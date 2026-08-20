@@ -1002,6 +1002,12 @@ p {
   font-size: 1rem;
 }
 
+.download-subheading {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
 .download-item__arch {
   font-size: 0.8rem;
   font-weight: 600;
@@ -1034,6 +1040,7 @@ p {
   flex: 1;
   display: flex;
   gap: 8px;
+  min-width: 0;
 }
 
 .terminal__prompt {
@@ -1043,6 +1050,12 @@ p {
 
 .terminal__cmd {
   color: #e4e4e7;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.terminal .copy-btn {
+  flex-shrink: 0;
 }
 
 .terminal--deps {
@@ -1160,18 +1173,19 @@ p {
   }
 
   .download-tabs {
-    justify-content: space-between;
-    overflow-x: visible;
+    justify-content: flex-start;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
   }
 
   .download-tab {
-    flex-direction: column;
-    gap: 4px;
-    padding: 10px 6px;
-    font-size: 0.65rem;
-    min-width: 0;
-    flex: 1;
+    flex: 0 0 auto;
+    gap: 6px;
+    min-width: max-content;
+    padding: 10px 12px;
+    font-size: 0.75rem;
     justify-content: center;
+    scroll-snap-align: start;
   }
 
   .download-tab__icon {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useApp } from '../lib/appContext'
 import { formatBytes, formatDate } from '../lib/format'
@@ -58,9 +58,14 @@ type DownloadItem = {
 }
 
 const RELEASES_URL = 'https://api.github.com/repos/vicrodh/qbz/releases'
+const SIGNED_MACOS_RELEASE_API_URL = 'https://api.github.com/repos/afonsojramos/qbz-macos/releases/latest'
 const AUR_PACKAGE_URL = 'https://aur.archlinux.org/packages/qbz-bin'
 const FLATHUB_URL = 'https://flathub.org/apps/com.blitzfc.qbz'
 const SNAP_STORE_URL = 'https://snapcraft.io/qbz-player'
+const SIGNED_MACOS_RELEASES_URL = 'https://github.com/afonsojramos/qbz-macos/releases/latest'
+const SIGNED_MACOS_PROVENANCE_URL = 'https://github.com/afonsojramos/qbz-macos#trust-and-provenance'
+const HOMEBREW_QBZ_URL = 'https://github.com/afonsojramos/homebrew-qbz'
+const HOMEBREW_QBZ_COMMAND = 'brew install --cask afonsojramos/qbz/qbz'
 
 /* ── Tabs ─────────────────────────────────────────────────── */
 
@@ -543,16 +548,26 @@ function GentooContent() {
   )
 }
 
-function MacOSContent({ downloads }: { downloads: DownloadItem[] }) {
+function MacOSContent({
+  downloads,
+  signedReleaseTag,
+  upstreamLoading,
+  upstreamError,
+}: {
+  downloads: DownloadItem[]
+  signedReleaseTag: string | null
+  upstreamLoading: boolean
+  upstreamError: boolean
+}) {
   const { t } = useTranslation()
-  const dmgItem = downloads.find((item) => item.type === 'dmg')
+  const dmgItems = downloads.filter((item) => item.type === 'dmg')
 
   return (
     <div className="download-list">
       <div className="download-item">
         <div className="download-item__header">
           <div className="download-item__info">
-            <span className="download-item__label">{t('downloads.macos.experimental')}</span>
+            <h3 className="download-item__label">{t('downloads.macos.experimental')}</h3>
           </div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
@@ -561,28 +576,66 @@ function MacOSContent({ downloads }: { downloads: DownloadItem[] }) {
         <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
           {t('downloads.macos.limitations')}
         </p>
-        {dmgItem && (
-          <>
+        <p className="download-item__file" style={{ margin: 0 }}>
+          {signedReleaseTag
+            ? t('downloads.macos.signedVersion', { version: signedReleaseTag })
+            : t('downloads.macos.signedVersionUnknown')}
+        </p>
+        <h4 className="download-subheading">
+          {t('downloads.macos.homebrewTitle')}
+        </h4>
+        <div className="terminal">
+          <code>
+            <span className="terminal__prompt">$</span>
+            <span className="terminal__cmd">{HOMEBREW_QBZ_COMMAND}</span>
+          </code>
+          <CopyButton text={HOMEBREW_QBZ_COMMAND} />
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+          <a className="btn btn-ghost btn-sm" href={SIGNED_MACOS_RELEASES_URL} target="_blank" rel="noreferrer">
+            {t('downloads.macos.downloadSigned')}
+          </a>
+          <a className="btn btn-ghost btn-sm" href={SIGNED_MACOS_PROVENANCE_URL} target="_blank" rel="noreferrer">
+            {t('downloads.macos.reviewProvenance')}
+          </a>
+          <a className="btn btn-ghost btn-sm" href={HOMEBREW_QBZ_URL} target="_blank" rel="noreferrer">
+            {t('downloads.macos.viewCask')}
+          </a>
+        </div>
+      </div>
+
+      <div className="download-item">
+        <div className="download-item__header">
+          <div className="download-item__info">
+            <h3 className="download-item__label">{t('downloads.macos.upstreamTitle')}</h3>
+          </div>
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
+          {t('downloads.macos.upstreamNote')}
+        </p>
+        {dmgItems.map((dmgItem) => (
+          <div key={dmgItem.fileName} style={{ marginBottom: 12 }}>
             <span className="download-item__file" style={{ display: 'block', marginBottom: 8 }}>
               {dmgItem.fileName} · {formatBytes(dmgItem.size)}
             </span>
-            <a
-              className="btn btn-ghost btn-sm"
-              href={dmgItem.url}
-            >
-              {t('downloads.macos.downloadDmg')}
+            <a className="btn btn-ghost btn-sm" href={dmgItem.url}>
+              {t('downloads.macos.downloadUpstream')}
             </a>
-          </>
-        )}
-        {!dmgItem && (
+          </div>
+        ))}
+        {dmgItems.length === 0 && (
           <p style={{ color: 'var(--text-tertiary)', fontSize: '0.9rem' }}>
-            No DMG available in the current release.
+            {upstreamLoading
+              ? t('downloads.loading')
+              : upstreamError
+                ? t('downloads.error')
+                : t('downloads.macos.noUpstreamDmg')}
           </p>
         )}
         <div style={{ marginTop: 20 }}>
-          <div className="download-meta__name" style={{ fontSize: 14, marginBottom: 8 }}>
+          <h4 className="download-subheading" style={{ marginBottom: 8 }}>
             {t('downloads.macos.unlockTitle')}
-          </div>
+          </h4>
           <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.5 }}>
             {t('downloads.macos.unlockNote')}
           </p>
@@ -705,6 +758,7 @@ export function DownloadSection() {
   const { t } = useTranslation()
   const { language } = useApp()
   const [release, setRelease] = useState<ReleaseData | null>(null)
+  const [signedReleaseTag, setSignedReleaseTag] = useState<string | null>(null)
   const [error, setError] = useState(false)
   const [activeTab, setActiveTab] = useState<TabId>('arch')
 
@@ -721,6 +775,14 @@ export function DownloadSection() {
         else setError(true)
       })
       .catch(() => { if (active) setError(true) })
+
+    fetch(SIGNED_MACOS_RELEASE_API_URL)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('signed release fetch failed'))))
+      .then((data: ReleaseData) => {
+        if (active && !data.draft && !data.prerelease) setSignedReleaseTag(data.tag_name)
+      })
+      .catch(() => {})
+
     return () => { active = false }
   }, [])
 
@@ -736,85 +798,107 @@ export function DownloadSection() {
 
   const releaseDate = release ? formatDate(release.published_at, language) : null
 
+  const handleTabKeyDown = useCallback((event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let nextIndex: number | null = null
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % TABS.length
+    if (event.key === 'ArrowLeft') nextIndex = (index - 1 + TABS.length) % TABS.length
+    if (event.key === 'Home') nextIndex = 0
+    if (event.key === 'End') nextIndex = TABS.length - 1
+    if (nextIndex === null) return
+
+    event.preventDefault()
+    const nextTab = TABS[nextIndex]
+    setActiveTab(nextTab.id)
+    document.getElementById(`download-tab-${nextTab.id}`)?.focus()
+  }, [])
+
   return (
     <section id="downloads" className="section">
       <div className="container">
         <h2 className="section__title">{t('downloads.title')}</h2>
         <p className="section__subtitle">{t('downloads.lead')}</p>
 
-        {error && (
-          <div className="card download-state">
-            <p>{t('downloads.error')}</p>
-            <a className="btn btn-ghost" href="https://github.com/vicrodh/qbz/releases" target="_blank" rel="noreferrer">
-              {t('downloads.viewAll')}
-            </a>
-          </div>
-        )}
-
-        {!error && !release && (
-          <div className="card download-state">
-            <p>{t('downloads.loading')}</p>
-          </div>
-        )}
-
-        {release && (
-          <div className="card" style={{ marginTop: 24 }}>
-            <div className="download-row download-row--stack">
-              <div className="download-meta">
-                <div className="download-meta__name">{t('downloads.allLabel')}</div>
-                <div className="download-meta__file">
-                  {t('downloads.versionLabel')} {release.tag_name} · {releaseDate}
-                </div>
+        <div className="card" style={{ marginTop: 24 }}>
+          <div className="download-row download-row--stack">
+            <div className="download-meta">
+              <div className="download-meta__name">{t('downloads.allLabel')}</div>
+              <div className="download-meta__file">
+                {release ? (
+                  <>{t('downloads.versionLabel')} {release.tag_name} · {releaseDate}</>
+                ) : error ? (
+                  t('downloads.error')
+                ) : (
+                  t('downloads.loading')
+                )}
               </div>
             </div>
-
-            <div className="download-tabs" role="tablist">
-              {TABS.map((tab) => (
-                <button
-                  key={tab.id}
-                  role="tab"
-                  aria-selected={activeTab === tab.id}
-                  className={`download-tab${activeTab === tab.id ? ' download-tab--active' : ''}`}
-                  onClick={() => setActiveTab(tab.id)}
-                >
-                  <TabIcon id={tab.id} />
-                  <span>{tab.label}</span>
-                </button>
-              ))}
-            </div>
-
-            <div className="download-tab-content" role="tabpanel">
-              {activeTab === 'source' ? (
-                <SourceContent />
-              ) : activeTab === 'gentoo' ? (
-                <div className="download-list">
-                  <GentooContent />
-                </div>
-              ) : activeTab === 'nixos' ? (
-                <div className="download-list">
-                  <NixOSContent />
-                </div>
-              ) : activeTab === 'macos' ? (
-                <MacOSContent downloads={allDownloads} />
-              ) : tabDownloads.length > 0 ? (
-                <div className="download-list">
-                  {activeTab === 'debian' && <AptRepoSection />}
-                  {tabDownloads.map((item) => (
-                    <ItemView key={`${item.type}-${item.fileName}`} item={item} />
-                  ))}
-                </div>
-              ) : (
-                <p style={{ color: 'var(--text-tertiary)', fontSize: '0.9rem', padding: '24px 0' }}>
-                  No packages available for this format in the current release.
-                </p>
-              )}
-            </div>
-
-            <a className="btn btn-ghost" href={release.html_url} target="_blank" rel="noreferrer">
-              {t('downloads.viewAll')}
-            </a>
           </div>
-        )}
+
+          <div className="download-tabs" role="tablist" aria-label={t('downloads.allLabel')}>
+            {TABS.map((tab, index) => (
+              <button
+                key={tab.id}
+                id={`download-tab-${tab.id}`}
+                role="tab"
+                aria-controls="download-tabpanel"
+                aria-selected={activeTab === tab.id}
+                tabIndex={activeTab === tab.id ? 0 : -1}
+                className={`download-tab${activeTab === tab.id ? ' download-tab--active' : ''}`}
+                onClick={() => setActiveTab(tab.id)}
+                onKeyDown={(event) => handleTabKeyDown(event, index)}
+              >
+                <TabIcon id={tab.id} />
+                <span>{tab.label}</span>
+              </button>
+            ))}
+          </div>
+
+          <div
+            id="download-tabpanel"
+            className="download-tab-content"
+            role="tabpanel"
+            aria-labelledby={`download-tab-${activeTab}`}
+          >
+            {activeTab === 'source' ? (
+              <SourceContent />
+            ) : activeTab === 'gentoo' ? (
+              <div className="download-list">
+                <GentooContent />
+              </div>
+            ) : activeTab === 'nixos' ? (
+              <div className="download-list">
+                <NixOSContent />
+              </div>
+            ) : activeTab === 'macos' ? (
+              <MacOSContent
+                downloads={allDownloads}
+                signedReleaseTag={signedReleaseTag}
+                upstreamLoading={!release && !error}
+                upstreamError={error}
+              />
+            ) : tabDownloads.length > 0 ? (
+              <div className="download-list">
+                {activeTab === 'debian' && <AptRepoSection />}
+                {tabDownloads.map((item) => (
+                  <ItemView key={`${item.type}-${item.fileName}`} item={item} />
+                ))}
+              </div>
+            ) : (
+              <p style={{ color: 'var(--text-tertiary)', fontSize: '0.9rem', padding: '24px 0' }}>
+                {!release && !error ? t('downloads.loading') : error ? t('downloads.error') : 'No packages available for this format in the current release.'}
+              </p>
+            )}
+          </div>
+
+          <a
+            className="btn btn-ghost"
+            href={release?.html_url ?? 'https://github.com/vicrodh/qbz/releases'}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {t('downloads.viewAll')}
+          </a>
+        </div>
       </div>
     </section>
   )
