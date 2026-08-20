@@ -426,12 +426,21 @@ pub(crate) async fn load_cortinilla_local(
             db.search_with_filter_page(q.trim(), 0, limit, true, exclude_network, "default")
         })
         .unwrap_or_default();
-        if plex_enabled {
-            // PREPEND so Plex content is visible without scrolling past a full
-            // local page. See the module header: this can starve the local-file
-            // tracks out of the track section, and that is the reference's
-            // behaviour, reproduced.
-            let mut merged = crate::local_plex::search_tracks(q.trim());
+        // PREPEND so remote content is visible without scrolling past a full
+        // local page. See the module header: this can starve the local-file
+        // tracks out of the track section, and that is the reference's
+        // behaviour, reproduced — now for every remote source, not just Plex.
+        let mut merged = if plex_enabled {
+            crate::local_plex::search_tracks(q.trim())
+        } else {
+            Vec::new()
+        };
+        // BOUNDED, unlike the Plex arm. The Plex cache is read whole because
+        // it always was; a media-server mirror can hold 50k rows and this runs
+        // on every keystroke of the cortinilla, so it takes the same limit the
+        // caller asked the local query for.
+        merged.extend(crate::media_servers_qt::search_tracks(q.trim(), Some(limit as u32)));
+        if !merged.is_empty() {
             merged.append(&mut rows);
             rows = merged;
         }

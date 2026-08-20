@@ -305,8 +305,17 @@ pub fn load_tracks_page_blocking(reset: bool) -> Result<(Vec<TrackRow>, bool), S
     // make pagination over-report.
     let has_more = page.len() as u64 == TRACKS_PAGE;
 
-    if crate::local_plex::is_enabled() && offset == 0 {
-        let mut merged = crate::local_plex::search_tracks(&query);
+    if offset == 0 {
+        // Plex AND the media servers, in one merge. Page 0 only, for the same
+        // reason the Plex arm was page 0 only: these caches are bounded sets
+        // read whole, so re-merging them on every page would repeat every
+        // remote row once per page of local results.
+        let mut merged = if crate::local_plex::is_enabled() {
+            crate::local_plex::search_tracks(&query)
+        } else {
+            Vec::new()
+        };
+        merged.extend(crate::media_servers_qt::search_tracks(&query, None));
         if !merged.is_empty() {
             merged.append(&mut page);
             if sort != "default" {
