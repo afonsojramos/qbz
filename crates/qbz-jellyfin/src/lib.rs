@@ -353,8 +353,28 @@ pub fn normalize_base_url(input: &str) -> String {
 }
 
 /// The `Authorization` header every Jellyfin client must send, with or without
-/// a token. `DeviceId` must be STABLE across runs — Jellyfin keys its session
-/// list on it, and a fresh id per launch litters the server's devices page.
+/// a token.
+///
+/// **`DeviceId` is load-bearing, and getting it wrong revokes your own token.**
+/// Jellyfin keys the SESSION on it, and a second `AuthenticateByName` under the
+/// same DeviceId replaces the first — the earlier token starts answering 401.
+/// Measured against 10.11.11:
+///
+/// ```text
+/// same DeviceId:      auth -> T1, auth -> T2;  T1 = 401, T2 = 200
+/// different DeviceId: auth -> A,  auth -> B;   A  = 200, B  = 200
+/// ```
+///
+/// Two obligations follow, and neither is optional:
+///
+/// 1. **Stable per install**, persisted like `local_plex::client_id` — not a
+///    constant (two QBZ installs would then fight over one session, each
+///    logging the other out) and not fresh per launch (which both litters the
+///    server's devices page and drops the previous run's token).
+/// 2. **Authenticate ONCE and hold the token.** Two concurrent auths leave
+///    whichever finishes first holding a dead one. This is not hypothetical:
+///    it is what five parallel live tests did to each other before they were
+///    made to share a session.
 fn auth_header(device_id: &str, token: Option<&str>) -> String {
     let mut h = format!(
         r#"MediaBrowser Client="QBZ", Device="{}", DeviceId="{}", Version="{}""#,

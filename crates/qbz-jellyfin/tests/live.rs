@@ -15,6 +15,8 @@
 use std::env;
 use std::sync::Once;
 
+use tokio::sync::OnceCell;
+
 /// reqwest is built `...-no-provider`, so a `reqwest::Client` cannot be built
 /// until a process-level rustls CryptoProvider exists. In the app that is
 /// `qbz_app::install_crypto_provider`; here there is no app.
@@ -31,6 +33,41 @@ fn server() -> Option<(String, String, String)> {
         env::var("QBZ_JELLYFIN_USER").ok()?,
         env::var("QBZ_JELLYFIN_PASS").ok()?,
     ))
+}
+
+/// ONE session for the whole test binary.
+///
+/// Not an optimisation — a correctness fix, and the reason is a real property
+/// of the protocol rather than a test artifact. Jellyfin keys its session on
+/// `DeviceId`, and re-authenticating with the SAME one **revokes the previous
+/// token**. Measured directly against 10.11.11:
+///
+/// ```text
+/// same DeviceId:      auth -> T1, auth -> T2;  T1 = 401, T2 = 200
+/// different DeviceId: auth -> A,  auth -> B;   A  = 200, B  = 200
+/// ```
+///
+/// So five tests authenticating in parallel under one DeviceId spend their time
+/// invalidating each other, and whichever finishes first is left holding a dead
+/// token — which is exactly what the `Unauthorized` on the second call was. The
+/// app carries the same obligation: authenticate ONCE, hold the token, and keep
+/// the DeviceId stable per install.
+static SESSION: OnceCell<qbz_jellyfin::Session> = OnceCell::const_new();
+
+async fn session(url: &str, user: &str, pass: &str) -> &'static qbz_jellyfin::Session {
+    SESSION
+        .get_or_init(|| async {
+            qbz_jellyfin::authenticate(url, "qbz-live-test", user, pass)
+                .await
+                .expect("authenticate")
+        })
+        .await
+}
+
+/// The authenticated client every live test shares.
+async fn client(url: &str, user: &str, pass: &str) -> qbz_jellyfin::JellyfinClient {
+    let s = session(url, user, pass).await;
+    qbz_jellyfin::JellyfinClient::new(url, &s.access_token, &s.user_id).unwrap()
 }
 
 macro_rules! skip_without_server {
@@ -60,12 +97,10 @@ async fn probe_reports_a_server_without_credentials() {
 #[tokio::test]
 async fn a_full_round_trip_yields_tracks_with_real_quality() {
     let (url, user, pass) = skip_without_server!();
-    let s = qbz_jellyfin::authenticate(&url, "qbz-live-test", &user, &pass)
-        .await
-        .expect("authenticate");
+    let s = session(&url, &user, &pass).await;
     assert!(!s.access_token.is_empty());
 
-    let c = qbz_jellyfin::JellyfinClient::new(&url, &s.access_token, &s.user_id).unwrap();
+    let c = client(&url, &user, &pass).await;
 
     let libs = c.music_libraries().await.expect("libraries");
     assert!(!libs.is_empty(), "the server exposes no music library");
@@ -111,10 +146,7 @@ async fn a_full_round_trip_yields_tracks_with_real_quality() {
 #[tokio::test]
 async fn the_stream_endpoint_is_direct_and_seekable() {
     let (url, user, pass) = skip_without_server!();
-    let s = qbz_jellyfin::authenticate(&url, "qbz-live-test", &user, &pass)
-        .await
-        .expect("authenticate");
-    let c = qbz_jellyfin::JellyfinClient::new(&url, &s.access_token, &s.user_id).unwrap();
+    let c = client(&url, &user, &pass).await;
     let libs = c.music_libraries().await.expect("libraries");
     let (page, _) = c
         .tracks_page(Some(&libs[0].id), 0, None)
@@ -168,10 +200,7 @@ async fn the_stream_endpoint_is_direct_and_seekable() {
 #[tokio::test]
 async fn cover_art_needs_no_token() {
     let (url, user, pass) = skip_without_server!();
-    let s = qbz_jellyfin::authenticate(&url, "qbz-live-test", &user, &pass)
-        .await
-        .expect("authenticate");
-    let c = qbz_jellyfin::JellyfinClient::new(&url, &s.access_token, &s.user_id).unwrap();
+    let c = client(&url, &user, &pass).await;
     let libs = c.music_libraries().await.expect("libraries");
     let (page, _) = c
         .tracks_page(Some(&libs[0].id), 0, None)
@@ -188,7 +217,8 @@ async fn cover_art_needs_no_token() {
         track.album_image_tag.as_deref(),
         qbz_jellyfin::IMAGE_PX,
     );
-    assert!(!art.contains(&s.access_token), "the cover url leaked the token");
+    let token = &session(&url, &user, &pass).await.access_token;
+    assert!(!art.contains(token), "the cover url leaked the token");
 
     let resp = reqwest::Client::new().get(&art).send().await.expect("cover");
     assert!(resp.status().is_success(), "cover fetch failed: {}", resp.status());
@@ -209,10 +239,7 @@ async fn cover_art_needs_no_token() {
 #[tokio::test]
 async fn a_future_delta_returns_nothing() {
     let (url, user, pass) = skip_without_server!();
-    let s = qbz_jellyfin::authenticate(&url, "qbz-live-test", &user, &pass)
-        .await
-        .expect("authenticate");
-    let c = qbz_jellyfin::JellyfinClient::new(&url, &s.access_token, &s.user_id).unwrap();
+    let c = client(&url, &user, &pass).await;
     let libs = c.music_libraries().await.expect("libraries");
     let (page, _) = c
         .tracks_page(Some(&libs[0].id), 0, Some("2999-01-01T00:00:00Z"))
