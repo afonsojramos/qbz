@@ -106,10 +106,22 @@ pub mod qbz_shader_scene {
         #[qml_singleton]
         // The active scene (Slint `shader-mode`): 0 Off, 1 Plasma (A2),
         // 2 Tunnel, 3 Aurora, 4 Spectral Ribbon (A3), 5 Line Bed (A4), 6
-        // parked, 7 Ambient. Written from QML (menu rows) and from Rust
-        // (cycle_scene, the immersive open-reset). NOT persisted — Slint
-        // keeps shader-mode session-only.
-        #[qproperty(i32, scene)]
+        // parked, 7 Ambient, 8 Tunnel Flow (B1). Written from QML (menu
+        // rows), from Rust (cycle_scene) and by the immersive open funnel.
+        //
+        // PERSISTED SINCE 2026-08-19, a deliberate divergence from Slint
+        // (which keeps shader-mode session-only and force-resets it to Off on
+        // every open). "Remember the last immersive view" covered the
+        // view_mode / mode / split_panel triple and NOT the scene, so the
+        // half of the immersive surface a user is most likely to leave it on —
+        // Plasma, the Ribbon, the Line Bed, Tunnel Flow — was the half that
+        // never came back. Owner call: the setting says "last view", and a
+        // scene IS one of the views the menu offers.
+        //
+        // Every write funnels through `set_scene`, which persists unless the
+        // RESTORING latch is up (the restore itself must not re-persist, the
+        // §3.1 rule the triple already follows).
+        #[qproperty(i32, scene, READ, WRITE = set_scene, NOTIFY)]
         // The batched audio pack (the §1 uniform contract minus time/
         // resolution/palette), one JSON publish per viz drain tick. READ +
         // NOTIFY only — QML never writes it.
@@ -162,6 +174,15 @@ pub mod qbz_shader_scene {
         /// edges gate the 517-byte ribbon frame publish.
         #[qinvokable]
         fn set_ribbon_active(self: Pin<&mut QbzShaderScene>, active: bool);
+    }
+
+    // The custom WRITE target of the `scene` property. NOT a qinvokable — QML
+    // reaches it by writing `QbzShaderScene.scene`, never by name. (cxx-qt
+    // custom-setter pattern, the immersive_bridge `set_open` precedent: the
+    // property's auto setter is replaced by this method, which owns the store,
+    // the notify and the persist.)
+    unsafe extern "RustQt" {
+        fn set_scene(self: Pin<&mut QbzShaderScene>, value: i32);
     }
 
     impl cxx_qt::Threading for QbzShaderScene {}
@@ -287,17 +308,75 @@ pub(crate) fn publish_tunnel_palette(json: String) {
     });
 }
 
-/// Immersive open-reset (parity `main.rs:10300-10301` — a documented no-op in
-/// v1 because the scenes were parked; REAL here): entering the immersive
-/// overlay always lands on scene Off. Called from the immersive open funnel
-/// (immersive_bridge.rs apply_open true edge). No-op when already Off so the
-/// common path emits no notify.
-pub(crate) fn reset_on_immersive_open() {
-    ui(|mut s| {
-        if s.scene != 0 {
-            s.as_mut().set_scene(0);
+/// The pref key holding the last scene. Lives in the shared `ui_prefs.json`
+/// alongside `immersive_last_view_mode` / `_mode` / `_split_panel`, as a JSON
+/// NUMBER for the same reason those three are: the file is co-owned with the
+/// Slint app, whose typed struct declares its own immersive keys i32. This one
+/// is NEW and therefore unknown to that struct — serde ignores it on read, and
+/// the worst case if the Slint build ever rewrites the document is that the key
+/// is dropped and this falls back to Off. Acceptable: `qbz-ui` is on its way
+/// out, and the failure mode is "the scene is not remembered", not a poisoned
+/// document.
+const SCENE_PREF: &str = "immersive_last_shader_scene";
+
+/// Up while the open funnel is writing the REMEMBERED scene back. `set_scene`
+/// checks it so the restore does not re-persist what it just read (§3.1: the
+/// restore writes go to the property, never through the persisting path).
+static RESTORING: AtomicBool = AtomicBool::new(false);
+
+/// Whether a scene number is one this build can actually show. Parked modes
+/// (6) and junk must never be restored: the layer would mount nothing and the
+/// menu would show no row active, which reads as a broken immersive.
+fn is_shipped(scene: i32) -> bool {
+    matches!(scene, 1 | 2 | 3 | 4 | 5 | 7 | 8)
+}
+
+/// Immersive open: apply the scene this session should start on.
+///
+/// Slint force-resets to Off here (`main.rs:10300-10301`) because it never
+/// remembered the scene at all. This port does, so the reset is now the
+/// FALLBACK arm and the remembered scene is the default one:
+///
+/// - `immersive_default_view == "remember"` and the stored scene is a shipped
+///   one and the GPU tier allows shaders -> restore it.
+/// - anything else (a PINNED default view, a parked/absent scene, a box below
+///   the shader tier) -> Off, exactly as before.
+///
+/// The tier gate is not optional: `renderer_qt::gpu_tier()` is the same probe
+/// behind `QbzShell.shaderScenesAvailable`, and off-tier the scenes render
+/// BLACK. Restoring one there would open immersive onto a black rectangle with
+/// no menu row to explain it.
+///
+/// Called from the immersive open funnel (immersive_bridge.rs, apply_open true
+/// edge). No-op when the target already matches, so the common path emits no
+/// notify.
+pub(crate) fn apply_on_immersive_open() {
+    let target = remembered_scene();
+    ui(move |mut s| {
+        if s.scene == target {
+            return;
         }
+        RESTORING.store(true, Ordering::SeqCst);
+        s.as_mut().set_scene(target);
+        RESTORING.store(false, Ordering::SeqCst);
     });
+}
+
+/// The scene an open edge should land on — pure, so the unit test can pin the
+/// gating without a QObject or a prefs file.
+fn resolve_open_scene(default_view: &str, stored: i32, tier_ok: bool) -> i32 {
+    if default_view != "remember" || !tier_ok || !is_shipped(stored) {
+        return 0;
+    }
+    stored
+}
+
+fn remembered_scene() -> i32 {
+    resolve_open_scene(
+        &crate::settings_qt::pref_str("immersive_default_view", "remember"),
+        crate::settings_qt::pref_i32(SCENE_PREF, 0),
+        crate::renderer_qt::gpu_tier(),
+    )
 }
 
 /// The `g` ring map, free-standing so the unit test can pin it without a
@@ -377,6 +456,35 @@ impl qbz_shader_scene::QbzShaderScene {
         self.as_mut().set_scene(next);
     }
 
+    /// The custom WRITE target of `scene` — the funnel EVERY write passes
+    /// through: the QML menu rows (`QbzShaderScene.scene = N`), the shader-
+    /// error latch in ShaderSceneLayer.qml, `cycle_scene` above and the open
+    /// funnel's restore. It stores, notifies, and persists.
+    ///
+    /// The persist is skipped while RESTORING is up, and it is also skipped
+    /// when the default-view pref is PINNED — the triple's own rule
+    /// (`immersive_bridge::set_view`): a pinned default wins on the next open,
+    /// so writing under it would store a value nothing will ever read while
+    /// silently overwriting the user's real last scene.
+    ///
+    /// The shader-error latch persisting Off is intended, not collateral: a
+    /// scene whose effect failed to compile on this box must not be the one
+    /// the next open restores.
+    pub fn set_scene(mut self: Pin<&mut Self>, value: i32) {
+        use cxx_qt::CxxQtType as _;
+        if self.scene == value {
+            return;
+        }
+        self.as_mut().rust_mut().scene = value;
+        self.as_mut().scene_changed();
+        if RESTORING.load(Ordering::SeqCst) {
+            return;
+        }
+        if crate::settings_qt::pref_str("immersive_default_view", "remember") == "remember" {
+            crate::settings_qt::save_pref(SCENE_PREF, serde_json::Value::Number(value.into()));
+        }
+    }
+
     /// The A4 publish gate (see LINEBED_ACTIVE). Runs on the Qt thread but
     /// touches only the atomic.
     pub fn set_linebed_active(self: Pin<&mut Self>, active: bool) {
@@ -410,6 +518,25 @@ mod tests {
                 "missing/short {key}"
             );
         }
+    }
+
+    /// The open edge restores the remembered scene only when all three gates
+    /// agree: the default-view pref is "remember", the box is on the shader
+    /// tier, and the stored number is a scene this build ships.
+    #[test]
+    fn open_scene_gates() {
+        assert_eq!(resolve_open_scene("remember", 5, true), 5);
+        assert_eq!(resolve_open_scene("remember", 8, true), 8);
+        // A pinned default view wins over the remembered scene.
+        assert_eq!(resolve_open_scene("lyrics", 5, true), 0);
+        // Below the shader tier the scenes render black — never restore one.
+        assert_eq!(resolve_open_scene("remember", 5, false), 0);
+        // Parked (6) and junk never come back.
+        assert_eq!(resolve_open_scene("remember", 6, true), 0);
+        assert_eq!(resolve_open_scene("remember", 42, true), 0);
+        assert_eq!(resolve_open_scene("remember", -1, true), 0);
+        // Off stays off.
+        assert_eq!(resolve_open_scene("remember", 0, true), 0);
     }
 
     /// The `g` ring over the shipped scenes: 0→1→2→3→4→5→7→0 (A2 added

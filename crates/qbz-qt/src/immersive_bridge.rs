@@ -297,10 +297,14 @@ fn apply_open(mut this: Pin<&mut QbzImmersive>, value: bool) {
         }
         // Unknown key: Slint's `_ => {}` — leave the current view alone.
         crate::viz_qt::immersive_opened();
-        // Shader scenes (block A1): entering immersive force-resets the
-        // scene to Off — parity main.rs:10300-10301, a documented no-op in
-        // v1 (the scenes were parked), REAL now that QbzShaderScene exists.
-        crate::shader_scene_bridge::reset_on_immersive_open();
+        // Shader scenes (block A1): the open edge decides the scene. Under
+        // "remember" it restores the last one (2026-08-19 — the triple above
+        // never covered the scenes, so Plasma / Ribbon / Line Bed / Tunnel
+        // Flow were the views "remember last view" could not remember); under
+        // a pinned default, off-tier, or with nothing shipped stored, it
+        // force-resets to Off, which is the Slint behaviour
+        // (main.rs:10300-10301) and stays the fallback.
+        crate::shader_scene_bridge::apply_on_immersive_open();
         // §3.4 open-edge hygiene: a stale-true desktop cortinillaOpen is
         // possible in theory — close it deterministically (the Rust
         // equivalent of QbzBridge.cortinillaDismiss, bridge.rs:359-361; the
