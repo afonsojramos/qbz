@@ -405,6 +405,22 @@ impl Source for QobuzSource {
         }
     }
 
+    fn artwork_token(&self, token: &str, size: ArtSize) -> ArtRef {
+        // A Qobuz row carries its cover as a CDN url outright, so unlike
+        // `artwork` this needs no memo and is never `Unavailable`.
+        let token = token.trim();
+        if !(token.starts_with("http://") || token.starts_with("https://")) {
+            return ArtRef::None;
+        }
+        ArtRef::Fetch {
+            url: Self::small_url(token, size.qobuz_px()),
+            // The RAW url is the stable key ACROSS sizes — downscaling is a
+            // query the CDN answers, not a different cover. Keying on the
+            // sized url would download the same art once per size class.
+            cache_key: token.to_string(),
+        }
+    }
+
     async fn playback(
         &self,
         item: &MediaRef,

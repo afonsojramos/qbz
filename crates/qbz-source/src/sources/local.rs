@@ -647,6 +647,38 @@ impl Source for LocalSource {
         }
     }
 
+    fn artwork_token(&self, token: &str, _size: ArtSize) -> ArtRef {
+        // The `LocalFile` half of `artwork_qt::classify` (artwork_qt.rs:155-183),
+        // minus the guessing: this only ever sees a token a LOCAL row carried,
+        // so an absolute path is a file rather than "a shape that might be a
+        // Plex thumb". No `stat` — this must stay pure; the CHEAP-phase
+        // thumbnail lookup happens in the pipeline, exactly where it does
+        // today.
+        let token = token.trim();
+        if token.is_empty() {
+            return ArtRef::None;
+        }
+        // A `file://` url is ALREADY on disk — reqwest cannot even build a
+        // request for it ("builder error for url"), so it must never be
+        // fetched.
+        if let Some(path) = token.strip_prefix("file://") {
+            return ArtRef::File(PathBuf::from(path));
+        }
+        // An offline-download row can keep the CDN url its cover came from.
+        if token.starts_with("http://") || token.starts_with("https://") {
+            return ArtRef::Fetch {
+                url: token.to_string(),
+                cache_key: token.to_string(),
+            };
+        }
+        if token.starts_with('/') {
+            return ArtRef::File(PathBuf::from(token));
+        }
+        // A bare relative string is not something this source can resolve.
+        // `classify` returned `Empty` here too.
+        ArtRef::None
+    }
+
     fn thumbnail(&self, art: &ArtRef, _size: ArtSize) -> ArtRef {
         // EXPENSIVE phase: this is where the decode+downscale happens, on the
         // caller's worker pool (`local_artwork::stream_cold`,
@@ -871,5 +903,32 @@ mod tests {
         let raw = RawRef::new("local", ItemKind::Track, "not-a-number");
         let err = claimed(&raw).unwrap_err();
         assert!(matches!(err, SourceError::BadIdShape { by: SourceId::LOCAL, .. }));
+    }
+
+    // ── artwork_token: the LocalFile arm of the dead `classify` ─────────────
+
+    /// The four shapes a local row's token really takes. `file://` must come
+    /// back as a PATH — reqwest cannot even build a request for that scheme,
+    /// so treating it as fetchable is a guaranteed miss.
+    #[test]
+    fn a_local_token_is_a_path_a_cdn_url_or_nothing() {
+        let l = LocalSource::new();
+        assert_eq!(
+            l.artwork_token("file:///home/u/.cache/qbz/thumb.jpg", ArtSize::Card),
+            ArtRef::File(PathBuf::from("/home/u/.cache/qbz/thumb.jpg"))
+        );
+        assert_eq!(
+            l.artwork_token("/home/u/Music/Album/cover.jpg", ArtSize::Card),
+            ArtRef::File(PathBuf::from("/home/u/Music/Album/cover.jpg"))
+        );
+        // An offline-download row can keep the CDN url its cover came from.
+        assert!(matches!(
+            l.artwork_token("https://static.qobuz.com/a.jpg", ArtSize::Card),
+            ArtRef::Fetch { .. }
+        ));
+        assert_eq!(l.artwork_token("", ArtSize::Card), ArtRef::None);
+        assert_eq!(l.artwork_token("   ", ArtSize::Card), ArtRef::None);
+        // A bare relative string is not resolvable — `classify` said Empty too.
+        assert_eq!(l.artwork_token("covers/a.jpg", ArtSize::Card), ArtRef::None);
     }
 }

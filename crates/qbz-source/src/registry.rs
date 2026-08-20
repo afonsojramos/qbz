@@ -177,6 +177,23 @@ impl SourceRegistry {
         }
     }
 
+    /// Interpret a RAW artwork token a row of `source` carried.
+    ///
+    /// The replacement for `artwork_qt::classify`: instead of one function
+    /// sniffing every url shape in the app — and therefore knowing about Plex
+    /// because somebody added an `is_thumb_path` arm to it — each source reads
+    /// its own tokens and nobody else's.
+    ///
+    /// An UNREGISTERED source is [`ArtRef::None`], not `Unavailable`: a row
+    /// whose source word this build does not know has no art to wait for, and
+    /// `Unavailable` would put it in the "retry when connected" bucket forever.
+    pub fn artwork_token(&self, source: SourceId, token: &str, size: ArtSize) -> ArtRef {
+        match self.get(source) {
+            Some(s) => s.artwork_token(token, size),
+            None => ArtRef::None,
+        }
+    }
+
     /// The EXPENSIVE artwork phase, keyed by [`ArtRef`] rather than
     /// [`MediaRef`] — the windowed pipeline it serves has no item in scope.
     pub fn thumbnail(&self, source: SourceId, art: &ArtRef, size: ArtSize) -> ArtRef {

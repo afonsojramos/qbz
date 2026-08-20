@@ -395,6 +395,27 @@ impl Source for PlexSource {
         }
     }
 
+    fn artwork_token(&self, token: &str, size: ArtSize) -> ArtRef {
+        // The Plex arm of `artwork_qt::classify` (artwork_qt.rs:168-178), now
+        // owned by the source that knows what a `/library/...` path is. The
+        // caller no longer has to have heard of `is_thumb_path`.
+        let token = token.trim();
+        if token.is_empty() || !is_thumb_path(token) {
+            return ArtRef::None;
+        }
+        let Some((base, token_secret)) = self.server() else {
+            // Distinct from `None` so the miss is logged for what it is —
+            // `ArtUrl::PlexUnconfigured`'s reason for existing.
+            return ArtRef::Unavailable("plex is not connected");
+        };
+        ArtRef::Fetch {
+            url: qbz_models::plex_thumb_url(&base, &token_secret, token, size.plex_px()),
+            // The RAW `/library/...` path is the stable memo key; the tokenized
+            // url is rebuilt every pass (artwork_qt.rs:231-238).
+            cache_key: token.to_string(),
+        }
+    }
+
     async fn playback(
         &self,
         item: &MediaRef,
@@ -704,5 +725,39 @@ mod tests {
             id: "281474976710656".into(),
             ..Default::default()
         }));
+    }
+
+    // ── artwork_token: the Plex arm of the dead `classify` ──────────────────
+
+    /// With no credentials a Plex thumb is UNAVAILABLE, never `None`: the art
+    /// exists, the server does not answer yet, and the two must stay
+    /// distinguishable or the miss is logged as a dead download.
+    #[test]
+    fn a_thumb_path_without_credentials_is_unavailable_not_none() {
+        let p = PlexSource::new();
+        assert!(matches!(
+            p.artwork_token("/library/metadata/42/thumb/1", ArtSize::Card),
+            ArtRef::Unavailable(_)
+        ));
+    }
+
+    /// Anything that is not one of the two declared thumb prefixes is not
+    /// Plex's to interpret — including an absolute path, which `classify`
+    /// would have called a LOCAL FILE purely because it starts with `/`.
+    #[test]
+    fn only_the_declared_thumb_prefixes_are_claimed() {
+        let p = PlexSource::new();
+        assert!(matches!(p.artwork_token("", ArtSize::Card), ArtRef::None));
+        assert!(matches!(
+            p.artwork_token("/home/u/Music/Album/cover.jpg", ArtSize::Card),
+            ArtRef::None
+        ));
+        assert!(matches!(
+            p.artwork_token("https://static.qobuz.com/a.jpg", ArtSize::Card),
+            ArtRef::None
+        ));
+        // Both prefixes the taxonomy declares.
+        assert!(is_thumb_path("/library/metadata/42/thumb/1"));
+        assert!(is_thumb_path("/photo/:/transcode"));
     }
 }
