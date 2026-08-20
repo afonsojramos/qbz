@@ -715,9 +715,20 @@ Rectangle {
                     padding: 6
                     closePolicy: Popup.CloseOnPressOutside
                     background: Rectangle {
-                        // Matches this root's own ambient treatment
-                        // (Sidebar.slint:920-922).
-                        color: root.ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
+                        // OPAQUE UNDER AMBIENT, unlike this root. Sidebar.slint
+                        // :920-922 gives the panel the sidebar's own ambient
+                        // treatment (surface-card @50%), and it was ported 1:1 —
+                        // which made this the ONE menu surface in the app that
+                        // goes translucent while the dynamic background is on.
+                        // Every other menu/flyout (QbzContextMenu and therefore
+                        // CardMenu / SidebarRowMenu / ViewModeMenu / the audio
+                        // flyout, plus NavFlyout, SidebarFolderFlyout,
+                        // QconnectFlyout, GenreFilterPopup, LocalFilterPopup)
+                        // paints a flat opaque surface. A menu is TEXT the user
+                        // is reading against artwork that moves under it, not
+                        // chrome, so the outlier lost: owner ruling 2026-08-19,
+                        // "la lectura se complica con la transparencia".
+                        color: theme.surfaceCard
                         radius: 8
                         border.width: 1
                         border.color: theme.borderSubtle
