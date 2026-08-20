@@ -6472,6 +6472,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-media-cache"
+version = "2.0.2"
+dependencies = [
+ "rusqlite",
+ "tempfile",
+]
+
+[[package]]
 name = "qbz-media-controls"
 version = "2.0.2"
 dependencies = [

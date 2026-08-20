@@ -56,6 +56,9 @@ members = [
     # DTOs only — no cache schema, no settings store, no Qt (ADR-006).
     "qbz-jellyfin",
     "qbz-subsonic",
+    # ONE cache for every remote server (see its header for why the Plex one
+    # is not migrated in the same change).
+    "qbz-media-cache",
 ]
 
 # Qt-frontend POC worktree: plain `cargo build`/`cargo check` in this workspace
