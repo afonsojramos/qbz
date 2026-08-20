@@ -1406,12 +1406,40 @@ fn toggle_local(kind: &str, id: &str) -> Option<bool> {
 
 /// library_all.rs `is_local_feed_id` — local tracks are file paths, local
 /// albums group keys, local artists plain names; Qobuz ids are numeric.
+///
+/// This is the gate `crate::open_album` consults to decide whether an album id
+/// goes to the LOCAL detail view or to Qobuz's `/album/get`, and every caller
+/// of that router depends on it: the now-playing bar, the queue, "go to album"
+/// in a row menu, the Library ALL feed.
 pub(crate) fn is_local_feed_id(kind: &str, id: &str) -> bool {
     match kind {
         "track" | "artist" => id.parse::<u64>().is_err(),
-        "album" => id.starts_with("plex:") || id.contains('|') || id.contains('/'),
+        "album" => is_server_album_key(id) || id.contains('|') || id.contains('/'),
         _ => false,
     }
+}
+
+/// `<source>:<album id>` — the group key every non-Qobuz album carries.
+///
+/// Spelled through `SourceId::from_word` rather than a list of prefixes: the
+/// literal `"plex:"` test this replaces was the whole vocabulary, so a
+/// `jellyfin:<itemId>` key answered NO, `open_album` sent it to `/album/get`,
+/// and the view landed on an empty album — from the now-playing bar, from the
+/// queue, from anywhere that router is reached. Jellyfin item ids are 32-char
+/// hex with no `/` and no `|`, so not one of the other clauses caught it.
+///
+/// `qobuz:` is excluded deliberately: it is a legal word and a catalog id.
+fn is_server_album_key(id: &str) -> bool {
+    let Some((word, rest)) = id.split_once(':') else {
+        return false;
+    };
+    if rest.is_empty() {
+        return false;
+    }
+    matches!(
+        qbz_source::SourceId::from_word(word),
+        Some(s) if s != qbz_source::SourceId::QOBUZ
+    )
 }
 
 /// main.rs `is_local_album_key` (qbz/src/main.rs:2630-2632) — the PLAY / NAV
@@ -1836,6 +1864,36 @@ mod tests {
             duration: "3:07".into(),
             ..Default::default()
         }
+    }
+
+    /// A server album key must route to the LOCAL detail view.
+    ///
+    /// The regression this pins: `open_album` asks `is_local_feed_id`, which
+    /// tested the literal prefix `"plex:"`. A `jellyfin:<itemId>` key answered
+    /// NO and went to Qobuz's `/album/get`, which 404s — the view navigated
+    /// and landed EMPTY. Owner report, 2026-08-20.
+    #[test]
+    fn a_server_album_key_is_a_local_id() {
+        for id in [
+            "plex:abc123",
+            "jellyfin:1f4e9a0b2c3d4e5f6a7b8c9d0e1f2a3b",
+            "subsonic:al-42",
+            "navidrome:0f9c",
+            "gonic:77",
+            "airsonic:al-1",
+            "astiga:9",
+        ] {
+            assert!(is_local_feed_id("album", id), "{id} must route locally");
+        }
+        // The controls: a Qobuz catalog id, and a word that is NOT a source.
+        assert!(!is_local_feed_id("album", "0060254727511"));
+        assert!(!is_local_feed_id("album", "qobuz:0060254727511"));
+        assert!(!is_local_feed_id("album", "spotify:abc"));
+        // A bare word with no id behind it is not a key.
+        assert!(!is_local_feed_id("album", "jellyfin:"));
+        // Still true for the two shapes that always worked.
+        assert!(is_local_feed_id("album", "Artist|Album"));
+        assert!(is_local_feed_id("album", "/music/Artist/Album"));
     }
 
     /// The branch that keeps a local row out of the Qobuz resolver. A local
