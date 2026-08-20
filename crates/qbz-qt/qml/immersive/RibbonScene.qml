@@ -21,12 +21,17 @@ import com.blitzfc.qbz
 RibbonItem {
     id: root
 
-    // mirrorVertically rule (2026-08-15, verified BOTH ways today): mirror
-    // on Vulkan/Metal/D3D, NOT on OpenGL — the empirical matrix lives in
-    // LineBedScene.qml (owner's Vulkan + no mirror = flipped; Mesa GL +
-    // mirror = flipped). The feedback passes are self-consistent in texture
-    // space; this only affects the composite.
+    // mirrorVertically: mirror on Vulkan/D3D, NOT on OpenGL and NOT on Metal.
+    // This line used to read "Vulkan/Metal/D3D" — Metal had never been run and
+    // was assumed to follow Vulkan because it is not OpenGL; on the Mac it
+    // flipped. The empirical matrix, and why the rule stays a negation, are in
+    // LineBedScene.qml.
+    // The feedback passes are self-consistent in texture space; this only
+    // affects the composite.
+    // Metal sides with OpenGL (2026-08-19) — the full matrix and the reason
+    // this stays a negation are in LineBedScene.qml.
     mirrorVertically: GraphicsInfo.api !== GraphicsInfo.OpenGL
+                      && GraphicsInfo.api !== GraphicsInfo.Metal
 
     // Called by ShaderSceneLayer on the pulse edge ONLY. `f` is the stashed
     // 517-byte frame (QbzShaderScene.ribbonFrame, raw bytes) or null when
