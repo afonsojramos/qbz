@@ -113,6 +113,26 @@ pub mod qbz_home {
         #[qproperty(QString, award_albums_json)]
         #[qproperty(bool, award_albums_loading)]
 
+        // --- Radio start-up indicator (src/foryou_qt.rs) -------------------
+        // "" while idle, else the KEY of the radio currently being built:
+        // "album:<id>" or "artist:<id>". A radio is not one request — it is a
+        // fetch, then a `get_tracks_batch` enrich (or the whole `qbz-radio`
+        // pool build), then the queue write — and until the first track
+        // resolves the UI has nothing to show, so the disc that was clicked
+        // read as a dead affordance. The button spins on this.
+        //
+        // A KEY, not a bool: the artist page and the album page can both be a
+        // back-step away from each other, and the Discover radio rail draws
+        // one disc per station. A bool would spin every one of them.
+        //
+        // ONE AT A TIME by construction — the key is overwritten, not stacked.
+        // That matches the domain (starting a radio replaces the queue, so a
+        // second one while the first is in flight is not a thing to support)
+        // and it means the LAST click owns the indicator.
+        //
+        // READ + NOTIFY: only `foryou_qt` writes it, always in pairs.
+        #[qproperty(QString, radio_pending, READ, NOTIFY)]
+
         type QbzHome = super::QbzHomeRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -238,9 +258,19 @@ pub mod qbz_home {
         /// Radio Stations tile — Qobuz `/radio/album` off the seed album.
         #[qinvokable]
         fn start_album_radio(self: Pin<&mut QbzHome>, album_id: QString);
-        /// Spotlight RADIO card — the smart `qbz-radio` artist pool.
+        /// Spotlight RADIO card — the smart `qbz-radio` artist pool. Also the
+        /// "QBZ Radio" row of the artist page's radio dropdown: Slint routes
+        /// both to the same `play_smart_artist_radio` (main.rs:12900).
         #[qinvokable]
         fn start_artist_radio(self: Pin<&mut QbzHome>, artist_id: QString);
+        /// The artist page's "Qobuz Radio" row — the plain `/radio/artist`
+        /// endpoint. It lives on THIS bridge and not on QbzArtist because its
+        /// implementation is `foryou_qt`'s, beside the smart twin and the album
+        /// radio it shares `enrich_radio_tracks` + `play_flat` with; splitting
+        /// the pair across two bridges to match the calling VIEW would put one
+        /// half of one dropdown in each.
+        #[qinvokable]
+        fn start_qobuz_artist_radio(self: Pin<&mut QbzHome>, artist_id: QString);
         /// Spotlight play / TOP TRACKS card — the artist's popular tracks.
         #[qinvokable]
         fn play_artist_top_tracks(self: Pin<&mut QbzHome>, artist_id: QString);
@@ -373,6 +403,7 @@ pub struct QbzHomeRust {
     award_loading: bool,
     award_albums_json: QString,
     award_albums_loading: bool,
+    radio_pending: QString,
 }
 
 impl Default for QbzHomeRust {
@@ -415,6 +446,7 @@ impl Default for QbzHomeRust {
             award_loading: false,
             award_albums_json: QString::from("{}"),
             award_albums_loading: false,
+            radio_pending: QString::default(),
         }
     }
 }
@@ -436,6 +468,18 @@ static QT_THREAD: OnceLock<CxxQtThread<QbzHome>> = OnceLock::new();
 /// document that was never built. Three builds went into proving that was NOT
 /// what was happening during the 2026-08-17 launch freeze; a single warn line
 /// would have answered it in one.
+/// Publish `radio_pending` (see the property's note). The property is
+/// READ + NOTIFY — no generated setter — and its backing field is private to
+/// this module, so the store + notify lives HERE and `foryou_qt` calls this.
+/// Same shape as `shader_scene_bridge::publish_pack`.
+pub(crate) fn publish_radio_pending(key: String) {
+    ui(move |mut b| {
+        use cxx_qt::CxxQtType as _;
+        b.as_mut().rust_mut().radio_pending = QString::from(key.as_str());
+        b.as_mut().radio_pending_changed();
+    });
+}
+
 pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzHome>) + Send + 'static) {
     match QT_THREAD.get() {
         Some(thread) => {
@@ -642,6 +686,10 @@ impl qbz_home::QbzHome {
 
     pub fn start_artist_radio(self: Pin<&mut Self>, artist_id: QString) {
         crate::foryou_qt::start_artist_radio(artist_id.to_string());
+    }
+
+    pub fn start_qobuz_artist_radio(self: Pin<&mut Self>, artist_id: QString) {
+        crate::foryou_qt::start_qobuz_artist_radio(artist_id.to_string());
     }
 
     pub fn play_artist_top_tracks(self: Pin<&mut Self>, artist_id: QString) {

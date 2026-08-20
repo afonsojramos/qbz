@@ -39,6 +39,7 @@
 //! | Spotlight        | `core().get_artist_page()` (+ `artist_qt::map_release` shape) |
 //! | album radio      | `core().get_radio_album()` + `get_tracks_batch()` enrich |
 //! | artist radio     | `core().create_smart_artist_radio()` (the `qbz-radio` pool builder) |
+//! | qobuz artist radio | `core().get_radio_artist()` + `get_tracks_batch()` enrich |
 //! | artist top tracks| `playback_qt::play_artist()` |
 //!
 //! ## POC-NOTEs (deliberate deltas vs the Slint build)
@@ -489,11 +490,52 @@ pub(crate) fn spotlight_play_top_tracks(artist_id: String) {
     });
 }
 
-/// Spotlight RADIO card — `media-action("artist", id, "radio")`, i.e. the
-/// SMART pool builder (`qbz-radio`), not `/radio/artist`.
+// ---------------------------------------------------------------------------
+//  Radio start-up indicator (QbzHome.radioPending)
+// ---------------------------------------------------------------------------
+
+/// Publish "a radio is being built for this key" / "nothing is".
+///
+/// EVERY radio entry point below arms this on the way in and disarms it on
+/// EVERY way out — the success path, the empty-result path and the error path
+/// alike. A leaked key is worse than no indicator at all: it is a disc that
+/// spins forever on a page the user is still looking at, and the only two
+/// exits from a network call are "it worked" and "it did not".
+///
+/// `RadioGuard` is what makes that structural rather than a rule three
+/// functions have to remember: it disarms in `Drop`, so an early `return` — or
+/// a future cancelled before it finishes — cannot skip it.
+fn set_radio_pending(key: &str) {
+    crate::home_bridge::publish_radio_pending(key.to_string());
+}
+
+/// Armed for the life of one radio build; disarms itself however the build
+/// ends. Held across the `.await`s, so it is dropped on the same task.
+struct RadioGuard;
+
+impl RadioGuard {
+    fn arm(key: &str) -> Self {
+        set_radio_pending(key);
+        RadioGuard
+    }
+}
+
+impl Drop for RadioGuard {
+    fn drop(&mut self) {
+        set_radio_pending("");
+    }
+}
+
+/// Spotlight RADIO card and the artist page's "QBZ Radio" row —
+/// `media-action("artist", id, "radio")` / `"radio-qbz"`, i.e. the SMART pool
+/// builder (`qbz-radio`), not `/radio/artist`.
 pub(crate) fn start_artist_radio(artist_id: String) {
     let runtime = crate::app();
     crate::spawn(async move {
+        // Armed BEFORE the parse: a bad id returns immediately and the guard's
+        // Drop clears it in the same turn, so the indicator never flickers,
+        // but the arming does not have to be duplicated after every early exit.
+        let _pending = RadioGuard::arm(&format!("artist:{artist_id}"));
         let Ok(id) = artist_id.parse::<u64>() else {
             log::warn!("[qbz-qt] smart radio: bad artist id {artist_id}");
             return;
@@ -506,6 +548,36 @@ pub(crate) fn start_artist_radio(artist_id: String) {
     });
 }
 
+/// The "Qobuz Radio" arm of the ARTIST PAGE's radio dropdown —
+/// `media-action("artist", id, "radio-qobuz")` in Slint
+/// (`ArtistPageView.slint:457` -> `main.rs:12906` ->
+/// `playback::play_artist_radio`). The plain Qobuz `/radio/artist` endpoint,
+/// as opposed to `start_artist_radio` above, which is the SMART `qbz-radio`
+/// pool builder wired to the dropdown's other row.
+///
+/// Its track objects are MINIMAL, exactly like the album radio's, so they go
+/// through the same `enrich_radio_tracks` re-fetch — without it the queue rows
+/// show no artist.
+pub(crate) fn start_qobuz_artist_radio(artist_id: String) {
+    let runtime = crate::app();
+    crate::spawn(async move {
+        // Same key as the smart arm: they are two rows of ONE dropdown on ONE
+        // disc, and that disc is what spins.
+        let _pending = RadioGuard::arm(&format!("artist:{artist_id}"));
+        match runtime.core().get_radio_artist(&artist_id).await {
+            Ok(resp) => {
+                let tracks = enrich_radio_tracks(&runtime, resp.tracks.items).await;
+                if tracks.is_empty() {
+                    log::warn!("[qbz-qt] qobuz artist radio {artist_id} returned no tracks");
+                    return;
+                }
+                play_flat(&runtime, tracks, 0, false).await;
+            }
+            Err(e) => log::warn!("[qbz-qt] qobuz artist radio {artist_id} failed: {e}"),
+        }
+    });
+}
+
 /// Radio Stations tile — `media-action("album", id, "radio")`, the Qobuz
 /// `/radio/album` endpoint. Its track objects are MINIMAL (no performer, no
 /// album), so they are re-fetched by id exactly like `playback.rs::
@@ -513,6 +585,7 @@ pub(crate) fn start_artist_radio(artist_id: String) {
 pub(crate) fn start_album_radio(album_id: String) {
     let runtime = crate::app();
     crate::spawn(async move {
+        let _pending = RadioGuard::arm(&format!("album:{album_id}"));
         match runtime.core().get_radio_album(&album_id).await {
             Ok(resp) => {
                 let tracks = enrich_radio_tracks(&runtime, resp.tracks.items).await;

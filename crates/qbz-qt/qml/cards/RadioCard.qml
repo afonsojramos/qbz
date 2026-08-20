@@ -46,6 +46,13 @@ Item {
     /// call sites today, kept separate so a future caller can split them.
     signal playRequested()
 
+    /// True while THIS card's radio is being built (QbzHome.radioPending).
+    /// The disc stops hiding on pointer-out and its glyph becomes a spinner:
+    /// a station takes a fetch + an enrich + a queue write to start, and the
+    /// tile's own hover affordance vanishing the moment you move the mouse is
+    /// what made the click read as lost.
+    property bool loading: false
+
     QbzTheme { id: theme }
 
     width: 200
@@ -107,22 +114,44 @@ Item {
             Rectangle {
                 anchors.fill: parent
                 color: "#000000"
-                opacity: panelArea.containsMouse || playArea.containsMouse ? 0.45 : 0.0
+                opacity: (root.loading || panelArea.containsMouse || playArea.containsMouse)
+                    ? 0.45 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 150 } }
             }
             Rectangle {
+                id: spinDisc
                 width: 44
                 height: 44
                 radius: 22
                 color: "#ffffff"
                 anchors.centerIn: parent
-                opacity: panelArea.containsMouse || playArea.containsMouse ? 1.0 : 0.0
+                // `root.loading` pins it up: the hover-only rule is right for
+                // an idle tile and wrong for one that is working, because the
+                // pointer leaves the moment the click lands.
+                opacity: (root.loading || panelArea.containsMouse || playArea.containsMouse)
+                    ? 1.0 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 150 } }
+                // Spinner on the SHARED SHELL PULSE — 12 degrees per ~30 Hz
+                // tick, one turn a second. Never a RotationAnimation: a
+                // continuous animator presents the whole window at display
+                // rate (THE PULSE LAW, qt-frontend/2026-08-11-scenegraph-
+                // batches §9), and a Discover rail can hold several of these.
+                // The Connections is disabled unless this card is the one
+                // loading, so an idle rail writes nothing.
+                property real spinPhase: 0
+                Connections {
+                    target: QbzShell
+                    enabled: root.loading && root.visible
+                    function onPulseMsChanged() {
+                        spinDisc.spinPhase = (spinDisc.spinPhase + 12) % 360
+                    }
+                }
                 QbzIcon {
-                    name: "play-fill"
+                    name: root.loading ? "loader-circle" : "play-fill"
                     width: 18
                     height: 18
                     anchors.centerIn: parent
+                    rotation: root.loading ? spinDisc.spinPhase : 0
                     tintName: "black"
                 }
                 MouseArea {
@@ -130,8 +159,10 @@ Item {
                     anchors.fill: parent
                     hoverEnabled: true
                     // The disc is invisible until the panel is hovered, so it
-                    // must not swallow the first press before it appears.
-                    enabled: parent.opacity > 0
+                    // must not swallow the first press before it appears — and
+                    // while the station is building there is nothing a second
+                    // press could do but start it again.
+                    enabled: parent.opacity > 0 && !root.loading
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.playRequested()
                 }
@@ -145,6 +176,7 @@ Item {
                 // therefore ON TOP. z pushes it back under.
                 z: -1
                 hoverEnabled: true
+                enabled: !root.loading
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.activated()
             }

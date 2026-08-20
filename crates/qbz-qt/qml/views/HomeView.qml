@@ -964,6 +964,9 @@ Rectangle {
                         // The patch map, not `artPath`: the rail's document is
                         // published ONCE and covers arrive per-URL.
                         artSource: root.forYouArtOf(modelData)
+                        // Per-station key, so the tile that was clicked is the
+                        // only one in the rail that spins.
+                        loading: QbzHome.radioPending === "album:" + modelData.albumId
                         // Both the card body and the hover disc start the
                         // album radio (the .slint wires `clicked` and `play`
                         // to the same callback).
@@ -1148,6 +1151,11 @@ Rectangle {
                             seedSubtitle: QbzSession.tr("Qobuz Radio Station", QbzSession.trRev)
                             label: QbzSession.tr("RADIO", QbzSession.trRev)
                             artSource: root.forYouArtOf(spot.doc)
+                            // The smart pool builder is the slowest radio in
+                            // the app; without this the tile went back to its
+                            // resting state the instant the pointer left.
+                            loading: QbzHome.radioPending
+                                === "artist:" + (spot.doc.artistId || "")
                             onActivated: QbzHome.startArtistRadio(spot.doc.artistId || "")
                             onPlayRequested: QbzHome.startArtistRadio(spot.doc.artistId || "")
                         }

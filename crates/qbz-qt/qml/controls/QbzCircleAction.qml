@@ -66,6 +66,13 @@ Rectangle {
     property bool active: false
     property bool primary: false
     property bool btnEnabled: true
+    /// While the action's work is in flight the glyph swaps for a spinning
+    /// arc (CircleAction.slint:18 / :77 — the reference has this arm and the
+    /// port did not, so every slow header action read as a dead click).
+    /// Clicks are gated for the duration: a second click cannot start the
+    /// same work twice, and it cannot re-open a dropdown over a request the
+    /// user already made.
+    property bool loading: false
     /// Light-on-dark palette for a button painted over artwork/atmosphere
     /// (CircleAction.slint's default arm; `on-surface: false` there).
     property bool overlay: false
@@ -94,8 +101,55 @@ Rectangle {
                 : (theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated)))
     border.width: primary ? 0 : 1.5
     border.color: overlay ? "#ccffffff" : theme.borderStrong
+    // A loading button keeps FULL opacity — it is working, not unavailable,
+    // and dimming it would say the opposite of what the spinner says. Only
+    // `btnEnabled` dims.
     opacity: btnEnabled ? 1.0 : 0.4
+
+    // --- The spinner arm --------------------------------------------------
+    // ON THE SHARED SHELL PULSE, never a RotationAnimation. Qt Quick has no
+    // partial redraws, so any continuous animator presents the WHOLE window at
+    // display rate — ~1.2% GPU per present on the owner's hybrid laptop
+    // (qt-frontend/2026-08-11-scenegraph-batches §9, THE PULSE LAW). A 60 Hz
+    // RotationAnimation for the two-to-five seconds a radio takes to build is
+    // exactly the bill that doctrine exists to refuse; theme/QbzSpinner.qml
+    // still uses one and is NOT reused here for that reason.
+    //
+    // 12 degrees per ~30 Hz pulse = one turn per second, the same rate and the
+    // same arithmetic as the offline manager's downloading glyph
+    // (OfflineManagerView.qml:154) and the transport's loading ring.
+    //
+    // The Connections is DISABLED unless the button is actually spinning and
+    // on screen, so at rest this component writes nothing at all — the other
+    // half of the law.
+    property real spinPhase: 0
+    Connections {
+        target: QbzShell
+        enabled: root.loading && root.visible
+        function onPulseMsChanged() { root.spinPhase = (root.spinPhase + 12) % 360 }
+    }
     QbzIcon {
+        visible: root.loading
+        name: "loader-circle"
+        // CircleAction.slint:78 `size: diameter * 0.45` — 19.8 on the 44px
+        // primary, 14.4 on the 32px secondary, i.e. deliberately a hair
+        // smaller than the glyph it replaces so the disc does not look fuller
+        // while it waits.
+        width: Math.round(root.width * 0.45)
+        height: Math.round(root.height * 0.45)
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
+        rotation: root.spinPhase
+        // CircleAction.slint:80-83, the same four-way selector the glyph tint
+        // uses below: dark on the solid white overlay primary, white on the
+        // overlay ghost, themed on-surface.
+        tintName: root.overlay
+            ? (root.primary ? "black" : "white")
+            : (root.primary ? theme.accentGlyphTint : root.onSurfaceTint)
+    }
+
+    QbzIcon {
+        visible: !root.loading
         name: root.name
         width: root.primary ? 19 : 15
         height: root.primary ? 19 : 15
@@ -140,9 +194,10 @@ Rectangle {
     MouseArea {
         id: cbArea
         anchors.fill: parent
-        enabled: parent.btnEnabled
+        enabled: parent.btnEnabled && !parent.loading
         hoverEnabled: true
-        cursorShape: parent.btnEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+        cursorShape: (parent.btnEnabled && !parent.loading)
+            ? Qt.PointingHandCursor : Qt.ArrowCursor
         onClicked: function (mouse) { parent.clicked(mouse) }
     }
 }

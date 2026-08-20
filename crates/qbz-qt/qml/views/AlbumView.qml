@@ -860,6 +860,11 @@ Rectangle {
                         QbzCircleAction {
                             name: "radio"
                             overlay: root.hdrOverlay
+                            // A radio is a fetch + an enrich + a queue write,
+                            // and until the first track resolves nothing on
+                            // screen moves. The key is per-album so this disc
+                            // spins and the Discover rail's stations do not.
+                            loading: QbzHome.radioPending === "album:" + albumHeader.id
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: QbzHome.startAlbumRadio(albumHeader.id)
                         }

@@ -2258,17 +2258,33 @@ Rectangle {
                                 QbzLibrary.libraryToggleFavorite("artist", artist.id)
                             }
                         }
-                        // Radio — the .slint opens a QBZ-radio / Qobuz-radio
-                        // dropdown; neither engine has a seam on this bridge,
-                        // and the dropdown it used to open had two rows that
-                        // just closed themselves. DIMMED and inert-by-
-                        // declaration until an engine lands.
+                        // Radio — ArtistPageView.slint:426-461: the disc opens
+                        // a two-row dropdown, QBZ Radio (the local `qbz-radio`
+                        // pool builder) vs Qobuz Radio (the curated
+                        // `/radio/artist` endpoint).
+                        //
+                        // IT WAS `btnEnabled: false` — dimmed and inert by
+                        // declaration, because at the time neither engine had a
+                        // seam on a Qt bridge and the port refuses to render a
+                        // control that drives nothing. Both exist now:
+                        // `QbzHome.startArtistRadio` (the smart pool, already
+                        // shipping behind the Discover spotlight's RADIO card)
+                        // and `QbzHome.startQobuzArtistRadio`, added with this
+                        // change. So the disc goes live and the dropdown is the
+                        // reference's, verbatim.
                         QbzCircleAction {
                             id: radioBtn
                             name: "radio"
                             overlay: root.hdrOverlay
-                            btnEnabled: false
+                            // BOTH dropdown rows arm the same key: they are
+                            // two ways to fill one queue from one disc, and
+                            // the disc is what the user is looking at. The
+                            // control also gates its own clicks while loading,
+                            // so the dropdown cannot be re-opened over a
+                            // request that is already running.
+                            loading: QbzHome.radioPending === "artist:" + artist.id
                             anchors.verticalCenter: parent.verticalCenter
+                            onClicked: radioMenu.openBelowLeft(radioBtn)
                         }
                         QbzCircleAction {
                             name: "element-connect"
@@ -3365,6 +3381,66 @@ Rectangle {
                                 onClicked: if ((modelData.url || "") !== "") Qt.openUrlExternally(modelData.url)
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Radio dropdown (the header disc) ----------------------------------
+    // ArtistPageView.slint:440-460 — 180px, two rows, `close-on-click`. Left
+    // aligned under the trigger (`x: 0px; y: 38px` there), which is what
+    // openBelowLeft does; openBelowRight would hang a 180px panel off to the
+    // LEFT of a 32px disc that sits at the start of the row.
+    QbzContextMenu {
+        id: radioMenu
+        menuWidth: 180
+        Repeater {
+            model: [
+                // Both labels already exist in the catalogue (they are the
+                // TrackContextMenu's), so this adds no new msgid to the eight
+                // locales.
+                { "label": QbzSession.tr("QBZ Radio", QbzSession.trRev), "action": "qbz" },
+                { "label": QbzSession.tr("Qobuz Radio", QbzSession.trRev), "action": "qobuz" },
+            ]
+            delegate: Rectangle {
+                required property var modelData
+                width: parent ? parent.width : 0
+                height: 33
+                radius: 5
+                color: rmiArea.containsMouse ? theme.surfaceHover : "transparent"
+                Row {
+                    anchors.fill: parent
+                    anchors.leftMargin: 8
+                    spacing: 8
+                    QbzIcon {
+                        name: "radio"
+                        width: 15
+                        height: 15
+                        anchors.verticalCenter: parent.verticalCenter
+                        tintName: rmiArea.containsMouse ? "textPrimary" : "secondary"
+                    }
+                    Text {
+                        height: parent.height
+                        width: parent.width - 23
+                        text: modelData.label
+                        color: rmiArea.containsMouse ? theme.textPrimary : theme.textSecondary
+                        font.pixelSize: 13
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                    }
+                }
+                MouseArea {
+                    id: rmiArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        radioMenu.close()
+                        if (modelData.action === "qbz")
+                            QbzHome.startArtistRadio(artist.id)
+                        else
+                            QbzHome.startQobuzArtistRadio(artist.id)
                     }
                 }
             }
