@@ -381,6 +381,10 @@ Rectangle {
                 x: 0
                 anchors.verticalCenter: parent.verticalCenter
                 kind: root.sourceKind
+                // A dense ROW: the media marks draw monochrome and tinted, like the
+                // hard-drive beside them. Colour logos are for cards — a list of
+                // them fights the text it labels.
+                mono: true
                 // Row glyph, so SourceGlyph.slint's numbers (:31 — 15px, the
                 // three Qobuz kinds 16px, muted local tint), not the version
                 // picker's flat-14 defaults.

@@ -174,6 +174,38 @@ Column {
     Item { width: 1; height: 28 }
 
     // ================================ PLEX ===============================
+    // The media servers, ABOVE Plex: Plex is the legacy integration and the
+    // one whose cache has not folded into the shared mirror yet, so the two
+    // newer ones lead. One component twice — every difference between the
+    // protocols is a property here rather than a second file.
+    MediaServerSettings {
+        width: parent.width
+        confirmHost: root.confirmHost
+        server: "jellyfin"
+        title: "Jellyfin"
+        state: (root.doc.library || ({})).jellyfin || ({})
+        subtitle: QbzSession.tr("Stream your own Jellyfin library, bit-perfect.", QbzSession.trRev)
+        urlPlaceholder: "http://192.168.0.10:8096"
+        // Jellyfin really can be tested without credentials.
+        testHint: QbzSession.tr("Checked before you sign in.", QbzSession.trRev)
+        credentialNote: QbzSession.tr("Jellyfin issues a token; your password is not stored.", QbzSession.trRev)
+        syncCost: QbzSession.tr("A first sync takes about a minute per 5,000 tracks.", QbzSession.trRev)
+    }
+
+    MediaServerSettings {
+        width: parent.width
+        confirmHost: root.confirmHost
+        server: "subsonic"
+        title: "Subsonic"
+        state: (root.doc.library || ({})).subsonic || ({})
+        subtitle: QbzSession.tr("Navidrome, Gonic, Airsonic and other Subsonic servers.", QbzSession.trRev)
+        urlPlaceholder: "http://192.168.0.10:4533"
+        // Subsonic has NO credential-free endpoint, so the test proves less.
+        testHint: QbzSession.tr("Only checks that a Subsonic server answers.", QbzSession.trRev)
+        credentialNote: QbzSession.tr("Subsonic has no session, so your password is stored to sign each request.", QbzSession.trRev)
+        syncCost: QbzSession.tr("Syncing is fast — a few seconds for a large library.", QbzSession.trRev)
+    }
+
     PlexSettings {
         width: parent.width
         doc: root.doc

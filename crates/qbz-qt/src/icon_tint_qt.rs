@@ -197,6 +197,16 @@ const MASTERS: &[(&str, &str)] = &[
     // differently" reads better answered here.
     ("gandalf", include_str!("../qml/assets/icons/primary/gandalf.svg")),
     ("globe", include_str!("../qml/assets/icons/primary/globe.svg")),
+    // ── Media-server BRAND marks, monochrome ──────────────────────────────
+    // Unlike the rest of this table these are logos, not UI glyphs, and they
+    // are here for one reason: they arrived as BLACK ink and are invisible on
+    // every dark theme untinted (rendered and looked at, 2026-08-20). This
+    // pipeline is the port's only shader-free way to recolour an SVG per
+    // theme, so the marks were normalised to the #ffffff master ink and joined
+    // it. Their COLOUR variants stay in `assets/brand/` and are drawn untinted
+    // like Plex's and Qobuz's — see `controls/SourceIcon.qml`.
+    ("jellyfin", include_str!("../qml/assets/icons/primary/jellyfin.svg")),
+    ("navidrome", include_str!("../qml/assets/icons/primary/navidrome.svg")),
     ("grip-vertical", include_str!("../qml/assets/icons/primary/grip-vertical.svg")),
     ("hard-drive", include_str!("../qml/assets/icons/primary/hard-drive.svg")),
     ("heart-filled", include_str!("../qml/assets/icons/primary/heart-filled.svg")),

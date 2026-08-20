@@ -179,6 +179,10 @@ Rectangle {
                 // benefit of the source chips. Without this the LIST mode of
                 // the very same album loses the gold mark the GRID shows.
                 kind: root.item.sourceRaw || root.item.source || ""
+                // A dense ROW: the media marks draw monochrome and tinted, like the
+                // hard-drive beside them. Colour logos are for cards — a list of
+                // them fights the text it labels.
+                mono: true
                 // .slint:319 — local 15, the marks 16; muted local tint.
                 glyphSize: 15
                 plexSize: 16

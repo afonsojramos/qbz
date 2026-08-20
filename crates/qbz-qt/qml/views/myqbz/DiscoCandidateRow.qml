@@ -430,6 +430,10 @@ Rectangle {
                 SourceIcon {
                     anchors.centerIn: parent
                     kind: root.candidate.source || ""
+                    // A dense ROW: the media marks draw monochrome and tinted, like the
+                    // hard-drive beside them. Colour logos are for cards — a list of
+                    // them fights the text it labels.
+                    mono: true
                     // Row glyph — SourceGlyph.slint:31: 15px, and the three
                     // Qobuz kinds one pixel larger (the wordmark's
                     // proportions). Explicit since the size rule became a

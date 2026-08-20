@@ -257,6 +257,10 @@ Rectangle {
                 visible: (feedRow.item.source || "") !== ""
                     && feedRow.item.source !== "qobuz"
                 kind: feedRow.item.source || ""
+                // A dense ROW: the media marks draw monochrome and tinted, like the
+                // hard-drive beside them. Colour logos are for cards — a list of
+                // them fights the text it labels.
+                mono: true
                 glyphSize: 15
                 plexSize: 16
                 qobuzSize: 16

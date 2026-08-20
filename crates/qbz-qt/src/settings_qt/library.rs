@@ -61,6 +61,61 @@ pub struct PlexFields {
     pub collapsed: bool,
 }
 
+/// One media server's panel state.
+///
+/// The credential itself NEVER leaves Rust — the panel gets `hasCredential`
+/// and nothing else, the same discipline `PlexFields` keeps with its token.
+/// A password round-tripping through a QML string property would sit in the
+/// scene graph's memory and in any JSON the panel logged.
+/// Read one media server's persisted settings into the panel's shape.
+fn media_fields(
+    kind: qbz_app::settings::media_servers::MediaServerKind,
+) -> MediaServerFields {
+    let s = crate::media_servers_qt::get(kind);
+    MediaServerFields {
+        enabled: s.enabled,
+        collapsed: s.ui_collapsed,
+        server_url: s.base_url.clone(),
+        // Jellyfin stores the USER ID here (every /Items call keys on it), so
+        // it is not a name worth prefilling. Subsonic stores the real account
+        // name and sends it on every request.
+        username: match kind {
+            qbz_app::settings::media_servers::MediaServerKind::Subsonic => s.username.clone(),
+            _ => String::new(),
+        },
+        has_credential: s.is_configured(kind),
+        server_name: s.server_name.clone(),
+        cached_tracks: s.last_sync_tracks,
+        last_sync_at: s.last_sync_at,
+    }
+}
+
+#[derive(Clone, Default, Serialize)]
+pub struct MediaServerFields {
+    pub enabled: bool,
+    pub collapsed: bool,
+    /// The persisted address — prefills the field.
+    #[serde(rename = "serverUrl")]
+    pub server_url: String,
+    /// The account name. Not secret, and prefilling it saves a retype.
+    pub username: String,
+    /// A usable credential is stored (a Jellyfin token, or a Subsonic
+    /// password). What KIND it is differs per protocol and the panel does not
+    /// need to know.
+    #[serde(rename = "hasCredential")]
+    pub has_credential: bool,
+    /// What the server called itself at connect time ("blitzmini 10.11.11",
+    /// "navidrome 1.16.1"). Empty until a successful connect.
+    #[serde(rename = "serverName")]
+    pub server_name: String,
+    /// Tracks cached by the last completed sweep.
+    #[serde(rename = "cachedTracks")]
+    pub cached_tracks: i64,
+    /// Unix seconds of that sweep; 0 = never.
+    #[serde(rename = "lastSyncAt")]
+    pub last_sync_at: i64,
+}
+
 #[derive(Clone, Default, Serialize)]
 pub struct Snapshot {
     pub folders: Vec<FolderRow>,
@@ -75,6 +130,10 @@ pub struct Snapshot {
     /// Inline result of the last add/remove (empty when there is nothing to say).
     pub status: String,
     pub plex: PlexFields,
+    /// Jellyfin and Subsonic. One shape twice, because the panel is one form
+    /// twice — see `qbz_app::settings::media_servers`.
+    pub jellyfin: MediaServerFields,
+    pub subsonic: MediaServerFields,
     /// The per-folder settings modal (`LibFolderEditModal.slint`). Rides the
     /// settings document rather than a bridge of its own — it is a surface of
     /// this panel and every one of its actions already lands in this module.
@@ -250,6 +309,12 @@ pub fn snapshot() -> Snapshot {
             .clone(),
         clearing: CLEARING.load(Ordering::SeqCst),
         status: STATUS.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        jellyfin: media_fields(
+            qbz_app::settings::media_servers::MediaServerKind::Jellyfin,
+        ),
+        subsonic: media_fields(
+            qbz_app::settings::media_servers::MediaServerKind::Subsonic,
+        ),
         plex: PlexFields {
             has_token: !plex_cfg.token.trim().is_empty(),
             server_url: plex_cfg.base_url,

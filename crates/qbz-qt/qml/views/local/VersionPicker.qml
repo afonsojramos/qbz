@@ -38,6 +38,10 @@ Rectangle {
         SourceIcon {
             anchors.verticalCenter: parent.verticalCenter
             kind: root.currentVersion.source || "local"
+            // A dense ROW: the media marks draw monochrome and tinted, like the
+            // hard-drive beside them. Colour logos are for cards — a list of
+            // them fights the text it labels.
+            mono: true
             // No size overrides on purpose: LocalAlbumView.slint:24-26 draws
             // ALL THREE kinds at a flat 14px here, which is SourceIcon's
             // default (the row glyphs are the ones that grow the marks).
@@ -86,6 +90,7 @@ Rectangle {
                     SourceIcon {
                         anchors.verticalCenter: parent.verticalCenter
                         kind: opt.modelData.source || "local"
+                        mono: true
                     }
                     Text {
                         width: parent.width - 22 - (opt.index === root.current ? 20 : 0)

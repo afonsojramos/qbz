@@ -642,6 +642,8 @@ fn main() {
                 "qml/settings/LocalLibrarySettings.qml",
                 "qml/settings/OfflineSettings.qml",
                 "qml/settings/PlaybackSettings.qml",
+                // ONE component instantiated twice (Jellyfin + Subsonic).
+                "qml/settings/MediaServerSettings.qml",
                 "qml/settings/PlexSettings.qml",
                 "qml/settings/SandboxSettings.qml",
                 "qml/settings/SettingsConfirmHost.qml",

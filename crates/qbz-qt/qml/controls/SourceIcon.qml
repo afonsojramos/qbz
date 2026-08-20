@@ -30,6 +30,28 @@
 // needs a tint on a multi-colour asset, so it is the one arm that uses an
 // effect; on a software renderer it degrades to the untinted mark rather than
 // to nothing.
+//
+// ── JELLYFIN AND SUBSONIC COME IN TWO FLAVOURS ────────────────────────────
+// Both ship a COLOUR mark and a MONOCHROME one, and `mono` picks. Cards get
+// the colour brand mark like Qobuz and Plex; dense rows get the monochrome
+// glyph, tinted with `localTint` exactly like the hard-drive.
+//
+// The monochrome pair goes through `QbzIcon`, NOT through a plain `Image`.
+// That is not a style choice — the source files are BLACK ink, so untinted
+// they are invisible on every dark theme (rendered and looked at, 2026-08-20).
+// `QbzIcon` recolours per theme at runtime with no shader involved, which is
+// also why they had to be added to `icon_tint_qt::MASTERS` with their ink
+// normalised to #ffffff: that literal IS the tint pipeline's contract.
+//
+// The Jellyfin colour asset arrived with a WHITE rounded-rect plate behind the
+// mark. It was stripped: every other brand mark here is transparent, and a
+// white tile beside them reads as a rendering bug rather than a logo.
+//
+// HONEST CAVEAT on the Subsonic mark: it is NAVIDROME's logo, and `subsonic`
+// is one source covering Navidrome, Gonic, Airsonic, Astiga and Ampache. A
+// Gonic user sees a Navidrome mark. `ping.view` reports the server's own
+// `type`, which is already persisted as `server_name`, so branching the glyph
+// later is cheap — this is a known wrongness, not an unnoticed one.
 
 import QtQuick
 import QtQuick.Effects
@@ -40,7 +62,7 @@ Item {
     id: root
 
     /// "local" | "qobuz" | "qobuz_download" | "qobuz_purchase" | "offline" |
-    /// "plex" (anything else = local).
+    /// "plex" | "jellyfin" | "subsonic" (anything else = local).
     ///
     /// `"offline"` is the Qt port's word for the Slint's `qobuz_download`
     /// (src/local_rows.rs:223-229 `badge_source`, which folds `qobuz_download`
@@ -62,7 +84,14 @@ Item {
     /// 22 for `qobuz_download` on `AlbumCard.slint:352` — the wordmark's
     /// proportions need the extra pixels.
     property int qobuzSize: -1
-    /// Tint of the MONOCHROME local glyph. "secondary" = LocalAlbumView.slint:36;
+    /// Draw the MONOCHROME variant instead of the colour brand mark.
+    ///
+    /// Only Jellyfin and Subsonic have one; every other kind ignores it. Rows
+    /// set it, cards do not — a dense list of coloured logos fights the text,
+    /// which is the same reason the local glyph was never a colour mark.
+    property bool mono: false
+    /// Tint of the MONOCHROME glyphs — the local hard-drive, and the two
+    /// media-server marks when `mono`. "secondary" = LocalAlbumView.slint:36;
     /// "muted" = SourceGlyph.slint:28, whose header calls the
     /// muted-never-accent rule load-bearing; "white" = the card badges
     /// (AlbumCard.slint:347 / TrackCard.slint:190), which sit on a near-black
@@ -73,8 +102,21 @@ Item {
         || kind === "qobuz_purchase" || kind === "offline"
     readonly property bool isPlex: kind === "plex"
     readonly property bool isPurchase: kind === "qobuz_purchase"
+    readonly property bool isJellyfin: kind === "jellyfin"
+    // Every brand spelling of a Subsonic server folds to ONE mark, matching
+    // `SourceId::from_word` — a row stamped "navidrome" must not fall through
+    // to the local hard-drive.
+    readonly property bool isSubsonic: kind === "subsonic" || kind === "navidrome"
+        || kind === "gonic" || kind === "airsonic" || kind === "astiga"
+    readonly property bool isMedia: root.isJellyfin || root.isSubsonic
+    /// The media marks in COLOUR (cards); `mono` sends them to `QbzIcon`.
+    readonly property bool mediaColour: root.isMedia && !root.mono
 
-    width: root.isPlex
+    /// Media marks size with the PLEX knob: every call site that sizes Plex is
+    /// sizing "a server's logo", and the two new ones belong in that slot.
+    /// Giving them a knob of their own would mean every future call site has to
+    /// remember a third one.
+    width: (root.isPlex || root.isMedia)
         ? (root.plexSize < 0 ? root.glyphSize : root.plexSize)
         : (root.isQobuz
             ? (root.qobuzSize < 0 ? root.glyphSize : root.qobuzSize)
@@ -87,9 +129,11 @@ Item {
     Image {
         id: mark
         anchors.fill: parent
-        visible: (root.isQobuz && !root.isPurchase) || root.isPlex
+        visible: (root.isQobuz && !root.isPurchase) || root.isPlex || root.mediaColour
         source: root.isPlex ? root.brandDir + "plex-logo.svg"
-                            : root.brandDir + "qobuz-logo-filled.svg"
+              : root.isJellyfin && !root.mono ? root.brandDir + "jellyfin-logo.svg"
+              : root.isSubsonic && !root.mono ? root.brandDir + "navidrome-logo.svg"
+              : root.brandDir + "qobuz-logo-filled.svg"
         fillMode: Image.PreserveAspectFit   // SourceGlyph's `image-fit: contain`
         // Decode at the size actually drawn: these are a 512x512 and a
         // ~1000x1006 source rendered into 14-22px.
@@ -123,11 +167,15 @@ Item {
         }
     }
 
-    // --- Local / anything else: the monochrome glyph, tinted ---------------
+    // --- Monochrome, tinted: the local hard-drive, and the two media marks
+    //     when `mono`. All three go through QbzIcon because all three are
+    //     single-ink glyphs whose ink has to follow the theme.
     QbzIcon {
         anchors.fill: parent
-        visible: !root.isQobuz && !root.isPlex
-        name: "hard-drive"
+        visible: !root.isQobuz && !root.isPlex && !root.mediaColour
+        name: root.isJellyfin ? "jellyfin"
+            : root.isSubsonic ? "navidrome"
+            : "hard-drive"
         tintName: root.localTint
     }
 }

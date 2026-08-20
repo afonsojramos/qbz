@@ -180,6 +180,10 @@ Item {
         // `source` folds into "offline" so the source chips still filter it.
         // A purchased track's row is gold; a plain download's is not.
         kind: root.item.sourceRaw || root.item.source || ""
+        // A dense ROW: the media marks draw monochrome and tinted, like the
+        // hard-drive beside them. Colour logos are for cards — a list of
+        // them fights the text it labels.
+        mono: true
         // .slint:722 — local 15, the marks 16. `localTint` muted is the rule
         // SourceGlyph.slint:6-8 calls load-bearing (never accent).
         glyphSize: 15

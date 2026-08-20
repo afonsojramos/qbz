@@ -688,6 +688,44 @@ pub async fn play_single_from_source(runtime: &Runtime, track_id: u64, source: &
             .ok()
             .flatten()
         }
+        // The media servers resolve through the SEAM, not through a
+        // `LocalTrack`: their rows live in the shared remote cache and have no
+        // `library.db` row to mint one from. `registry.tracks_of` claims the
+        // namespaced id and hands back a queue row directly, which is the
+        // shape this function was building by hand for the other sources.
+        "jellyfin" | "subsonic" | "navidrome" | "gonic" | "airsonic" | "astiga" => {
+            let raw = qbz_source::RawRef {
+                source: qbz_source::SourceId::from_word(source),
+                kind: Some(qbz_source::ItemKind::Track),
+                id: track_id.to_string(),
+                is_local: Some(true),
+                ..Default::default()
+            };
+            return match qbz_source::registry().tracks_of(&raw).await {
+                Ok(tracks) if !tracks.is_empty() => {
+                    let first = tracks[0].clone();
+                    if crate::playback_qt::set_queue_stamped(runtime, tracks, Some(0), None)
+                        .await
+                        .is_none()
+                    {
+                        log::warn!("[qbz-qt] {source} play: the queue was filtered to nothing");
+                        return false;
+                    }
+                    crate::playback_qt::publish_queue(runtime).await;
+                    let played = play_audible(runtime, &first).await;
+                    crate::playback_qt::refresh_now_playing(runtime).await;
+                    played
+                }
+                Ok(_) => {
+                    log::warn!("[qbz-qt] {source} play: track {track_id} resolved to nothing");
+                    false
+                }
+                Err(e) => {
+                    log::warn!("[qbz-qt] {source} play: track {track_id} not resolvable: {e}");
+                    false
+                }
+            };
+        }
         other => {
             log::warn!("[qbz-qt] play: unknown source {other:?} for track {track_id}");
             return false;

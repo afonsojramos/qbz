@@ -249,6 +249,16 @@ pub fn artist_key(name: &str) -> String {
 pub fn badge_source(raw: Option<&str>) -> String {
     match raw {
         Some("plex") => "plex".into(),
+        // The media servers. Missing here they fell into the `_` arm and every
+        // Jellyfin album in the grid drew the LOCAL HARD-DRIVE glyph — which is
+        // not a cosmetic slip: the badge is what tells a user whose disk a
+        // track lives on, and the source chips filter on this exact string.
+        // Caught by looking at the window, 2026-08-20; no test and no audit
+        // could see it, because folding to "local" is a perfectly valid answer
+        // for a word this function was never taught.
+        Some("jellyfin") => "jellyfin".into(),
+        Some("subsonic") | Some("navidrome") | Some("gonic") | Some("airsonic")
+        | Some("astiga") => "subsonic".into(),
         Some("qobuz_download") | Some("qobuz_purchase") => "offline".into(),
         _ => "local".into(),
     }

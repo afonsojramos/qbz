@@ -755,6 +755,7 @@ impl qbz_local::QbzLocal {
             match crate::media_servers_qt::connect(kind, &url, &user, &pass).await {
                 Ok(()) => {
                     crate::toast_qt::success(qbz_i18n::t("Connected"));
+                    crate::settings_qt::publish_snapshot().await;
                     run_media_sync(kind, true).await;
                 }
                 Err(e) => crate::toast_qt::error(e),
@@ -770,6 +771,12 @@ impl qbz_local::QbzLocal {
             let mut cfg = crate::media_servers_qt::get(kind);
             cfg.enabled = enabled;
             crate::media_servers_qt::put(kind, &cfg);
+            // The panel reads `state.enabled` off the SETTINGS DOCUMENT, not
+            // off a bridge property the way Plex's toggle does — so a write
+            // that does not republish leaves the switch visually stuck in its
+            // old position while the store underneath has already changed
+            // (caught by driving the real window, 2026-08-20).
+            crate::settings_qt::publish_snapshot().await;
             // The union IS the query — the grid/tracks/badges must re-run.
             reload_browse();
         });
@@ -795,6 +802,7 @@ impl qbz_local::QbzLocal {
         };
         crate::spawn(async move {
             crate::media_servers_qt::disconnect(kind);
+            crate::settings_qt::publish_snapshot().await;
             // Purge the rows too: leaving them would keep a signed-out
             // server's music in the grid until something else cleared it,
             // and the master-toggle path deliberately does NOT purge (so it
@@ -1105,6 +1113,9 @@ async fn run_media_sync(kind: qbz_app::settings::media_servers::MediaServerKind,
                 r.pruned,
                 r.total
             );
+            // The sweep stamped `last_sync_at` / `last_sync_tracks`; without a
+            // republish the panel keeps reporting "Not synced yet".
+            crate::settings_qt::publish_snapshot().await;
             reload_browse();
         }
         Err(e) => crate::toast_qt::error(e),

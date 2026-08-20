@@ -141,7 +141,12 @@ fi
 if [[ "${NO_AUDIT:-0}" != 1 ]]; then
   if [[ -d "${AUDIT_DIR}" ]] && command -v python3 >/dev/null 2>&1; then
     audit_abs="$(pwd)/${QT_CRATE}"
-    for a in qml_resolution_audit.py qml_singleton_xref.py qml_eager_tab_audit.py; do
+    # `qml_module_registration_audit.py` is the newest and it exists because the
+    # other three could not see the failure it catches: a .qml on disk that is
+    # missing from build.rs is not in the QML MODULE, so it resolves fine on
+    # disk, compiles nothing, and blanks a whole page at runtime with
+    # "<Component> is not a type" (2026-08-20, the media-server panel).
+    for a in qml_resolution_audit.py qml_singleton_xref.py qml_eager_tab_audit.py qml_module_registration_audit.py; do
       [[ -r "${AUDIT_DIR}/${a}" ]] || { warn "audit ${a} not found — skipped"; continue; }
       if ! python3 "${AUDIT_DIR}/${a}" "${audit_abs}"; then
         die "${a} FAILED — fix it before burning a build (QML resolves lazily; this is what cargo cannot tell you)."

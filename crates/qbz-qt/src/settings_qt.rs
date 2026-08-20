@@ -2378,6 +2378,22 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
             save_pref("plex_ui_collapsed", serde_json::json!(value));
             Ok(Apply::None)
         }
+        // The media servers keep their collapse state in their OWN store
+        // rather than in ui_prefs, because the whole row lives there — a
+        // second home for one boolean is how the two drift out of step on a
+        // user switch.
+        "jellyfin-collapse" | "subsonic-collapse" => {
+            use qbz_app::settings::media_servers::MediaServerKind;
+            let kind = if key.starts_with("jellyfin") {
+                MediaServerKind::Jellyfin
+            } else {
+                MediaServerKind::Subsonic
+            };
+            let mut cfg = crate::media_servers_qt::get(kind);
+            cfg.ui_collapsed = value;
+            crate::media_servers_qt::put(kind, &cfg);
+            Ok(Apply::None)
+        }
         other => {
             log::warn!("[qbz-qt] unknown settings bool key: {other}");
             return;
