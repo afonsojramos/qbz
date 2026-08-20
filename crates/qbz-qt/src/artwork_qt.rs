@@ -165,6 +165,40 @@ pub fn classify(url: &str) -> ArtUrl {
     if let Some(path) = url.strip_prefix("file://") {
         return ArtUrl::LocalFile(path.to_string());
     }
+    // A SOURCE-TAGGED token (`jellyfin:<albumId>/<tag>`,
+    // `subsonic:al-<id>_<hash>`), stamped by `local_queue_track` for a media
+    // server row.
+    //
+    // This is the ONE arm that does not guess. Every other arm above reads the
+    // SHAPE of the string, which works for a filesystem path and a CDN url and
+    // is exactly what fails for an opaque token: a Jellyfin image tag looks
+    // like nothing in particular, and a Subsonic coverArt id looks like a
+    // relative path. So the tag names the owner and the owner is asked —
+    // `registry().artwork_token` is the same call the Local Library grid makes,
+    // so a cover fetched for a queue row and the same cover in the grid share
+    // one cache entry.
+    //
+    // It is here rather than at the 111 call sites of `cached_path` for the
+    // same reason `classify` exists at all: one taxonomy, asked from
+    // everywhere. The difference is that this arm delegates instead of
+    // sniffing.
+    if let Some((word, token)) = url.split_once(':') {
+        if let Some(id) = qbz_source::SourceId::from_word(word) {
+            if matches!(id, qbz_source::SourceId::JELLYFIN | qbz_source::SourceId::SUBSONIC) {
+                return match qbz_source::registry()
+                    .artwork_token(id, token, qbz_source::ArtSize::Card)
+                {
+                    qbz_source::ArtRef::Fetch { url, .. } => ArtUrl::Http(url),
+                    // The server is not connected. Reuse the Plex arm's answer:
+                    // "the art exists, it cannot be resolved right now", so the
+                    // miss is logged for what it is instead of looking like a
+                    // dead download.
+                    qbz_source::ArtRef::Unavailable(_) => ArtUrl::PlexUnconfigured,
+                    _ => ArtUrl::Empty,
+                };
+            }
+        }
+    }
     // A Plex thumb is server-relative; it needs base url + token to exist.
     // `local_plex::thumb_url` is the SAME builder the Local Library grid
     // uses, so both surfaces produce identical cache keys.
@@ -843,6 +877,31 @@ mod tests {
 
     #[test]
     fn relative_and_empty_urls_are_empty() {
+        // A SOURCE-TAGGED media token is DELEGATED, never sniffed. Untagged, a
+        // Jellyfin `<albumId>/<tag>` and a Subsonic `al-x_y` are both shapes
+        // this function would have called `Empty` or a filesystem path — which
+        // is why the now-playing bar, the queue and MPRIS showed no cover for a
+        // media-server track even though the grid did.
+        //
+        // Disconnected answers `PlexUnconfigured` rather than `Empty` for the
+        // same reason the Plex arm does: the art EXISTS, it cannot be resolved
+        // right now, and the two must stay distinguishable. Nothing is
+        // connected in a unit test, so that is what this asserts — the
+        // CONNECTED shape is covered where the credentials live
+        // (`JellyfinSource::artwork_token`).
+        assert_eq!(classify("jellyfin:alb-1/deadbeef"), ArtUrl::PlexUnconfigured);
+        assert_eq!(classify("subsonic:al-abc_59fec8ff"), ArtUrl::PlexUnconfigured);
+        // A brand spelling folds the same way the source words do.
+        assert_eq!(classify("navidrome:al-abc"), ArtUrl::PlexUnconfigured);
+        // A Subsonic track cover id contains its own colon; only the FIRST
+        // separator may be consumed.
+        assert_eq!(classify("subsonic:dc-abc:1_0"), ArtUrl::PlexUnconfigured);
+        // And the arm must not swallow anything that merely contains a colon.
+        assert_eq!(
+            classify("https://static.qobuz.com/images/covers/a.jpg"),
+            ArtUrl::Http("https://static.qobuz.com/images/covers/a.jpg".into())
+        );
+        assert_eq!(classify("plex:whatever"), ArtUrl::Empty);
         assert_eq!(classify(""), ArtUrl::Empty);
         assert_eq!(classify("   "), ArtUrl::Empty);
         assert_eq!(classify("covers/a.jpg"), ArtUrl::Empty);

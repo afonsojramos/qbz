@@ -67,8 +67,21 @@ Item {
     readonly property int cellH: 266
     readonly property int headerH: 34
     readonly property int listRowH: 56
+    /// Columns, or 0 while the width is still UNKNOWN.
+    ///
+    /// Zero is not a degenerate case to be clamped away — it is the honest
+    /// answer, and clamping it to 1 is what put a full-length ONE-COLUMN grid
+    /// on screen at every mount. `Component.onCompleted` builds synchronously
+    /// (deliberately, so the grid is not empty for a frame), and at that moment
+    /// `width` is still 0, so `Math.max(1, …)` said "one column" and the whole
+    /// album list was chunked one-per-row. The real width arrives a moment
+    /// later, `onColsChanged` fires, and the entire model is thrown away and
+    /// rebuilt — the reflow the owner sees, and it is visible for exactly as
+    /// long as chunking every album twice takes.
+    ///
+    /// A list view really is one column, so that arm keeps its 1.
     readonly property int cols: viewMode === "grid"
-        ? Math.max(1, Math.floor(width / cellW)) : 1
+        ? (width > 0 ? Math.max(1, Math.floor(width / cellW)) : 0) : 1
 
     /// Stand-in for a grid slot with no album — the last row of a group is
     /// rarely full, and since the cell count is now CONSTANT (that is what
@@ -106,6 +119,11 @@ Item {
     property int rebuildCount: 0
 
     function rebuild() {
+        // No width yet: build NOTHING rather than something guaranteed wrong.
+        // One empty frame beats a full-length one-column grid that has to be
+        // discarded — and in the common case the width IS known here, so this
+        // never fires and the synchronous first build is unchanged.
+        if (cols <= 0) return
         var _t0 = Date.now()
         var out = []
         var flatOut = []
@@ -144,6 +162,7 @@ Item {
         root.rebuildCount += 1
         console.info(colTiming, "[coltiming] rebuild #" + root.rebuildCount
             + " surface=" + root.surface + " grouped=" + root.grouped
+            + " cols=" + per
             + " albums=" + flatOut.length + " entries=" + out.length
             + " in " + (Date.now() - _t0) + "ms")
         report()

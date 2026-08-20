@@ -319,6 +319,119 @@ pub fn purge_cache(kind: MediaServerKind) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The `LocalTrack` shape — what every Local Library surface consumes
+// ---------------------------------------------------------------------------
+
+/// Map a cached remote row into the `LocalTrack` shape the Local Library's
+/// album page, per-disc menu, bulk bar and row cache all read.
+///
+/// The Plex sibling is `local_plex::map_cached_to_local_track`. Two fields are
+/// decided differently and both matter:
+///
+/// - `file_path` carries the SERVER'S OWN id, not a path. A remote track has no
+///   file on this machine, and this is the slot `local_queue_track` stamps into
+///   `source_item_id_hint` — which is exactly what `claim` prefers, because a
+///   server id survives a cache rebuild that renumbers rowids. Nothing ever
+///   opens it as a path; `LocalSource` never sees these rows.
+/// - `album_group_key` is the PREFIXED key (`jellyfin:<albumId>`), matching the
+///   one the grid's SQL union publishes, so "go to album" from a track row
+///   lands on the same page the card opens.
+pub fn cached_to_local_track(t: qbz_media_cache::CachedTrack) -> qbz_library::LocalTrack {
+    qbz_library::LocalTrack {
+        id: t.id,
+        file_path: t.item_id,
+        title: t.title,
+        artist: t.artist.clone(),
+        album_artist: (!t.album_artist.is_empty()).then_some(t.album_artist),
+        album: t.album.clone(),
+        album_group_key: format!("{}:{}", t.source, t.album_id),
+        album_group_title: t.album,
+        track_number: t.track_number,
+        disc_number: t.disc_number,
+        duration_secs: t.duration_ms / 1000,
+        format: parse_audio_format(&t.container, t.codec.as_deref()),
+        bit_depth: t.bit_depth,
+        sample_rate: t.sample_rate_hz.unwrap_or(0) as f64,
+        year: t.year,
+        artwork_path: t.artwork_token,
+        source: Some(t.source),
+        ..Default::default()
+    }
+}
+
+/// Container/codec name -> the enum the quality badge derives from.
+///
+/// Both are consulted because the two protocols disagree about which one is
+/// populated: Jellyfin reports a `Container` and often a codec, Subsonic
+/// reports a `suffix` and a MIME type.
+fn parse_audio_format(container: &str, codec: Option<&str>) -> qbz_library::AudioFormat {
+    use qbz_library::AudioFormat as F;
+    let probe = |s: &str| -> Option<F> {
+        let s = s.to_ascii_lowercase();
+        if s.contains("flac") {
+            Some(F::Flac)
+        } else if s.contains("mp3") || s.contains("mpeg") {
+            Some(F::Mp3)
+        } else if s.contains("alac") || s.contains("m4a") || s.contains("mp4") {
+            Some(F::Alac)
+        } else if s.contains("wav") {
+            Some(F::Wav)
+        } else if s.contains("aiff") {
+            Some(F::Aiff)
+        } else {
+            None
+        }
+    };
+    probe(container)
+        .or_else(|| codec.and_then(probe))
+        .unwrap_or(F::Flac)
+}
+
+/// The tracks of one remote album, by its PREFIXED grid key
+/// (`jellyfin:<albumId>` / `subsonic:<albumId>`), in disc/track order.
+///
+/// `None` when the key is not a remote one, so the caller falls through to
+/// `library.db` exactly as before.
+pub fn album_tracks(prefixed_key: &str) -> Option<Vec<qbz_library::LocalTrack>> {
+    let (word, album_id) = prefixed_key.split_once(':')?;
+    let source = qbz_media_cache::RemoteSource::from_word(word)?;
+    let handle = match source {
+        qbz_media_cache::RemoteSource::Jellyfin => qbz_source::registry().jellyfin().cache(),
+        qbz_media_cache::RemoteSource::Subsonic => qbz_source::registry().subsonic().cache(),
+    };
+    let rows = handle
+        .with(|c| qbz_media_cache::album_tracks(c, source, album_id).unwrap_or_default())
+        .unwrap_or_default();
+    Some(rows.into_iter().map(cached_to_local_track).collect())
+}
+
+/// Substring search across one remote source, in the `LocalTrack` shape.
+pub fn search_tracks(query: &str, limit: Option<u32>) -> Vec<qbz_library::LocalTrack> {
+    let mut out = Vec::new();
+    for kind in MediaServerKind::ALL {
+        if !get(kind).is_configured(kind) {
+            continue;
+        }
+        let (source, handle) = match kind {
+            MediaServerKind::Jellyfin => (
+                qbz_media_cache::RemoteSource::Jellyfin,
+                qbz_source::registry().jellyfin().cache(),
+            ),
+            MediaServerKind::Subsonic => (
+                qbz_media_cache::RemoteSource::Subsonic,
+                qbz_source::registry().subsonic().cache(),
+            ),
+        };
+        if let Some(rows) = handle
+            .with(|c| qbz_media_cache::search(c, source, query, limit).unwrap_or_default())
+        {
+            out.extend(rows.into_iter().map(cached_to_local_track));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

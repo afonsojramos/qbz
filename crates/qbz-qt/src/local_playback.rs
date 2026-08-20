@@ -144,16 +144,33 @@ pub fn local_queue_track(t: &LocalTrack) -> QueueTrack {
     let src = match t.source.as_deref() {
         Some("qobuz_download") => "qobuz_download",
         Some("plex") => "plex",
+        // The media servers. Folding these into "local" — which the `_` arm
+        // did — put a Jellyfin row into the queue wearing the wrong source
+        // word AND with no server id, so it changed the now-playing bar and
+        // then played nothing: `claim` had a namespaced id and a word that
+        // disagreed with it.
+        Some("jellyfin") => "jellyfin",
+        Some("subsonic") | Some("navidrome") | Some("gonic") | Some("airsonic")
+        | Some("astiga") => "subsonic",
         _ => "local",
     };
     let is_offline = src == "qobuz_download";
     let is_plex = src == "plex";
+    let is_media = src == "jellyfin" || src == "subsonic";
     // A Plex row carries a RAW server-relative thumb path; it must stay raw
     // so the now-playing bar / queue resolve it from current creds.
     // `file://`-prefixing it poisons it into a local-read miss.
     let artwork_url = t.artwork_path.as_ref().map(|p| {
         if is_plex || p.starts_with("file://") {
             p.clone()
+        } else if is_media {
+            // SOURCE-TAGGED, because a media server's token is meaningless on
+            // its own: a Jellyfin image tag and a Subsonic coverArt id are
+            // both opaque, and the now-playing bar / queue / MPRIS resolve an
+            // `artwork_url` through the shared taxonomy with no row in hand.
+            // The tag is what lets that taxonomy hand it back to the source
+            // that issued it instead of guessing (`artwork_qt::classify`).
+            format!("{src}:{p}")
         } else {
             format!("file://{p}")
         }
@@ -186,6 +203,9 @@ pub fn local_queue_track(t: &LocalTrack) -> QueueTrack {
         album_id: Some(if is_plex {
             crate::local_plex::album_key_for(&t.artist, &t.album)
         } else {
+            // For a media row this is already the PREFIXED key
+            // (`jellyfin:<albumId>`) that `cached_to_local_track` stamped, so
+            // "go to album" from the queue opens the same page the card does.
             t.album_group_key.clone()
         }),
         artist_id: None,
@@ -203,8 +223,12 @@ pub fn local_queue_track(t: &LocalTrack) -> QueueTrack {
         parental_warning: false,
         // Plex: the string rating_key the resolve needs (the numeric queue id
         // is a namespaced form). Offline: the local row id.
-        source_item_id_hint: if is_plex || is_offline {
-            Some(if is_plex {
+        source_item_id_hint: if is_plex || is_offline || is_media {
+            Some(if is_plex || is_media {
+                // Plex: the raw rating key. Media servers: the SERVER's own
+                // item id, which `cached_to_local_track` parks in `file_path`
+                // (a remote track has no path on this machine). `claim` prefers
+                // it over the numeric id because it survives a cache rebuild.
                 t.file_path.clone()
             } else {
                 t.id.to_string()
@@ -309,9 +333,24 @@ pub async fn play_current_if_local(runtime: &Runtime, track_id: u64) -> LocalPla
     //
     // `claim` refuses to guess, so a row nobody owns stays `NotLocal` and the
     // Qobuz path runs exactly as before.
-    let claimed = qbz_source::registry().claim(&qbz_source::RawRef::from_queue_track(&qt));
-    let ours = match claimed {
-        Ok(item) => item.source() != qbz_source::SourceId::QOBUZ,
+    let raw = qbz_source::RawRef::from_queue_track(&qt);
+    // An OFFLINE row is NOT ours, and this exclusion is the correction to
+    // IC-12's first pass. `SourceId::from_word` folds `qobuz_download` /
+    // `qobuz_purchase` / `offline` into LOCAL because the row IS a file — but
+    // for a CMAF-cached download that "file" is the offline cache's own
+    // container, and only `qbz-core`'s offline tier can read it. Handing it to
+    // the local audible step produced exactly one log line and silence:
+    //
+    //   audible: file not available at …/audio/tracks-cmaf/426056576
+    //
+    // Its `QueueTrack.id` is the real Qobuz catalog id precisely so the funnel
+    // can resolve it, which is what happened before stage 3 and what has to
+    // keep happening.
+    let ours = match qbz_source::registry().claim(&raw) {
+        Ok(item) => {
+            item.source() != qbz_source::SourceId::QOBUZ
+                && raw.badge != qbz_source::SourceBadge::Offline
+        }
         Err(_) => false,
     };
     if !ours {

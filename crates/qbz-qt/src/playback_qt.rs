@@ -730,8 +730,14 @@ pub(crate) async fn play_resolved_offline_aware(
         .await
         .filter(|t| t.id == track_id)
     {
-        let claimed = qbz_source::registry().claim(&qbz_source::RawRef::from_queue_track(&qt));
-        if let Ok(item) = claimed {
+        let raw = qbz_source::RawRef::from_queue_track(&qt);
+        // OFFLINE rows stay on THIS path on purpose — see
+        // `local_playback::play_current_if_local` for the log line that proves
+        // why. The offline tier below is the only thing that can read a
+        // CMAF-cached download, and the row carries the Qobuz catalog id so it
+        // can.
+        let is_offline = raw.badge == qbz_source::SourceBadge::Offline;
+        if let (false, Ok(item)) = (is_offline, qbz_source::registry().claim(&raw)) {
             if item.source() != qbz_source::SourceId::QOBUZ {
                 return match crate::audible_qt::play_queue_track(runtime, &qt).await {
                     Ok(true) => Ok(()),

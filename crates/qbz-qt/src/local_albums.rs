@@ -352,6 +352,14 @@ pub fn fetch_album_tracks_blocking(id: &str) -> Vec<LocalTrack> {
     if id.starts_with("plex:") {
         return crate::local_plex::album_tracks(id);
     }
+    // A media-server key (`jellyfin:<albumId>` / `subsonic:<albumId>`). WITHOUT
+    // this arm the key fell through to `library.db`, where it matches nothing:
+    // the album page opened EMPTY, and in metadata mode it paid two fruitless
+    // full queries first — which is why leaving a Jellyfin album was slower
+    // than leaving a local one.
+    if let Some(rows) = crate::media_servers_qt::album_tracks(id) {
+        return rows;
+    }
     let mode = group_mode();
     with_db(|db| match mode {
         AlbumGroupMode::Metadata => {
