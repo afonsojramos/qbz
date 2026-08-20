@@ -55,8 +55,9 @@ Rectangle {
     property string artworkUrl: ""
     property bool isFavorite: false
     property bool isPinned: false
-    // The row's SOURCE word — "local" | "offline" | "plex" (the Local Library
-    // badge triple, src/local_rows.rs `badge_source`) or "qobuz" (the Library
+    // The row's SOURCE word — "local" | "offline" | "plex" | "jellyfin" |
+    // a Subsonic brand spelling (the Local Library badge set,
+    // src/local_rows.rs `badge_source`) or "qobuz" (the Library
     // ALL feed, library_qt.rs `FeedItem.source`). "" = a catalog surface that
     // publishes no source at all.
     //
@@ -65,6 +66,15 @@ Rectangle {
     // (AlbumCard.slint:434 keeps the entry off local/plex rows). Hosts that
     // want the badge hidden set `showSourceBadge`, never `source: ""`.
     property string source: ""
+    /// Source words that mean "this album does not live in the Qobuz catalog".
+    /// Same fold as `SourceIcon.isSubsonic`: a row stamped with a Subsonic
+    /// BRAND is still a server row, so it must not be offered a catalog-only
+    /// action.
+    readonly property bool serverAlbum: root.source === "local"
+        || root.source === "plex" || root.source === "jellyfin"
+        || root.source === "subsonic" || root.source === "navidrome"
+        || root.source === "gonic" || root.source === "airsonic"
+        || root.source === "astiga"
     // discover/AlbumCard.slint:79 `show-source-badge` — default OFF; the two
     // hosts that turn it on are the Library ALL grid (gated on the toolbar's
     // show-local toggle, FavoritesView.slint:1097) and the Local Library
@@ -256,8 +266,11 @@ Rectangle {
         if (root.catalogAffordances) {
             m.push({ "label": root.isFavorite ? t("Remove from Library", r) : t("Add to Library", r),
                      "icon": root.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
-            // .slint gates this on a non-local/plex source as well.
-            if (root.hasBlacklistSeam && root.source !== "local" && root.source !== "plex")
+            // .slint gates this on a non-local/plex source as well — and the
+            // rule is "not a Qobuz catalog album", so every server source is
+            // in the same class as Plex. Blocking a Jellyfin album would write
+            // a blacklist entry against an id the Qobuz catalog never had.
+            if (root.hasBlacklistSeam && !root.serverAlbum)
                 m.push({ "label": t("Block this album", r), "icon": "blind-eye", "action": "block" })
         }
         // Host tail (see `extraMenuEntries`). `concat` so the host's array is

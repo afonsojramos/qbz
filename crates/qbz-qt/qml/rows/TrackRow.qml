@@ -228,9 +228,10 @@ Rectangle {
     // unmistakable (playlist_picker_qt.rs's four-case matrix):
     //
     //   catalogRow          `item.id` is a Qobuz catalog id -> openForTrack.
-    //   localSourceRow      the row carries its own source word and it says
-    //                       local/plex -> `item.id` is a library.db row id or
-    //                       a Plex synthetic id. Sending it to the Qobuz arm
+    //   localSourceRow      the row carries its own source word and it names
+    //                       a NON-CATALOG origin -> `item.id` is a library.db
+    //                       row id or a namespaced synthetic id (Plex,
+    //                       Jellyfin, Subsonic). Sending it to the Qobuz arm
     //                       adds an UNRELATED track, so the entry is only
     //                       offered when the HOST takes the routing
     //                       (`routePlaylistAddExternally`, below), and is
@@ -241,8 +242,17 @@ Rectangle {
     //
     // Ephemeral rows never reach this decision: their surface sets
     // `showMenu: false`, so the whole menu is absent (LocalEphemeralPane).
-    readonly property bool localSourceRow:
-        root.item.source === "local" || root.item.source === "plex"
+    // An ALLOWLIST of non-catalog words, not `!== "qobuz"`: "offline" is an
+    // offline-CACHED Qobuz row whose id IS a catalog id, so inverting the test
+    // would strip Add-to-playlist from the rows that legitimately have it.
+    // The Subsonic brand spellings fold here for the same reason they fold in
+    // `SourceIcon.isSubsonic` — a row stamped "navidrome" is not a Qobuz row.
+    readonly property bool localSourceRow: {
+        var s = root.item.source
+        return s === "local" || s === "plex" || s === "jellyfin"
+            || s === "subsonic" || s === "navidrome" || s === "gonic"
+            || s === "airsonic" || s === "astiga"
+    }
     /// Hand "Add to playlist" to the HOST (the `routeGoToExternally` idiom):
     /// the host answers `playlistAddRequested()` with the LOCAL-mode call its
     /// surface can make. The local playlist detail is the one that needs it —

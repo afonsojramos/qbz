@@ -897,7 +897,24 @@ fn all_local_feed_blocking() -> Vec<FeedItem> {
     .unwrap_or_default();
     let n = albums.len();
     for (i, a) in albums.into_iter().enumerate() {
-        let source = if a.id.starts_with("plex:") { "plex" } else { "local" };
+        // The row's own `source` word, NOT the id prefix. Both answer "plex"
+        // for a Plex album (group_key is `plex:<hash>` and the CTE stamps
+        // 'plex'), so this is byte-identical for the two sources that existed
+        // — but a media server's group_key is `jellyfin:<id>` / `navidrome:<id>`,
+        // and the prefix test folded every one of them to "local". That is the
+        // same failure `local_rows::badge_source` had: the ALL feed drew the
+        // local hard-drive on albums that live on a server.
+        //
+        // "user" and "qobuz_download" keep answering "local" exactly as before;
+        // this feed's `source` vocabulary is consumed by `feed_track_to_queue`
+        // and by the QML badge, and widening it to "offline" here would be a
+        // separate change with its own consumers to check.
+        let source = match a.source.as_str() {
+            "plex" => "plex",
+            "jellyfin" => "jellyfin",
+            "subsonic" | "navidrome" | "gonic" | "airsonic" | "astiga" => "subsonic",
+            _ => "local",
+        };
         out.push(
             FeedItem {
                 kind: "album".into(),
@@ -1608,6 +1625,22 @@ pub(crate) fn apply_pin_change(kind: &str, id: &str, pinned: bool) {
 // under the pointer — identical on the Tracks tab, and in the All feed it
 // queues the mixed feed's track rows in the order shown instead of nothing.
 
+/// Every source word whose row id is NOT a Qobuz catalog id.
+///
+/// The list is an ALLOWLIST rather than `!= "qobuz"` because the fall-through
+/// below parses the id as a u64 and resolves it against the Qobuz catalog: a
+/// word this function has not been taught silently becomes "somebody else's
+/// track", which is exactly the failure the test below pins for local/plex.
+/// Media-server tracks do not ride this feed today (only their ALBUMS do), so
+/// this is the guard being taught the words BEFORE they arrive, not a fix for
+/// a live bug.
+fn is_local_source(source: &str) -> bool {
+    matches!(
+        source,
+        "local" | "plex" | "jellyfin" | "subsonic" | "navidrome" | "gonic" | "airsonic" | "astiga"
+    )
+}
+
 /// `playback_qt::feed_queue_track` for a feed row already in hand.
 ///
 /// Mirrors that function field-for-field (it looks the same row up by id and
@@ -1632,7 +1665,7 @@ pub(crate) fn apply_pin_change(kind: &str, id: &str, pinned: bool) {
 /// Slint builds — its `FAV_CURRENT` is Qobuz-only — and it is strictly better
 /// than resolving it as somebody else's track.
 pub(crate) fn feed_track_to_queue(item: &FeedItem) -> Option<QueueTrack> {
-    if item.source == "local" || item.source == "plex" {
+    if is_local_source(&item.source) {
         let row_id = item.id.parse::<i64>().ok()?;
         let raw = LOCAL_RAW.lock().ok()?.get(&row_id).cloned();
         return match raw {
@@ -1813,7 +1846,16 @@ mod tests {
     /// `QueueTrack` with `source: "qobuz"` and this id.
     #[test]
     fn a_local_row_is_never_resolved_as_a_qobuz_track() {
-        for source in ["local", "plex"] {
+        for source in [
+            "local",
+            "plex",
+            "jellyfin",
+            "subsonic",
+            "navidrome",
+            "gonic",
+            "airsonic",
+            "astiga",
+        ] {
             let mut item = track("42", "Ghost in the Machine");
             item.source = source.into();
             assert!(
