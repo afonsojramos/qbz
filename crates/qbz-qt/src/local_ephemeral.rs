@@ -13,9 +13,13 @@
 //!     (`{name, path, trackCount, multiAlbum, albums:[…]}`), built out of the
 //!     SAME `local_rows::TrackRow` every other Local Library surface uses;
 //!  3. the play seam — the queue is mapped by `local_playback`'s
-//!     `local_queue_track` and the audible step hands file bytes to the same
-//!     `play_data` / `play_dsd_file` entry points. The PROTECTED audio path is
-//!     entered, never modified.
+//!     `local_queue_track` and handed to the SHARED audible step
+//!     (`audible_qt`, design 02 §9 stage 3). This file used to carry its own
+//!     `play_file`, described in its own doc as "`local_playback::
+//!     play_local_file` 1:1 apart from that lookup"; the lookup is now
+//!     `LocalSource::track_row`, which reads this session store for any
+//!     ephemeral id, so there is no ephemeral arm anywhere in playback. The
+//!     PROTECTED audio path is entered there, never modified.
 //!
 //! Ephemeral track ids are SYNTHETIC and high (`>= 2^48`, the shared
 //! `EPHEMERAL_ID_FLOOR`), so they can never collide with a `local_tracks` row
@@ -468,72 +472,19 @@ async fn play_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, start: usize) {
         .map(crate::local_playback::local_queue_track)
         .collect();
     let start = start.min(queue.len() - 1);
-    let first_id = queue[start].id;
+    let first = queue[start].clone();
     runtime.core().set_queue(queue, Some(start)).await;
     crate::playback_qt::publish_queue(runtime).await;
-    play_file(runtime, first_id).await;
+    // THE shared audible step. This used to call a local `play_file` that was
+    // "`local_playback::play_local_file` 1:1 apart from the lookup" — a third
+    // copy of the same routine, and the only one whose CUE fast path compared
+    // FILE PATHS instead of track ids (i.e. the only one that actually worked).
+    // `LocalSource::track_row` reads the session store for an ephemeral id, so
+    // the seam resolves these rows with no arm of their own, and `audible_qt`
+    // keeps the path comparison for every source.
+    if let Err(e) = crate::audible_qt::play_queue_track(runtime, &first).await {
+        log::error!("[qbz-qt] ephemeral play: track {} not playable: {e}", first.id);
+    }
     crate::playback_qt::refresh_now_playing(runtime).await;
 }
 
-/// The AUDIBLE step for one ephemeral id: resolve the path from the in-memory
-/// store (there is no DB row to read) and hand the file to the player.
-/// `local_playback::play_local_file` 1:1 apart from that lookup — DSD streams
-/// from disk, a CUE virtual track seeks inside its shared container, and the
-/// bytes go to `play_data` untouched (bit-perfect).
-///
-/// Returns false when the row is stale (session cleared / replaced), so a
-/// caller can fall through.
-pub async fn play_file(runtime: &Runtime, row_id: u64) -> bool {
-    let Some(track) = get_track(row_id as i64) else {
-        log::error!("[qbz-qt] ephemeral play: track {row_id} not in the session");
-        return false;
-    };
-    let path = track.file_path;
-    let cue = track.cue_start_secs;
-    let lower = path.to_lowercase();
-    if lower.ends_with(".dsf") || lower.ends_with(".dff") {
-        if let Err(e) = runtime
-            .core()
-            .player()
-            .play_dsd_file(PathBuf::from(&path), row_id)
-        {
-            log::error!("[qbz-qt] ephemeral play: play_dsd_file {row_id} failed: {e}");
-            return false;
-        }
-        return true;
-    }
-    // CUE fast path: every virtual track of a CUE album shares ONE audio
-    // file. If that container is already loaded, seek instead of re-reading.
-    if let Some(start) = cue.filter(|s| *s > 0.0) {
-        let loaded = runtime.core().player().state.current_track_id();
-        if runtime.core().player().has_loaded_audio()
-            && get_track(loaded as i64).map(|t| t.file_path) == Some(path.clone())
-        {
-            let _ = runtime.core().player().seek(start as u64);
-            return true;
-        }
-    }
-    let read_path = path.clone();
-    let bytes = tokio::task::spawn_blocking(move || {
-        if !Path::new(&read_path).exists() {
-            return None;
-        }
-        std::fs::read(&read_path).ok()
-    })
-    .await
-    .ok()
-    .flatten();
-    let Some(bytes) = bytes else {
-        log::error!("[qbz-qt] ephemeral play: file not available at {path} (drive unmounted?)");
-        return false;
-    };
-    if let Err(e) = runtime.core().player().play_data(bytes, row_id) {
-        log::error!("[qbz-qt] ephemeral play: play_data {row_id} failed: {e}");
-        return false;
-    }
-    if let Some(start) = cue.filter(|s| *s > 0.0) {
-        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-        let _ = runtime.core().player().seek(start as u64);
-    }
-    true
-}

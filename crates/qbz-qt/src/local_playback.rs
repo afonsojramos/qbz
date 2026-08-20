@@ -1,22 +1,28 @@
 //! Local Library playback: `LocalTrack` -> `QueueTrack` -> `core().set_queue`
 //! -> the player's audible seam.
 //!
-//! Split out of `local_library_qt.rs` (phase-24 modularization) and made
-//! source-aware: a queue built here can mix LOCAL files, OFFLINE (Qobuz
-//! download) copies and PLEX rows, and the audible step routes per row —
-//! local/offline read from disk (`play_data` / `play_dsd_file`), Plex
-//! resolves its direct-play part from the server.
+//! Split out of `local_library_qt.rs` (phase-24 modularization). A queue built
+//! here can mix LOCAL files, EPHEMERAL rows, OFFLINE (Qobuz download) copies
+//! and PLEX rows.
 //!
-//! The PROTECTED audio path is only ENTERED here, never modified: the file
-//! bytes are handed to the same `play_data` seam the Slint frontend uses, so
-//! sample rate / bit depth stay whatever the decoder found.
+//! THE AUDIBLE STEP IS NO LONGER HERE (design 02 §9 stage 3). This file used
+//! to own `play_local_file`, `play_plex_track` and a `plex_rating_key` ladder,
+//! and `local_album_actions` + `local_ephemeral` each carried their own copy of
+//! the same routine. All three are gone: `qbz_source::SourceRegistry::playback`
+//! claims the row and answers with a `PlaybackTicket`, and `audible_qt`
+//! performs it. What is left here is queue BUILDING — mapping rows, ordering
+//! them, stamping context — plus `play_audible`, which is now one call.
+//!
+//! The PROTECTED audio path is entered in `audible_qt`, never modified: the
+//! bytes go to the same `play_data` seam the Slint frontend uses, so sample
+//! rate / bit depth stay whatever the decoder found.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
-use qbz_library::{LocalTrack, Reach};
+use qbz_library::LocalTrack;
 use qbz_models::QueueTrack;
 
 use crate::local_albums::fetch_album_tracks_blocking;
@@ -226,238 +232,33 @@ pub fn local_queue_track(t: &LocalTrack) -> QueueTrack {
 // Audible steps
 // ---------------------------------------------------------------------------
 
-/// The audible step for a LOCAL/OFFLINE queue track: read the file and hand
-/// the bytes to the player. False when the row can't be resolved (missing db
-/// row, unmounted drive) so the caller can fall through.
+/// Route ONE queue track to its audible step — through `qbz-source`.
 ///
-/// DSD (.dsf/.dff) is streamed from disk by the player instead of slurped.
-pub async fn play_local_file(runtime: &Runtime, row_id: u64) -> bool {
-    // An ephemeral row id has no library.db row (the session store owns it),
-    // so route it before any DB lookup — this is the path auto-advance and
-    // queue-row clicks take.
-    if crate::local_ephemeral::is_ephemeral_id(row_id as i64) {
-        return crate::local_ephemeral::play_file(runtime, row_id).await;
-    }
-    let info = tokio::task::spawn_blocking(move || {
-        with_db(|db| db.get_track(row_id as i64))
-            .flatten()
-            .map(|t| (t.file_path, t.cue_start_secs))
-    })
-    .await
-    .ok()
-    .flatten();
-    let Some((path, cue)) = info else {
-        log::error!("[qbz-qt] local play: track {row_id} not found");
-        return false;
-    };
-    let lower = path.to_lowercase();
-    if lower.ends_with(".dsf") || lower.ends_with(".dff") {
-        if let Err(e) = runtime
-            .core()
-            .player()
-            .play_dsd_file(PathBuf::from(&path), row_id)
-        {
-            log::error!("[qbz-qt] local play: play_dsd_file {row_id} failed: {e}");
-            return false;
-        }
-        return true;
-    }
-    // CUE fast path: every virtual track of a CUE album shares ONE audio
-    // file. If that container is already loaded, seek instead of re-reading.
-    if let Some(start) = cue.filter(|s| *s > 0.0) {
-        let loaded = runtime.core().player().state.current_track_id();
-        if runtime.core().player().has_loaded_audio() && loaded == row_id {
-            let _ = runtime.core().player().seek(start as u64);
-            return true;
-        }
-    }
-    // BOUNDED PROBE, then an unbounded read — and the split is the whole
-    // point. A mounted-but-unreachable share (the user is on a different
-    // network today) does not make `exists()` fail, it makes it BLOCK for the
-    // mount's timeout, so this await could never return: playing one dead file
-    // wedged playback with no way out. The probe now stops WAITING.
-    //
-    // The READ deliberately keeps no deadline. A hi-res FLAC over a
-    // working-but-slow share legitimately takes longer than any probe budget,
-    // and timing the transfer out would turn "your network is slow today" into
-    // "this track is gone" — worse than the bug being fixed.
-    let read_path = path.clone();
-    let (reach, bytes) = tokio::task::spawn_blocking(move || {
-        let reach = qbz_library::probe_default(Path::new(&read_path));
-        let bytes = if reach == Reach::Present {
-            std::fs::read(&read_path).ok()
-        } else {
-            None
-        };
-        (reach, bytes)
-    })
-    .await
-    .unwrap_or((Reach::Unreachable, None));
-    let Some(bytes) = bytes else {
-        // Missing and Unreachable are NOT the same answer and must not be
-        // logged as one. `Missing` is the filesystem saying the file is gone —
-        // a caller may clean on it. `Unreachable` is the filesystem saying
-        // NOTHING; the file may be perfectly fine on a share this network
-        // cannot see, so it may only ever be SKIPPED.
-        match reach {
-            Reach::Unreachable => log::warn!(
-                "[qbz-qt] local play: {path} did not answer — share unreachable from this network; skipping, NOT removing"
-            ),
-            _ => log::error!(
-                "[qbz-qt] local play: file not available at {path} (drive unmounted?)"
-            ),
-        }
-        return false;
-    };
-    if let Err(e) = runtime.core().player().play_data(bytes, row_id) {
-        log::error!("[qbz-qt] local play: play_data {row_id} failed: {e}");
-        return false;
-    }
-    if let Some(start) = cue.filter(|s| *s > 0.0) {
-        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-        let _ = runtime.core().player().seek(start as u64);
-    }
-    true
-}
-
-/// The audible step for a PLEX queue track: resolve the direct-play part and
-/// hand the ORIGINAL bytes to the player (bit-perfect — no transcode is
-/// requested).
+/// This used to `match track.source.as_deref()`, with a `Some("plex")` arm
+/// carrying its own rating-key ladder (`plex_rating_key`, deleted with it) and
+/// a `_` arm that handed `track.id` to `play_local_file`. Both were wrong in a
+/// way only the seam can see:
 ///
-/// POC-NOTE: the Slint frontend Range-streams the part progressively
-/// (`remote_stream`, which lives inside the Slint binary) and only falls back
-/// to this whole-file download when streaming setup fails. The Qt port has no
-/// streaming feeder yet, so it takes the documented fallback path: correct
-/// audio, slower first-note on a large FLAC.
-pub async fn play_plex_track(runtime: &Runtime, rating_key: String, play_id: u64) -> bool {
-    let cfg = crate::local_plex::settings();
-    if cfg.base_url.is_empty() || cfg.token.is_empty() {
-        log::error!("[qbz-qt] plex play: no Plex credentials configured");
-        return false;
-    }
-    // TIMED, because the shape of this delay does not match its obvious
-    // explanation. The whole-file download below is a known POC gap, but the
-    // owner measured this path taking LONGER than a Qobuz track that streams
-    // over the internet — and 58 MB over a LAN cannot do that. So before any
-    // redesign, the log says which segment actually costs: the metadata round
-    // trip, the transfer, or the handoff to the player. It also prints the base
-    // URL, because `resolve_base_url` can hand back the plex.tv RELAY instead
-    // of the LAN address, and a relayed transfer is a round trip through Plex's
-    // servers — that alone would outweigh a local download and would explain
-    // being slower than remote Qobuz.
-    let t0 = std::time::Instant::now();
-    let base = cfg.base_url.clone();
-    let is_lan = crate::local_plex::is_local_address(&base);
-
-    // PROGRESSIVE FIRST. `plex_resolve_part_url` stops at the URL and the
-    // shared feeder Range-streams the original bytes, so audio starts on the
-    // first chunk instead of after the whole FLAC is in RAM. The doc on
-    // `PlexPartLocation` states the intent outright — "~1s to first audio
-    // instead of buffering the whole FLAC into RAM first" — and it went unused
-    // here only because the feeder lived inside the Slint binary until it was
-    // moved to `qbz_player::remote_stream`.
-    //
-    // Duration comes from the queue row (the feeder needs it for its buffer
-    // maths); 0 is acceptable — it only makes the estimate conservative.
-    let duration = runtime
-        .core()
-        .current_track()
-        .await
-        .map(|t| t.duration_secs as u64)
-        .unwrap_or(0);
-    match qbz_plex::plex_resolve_part_url(base.clone(), cfg.token.clone(), rating_key.clone()).await
-    {
-        Ok(loc) => {
-            let resolved = t0.elapsed();
-            match qbz_player::remote_stream::stream_remote_track_into_player(
-                &runtime.core().player(),
-                play_id,
-                duration,
-                0,
-                &loc.part_url,
-                "PLEX",
-            )
-            .await
-            {
-                Ok(()) => {
-                    log::info!(
-                        "[qbz-qt][perf] plex play {play_id}: STREAMED — resolve {resolved:?}, \
-                         first audio {:?} — base {} ({})",
-                        t0.elapsed(),
-                        base,
-                        if is_lan { "LAN" } else { "NOT a LAN address — relayed?" },
-                    );
-                    return true;
-                }
-                // The whole-file path below stays as the fallback, exactly as
-                // the reference keeps it: a server that refuses Range, or a
-                // part that will not probe, still plays — just slowly.
-                Err(e) => log::warn!(
-                    "[qbz-qt] plex play {play_id}: streaming failed ({e}) — \
-                     falling back to whole-file download"
-                ),
-            }
-        }
-        Err(e) => log::warn!("[qbz-qt] plex play: part-url resolve failed ({e}) — full download"),
-    }
-    match qbz_plex::plex_resolve_track_media(cfg.base_url, cfg.token, rating_key.clone()).await {
-        Ok(media) => {
-            let fetched = t0.elapsed();
-            let bytes = media.bytes.len();
-            let t1 = std::time::Instant::now();
-            if let Err(e) = runtime.core().player().play_data(media.bytes, play_id) {
-                log::error!("[qbz-qt] plex play: play_data {play_id} failed: {e}");
-                return false;
-            }
-            log::info!(
-                "[qbz-qt][perf] plex play {play_id}: resolve+fetch {:?} for {} bytes \
-                 ({:.1} MB/s), play_data {:?} — base {} ({})",
-                fetched,
-                bytes,
-                (bytes as f64 / 1_048_576.0) / fetched.as_secs_f64().max(0.001),
-                t1.elapsed(),
-                base,
-                if is_lan { "LAN" } else { "NOT a LAN address — relayed?" },
-            );
-            true
-        }
+/// - the `_` arm caught **offline** rows, whose `QueueTrack.id` is the *Qobuz*
+///   catalog id while the `library.db` row id rides in `source_item_id_hint`
+///   (`local_queue_track` above, `:161-167` and `:199-206`). It looked the row
+///   up by the wrong number and missed. `LocalSource::row_id` decides that on
+///   evidence instead;
+/// - the `plex:`-prefixed-hint rule was one engineer's reconstruction of a
+///   five-id table nobody had written down, and its fallback is right for the
+///   MyQBZ path and wrong for the LocalLibrary one. `PlexSource` owns that
+///   table now, and a shape it recognises but rejects is a named error at the
+///   moment of the mistake rather than a 404 two layers down.
+///
+/// `SourceRegistry::playback` claims the row ONCE and answers with a ticket;
+/// `audible_qt` performs it. No source is branched on by hand here any more.
+async fn play_audible(runtime: &Runtime, track: &QueueTrack) -> bool {
+    match crate::audible_qt::play_queue_track(runtime, track).await {
+        Ok(played) => played,
         Err(e) => {
-            log::error!("[qbz-qt] plex play: resolve {rating_key} failed: {e}");
+            log::error!("[qbz-qt] local play: track {} not playable: {e}", track.id);
             false
         }
-    }
-}
-
-/// Resolve the Plex track rating key for a queue row (PARITY-DEBT #4, ports
-/// `playback.rs:666-680`, commit `b5c1a76e`).
-///
-/// The string rating_key rides in `source_item_id_hint` on the LocalLibrary
-/// path (`local_queue_track` above stamps `file_path`, which for a Plex row IS
-/// the raw key). The MyQBZ collections path stamps the per-item ALBUM key there
-/// instead (`plex:<hash>` from `qbz_plex::plex_album_key`, for shuffle boundary
-/// detection) — that is NOT a track rating key, so ignore any `plex:`-prefixed
-/// hint and fall back to the numeric queue id (= rating_key for the common
-/// numeric-key case). Using it verbatim made
-/// `GET /library/metadata/plex:<hash>` 404: the Plex track never started and
-/// the previous track kept playing under the new card.
-///
-/// A MISSING hint falls back the same way — the reference's `_` arm covers both
-/// `None` and the prefixed case, so this no longer refuses the row.
-pub(crate) fn plex_rating_key(hint: Option<&str>, track_id: u64) -> String {
-    match hint {
-        Some(hint) if !hint.starts_with("plex:") => hint.to_string(),
-        _ => track_id.to_string(),
-    }
-}
-
-/// Route ONE queue track to its audible step.
-async fn play_audible(runtime: &Runtime, track: &QueueTrack) -> bool {
-    match track.source.as_deref() {
-        Some("plex") => {
-            let rating_key = plex_rating_key(track.source_item_id_hint.as_deref(), track.id);
-            play_plex_track(runtime, rating_key, track.id).await
-        }
-        _ => play_local_file(runtime, track.id).await,
     }
 }
 
@@ -493,22 +294,37 @@ pub async fn play_current_if_local(runtime: &Runtime, track_id: u64) -> LocalPla
     if qt.id != track_id {
         return LocalPlay::NotLocal;
     }
-    match qt.source.as_deref() {
-        Some("local") | Some("plex") => {
-            if play_audible(runtime, &qt).await {
-                LocalPlay::Played
-            } else {
-                // The wording is load-bearing: `is_terminal_unavailable`
-                // matches on "no longer available", which is what routes this
-                // into the SAME bounded skip walk a pulled Qobuz track takes.
-                // One seam for both, which is the point — to the user they are
-                // the same failure.
-                LocalPlay::Unavailable(format!(
-                    "local file no longer available (track {track_id})"
-                ))
-            }
-        }
-        _ => LocalPlay::NotLocal,
+    // WHO OWNS THIS ROW is asked ONCE, of the registry (design 02 §3.1's
+    // vocabulary table), instead of matched against two hand-written words.
+    //
+    // The old test was `Some("local") | Some("plex")`, and it is IC-12: six
+    // source words really occur on a queue row, and the four it missed —
+    // `"user"`, `"ephemeral"`, `"qobuz_download"`, `"qobuz_purchase"` — all
+    // name rows that are FILES ON DISK. Auto-advance onto one of them returned
+    // `NotLocal`, fell through to the Qobuz tier-walk and died there with "No
+    // Qobuz client available": an error about a service that has nothing to do
+    // with the track, which `auto_skip_unavailable` then declines to skip
+    // because it is not terminal-unavailable. One ephemeral track could stop
+    // playback dead.
+    //
+    // `claim` refuses to guess, so a row nobody owns stays `NotLocal` and the
+    // Qobuz path runs exactly as before.
+    let claimed = qbz_source::registry().claim(&qbz_source::RawRef::from_queue_track(&qt));
+    let ours = match claimed {
+        Ok(item) => item.source() != qbz_source::SourceId::QOBUZ,
+        Err(_) => false,
+    };
+    if !ours {
+        return LocalPlay::NotLocal;
+    }
+    if play_audible(runtime, &qt).await {
+        LocalPlay::Played
+    } else {
+        // The wording is load-bearing: `is_terminal_unavailable` matches on
+        // "no longer available", which is what routes this into the SAME
+        // bounded skip walk a pulled Qobuz track takes. One seam for both,
+        // which is the point — to the user they are the same failure.
+        LocalPlay::Unavailable(format!("local file no longer available (track {track_id})"))
     }
 }
 
@@ -757,7 +573,7 @@ pub async fn enqueue(runtime: &Runtime, kind: String, id: String, mode: String) 
 
 #[cfg(test)]
 mod tests {
-    use super::{order_by_visible, plex_rating_key};
+    use super::order_by_visible;
     use qbz_library::LocalTrack;
 
     fn track(id: i64, title: &str) -> LocalTrack {
@@ -809,36 +625,6 @@ mod tests {
         assert!(order_by_visible(&rows, &[], 1).is_none());
     }
 
-    /// LocalLibrary path: the hint IS the raw rating key (`local_queue_track`
-    /// stamps `file_path`, which for a Plex row is the server key). Unchanged
-    /// by the guard — `playback.rs:673-676` first arm.
-    #[test]
-    fn raw_hint_is_used_verbatim() {
-        assert_eq!(plex_rating_key(Some("12345"), 999), "12345");
-        // Non-numeric server keys are legal and must survive untouched.
-        assert_eq!(
-            plex_rating_key(Some("/library/metadata/771"), 999),
-            "/library/metadata/771"
-        );
-    }
-
-    /// PARITY-DEBT #4: the MyQBZ collections path stamps the ALBUM boundary key
-    /// (`qbz_plex::plex_album_key` -> `plex:<hash>`). It is not a rating key, so
-    /// it is ignored in favour of the numeric queue id — the `b5c1a76e` fix.
-    #[test]
-    fn plex_prefixed_hint_falls_back_to_queue_id() {
-        assert_eq!(plex_rating_key(Some("plex:deadbeef"), 771), "771");
-        // Prefix test is on the LEADING bytes only, exactly like `starts_with`.
-        assert_eq!(plex_rating_key(Some("plex:"), 42), "42");
-        assert_eq!(plex_rating_key(Some("77plex:1"), 42), "77plex:1");
-    }
-
-    /// The reference's `_` arm also covers a missing hint: fall back rather than
-    /// refuse the row.
-    #[test]
-    fn missing_hint_falls_back_to_queue_id() {
-        assert_eq!(plex_rating_key(None, 771), "771");
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -120,6 +120,10 @@ mod kiosk_nav_qt;
 mod kiosk_profile_qt;
 mod artwork_qt;
 mod atmosphere_qt;
+// THE audible step (design 02 §9 stage 3): one exhaustive match over
+// `qbz_source::PlaybackTicket`, replacing the three drifted copies of
+// `play_audible` that each matched on `track.source` by hand.
+mod audible_qt;
 mod bridge;
 mod custom_theme_qt;
 mod diagnostics_qt;

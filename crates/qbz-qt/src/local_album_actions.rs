@@ -35,7 +35,7 @@ use qbz_models::QueueTrack;
 use serde::Serialize;
 
 use crate::local_bridge::ui;
-use crate::local_playback::{local_queue_track, play_local_file, play_plex_track, plex_rating_key};
+use crate::local_playback::local_queue_track;
 use crate::local_rows::{
     album_key, badge_source, badge_source_raw, map_track, tier_of, to_json, total_duration,
     AlbumRow, TrackRow,
@@ -468,19 +468,23 @@ fn publish_doc(doc: Option<AlbumDetailDoc>) {
     });
 }
 
-/// Route ONE queue track to its audible step. Mirrors
-/// `local_playback::play_audible` (private there) over the SAME public seams —
-/// the PROTECTED audio path is entered, never modified.
+/// Route ONE queue track to its audible step.
+///
+/// This WAS a hand-copy of `local_playback::play_audible`, rating-key ladder
+/// and all, kept in sync by comment. It is now the same single call, so there
+/// is nothing left to keep in sync: `SourceRegistry::playback` claims the row
+/// and `audible_qt` performs the ticket. The PROTECTED audio path is entered,
+/// never modified.
 async fn play_audible(runtime: &Runtime, track: &QueueTrack) -> bool {
-    match track.source.as_deref() {
-        // PARITY-DEBT #4: the hint is NOT always a rating key — a `plex:<hash>`
-        // hint is the MyQBZ album-boundary key and 404s the resolve. The guard
-        // lives with the other one, in `local_playback` (`playback.rs:666-680`).
-        Some("plex") => {
-            let rating_key = plex_rating_key(track.source_item_id_hint.as_deref(), track.id);
-            play_plex_track(runtime, rating_key, track.id).await
+    match crate::audible_qt::play_queue_track(runtime, track).await {
+        Ok(played) => played,
+        Err(e) => {
+            log::error!(
+                "[qbz-qt] local album play: track {} not playable: {e}",
+                track.id
+            );
+            false
         }
-        _ => play_local_file(runtime, track.id).await,
     }
 }
 
