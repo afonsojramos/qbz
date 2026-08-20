@@ -588,9 +588,17 @@ fn on_session_entered() {
         settings_qt::refresh_device_cap(&app()).await;
         settings_qt::publish_snapshot().await;
     });
-    // Phase 2: the shell mounts on the (only) "home" view; seed the nav
-    // history and push the current now-playing model onto the bar.
-    nav_qt::record(&nav_qt::shell_entry_view());
+    // Phase 2: the shell mounts on the startup view; seed the nav history and
+    // push the current now-playing model onto the bar.
+    //
+    // The entry view gets the SAME lazy load a sidebar click would have given
+    // it (`hydrate_view`). Without it "Where you left off" restored onto
+    // Library / Mixtapes / Collections and painted an EMPTY page — the view is
+    // fed by a Rust document that only `navigate_to` ever asked for, and a
+    // restore does not go through `navigate_to`.
+    let entry_view = nav_qt::shell_entry_view();
+    nav_qt::record(&entry_view);
+    hydrate_view(&entry_view);
     now_playing::publish_current();
     // Phase 3: fetch Discover > Home (online sessions only — the offline
     // engine gates Qobuz calls anyway, and the view shows the offline
@@ -2077,6 +2085,27 @@ pub(crate) fn navigate_to(view: &str) {
         }
     });
     LAST_DETAIL.lock().unwrap().0.clear();
+    hydrate_view(view);
+}
+
+/// The per-view lazy load that a section navigation owes its destination.
+///
+/// SPLIT OUT OF `navigate_to` BECAUSE `navigate_to` IS NOT THE ONLY DOOR.
+/// Session restore ("Startup page = where you left off") mounts its view by
+/// calling `nav_qt::record` DIRECTLY (`on_session_entered`), since it must not
+/// clear the landing tab or the detail latch of a session that has not started
+/// yet — and `record` is history bookkeeping, nothing more. So a restore onto
+/// Library opened the Library view with `libraryJson` still `[]`: the page
+/// rendered, the counts read zero, and it stayed that way until the user
+/// clicked Library in the sidebar, which finally ran the arm below. Same hole
+/// for Mixtapes and Collections. Home never showed it because `load_home_once`
+/// is a separate, unconditional phase of shell entry.
+///
+/// `local` is absent ON PURPOSE and is not a gap: LocalLibraryView.qml loads
+/// its own tab from `Component.onCompleted`, so the mount is the trigger there.
+/// Detail routes are absent for the reason `navigate_to` already states — each
+/// is reached through a call that loads its data and records the route itself.
+fn hydrate_view(view: &str) {
     if view == "library" {
         load_library_once();
     }
