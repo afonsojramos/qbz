@@ -706,6 +706,48 @@ pub(crate) async fn play_resolved_offline_aware(
     track_id: u64,
     start_position_secs: u64,
 ) -> Result<(), String> {
+    // SOURCE FIRST (design 02 §9 stage 3). Everything below this block is the
+    // QOBUZ entry: the tier walk, the offline cache, the quality request. A row
+    // a different source owns has no business in it, and until now it went
+    // there anyway — `myqbz_play_qt`'s own header called this out as the reason
+    // a MyQBZ collection's local or Plex first track "still fails AT THE
+    // PLAYER even though it now resolves".
+    //
+    // It was also unsafe, not merely wrong: the offline cache is keyed on the
+    // raw `u64`, and a `local_tracks` rowid or a Plex rating key lives in the
+    // same small-integer space as older Qobuz ids. A collision played THE
+    // WRONG TRACK rather than failing cleanly (#638 fix 3's sharp edge).
+    // Claiming the row first removes the id-space overlap: a claimed non-Qobuz
+    // row never reaches the cache lookup at all.
+    //
+    // The cursor test is deliberate. Every caller sets the queue and then plays
+    // its anchor, so the core is already sitting on this track; if it is NOT,
+    // this function does exactly what it did before rather than guessing which
+    // row was meant.
+    if let Some(qt) = runtime
+        .core()
+        .current_track()
+        .await
+        .filter(|t| t.id == track_id)
+    {
+        let claimed = qbz_source::registry().claim(&qbz_source::RawRef::from_queue_track(&qt));
+        if let Ok(item) = claimed {
+            if item.source() != qbz_source::SourceId::QOBUZ {
+                return match crate::audible_qt::play_queue_track(runtime, &qt).await {
+                    Ok(true) => Ok(()),
+                    // Its own source owned it and could not play it. Phrased so
+                    // `is_terminal_unavailable` routes it into the SAME bounded
+                    // skip walk a pulled Qobuz track takes — to the user the two
+                    // failures are the same one.
+                    Ok(false) => Err(format!(
+                        "local file no longer available (track {track_id})"
+                    )),
+                    Err(e) => Err(e.to_string()),
+                };
+            }
+        }
+    }
+
     let quality = local_playback_quality().0;
     let off = crate::offline_qt::get().await;
     let sink = off.as_ref().map(|_| crate::offline_cache_qt::row_sink());

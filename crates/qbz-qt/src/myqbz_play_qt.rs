@@ -23,22 +23,20 @@
 //! No source is branched on by hand here: `SourceRegistry::claim` is the one
 //! normalisation point, and the source of a row always comes from the ROW.
 //!
-//! STILL OPEN, and NOT this stage's job: every `Play` arm below starts the
-//! first track through `playback_qt::play_resolved_offline_aware`, whose
-//! network arm is the Qobuz-only entry (`qbz-core/src/core.rs` errors "No
-//! Qobuz client available"). A local or Plex first track therefore still
-//! fails AT THE PLAYER even though it now resolves. That router is design 02
-//! §9 stage 3 (`SourceRegistry::playback` → `PlaybackTicket`), which owns both
-//! copies of `play_audible` as well; nothing here should grow a source branch
-//! to anticipate it.
+//! CLOSED by stage 3, and it is why no `Play` arm below grew a source branch:
+//! every arm still starts its first track through
+//! `playback_qt::play_resolved_offline_aware`, but that funnel now CLAIMS the
+//! row before it does anything else and hands a non-Qobuz one to `audible_qt`.
+//! A local, ephemeral or Plex first track plays. It used to resolve here and
+//! then fail AT THE PLAYER with "No Qobuz client available" — an error about a
+//! service that has nothing to do with the track.
 //!
-//! One sharp edge that arrived with the funnel (2026-08-17, #638 fix 3): the
-//! funnel consults the OFFLINE cache before the network, keyed on the raw
-//! `u64`. A `local_tracks` rowid and a Plex rating_key live in the same small
-//! -integer space as older Qobuz ids, so a collision would play the wrong
-//! track instead of failing cleanly — the same id-space hazard that produced
-//! the `feed_track_to_queue` bug. Ephemeral ids cannot collide (they start at
-//! 2^48). The real fix is stage 3's source-aware routing, not a guard here.
+//! That also removed the sharp edge the funnel arrived with (2026-08-17, #638
+//! fix 3): it consulted the OFFLINE cache before the network, keyed on the raw
+//! `u64`, and a `local_tracks` rowid or a Plex rating_key lives in the same
+//! small-integer space as older Qobuz ids — a collision played THE WRONG TRACK
+//! instead of failing cleanly. A claimed non-Qobuz row never reaches that
+//! lookup now, so the id-space overlap is gone rather than guarded.
 //!
 //! Contract, all load-bearing and 1:1 with the reference:
 //! - "Resolve all" uses the collection's persisted `play_mode`; the hero

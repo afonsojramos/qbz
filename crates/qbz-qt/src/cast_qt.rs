@@ -562,15 +562,22 @@ impl CastService {
         // Resolve + register per source. The fetch happens OUTSIDE the lock.
         let info = match source {
             "local" | "ephemeral" => {
-                let path = resolve_local_path(track.id)
-                    .ok_or_else(|| format!("Local file not found for track {}", track.id))?;
+                let path = resolve_castable_path(track).await?;
                 self.register_local(track.id, &path).await?
             }
             "qobuz" | "qobuz_download" => self.register_qobuz(track.id).await?,
             "plex" => {
-                // TODO(cast-plex): needs the Plex bytes resolver
-                // (baseUrl/token/ratingKey -> proxied bytes). The Slint
-                // service carries the same TODO.
+                // TODO(cast-plex): needs a proxy that re-serves the resolved
+                // part bytes to the renderer. `PlaybackTicket::Stream` now
+                // hands over the url that proxy would read, so what is missing
+                // is the media-server arm, not the resolve. The Slint service
+                // carries the same TODO.
+                //
+                // Kept as an EARLY refusal on purpose: `resolve_castable_path`
+                // would refuse it too — structurally, for every remote source,
+                // including ones that have no arm here — but only after paying
+                // a network round trip to build a url it is about to throw
+                // away.
                 return Err("Plex casting is not yet supported".to_string());
             }
             other => return Err(format!("Unsupported cast source: {other}")),
@@ -1641,15 +1648,44 @@ fn cap_index_for_key(cap_key: &str) -> i32 {
     }
 }
 
-/// On-disk path for a local/ephemeral track id (mirrors the local playback
-/// lookup in `local_playback.rs`).
-fn resolve_local_path(track_id: u64) -> Option<String> {
-    if crate::local_ephemeral::is_ephemeral_id(track_id as i64) {
-        crate::local_ephemeral::get_track(track_id as i64).map(|row| row.file_path)
-    } else {
-        crate::local_state::with_db(|db| db.get_track(track_id as i64))
-            .flatten()
-            .map(|row| row.file_path)
+/// The on-disk file a row can be SERVED from, or a named refusal.
+///
+/// IC-10. This was `resolve_local_path(track_id)`: an ephemeral-floor test and
+/// then a bare `db.get_track(id)`. Its two siblings in `local_playback` both
+/// grew guards this one never got — and the id it is handed is a
+/// `QueueTrack.id`, which is only sometimes a `library.db` rowid. A Plex row
+/// carries a NAMESPACED id (bit 40 set) and an offline row carries the *Qobuz*
+/// catalog id, so both looked up a rowid that is not theirs, missed, and
+/// reported "Local file not found" — an answer that names the wrong problem.
+///
+/// It is now a `PlaybackTicket` consumer like every other playback path, which
+/// makes the refusals structural rather than remembered:
+///
+/// - `File` / `DsdFile` — a real path; cast can serve it.
+/// - anything else — the row plays through the network, and casting it would
+///   need a proxy this service does not have. That is the `TODO(cast-plex)`
+///   arm's actual content, and it now applies to every remote source by
+///   construction instead of to the one word somebody thought to list.
+async fn resolve_castable_path(track: &QueueTrack) -> Result<String, String> {
+    let ticket = qbz_source::registry()
+        .playback(track)
+        .await
+        .map_err(|e| format!("Cannot resolve track {} for casting: {e}", track.id))?;
+    match ticket {
+        qbz_source::PlaybackTicket::File { path, .. }
+        | qbz_source::PlaybackTicket::DsdFile { path, .. } => {
+            Ok(path.to_string_lossy().into_owned())
+        }
+        other => Err(format!(
+            "Track {} cannot be cast: its source serves it over the network, not as a file ({})",
+            track.id,
+            match other {
+                qbz_source::PlaybackTicket::Stream { .. } => "streamed",
+                qbz_source::PlaybackTicket::Bytes { .. } => "fetched bytes",
+                qbz_source::PlaybackTicket::Catalog { .. } => "catalog",
+                _ => "unsupported",
+            }
+        )),
     }
 }
 
