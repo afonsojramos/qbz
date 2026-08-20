@@ -6756,12 +6756,17 @@ version = "2.0.2"
 dependencies = [
  "async-trait",
  "log",
+ "qbz-jellyfin",
  "qbz-library",
+ "qbz-media-cache",
  "qbz-mixtape",
  "qbz-models",
  "qbz-plex",
  "qbz-qobuz",
+ "qbz-subsonic",
+ "rusqlite",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

@@ -11,18 +11,22 @@ use crate::id::{MediaRef, RawRef, SourceId};
 use crate::meta::ItemMeta;
 use crate::playback::PlaybackTicket;
 use crate::source::Source;
-use crate::sources::{ClientLens, LocalSource, PlexSource, QobuzSource};
+use crate::sources::{
+    ClientLens, JellyfinSource, LocalSource, PlexSource, QobuzSource, SubsonicSource,
+};
 
 /// Every source in the process.
 pub struct SourceRegistry {
     sources: Vec<Arc<dyn Source>>,
-    // Typed handles for the three that exist. This is NOT a plugin table: the
+    // Typed handles for the five that exist. This is NOT a plugin table: the
     // auth path has to hand each of them something only IT understands (a Qobuz
-    // client, a Plex creds impl, a user directory + the ephemeral store), and
-    // `&Arc<dyn Source>` cannot express that. Three concrete accessors beat one
-    // downcast.
+    // client, a Plex creds impl, a Subsonic `Credentials`, a user directory +
+    // the ephemeral store), and `&Arc<dyn Source>` cannot express that.
+    // Concrete accessors beat a downcast.
     qobuz: Arc<QobuzSource>,
     plex: Arc<PlexSource>,
+    jellyfin: Arc<JellyfinSource>,
+    subsonic: Arc<SubsonicSource>,
     local: Arc<LocalSource>,
 }
 
@@ -50,15 +54,23 @@ impl SourceRegistry {
     fn build(qobuz: QobuzSource) -> Self {
         let qobuz = Arc::new(qobuz);
         let plex = Arc::new(PlexSource::new());
+        let jellyfin = Arc::new(JellyfinSource::new());
+        let subsonic = Arc::new(SubsonicSource::new());
         let local = Arc::new(LocalSource::new());
         Self {
             sources: vec![
                 qobuz.clone() as Arc<dyn Source>,
                 plex.clone() as Arc<dyn Source>,
+                // The acceptance test of design §10, and it really was one line
+                // each. Order is not load-bearing (see `with_defaults`).
+                jellyfin.clone() as Arc<dyn Source>,
+                subsonic.clone() as Arc<dyn Source>,
                 local.clone() as Arc<dyn Source>,
             ],
             qobuz,
             plex,
+            jellyfin,
+            subsonic,
             local,
         }
     }
@@ -81,6 +93,17 @@ impl SourceRegistry {
     /// The Plex source, for `set_creds` from the settings path.
     pub fn plex(&self) -> &PlexSource {
         &self.plex
+    }
+
+    /// The Jellyfin source, for `set_creds` and for the sync to write through
+    /// its cache handle.
+    pub fn jellyfin(&self) -> &JellyfinSource {
+        &self.jellyfin
+    }
+
+    /// The Subsonic source, same two reasons.
+    pub fn subsonic(&self) -> &SubsonicSource {
+        &self.subsonic
     }
 
     /// The local source.
@@ -106,9 +129,10 @@ impl SourceRegistry {
     ///   wins over a weaker positive claim: that is what turns bug 2 into a log
     ///   line at the point of the mistake instead of a 404 two layers down;
     /// - more than one `Some(Ok)` → [`SourceError::Ambiguous`] listing the
-    ///   candidates. It cannot happen with today's three (their predicates are
-    ///   disjoint), and the day it can, the registry says so instead of
-    ///   picking.
+    ///   candidates. It cannot happen with today's five — their predicates are
+    ///   disjoint, and the id-namespace matrix in `qbz-media-cache` is what
+    ///   keeps the three cached sources apart — and the day it can, the registry
+    ///   says so instead of picking.
     ///
     /// **Pass 2 — none of the above.** `Ambiguous` when the id is a bare
     /// numeric (genuinely undecidable without a source word, survey §6.3),

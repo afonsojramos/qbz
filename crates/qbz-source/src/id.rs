@@ -28,6 +28,12 @@ impl SourceId {
     pub const QOBUZ: SourceId = SourceId("qobuz");
     /// A Plex Media Server (through the local Plex cache).
     pub const PLEX: SourceId = SourceId("plex");
+    /// A Jellyfin server (through `qbz-media-cache`).
+    pub const JELLYFIN: SourceId = SourceId("jellyfin");
+    /// A Subsonic-compatible server — Navidrome, Gonic, Airsonic, Astiga,
+    /// Ampache. ONE source, because they speak one API; the server's own
+    /// flavour is a display detail, not an identity.
+    pub const SUBSONIC: SourceId = SourceId("subsonic");
     /// Files on this machine: the indexed library, Qobuz downloads/purchases
     /// and the session-scoped ephemeral folder.
     pub const LOCAL: SourceId = SourceId("local");
@@ -50,6 +56,9 @@ impl SourceId {
     /// | `"qobuz_download"`, `"qobuz_purchase"`, `"offline"` | `LocalTrack.source`, badges | `LOCAL` (an offline copy is a FILE; the distinction is a [`SourceBadge`]) |
     /// | `"ephemeral"` | `lyrics_qt.rs:816`, `foryou_qt.rs:775` | `LOCAL` (session-scoped arm inside `LocalSource`) |
     /// | `"plex"` | `QueueTrack.source`, `local_favorites.db` CHECK | `PLEX` |
+    /// | `"jellyfin"` | `QueueTrack.source`, `remote_cache_tracks.source` | `JELLYFIN` |
+    /// | `"subsonic"` | `QueueTrack.source`, `remote_cache_tracks.source` | `SUBSONIC` |
+    /// | `"navidrome"`, `"gonic"`, `"airsonic"` | a user's or a producer's spelling of the server they run | `SUBSONIC` |
     ///
     /// Unknown words return `None`. They are never guessed into `QOBUZ`, which
     /// is `myqbz_add_qt::source_from_str`'s bug (survey IC-6).
@@ -57,6 +66,13 @@ impl SourceId {
         match w.trim().to_ascii_lowercase().as_str() {
             "qobuz" => Some(SourceId::QOBUZ),
             "plex" => Some(SourceId::PLEX),
+            "jellyfin" => Some(SourceId::JELLYFIN),
+            // The Subsonic FLAVOURS fold into one source. They speak one API
+            // and QBZ reads them through one impl, so a row stamped with the
+            // server's brand must still resolve — a `"navidrome"` word that
+            // returned None would be `Unclaimed` and the row would refuse to
+            // play, which is a worse answer than the honest fold.
+            "subsonic" | "navidrome" | "gonic" | "airsonic" | "astiga" => Some(SourceId::SUBSONIC),
             "local" | "user" | "qobuz_download" | "qobuz_purchase" | "offline" | "ephemeral" => {
                 Some(SourceId::LOCAL)
             }
@@ -301,9 +317,24 @@ mod tests {
         assert_eq!(SourceId::from_word("qobuz_purchase"), Some(SourceId::LOCAL));
         assert_eq!(SourceId::from_word("offline"), Some(SourceId::LOCAL));
         assert_eq!(SourceId::from_word("ephemeral"), Some(SourceId::LOCAL));
-        // Unknown / absent is NOT guessed into Qobuz (survey IC-6).
+        assert_eq!(SourceId::from_word("jellyfin"), Some(SourceId::JELLYFIN));
+        // Every Subsonic BRAND folds to one source: they speak one API and QBZ
+        // reads them through one impl, so a row stamped with the server's name
+        // must still resolve. A `"navidrome"` that returned None would be
+        // `Unclaimed`, and the row would refuse to play.
+        for brand in ["subsonic", "navidrome", "gonic", "airsonic", "astiga"] {
+            assert_eq!(
+                SourceId::from_word(brand),
+                Some(SourceId::SUBSONIC),
+                "{brand} did not fold"
+            );
+        }
+        // Unknown / absent is NOT guessed into Qobuz (survey IC-6). This
+        // assertion used to be spelled with "jellyfin", which is why it needed
+        // rewriting rather than deleting when Jellyfin became real — the
+        // PROPERTY is what matters, not the example.
         assert_eq!(SourceId::from_word(""), None);
-        assert_eq!(SourceId::from_word("jellyfin"), None);
+        assert_eq!(SourceId::from_word("emby"), None);
         assert_eq!(SourceId::from_word("???"), None);
     }
 

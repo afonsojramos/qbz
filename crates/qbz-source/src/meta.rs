@@ -95,6 +95,8 @@ pub enum SourceBadge {
     Local,
     Offline,
     Plex,
+    Jellyfin,
+    Subsonic,
     Qobuz,
 }
 
@@ -105,6 +107,9 @@ impl SourceBadge {
     pub fn from_word(raw: Option<&str>) -> SourceBadge {
         match raw.map(str::trim) {
             Some("plex") => SourceBadge::Plex,
+            Some("jellyfin") => SourceBadge::Jellyfin,
+            Some("subsonic") | Some("navidrome") | Some("gonic") | Some("airsonic")
+            | Some("astiga") => SourceBadge::Subsonic,
             Some("qobuz_download") | Some("qobuz_purchase") | Some("offline") => {
                 SourceBadge::Offline
             }
@@ -119,6 +124,8 @@ impl SourceBadge {
             SourceBadge::Local => "local",
             SourceBadge::Offline => "offline",
             SourceBadge::Plex => "plex",
+            SourceBadge::Jellyfin => "jellyfin",
+            SourceBadge::Subsonic => "subsonic",
             SourceBadge::Qobuz => "qobuz",
         }
     }

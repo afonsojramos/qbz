@@ -105,6 +105,6 @@ pub use playback::PlaybackTicket;
 pub use registry::{init_registry, registry, SourceRegistry};
 pub use source::Source;
 pub use sources::{
-    local_queue_track, ClientFuture, ClientLens, EphemeralTracks, LocalSource, PlexCreds,
-    PlexSource, QobuzSource,
+    local_queue_track, CacheHandle, ClientFuture, ClientLens, EphemeralTracks, JellyfinCreds,
+    JellyfinSource, LocalSource, PlexCreds, PlexSource, QobuzSource, SubsonicCreds, SubsonicSource,
 };
