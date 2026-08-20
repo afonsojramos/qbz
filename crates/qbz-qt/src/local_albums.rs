@@ -174,6 +174,7 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
     let credits: Vec<AlbumCredit<'_>> = albums
         .iter()
         .map(|a| AlbumCredit {
+            source: a.source.as_str(),
             id: a.id.as_str(),
             artist: a.artist.as_str(),
             all_artists: a.all_artists.as_str(),
@@ -195,7 +196,10 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
             .map(|m| {
                 let key = artist_key(&m.name);
                 if !m.image_path.is_empty() {
-                    art.insert(key.clone(), m.image_path);
+                    art.insert(
+                        key.clone(),
+                        crate::local_rows::art_ref(Some(&m.image_source), &m.image_path),
+                    );
                 }
                 ArtistRow {
                     art_key: key,

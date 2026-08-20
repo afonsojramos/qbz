@@ -23,6 +23,7 @@
 use std::collections::HashMap;
 
 use qbz_library::{AudioFormat, LocalAlbum, LocalTrack};
+use qbz_source::{ArtRef, ArtSize};
 use serde::Serialize;
 
 // ---------------------------------------------------------------------------
@@ -274,15 +275,54 @@ pub fn badge_source_raw(raw: Option<&str>) -> String {
     }
 }
 
+/// The [`ArtRef`] for a row's raw artwork token, decided by the row's OWN
+/// source (design 02 §9 stage 4).
+///
+/// The art index used to hold the token as a bare `String`, and
+/// `artwork_qt::classify` sniffed it back apart later — by which point the row
+/// was gone and all that was left was the shape of the characters. That is bug
+/// 3, and its concrete failure is not hypothetical: `classify` knows a Plex
+/// thumb only because `local_plex::is_thumb_path` was bolted onto it, so a
+/// Jellyfin token (`/Items/<id>/Images/Primary`) matches its `starts_with('/')`
+/// arm and the pipeline tries to open it as a file on disk — blank cover, no
+/// error, nothing in the log.
+///
+/// Registering the answer HERE is the fix: this is the last moment the row's
+/// provenance exists. `SourceId::from_word` is the one vocabulary table
+/// (§3.1), so all six source words land on the right source, and an unknown
+/// word gets `None` rather than being guessed into Qobuz.
+///
+/// Cheap by contract — `Source::artwork_token` may not touch the network, a DB
+/// or the filesystem — so this stays a per-row call on a page load.
+pub fn art_ref(source_word: Option<&str>, token: &str) -> ArtRef {
+    if token.trim().is_empty() {
+        return ArtRef::None;
+    }
+    // The grid's size class. `ArtSize::Card` is `artwork_qt::PLEX_THUMB_PX`
+    // (256), which is deliberately ONE app-wide Plex transcode size so a cover
+    // is downloaded once — do not introduce a second size here.
+    match qbz_source::SourceId::from_word(source_word.unwrap_or("")) {
+        Some(id) => qbz_source::registry().artwork_token(id, token, ArtSize::Card),
+        // No word at all is the LOCAL case in practice (`local_tracks.source`
+        // is empty for a plain scanned file, §3.1's vocabulary table), and it
+        // is what `classify` did with those rows too.
+        None => qbz_source::registry().artwork_token(
+            qbz_source::SourceId::LOCAL,
+            token,
+            ArtSize::Card,
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Mappers (they also register the row's artwork SOURCE in the art index —
-// a local cover path, or a raw Plex `/library/...` thumb path)
+// Mappers (they also register the row's artwork REFERENCE in the art index —
+// see `art_ref`: the row's own source decides what its token means)
 // ---------------------------------------------------------------------------
 
-pub fn map_album(a: LocalAlbum, art: &mut HashMap<String, String>) -> AlbumRow {
+pub fn map_album(a: LocalAlbum, art: &mut HashMap<String, ArtRef>) -> AlbumRow {
     let key = album_key(&a.id);
     if let Some(p) = a.artwork_path.as_ref().filter(|p| !p.is_empty()) {
-        art.insert(key.clone(), p.clone());
+        art.insert(key.clone(), art_ref(Some(a.source.as_str()), p));
     }
     let folder_count = a
         .source_folders
@@ -308,10 +348,10 @@ pub fn map_album(a: LocalAlbum, art: &mut HashMap<String, String>) -> AlbumRow {
     }
 }
 
-pub fn map_track(t: &LocalTrack, art: &mut HashMap<String, String>) -> TrackRow {
+pub fn map_track(t: &LocalTrack, art: &mut HashMap<String, ArtRef>) -> TrackRow {
     let key = track_key(t.id);
     if let Some(p) = t.artwork_path.as_ref().filter(|p| !p.is_empty()) {
-        art.insert(key.clone(), p.clone());
+        art.insert(key.clone(), art_ref(t.source.as_deref(), p));
     }
     TrackRow {
         id: t.id.to_string(),

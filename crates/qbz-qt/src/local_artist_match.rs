@@ -102,6 +102,11 @@ pub struct AlbumCredit<'a> {
     pub all_artists: &'a str,
     /// On-disk cover / Plex thumb path ("" when the album has none).
     pub artwork_path: &'a str,
+    /// The album's own source word, so a portrait borrowed from its cover
+    /// keeps that cover's provenance. Without it the artwork index would have
+    /// to guess what `artwork_path` is from its characters, which is exactly
+    /// the sniffing design 02 §9 stage 4 removes.
+    pub source: &'a str,
 }
 
 /// Does this album credit the artist whose normalized name is `nsel` — as
@@ -175,7 +180,16 @@ pub struct MergedArtist {
     /// Portrait SOURCE (custom/cached url or path, Plex thumb, album cover);
     /// "" when nothing is known and the row falls back to the placeholder.
     pub image_path: String,
-    /// "local" | "plex" | "mixed".
+    /// WHICH source [`MergedArtist::image_path`] came from — never "mixed".
+    ///
+    /// Distinct from [`MergedArtist::source`] on purpose: that one describes
+    /// the artist's LIBRARY provenance and is legitimately "mixed" when a name
+    /// has both local and Plex rows. A portrait, however, comes from exactly
+    /// ONE of the three chain tiers, and the artwork index needs to know which
+    /// — "mixed" is not a source a token can be interpreted by.
+    pub image_source: String,
+    /// "local" | "plex" | "mixed" — the artist's LIBRARY provenance, which the
+    /// Artists rail renders as a hint.
     pub source: String,
 }
 
@@ -205,13 +219,15 @@ pub fn merge_artists(
         .iter()
         .map(|(k, v)| (normalize_artist(k), v.clone()))
         .collect();
-    let mut album_thumbs: HashMap<String, String> = HashMap::new();
+    // (path, the album's OWN source word) — the tier is Plex-gated but the
+    // album it borrows from can still be a local one, so the word travels.
+    let mut album_thumbs: HashMap<String, (String, String)> = HashMap::new();
     if album_thumb_fallback {
         for al in albums {
             if !al.artwork_path.is_empty() {
                 album_thumbs
                     .entry(normalize_artist(al.artist))
-                    .or_insert_with(|| al.artwork_path.to_string());
+                    .or_insert_with(|| (al.artwork_path.to_string(), al.source.to_string()));
             }
         }
     }
@@ -270,17 +286,25 @@ pub fn merge_artists(
             };
             (canon.name.clone(), ac, total_tracks)
         };
-        let image_path = norm_imgs
-            .get(&n)
-            .or_else(|| plex_portraits.get(&n))
-            .or_else(|| album_thumbs.get(&n))
-            .cloned()
-            .unwrap_or_default();
+        // The three tiers, each carrying WHERE it came from. Order is the
+        // reference's: custom/cached image -> Plex portrait -> album cover.
+        let (image_path, image_source) = if let Some(p) = norm_imgs.get(&n) {
+            // Custom portraits are written by this app: a local path or a
+            // cached url, never a server-relative thumb.
+            (p.clone(), "local")
+        } else if let Some(p) = plex_portraits.get(&n) {
+            (p.clone(), "plex")
+        } else if let Some((p, src)) = album_thumbs.get(&n) {
+            (p.clone(), src.as_str())
+        } else {
+            (String::new(), "local")
+        };
         out.push(MergedArtist {
             name: canonical,
             album_count,
             track_count,
             image_path,
+            image_source: image_source.to_string(),
             source: source.to_string(),
         });
     }
@@ -295,7 +319,18 @@ mod tests {
     use super::*;
 
     fn credit<'a>(id: &'a str, artist: &'a str, all: &'a str, art: &'a str) -> AlbumCredit<'a> {
+        credit_from("local", id, artist, all, art)
+    }
+
+    fn credit_from<'a>(
+        source: &'a str,
+        id: &'a str,
+        artist: &'a str,
+        all: &'a str,
+        art: &'a str,
+    ) -> AlbumCredit<'a> {
         AlbumCredit {
+            source,
             id,
             artist,
             all_artists: all,

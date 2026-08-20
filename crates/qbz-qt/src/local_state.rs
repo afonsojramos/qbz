@@ -12,6 +12,7 @@ use std::sync::Mutex;
 
 use qbz_app::user_data::UserDataPaths;
 use qbz_library::{LibraryDatabase, LibraryError, LocalTrack};
+use qbz_source::ArtRef;
 
 use crate::local_rows::{AlbumRow, ArtistRow, LocalCounts, TrackRow, TreeNode};
 
@@ -96,10 +97,15 @@ pub struct LocalState {
     /// The FULL flattened tree (visible derivation applies the rail search).
     pub tree: Vec<TreeNode>,
     pub tree_search: String,
-    /// artKey -> the artwork SOURCE: an on-disk cover path, or a raw Plex
-    /// `/library/...` thumb path. The artwork window turns these into 256px
-    /// thumbnails (local) or tokenized, disk-cached fetches (Plex).
-    pub art_index: HashMap<String, String>,
+    /// artKey -> what the row's OWN source said its artwork token means
+    /// (design 02 §9 stage 4). The artwork window turns these into 256px
+    /// thumbnails (`ArtRef::File`) or disk-cached fetches (`ArtRef::Fetch`).
+    ///
+    /// It used to hold the raw token as a `String`, and `artwork_qt::classify`
+    /// sniffed it back apart at window time — by which point the row was gone
+    /// and only the shape of the characters was left. That is bug 3;
+    /// `local_rows::art_ref` resolves it while provenance still exists.
+    pub art_index: HashMap<String, ArtRef>,
     /// Album identity ("folder" | "metadata") — persisted (locallibrary_ui).
     pub album_mode: String,
     pub counts: LocalCounts,
@@ -133,7 +139,7 @@ pub fn state<R>(f: impl FnOnce(&mut LocalState) -> R) -> R {
 
 /// Take the art index out, run `f` with it, put it back — the shape every
 /// loader uses so mapping can register covers without a second lock.
-pub fn with_art<R>(f: impl FnOnce(&mut HashMap<String, String>) -> R) -> R {
+pub fn with_art<R>(f: impl FnOnce(&mut HashMap<String, ArtRef>) -> R) -> R {
     let mut art = state(|s| std::mem::take(&mut s.art_index));
     let out = f(&mut art);
     state(|s| s.art_index = art);

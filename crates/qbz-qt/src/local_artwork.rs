@@ -1,21 +1,33 @@
 //! Windowed, id-keyed artwork for the Local Library (the perf contract:
 //! a 16K-track library must never decode a cover it does not show).
 //!
-//! Split out of `local_library_qt.rs` (phase-24 modularization) and made
-//! source-aware. The routing decision is NOT made here — `artwork_qt::classify`
-//! owns the one url taxonomy the whole app shares (see its module docs), so a
-//! cover resolves identically in the grid, the queue and the now-playing bar:
+//! Split out of `local_library_qt.rs` (phase-24 modularization).
 //!
-//!  - a LOCAL cover path resolves to the `qbz-library` THUMBNAIL (generated
-//!    once, cached on disk) — never the full-size original, which is what
-//!    keeps a 16K library from decoding 3000px jpegs into cards;
-//!  - a PLEX thumb (`/library/...` / `/photo/...`) resolves to the tokenized
-//!    server-side transcode URL and is served through the SAME shared image
-//!    cache the Home/queue covers use (`artwork_qt`), at the SAME transcode
-//!    size (`artwork_qt::PLEX_THUMB_PX`), so a Plex cover is downloaded once
-//!    for the whole process and then read from disk like any other;
-//!  - an http(s) cover (an offline-download row that kept its CDN url) goes
-//!    down the same disk-cache path as a Plex thumb.
+//! The routing decision is not made here, and since design 02 §9 stage 4 it is
+//! not made by sniffing a string either: the art index holds a
+//! `qbz_source::ArtRef` that the row's OWN source produced at mapping time
+//! (`local_rows::art_ref`), and this file obeys it:
+//!
+//!  - [`ArtRef::File`] — an on-disk cover, resolved to the `qbz-library`
+//!    THUMBNAIL (generated once, cached on disk) rather than the full-size
+//!    original, which is what keeps a 16K library from decoding 3000px jpegs
+//!    into cards;
+//!  - [`ArtRef::Fetch`] — a remote cover (a tokenized Plex transcode url, an
+//!    offline-download row's CDN url) served through the SAME shared image
+//!    cache the Home/queue covers use (`artwork_qt`), so it is downloaded once
+//!    for the whole process and then read from disk like any other. Its
+//!    `cache_key` is what the memo keys on, never the fetch url, which is
+//!    rebuilt every pass;
+//!  - [`ArtRef::Unavailable`] — the art exists but the server is not connected.
+//!    Kept distinct from `None` so the miss is logged for what it is rather
+//!    than looking like a dead download.
+//!
+//! `artwork_qt::classify` used to stand where that match is. It knew about
+//! Plex only because `local_plex::is_thumb_path` was bolted onto it, so any
+//! future source whose token starts with `/` — a Jellyfin
+//! `/Items/<id>/Images/Primary`, say — would have been read as a filesystem
+//! path and opened from disk: blank cover, no error, nothing in the log. That
+//! is bug 3, and it is why the taxonomy now belongs to the sources.
 //!
 //! Every arm ends at a `file://` path — QML `Image` decodes it natively and
 //! asynchronously, and no token ever reaches QML.
@@ -58,7 +70,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
-use crate::artwork_qt::{self, ArtUrl};
+use qbz_source::ArtRef;
+
+use crate::artwork_qt;
 use crate::local_state::state;
 
 /// Memo ceiling, mirroring `artwork_qt::MEMO_CAP`: an accelerator, cleared
@@ -93,10 +107,16 @@ fn gen_shard(src: &str) -> usize {
 pub struct ArtworkWindow {
     /// (artKey, "file://…") — already on disk, ready to emit immediately.
     pub hits: Vec<(String, String)>,
-    /// (artKey, fetchable http url) — not on disk yet; the bridge downloads
-    /// these off the Qt thread and re-resolves them to `file://`. Named for
-    /// its dominant case; an http cover on a Plex-less row lands here too.
-    pub plex_misses: Vec<(String, String)>,
+    /// (artKey, fetchable http url, STABLE cache key) — not on disk yet; the
+    /// bridge downloads these off the Qt thread and re-resolves them to
+    /// `file://`. Named for its dominant case; an http cover on a Plex-less
+    /// row lands here too.
+    ///
+    /// The cache key rides ALONGSIDE the url because they are not the same
+    /// string: a Plex url is re-tokenized every pass and a Qobuz one carries a
+    /// size query, while the key stays put. Collapsing them re-downloads a
+    /// cover that is already on disk (`ArtRef::Fetch`, design 02 §3.4).
+    pub plex_misses: Vec<(String, String, String)>,
     /// (artKey, local cover path) — needs a decode+downscale, in the caller's
     /// display order. Fed to [`stream_cold`], which emits each one as it
     /// lands instead of batching them.
@@ -109,7 +129,7 @@ pub struct ArtworkWindow {
 /// Keys with no cover are dropped, so the QML map only ever grows with real
 /// hits.
 pub fn resolve_window_blocking(keys: Vec<String>) -> ArtworkWindow {
-    let sources: Vec<(String, String)> = state(|s| {
+    let sources: Vec<(String, ArtRef)> = state(|s| {
         keys.iter()
             .filter_map(|k| s.art_index.get(k).map(|p| (k.clone(), p.clone())))
             .collect()
@@ -118,32 +138,46 @@ pub fn resolve_window_blocking(keys: Vec<String>) -> ArtworkWindow {
     let mut plex_misses = Vec::new();
     let mut cold = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for (key, src) in sources {
+    for (key, art) in sources {
         if !seen.insert(key.clone()) {
             continue;
         }
-        match artwork_qt::classify(&src) {
-            // --- Plex / remote arm: disk cache, else a background fetch ----
-            ArtUrl::Plex(_) | ArtUrl::Http(_) => {
-                let cached = artwork_qt::cached_path(&src);
+        // The taxonomy is READ, not re-derived. `artwork_qt::classify` used to
+        // stand here and sniff a `String` whose provenance had been thrown
+        // away three layers up; the row's own source answered this question at
+        // mapping time (`local_rows::art_ref`), and every arm below is that
+        // answer being obeyed.
+        match art {
+            // --- Remote arm: disk cache, else a background fetch -----------
+            ArtRef::Fetch { url, cache_key } => {
+                // The memo is keyed on the STABLE key, never the fetch url: a
+                // Plex url is re-tokenized every pass and a Qobuz one carries
+                // a size query, so keying on it would miss a cover already
+                // sitting in the cache (artwork_qt.rs:231-238).
+                let cached = artwork_qt::cached_path_for(&cache_key, &url);
                 if cached.is_empty() {
-                    // Hand the bridge the RAW source: `download_missing`
-                    // re-classifies it, and `cached_path` memoizes under the
-                    // raw url, so the re-resolve below is a RAM read.
-                    plex_misses.push((key, src));
+                    plex_misses.push((key, url, cache_key));
                 } else {
                     hits.push((key, cached));
                 }
             }
-            // No server / token: nothing to fetch, leave the card blank.
-            ArtUrl::PlexUnconfigured | ArtUrl::Empty => {}
+            // Nothing to show, and nothing to wait for.
+            ArtRef::None => {}
+            // The art EXISTS but the server is not connected. Distinct from
+            // `None` so the miss is logged for what it is instead of looking
+            // like a dead download — `ArtUrl::PlexUnconfigured`'s whole reason
+            // for existing, kept.
+            ArtRef::Unavailable(_) => {}
             // --- Local arm: thumbnail the on-disk cover -------------------
-            ArtUrl::LocalFile(path) => match cached_thumbnail(&path) {
-                Some(thumb) => hits.push((key, artwork_qt::file_url(&thumb.to_string_lossy()))),
-                // Not on disk (or gone): decode it in phase 2. `cold` keeps
-                // the caller's order, which is display order.
-                None => cold.push((key, path)),
-            },
+            ArtRef::File(path) => {
+                let path = path.to_string_lossy().into_owned();
+                match cached_thumbnail(&path) {
+                    Some(thumb) => hits.push((key, artwork_qt::file_url(&thumb.to_string_lossy()))),
+                    // Not on disk (or gone): decode it in phase 2. `cold`
+                    // keeps the caller's order, which is display order.
+                    None => cold.push((key, path)),
+                }
+            }
         }
     }
     ArtworkWindow {
@@ -255,17 +289,23 @@ fn memoize(src: &str, resolved: &Path) {
 /// Download the misses into the shared image cache and return the resolved
 /// `(key, file://…)` pairs. Async (network) — the bridge awaits it on the
 /// tokio runtime, never on the Qt thread.
-pub async fn fetch_plex_misses(misses: Vec<(String, String)>) -> Vec<(String, String)> {
+pub async fn fetch_plex_misses(misses: Vec<(String, String, String)>) -> Vec<(String, String)> {
     if misses.is_empty() {
         return Vec::new();
     }
-    let urls: Vec<String> = misses.iter().map(|(_, u)| u.clone()).collect();
-    artwork_qt::download_missing(urls).await;
+    // `download_pairs` / `cached_path_for` instead of the classifying pair:
+    // the source already resolved both halves, so nothing here has to guess
+    // what the string is (design 02 §9 stage 4).
+    let jobs: Vec<(String, String)> = misses
+        .iter()
+        .map(|(_, url, key)| (key.clone(), url.clone()))
+        .collect();
+    artwork_qt::download_pairs(jobs).await;
     misses
         .into_iter()
-        .filter_map(|(key, url)| {
-            let path = artwork_qt::cached_path(&url);
-            (!path.is_empty()).then_some((key, path))
+        .filter_map(|(art_key, url, cache_key)| {
+            let path = artwork_qt::cached_path_for(&cache_key, &url);
+            (!path.is_empty()).then_some((art_key, path))
         })
         .collect()
 }

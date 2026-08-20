@@ -308,6 +308,49 @@ pub fn cached_path(url: &str) -> String {
     }
 }
 
+/// [`cached_path`] for a cover whose `(cache_key, fetch url)` pair is ALREADY
+/// resolved — i.e. one that arrived as a `qbz_source::ArtRef::Fetch`.
+///
+/// The difference is only that it does not call [`classify`], because it does
+/// not have to: the source that owns the row already said what its token means
+/// (design 02 §9 stage 4). `classify` remains for the surfaces that still hand
+/// this module a bare string.
+///
+/// The `cache_key` keeps doing both jobs it did before — the custom-cover
+/// override is looked up under it, and it is the memo key `disk_path` stores
+/// beside the fetch url — so a cover cached by the old code path is still a
+/// hit.
+pub fn cached_path_for(cache_key: &str, fetch: &str) -> String {
+    let custom = crate::cover_artwork_qt::override_for_url(cache_key);
+    if !custom.is_empty() {
+        return file_url(&custom);
+    }
+    disk_path(cache_key, fetch)
+        .map(|p| file_url(&p.to_string_lossy()))
+        .unwrap_or_default()
+}
+
+/// [`download_missing`] for pairs that need no classification: each job is
+/// `(cache_key, fetch url)`, deduped by the FETCH url so two rows sharing a
+/// cover download it once.
+pub async fn download_pairs(pairs: Vec<(String, String)>) {
+    let mut jobs: Vec<(String, String)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for (key, fetch) in pairs {
+        // Overridden art never needs a fetch — `cached_path_for` answers it.
+        if !crate::cover_artwork_qt::override_for_url(&key).is_empty() {
+            continue;
+        }
+        if fetch.is_empty() {
+            continue;
+        }
+        if seen.insert(fetch.clone()) {
+            jobs.push((key, fetch));
+        }
+    }
+    fetch_jobs(jobs).await;
+}
+
 /// The cached file for a FETCHABLE cover (http/https, and Plex thumbs once
 /// tokenized) as a RAW filesystem path — `None` when it is not on disk.
 ///
@@ -384,6 +427,16 @@ pub async fn download_missing(urls: Vec<String>) {
             ArtUrl::Empty => {}
         }
     }
+    fetch_jobs(jobs).await;
+}
+
+/// The shared download loop: `(cache_key, fetch url)` jobs, already deduped.
+///
+/// Split out of [`download_missing`] so [`download_pairs`] — the
+/// classification-free entry the `ArtRef::Fetch` pipeline uses — reuses the
+/// bounded pool, the error-page guard and the cache store rather than growing
+/// a second copy of them.
+async fn fetch_jobs(jobs: Vec<(String, String)>) {
     if jobs.is_empty() {
         return;
     }
