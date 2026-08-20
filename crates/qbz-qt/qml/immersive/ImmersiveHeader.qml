@@ -35,25 +35,35 @@ Item {
     // `fieldActive` seam).
     readonly property bool searchActive: searchField.fieldActive
 
+    /// macOS with the NATIVE traffic lights floating over the client area —
+    /// the only configuration where the band's left edge is already occupied.
+    /// Same predicate the view's old `chromeLeftInset` used.
+    readonly property bool trailingTrigger:
+        QbzShell.isMacos && !QbzShell.systemTitleBar
+
 
     // --- LEFT: the view menu ---------------------------------------------
     Rectangle {
         id: viewTrigger
-        // ON THE RIGHT, beside the capsule — not at the band's left edge.
+        // MACOS ONLY: over on the right, beside the capsule. Everywhere else it
+        // stays at the band's left edge, where it has always been.
         //
-        // It lived on the left and on macOS that is the traffic lights' corner,
-        // so the band was being shoved sideways to make room for one 44px pill.
-        // Moving the pill instead leaves that corner to the lights on macOS and
-        // costs nothing anywhere else: the search field is centred on the band,
-        // not laid out after the trigger, so the left half simply goes empty.
+        // The move exists for ONE reason — on macOS the band's left edge is the
+        // native traffic lights' corner (x ~ 7-85, this pill's exact spot), so
+        // something had to give. Nothing else has traffic lights, so nothing
+        // else has the problem, and moving the control there was a change with
+        // no cause. (It shipped unconditional first; this is that fix.)
         //
-        // The right margin RESERVES THE CAPSULE'S EXPANDED WIDTH (112) plus a
-        // 12px gap, rather than anchoring to the capsule's live left edge. The
-        // capsule grows leftward on hover, and anchoring to it would slide this
-        // pill sideways every time the pointer crossed the other one — motion
-        // with no meaning. Reserving the maximum keeps both still.
-        anchors.right: parent.right
-        anchors.rightMargin: 112 + 12
+        // `x` rather than swapped anchors: toggling between `anchors.left` and
+        // `anchors.right` means clearing one with `undefined` on every flip,
+        // and the position is one expression either way.
+        //
+        // The trailing position RESERVES THE CAPSULE'S EXPANDED WIDTH (112)
+        // plus a 12px gap instead of tracking its live left edge. The capsule
+        // grows leftward on hover, so tracking it would slide this pill
+        // sideways every time the pointer crossed the other one — motion with
+        // no meaning. Reserving the maximum keeps both still.
+        x: header.trailingTrigger ? header.width - 112 - 12 - width : 0
         anchors.verticalCenter: parent.verticalCenter
         width: 44
         height: 36
