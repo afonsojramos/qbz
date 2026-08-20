@@ -161,8 +161,20 @@ pub(crate) fn load_albums() {
         let _ = tokio::task::spawn_blocking(lib::load_counts_blocking).await;
         match result {
             Ok(rows) => {
+                // TIMED alongside the SQL/map segments in `load_albums_blocking`.
+                // This document is republished on every mount of the view, and
+                // the three numbers together are the only way to tell whether a
+                // slow grid is the query, the mapping, the serialisation, or —
+                // as it turned out — the QML parse that follows this line and
+                // that Rust cannot see at all.
+                let t = std::time::Instant::now();
                 let json = lib::to_json(&rows);
-                log::info!("[qbz-qt] local albums published: {} ({} bytes)", rows.len(), json.len());
+                let ser = t.elapsed();
+                log::info!(
+                    "[qbz-qt][perf] local albums published: {} rows, {} bytes, serialize {ser:?}",
+                    rows.len(),
+                    json.len()
+                );
                 ui(move |mut b| {
                     b.as_mut()
                         .set_local_albums_json(QString::from(json.as_str()));

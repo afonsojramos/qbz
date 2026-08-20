@@ -32,6 +32,14 @@ use crate::local_state::{group_mode, state, with_art, with_db, TRACKS_PAGE};
 /// Albums tab: the FULL metadata/folder-grouped set (local + Plex) in one
 /// page. Search, sort and grouping derive QML-side over the parsed array.
 pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
+    // TIMED, in three segments, because this document is republished on EVERY
+    // navigation (5 times in a 37-second screencast) and there was no
+    // instrument on the path at all — so "the grid got slower" could only be
+    // argued about. The segments are the three things that can actually cost:
+    // the SQL (which now ATTACHes two mirrors and UNIONs three sources), the
+    // row mapping (which resolves an ArtRef per row), and the JSON the bridge
+    // hands to QML.
+    let t0 = std::time::Instant::now();
     let mode = group_mode();
     let plex_path = crate::local_plex::cache_db_path();
     // The SHARED remote mirror, and which of its sources may show. Both gates
@@ -56,14 +64,23 @@ pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
         )
     })
     .ok_or_else(|| "local library not available".to_string())?;
+    let t_sql = t0.elapsed();
     let total = page.total;
     let albums = page.albums;
+    let n = albums.len();
+    let t1 = std::time::Instant::now();
     let rows = with_art(|art| {
         albums
             .into_iter()
             .map(|a| map_album(a, art))
             .collect::<Vec<AlbumRow>>()
     });
+    log::info!(
+        "[qbz-qt][perf] albums load: {n} rows — sql {t_sql:?}, map {:?} (plex={} remote={:?})",
+        t1.elapsed(),
+        plex_path.is_some(),
+        remote_words,
+    );
     state(|s| {
         s.counts.albums = total as i64;
         s.albums = rows.clone();
