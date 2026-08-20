@@ -161,29 +161,9 @@ You can also download the Apple Silicon or Intel DMG from the
 [signed macOS releases](https://github.com/afonsojramos/qbz-macos/releases/latest).
 These are made from the upstream QBZ application without recompiling it; its
 signature metadata and DMG container are replaced, then notarized by
-[@afonsojramos](https://github.com/afonsojramos). They are not produced or
-endorsed by the upstream project. The mirror publishes the source commit,
-original checksums, and signed checksums for each release; see its
-[trust and provenance documentation](https://github.com/afonsojramos/qbz-macos#trust-and-provenance).
-
-**Upstream alternative — ad-hoc signed:** download the Apple Silicon or Intel
-DMG from the [official upstream releases](https://github.com/vicrodh/qbz/releases)
-and drag QBZ into Applications. These DMGs are not notarized, so Gatekeeper
-will block the first run — and on recent macOS (Sequoia / 15 and later) the old
-right-click → Open trick no longer works. Two ways to unlock it, pick one:
-
-- **Settings route:** try to open QBZ once (it gets blocked), then go to
-  **System Settings → Privacy & Security**, scroll down to the message that
-  QBZ was blocked, and click **Open Anyway**.
-- **Terminal route** (what the settings toggle does, minus the clicking):
-
-  ```bash
-  xattr -dr com.apple.quarantine /Applications/QBZ.app
-  ```
-
-  This removes the quarantine attribute macOS stamps on downloaded files —
-  it's a one-time unlock for this copy of the app; updates installed through
-  QBZ's own updater don't need it again.
+[@afonsojramos](https://github.com/afonsojramos).
+The mirror publishes the source commit, original checksums, and signed
+checksums for each release; see its [trust and provenance documentation](https://github.com/afonsojramos/qbz-macos#trust-and-provenance).
 
 ## Features
 
