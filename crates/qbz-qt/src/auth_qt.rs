@@ -220,6 +220,10 @@ async fn bind_per_user_stores(dir: &std::path::Path, user_id: u64) {
     // Bound after, that probe would report "none" on every login.
     crate::media_servers_qt::init_for_user(dir);
     crate::source_wiring::bind_user(dir, user_id);
+    // The filter chips are gated on "is this server configured", and the
+    // answer is known now — without this the chips are absent until the first
+    // browse reload, which for a user who never touches settings is never.
+    crate::local_bridge_ops::publish_media_gates();
     // MyQBZ: branding (label + icon, read by the sidebar/nav flyout on frame
     // 1) and the grids + mixtape schema.
     crate::myqbz_prefs_qt::init_for_user(dir);

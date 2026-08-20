@@ -143,9 +143,10 @@ Rectangle {
                            ["FLAC", "ALAC", "APE", "WAV", "MP3", "AAC",
                             QbzSession.tr("Other", tr)]) },
             { group: QbzSession.tr("Source", tr),
-              values: pick(["local", "offline", "plex"],
+              values: pick(["local", "offline", "plex", "jellyfin", "subsonic"],
                            [QbzSession.tr("Local", tr),
-                            QbzSession.tr("Offline cache", tr), "Plex"]) }
+                            QbzSession.tr("Offline cache", tr), "Plex",
+                            "Jellyfin", "Subsonic"]) }
         ]
     }
 
@@ -394,6 +395,7 @@ Rectangle {
         var fAny = filter.flac || filter.alac || filter.ape || filter.wav
             || filter.mp3 || filter.aac || filter.other
         var sAny = filter.local || filter.offline || filter.plex
+            || filter.jellyfin || filter.subsonic
         var known = { "flac": 1, "alac": 1, "ape": 1, "wav": 1, "mp3": 1, "aac": 1 }
         var out = []
         for (var i = 0; i < rows.length; i++) {
@@ -424,6 +426,13 @@ Rectangle {
                 // source filter hides every purchased album, silently.
                 var src = (r.source || "local").toLowerCase()
                 if (src === "qobuz_purchase" || src === "qobuz_download") src = "offline"
+                // Every brand spelling of a Subsonic server is ONE chip, the
+                // same fold `SourceId::from_word` applies. A row stamped
+                // "navidrome" that matched no chip would VANISH the moment any
+                // source filter was ticked — the §10-H shape above, in a new
+                // source.
+                if (src === "navidrome" || src === "gonic" || src === "airsonic"
+                    || src === "astiga") src = "subsonic"
                 if (!filter[src]) continue
             }
             out.push(r)

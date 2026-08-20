@@ -129,6 +129,12 @@ pub mod qbz_local {
         /// the two questions have different answers: `media_syncing` gates the
         /// spinner, and `media_sync_progress` ("1500/4924") is what makes a
         /// 45.8-second Jellyfin sweep legible instead of a frozen button.
+        /// Whether each media server is CONFIGURED — what gates its source
+        /// chip in the Local Library filter popup. A chip that can never match
+        /// anything is a control that teaches the user the filter is broken,
+        /// so the chip only exists when its server does.
+        #[qproperty(bool, media_has_jellyfin)]
+        #[qproperty(bool, media_has_subsonic)]
         #[qproperty(bool, media_syncing)]
         #[qproperty(QString, media_sync_progress)]
         /// Tracks written by the last sync; -1 = never synced this session.
@@ -441,6 +447,8 @@ pub struct QbzLocalRust {
     plex_enabled: bool,
     plex_available: bool,
     plex_syncing: bool,
+    media_has_jellyfin: bool,
+    media_has_subsonic: bool,
     media_syncing: bool,
     media_sync_progress: QString,
     plex_last_sync_tracks: i32,
@@ -486,6 +494,8 @@ impl Default for QbzLocalRust {
             plex_enabled: false,
             plex_available: false,
             plex_syncing: false,
+            media_has_jellyfin: false,
+            media_has_subsonic: false,
             media_syncing: false,
             media_sync_progress: QString::default(),
             plex_last_sync_tracks: -1,

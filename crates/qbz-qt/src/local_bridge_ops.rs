@@ -78,7 +78,23 @@ pub(crate) fn publish_plex_state() {
 }
 
 /// Reload every browse document in place (after a sync / connect / toggle).
+/// Push the "is this server configured" gates the filter chips read.
+///
+/// Called from every path that can change the answer — a connect, a
+/// disconnect, the master toggle and the user bind — because a chip that
+/// outlives its server filters a bucket that no longer exists.
+pub(crate) fn publish_media_gates() {
+    let words = crate::media_servers_qt::configured_words();
+    let jf = words.contains(&"jellyfin");
+    let sub = words.contains(&"subsonic");
+    ui(move |mut b| {
+        b.as_mut().set_media_has_jellyfin(jf);
+        b.as_mut().set_media_has_subsonic(sub);
+    });
+}
+
 pub(crate) fn reload_browse() {
+    publish_media_gates();
     // The cortinilla's instant-paint cache embeds LOCAL rows and their artwork
     // paths, so anything that reaches here has just made those rows possibly
     // wrong. This is the single chokepoint for local-library mutations, which

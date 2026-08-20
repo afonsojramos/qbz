@@ -167,6 +167,22 @@ Item {
                     active: root.view.filter.plex === true
                     onToggled: root.view.toggleFilter("plex")
                 }
+                // The media servers, chips of their own. They are only worth
+                // a chip when the user actually has one — an always-present
+                // "Jellyfin" that can never match anything is a control that
+                // teaches the user the filter is broken.
+                FilterChip {
+                    visible: QbzLocal.mediaHasJellyfin
+                    label: "Jellyfin"
+                    active: root.view.filter.jellyfin === true
+                    onToggled: root.view.toggleFilter("jellyfin")
+                }
+                FilterChip {
+                    visible: QbzLocal.mediaHasSubsonic
+                    label: "Subsonic"
+                    active: root.view.filter.subsonic === true
+                    onToggled: root.view.toggleFilter("subsonic")
+                }
             }
         }
     }
