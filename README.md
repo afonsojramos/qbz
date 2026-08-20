@@ -150,12 +150,27 @@ Download from [Releases](https://github.com/vicrodh/qbz/releases): `chmod +x QBZ
 
 **QBZ is Linux-first, but as of 2.0 macOS is out of its experimental phase and is a stable, fully supported platform** — a proper player for Linux and Mac. PipeWire, ALSA, and JACK are Linux-specific backends; macOS plays through its own CoreAudio backend, including a Core Audio Direct passthrough path for bit-perfect output. Casting (Chromecast/DLNA) and Qobuz Connect work on macOS as well.
 
-Download the DMG (Apple Silicon or Intel) from [Releases](https://github.com/vicrodh/qbz/releases) and drag QBZ into Applications.
+**Recommended — signed and notarized:** install the independently maintained
+[Homebrew Cask](https://github.com/afonsojramos/homebrew-qbz):
 
-**First launch:** QBZ is ad-hoc signed but NOT notarized (no Apple Developer
-subscription), so Gatekeeper will block the first run — and on recent macOS
-(Sequoia / 15 and later) the old right-click → Open trick no longer works for
-un-notarized apps. Two ways to unlock it, pick one:
+```bash
+brew install --cask afonsojramos/qbz/qbz
+```
+
+You can also download the Apple Silicon or Intel DMG from the
+[signed macOS releases](https://github.com/afonsojramos/qbz-macos/releases/latest).
+These are made from the upstream QBZ application without recompiling it; its
+signature metadata and DMG container are replaced, then notarized by
+[@afonsojramos](https://github.com/afonsojramos). They are not produced or
+endorsed by the upstream project. The mirror publishes the source commit,
+original checksums, and signed checksums for each release; see its
+[trust and provenance documentation](https://github.com/afonsojramos/qbz-macos#trust-and-provenance).
+
+**Upstream alternative — ad-hoc signed:** download the Apple Silicon or Intel
+DMG from the [official upstream releases](https://github.com/vicrodh/qbz/releases)
+and drag QBZ into Applications. These DMGs are not notarized, so Gatekeeper
+will block the first run — and on recent macOS (Sequoia / 15 and later) the old
+right-click → Open trick no longer works. Two ways to unlock it, pick one:
 
 - **Settings route:** try to open QBZ once (it gets blocked), then go to
   **System Settings → Privacy & Security**, scroll down to the message that
