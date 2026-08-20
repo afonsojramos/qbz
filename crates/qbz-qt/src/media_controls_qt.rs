@@ -297,6 +297,38 @@ fn meta_changed(key: &(u64, Option<String>)) -> bool {
 /// or on the 600-tier rewrite; they diverge only on what they do with a
 /// REMOTE cover, which is the whole point of the split (see `notify_art_for`).
 fn artwork_ref_for(track: &qbz_models::QueueTrack) -> qbz_models::ArtworkRef {
+    // A SOURCE-TAGGED media token first, and it has to be first because
+    // `qbz-models` cannot resolve it. That crate is the base of the graph — it
+    // has no way to reach `qbz-source`, so `artwork_ref_with_plex` knows about
+    // exactly one server, and anything else falls to its `LocalFile` arm: a
+    // `jellyfin:<albumId>/<tag>` became a `file://` URI pointing at a path that
+    // does not exist, which is why the bar and the queue showed the cover and
+    // MPRIS did not.
+    //
+    // The frontend CAN resolve it, and by this point the cover is already in
+    // the shared disk cache (the now-playing feed fetched it), so this is a
+    // memo read. `LocalFile` rather than `Remote` on purpose: an MPRIS widget
+    // fetches a remote URL itself, and this one carries credentials.
+    if let Some(raw) = track.artwork_url.as_deref() {
+        if raw
+            .split_once(':')
+            .and_then(|(w, _)| qbz_source::SourceId::from_word(w))
+            .is_some_and(|id| {
+                matches!(
+                    id,
+                    qbz_source::SourceId::JELLYFIN | qbz_source::SourceId::SUBSONIC
+                )
+            })
+        {
+            if let Some(path) = crate::artwork_qt::cached_raw_path(raw) {
+                return qbz_models::ArtworkRef::LocalFile(path.to_string_lossy().into_owned());
+            }
+            // Not on disk yet: say NOTHING rather than hand the widget a
+            // `file://` to a token. An empty ref is a missing cover; a broken
+            // one is a broken cover.
+            return qbz_models::ArtworkRef::LocalFile(String::new());
+        }
+    }
     let plex = crate::local_plex::settings();
     let artwork = track.artwork_ref_with_plex(&plex.base_url, &plex.token, None);
     // A restored queue can carry the 50px `small` Qobuz variant — the widget
