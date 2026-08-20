@@ -252,8 +252,19 @@ Rectangle {
             id: cell
             required property int index
 
-            x: 32
-            width: root.contentW
+            // FULL-WIDTH DELEGATE, INSET ON THE CHILD — the shape the list and
+            // tree delegates below already use, and the reason this one is
+            // written the same way now:
+            //
+            // this delegate used to carry `x: 32` ITSELF. A ListView owns its
+            // delegates' position, so an `x` set on the delegate root is not
+            // reliably the one that survives layout — and it did not here: the
+            // card grid sat ~24 px left of the section headings above it, which
+            // `PmPageHead` draws at 32 through its own Column. Headings at one
+            // inset and cards at another, on the same page.
+            //
+            // The inset now lives where the view has no opinion about it.
+            width: pmList.width
             height: root.cardH + 16
 
             // A BINDING, not a function call: it must re-evaluate when the
@@ -262,6 +273,8 @@ Rectangle {
                 cell.index * root.gridCols, (cell.index + 1) * root.gridCols)
 
             Row {
+                x: 32
+                width: root.contentW
                 spacing: 16
 
                 Repeater {
