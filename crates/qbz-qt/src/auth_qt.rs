@@ -208,6 +208,14 @@ where
 /// logs on failure, never blocks shell entry) — one entry point, so the caller
 /// cannot bind the uid and forget the schema.
 async fn bind_per_user_stores(dir: &std::path::Path, user_id: u64) {
+    // THE SOURCE REGISTRY FIRST, before any other store. `myqbz_qt::
+    // init_for_user` below runs the mixtape migrations through
+    // `library_db_qt::with_db(true, …)`, and against an unbound pool a fresh
+    // account can never create a collection. It is also what makes local and
+    // Plex playback work at all: an unbound `DbPool` refuses every read, and
+    // `PlexSource` with no credentials answers `NotConfigured` — which is
+    // exactly what shipped for one build when this line was missing.
+    crate::source_wiring::bind_user(dir, user_id);
     // MyQBZ: branding (label + icon, read by the sidebar/nav flyout on frame
     // 1) and the grids + mixtape schema.
     crate::myqbz_prefs_qt::init_for_user(dir);
@@ -459,6 +467,11 @@ where
     crate::myqbz_builder_qt::teardown();
     crate::artist_blacklist::teardown();
     crate::reco_dismiss_qt::teardown();
+    // Every source's per-user handle and cache: the pooled `library.db`
+    // handles, the Plex art memo, the ephemeral session store. Without this
+    // the next account inherits the previous one's handles out of a `'static`
+    // registry.
+    crate::source_wiring::teardown();
     crate::offline_fwd::teardown();
     // The offline download cache (index.db/library connections + the cached
     // id set) — torn down so the next account never reads this one's rows.

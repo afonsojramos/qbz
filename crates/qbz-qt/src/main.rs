@@ -125,6 +125,9 @@ mod atmosphere_qt;
 // `play_audible` that each matched on `track.source` by hand.
 mod audible_qt;
 mod bridge;
+// The registry's injections: Plex credentials, the ephemeral store, the user
+// binding and the album-identity mode. See its header.
+mod source_wiring;
 mod custom_theme_qt;
 mod diagnostics_qt;
 mod discover_config_qt;
@@ -509,6 +512,11 @@ pub(crate) fn on_boot() {
             guard.as_ref().cloned()
         })
     }));
+    // ...and its INJECTIONS immediately after. The registry is built lazily by
+    // whoever touches it first, so publishing these here — before any view can
+    // resolve a row — is what keeps a Plex cover or a local play from asking an
+    // unwired source (see `source_wiring`'s header for what that looked like).
+    source_wiring::install();
 
     // Offline guardrails FIRST (before the login screen can show): engine +
     // connectivity actor, then the live status forwarder. Both need the

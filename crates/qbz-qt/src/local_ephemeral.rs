@@ -95,6 +95,14 @@ fn album_key_of(t: &LocalTrack) -> String {
 }
 
 /// The tracks of one album block, in scan order.
+///
+/// `pub(crate)` under a second name for `source_wiring::EphemeralGlue`: the
+/// seam's `LocalSource` resolves an ephemeral album through this store rather
+/// than through `library.db`, and it needs the same scan order the pane shows.
+pub(crate) fn album_tracks_for(group_key: &str) -> Vec<LocalTrack> {
+    album_tracks(group_key)
+}
+
 fn album_tracks(group_key: &str) -> Vec<LocalTrack> {
     STATE
         .tracks_snapshot()

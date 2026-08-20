@@ -279,6 +279,11 @@ pub fn set_album_mode(mode: &str) {
     let mode = if mode == "metadata" { "metadata" } else { "folder" };
     state(|s| s.album_mode = mode.to_string());
     update_prefs(|p| p.albums_id_mode = mode.to_string());
+    // The grouping IS the query: `LocalSource` resolves an album's tracks
+    // through `get_album_tracks_metadata` or `get_album_tracks` depending on
+    // it. Leaving the source on its default would make album PLAYBACK use a
+    // different track list than the grid just rendered.
+    crate::source_wiring::sync_album_group_mode();
 }
 
 pub fn album_mode() -> String {

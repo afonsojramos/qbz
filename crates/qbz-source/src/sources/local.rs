@@ -211,6 +211,15 @@ impl LocalSource {
         }
     }
 
+    /// Is the frontend's ephemeral session store published?
+    ///
+    /// For the boot-time wiring report only (`source_wiring::report_wiring`):
+    /// an absent store makes every ephemeral row resolve as "not found", which
+    /// is indistinguishable from an empty session unless somebody asks.
+    pub fn has_ephemeral_store(&self) -> bool {
+        self.ephemeral.read().map(|e| e.is_some()).unwrap_or(false)
+    }
+
     fn ephemeral(&self) -> Option<Arc<dyn EphemeralTracks>> {
         self.ephemeral.read().ok().and_then(|s| s.clone())
     }
