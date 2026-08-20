@@ -722,6 +722,33 @@ impl Source for LocalSource {
             why: "a normalised local track id is always numeric",
         })?;
         let row = self.track_row(row_id).ok_or_else(|| self.not_found(item))?;
+
+        // An OFFLINE row is recognised here and REFUSED here, which is the
+        // discipline `BadIdShape` exists for: say no at the moment of the
+        // mistake instead of forwarding a shape that fails two layers down.
+        //
+        // A CMAF download's `local_tracks.file_path` is the BUNDLE DIRECTORY
+        // (`…/audio/tracks-cmaf/<qobuz_id>/`, holding `init.mp4` and an
+        // AES-encrypted `segments.bin`), not a playable container. Returned as
+        // a `File` ticket it reached `std::fs::read`, which reported it as
+        //
+        //   audible: file not available at …/tracks-cmaf/266725026 (drive unmounted?)
+        //
+        // — a message about a drive, for a bundle sitting on the local disk.
+        // Only `qbz-core`'s offline tier can decrypt it, and it is asked for by
+        // the QOBUZ catalog id the row carries in `QueueTrack.id`, not by this
+        // row id. NO fs call is made to decide this: a `is_dir()` here would
+        // block for the mount timeout on exactly the unreachable share the
+        // audible step's bounded probe exists to survive.
+        if SourceBadge::from_word(row.source.as_deref()) == SourceBadge::Offline {
+            return Err(SourceError::BadIdShape {
+                by: SourceId::LOCAL,
+                id: item.id().to_string(),
+                why: "an offline (qobuz_download) row is a CMAF bundle only qbz-core's offline \
+                      tier can read — play it by its Qobuz catalog id, not as a local file",
+            });
+        }
+
         let path = PathBuf::from(&row.file_path);
 
         // The player keys on the QUEUE's id, which is what every caller passes

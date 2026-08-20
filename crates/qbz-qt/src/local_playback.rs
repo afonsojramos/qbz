@@ -256,6 +256,17 @@ pub fn local_queue_track(t: &LocalTrack) -> QueueTrack {
 // Audible steps
 // ---------------------------------------------------------------------------
 
+/// Does this queue row belong to `qbz-core`'s OFFLINE tier rather than to the
+/// local audible step?
+///
+/// A pure test on the row, deliberately: the alternative is asking the
+/// filesystem whether `file_path` is a directory, and that stats a path which
+/// may live on an unreachable share — the exact block the audible step's
+/// bounded probe exists to survive.
+fn belongs_to_the_offline_tier(track: &QueueTrack) -> bool {
+    qbz_source::RawRef::from_queue_track(track).badge == qbz_source::SourceBadge::Offline
+}
+
 /// Route ONE queue track to its audible step — through `qbz-source`.
 ///
 /// This used to `match track.source.as_deref()`, with a `Some("plex")` arm
@@ -276,7 +287,37 @@ pub fn local_queue_track(t: &LocalTrack) -> QueueTrack {
 ///
 /// `SourceRegistry::playback` claims the row ONCE and answers with a ticket;
 /// `audible_qt` performs it. No source is branched on by hand here any more.
-async fn play_audible(runtime: &Runtime, track: &QueueTrack) -> bool {
+///
+/// The ONE routing decision left is not a source branch, it is a TIER one: an
+/// OFFLINE row is a file the local step cannot read. `library.db` stores a
+/// CMAF download's `file_path` as the BUNDLE DIRECTORY
+/// (`…/audio/tracks-cmaf/<qobuz_id>/`, holding `init.mp4` + an encrypted
+/// `segments.bin`), so `LocalSource::playback` hands back a
+/// `PlaybackTicket::File` naming a directory and the read fails as
+///
+///   audible: file not available at …/audio/tracks-cmaf/266725026 (drive unmounted?)
+///
+/// — a message about a drive, for a bundle that is right there on disk. Only
+/// `qbz-core`'s offline tier can decrypt it, and the row carries the real
+/// Qobuz catalog id precisely so that tier can be asked. Two of the three
+/// funnels into the audible step already excluded these rows
+/// (`play_current_if_local`, `playback_qt::play_resolved_offline_aware`); the
+/// LocalLibrary PLAY funnel did not, so every offline album played from that
+/// view went silent. This is now the only copy of the test, and both local
+/// play paths (here and `local_album_actions`) go through it.
+pub(crate) async fn play_audible(runtime: &Runtime, track: &QueueTrack) -> bool {
+    if belongs_to_the_offline_tier(track) {
+        return match crate::playback_qt::play_resolved_offline_aware(runtime, track.id, 0).await {
+            Ok(()) => true,
+            Err(e) => {
+                log::error!(
+                    "[qbz-qt] local play: offline track {} not playable: {e}",
+                    track.id
+                );
+                false
+            }
+        };
+    }
     match crate::audible_qt::play_queue_track(runtime, track).await {
         Ok(played) => played,
         Err(e) => {
@@ -664,6 +705,53 @@ mod tests {
         assert!(order_by_visible(&rows, &[], 1).is_none());
     }
 
+    /// A DOWNLOADED row played from Local Library must be recognised as the
+    /// offline tier's, not the local audible step's. The regression this
+    /// guards was silent: `LocalSource` answered with a `File` ticket naming
+    /// the CMAF bundle DIRECTORY, the read failed as "drive unmounted?", and
+    /// the bar still adopted the track — the album looked like it was playing
+    /// and no audio came out.
+    ///
+    /// The test runs the row through the REAL `local_queue_track`, because the
+    /// two halves that have to agree are its source word and the badge the
+    /// router reads. Asserting the badge alone would keep passing if either
+    /// side were renamed.
+    #[test]
+    fn a_downloaded_row_is_the_offline_tiers_not_the_local_steps() {
+        let offline = LocalTrack {
+            id: 4938,
+            qobuz_track_id: Some(266_725_026),
+            source: Some("qobuz_download".into()),
+            file_path: "/c/qbz/audio/tracks-cmaf/266725026".into(),
+            ..Default::default()
+        };
+        let row = super::local_queue_track(&offline);
+        assert!(super::belongs_to_the_offline_tier(&row));
+        // And it is asked for by the QOBUZ id — the offline tier is keyed on
+        // it, and the library row id rides in the hint.
+        assert_eq!(row.id, 266_725_026);
+        assert_eq!(row.source_item_id_hint.as_deref(), Some("4938"));
+    }
+
+    /// The other side of the same fork: a user file, a Plex item and a media
+    /// server row all stay with the local audible step. A predicate that said
+    /// "yes" here would send a file on disk down the Qobuz tier walk.
+    #[test]
+    fn every_other_local_source_stays_with_the_audible_step() {
+        for word in ["user", "plex", "jellyfin", "subsonic", "navidrome"] {
+            let t = LocalTrack {
+                id: 12,
+                source: Some(word.into()),
+                file_path: "/m/a.flac".into(),
+                ..Default::default()
+            };
+            let row = super::local_queue_track(&t);
+            assert!(
+                !super::belongs_to_the_offline_tier(&row),
+                "{word} must not be routed to the offline tier"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
