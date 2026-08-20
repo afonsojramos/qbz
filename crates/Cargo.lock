@@ -6413,6 +6413,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-jellyfin"
+version = "2.0.2"
+dependencies = [
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "qbz-library"
 version = "0.1.0"
 dependencies = [
