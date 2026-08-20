@@ -25,7 +25,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, RwLock};
 
 use qbz_app::user_data::UserDataPaths;
 use qbz_library::LocalTrack;
@@ -48,6 +48,43 @@ pub fn is_plex_track_id(id: i64) -> bool {
 static STATE: LazyLock<PlexSettingsState> = LazyLock::new(PlexSettingsState::new_empty);
 /// The user id the store is currently bound to (None = session-less).
 static BOUND: Mutex<Option<u64>> = Mutex::new(None);
+
+/// The last read of [`settings`], kept so the accessor is not a database hit.
+///
+/// # Why this exists — it is a measured regression, not a micro-optimisation
+///
+/// `settings()` runs `ensure_bound()` (a `load_last_user_id` file read plus a
+/// mutex) and then a SQLite query. That was fine while its callers were gates
+/// asked a handful of times per view.
+///
+/// Design 02 §9 stage 4 put it on a PER-ROW path: `local_rows::art_ref` asks
+/// the owning source what a row's artwork token means, and `PlexSource`'s
+/// answer depends on whether Plex is connected — so every Plex row in the grid
+/// paid a file read, a mutex and a query. Measured on the owner's library:
+///
+/// ```text
+///     29 local rows   map 0.06 ms   ->  2 µs/row
+///   1271 Plex rows    map 50-117 ms -> 39-92 µs/row
+/// ```
+///
+/// 25-45x per row, on a document that is rebuilt on every visit to Local
+/// Library. The grid had been tuned to a good place and this is what took it
+/// away.
+///
+/// The cache is INVALIDATED by every writer in this module and by
+/// `init_for_user` / `reset`, so a connect, a disconnect or a user switch is
+/// still seen immediately — the property `PlexCredsGlue` documents (it reads
+/// the live store rather than caching a copy) is preserved, because the
+/// authority itself is what caches now.
+static CACHE: RwLock<Option<PlexSettings>> = RwLock::new(None);
+
+/// Drop the memo. Call from EVERY writer — a stale `enabled` here is a Plex
+/// library that will not disappear when the user switches it off.
+fn invalidate_cache() {
+    if let Ok(mut c) = CACHE.write() {
+        *c = None;
+    }
+}
 
 /// Bind (or re-bind) the store to the ACTIVE user. Called lazily by every
 /// accessor, so no glue in the login path is required; `init_for_user` is
@@ -78,6 +115,7 @@ fn ensure_bound() {
 
 /// Explicit bind on session activation (optional — accessors self-bind).
 pub fn init_for_user(base_dir: &std::path::Path) {
+    invalidate_cache();
     if let Err(e) = STATE.init_at(base_dir) {
         log::warn!("[qbz-qt] plex settings init failed: {e}");
         return;
@@ -87,14 +125,24 @@ pub fn init_for_user(base_dir: &std::path::Path) {
 
 /// Forget the binding (logout) so the next read re-binds to the new user.
 pub fn reset() {
+    invalidate_cache();
     *BOUND.lock().unwrap() = None;
     let _ = STATE.teardown();
 }
 
 /// Current persisted settings (defaults when there is no session).
 pub fn settings() -> PlexSettings {
+    if let Ok(c) = CACHE.read() {
+        if let Some(s) = c.as_ref() {
+            return s.clone();
+        }
+    }
     ensure_bound();
-    STATE.get_settings().unwrap_or_default()
+    let fresh = STATE.get_settings().unwrap_or_default();
+    if let Ok(mut c) = CACHE.write() {
+        *c = Some(fresh.clone());
+    }
+    fresh
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +396,7 @@ pub fn cached_sections() -> (Vec<qbz_plex::PlexMusicSection>, Vec<String>) {
 // ---------------------------------------------------------------------------
 
 pub fn set_enabled(value: bool) {
+    invalidate_cache();
     ensure_bound();
     if let Err(e) = STATE.set_enabled(value) {
         log::error!("[qbz-qt] plex set_enabled failed: {e}");
@@ -370,6 +419,7 @@ pub fn client_id() -> String {
 /// through a PIN. The PIN path clears it on success so the panel goes back to
 /// showing Authorize (`plex_auth.rs:531`).
 pub fn set_manual_token_mode(value: bool) {
+    invalidate_cache();
     ensure_bound();
     if let Err(e) = STATE.set_manual_token_mode(value) {
         log::error!("[qbz-qt] plex set_manual_token_mode failed: {e}");
@@ -383,6 +433,7 @@ pub fn set_manual_token_mode(value: bool) {
 /// `ping_inner` — so a Qt-only install stamped `server_id = NULL` on every
 /// cached row. Porting the ping is what closes that.
 pub fn set_machine_id(value: &str) {
+    invalidate_cache();
     ensure_bound();
     if let Err(e) = STATE.set_machine_id(value) {
         log::error!("[qbz-qt] plex set_machine_id failed: {e}");
@@ -400,6 +451,7 @@ pub fn credentials() -> (String, String) {
 // That settings surface is not ported yet, so nothing calls this today.
 #[allow(dead_code)]
 pub fn set_metadata_write_enabled(value: bool) {
+    invalidate_cache();
     ensure_bound();
     if let Err(e) = STATE.set_metadata_write_enabled(value) {
         log::error!("[qbz-qt] plex set_metadata_write_enabled failed: {e}");
@@ -410,6 +462,7 @@ pub fn set_metadata_write_enabled(value: bool) {
 /// is RESOLVED (`proto://host:32400`) before it is stored. Returns the
 /// resolved base url ("" when the input is unusable).
 pub fn connect_manual(server_url: &str, token: &str) -> String {
+    invalidate_cache();
     ensure_bound();
     let base = resolve_base_url(server_url);
     if base.is_empty() {
@@ -424,6 +477,7 @@ pub fn connect_manual(server_url: &str, token: &str) -> String {
 }
 
 pub fn set_selected_sections(keys: &[String]) {
+    invalidate_cache();
     ensure_bound();
     if let Err(e) = STATE.set_selected_section_keys(keys) {
         log::error!("[qbz-qt] plex set_selected_section_keys failed: {e}");
@@ -434,6 +488,7 @@ pub fn set_selected_sections(keys: &[String]) {
 /// `client_id`, `metadata_write_enabled`) and purge the shared cache DB so
 /// no Plex rows survive in the browse union.
 pub fn disconnect() {
+    invalidate_cache();
     ensure_bound();
     if let Err(e) = STATE.disconnect() {
         log::error!("[qbz-qt] plex disconnect failed: {e}");

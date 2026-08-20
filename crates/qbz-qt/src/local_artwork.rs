@@ -70,7 +70,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
-use qbz_source::ArtRef;
+use qbz_source::{ArtRef, ArtSize};
 
 use crate::artwork_qt;
 use crate::local_state::state;
@@ -129,19 +129,28 @@ pub struct ArtworkWindow {
 /// Keys with no cover are dropped, so the QML map only ever grows with real
 /// hits.
 pub fn resolve_window_blocking(keys: Vec<String>) -> ArtworkWindow {
-    let sources: Vec<(String, ArtRef)> = state(|s| {
+    let sources: Vec<(String, qbz_source::SourceId, String)> = state(|s| {
         keys.iter()
-            .filter_map(|k| s.art_index.get(k).map(|p| (k.clone(), p.clone())))
+            .filter_map(|k| {
+                s.art_index
+                    .get(k)
+                    .map(|(src, tok)| (k.clone(), *src, tok.clone()))
+            })
             .collect()
     });
     let mut hits = Vec::with_capacity(sources.len());
     let mut plex_misses = Vec::new();
     let mut cold = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for (key, art) in sources {
+    for (key, src, token) in sources {
         if !seen.insert(key.clone()) {
             continue;
         }
+        // THE resolution, and it happens HERE — over the keys on screen, not
+        // over every row of the document. A remote source answers by reading
+        // its credentials, so doing this per mapped row cost 39-92 µs each on
+        // a 1703-row grid that rebuilds on every visit.
+        let art = qbz_source::registry().artwork_token(src, &token, ArtSize::Card);
         // The taxonomy is READ, not re-derived. `artwork_qt::classify` used to
         // stand here and sniff a `String` whose provenance had been thrown
         // away three layers up; the row's own source answered this question at

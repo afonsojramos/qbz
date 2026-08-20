@@ -192,10 +192,9 @@ fn build_doc(name: &str, path: &str, tracks: &[LocalTrack]) -> EphemeralDoc {
                 // key of an indexed album that happens to group the same.
                 let art_key = album_key(&format!("eph:{key}"));
                 if let Some(p) = first.artwork_path.as_ref().filter(|p| !p.is_empty()) {
-                    art.insert(
-                        art_key.clone(),
-                        crate::local_rows::art_ref(first.source.as_deref(), p),
-                    );
+                    if let Some(t) = crate::local_rows::art_token(first.source.as_deref(), p) {
+                        art.insert(art_key.clone(), t);
+                    }
                 }
                 let rows: Vec<TrackRow> = group.iter().map(|t| map_track(*t, art)).collect();
                 EphemeralAlbumBlock {

@@ -18,9 +18,9 @@ use std::sync::Mutex;
 use qbz_library::{FolderTreeEntry, LibraryError, LocalTrack};
 use serde::Serialize;
 
-use qbz_source::ArtRef;
+use qbz_source::SourceId;
 
-use crate::local_rows::{art_ref, basename, folder_key, map_track, FolderDetail, SubfolderRow, TrackRow, TreeNode};
+use crate::local_rows::{art_token, basename, folder_key, map_track, FolderDetail, SubfolderRow, TrackRow, TreeNode};
 use crate::local_state::{state, with_art, with_db};
 
 /// `list_folder_children` + the reference's on-disk cover fallback for the
@@ -63,7 +63,7 @@ fn folder_children_with_covers(path: &str) -> Vec<FolderTreeEntry> {
 fn entry_to_node(
     e: &FolderTreeEntry,
     depth: i32,
-    art: &mut std::collections::HashMap<String, ArtRef>,
+    art: &mut std::collections::HashMap<String, (SourceId, String)>,
 ) -> TreeNode {
     match e {
         FolderTreeEntry::Folder {
@@ -76,7 +76,9 @@ fn entry_to_node(
             if let Some(a) = artwork.as_ref().filter(|a| !a.is_empty()) {
                 // The folder tree is `library.db`: every cover here is a
                 // local file.
-                art.insert(key.clone(), art_ref(Some("local"), a));
+                if let Some(t) = art_token(Some("local"), a) {
+                    art.insert(key.clone(), t);
+                }
             }
             TreeNode {
                 path: path.clone(),
@@ -412,7 +414,9 @@ pub fn load_folder_detail_blocking(path: &str) -> FolderDetail {
                     if let Some(a) = artwork.as_ref().filter(|a| !a.is_empty()) {
                         // The folder tree is `library.db`: every cover here is a
                 // local file.
-                art.insert(key.clone(), art_ref(Some("local"), a));
+                if let Some(t) = art_token(Some("local"), a) {
+                    art.insert(key.clone(), t);
+                }
                     }
                     Some(SubfolderRow {
                         path: path.clone(),

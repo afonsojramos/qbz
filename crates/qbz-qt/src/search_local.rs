@@ -103,7 +103,14 @@ pub(crate) fn local_art_split(source: Option<&str>, path: Option<&str>) -> (Stri
     // The ROW's source decides, not the shape of the string (design 02 §9
     // stage 4). `classify` stood here and would read a Jellyfin token as a
     // filesystem path purely because it starts with `/`.
-    match crate::local_rows::art_ref(source, p) {
+    // Resolved here rather than deferred: this list is the cortinilla's
+    // bounded result set (76 rows), not the whole library, and the split it
+    // needs — `art_path` for a file, `art_url` for a fetch — is decided per
+    // row by definition.
+    let Some((src, token)) = crate::local_rows::art_token(source, p) else {
+        return (String::new(), String::new());
+    };
+    match qbz_source::registry().artwork_token(src, &token, qbz_source::ArtSize::Card) {
         qbz_source::ArtRef::File(f) => (
             String::new(),
             crate::artwork_qt::file_url(&f.to_string_lossy()),

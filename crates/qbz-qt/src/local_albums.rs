@@ -229,10 +229,11 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
             .map(|m| {
                 let key = artist_key(&m.name);
                 if !m.image_path.is_empty() {
-                    art.insert(
-                        key.clone(),
-                        crate::local_rows::art_ref(Some(&m.image_source), &m.image_path),
-                    );
+                    if let Some(t) =
+                        crate::local_rows::art_token(Some(&m.image_source), &m.image_path)
+                    {
+                        art.insert(key.clone(), t);
+                    }
                 }
                 ArtistRow {
                     art_key: key,

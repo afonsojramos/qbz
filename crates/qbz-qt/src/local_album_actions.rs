@@ -185,8 +185,9 @@ pub fn version_doc(id: &str, index: usize) -> Option<AlbumDetailDoc> {
             .find_map(|t| t.artwork_path.as_ref().filter(|p| !p.is_empty()))
         {
             let source = tracks.first().and_then(|t| t.source.as_deref());
-            art.entry(row.art_key.clone())
-                .or_insert_with(|| crate::local_rows::art_ref(source, p));
+            if let Some(t) = crate::local_rows::art_token(source, p) {
+                art.entry(row.art_key.clone()).or_insert(t);
+            }
         }
         tracks.iter().map(|t| map_track(t, art)).collect::<Vec<TrackRow>>()
     });

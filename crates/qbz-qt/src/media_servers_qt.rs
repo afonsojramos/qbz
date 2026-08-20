@@ -17,15 +17,36 @@
 //! beside the rest of the registry's injections, so there is one place to look
 //! when a source answers "not configured".
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, RwLock};
 
 use qbz_app::settings::media_servers::{MediaServerKind, MediaServerSettings, MediaServerState};
 
 static STATE: LazyLock<MediaServerState> = LazyLock::new(MediaServerState::new);
 
+/// The last read per server, so [`get`] is not a database hit.
+///
+/// SAME defect as `local_plex`'s, introduced the same way: `local_rows::art_ref`
+/// asks the owning source per ROW what an artwork token means, and both media
+/// sources answer by looking at whether they are connected. Without this, every
+/// remote row in the grid costs a mutex plus a SQLite query — measured at
+/// 39-92 µs/row against 2 µs for a row whose source needs no credentials.
+///
+/// Invalidated by [`put`], [`disconnect`], [`init_for_user`] and [`reset`], so
+/// a connect or a master-toggle flip is still seen on the very next read.
+static CACHE: LazyLock<RwLock<HashMap<&'static str, MediaServerSettings>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+fn invalidate_cache() {
+    if let Ok(mut c) = CACHE.write() {
+        c.clear();
+    }
+}
+
 /// Bind the store to the active user. Called from `auth_qt`.
 pub fn init_for_user(base_dir: &std::path::Path) {
+    invalidate_cache();
     STATE.init_at(base_dir);
     // Mint the two stable identifiers ONCE, now, rather than at first use.
     // Both are load-bearing and both are easy to get wrong lazily: a Jellyfin
@@ -35,19 +56,31 @@ pub fn init_for_user(base_dir: &std::path::Path) {
 }
 
 pub fn reset() {
+    invalidate_cache();
     STATE.reset();
 }
 
 pub fn get(kind: MediaServerKind) -> MediaServerSettings {
-    STATE.get(kind)
+    if let Ok(c) = CACHE.read() {
+        if let Some(s) = c.get(kind.as_str()) {
+            return s.clone();
+        }
+    }
+    let fresh = STATE.get(kind);
+    if let Ok(mut c) = CACHE.write() {
+        c.insert(kind.as_str(), fresh.clone());
+    }
+    fresh
 }
 
 pub fn put(kind: MediaServerKind, s: &MediaServerSettings) {
     STATE.put(kind, s);
+    invalidate_cache();
 }
 
 pub fn disconnect(kind: MediaServerKind) {
     STATE.disconnect(kind);
+    invalidate_cache();
 }
 
 /// Which remote sources the Local Library union may show.
@@ -57,7 +90,13 @@ pub fn disconnect(kind: MediaServerKind) {
 /// credentials yet would widen the union's `source IN (…)` over rows nothing
 /// ever swept.
 pub fn configured_words() -> Vec<&'static str> {
-    STATE.configured_words()
+    // Through the CACHED `get`, not `STATE.configured_words()` — this is called
+    // once per albums-page load and twice more via `remote_cache_path`.
+    MediaServerKind::ALL
+        .iter()
+        .filter(|k| get(**k).is_configured(**k))
+        .map(|k| k.as_str())
+        .collect()
 }
 
 /// The shared remote mirror for the active user, or `None` when no remote
