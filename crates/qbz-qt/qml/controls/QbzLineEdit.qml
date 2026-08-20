@@ -230,11 +230,31 @@ Rectangle {
                     // frames between the × and the owner's republish, when
                     // `root.text` is still the query the user just cleared —
                     // see `_cleared`.
-                    Binding {
-                        target: input
-                        property: "text"
-                        value: root.text
-                        when: !input.activeFocus && !root._cleared
+                    //
+                    // On the CHANGE, never on the focus loss. This was a
+                    // `Binding { when: !input.activeFocus }`, which re-asserts
+                    // whenever its condition flips — so blurring the field
+                    // wrote `root.text` back over whatever had been typed. A
+                    // SEARCH field never noticed: it fires `edited()` per
+                    // keystroke, so the owner republishes and `root.text` is
+                    // already what the user typed. A FORM field is the
+                    // opposite — it reports on `committed()` and the owner
+                    // holds the value until Save — so `root.text` is still the
+                    // stored value (`""` for a password, which is never
+                    // prefilled), and every blur ERASED the field. Measured in
+                    // the media-server panel 2026-08-20: username and password
+                    // wiped each other, so the form could not be filled by
+                    // hand at all.
+                    //
+                    // A republish IS a change to `root.text`; a focus loss is
+                    // not. Reacting to the change alone keeps the documented
+                    // case and drops the destructive one.
+                    Connections {
+                        target: root
+                        function onTextChanged() {
+                            if (!input.activeFocus && !root._cleared)
+                                input.text = root.text
+                        }
                     }
                 }
                 Text {
