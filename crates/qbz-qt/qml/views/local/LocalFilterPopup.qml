@@ -1,7 +1,16 @@
 // Albums quality/format/source filter popup (LocalLibraryView.slint:2470 —
 // the component at the end of the file). Floats OVER the content: a
-// click-out backdrop plus a 372px card pinned 36px from the right edge,
-// 92px down, radius 10, surface-card, 1px subtle border.
+// click-out backdrop plus a card pinned 36px from the right edge, 92px down,
+// radius 10, surface-card, 1px subtle border.
+//
+// The card's 372px is a FLOOR, not the width. The Slint original sized a fixed
+// card around three source chips; this port grew to five (Plex plus the two
+// media servers) and the row overflowed the card — owner report, 2026-08-20.
+// The width is derived from the widest chip row instead, so it also survives a
+// UI-scale bump or a language whose labels are longer, neither of which a fixed
+// number can. `implicitWidth` is safe to measure here: a `Row` sums its
+// children and a non-wrapping `Text` reports its natural width, so nothing in
+// the chain reads the card width back and there is no binding loop.
 //
 // Three sections of FilterChips: Quality (Hi-Res / CD / Lossy), Format
 // (FLAC ALAC APE WAV, then MP3 AAC Other), Source (Local / Offline cache /
@@ -32,9 +41,19 @@ Item {
     }
 
     Rectangle {
+        id: card
         x: parent.width - width - 36
         y: 92
-        width: 372
+        /// Widest row, plus the 16px padding on each side. Capped so the card
+        /// can never run past the left edge of the window.
+        readonly property real contentWidth: Math.max(
+            titleText.implicitWidth + (root.view.filterCount > 0 ? clearBtn.width + 8 : 0),
+            qualityRow.implicitWidth,
+            formatRow1.implicitWidth,
+            formatRow2.implicitWidth,
+            sourceRow.implicitWidth)
+        width: Math.min(Math.max(372, card.contentWidth + 32),
+                        Math.max(372, root.width - 72))
         height: col.height + 32
         color: theme.surfaceCard
         radius: 10
@@ -59,6 +78,7 @@ Item {
                 width: parent.width
                 height: 28
                 Text {
+                    id: titleText
                     width: parent.width - (root.view.filterCount > 0 ? clearBtn.width : 0)
                     height: parent.height
                     text: QbzSession.tr("Filter", QbzSession.trRev)
@@ -100,6 +120,7 @@ Item {
                 font.weight: theme.weightSemibold
             }
             Row {
+                id: qualityRow
                 spacing: 8
                 FilterChip {
                     label: QbzSession.tr("Hi-Res", QbzSession.trRev)
@@ -126,6 +147,7 @@ Item {
                 font.weight: theme.weightSemibold
             }
             Row {
+                id: formatRow1
                 spacing: 8
                 FilterChip { label: "FLAC"; active: root.view.filter.flac === true; onToggled: root.view.toggleFilter("flac") }
                 FilterChip { label: "ALAC"; active: root.view.filter.alac === true; onToggled: root.view.toggleFilter("alac") }
@@ -133,6 +155,7 @@ Item {
                 FilterChip { label: "WAV"; active: root.view.filter.wav === true; onToggled: root.view.toggleFilter("wav") }
             }
             Row {
+                id: formatRow2
                 spacing: 8
                 FilterChip { label: "MP3"; active: root.view.filter.mp3 === true; onToggled: root.view.toggleFilter("mp3") }
                 FilterChip { label: "AAC"; active: root.view.filter.aac === true; onToggled: root.view.toggleFilter("aac") }
@@ -151,6 +174,7 @@ Item {
                 font.weight: theme.weightSemibold
             }
             Row {
+                id: sourceRow
                 spacing: 8
                 FilterChip {
                     label: QbzSession.tr("Local", QbzSession.trRev)
