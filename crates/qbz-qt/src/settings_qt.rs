@@ -1180,6 +1180,15 @@ pub(crate) fn read_pref_f32(key: &str) -> Option<f32> {
     doc.get(key)?.as_f64().map(|v| v as f32)
 }
 
+/// One key of ui_prefs.json, as raw JSON. `None` when the file, the key or
+/// the parse is missing — every caller treats that as "not set".
+pub(crate) fn read_pref(key: &str) -> Option<serde_json::Value> {
+    let path = prefs_path()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(&text).ok()?;
+    doc.get(key).cloned()
+}
+
 /// Additive single-key patch of ui_prefs.json — THE writer every other pref
 /// setter in this file funnels through, so they all inherit `update_prefs`'
 /// atomic rename and its refusal to rebuild an unparsable document.

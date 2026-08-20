@@ -135,6 +135,17 @@ pub mod qbz_local {
         /// so the chip only exists when its server does.
         #[qproperty(bool, media_has_jellyfin)]
         #[qproperty(bool, media_has_subsonic)]
+        /// The Albums funnel, as a JSON object of the ticked keys
+        /// (`{"hires":true,"jellyfin":true}`). Empty string = no filter.
+        ///
+        /// It lives on the BRIDGE, not on `LocalLibraryView`, for the reason
+        /// the owner reported: navigating away DESTROYS the view (see
+        /// `project_qt_nav_eager_tabs` — Qt, Slint and Tauri all do), so a
+        /// view-local `property var filter` cannot survive a round trip to
+        /// Discover, let alone a restart. The bridge outlives the view and
+        /// mirrors `ui_prefs.json`, so one property buys BOTH kinds of
+        /// persistence the owner asked for.
+        #[qproperty(QString, albums_filter)]
         #[qproperty(bool, media_syncing)]
         #[qproperty(QString, media_sync_progress)]
         /// Tracks written by the last sync; -1 = never synced this session.
@@ -323,6 +334,9 @@ pub mod qbz_local {
         /// user fixing a typo and a user thinking the feature is broken.
         #[qinvokable]
         fn media_test(self: Pin<&mut QbzLocal>, server: QString, url: QString);
+        /// Persist the Albums funnel. See the `albums_filter` qproperty.
+        #[qinvokable]
+        fn set_albums_filter_json(self: Pin<&mut QbzLocal>, json: QString);
         /// Authenticate and persist. Runs a first sweep on success.
         #[qinvokable]
         fn media_connect(
@@ -449,6 +463,7 @@ pub struct QbzLocalRust {
     plex_syncing: bool,
     media_has_jellyfin: bool,
     media_has_subsonic: bool,
+    albums_filter: QString,
     media_syncing: bool,
     media_sync_progress: QString,
     plex_last_sync_tracks: i32,
@@ -496,6 +511,7 @@ impl Default for QbzLocalRust {
             plex_syncing: false,
             media_has_jellyfin: false,
             media_has_subsonic: false,
+            albums_filter: QString::default(),
             media_syncing: false,
             media_sync_progress: QString::default(),
             plex_last_sync_tracks: -1,
@@ -737,6 +753,14 @@ impl qbz_local::QbzLocal {
     }
 
     // ── Media servers (Jellyfin / Subsonic) ─────────────────────────────
+
+    pub fn set_albums_filter_json(mut self: Pin<&mut Self>, json: QString) {
+        let text = json.to_string();
+        // The qproperty is what the view re-seeds from on its next mount, so
+        // it is written on EVERY toggle, not only on close.
+        self.as_mut().set_albums_filter(QString::from(text.as_str()));
+        crate::local_bridge_ops::save_albums_filter(&text);
+    }
 
     pub fn media_test(self: Pin<&mut Self>, server: QString, url: QString) {
         let (Some(kind), url) = (media_kind(&server), url.to_string()) else {

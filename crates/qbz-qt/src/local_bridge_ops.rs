@@ -87,10 +87,58 @@ pub(crate) fn publish_media_gates() {
     let words = crate::media_servers_qt::configured_words();
     let jf = words.contains(&"jellyfin");
     let sub = words.contains(&"subsonic");
+    // The saved funnel is seeded HERE, with the gates, so the two can never
+    // disagree: a filter restored from disk must not tick a source whose chip
+    // the popup is about to hide. That combination is invisible — the grid
+    // comes back empty and the funnel badge counts a filter the user cannot
+    // see, let alone clear.
+    let filter = pruned_albums_filter(jf, sub);
     ui(move |mut b| {
         b.as_mut().set_media_has_jellyfin(jf);
         b.as_mut().set_media_has_subsonic(sub);
+        b.as_mut().set_albums_filter(cxx_qt_lib::QString::from(filter.as_str()));
     });
+}
+
+/// Key the Albums funnel is stored under in the shared `ui_prefs.json`.
+const ALBUMS_FILTER_KEY: &str = "local_albums_filter";
+
+/// Persist the funnel. Called from the bridge on every toggle.
+pub(crate) fn save_albums_filter(json: &str) {
+    let value = if json.trim().is_empty() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str(json).unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
+    };
+    crate::settings_qt::save_pref(ALBUMS_FILTER_KEY, value);
+}
+
+/// The stored funnel with any source key its server cannot serve removed.
+///
+/// Only the MEDIA-SERVER keys are pruned. `local` / `offline` / `plex` are
+/// always meaningful words (an empty result there is an honest answer about
+/// the library), but a `jellyfin` tick with no Jellyfin configured can only
+/// ever match zero rows, and the chip that would let the user untick it is
+/// hidden by the same gate.
+fn pruned_albums_filter(has_jellyfin: bool, has_subsonic: bool) -> String {
+    let Some(serde_json::Value::Object(mut map)) =
+        crate::settings_qt::read_pref(ALBUMS_FILTER_KEY)
+    else {
+        return String::new();
+    };
+    if !has_jellyfin {
+        map.remove("jellyfin");
+    }
+    if !has_subsonic {
+        map.remove("subsonic");
+    }
+    // Only the TRUE keys travel: the view stores a key by deleting it when it
+    // goes false, but a hand-edited prefs file need not honour that.
+    map.retain(|_, v| v.as_bool() == Some(true));
+    if map.is_empty() {
+        return String::new();
+    }
+    serde_json::to_string(&map).unwrap_or_default()
 }
 
 pub(crate) fn reload_browse() {

@@ -102,19 +102,48 @@ Rectangle {
 
     // Albums quality/format/source filter (LibAlbumFilterState).
     property bool filterOpen: false
-    property var filter: ({})
+    // SEEDED FROM THE BRIDGE, not defaulted to `{}`. This view is DESTROYED on
+    // every navigation away (see the bridge's `albums_filter` doc), so a
+    // view-local default meant the funnel reset the moment the user visited
+    // Discover — and never survived a restart at all. `QbzLocal.albumsFilter`
+    // outlives the view and mirrors `ui_prefs.json`.
+    property var filter: root.parseFilter(QbzLocal.albumsFilter)
+    function parseFilter(json) {
+        if (!json || json === "") return ({})
+        try { return JSON.parse(json) || ({}) } catch (e) { return ({}) }
+    }
+    // A LATER republish still wins: the gates and the saved funnel are
+    // published together when a media server is connected or removed, and the
+    // pruning that happens there (a tick whose chip is now hidden) has to
+    // reach a view that is already open. Guarded on a real difference so
+    // writing the property back does not bounce.
+    Connections {
+        target: QbzLocal
+        function onAlbumsFilterChanged() {
+            var next = root.parseFilter(QbzLocal.albumsFilter)
+            if (JSON.stringify(next) !== JSON.stringify(root.filter))
+                root.filter = next
+        }
+    }
     readonly property int filterCount: {
         var n = 0
         for (var k in filter) if (filter[k]) n++
         return n
     }
+    /// The ONE writer. Both mutators funnel through it, so neither can change
+    /// the funnel and forget to persist it.
+    function setFilter(f) {
+        filter = f
+        QbzLocal.setAlbumsFilterJson(
+            Object.keys(f).length === 0 ? "" : JSON.stringify(f))
+    }
     function toggleFilter(key) {
         var f = Object.assign({}, filter)
         f[key] = !f[key]
         if (!f[key]) delete f[key]
-        filter = f
+        setFilter(f)
     }
-    function clearFilter() { filter = ({}) }
+    function clearFilter() { setFilter({}) }
 
     /// The funnel's state as the applied-filters tooltip wants it: three groups
     /// in the popup's own order, each holding the labels of the keys that are
