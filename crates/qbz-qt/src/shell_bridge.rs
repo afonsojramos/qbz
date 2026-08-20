@@ -663,10 +663,6 @@ pub mod qbz_shell {
         /// offline (contract §4.7 / block 6).
         #[qinvokable]
         fn sidebar_open_folder_popup(self: Pin<&mut QbzShell>, folder_id: QString);
-        /// Sidebar "+" — create an empty playlist (single core call), then
-        /// reload the tree.
-        #[qinvokable]
-        fn create_playlist(self: Pin<&mut QbzShell>);
         /// Sidebar cover dispatch: JSON array of cover URLS (the tree's
         /// collage is url-keyed, unlike the feed's artKey).
         #[qinvokable]
@@ -1286,10 +1282,6 @@ impl qbz_shell::QbzShell {
 
     pub fn sidebar_open_folder_popup(self: Pin<&mut Self>, folder_id: QString) {
         crate::sidebar_open_folder_popup(&folder_id.to_string());
-    }
-
-    pub fn create_playlist(self: Pin<&mut Self>) {
-        crate::create_playlist();
     }
 
     pub fn sidebar_artwork_window(self: Pin<&mut Self>, urls_json: QString) {

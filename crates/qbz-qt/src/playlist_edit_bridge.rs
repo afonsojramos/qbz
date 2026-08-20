@@ -75,6 +75,19 @@ pub mod qbz_playlist_edit_bridge {
         // descLoaded / isLocal / offlineOnly / busy. Parseable default so a
         // binding reading `doc.open` on the pre-publish frame cannot throw.
         #[qproperty(QString, edit_json)]
+        /// The "New playlist" document (`playlist_create_qt`): open / busy /
+        /// offlineLocked / folders. Same parseable-default rule as `edit_json`.
+        ///
+        /// CREATE RIDES THE EDITOR'S SINGLETON rather than getting one of its
+        /// own, which is where the reference splits it (`CreatePlaylistState`
+        /// vs `EditPlaylistState`). One domain — a playlist's own metadata:
+        /// name, description, folder, the offline-only flag — reached from the
+        /// same two surfaces (the sidebar and the manager), with two documents
+        /// that never interact. A second QObject would buy the separation at
+        /// the cost of a second boot() to forget, and this port has already
+        /// paid that bill once: the bridge header's own note about a missing
+        /// `boot()` being "silently and forever" dropped is not hypothetical.
+        #[qproperty(QString, create_json)]
 
         type QbzPlaylistEdit = super::QbzPlaylistEditRust;
 
@@ -119,6 +132,34 @@ pub mod qbz_playlist_edit_bridge {
         /// Dismiss. Refused while a save or delete is in flight (D22).
         #[qinvokable]
         fn close(self: Pin<&mut QbzPlaylistEdit>);
+
+        // --- "New playlist" (playlist_create_qt) -------------------------
+
+        /// Sidebar "+" — seed and open the create modal. Resolves the offline
+        /// lock and the folder dropdown BEFORE it opens, so the panel never
+        /// flashes an empty picker.
+        #[qinvokable]
+        fn open_create(self: Pin<&mut QbzPlaylistEdit>);
+
+        /// Create. Every field is a QML-local draft and arrives here as an
+        /// argument; `folder_id` is `""` for "No folder". `offline_only` (or
+        /// being offline) selects the LOCAL arm — a `local_playlists` row that
+        /// never reaches Qobuz. That toggle is the only reason this modal had
+        /// to come back: the POC shortcut derived it from connectivity, so an
+        /// online user could not create a local playlist at all.
+        #[qinvokable]
+        fn create_submit(
+            self: Pin<&mut QbzPlaylistEdit>,
+            name: QString,
+            description: QString,
+            folder_id: QString,
+            is_public: bool,
+            offline_only: bool,
+        );
+
+        /// Dismiss the create modal. Refused while the write is in flight.
+        #[qinvokable]
+        fn close_create(self: Pin<&mut QbzPlaylistEdit>);
     }
 
     impl cxx_qt::Threading for QbzPlaylistEdit {}
@@ -129,6 +170,7 @@ use qbz_playlist_edit_bridge::QbzPlaylistEdit;
 /// Rust side of the playlist-editor bridge (plain storage, phase-1 pattern).
 pub struct QbzPlaylistEditRust {
     edit_json: QString,
+    create_json: QString,
 }
 
 impl Default for QbzPlaylistEditRust {
@@ -137,6 +179,7 @@ impl Default for QbzPlaylistEditRust {
             // Closed and parseable: `doc.open === true` on frame 1 is false,
             // and no binding in the modal throws before the first publish.
             edit_json: QString::from("{\"open\":false}"),
+            create_json: QString::from("{\"open\":false}"),
         }
     }
 }
@@ -160,9 +203,10 @@ impl qbz_playlist_edit_bridge::QbzPlaylistEdit {
         if QT_THREAD.set(self.qt_thread()).is_err() {
             log::warn!("[qbz-qt] playlist edit Qt thread already registered");
         }
-        // Publish the closed document once, so the modal's parse sees the
+        // Publish the closed documents once, so each modal's parse sees the
         // full shape rather than the terser Default literal.
         crate::playlist_edit_qt::publish();
+        crate::playlist_create_qt::publish();
     }
 
     pub fn open(self: Pin<&mut Self>, id: QString) {
@@ -188,5 +232,30 @@ impl qbz_playlist_edit_bridge::QbzPlaylistEdit {
 
     pub fn close(self: Pin<&mut Self>) {
         crate::playlist_edit_qt::close();
+    }
+
+    pub fn open_create(self: Pin<&mut Self>) {
+        crate::playlist_create_qt::open();
+    }
+
+    pub fn create_submit(
+        self: Pin<&mut Self>,
+        name: QString,
+        description: QString,
+        folder_id: QString,
+        is_public: bool,
+        offline_only: bool,
+    ) {
+        crate::playlist_create_qt::submit(
+            &name.to_string(),
+            &description.to_string(),
+            &folder_id.to_string(),
+            is_public,
+            offline_only,
+        );
+    }
+
+    pub fn close_create(self: Pin<&mut Self>) {
+        crate::playlist_create_qt::close();
     }
 }

@@ -649,17 +649,22 @@ Rectangle {
                     }
                 }
             }
-            // New playlist (+) — single bridge call (create_playlist), then
-            // reload the tree. Slint opens a naming modal; the POC creates
-            // with the default name (POC-NOTE).
+            // New playlist (+) — opens controls/PlaylistCreateModal.qml, the
+            // port of primitives/CreatePlaylistModal.slint.
             //
-            // NOT offline-gated, and that is deliberate: `crate::create_playlist`
-            // branches on connectivity and creates a LOCAL playlist while
-            // offline (the reference's D8 — its create modal locks the
-            // offline-only toggle ON there). Dimming this row would take the
+            // IT USED TO BE A ONE-CALL SHORTCUT (`QbzShell.createPlaylist()`)
+            // that created a playlist named "New Playlist" and navigated to
+            // it. That shortcut had no way to set the name, the description,
+            // the folder or the public flag — and, the reason it counts as a
+            // regression rather than a rough edge, no way to set OFFLINE-ONLY.
+            // It derived that from connectivity, so an online user could not
+            // create a local playlist at all.
+            //
+            // NOT offline-gated, and that is deliberate: the modal's own D8
+            // arm locks the offline-only toggle ON while the app is offline
+            // and creates a LOCAL playlist. Dimming this row would take the
             // ONE way an account-less user makes a playlist away from exactly
-            // the state they live in. Before that branch existed the button was
-            // lit and its whole offline effect was a log line.
+            // the state they live in.
             Rectangle {
                 width: 22
                 height: 22
@@ -677,7 +682,7 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzShell.createPlaylist()
+                    onClicked: QbzPlaylistEdit.openCreate()
                 }
             }
             // Sort / more (...) menu.

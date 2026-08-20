@@ -414,6 +414,7 @@ fn main() {
                 "qml/controls/FolderModals.qml",
                 "qml/controls/GroupHeader.qml",
                 "qml/controls/MyQbzModals.qml",
+                "qml/controls/PlaylistCreateModal.qml",
                 "qml/controls/PlaylistEditModal.qml",
                 "qml/controls/PlaylistImportModal.qml",
                 "qml/controls/PlaylistPickerModal.qml",

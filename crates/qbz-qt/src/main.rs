@@ -273,6 +273,7 @@ mod playlist_manager_rows;
 // offline-only · delete), driven from the manager's three delegates, the
 // sidebar row menu and the playlist detail header. Plain module — it declares
 // no #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
+mod playlist_create_qt;
 mod playlist_edit_qt;
 mod playlist_qt;
 // The replacement-search controller (2026-08-17 unavailable-tracks contract
@@ -1206,72 +1207,6 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
                 });
             }
             Err(e) => log::warn!("[qbz-qt] release page load failed: {e}"),
-        }
-    });
-}
-
-/// Sidebar "+" — create an empty playlist with the default name, then
-/// reload the tree (the Slint flow opens a naming modal — POC-NOTE).
-///
-/// OFFLINE it creates a LOCAL playlist instead, which is the reference's D8
-/// rule collapsed onto this port's no-modal shortcut: `on_create_playlist`
-/// (qbz/src/main.rs:21109) opens the create modal with `offline_only` set ON
-/// **and LOCKED** while offline, so creation there always produces a local
-/// playlist. Without this arm the "+" was a fully lit, pointer-cursor button
-/// whose entire offline effect was `log::error!` — the dead-control class the
-/// owner's standing rule forbids, on the ONE surface a user with no Qobuz
-/// account owns. `offline_only = true` matches the picker's own offline create
-/// (`playlist_picker_qt.rs:555-559`): the playlist is never offered for upload
-/// and never reaches a QConnect push.
-pub(crate) fn create_playlist() {
-    if offline_fwd::engine().status().is_offline() {
-        // The SAME default name the online arm uses — one msgid, one label,
-        // whichever door the user came through.
-        let name = qbz_i18n::t("New Playlist");
-        spawn(async move {
-            let created = tokio::task::spawn_blocking(move || {
-                local_playlist_qt::create_blocking(&name, None, true)
-            })
-            .await
-            .ok()
-            .flatten();
-            match created {
-                Some(new_id) => {
-                    log::info!("[qbz-qt] local playlist created offline: {new_id}");
-                    // The offline-safe verb — `reload_sidebar` early-returns
-                    // here, which is exactly this branch.
-                    reload_sidebar_including_local();
-                    // Land on it, like the online arm does. `open_playlist`
-                    // routes a `local:` id to the local loader and does NOT
-                    // offline-gate it.
-                    open_playlist(new_id);
-                }
-                None => {
-                    log::error!("[qbz-qt] offline local playlist create failed");
-                    toast_qt::error(qbz_i18n::t("Couldn't create the playlist"));
-                }
-            }
-        });
-        return;
-    }
-    let runtime = app();
-    spawn(async move {
-        match runtime
-            .core()
-            .create_playlist(&qbz_i18n::t("New Playlist"), None, false)
-            .await
-        {
-            Ok(p) => {
-                log::info!("[qbz-qt] playlist created: {} ({})", p.name, p.id);
-                sidebar_qt::load(&runtime).await;
-                publish_sidebar();
-                // Open the new playlist (the Slint lands on it after the
-                // naming modal); the user-playlists endpoint lags the
-                // write, so the tree may not show it yet — the detail view
-                // fetches by id and is correct regardless.
-                open_playlist(p.id.to_string());
-            }
-            Err(e) => log::error!("[qbz-qt] create playlist failed: {e}"),
         }
     });
 }

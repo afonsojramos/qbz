@@ -760,6 +760,16 @@ Rectangle {
     PlaylistEditModal {
         anchors.fill: parent
     }
+    // PlaylistCreateModal — "New playlist" (name · description · folder ·
+    // public · offline-only), raised by the sidebar's "+" and, like its
+    // neighbour, self-gating on its own document (QbzPlaylistEdit.createJson).
+    // It rides the editor's singleton because it is the same domain — a
+    // playlist's own metadata — with a document that never interacts with the
+    // editor's. It replaces the POC shortcut that created a playlist named
+    // "New Playlist" with no way to set any of the five.
+    PlaylistCreateModal {
+        anchors.fill: parent
+    }
     // The hotkeys pair (2026-08-03 hotkeys-port contract §4.4/§4.5, block
     // B3): the read-only cheatsheet (`?` / the HeaderBar menu row) and the
     // editable customize editor. Same declaration-order convention as their
