@@ -45,3 +45,9 @@ thiserror = { workspace = true }
 [dev-dependencies]
 # `#[tokio::test]` only — the crate itself never spawns (see the note above).
 tokio = { workspace = true }
+# The END-TO-END live tests (tests/live_remote.rs): a temp user dir to bind the
+# sources to, an HTTP client to actually follow the playback url the ticket
+# hands out, and the rustls provider that client needs.
+tempfile = "3"
+reqwest = { workspace = true }
+rustls = { version = "0.23", features = ["aws_lc_rs"] }

@@ -6764,7 +6764,10 @@ dependencies = [
  "qbz-plex",
  "qbz-qobuz",
  "qbz-subsonic",
+ "reqwest",
  "rusqlite",
+ "rustls",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
