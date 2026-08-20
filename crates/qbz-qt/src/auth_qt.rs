@@ -215,6 +215,10 @@ async fn bind_per_user_stores(dir: &std::path::Path, user_id: u64) {
     // Plex playback work at all: an unbound `DbPool` refuses every read, and
     // `PlexSource` with no credentials answers `NotConfigured` — which is
     // exactly what shipped for one build when this line was missing.
+    // The media-server settings store FIRST: `source_wiring::bind_user` ends
+    // with `report_wiring`, which asks it which remote sources are configured.
+    // Bound after, that probe would report "none" on every login.
+    crate::media_servers_qt::init_for_user(dir);
     crate::source_wiring::bind_user(dir, user_id);
     // MyQBZ: branding (label + icon, read by the sidebar/nav flyout on frame
     // 1) and the grids + mixtape schema.
@@ -471,6 +475,7 @@ where
     // handles, the Plex art memo, the ephemeral session store. Without this
     // the next account inherits the previous one's handles out of a `'static`
     // registry.
+    crate::media_servers_qt::reset();
     crate::source_wiring::teardown();
     crate::offline_fwd::teardown();
     // The offline download cache (index.db/library connections + the cached

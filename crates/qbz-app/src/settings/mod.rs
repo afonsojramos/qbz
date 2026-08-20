@@ -11,6 +11,7 @@ pub mod payload_cache;
 pub mod pinned_items;
 pub mod playback;
 pub mod playlist_play_history;
+pub mod media_servers;
 pub mod plex;
 pub mod album_play_history;
 pub mod reco_store;

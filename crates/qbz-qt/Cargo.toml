@@ -79,6 +79,12 @@ qbz-library = { path = "../qbz-library" }
 # library.db's mixtape tables rather than each growing their own.
 qbz-mixtape = { path = "../qbz-mixtape" }
 qbz-source = { path = "../qbz-source" }
+# The media-server protocol crates. `qbz-qt` needs them directly for the SYNC
+# (which lives here, where the tokio runtime and the progress UI are) and for
+# `Credentials`, which the settings glue derives.
+qbz-jellyfin = { path = "../qbz-jellyfin" }
+qbz-subsonic = { path = "../qbz-subsonic" }
+qbz-media-cache = { path = "../qbz-media-cache" }
 # Cast: Chromecast + DLNA discovery, the two device families and the local
 # media server (src/cast_qt.rs drives it — nothing is reimplemented).
 qbz-cast = { path = "../qbz-cast" }

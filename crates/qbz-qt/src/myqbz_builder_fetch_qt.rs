@@ -132,6 +132,10 @@ pub fn fetch_local_and_plex(artist_name: &str) -> Vec<Candidate> {
         return Vec::new();
     }
     let plex_path = crate::local_plex::cache_db_path();
+    // The shared remote mirror + the enabled sources, same gates the Albums
+    // tab uses — the builder must see the SAME set the grid shows.
+    let remote_path = crate::media_servers_qt::remote_cache_path();
+    let remote_words = crate::media_servers_qt::configured_words();
     // Map INSIDE the `with_db` closure so `db.resolve_album_cover_fallback` is
     // reachable (mirrors the Albums grid): the cover PATH rides on the
     // candidate's `artwork_url`, so the saved collection item carries it and the
@@ -153,6 +157,8 @@ pub fn fetch_local_and_plex(artist_name: &str) -> Vec<Candidate> {
             // the builder must see the SAME set the Albums tab shows.
             /* exclude_network_folders */ false,
             plex_path.as_deref(),
+            remote_path.as_deref(),
+            &remote_words,
             // My QBZ collections are artist-scoped CANDIDATES, not the Albums
             // view — keep the metadata grouping regardless of the user's Local
             // Library identity-mode pref.

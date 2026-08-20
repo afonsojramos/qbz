@@ -128,6 +128,13 @@ mod bridge;
 // The registry's injections: Plex credentials, the ephemeral store, the user
 // binding and the album-identity mode. See its header.
 mod source_wiring;
+// Jellyfin / Subsonic: the per-user settings store plus the two gates the
+// Local Library union reads. The credential glue itself is in `source_wiring`.
+mod media_servers_qt;
+// The library sweep. Lives in the frontend because it needs the tokio runtime
+// and a channel to the progress UI; it writes through the cache handle the
+// SOURCE owns, so sweep and reads can never point at different users.
+mod media_sync_qt;
 mod custom_theme_qt;
 mod diagnostics_qt;
 mod discover_config_qt;

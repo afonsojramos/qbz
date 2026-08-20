@@ -27,3 +27,7 @@ rand = "0.10"
 
 # TLS provider selection
 rustls = { version = "0.23", features = ["aws_lc_rs"] }
+
+[dev-dependencies]
+# A temp user dir for the settings-store tests.
+tempfile = "3"

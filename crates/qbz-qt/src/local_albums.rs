@@ -34,6 +34,12 @@ use crate::local_state::{group_mode, state, with_art, with_db, TRACKS_PAGE};
 pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
     let mode = group_mode();
     let plex_path = crate::local_plex::cache_db_path();
+    // The SHARED remote mirror, and which of its sources may show. Both gates
+    // matter: the path short-circuits the ATTACH for a user with no media
+    // server, and the words are what make the master toggle actually remove a
+    // server's rows from the grid (the mirror holds them all).
+    let remote_path = crate::media_servers_qt::remote_cache_path();
+    let remote_words = crate::media_servers_qt::configured_words();
     let page = with_db(|db| {
         db.get_albums_metadata_page(
             0,
@@ -44,6 +50,8 @@ pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
             /* include_qobuz_downloads */ true,
             /* exclude_network_folders */ false,
             plex_path.as_deref(),
+            remote_path.as_deref(),
+            &remote_words,
             mode,
         )
     })
@@ -104,6 +112,12 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
     let plex_on = crate::local_plex::is_enabled();
     let mode = group_mode();
     let plex_path = crate::local_plex::cache_db_path();
+    // The SHARED remote mirror, and which of its sources may show. Both gates
+    // matter: the path short-circuits the ATTACH for a user with no media
+    // server, and the words are what make the master toggle actually remove a
+    // server's rows from the grid (the mirror holds them all).
+    let remote_path = crate::media_servers_qt::remote_cache_path();
+    let remote_words = crate::media_servers_qt::configured_words();
 
     // ONE db open for the three reads the merge needs. The album set is the
     // SAME query the Albums tab runs (Plex-aware union when the toggle is on),
@@ -123,6 +137,8 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
                 /* include_qobuz_downloads */ true,
                 /* exclude_network_folders */ false,
                 plex_path.as_deref(),
+                remote_path.as_deref(),
+                &remote_words,
                 mode,
             )?
             .albums

@@ -33,6 +33,27 @@ pub struct LibraryDatabase {
     conn: Connection,
 }
 
+/// A SQL predicate restricting the shared remote mirror to the sources the user
+/// has enabled.
+///
+/// The words are VALIDATED, not escaped: only `[a-z]` survives, and anything
+/// else drops the entry. They arrive from `SourceId::as_str`, so they are
+/// already a closed set — but this string is interpolated into SQL, and a
+/// validator that cannot be bypassed beats an escape that can be forgotten.
+/// An all-invalid list yields `0`, which shows nothing rather than everything.
+fn remote_source_filter(sources: &[&str]) -> String {
+    let clean: Vec<String> = sources
+        .iter()
+        .filter(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase()))
+        .map(|w| format!("'{w}'"))
+        .collect();
+    if clean.is_empty() {
+        "0".to_string()
+    } else {
+        format!("source IN ({})", clean.join(", "))
+    }
+}
+
 impl LibraryDatabase {
     /// Open or create database at path
     pub fn open(db_path: &Path) -> Result<Self, LibraryError> {
@@ -2104,29 +2125,28 @@ impl LibraryDatabase {
         include_qobuz_downloads: bool,
         exclude_network_folders: bool,
         plex_cache_path: Option<&std::path::Path>,
+        remote_cache_path: Option<&std::path::Path>,
+        remote_sources: &[&str],
         group_mode: crate::album_grouping::AlbumGroupMode,
     ) -> Result<crate::models::AlbumsMetadataPage, LibraryError> {
-        // Best-effort ATTACH of the Plex cache so the union below can
-        // see `plex_cache.plex_cache_tracks`. DETACH first defensively
-        // so a stale attachment from a previous call (or another
-        // connection user) doesn't fail the new one. Failure to
-        // attach is non-fatal — we fall back to local-only.
-        let plex_attached = if let Some(path) = plex_cache_path {
-            if path.exists() {
-                let _ = self.conn.execute("DETACH DATABASE plex_cache", []);
-                let path_str = path.to_string_lossy().replace('\'', "''");
-                self.conn
-                    .execute(
-                        &format!("ATTACH DATABASE '{}' AS plex_cache", path_str),
-                        [],
-                    )
-                    .is_ok()
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+        // TWO attachments, deliberately. `plex_cache` is the original
+        // per-source mirror; `remote_cache` is the shared one every source
+        // added after it writes into (`qbz-media-cache`), keyed by a `source`
+        // column. Plex will fold into the second and this will collapse back
+        // to one — see that crate's header for why it is not folded in the
+        // same change that introduced Jellyfin and Subsonic.
+        //
+        // Best-effort, and independently so: a missing or unreadable Plex
+        // cache must not cost the user their Jellyfin rows, and vice versa.
+        let plex_attached = self.attach_best_effort("plex_cache", plex_cache_path);
+        // The shared mirror holds EVERY remote source, so which of them the
+        // union may show is a separate question from whether the file is
+        // there. Turning Jellyfin off has to hide Jellyfin's rows without
+        // touching Subsonic's, and an empty list means "no remote source is
+        // enabled" — do not attach at all.
+        let remote_filter = remote_source_filter(remote_sources);
+        let remote_attached = !remote_sources.is_empty()
+            && self.attach_best_effort("remote_cache", remote_cache_path);
         let result = self.get_albums_metadata_page_inner(
             offset,
             limit,
@@ -2136,12 +2156,39 @@ impl LibraryDatabase {
             include_qobuz_downloads,
             exclude_network_folders,
             plex_attached,
+            remote_attached,
+            &remote_filter,
             group_mode,
         );
         if plex_attached {
             let _ = self.conn.execute("DETACH DATABASE plex_cache", []);
         }
+        if remote_attached {
+            let _ = self.conn.execute("DETACH DATABASE remote_cache", []);
+        }
         result
+    }
+
+    /// ATTACH `path` under `alias`, reporting whether the union may use it.
+    ///
+    /// DETACH first, defensively: a stale attachment left by a previous call
+    /// (or by another user of this connection) makes the new ATTACH fail, and
+    /// the failure mode of that is a silently local-only library.
+    ///
+    /// A failure is NON-FATAL by design. The alternative — refusing to list any
+    /// albums because one mirror is missing — turns "your Jellyfin server is
+    /// off" into "your music library is empty".
+    fn attach_best_effort(&self, alias: &str, path: Option<&std::path::Path>) -> bool {
+        let Some(path) = path.filter(|p| p.exists()) else {
+            return false;
+        };
+        let _ = self
+            .conn
+            .execute(&format!("DETACH DATABASE {alias}"), []);
+        let path_str = path.to_string_lossy().replace('\'', "''");
+        self.conn
+            .execute(&format!("ATTACH DATABASE '{path_str}' AS {alias}"), [])
+            .is_ok()
     }
 
     /// Resolve a folder cover for an album that has no `artwork_path` in the
@@ -2214,6 +2261,8 @@ impl LibraryDatabase {
         include_qobuz_downloads: bool,
         exclude_network_folders: bool,
         plex_attached: bool,
+        remote_attached: bool,
+        remote_filter: &str,
         group_mode: crate::album_grouping::AlbumGroupMode,
     ) -> Result<crate::models::AlbumsMetadataPage, LibraryError> {
         let source_filter = if include_qobuz_downloads {
@@ -2318,10 +2367,59 @@ impl LibraryDatabase {
             ""
         };
 
-        let unioned_clause = if plex_attached {
-            "SELECT * FROM aggregated UNION ALL SELECT * FROM plex_aggregated"
+        // The SHARED remote mirror: Jellyfin, Subsonic, and whatever comes
+        // next. ONE arm for all of them because the table carries a `source`
+        // column — that is the entire reason it exists.
+        //
+        // The group key is `<source>:<album id>`, matching Plex's `plex:<hash>`
+        // convention: it namespaces two servers that happen to use the same
+        // album id, and it is what lets a source `claim` an album card that
+        // arrives with no source word (which is every card that round-trips
+        // through a QML string property).
+        //
+        // Unlike Plex there is no bit-depth guess here. Both protocols report
+        // it directly — Jellyfin in MediaSources, Subsonic as an OpenSubsonic
+        // field — and the mappers already fold "not applicable" (Jellyfin's
+        // null, Subsonic's 0) to NULL. Inventing 16 for a lossless CD-rate row
+        // would be guessing where the server answered.
+        let remote_cte = if remote_attached {
+            format!(r#",
+            remote_aggregated AS (
+                SELECT
+                    source || ':' || album_id AS group_key,
+                    COALESCE(NULLIF(TRIM(album), ''), 'Unknown Album') AS title,
+                    CASE WHEN COUNT(DISTINCT album_artist) > 1
+                         THEN 'Various Artists'
+                         ELSE COALESCE(NULLIF(MIN(album_artist), ''), MIN(artist), 'Unknown Artist')
+                    END AS artist,
+                    GROUP_CONCAT(DISTINCT artist) AS all_artists,
+                    MIN(year) AS year,
+                    CAST(NULL AS TEXT) AS catalog_number,
+                    MAX(CASE WHEN artwork_token IS NOT NULL THEN artwork_token END) AS artwork,
+                    COUNT(*) AS track_count,
+                    CAST(SUM(COALESCE(duration_ms, 0)) / 1000 AS INTEGER) AS total_duration,
+                    COALESCE(MAX(container), MAX(codec)) AS format,
+                    MAX(bit_depth) AS bit_depth,
+                    CAST(MAX(sample_rate_hz) AS REAL) AS sample_rate,
+                    CAST(NULL AS TEXT) AS source_folders,
+                    source AS source
+                FROM remote_cache.remote_cache_tracks
+                WHERE album_id != '' AND {remote_filter}
+                GROUP BY source, album_id
+            )"#)
         } else {
-            "SELECT * FROM aggregated"
+            String::new()
+        };
+
+        let unioned_clause = match (plex_attached, remote_attached) {
+            (true, true) => {
+                "SELECT * FROM aggregated \
+                 UNION ALL SELECT * FROM plex_aggregated \
+                 UNION ALL SELECT * FROM remote_aggregated"
+            }
+            (true, false) => "SELECT * FROM aggregated UNION ALL SELECT * FROM plex_aggregated",
+            (false, true) => "SELECT * FROM aggregated UNION ALL SELECT * FROM remote_aggregated",
+            (false, false) => "SELECT * FROM aggregated",
         };
 
         let query = format!(
@@ -2378,7 +2476,7 @@ impl LibraryDatabase {
                     MAX(source) AS source
                 FROM grouped
                 GROUP BY group_key
-            ){plex_cte},
+            ){plex_cte}{remote_cte},
             filtered AS (
                 SELECT * FROM ({unioned_clause})
                 WHERE ?1 = 0 OR (title LIKE ?2 OR artist LIKE ?2)
@@ -2463,6 +2561,8 @@ impl LibraryDatabase {
                 include_qobuz_downloads,
                 exclude_network_folders,
                 plex_attached,
+                remote_attached,
+                remote_filter,
                 group_mode,
             )?;
         }
@@ -2481,6 +2581,8 @@ impl LibraryDatabase {
         include_qobuz_downloads: bool,
         exclude_network_folders: bool,
         plex_attached: bool,
+        remote_attached: bool,
+        remote_filter: &str,
         group_mode: crate::album_grouping::AlbumGroupMode,
     ) -> Result<u64, LibraryError> {
         let source_filter = if include_qobuz_downloads {
@@ -2518,10 +2620,33 @@ impl LibraryDatabase {
         } else {
             ""
         };
-        let unioned_clause = if plex_attached {
-            "SELECT * FROM aggregated UNION ALL SELECT * FROM plex_aggregated"
+        // Grouped and filtered EXACTLY as the page query groups and filters
+        // it — same key, same `album_id != ''` guard. A count that disagrees
+        // with the page it counts is worse than no count: the grid renders a
+        // scrollbar for rows that are not there.
+        let remote_cte = if remote_attached {
+            format!(r#",
+            remote_aggregated AS (
+                SELECT
+                    source || ':' || album_id AS group_key,
+                    COALESCE(NULLIF(TRIM(album), ''), 'Unknown Album') AS title,
+                    COALESCE(NULLIF(MIN(album_artist), ''), MIN(artist), 'Unknown Artist') AS artist
+                FROM remote_cache.remote_cache_tracks
+                WHERE album_id != '' AND {remote_filter}
+                GROUP BY source, album_id
+            )"#)
         } else {
-            "SELECT * FROM aggregated"
+            String::new()
+        };
+        let unioned_clause = match (plex_attached, remote_attached) {
+            (true, true) => {
+                "SELECT * FROM aggregated \
+                 UNION ALL SELECT * FROM plex_aggregated \
+                 UNION ALL SELECT * FROM remote_aggregated"
+            }
+            (true, false) => "SELECT * FROM aggregated UNION ALL SELECT * FROM plex_aggregated",
+            (false, true) => "SELECT * FROM aggregated UNION ALL SELECT * FROM remote_aggregated",
+            (false, false) => "SELECT * FROM aggregated",
         };
 
         let query = format!(
@@ -2558,7 +2683,7 @@ impl LibraryDatabase {
                     END AS artist
                 FROM grouped
                 GROUP BY group_key
-            ){plex_cte}
+            ){plex_cte}{remote_cte}
             SELECT COUNT(*)
             FROM ({unioned_clause})
             WHERE ?1 = 0 OR (title LIKE ?2 OR artist LIKE ?2)
@@ -2567,6 +2692,7 @@ impl LibraryDatabase {
             source_filter = source_filter,
             network_filter = network_filter,
             plex_cte = plex_cte,
+            remote_cte = remote_cte,
             unioned_clause = unioned_clause,
         );
 
@@ -7093,5 +7219,184 @@ mod sidecar_position_tests {
         db.add_local_track_to_playlist(7, ids[1], 0).unwrap();
         assert!(!db.heal_playlist_sidecar_positions(7, 5).unwrap().is_empty());
         assert!(db.heal_playlist_sidecar_positions(7, 5).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod remote_union_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// A local library with one album, plus a shared remote mirror holding one
+    /// Jellyfin album and one Subsonic album.
+    fn bench() -> (TempDir, LibraryDatabase, std::path::PathBuf) {
+        let tmp = TempDir::new().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
+
+        let mut t = LocalTrack::default();
+        t.file_path = "/m/local/01.flac".into();
+        t.title = "Local One".into();
+        t.album = "Local Album".into();
+        t.album_artist = Some("Local Artist".into());
+        t.artist = "Local Artist".into();
+        t.album_group_key = "/m/local".into();
+        t.album_group_title = "Local Album".into();
+        t.duration_secs = 100;
+        t.format = crate::AudioFormat::Flac;
+        t.bit_depth = Some(16);
+        t.sample_rate = 44100.0;
+        db.insert_track(&t).unwrap();
+
+        // The shared mirror, written with plain SQL so this test does not
+        // depend on `qbz-media-cache` (which depends on nothing here, and must
+        // keep not depending on it).
+        let remote = tmp.path().join("remote_cache.db");
+        let conn = rusqlite::Connection::open(&remote).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE remote_cache_tracks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL,
+                item_id TEXT NOT NULL, server_id TEXT NOT NULL DEFAULT '',
+                library_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
+                artist TEXT NOT NULL DEFAULT '', album_artist TEXT NOT NULL DEFAULT '',
+                album TEXT NOT NULL DEFAULT '', album_id TEXT NOT NULL DEFAULT '',
+                track_number INTEGER, disc_number INTEGER,
+                duration_ms INTEGER NOT NULL DEFAULT 0, year INTEGER, genre TEXT,
+                container TEXT NOT NULL DEFAULT '', codec TEXT, bit_depth INTEGER,
+                sample_rate_hz INTEGER, channels INTEGER, bitrate_kbps INTEGER,
+                artwork_token TEXT, size_bytes INTEGER, updated_at INTEGER NOT NULL,
+                UNIQUE (source, item_id));",
+        )
+        .unwrap();
+        let mut add = |source: &str, item: &str, album: &str, album_id: &str, depth: i64| {
+            conn.execute(
+                "INSERT INTO remote_cache_tracks
+                   (source,item_id,title,artist,album_artist,album,album_id,
+                    duration_ms,container,bit_depth,sample_rate_hz,updated_at)
+                 VALUES (?1,?2,?3,?4,?4,?5,?6,120000,'flac',?7,96000,1)",
+                rusqlite::params![source, item, format!("{item} title"), "Remote Artist", album, album_id, depth],
+            )
+            .unwrap();
+        };
+        add("jellyfin", "jf-1", "Jellyfin Album", "jf-alb", 24);
+        add("jellyfin", "jf-2", "Jellyfin Album", "jf-alb", 24);
+        add("subsonic", "sub-1", "Subsonic Album", "sub-alb", 16);
+        (tmp, db, remote)
+    }
+
+    fn titles(db: &LibraryDatabase, remote: Option<&std::path::Path>, sources: &[&str]) -> Vec<String> {
+        let page = db
+            .get_albums_metadata_page(
+                0,
+                50,
+                None,
+                "title",
+                "asc",
+                true,
+                false,
+                None,
+                remote,
+                sources,
+                crate::album_grouping::AlbumGroupMode::Folder,
+            )
+            .unwrap();
+        let mut v: Vec<String> = page.albums.iter().map(|a| a.title.clone()).collect();
+        v.sort();
+        v
+    }
+
+    /// Both mirrors' albums appear beside the local ones, in ONE result set —
+    /// which is the entire point of unioning rather than concatenating pages.
+    #[test]
+    fn enabled_remote_albums_join_the_local_ones() {
+        let (_t, db, remote) = bench();
+        assert_eq!(
+            titles(&db, Some(&remote), &["jellyfin", "subsonic"]),
+            vec!["Jellyfin Album", "Local Album", "Subsonic Album"]
+        );
+    }
+
+    /// Turning ONE source off hides ITS rows and leaves the other's alone. The
+    /// mirror is shared, so this is a filter rather than a detach — and getting
+    /// it wrong takes the wrong server's music off the screen.
+    #[test]
+    fn disabling_one_source_leaves_the_other_visible() {
+        let (_t, db, remote) = bench();
+        assert_eq!(
+            titles(&db, Some(&remote), &["subsonic"]),
+            vec!["Local Album", "Subsonic Album"]
+        );
+        assert_eq!(
+            titles(&db, Some(&remote), &["jellyfin"]),
+            vec!["Jellyfin Album", "Local Album"]
+        );
+    }
+
+    /// No source enabled, or no mirror on disk: local-only, and NOT an error.
+    /// Refusing to list any albums because a server is off would turn "Jellyfin
+    /// is unplugged" into "your library is empty".
+    #[test]
+    fn no_enabled_sources_is_local_only_not_a_failure() {
+        let (_t, db, remote) = bench();
+        assert_eq!(titles(&db, Some(&remote), &[]), vec!["Local Album"]);
+        assert_eq!(titles(&db, None, &["jellyfin"]), vec!["Local Album"]);
+        let missing = std::path::PathBuf::from("/nonexistent/remote_cache.db");
+        assert_eq!(titles(&db, Some(&missing), &["jellyfin"]), vec!["Local Album"]);
+    }
+
+    /// The two tracks of the Jellyfin album collapse into ONE card, and the
+    /// quality the server reported survives the aggregation. A grouping bug
+    /// here shows as duplicate cards, which is what the album_id key prevents.
+    #[test]
+    fn a_remote_album_aggregates_its_tracks_and_keeps_its_quality() {
+        let (_t, db, remote) = bench();
+        let page = db
+            .get_albums_metadata_page(
+                0,
+                50,
+                None,
+                "title",
+                "asc",
+                true,
+                false,
+                None,
+                Some(&remote),
+                &["jellyfin"],
+                crate::album_grouping::AlbumGroupMode::Folder,
+            )
+            .unwrap();
+        let jf = page
+            .albums
+            .iter()
+            .find(|a| a.title == "Jellyfin Album")
+            .expect("the jellyfin album");
+        assert_eq!(jf.track_count, 2, "the two tracks did not group into one card");
+        assert_eq!(jf.bit_depth, Some(24));
+        assert_eq!(jf.sample_rate, 96000.0);
+        assert_eq!(jf.source, "jellyfin", "the row lost its source word");
+        // The group key is PREFIXED, which is what lets the source claim the
+        // card when it comes back with no source word attached.
+        assert_eq!(jf.id, "jellyfin:jf-alb");
+        assert_eq!(page.total, 2, "the count disagrees with the page it counts");
+    }
+
+    /// The interpolated filter is validated, not escaped. Anything that is not
+    /// plain lowercase drops out, and an all-invalid list shows NOTHING rather
+    /// than everything — the safe direction for a predicate that reaches SQL.
+    #[test]
+    fn the_source_filter_rejects_anything_that_is_not_a_source_word() {
+        assert_eq!(remote_source_filter(&["jellyfin"]), "source IN ('jellyfin')");
+        assert_eq!(
+            remote_source_filter(&["jellyfin", "subsonic"]),
+            "source IN ('jellyfin', 'subsonic')"
+        );
+        assert_eq!(remote_source_filter(&[]), "0");
+        assert_eq!(remote_source_filter(&["x'; DROP TABLE local_tracks; --"]), "0");
+        assert_eq!(remote_source_filter(&["Jellyfin"]), "0");
+        assert_eq!(remote_source_filter(&[""]), "0");
+        // One bad entry does not smuggle itself in beside a good one.
+        assert_eq!(
+            remote_source_filter(&["jellyfin", "'; --"]),
+            "source IN ('jellyfin')"
+        );
     }
 }

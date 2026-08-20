@@ -125,6 +125,12 @@ pub mod qbz_local {
         /// A manual sync is in flight (`plex-syncing`) — the Sync button's
         /// busy state.
         #[qproperty(bool, plex_syncing)]
+        /// Media-server sweep state. TWO properties rather than one, because
+        /// the two questions have different answers: `media_syncing` gates the
+        /// spinner, and `media_sync_progress` ("1500/4924") is what makes a
+        /// 45.8-second Jellyfin sweep legible instead of a frozen button.
+        #[qproperty(bool, media_syncing)]
+        #[qproperty(QString, media_sync_progress)]
         /// Tracks written by the last sync; -1 = never synced this session.
         #[qproperty(i32, plex_last_sync_tracks)]
         /// Raw error text from the last Plex operation ("" when fine). QML
@@ -299,6 +305,37 @@ pub mod qbz_local {
         /// Header Sync button (#573): re-fetch the Plex sections + tracks
         /// into the shared cache DB, then reload the browse documents in
         /// place. No-op when `plexAvailable` is false.
+        /// ── Media servers (Jellyfin / Subsonic) ─────────────────────────
+        ///
+        /// One set of invokables for both, discriminated by a `server` word
+        /// ("jellyfin" | "subsonic"), because the panel is the same form twice
+        /// and the store behind it is one table. An unknown word is refused
+        /// with a toast rather than silently ignored.
+        ///
+        /// TEST the address before asking for a password: it separates "wrong
+        /// address" from "wrong password", which is the difference between a
+        /// user fixing a typo and a user thinking the feature is broken.
+        #[qinvokable]
+        fn media_test(self: Pin<&mut QbzLocal>, server: QString, url: QString);
+        /// Authenticate and persist. Runs a first sweep on success.
+        #[qinvokable]
+        fn media_connect(
+            self: Pin<&mut QbzLocal>,
+            server: QString,
+            url: QString,
+            username: QString,
+            password: QString,
+        );
+        /// Master toggle. OFF collapses the union back immediately; the cache
+        /// is KEPT so turning it on again does not re-sweep.
+        #[qinvokable]
+        fn media_set_enabled(self: Pin<&mut QbzLocal>, server: QString, enabled: bool);
+        /// Sweep now. `full` forces a complete pass instead of a delta.
+        #[qinvokable]
+        fn media_sync(self: Pin<&mut QbzLocal>, server: QString, full: bool);
+        /// Sign out: clear credentials and purge this server's cached rows.
+        #[qinvokable]
+        fn media_disconnect(self: Pin<&mut QbzLocal>, server: QString);
         #[qinvokable]
         fn sync_plex(self: Pin<&mut QbzLocal>);
         /// Master toggle. Turning it OFF collapses the browse union back to
@@ -404,6 +441,8 @@ pub struct QbzLocalRust {
     plex_enabled: bool,
     plex_available: bool,
     plex_syncing: bool,
+    media_syncing: bool,
+    media_sync_progress: QString,
     plex_last_sync_tracks: i32,
     plex_error: QString,
     plex_sections_json: QString,
@@ -447,6 +486,8 @@ impl Default for QbzLocalRust {
             plex_enabled: false,
             plex_available: false,
             plex_syncing: false,
+            media_syncing: false,
+            media_sync_progress: QString::default(),
             plex_last_sync_tracks: -1,
             plex_error: QString::default(),
             plex_sections_json: QString::from("[]"),
@@ -683,6 +724,84 @@ impl qbz_local::QbzLocal {
             return;
         }
         run_sync();
+    }
+
+    // ── Media servers (Jellyfin / Subsonic) ─────────────────────────────
+
+    pub fn media_test(self: Pin<&mut Self>, server: QString, url: QString) {
+        let (Some(kind), url) = (media_kind(&server), url.to_string()) else {
+            return;
+        };
+        crate::spawn(async move {
+            match crate::media_servers_qt::probe(kind, &url).await {
+                Ok(name) => crate::toast_qt::success(format!("Connected to {name}")),
+                Err(e) => crate::toast_qt::error(e),
+            }
+        });
+    }
+
+    pub fn media_connect(
+        self: Pin<&mut Self>,
+        server: QString,
+        url: QString,
+        username: QString,
+        password: QString,
+    ) {
+        let Some(kind) = media_kind(&server) else {
+            return;
+        };
+        let (url, user, pass) = (url.to_string(), username.to_string(), password.to_string());
+        crate::spawn(async move {
+            match crate::media_servers_qt::connect(kind, &url, &user, &pass).await {
+                Ok(()) => {
+                    crate::toast_qt::success(qbz_i18n::t("Connected"));
+                    run_media_sync(kind, true).await;
+                }
+                Err(e) => crate::toast_qt::error(e),
+            }
+        });
+    }
+
+    pub fn media_set_enabled(self: Pin<&mut Self>, server: QString, enabled: bool) {
+        let Some(kind) = media_kind(&server) else {
+            return;
+        };
+        crate::spawn(async move {
+            let mut cfg = crate::media_servers_qt::get(kind);
+            cfg.enabled = enabled;
+            crate::media_servers_qt::put(kind, &cfg);
+            // The union IS the query — the grid/tracks/badges must re-run.
+            reload_browse();
+        });
+    }
+
+    pub fn media_sync(self: Pin<&mut Self>, server: QString, full: bool) {
+        let Some(kind) = media_kind(&server) else {
+            return;
+        };
+        // Refuse HERE rather than letting the sweep's own guard reject it: a
+        // second click should say why, and by the time the guard sees it the
+        // caller has already been told the task started.
+        if crate::media_sync_qt::is_syncing(kind) {
+            crate::toast_qt::info(qbz_i18n::t("A sync is already running"));
+            return;
+        }
+        crate::spawn(async move { run_media_sync(kind, full).await });
+    }
+
+    pub fn media_disconnect(self: Pin<&mut Self>, server: QString) {
+        let Some(kind) = media_kind(&server) else {
+            return;
+        };
+        crate::spawn(async move {
+            crate::media_servers_qt::disconnect(kind);
+            // Purge the rows too: leaving them would keep a signed-out
+            // server's music in the grid until something else cleared it,
+            // and the master-toggle path deliberately does NOT purge (so it
+            // can be undone cheaply). Disconnect is the destructive one.
+            crate::media_servers_qt::purge_cache(kind);
+            reload_browse();
+        });
     }
 
     pub fn plex_set_enabled(self: Pin<&mut Self>, enabled: bool) {
@@ -956,3 +1075,38 @@ pub(crate) fn open_album_by_id(id: String) {
     });
 }
 
+/// Map the QML `server` word to a kind, toasting on an unknown one.
+///
+/// A silent `return` would make a typo in QML look like a dead button; this at
+/// least says which word was not understood.
+fn media_kind(server: &QString) -> Option<qbz_app::settings::media_servers::MediaServerKind> {
+    let w = server.to_string();
+    let kind = qbz_app::settings::media_servers::MediaServerKind::from_word(w.trim());
+    if kind.is_none() {
+        log::error!("[qbz-qt] media server: unknown server word {w:?}");
+    }
+    kind
+}
+
+/// Run a sweep and report it, then reload the browse documents so the new rows
+/// appear without the user navigating away and back.
+async fn run_media_sync(kind: qbz_app::settings::media_servers::MediaServerKind, full: bool) {
+    use qbz_app::settings::media_servers::MediaServerKind;
+    let result = match kind {
+        MediaServerKind::Jellyfin => crate::media_sync_qt::sync_jellyfin(full).await,
+        MediaServerKind::Subsonic => crate::media_sync_qt::sync_subsonic(full).await,
+    };
+    match result {
+        Ok(r) => {
+            log::info!(
+                "[qbz-qt] {} sync: {} saved, {} pruned, {} cached",
+                kind.as_str(),
+                r.saved,
+                r.pruned,
+                r.total
+            );
+            reload_browse();
+        }
+        Err(e) => crate::toast_qt::error(e),
+    }
+}

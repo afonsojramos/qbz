@@ -851,6 +851,12 @@ fn all_local_feed_blocking() -> Vec<FeedItem> {
     let mut out: Vec<FeedItem> = Vec::new();
     let plex_on = crate::local_plex::is_enabled();
     let plex_path = crate::local_plex::cache_db_path();
+    // The SHARED remote mirror, and which of its sources may show. Both gates
+    // matter: the path short-circuits the ATTACH for a user with no media
+    // server, and the words are what make the master toggle actually remove a
+    // server's rows from the grid (the mirror holds them all).
+    let remote_path = crate::media_servers_qt::remote_cache_path();
+    let remote_words = crate::media_servers_qt::configured_words();
     let mode = group_mode();
 
     // The hearts, once. The reference asks the store per row
@@ -882,6 +888,8 @@ fn all_local_feed_blocking() -> Vec<FeedItem> {
             /* include_qobuz_downloads */ true,
             /* exclude_network_folders */ false,
             plex_path.as_deref(),
+            remote_path.as_deref(),
+            &remote_words,
             mode,
         )
         .map(|p| p.albums)

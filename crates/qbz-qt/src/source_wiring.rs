@@ -66,6 +66,37 @@ impl qbz_source::PlexCreds for PlexCredsGlue {
     }
 }
 
+/// `JellyfinSource`'s view of the media-server settings store.
+struct JellyfinGlue;
+
+impl qbz_source::JellyfinCreds for JellyfinGlue {
+    fn is_enabled(&self) -> bool {
+        crate::media_servers_qt::jellyfin_server().is_some()
+    }
+
+    fn server(&self) -> Option<(String, String)> {
+        crate::media_servers_qt::jellyfin_server()
+    }
+}
+
+/// `SubsonicSource`'s view of the same store.
+///
+/// It hands over a derived `Credentials` rather than a bearer token because
+/// Subsonic has no session: every request carries `md5(password + salt)`, so
+/// the token is computed here, from the stored password and the install's
+/// fixed salt.
+struct SubsonicGlue;
+
+impl qbz_source::SubsonicCreds for SubsonicGlue {
+    fn is_enabled(&self) -> bool {
+        crate::media_servers_qt::subsonic_credentials().is_some()
+    }
+
+    fn server(&self) -> Option<(String, qbz_subsonic::Credentials)> {
+        crate::media_servers_qt::subsonic_credentials()
+    }
+}
+
 /// `LocalSource`'s view of the session-scoped ephemeral store.
 struct EphemeralGlue;
 
@@ -90,6 +121,8 @@ impl qbz_source::EphemeralTracks for EphemeralGlue {
 pub(crate) fn install() {
     let registry = qbz_source::registry();
     registry.plex().set_creds(Some(Arc::new(PlexCredsGlue)));
+    registry.jellyfin().set_creds(Some(Arc::new(JellyfinGlue)));
+    registry.subsonic().set_creds(Some(Arc::new(SubsonicGlue)));
     registry.local().set_ephemeral(Some(Arc::new(EphemeralGlue)));
     // Reads BEFORE a user is bound (splash, session restore) must resolve the
     // way `local_state::with_db` already resolves them — through
@@ -167,8 +200,20 @@ fn report_wiring() {
     } else {
         "NO"
     };
+    // The remote pair reports what the union will actually see, which is the
+    // question that matters: a server can be enabled and still contribute
+    // nothing because it was never swept.
+    let remote = {
+        let words = crate::media_servers_qt::configured_words();
+        if words.is_empty() {
+            "none configured".to_string()
+        } else {
+            words.join("+")
+        }
+    };
     log::info!(
-        "[qbz-qt] source registry bound: local_tracks={tracks} plex={plex} ephemeral_store={ephemeral}"
+        "[qbz-qt] source registry bound: local_tracks={tracks} plex={plex} \
+         ephemeral_store={ephemeral} remote={remote}"
     );
 }
 
@@ -184,6 +229,8 @@ pub(crate) fn teardown() {
     // rather than left cleared — `PlexSource::teardown` drops the handle.
     let registry = qbz_source::registry();
     registry.plex().set_creds(Some(Arc::new(PlexCredsGlue)));
+    registry.jellyfin().set_creds(Some(Arc::new(JellyfinGlue)));
+    registry.subsonic().set_creds(Some(Arc::new(SubsonicGlue)));
     registry.local().set_ephemeral(Some(Arc::new(EphemeralGlue)));
     registry
         .local()

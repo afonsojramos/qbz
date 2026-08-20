@@ -103,6 +103,12 @@ impl Default for SubsonicSource {
 /// `SourceId::from_word` has already folded), or the namespace bit.
 pub(crate) fn recognises(raw: &RawRef) -> bool {
     raw.source == Some(SourceId::SUBSONIC)
+        // The PREFIXED album key the Local Library grid publishes. Without
+        // this arm an album card carrying no source word — which is every card
+        // that round-trips through a QML string property — would be claimed by
+        // nobody and the album page would open empty. Plex solves the same
+        // problem the same way, with its `plex:` keys.
+        || raw.id.trim().starts_with("subsonic:")
         || raw
             .numeric()
             .map(|n| RemoteSource::of_id(n as i64) == Some(RemoteSource::Subsonic))
@@ -123,14 +129,20 @@ impl Source for SubsonicSource {
         let kind = raw.kind.unwrap_or(ItemKind::Track);
         Some(match kind {
             ItemKind::Album => {
-                if id.is_empty() {
+                // The grid publishes `subsonic:<server album id>`; a producer
+                // that holds the raw id may pass it bare. STRIP the prefix —
+                // the cache and the server both speak the raw id, and carrying
+                // the prefixed form inward is how Plex ended up with two album
+                // keys only one of its queries understood (survey IC-2).
+                let bare = id.strip_prefix("subsonic:").unwrap_or(id).trim();
+                if bare.is_empty() {
                     Err(SourceError::BadIdShape {
                         by: SourceId::SUBSONIC,
                         id: id.to_string(),
                         why: "a subsonic album id is the server's own id, never empty",
                     })
                 } else {
-                    Ok(MediaRef::new(SourceId::SUBSONIC, ItemKind::Album, id))
+                    Ok(MediaRef::new(SourceId::SUBSONIC, ItemKind::Album, bare))
                 }
             }
             // Same two shapes as Jellyfin, same reason for preferring the hint:
@@ -353,6 +365,59 @@ mod tests {
                 "claimed {foreign}"
             );
         }
+    }
+
+    /// The grid's album key is PREFIXED, and it must round-trip: recognised
+    /// with no source word at all, and stripped back to the raw server id the
+    /// cache and the server both speak.
+    #[test]
+    fn a_prefixed_album_key_is_recognised_and_stripped() {
+        let s = connected();
+        // No source word — the shape a QML string property hands back.
+        let raw = RawRef {
+            kind: Some(ItemKind::Album),
+            id: "subsonic:al-abc".into(),
+            ..Default::default()
+        };
+        assert!(recognises(&raw), "an unlabelled prefixed key was not recognised");
+        let m = s.claim(&raw).unwrap().unwrap();
+        assert_eq!(m.id(), "al-abc", "the prefix was carried inward");
+        // A bare id with the source word still works.
+        let bare = s
+            .claim(&RawRef {
+                source: Some(SourceId::SUBSONIC),
+                kind: Some(ItemKind::Album),
+                id: "al-abc".into(),
+                ..Default::default()
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(bare.id(), "al-abc");
+        // A prefix with nothing after it is a named error, not an empty lookup.
+        let err = s
+            .claim(&RawRef {
+                kind: Some(ItemKind::Album),
+                id: "subsonic:".into(),
+                ..Default::default()
+            })
+            .unwrap()
+            .unwrap_err();
+        assert!(matches!(err, SourceError::BadIdShape { by: SourceId::SUBSONIC, .. }));
+    }
+
+    /// ...and it must not answer for the NEIGHBOUR's prefix.
+    #[test]
+    fn it_does_not_recognise_the_other_prefix() {
+        assert!(!recognises(&RawRef {
+            kind: Some(ItemKind::Album),
+            id: "jellyfin:alb-1".into(),
+            ..Default::default()
+        }));
+        assert!(!recognises(&RawRef {
+            kind: Some(ItemKind::Album),
+            id: "plex:5677211365378243606".into(),
+            ..Default::default()
+        }));
     }
 
     #[test]
