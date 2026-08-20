@@ -5315,3 +5315,77 @@ msgstr "Клик по разделу в боковой панели или за�
 # Discover configurator: per-rail default item count (2026-08-19)
 msgid "Default ({})"
 msgstr "По умолчанию ({})"
+
+# Playlist importer expansion (2.0.3): file / JSON / ListenBrainz / Last.fm sources
+
+msgid "Streaming URL"
+msgstr "URL стриминга"
+
+msgid "Playlist file"
+msgstr "Файл плейлиста"
+
+msgid "JSON file"
+msgstr "Файл JSON"
+
+msgid "ListenBrainz"
+msgstr "ListenBrainz"
+
+msgid "Last.fm"
+msgstr "Last.fm"
+
+msgid "Choose file…"
+msgstr "Выбрать файл…"
+
+msgid "No file selected"
+msgstr "Файл не выбран"
+
+msgid "Only the track list is read — the referenced audio files are never opened, copied, or added to your Local Library. Each entry is matched against the Qobuz catalog."
+msgstr "Читается только список треков — указанные аудиофайлы никогда не открываются, не копируются и не добавляются в локальную библиотеку. Каждая запись сопоставляется с каталогом Qobuz."
+
+msgid "JSON is read best-effort — check the track count below before importing."
+msgstr "JSON читается по мере возможности — проверьте количество треков перед импортом."
+
+msgid "Could not read the file."
+msgstr "Не удалось прочитать файл."
+
+msgid "No tracks found in the file."
+msgstr "В файле не найдено треков."
+
+msgid "Unrecognized file format — use XSPF, PLS, M3U/M3U8, or JSON."
+msgstr "Формат файла не распознан — используйте XSPF, PLS, M3U/M3U8 или JSON."
+
+msgid "This looks like a live-stream manifest, not a playlist."
+msgstr "Похоже, это манифест прямой трансляции, а не плейлист."
+
+msgid "That file is too large to import."
+msgstr "Этот файл слишком велик для импорта."
+
+msgid "Could not recognize a track list in this JSON."
+msgstr "Не удалось распознать список треков в этом JSON."
+
+msgid "Username or profile URL"
+msgstr "Имя пользователя или URL профиля"
+
+msgid "Username or playlist URL"
+msgstr "Имя пользователя или URL плейлиста"
+
+msgid "Play your library"
+msgstr "Слушать вашу библиотеку"
+
+msgid "Play your mix"
+msgstr "Слушать ваш микс"
+
+msgid "Play your recommendations"
+msgstr "Слушать ваши рекомендации"
+
+msgid "Station"
+msgstr "Станция"
+
+msgid "No playlists found for {}."
+msgstr "Плейлисты для {} не найдены."
+
+msgid "Enter a public username."
+msgstr "Введите публичное имя пользователя."
+
+msgid "Duplicates: {}"
+msgstr "Дубликаты: {}"

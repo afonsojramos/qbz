@@ -5296,3 +5296,77 @@ msgstr "Clicar em uma seção na barra lateral ou na barra de título abre-a na 
 # Discover configurator: per-rail default item count (2026-08-19)
 msgid "Default ({})"
 msgstr "Padrão ({})"
+
+# Playlist importer expansion (2.0.3): file / JSON / ListenBrainz / Last.fm sources
+
+msgid "Streaming URL"
+msgstr "URL de streaming"
+
+msgid "Playlist file"
+msgstr "Ficheiro de playlist"
+
+msgid "JSON file"
+msgstr "Ficheiro JSON"
+
+msgid "ListenBrainz"
+msgstr "ListenBrainz"
+
+msgid "Last.fm"
+msgstr "Last.fm"
+
+msgid "Choose file…"
+msgstr "Escolher ficheiro…"
+
+msgid "No file selected"
+msgstr "Nenhum ficheiro selecionado"
+
+msgid "Only the track list is read — the referenced audio files are never opened, copied, or added to your Local Library. Each entry is matched against the Qobuz catalog."
+msgstr "Apenas a lista de faixas é lida — os ficheiros de áudio referenciados nunca são abertos, copiados nem adicionados à sua biblioteca local. Cada entrada é procurada no catálogo Qobuz."
+
+msgid "JSON is read best-effort — check the track count below before importing."
+msgstr "O JSON é lido da melhor forma possível — verifique o número de faixas antes de importar."
+
+msgid "Could not read the file."
+msgstr "Não foi possível ler o ficheiro."
+
+msgid "No tracks found in the file."
+msgstr "Não foram encontradas faixas no ficheiro."
+
+msgid "Unrecognized file format — use XSPF, PLS, M3U/M3U8, or JSON."
+msgstr "Formato de ficheiro não reconhecido — use XSPF, PLS, M3U/M3U8 ou JSON."
+
+msgid "This looks like a live-stream manifest, not a playlist."
+msgstr "Isto parece um manifesto de transmissão em direto, não uma playlist."
+
+msgid "That file is too large to import."
+msgstr "Esse ficheiro é demasiado grande para importar."
+
+msgid "Could not recognize a track list in this JSON."
+msgstr "Não foi possível reconhecer uma lista de faixas neste JSON."
+
+msgid "Username or profile URL"
+msgstr "Utilizador ou URL de perfil"
+
+msgid "Username or playlist URL"
+msgstr "Utilizador ou URL da playlist"
+
+msgid "Play your library"
+msgstr "Reproduzir a sua biblioteca"
+
+msgid "Play your mix"
+msgstr "Reproduzir a sua mistura"
+
+msgid "Play your recommendations"
+msgstr "Reproduzir as suas recomendações"
+
+msgid "Station"
+msgstr "Estação"
+
+msgid "No playlists found for {}."
+msgstr "Não foram encontradas playlists para {}."
+
+msgid "Enter a public username."
+msgstr "Introduza um utilizador público."
+
+msgid "Duplicates: {}"
+msgstr "Duplicados: {}"

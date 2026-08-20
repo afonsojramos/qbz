@@ -20,7 +20,22 @@
 //! - Tidal: fetches a fresh proxy token per playlist fetch (no caching/expiry
 //!   handling). TODO: cache the token until expiry.
 //! - Scrapers send no browser User-Agent (reqwest default) — TODO if any
-//!   provider starts gating on UA.
+//!   provider starts gating on UA. (The Last.fm source in `sources::service`
+//!   sets one PER REQUEST, because its CDN 403s an empty UA; the shared client
+//!   is deliberately left as it was.)
+//!
+//! # Sources beyond streaming URLs (2.0.3)
+//!
+//! [`PlaylistSource`] widens the front door to playlist FILES (XSPF / PLS /
+//! M3U / M3U8), best-effort JSON, and two public-read services (ListenBrainz,
+//! Last.fm). Every one of them resolves to the same [`models::ImportPlaylist`],
+//! so nothing downstream — the Qobuz matcher, the 2000-track split, the
+//! progress sink, the summary — learns that a second kind of source exists.
+//! Design: `qbz-nix-docs/deferred-2.0.3/playlist-importer-expansion-design.md`.
+//!
+//! FILES ARE READ FOR THEIR TRACK LIST ONLY. The paths inside a playlist file
+//! are never opened, copied, or added to the Local Library; each entry is
+//! matched against the Qobuz catalog like any other import.
 
 pub mod errors;
 pub mod importer;
@@ -28,11 +43,16 @@ pub mod match_qobuz;
 pub mod models;
 pub mod providers;
 pub mod sink;
+pub mod sources;
 
 mod http;
 
 pub use errors::PlaylistImportError;
-pub use importer::{import_public_playlist, preview_public_playlist};
+pub use importer::{import_prepared_playlist, import_public_playlist, preview_public_playlist};
+// The 2.0.3 expansion: three new source classes, all resolving to the same
+// `ImportPlaylist` the URL scrapers already produce, so the match -> create ->
+// add pipeline behind `import_prepared_playlist` is untouched.
+pub use sources::{FileFormat, LastFmStation, PlaylistSource, MAX_IMPORT_BYTES};
 // The Qobuz matcher's public surface. `match_tracks` stays the importer's own
 // entry point; `rank_candidates` is the ranked-list form the "find available
 // version" replacement flow needs (match_qobuz.rs).

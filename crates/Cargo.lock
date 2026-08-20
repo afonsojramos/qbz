@@ -6574,11 +6574,13 @@ dependencies = [
 name = "qbz-playlist-import"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
  "futures-util",
  "log",
  "qbz-models",
  "qbz-qobuz",
  "reqwest",
+ "roxmltree 0.20.0",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

@@ -5286,3 +5286,77 @@ msgstr "Klikken op een sectie in de zijbalk of titelbalk opent deze op het eerst
 # Discover configurator: per-rail default item count (2026-08-19)
 msgid "Default ({})"
 msgstr "Standaard ({})"
+
+# Playlist importer expansion (2.0.3): file / JSON / ListenBrainz / Last.fm sources
+
+msgid "Streaming URL"
+msgstr "Streaming-URL"
+
+msgid "Playlist file"
+msgstr "Afspeellijstbestand"
+
+msgid "JSON file"
+msgstr "JSON-bestand"
+
+msgid "ListenBrainz"
+msgstr "ListenBrainz"
+
+msgid "Last.fm"
+msgstr "Last.fm"
+
+msgid "Choose file…"
+msgstr "Bestand kiezen…"
+
+msgid "No file selected"
+msgstr "Geen bestand geselecteerd"
+
+msgid "Only the track list is read — the referenced audio files are never opened, copied, or added to your Local Library. Each entry is matched against the Qobuz catalog."
+msgstr "Alleen de tracklijst wordt gelezen — de audiobestanden waarnaar wordt verwezen worden nooit geopend, gekopieerd of aan je lokale bibliotheek toegevoegd. Elk item wordt in de Qobuz-catalogus opgezocht."
+
+msgid "JSON is read best-effort — check the track count below before importing."
+msgstr "JSON wordt naar beste kunnen gelezen — controleer het aantal tracks voordat je importeert."
+
+msgid "Could not read the file."
+msgstr "Kon het bestand niet lezen."
+
+msgid "No tracks found in the file."
+msgstr "Geen tracks gevonden in het bestand."
+
+msgid "Unrecognized file format — use XSPF, PLS, M3U/M3U8, or JSON."
+msgstr "Bestandsformaat niet herkend — gebruik XSPF, PLS, M3U/M3U8 of JSON."
+
+msgid "This looks like a live-stream manifest, not a playlist."
+msgstr "Dit lijkt een livestream-manifest te zijn, geen afspeellijst."
+
+msgid "That file is too large to import."
+msgstr "Dat bestand is te groot om te importeren."
+
+msgid "Could not recognize a track list in this JSON."
+msgstr "Kon in deze JSON geen tracklijst herkennen."
+
+msgid "Username or profile URL"
+msgstr "Gebruikersnaam of profiel-URL"
+
+msgid "Username or playlist URL"
+msgstr "Gebruikersnaam of afspeellijst-URL"
+
+msgid "Play your library"
+msgstr "Je bibliotheek afspelen"
+
+msgid "Play your mix"
+msgstr "Je mix afspelen"
+
+msgid "Play your recommendations"
+msgstr "Je aanbevelingen afspelen"
+
+msgid "Station"
+msgstr "Station"
+
+msgid "No playlists found for {}."
+msgstr "Geen afspeellijsten gevonden voor {}."
+
+msgid "Enter a public username."
+msgstr "Voer een openbare gebruikersnaam in."
+
+msgid "Duplicates: {}"
+msgstr "Duplicaten: {}"

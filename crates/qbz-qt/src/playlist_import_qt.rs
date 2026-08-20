@@ -56,10 +56,23 @@ use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
 use serde::Serialize;
 
+use qbz_playlist_import::sources::service::{lastfm, listenbrainz};
 use qbz_playlist_import::{
     detect_provider_key, ImportEvent, ImportPhase, ImportPlaylist, ImportProgressSink,
-    ImportProvider, ImportSummary, ProviderKey,
+    ImportProvider, ImportSummary, LastFmStation, PlaylistImportError, PlaylistSource, ProviderKey,
+    MAX_IMPORT_BYTES,
 };
+
+/// The source picker's indices. They are the ONE place the picker order is
+/// defined; the QML reads its labels from `sourceOptions` and sends back an
+/// index, so a reorder here is a reorder there and nowhere else.
+mod source_kind {
+    pub const URL: i32 = 0;
+    pub const FILE: i32 = 1;
+    pub const JSON: i32 = 2;
+    pub const LISTENBRAINZ: i32 = 3;
+    pub const LASTFM: i32 = 4;
+}
 
 type Runtime = Arc<AppRuntime<LoggingAdapter>>;
 
@@ -123,6 +136,37 @@ struct ImportDoc {
     #[serde(rename = "currentTrack")]
     current_track: String,
     log: Vec<LogEntry>,
+    // --- Source picker (2.0.3 expansion) --------------------------------
+    /// 0 URL · 1 Playlist file · 2 JSON · 3 ListenBrainz · 4 Last.fm.
+    #[serde(rename = "sourceIndex")]
+    source_index: i32,
+    /// The five localized picker labels, formatted here like every other
+    /// string in this document.
+    #[serde(rename = "sourceOptions")]
+    source_options: Vec<String>,
+    /// `""` = nothing picked yet.
+    #[serde(rename = "pickedFileName")]
+    picked_file_name: String,
+    /// The ListenBrainz / Last.fm username-or-URL field.
+    #[serde(rename = "serviceUser")]
+    service_user: String,
+    /// Last.fm only: 0 = a profile (show the station picker), 1 = a specific
+    /// playlist (import it directly, no station choice).
+    #[serde(rename = "lastfmMode")]
+    lastfm_mode: i32,
+    #[serde(rename = "stationOptions")]
+    station_options: Vec<String>,
+    #[serde(rename = "stationIndex")]
+    station_index: i32,
+    /// ListenBrainz "created for you" titles, filled after a valid username.
+    #[serde(rename = "lbPlaylistOptions")]
+    lb_playlist_options: Vec<String>,
+    #[serde(rename = "lbPlaylistIndex")]
+    lb_playlist_index: i32,
+    /// True while the "created for you" list is being fetched.
+    #[serde(rename = "lbListLoading")]
+    lb_list_loading: bool,
+
     /// Index 0 is always `No folder` (id `""`), then the visible folders.
     #[serde(rename = "folderOptions")]
     folder_options: Vec<String>,
@@ -137,6 +181,11 @@ struct ImportDoc {
     summary_matched: String,
     #[serde(rename = "summarySkipped")]
     summary_skipped: String,
+    /// `""` unless the source repeated a track. Its own line rather than a
+    /// footnote on "skipped": a duplicate is not a failure and reading it as
+    /// one is what made a 453-of-469 match look like a 198-of-469 one.
+    #[serde(rename = "summaryDuplicates")]
+    summary_duplicates: String,
     #[serde(rename = "summaryParts")]
     summary_parts: String,
 }
@@ -167,12 +216,23 @@ struct State {
     status_line: String,
     current_track: String,
     log: Vec<LogEntry>,
+    source_index: i32,
+    source_options: Vec<String>,
+    picked_file_name: String,
+    service_user: String,
+    lastfm_mode: i32,
+    station_options: Vec<String>,
+    station_index: i32,
+    lb_playlist_options: Vec<String>,
+    lb_playlist_index: i32,
+    lb_list_loading: bool,
     folder_options: Vec<String>,
     folder_ids: Vec<String>,
     folder_index: i32,
     summary_playlist: String,
     summary_matched: String,
     summary_skipped: String,
+    summary_duplicates: String,
     summary_parts: String,
 
     // ---- session-only (the reference's `Session`) ----
@@ -187,6 +247,15 @@ struct State {
     last_imported_url: String,
     /// 5 %-milestone tracker for the matching log lines (-1 = none yet).
     last_logged_percent: i32,
+
+    // ---- source-specific session state (2.0.3) ----
+    /// The picked file's bytes. They live HERE, not on disk and not re-read at
+    /// execute time: the `rfd` handle is gone by then and the dialog cannot
+    /// silently reopen. Bounded by `MAX_IMPORT_BYTES` before the read.
+    file_bytes: Option<Vec<u8>>,
+    file_name: String,
+    /// The MBIDs parallel to `lb_playlist_options`.
+    lb_playlist_mbids: Vec<String>,
 }
 
 impl State {
@@ -198,14 +267,40 @@ impl State {
             folder_options: opts,
             folder_ids: vec![String::new()],
             last_logged_percent: -1,
+            source_options: source_labels(),
+            station_options: station_labels(),
             ..State::default()
         };
+    }
+
+    /// The per-source reset a picker change performs: everything the OLD
+    /// source put in the session goes, so a stale file or username can never
+    /// be what a later Fetch reads.
+    fn clear_source_inputs(&mut self) {
+        self.picked_file_name.clear();
+        self.file_bytes = None;
+        self.file_name.clear();
+        self.service_user.clear();
+        self.lastfm_mode = 0;
+        self.station_index = 0;
+        self.lb_playlist_options.clear();
+        self.lb_playlist_mbids.clear();
+        self.lb_playlist_index = 0;
+        self.lb_list_loading = false;
+        self.url.clear();
+        self.preview = None;
+        self.preview_url.clear();
+        self.locked_provider = None;
+        self.active_provider.clear();
+        self.show_preview = false;
+        self.can_fetch = false;
     }
 
     fn clear_summary(&mut self) {
         self.summary_playlist.clear();
         self.summary_matched.clear();
         self.summary_skipped.clear();
+        self.summary_duplicates.clear();
         self.summary_parts.clear();
     }
 
@@ -214,6 +309,26 @@ impl State {
         self.status_line.clear();
         self.current_track.clear();
     }
+}
+
+/// The picker's five labels, in index order (`source_kind`).
+fn source_labels() -> Vec<String> {
+    vec![
+        qbz_i18n::t("Streaming URL"),
+        qbz_i18n::t("Playlist file"),
+        qbz_i18n::t("JSON file"),
+        qbz_i18n::t("ListenBrainz"),
+        qbz_i18n::t("Last.fm"),
+    ]
+}
+
+/// The three Last.fm station labels, in `LastFmStation::from_index` order.
+fn station_labels() -> Vec<String> {
+    vec![
+        qbz_i18n::t("Play your library"),
+        qbz_i18n::t("Play your mix"),
+        qbz_i18n::t("Play your recommendations"),
+    ]
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(State::default()));
@@ -272,12 +387,23 @@ fn build_doc(st: &State) -> ImportDoc {
         status_line: st.status_line.clone(),
         current_track: st.current_track.clone(),
         log: st.log.clone(),
+        source_index: st.source_index,
+        source_options: st.source_options.clone(),
+        picked_file_name: st.picked_file_name.clone(),
+        service_user: st.service_user.clone(),
+        lastfm_mode: st.lastfm_mode,
+        station_options: st.station_options.clone(),
+        station_index: st.station_index,
+        lb_playlist_options: st.lb_playlist_options.clone(),
+        lb_playlist_index: st.lb_playlist_index,
+        lb_list_loading: st.lb_list_loading,
         folder_options: st.folder_options.clone(),
         folder_ids: st.folder_ids.clone(),
         folder_index: st.folder_index,
         summary_playlist: st.summary_playlist.clone(),
         summary_matched: st.summary_matched.clone(),
         summary_skipped: st.summary_skipped.clone(),
+        summary_duplicates: st.summary_duplicates.clone(),
         summary_parts: st.summary_parts.clone(),
     }
 }
@@ -409,10 +535,316 @@ fn is_open() -> bool {
 /// Recompute the URL-derived fields on every keystroke (the reference's
 /// derived `detectedProvider` / `activeProvider` / `isValid` / `showPreview`),
 /// plus the post-completion fresh-import rearm path.
+/// "Does the ACTIVE source have enough input to Fetch?"
+///
+/// One rule per source, and the offline nuance is real rather than uniform:
+/// FILE and JSON parse locally, so their preview works with no network at all
+/// — which is the whole point for someone importing an M3U on a plane. Every
+/// other source is a network read and is gated like the URL always was. The
+/// IMPORT half needs a session regardless and is gated separately, so a file
+/// can preview offline and still refuse to import.
+fn compute_can_fetch(st: &State) -> bool {
+    let offline = crate::offline_fwd::engine().is_offline();
+    match st.source_index {
+        source_kind::FILE | source_kind::JSON => st.file_bytes.is_some(),
+        source_kind::LISTENBRAINZ => {
+            !offline
+                && match listenbrainz::detect(&st.service_user) {
+                    // A username alone is not enough: one of its "created for
+                    // you" playlists has to be chosen first.
+                    Some(listenbrainz::LbTarget::User(_)) => !st.lb_playlist_mbids.is_empty(),
+                    Some(listenbrainz::LbTarget::Mbid(_)) => true,
+                    None => false,
+                }
+        }
+        source_kind::LASTFM => !offline && lastfm::detect(&st.service_user).is_some(),
+        // URL (and any unexpected index) keeps the original rule.
+        _ => detect_provider_key(&st.url).is_some() && !offline,
+    }
+}
+
+/// The source picker changed. Everything the previous source contributed is
+/// dropped — see `clear_source_inputs`.
+pub fn on_source_changed(index: i32) {
+    // Read the stored handles BEFORE taking the lock — the store is a blocking
+    // read and this runs on the Qt thread.
+    let (lastfm_user, lb_user, _) = crate::integrations_qt::scrobbler_handles();
+    let mut prefill_lb: Option<String> = None;
+    {
+        let mut st = STATE.lock().unwrap();
+        if st.source_index == index {
+            return;
+        }
+        st.source_index = index;
+        st.clear_source_inputs();
+        // PREFILL, never a requirement (integrations stay opt-in): a connected
+        // account fills the field, an empty one leaves it blank and the source
+        // still works with any public handle typed by hand.
+        match index {
+            source_kind::LASTFM => {
+                st.service_user = lastfm_user;
+                if lastfm::detect(&st.service_user).is_some() {
+                    st.lastfm_mode = 0;
+                }
+            }
+            source_kind::LISTENBRAINZ => {
+                st.service_user = lb_user;
+                if matches!(
+                    listenbrainz::detect(&st.service_user),
+                    Some(listenbrainz::LbTarget::User(_))
+                ) {
+                    prefill_lb = Some(st.service_user.clone());
+                }
+            }
+            _ => {}
+        }
+        st.error.clear();
+        st.import_completed = false;
+        st.progress_visible = false;
+        st.progress = 0.0;
+        st.log.clear();
+        st.clear_progress_lines();
+        st.clear_summary();
+        st.can_fetch = compute_can_fetch(&st);
+    }
+    publish();
+    // A prefilled ListenBrainz username needs its "created for you" list, or
+    // the picker would be empty until the user typed a character.
+    if let Some(user) = prefill_lb {
+        load_lb_created_for(user);
+    }
+}
+
+/// The ListenBrainz / Last.fm handle field, on every keystroke.
+///
+/// ANY edit drops the preview: it is the service analogue of editing the URL
+/// away from the one that was fetched, and without it the footer button would
+/// still say "Import" for a playlist the field no longer names.
+pub fn on_service_input_edited(text: &str) {
+    let lb_user = {
+        let mut st = STATE.lock().unwrap();
+        st.service_user = text.to_string();
+        st.preview = None;
+        st.show_preview = false;
+        st.error.clear();
+
+        if st.source_index == source_kind::LASTFM {
+            // Profile vs playlist drives the sub-UI: a playlist URL imports
+            // directly, a profile offers the three stations.
+            st.lastfm_mode = match lastfm::detect(text) {
+                Some(lastfm::LastFmTarget::Playlist { .. }) => 1,
+                _ => 0,
+            };
+        }
+
+        // A ListenBrainz USERNAME needs its "created for you" list fetched
+        // before anything can be picked. An MBID needs nothing.
+        let want_list = st.source_index == source_kind::LISTENBRAINZ
+            && matches!(
+                listenbrainz::detect(text),
+                Some(listenbrainz::LbTarget::User(_))
+            );
+        if !want_list {
+            st.lb_playlist_options.clear();
+            st.lb_playlist_mbids.clear();
+            st.lb_playlist_index = 0;
+            st.lb_list_loading = false;
+        }
+        st.can_fetch = compute_can_fetch(&st);
+        if want_list {
+            match listenbrainz::detect(text) {
+                Some(listenbrainz::LbTarget::User(u)) => Some(u),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    };
+    publish();
+    if let Some(user) = lb_user {
+        load_lb_created_for(user);
+    }
+}
+
+/// Fetch the "created for you" dropdown for a ListenBrainz username.
+///
+/// Fired per keystroke while the field holds a username, so it is guarded the
+/// same way every other detached task here is: the generation it started under
+/// must still be current, AND the field must still hold the username it was
+/// started for. Without the second check a fast typist gets the list for a
+/// prefix of what they typed.
+fn load_lb_created_for(user: String) {
+    {
+        let mut st = STATE.lock().unwrap();
+        st.lb_list_loading = true;
+    }
+    publish();
+    let generation = current_generation();
+    crate::spawn(async move {
+        let token = crate::integrations_qt::scrobbler_handles().2;
+        let res = listenbrainz::list_created_for(&user, token.as_deref()).await;
+        if generation != current_generation() {
+            return;
+        }
+        {
+            let mut st = STATE.lock().unwrap();
+            let still_ours = matches!(
+                listenbrainz::detect(&st.service_user),
+                Some(listenbrainz::LbTarget::User(ref u)) if *u == user
+            );
+            if !still_ours {
+                return;
+            }
+            st.lb_list_loading = false;
+            match res {
+                Ok(list) => {
+                    st.lb_playlist_options = list.iter().map(|p| p.title.clone()).collect();
+                    st.lb_playlist_mbids = list.iter().map(|p| p.mbid.clone()).collect();
+                    st.lb_playlist_index = 0;
+                    if st.lb_playlist_options.is_empty() {
+                        st.error = qbz_i18n::t_args("No playlists found for {}.", &[&user]);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[qbz-qt] listenbrainz createdfor {user} failed: {e}");
+                    st.lb_playlist_options.clear();
+                    st.lb_playlist_mbids.clear();
+                }
+            }
+            st.can_fetch = compute_can_fetch(&st);
+        }
+        publish();
+    });
+}
+
+/// Last.fm station picker.
+pub fn set_station_index(index: i32) {
+    {
+        let mut st = STATE.lock().unwrap();
+        st.station_index = index.clamp(0, 2);
+        // A different station is a different playlist.
+        st.preview = None;
+        st.show_preview = false;
+    }
+    publish();
+}
+
+/// ListenBrainz "created for you" picker.
+pub fn set_lb_playlist_index(index: i32) {
+    {
+        let mut st = STATE.lock().unwrap();
+        if index < 0 || index as usize >= st.lb_playlist_mbids.len() {
+            return;
+        }
+        st.lb_playlist_index = index;
+        st.preview = None;
+        st.show_preview = false;
+    }
+    publish();
+}
+
+/// "Choose file…" — the native picker for the File and JSON sources.
+///
+/// THE SIZE CHECK HAPPENS BEFORE THE READ. `metadata().len()` on the path,
+/// then refuse; the crate re-checks the byte length as defense in depth, but by
+/// then a 2 GB pick would already be in RAM. This is the one place the wall
+/// actually protects the process.
+pub fn pick_file() {
+    let (json_mode, generation) = {
+        let st = STATE.lock().unwrap();
+        (st.source_index == source_kind::JSON, current_generation())
+    };
+    crate::spawn(async move {
+        let dialog = rfd::AsyncFileDialog::new().set_title(&qbz_i18n::t("Choose file…"));
+        let dialog = if json_mode {
+            dialog.add_filter(&qbz_i18n::t("JSON file"), &["json"])
+        } else {
+            dialog.add_filter(
+                &qbz_i18n::t("Playlist file"),
+                &["m3u", "m3u8", "pls", "xspf"],
+            )
+        };
+        let Some(handle) = dialog.pick_file().await else {
+            return; // cancelled — no toast, no state change.
+        };
+        let path = handle.path().to_path_buf();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let read = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, PlaylistImportError> {
+            let len = std::fs::metadata(&path)
+                .map_err(|e| PlaylistImportError::Http(e.to_string()))?
+                .len();
+            if len as usize > MAX_IMPORT_BYTES {
+                return Err(PlaylistImportError::FileTooLarge);
+            }
+            std::fs::read(&path).map_err(|e| PlaylistImportError::Http(e.to_string()))
+        })
+        .await;
+
+        // A reopen while the dialog was up must not land a file on the fresh
+        // modal (the same guard `fetch` carries).
+        if generation != current_generation() {
+            return;
+        }
+        {
+            let mut st = STATE.lock().unwrap();
+            // Any newly-picked file invalidates the previous preview.
+            st.preview = None;
+            st.show_preview = false;
+            match read {
+                Ok(Ok(bytes)) => {
+                    st.error.clear();
+                    st.file_bytes = Some(bytes);
+                    st.file_name = name.clone();
+                    st.picked_file_name = name;
+                }
+                Ok(Err(e)) => {
+                    st.file_bytes = None;
+                    st.file_name.clear();
+                    st.picked_file_name.clear();
+                    st.error = localize_import_error(&e);
+                }
+                Err(e) => {
+                    log::warn!("[qbz-qt] file read task panicked: {e}");
+                    st.file_bytes = None;
+                    st.picked_file_name.clear();
+                    st.error = qbz_i18n::t("Could not read the file.");
+                }
+            }
+            st.can_fetch = compute_can_fetch(&st);
+        }
+        publish();
+    });
+}
+
+/// A `PlaylistImportError` as something a user can read, in their language.
+///
+/// The semantic variants exist FOR this: matching a discriminant is what makes
+/// a localized message possible at all, where the old `Parse(String)` would
+/// have forced prefix-matching on an English string.
+fn localize_import_error(e: &PlaylistImportError) -> String {
+    match e {
+        PlaylistImportError::UnrecognizedFormat => {
+            qbz_i18n::t("Unrecognized file format — use XSPF, PLS, M3U/M3U8, or JSON.")
+        }
+        PlaylistImportError::HlsManifest => {
+            qbz_i18n::t("This looks like a live-stream manifest, not a playlist.")
+        }
+        PlaylistImportError::EmptyPlaylist => qbz_i18n::t("No tracks found in the file."),
+        PlaylistImportError::FileTooLarge => qbz_i18n::t("That file is too large to import."),
+        PlaylistImportError::JsonShapeUnrecognized => {
+            qbz_i18n::t("Could not recognize a track list in this JSON.")
+        }
+        other => other.to_string(),
+    }
+}
+
 pub fn on_url_edited(text: &str) {
     let trimmed = text.trim().to_string();
     let detected = detect_provider_key(text);
-    let offline = crate::offline_fwd::engine().is_offline();
     {
         let mut st = STATE.lock().unwrap();
         st.url = text.to_string();
@@ -432,7 +864,7 @@ pub fn on_url_edited(text: &str) {
 
         let active = st.locked_provider.or(detected);
         st.active_provider = active.map(|p| p.as_str()).unwrap_or("").to_string();
-        st.can_fetch = detected.is_some() && !offline;
+        st.can_fetch = compute_can_fetch(&st);
         st.show_preview = st.preview.is_some() && trimmed == st.preview_url;
     }
     publish();
@@ -465,64 +897,127 @@ pub fn set_folder_index(index: i32) {
 // Step A — fetch the preview
 // ---------------------------------------------------------------------------
 
-/// Step A gate + reset (the reference's `begin_fetch`). Returns the URL to
-/// fetch, or `None` when the gate fails.
-fn begin_fetch() -> Option<String> {
-    let url = {
+/// Step A gate + reset. Returns the SOURCE to resolve, or `None` when the gate
+/// fails.
+///
+/// It builds a whole [`PlaylistSource`] rather than a URL string, and that is
+/// what makes the expansion additive: the snapshot is taken here, on the Qt
+/// thread, under the lock — so the detached task never reads `STATE` again and
+/// a reopen mid-fetch cannot change what it is fetching.
+fn begin_fetch() -> Option<PlaylistSource> {
+    let source = {
         let mut st = STATE.lock().unwrap();
         if st.loading || !st.can_fetch {
             return None;
         }
-        let url = st.url.clone();
-        let detected = detect_provider_key(&url)?;
+        let source = build_source(&st)?;
         st.preview = None;
         st.preview_url.clear();
-        st.locked_provider = Some(detected);
+        // The locked provider / logo row belongs to the URL source only; the
+        // others have no provider logo to light up.
+        if st.source_index == source_kind::URL {
+            let detected = detect_provider_key(&st.url)?;
+            st.locked_provider = Some(detected);
+            st.active_provider = detected.as_str().to_string();
+        } else {
+            st.locked_provider = None;
+            st.active_provider.clear();
+        }
         st.loading = true;
         st.error.clear();
         st.show_preview = false;
         st.import_completed = false;
-        st.active_provider = detected.as_str().to_string();
         st.progress = 0.0;
         st.clear_progress_lines();
         st.clear_summary();
         st.log.clear();
         st.progress_visible = true;
-        url
+        source
     };
     push_log(qbz_i18n::t("Checking playlist link..."), "info");
-    Some(url)
+    Some(source)
 }
 
-/// Step A. The preview needs no session (the reference notes this) — only the
-/// execute does.
+/// The active source as a resolvable value. Pure over the state — the caller
+/// already holds the lock.
+fn build_source(st: &State) -> Option<PlaylistSource> {
+    match st.source_index {
+        source_kind::FILE => {
+            let bytes = st.file_bytes.clone()?;
+            // Detection runs HERE rather than at parse time so a wrong pick
+            // fails before the modal flips into step B.
+            let format = qbz_playlist_import::sources::file::detect_format(&bytes, &st.file_name)
+                .ok()?;
+            Some(PlaylistSource::File {
+                format,
+                bytes,
+                filename: st.file_name.clone(),
+            })
+        }
+        source_kind::JSON => Some(PlaylistSource::Json {
+            bytes: st.file_bytes.clone()?,
+            filename: st.file_name.clone(),
+        }),
+        source_kind::LISTENBRAINZ => {
+            let token = crate::integrations_qt::scrobbler_handles().2;
+            match listenbrainz::detect(&st.service_user)? {
+                listenbrainz::LbTarget::Mbid(mbid) => {
+                    Some(PlaylistSource::ListenBrainz { mbid, token })
+                }
+                listenbrainz::LbTarget::User(_) => {
+                    let mbid = st
+                        .lb_playlist_mbids
+                        .get(st.lb_playlist_index.max(0) as usize)?
+                        .clone();
+                    Some(PlaylistSource::ListenBrainz { mbid, token })
+                }
+            }
+        }
+        source_kind::LASTFM => match lastfm::detect(&st.service_user)? {
+            lastfm::LastFmTarget::Playlist { user, id } => Some(PlaylistSource::LastFmPlaylist {
+                user,
+                playlist_id: id,
+            }),
+            lastfm::LastFmTarget::Profile { user } => Some(PlaylistSource::LastFmStation {
+                user,
+                station: LastFmStation::from_index(st.station_index),
+            }),
+        },
+        _ => Some(PlaylistSource::Url(st.url.clone())),
+    }
+}
+
+/// Step A. The preview needs no session — only the execute does. And for FILE
+/// and JSON it needs no network either, which is why `compute_can_fetch` lets
+/// those two through offline.
 pub fn fetch() {
-    let Some(url) = begin_fetch() else {
+    let Some(source) = begin_fetch() else {
         return;
     };
     // A reopen mid-fetch bumps the generation; the stale preview result must
     // not land on the fresh modal (§1.8).
     let generation = current_generation();
     crate::spawn(async move {
-        let res = qbz_playlist_import::preview_public_playlist(&url).await;
+        let label = source.label();
+        let res = source.resolve().await;
         if generation != current_generation() {
             return;
         }
         match res {
-            Ok(p) => apply_preview_ok(&url, p),
-            Err(e) => apply_preview_err(&e.to_string()),
+            Ok(p) => apply_preview_ok(&label, p),
+            Err(e) => apply_preview_err(&localize_import_error(&e)),
         }
     });
 }
 
 /// Preview fetch succeeded.
-fn apply_preview_ok(url: &str, preview: ImportPlaylist) {
+fn apply_preview_ok(label: &str, preview: ImportPlaylist) {
     let count = preview.tracks.len();
     let provider = provider_display_name(&preview.provider);
     {
         let mut st = STATE.lock().unwrap();
         st.custom_name = preview.name.clone();
-        st.preview_url = url.trim().to_string();
+        st.preview_url = label.trim().to_string();
         st.preview = Some(preview);
     }
     push_log(
@@ -532,9 +1027,22 @@ fn apply_preview_ok(url: &str, preview: ImportPlaylist) {
     {
         let mut st = STATE.lock().unwrap();
         st.loading = false;
-        // The URL input is disabled during the fetch, so it still equals the
-        // fetched URL — step B (rename + Import) becomes visible.
-        st.show_preview = st.url.trim() == st.preview_url;
+        // SOURCE-AWARE, and this is the line that makes the whole expansion
+        // reachable. The URL rule is "the field still holds what was fetched",
+        // which is right for a URL and impossible for the others: their URL
+        // field is hidden and permanently `""`, so `"" == label` would be false
+        // forever and the footer button would say "Fetch" for the rest of time
+        // — Import unreachable for every new source.
+        //
+        // For a non-URL source the preview that just landed IS the current one:
+        // any edit to the file or the handle clears it (`pick_file`,
+        // `on_service_input_edited`), so there is nothing for an equality check
+        // to protect against.
+        st.show_preview = if st.source_index == source_kind::URL {
+            st.url.trim() == st.preview_url
+        } else {
+            true
+        };
     }
     publish();
 }
@@ -555,7 +1063,16 @@ fn apply_preview_err(err: &str) {
 
 /// Everything the execute task needs, snapshotted before it spawns.
 struct ExecuteArgs {
-    url: String,
+    /// THE RESOLVED PLAYLIST, cloned out of the session under the lock.
+    ///
+    /// It used to be the URL, and the task re-fetched from it. That was a
+    /// double scrape on every URL import, and for the new sources it is not
+    /// merely wasteful but impossible: the `rfd` bytes of a picked file are
+    /// gone, and the dialog cannot silently reopen. Snapshotting also closes a
+    /// real race — `open()` resets the session, so a modal reopened between the
+    /// Import click and the task's read would have handed a detached task
+    /// `None` and imported nothing.
+    playlist: ImportPlaylist,
     name_override: Option<String>,
     /// Local folder id chosen in the dropdown (`""` = no folder).
     folder_id: String,
@@ -570,7 +1087,8 @@ fn begin_execute() -> Option<ExecuteArgs> {
     if st.loading || st.import_completed {
         return None;
     }
-    let source_name = st.preview.as_ref()?.name.clone();
+    let playlist = st.preview.as_ref()?.clone();
+    let source_name = playlist.name.clone();
     // The rename goes out only when it differs from the source name; an empty
     // rename falls back to the source name (reference Appendix A).
     let custom = st.custom_name.trim().to_string();
@@ -580,7 +1098,6 @@ fn begin_execute() -> Option<ExecuteArgs> {
         None
     };
     st.last_logged_percent = -1;
-    let url = st.preview_url.clone();
     let folder_id = st
         .folder_ids
         .get(st.folder_index.max(0) as usize)
@@ -590,7 +1107,7 @@ fn begin_execute() -> Option<ExecuteArgs> {
     st.error.clear();
     st.progress_visible = true;
     Some(ExecuteArgs {
-        url,
+        playlist,
         name_override,
         folder_id,
         generation: bump_generation(),
@@ -624,8 +1141,8 @@ pub fn execute() {
         let sink: Arc<dyn ImportProgressSink> = Arc::new(QtSink {
             generation: args.generation,
         });
-        let res = qbz_playlist_import::import_public_playlist(
-            &args.url,
+        let res = qbz_playlist_import::import_prepared_playlist(
+            args.playlist,
             &client,
             args.name_override.as_deref(),
             false, // is_public — the reference hardcodes false, no toggle
@@ -725,6 +1242,15 @@ fn apply_execute_ok(summary: &ImportSummary) {
         );
         st.summary_skipped =
             qbz_i18n::t_args("Skipped: {}", &[&summary.skipped_tracks.to_string()]);
+        // Hidden when there were none, which is every well-formed source.
+        st.summary_duplicates = if summary.duplicate_tracks > 0 {
+            qbz_i18n::t_args(
+                "Duplicates: {}",
+                &[&summary.duplicate_tracks.to_string()],
+            )
+        } else {
+            String::new()
+        };
         st.summary_parts = if summary.parts_created > 1 {
             parts_line(summary.parts_created)
         } else {
@@ -930,6 +1456,14 @@ fn provider_display_name(provider: &ImportProvider) -> &'static str {
         ImportProvider::AppleMusic => "Apple Music",
         ImportProvider::Tidal => "Tidal",
         ImportProvider::Deezer => "Deezer",
+        // The four added by the 2.0.3 expansion. "Playlist file" and
+        // "JSON file" are deliberately the SAME strings as the source picker's
+        // labels, so "Found 42 tracks from JSON file." and the picker read as
+        // one vocabulary.
+        ImportProvider::File => "Playlist file",
+        ImportProvider::Json => "JSON file",
+        ImportProvider::ListenBrainz => "ListenBrainz",
+        ImportProvider::LastFm => "Last.fm",
     }
 }
 

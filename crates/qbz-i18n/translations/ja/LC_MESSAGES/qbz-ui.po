@@ -5281,3 +5281,77 @@ msgstr "サイドバーやタイトルバーのセクションをクリックす
 # Discover configurator: per-rail default item count (2026-08-19)
 msgid "Default ({})"
 msgstr "デフォルト ({})"
+
+# Playlist importer expansion (2.0.3): file / JSON / ListenBrainz / Last.fm sources
+
+msgid "Streaming URL"
+msgstr "ストリーミング URL"
+
+msgid "Playlist file"
+msgstr "プレイリストファイル"
+
+msgid "JSON file"
+msgstr "JSON ファイル"
+
+msgid "ListenBrainz"
+msgstr "ListenBrainz"
+
+msgid "Last.fm"
+msgstr "Last.fm"
+
+msgid "Choose file…"
+msgstr "ファイルを選択…"
+
+msgid "No file selected"
+msgstr "ファイルが選択されていません"
+
+msgid "Only the track list is read — the referenced audio files are never opened, copied, or added to your Local Library. Each entry is matched against the Qobuz catalog."
+msgstr "読み込むのはトラック一覧だけです。参照されている音声ファイルを開いたり、コピーしたり、ローカルライブラリに追加することはありません。各項目は Qobuz のカタログと照合されます。"
+
+msgid "JSON is read best-effort — check the track count below before importing."
+msgstr "JSON はベストエフォートで読み込まれます。インポート前にトラック数を確認してください。"
+
+msgid "Could not read the file."
+msgstr "ファイルを読み込めませんでした。"
+
+msgid "No tracks found in the file."
+msgstr "ファイルにトラックが見つかりませんでした。"
+
+msgid "Unrecognized file format — use XSPF, PLS, M3U/M3U8, or JSON."
+msgstr "ファイル形式を認識できません。XSPF、PLS、M3U/M3U8、JSON を使用してください。"
+
+msgid "This looks like a live-stream manifest, not a playlist."
+msgstr "これはプレイリストではなくライブ配信のマニフェストのようです。"
+
+msgid "That file is too large to import."
+msgstr "このファイルは大きすぎてインポートできません。"
+
+msgid "Could not recognize a track list in this JSON."
+msgstr "この JSON からトラック一覧を認識できませんでした。"
+
+msgid "Username or profile URL"
+msgstr "ユーザー名またはプロフィール URL"
+
+msgid "Username or playlist URL"
+msgstr "ユーザー名またはプレイリスト URL"
+
+msgid "Play your library"
+msgstr "ライブラリを再生"
+
+msgid "Play your mix"
+msgstr "ミックスを再生"
+
+msgid "Play your recommendations"
+msgstr "おすすめを再生"
+
+msgid "Station"
+msgstr "ステーション"
+
+msgid "No playlists found for {}."
+msgstr "{} のプレイリストが見つかりませんでした。"
+
+msgid "Enter a public username."
+msgstr "公開ユーザー名を入力してください。"
+
+msgid "Duplicates: {}"
+msgstr "重複: {}"

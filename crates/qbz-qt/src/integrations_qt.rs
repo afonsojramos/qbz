@@ -143,6 +143,22 @@ pub fn scrobble_settings() -> ScrobblerSettings {
     scrobble().get_settings().unwrap_or_default()
 }
 
+/// The playlist importer's PREFILL + optional credential (2.0.3 expansion).
+///
+/// Returns `(lastfm_username, listenbrainz_username, listenbrainz_token)`.
+///
+/// STRICTLY A CONVENIENCE. Both service sources read PUBLIC data with a bare
+/// username, so nothing here is required — a user who has connected nothing
+/// types a handle and it works. The token is the one credential that changes
+/// behaviour when present (higher ListenBrainz rate limits, and the user's own
+/// private playlists resolve), and it is sent only because it is already
+/// stored; the importer never asks for it.
+pub fn scrobbler_handles() -> (String, String, Option<String>) {
+    let cfg = scrobble_settings();
+    let token = Some(cfg.listenbrainz_token.clone()).filter(|t| !t.trim().is_empty());
+    (cfg.lastfm_username, cfg.listenbrainz_username, token)
+}
+
 pub fn show_recommendations() -> bool {
     with_discover(|s| s.load().show_recommendations).unwrap_or(true)
 }

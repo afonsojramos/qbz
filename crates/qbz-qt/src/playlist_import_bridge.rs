@@ -79,6 +79,40 @@ pub mod qbz_playlist_import_bridge {
         /// progress.
         #[qinvokable]
         fn execute(self: Pin<&mut QbzPlaylistImport>);
+
+        // --- Source picker (2.0.3 expansion) -----------------------------
+        //
+        // Everything below feeds ONE `PlaylistSource`, which resolves to the
+        // same `ImportPlaylist` the URL path always produced. The rename,
+        // folder, progress, log and summary halves of this modal never learn
+        // that a second kind of source exists.
+
+        /// The picker changed (0 URL · 1 Playlist file · 2 JSON ·
+        /// 3 ListenBrainz · 4 Last.fm). Everything the previous source
+        /// contributed is dropped, and a service source prefills its handle
+        /// from the connected account when there is one.
+        #[qinvokable]
+        fn source_changed(self: Pin<&mut QbzPlaylistImport>, index: i32);
+
+        /// "Choose file…" — the native picker for the File and JSON sources.
+        /// The size wall is enforced on the PATH before the read, so an
+        /// oversize pick never reaches RAM.
+        #[qinvokable]
+        fn pick_file(self: Pin<&mut QbzPlaylistImport>);
+
+        /// The ListenBrainz / Last.fm username-or-URL field, per keystroke.
+        /// Recomputes the fetch gate, detects Last.fm profile-vs-playlist, and
+        /// loads the ListenBrainz "created for you" list for a username.
+        #[qinvokable]
+        fn service_input_edited(self: Pin<&mut QbzPlaylistImport>, text: QString);
+
+        /// Last.fm station picker (0 Library · 1 Mix · 2 Recommendations).
+        #[qinvokable]
+        fn set_station_index(self: Pin<&mut QbzPlaylistImport>, index: i32);
+
+        /// ListenBrainz "created for you" picker.
+        #[qinvokable]
+        fn set_lb_playlist_index(self: Pin<&mut QbzPlaylistImport>, index: i32);
     }
 
     impl cxx_qt::Threading for QbzPlaylistImport {}
@@ -149,5 +183,25 @@ impl qbz_playlist_import_bridge::QbzPlaylistImport {
 
     pub fn execute(self: Pin<&mut Self>) {
         crate::playlist_import_qt::execute();
+    }
+
+    pub fn source_changed(self: Pin<&mut Self>, index: i32) {
+        crate::playlist_import_qt::on_source_changed(index);
+    }
+
+    pub fn pick_file(self: Pin<&mut Self>) {
+        crate::playlist_import_qt::pick_file();
+    }
+
+    pub fn service_input_edited(self: Pin<&mut Self>, text: QString) {
+        crate::playlist_import_qt::on_service_input_edited(&text.to_string());
+    }
+
+    pub fn set_station_index(self: Pin<&mut Self>, index: i32) {
+        crate::playlist_import_qt::set_station_index(index);
+    }
+
+    pub fn set_lb_playlist_index(self: Pin<&mut Self>, index: i32) {
+        crate::playlist_import_qt::set_lb_playlist_index(index);
     }
 }

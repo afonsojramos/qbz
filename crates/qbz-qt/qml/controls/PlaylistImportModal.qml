@@ -51,6 +51,20 @@ Item {
     readonly property bool importCompleted: doc.importCompleted === true
     readonly property var folderOptions: doc.folderOptions || []
 
+    // --- Source picker (2.0.3 expansion) ----------------------------------
+    // 0 URL · 1 Playlist file · 2 JSON · 3 ListenBrainz · 4 Last.fm. The order
+    // is `playlist_import_qt::source_kind`; the labels come from the document
+    // pre-localized, like every other string here.
+    readonly property int sourceIndex: doc.sourceIndex || 0
+    readonly property bool srcUrl: root.sourceIndex === 0
+    readonly property bool srcFile: root.sourceIndex === 1
+    readonly property bool srcJson: root.sourceIndex === 2
+    readonly property bool srcLb: root.sourceIndex === 3
+    readonly property bool srcLastfm: root.sourceIndex === 4
+    /// File and JSON share their whole block except the caveat line.
+    readonly property bool srcAnyFile: root.srcFile || root.srcJson
+    readonly property bool srcAnyService: root.srcLb || root.srcLastfm
+
     // Bumped by every QbzPlaylistImport.open(). The reference remounts the
     // whole Svelte component per open and Slint reproduces it by clearing 14
     // properties; here Rust resets its document and this counter tells the two
@@ -59,6 +73,7 @@ Item {
     onResetSeqChanged: {
         urlInput.text = ""
         nameInput.text = ""
+        serviceInput.text = ""
     }
 
     // Absolute qrc prefix for the brand SVGs — same rule as QbzIcon: a relative
@@ -264,6 +279,30 @@ Item {
                     title: root.doc.error || ""
                 }
 
+                // --- Source picker ----------------------------------------
+                // The one control that is always visible. Everything below it
+                // is one source's block; they are mutually exclusive and a
+                // Column skips invisible children, so exactly one appears and
+                // nothing leaves a gap.
+                Column {
+                    width: card.contentWidth
+                    spacing: 8
+                    Text {
+                        text: QbzSession.tr("Source", QbzSession.trRev)
+                        color: theme.textSecondary
+                        font.pixelSize: theme.fontLegal
+                        font.weight: theme.weightMedium
+                    }
+                    QbzSelect {
+                        width: parent.width
+                        popupWidth: parent.width
+                        enabled: !root.loading
+                        options: root.doc.sourceOptions || []
+                        currentIndex: root.sourceIndex
+                        onSelected: function (i) { QbzPlaylistImport.sourceChanged(i) }
+                    }
+                }
+
                 // --- URL input --------------------------------------------
                 // Every keystroke routes the provider detection through Rust
                 // (the reference does the same because Slint 1.16 strings have
@@ -273,6 +312,7 @@ Item {
                 Column {
                     width: card.contentWidth
                     spacing: 8
+                    visible: root.srcUrl
                     Text {
                         text: QbzSession.tr("Playlist URL", QbzSession.trRev)
                         color: theme.textSecondary
@@ -342,6 +382,9 @@ Item {
                 Column {
                     width: card.contentWidth
                     spacing: 8
+                    // URL ONLY. Four dimmed streaming logos over a file picker
+                    // would say the file has to come from one of them.
+                    visible: root.srcUrl
                     Text {
                         text: QbzSession.tr("ALLOWED SOURCES", QbzSession.trRev)
                         color: theme.textMuted
@@ -390,6 +433,194 @@ Item {
                             smooth: true
                             opacity: root.doc.activeProvider === "deezer" ? 1.0 : 0.45
                         }
+                    }
+                }
+
+                // --- File / JSON block ------------------------------------
+                // ONLY THE TRACK LIST IS READ. The disclaimer is not fine
+                // print: a user handing over an .m3u reasonably expects the
+                // referenced audio to be imported, and it never is. It is a
+                // persistent row next to the picker, not a tooltip.
+                Column {
+                    width: card.contentWidth
+                    spacing: 8
+                    visible: root.srcAnyFile
+
+                    Row {
+                        spacing: 12
+                        // Ghost button, the port's neutral secondary shape.
+                        Rectangle {
+                            width: pickLabel.implicitWidth + 28
+                            height: 36
+                            radius: theme.radiusSm
+                            color: (pickArea.containsMouse && !root.loading)
+                                ? theme.surfaceHover : theme.surfaceElevated
+                            opacity: root.loading ? 0.5 : 1.0
+                            Text {
+                                id: pickLabel
+                                anchors.centerIn: parent
+                                text: QbzSession.tr("Choose file…", QbzSession.trRev)
+                                color: theme.textPrimary
+                                font.pixelSize: theme.fontLink
+                            }
+                            MouseArea {
+                                id: pickArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                enabled: !root.loading
+                                cursorShape: root.loading ? Qt.ArrowCursor
+                                                          : Qt.PointingHandCursor
+                                onClicked: QbzPlaylistImport.pickFile()
+                            }
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Math.max(0, card.contentWidth - pickLabel.implicitWidth - 40)
+                            text: (root.doc.pickedFileName || "") !== ""
+                                ? root.doc.pickedFileName
+                                : QbzSession.tr("No file selected", QbzSession.trRev)
+                            color: (root.doc.pickedFileName || "") !== ""
+                                ? theme.textPrimary : theme.textMuted
+                            font.pixelSize: theme.fontLink
+                            elide: Text.ElideMiddle
+                        }
+                    }
+
+                    Text {
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: QbzSession.tr("Only the track list is read — the referenced audio files are never opened, copied, or added to your Local Library. Each entry is matched against the Qobuz catalog.", QbzSession.trRev)
+                        color: theme.textMuted
+                        font.pixelSize: theme.fontLegal
+                    }
+
+                    // JSON carries one extra caveat: the parse is best-effort
+                    // and the preview COUNT is the user's gate on it.
+                    Text {
+                        visible: root.srcJson
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                        text: QbzSession.tr("JSON is read best-effort — check the track count below before importing.", QbzSession.trRev)
+                        color: theme.textMuted
+                        font.pixelSize: theme.fontLegal
+                    }
+                }
+
+                // --- ListenBrainz / Last.fm block -------------------------
+                // One handle field for both, because they take the same thing:
+                // a public username or a URL. Nothing is authenticated; a
+                // connected account only PREFILLS the field.
+                Column {
+                    width: card.contentWidth
+                    spacing: 8
+                    visible: root.srcAnyService
+
+                    Text {
+                        text: root.srcLb
+                            ? QbzSession.tr("Username or playlist URL", QbzSession.trRev)
+                            : QbzSession.tr("Username or profile URL", QbzSession.trRev)
+                        color: theme.textSecondary
+                        font.pixelSize: theme.fontLegal
+                        font.weight: theme.weightMedium
+                    }
+                    // The same 43px box recipe as the URL field, for the same
+                    // reason: QbzLineEdit commits on Enter/blur and this must
+                    // recompute per keystroke.
+                    Rectangle {
+                        width: parent.width
+                        height: 43
+                        radius: theme.radiusSm
+                        color: theme.surfaceCard
+                        border.width: 1
+                        border.color: serviceInput.activeFocus ? theme.accent : theme.borderSubtle
+                        opacity: root.loading ? 0.5 : 1.0
+
+                        TextInput {
+                            id: serviceInput
+                            anchors.fill: parent
+                            anchors.leftMargin: 12
+                            anchors.rightMargin: 12
+                            color: theme.textPrimary
+                            font.pixelSize: theme.fontLink
+                            verticalAlignment: Text.AlignVCenter
+                            clip: true
+                            selectByMouse: true
+                            enabled: !root.loading
+                            onTextEdited: QbzPlaylistImport.serviceInputEdited(text)
+                            onAccepted: {
+                                if (!root.showPreview && root.doc.canFetch === true && !root.loading)
+                                    QbzPlaylistImport.fetch()
+                            }
+                            Binding {
+                                target: serviceInput
+                                property: "text"
+                                value: root.doc.serviceUser || ""
+                                when: !serviceInput.activeFocus
+                            }
+                        }
+                        Text {
+                            visible: serviceInput.text === ""
+                            anchors.fill: parent
+                            anchors.leftMargin: 12
+                            anchors.rightMargin: 12
+                            verticalAlignment: Text.AlignVCenter
+                            text: QbzSession.tr("Enter a public username.", QbzSession.trRev)
+                            color: theme.textMuted
+                            font.pixelSize: theme.fontLink
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    // Last.fm PROFILE -> pick one of three stations. A
+                    // PLAYLIST url (lastfmMode 1) skips this entirely and
+                    // imports what the URL names.
+                    Column {
+                        width: parent.width
+                        spacing: 8
+                        visible: root.srcLastfm && (root.doc.lastfmMode || 0) === 0
+                        Text {
+                            text: QbzSession.tr("Station", QbzSession.trRev)
+                            color: theme.textSecondary
+                            font.pixelSize: theme.fontLegal
+                            font.weight: theme.weightMedium
+                        }
+                        QbzSelect {
+                            width: parent.width
+                            popupWidth: parent.width
+                            enabled: !root.loading
+                            options: root.doc.stationOptions || []
+                            currentIndex: root.doc.stationIndex || 0
+                            onSelected: function (i) { QbzPlaylistImport.setStationIndex(i) }
+                        }
+                    }
+
+                    // ListenBrainz USERNAME -> its "created for you" list. A
+                    // pasted /playlist/<mbid> resolves on its own, so the
+                    // picker only appears once there is something to pick.
+                    Column {
+                        width: parent.width
+                        spacing: 8
+                        visible: root.srcLb && (root.doc.lbPlaylistOptions || []).length > 0
+                        Text {
+                            text: QbzSession.tr("Playlist", QbzSession.trRev)
+                            color: theme.textSecondary
+                            font.pixelSize: theme.fontLegal
+                            font.weight: theme.weightMedium
+                        }
+                        QbzSelect {
+                            width: parent.width
+                            popupWidth: parent.width
+                            enabled: !root.loading
+                            options: root.doc.lbPlaylistOptions || []
+                            currentIndex: root.doc.lbPlaylistIndex || 0
+                            onSelected: function (i) { QbzPlaylistImport.setLbPlaylistIndex(i) }
+                        }
+                    }
+                    Text {
+                        visible: root.srcLb && root.doc.lbListLoading === true
+                        text: QbzSession.tr("Loading...", QbzSession.trRev)
+                        color: theme.textMuted
+                        font.pixelSize: theme.fontLegal
                     }
                 }
 
@@ -653,6 +884,19 @@ Item {
                                 width: parent.width
                                 height: 18
                                 text: root.doc.summarySkipped || ""
+                                color: theme.textSecondary
+                                font.pixelSize: theme.fontLegal
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
+                            // Only when the SOURCE repeated a track. A
+                            // duplicate is not a skip, and folding it into one
+                            // is what made a 453-of-469 match read as 198.
+                            Text {
+                                width: parent.width
+                                visible: (root.doc.summaryDuplicates || "") !== ""
+                                height: visible ? 18 : 0
+                                text: root.doc.summaryDuplicates || ""
                                 color: theme.textSecondary
                                 font.pixelSize: theme.fontLegal
                                 verticalAlignment: Text.AlignVCenter
