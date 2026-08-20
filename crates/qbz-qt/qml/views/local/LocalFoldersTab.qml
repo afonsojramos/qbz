@@ -89,6 +89,7 @@ Item {
             text: QbzSession.tr("No folders match your search.", QbzSession.trRev)
         }
         LocalAlbumCollection {
+            scrollScope: "local:folders"
             anchors.fill: parent
             anchors.leftMargin: 32
             anchors.rightMargin: 32

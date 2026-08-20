@@ -31,6 +31,9 @@ Item {
     /// instances of this component can be alive at once (Albums, Folders-flat,
     /// the Artists detail grid), and they must not share a slot.
     property string surface: "collection"
+    /// Scroll-memory scope for this list ("local:albums" / "local:folders"),
+    /// empty when the host is not the page (the artist detail pane).
+    property string scrollScope: ""
     /// Flat album rows (already searched/sorted/filtered by the host).
     property var rows: []
     /// [{ letter, items: [...] }] — only read when `grouped`.
@@ -484,6 +487,12 @@ Item {
             }
         }
     }
+
+    // Back/forward scroll memory — OPT-IN, because this component is mounted
+    // by three different hosts (the Albums tab, the Folders tab and the artist
+    // detail pane) and only the two that ARE the page should own a scroll
+    // scope. The default "" leaves the third inert.
+    ScrollMemory { target: list; scope: root.scrollScope }
 
     QbzScrollBar {
         anchors.right: parent.right

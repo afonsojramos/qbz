@@ -118,6 +118,7 @@ Item {
                 scrollBarInset: root.view.albumsGroup === "alpha" ? 34 : 4
                 view: root.view
                 surface: "albums"
+                scrollScope: "local:albums"
                 rows: root.view.albumsVisible
                 groups: root.view.albumsGrouped
                 grouped: root.view.albumsGroup !== "off"

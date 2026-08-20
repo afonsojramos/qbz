@@ -1323,6 +1323,10 @@ Rectangle {
             }
 
             // Thin auto-hiding scrollbars (ListScrollbar replica).
+            // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+            // this container's offset while it is the live page, and restores it
+            // when a back/forward step arms this route.
+            ScrollMemory { target: grid; scope: "library:" + root.activeTab }
             QbzScrollBar {
                 anchors.right: parent.right
                 anchors.rightMargin: root.alphaVisible ? 34 : 4
@@ -1331,6 +1335,10 @@ Rectangle {
                 target: grid
                 visible: grid.visible && grid.contentHeight > grid.height
             }
+            // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+            // this container's offset while it is the live page, and restores it
+            // when a back/forward step arms this route.
+            ScrollMemory { target: list; scope: "library:" + root.activeTab }
             QbzScrollBar {
                 anchors.right: parent.right
                 anchors.rightMargin: root.alphaVisible ? 34 : 4
@@ -1339,6 +1347,10 @@ Rectangle {
                 target: list
                 visible: list.visible && list.contentHeight > list.height
             }
+            // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+            // this container's offset while it is the live page, and restores it
+            // when a back/forward step arms this route.
+            ScrollMemory { target: playlistsList; scope: "library:" + root.activeTab }
             QbzScrollBar {
                 anchors.right: parent.right
                 anchors.rightMargin: 4

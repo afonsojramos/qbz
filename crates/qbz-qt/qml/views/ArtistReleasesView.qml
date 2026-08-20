@@ -340,6 +340,10 @@ Rectangle {
 
             // Tracks only the scrolling grid — the header is a sibling above,
             // which is the .slint's `y: 56px` / `height: parent.height - 56px`.
+            // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+            // this container's offset while it is the live page, and restores it
+            // when a back/forward step arms this route.
+            ScrollMemory { target: flick; scope: "artistreleases" }
             QbzScrollBar {
                 anchors.right: parent.right
                 anchors.rightMargin: 4

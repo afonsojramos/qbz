@@ -332,6 +332,10 @@ Rectangle {
         }
     }
 
+    // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+    // this container's offset while it is the live page, and restores it
+    // when a back/forward step arms this route.
+    ScrollMemory { target: flick; scope: "labelreleases" }
     QbzScrollBar {
         anchors.right: parent.right
         anchors.rightMargin: 4

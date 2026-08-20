@@ -50,6 +50,22 @@ pub mod qbz_shell {
         // Nav history (src/nav_qt.rs):
         #[qproperty(bool, can_back)]
         #[qproperty(bool, can_forward)]
+        // --- Scroll-position memory (the Slint NavState.restore-scope /
+        // scroll-restore / report-scroll trio, crates/qbz/src/nav.rs:7-14) ---
+        //
+        // `restore_scope` is the ROUTE ID a back/forward step wants restored,
+        // "" when nothing is armed; `scroll_restore` is the `contentY` it
+        // should land on. `nav_qt::step` writes BOTH before it writes
+        // `current_view`, so the destination view is already armed when the
+        // Loader builds it (see the order note on `nav_qt::publish`).
+        //
+        // WRITABLE FROM QML on purpose: the consuming scroll container clears
+        // the scope the moment it applies the offset, which is what stops a
+        // second container in the same view — or the same container after a
+        // later relayout — from yanking the page back. Same one-shot handshake
+        // Slint uses (`NavState.restore-scope = ""` at the apply site).
+        #[qproperty(QString, restore_scope)]
+        #[qproperty(f32, scroll_restore)]
         // --- Flyout landing tab (NavFlyout rows carry view + tab) ----------
         // The tab a nav-flyout click must land on: Discover > For You is
         // nav_tab_view="home" + nav_tab="forYou". Written by
@@ -457,6 +473,18 @@ pub mod qbz_shell {
         #[qinvokable]
         fn toggle_lyrics(self: Pin<&mut QbzShell>);
 
+        /// The mounted page's live scroll offset and the SCOPE it belongs to
+        /// ("album", "library:albums", ...), reported on every `contentY`
+        /// change by controls/ScrollMemory.qml. Read only when a navigation
+        /// stamps the page it is leaving, so this is a store and nothing else
+        /// — no notify, no binding re-evaluation, and no allocation once the
+        /// page has reported once. (Slint wires the same callback,
+        /// `NavState.report-scroll`; the scope is this port's addition — see
+        /// the note on `nav_qt::Entry::scope` for why it cannot be derived
+        /// from the route here the way Slint derives it from the entry.)
+        #[qinvokable]
+        fn report_scroll(self: Pin<&mut QbzShell>, scope: QString, y: f32);
+
         /// Sidebar navigation: record a content view ("home" | "library")
         /// and lazy-load its data on first visit.
         #[qinvokable]
@@ -712,6 +740,8 @@ pub struct QbzShellRust {
     current_view: QString,
     can_back: bool,
     can_forward: bool,
+    restore_scope: QString,
+    scroll_restore: f32,
     nav_tab: QString,
     nav_tab_view: QString,
     nav_tab_seq: i32,
@@ -801,6 +831,8 @@ impl Default for QbzShellRust {
             // AND the stored view is in the safe set.
             current_view: QString::from(crate::nav_qt::startup_view().as_str()),
             can_back: false,
+            restore_scope: QString::default(),
+            scroll_restore: 0.0,
             nav_tab: QString::default(),
             nav_tab_view: QString::default(),
             nav_tab_seq: 0,
@@ -1104,6 +1136,10 @@ impl qbz_shell::QbzShell {
 
     pub fn toggle_lyrics(self: Pin<&mut Self>) {
         crate::toggle_lyrics();
+    }
+
+    pub fn report_scroll(self: Pin<&mut Self>, scope: QString, y: f32) {
+        crate::nav_qt::set_live_scroll(&scope.to_string(), y);
     }
 
     pub fn navigate_to(self: Pin<&mut Self>, view: QString) {

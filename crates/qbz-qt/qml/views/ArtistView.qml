@@ -2859,6 +2859,10 @@ Rectangle {
     // with the page. Hidden while the network panel is open — that panel pins
     // to the same right edge and carries its own scroll
     // (ArtistPageView.slint:1157).
+    // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+    // this container's offset while it is the live page, and restores it
+    // when a back/forward step arms this route.
+    ScrollMemory { target: flick; scope: "artist" }
     QbzScrollBar {
         visible: !root.networkOpen
         anchors.right: parent.right

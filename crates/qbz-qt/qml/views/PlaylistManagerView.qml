@@ -227,6 +227,10 @@ Rectangle {
         // the Slint ListScrollbar's `auto-hide: true`). NEVER assign `visible`
         // at this call site — that replaces the binding and a short page gets a
         // full-height thumb on gutter hover.
+        // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+        // this container's offset while it is the live page, and restores it
+        // when a back/forward step arms this route.
+        ScrollMemory { target: pmList; scope: "playlistmanager" }
         QbzScrollBar {
             target: pmList
             anchors.right: parent.right

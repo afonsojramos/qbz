@@ -490,6 +490,10 @@ Rectangle {
     // and mapped the track's top 118px — visually the header/toolbar band — to
     // content that is not there, so a click in the gutter beside the TOOLBAR
     // scrolled the grid.
+    // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+    // this container's offset while it is the live page, and restores it
+    // when a back/forward step arms this route.
+    ScrollMemory { target: grid; scope: QbzShell.currentView }
     QbzScrollBar {
         anchors.right: parent.right
         anchors.rightMargin: 4
@@ -498,6 +502,10 @@ Rectangle {
         target: grid
         visible: grid.visible && grid.contentHeight > grid.height
     }
+    // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+    // this container's offset while it is the live page, and restores it
+    // when a back/forward step arms this route.
+    ScrollMemory { target: list; scope: QbzShell.currentView }
     QbzScrollBar {
         anchors.right: parent.right
         anchors.rightMargin: 4

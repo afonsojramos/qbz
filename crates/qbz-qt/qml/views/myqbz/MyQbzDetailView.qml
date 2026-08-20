@@ -1154,6 +1154,10 @@ Rectangle {
         // The .slint floats its ListScrollbar at `parent.width - 14 - 4`
         // (:1226-1235), i.e. INSIDE the page's 32px right padding. Mounted
         // here, outside `body`, because the grid host clips.
+        // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+        // this container's offset while it is the live page, and restores it
+        // when a back/forward step arms this route.
+        ScrollMemory { target: itemList; scope: "mixtapedetail" }
         QbzScrollBar {
             target: itemList
             visible: root.itemCount > 0 && root.viewMode !== "grid"
@@ -1163,6 +1167,10 @@ Rectangle {
             anchors.top: body.top
             anchors.bottom: body.bottom
         }
+        // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+        // this container's offset while it is the live page, and restores it
+        // when a back/forward step arms this route.
+        ScrollMemory { target: itemGrid; scope: "mixtapedetail" }
         QbzScrollBar {
             target: itemGrid
             visible: root.itemCount > 0 && root.viewMode === "grid"

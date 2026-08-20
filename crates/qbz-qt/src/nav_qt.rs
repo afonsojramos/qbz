@@ -54,13 +54,71 @@ use std::sync::Mutex;
 
 use cxx_qt_lib::QString;
 
+/// One slot in the history stack: where we went, and how far it was scrolled
+/// when we last left it (the Slint `nav::Entry`, `crates/qbz/src/nav.rs:178`).
+struct Entry {
+    view: String,
+    /// The scroll container the offset belongs to, as the VIEW named it —
+    /// "album", "library:albums", "local:tracks". Opaque here: this module
+    /// never builds one and never parses one, it only carries it back.
+    ///
+    /// THIS IS WHY THERE IS NO `scope_for(entry)` TABLE like the Slint build's
+    /// (`crates/qbz/src/main.rs:3068`). Slint can derive the scope from the
+    /// entry because ITS history entries carry the tab — `Favorites { tab }`
+    /// and `LocalLibrary { tab }` are separate entries there. This port's
+    /// entry is a bare route id, so a derived scope would read `"library"` for
+    /// all five Library tabs, and coming back would drop the Albums grid's
+    /// offset into whatever tab the view happened to mount on. Letting the
+    /// reporter name its own scope buys tab granularity without turning tabs
+    /// into history entries, and the mismatch case degrades the right way: an
+    /// unmatched scope restores NOTHING instead of restoring the wrong thing.
+    scope: String,
+    /// Saved `contentY` of that container, in Qt's convention: 0 at the top,
+    /// POSITIVE downward. (Slint stores the same distance as a negative
+    /// `viewport-y`; nothing crosses between the two, so this side keeps the
+    /// sign its own Flickables use.)
+    scroll: f32,
+}
+
 struct NavHistory {
-    entries: Vec<String>,
+    entries: Vec<Entry>,
     // Index of the CURRENT entry in `entries` (0 when only "home" exists).
     index: usize,
 }
 
 static HISTORY: Mutex<Option<NavHistory>> = Mutex::new(None);
+
+/// The on-screen page's live (scope, contentY), kept fresh by the mounted view
+/// (`QbzShell.reportScroll`, ScrollMemory.qml). Read only when LEAVING a page,
+/// so its entry can be stamped without touching the ~40 `record` call sites —
+/// the reason Slint chose the same shape.
+///
+/// A second Mutex, and the lock order is ALWAYS HISTORY then LIVE (never the
+/// reverse — `set_live_scroll` takes this one alone). The scope String is
+/// reused in place rather than reassigned, so a scroll frame allocates nothing
+/// once the page has reported once.
+static LIVE: Mutex<(String, f32)> = Mutex::new((String::new(), 0.0));
+
+/// Record the on-screen scroll container's current `contentY` under its scope.
+pub fn set_live_scroll(scope: &str, y: f32) {
+    let mut live = LIVE.lock().unwrap();
+    if live.0 != scope {
+        live.0.clear();
+        live.0.push_str(scope);
+    }
+    live.1 = y;
+}
+
+fn live_scroll() -> (String, f32) {
+    let live = LIVE.lock().unwrap();
+    (live.0.clone(), live.1)
+}
+
+fn reset_live_scroll() {
+    let mut live = LIVE.lock().unwrap();
+    live.0.clear();
+    live.1 = 0.0;
+}
 
 fn with_history<R>(f: impl FnOnce(&mut NavHistory) -> R) -> R {
     let mut guard = HISTORY.lock().unwrap();
@@ -68,7 +126,11 @@ fn with_history<R>(f: impl FnOnce(&mut NavHistory) -> R) -> R {
         // Seeded with the STARTUP view, not a literal "home": booting on a
         // restored view with a history rooted at Home would offer a Back to a
         // page the user never opened this session.
-        entries: vec![startup_view()],
+        entries: vec![Entry {
+            view: startup_view(),
+            scope: String::new(),
+            scroll: 0.0,
+        }],
         index: 0,
     });
     f(history)
@@ -231,15 +293,39 @@ pub fn record(view: &str) {
     if let Some(pref) = pref_for_view(view) {
         crate::settings_qt::save_pref("last_view", serde_json::json!(pref));
     }
-    let (can_back, can_forward, current) = with_history(|h| {
-        if h.entries[h.index] != view {
+    let (can_back, can_forward, current, pushed) = with_history(|h| {
+        let mut pushed = false;
+        if h.entries[h.index].view != view {
+            // Stamp the page we are leaving with its live scroll position.
+            let (scope, y) = live_scroll();
+            log::debug!(
+                "[qbz-qt] scroll: stamping {:?} with {scope:?} y={y} on the way to {view:?}",
+                h.entries[h.index].view
+            );
+            h.entries[h.index].scope = scope;
+            h.entries[h.index].scroll = y;
             h.entries.truncate(h.index + 1);
-            h.entries.push(view.to_string());
+            h.entries.push(Entry {
+                view: view.to_string(),
+                scope: String::new(),
+                scroll: 0.0,
+            });
             h.index += 1;
+            pushed = true;
         }
-        snapshot(h)
+        let (b, f, c) = snapshot(h);
+        (b, f, c, pushed)
     });
-    publish(can_back, can_forward, current);
+    // A fresh page starts at the top; the new view reports its own scroll as
+    // the user moves it.
+    if pushed {
+        reset_live_scroll();
+    }
+    // A FORWARD navigation never restores — and it must actively DISARM, or a
+    // scope armed by a back() that its destination never consumed (a page
+    // whose list stayed shorter than the viewport, so the guard never passed)
+    // would fire on whatever mounts next.
+    publish(can_back, can_forward, current, String::new(), 0.0);
 }
 
 /// The id of the entry the user is standing on.
@@ -252,43 +338,78 @@ pub fn record(view: &str) {
 /// property back off the Qt thread — hence the accessor rather than a QML
 /// round trip.
 pub fn current_view() -> String {
-    with_history(|h| h.entries[h.index].clone())
+    with_history(|h| h.entries[h.index].view.clone())
 }
 
 /// Move one entry back, if possible.
 pub fn back() {
-    let (can_back, can_forward, current) = with_history(|h| {
-        if h.index > 0 {
-            h.index -= 1;
-        }
-        snapshot(h)
-    });
-    publish(can_back, can_forward, current);
+    step(-1);
 }
 
 /// Move one entry forward, if possible.
 pub fn forward() {
-    let (can_back, can_forward, current) = with_history(|h| {
-        if h.index + 1 < h.entries.len() {
-            h.index += 1;
+    step(1);
+}
+
+/// The shared body of back/forward: stamp the outgoing page's live scroll,
+/// move the cursor, and hand the destination's saved position to the shell so
+/// its scroll container can pick it up when it lays out.
+fn step(delta: isize) {
+    let (can_back, can_forward, current, scope, scroll) = with_history(|h| {
+        let next = h.index as isize + delta;
+        if next >= 0 && (next as usize) < h.entries.len() {
+            // Stamp the page we are leaving before stepping away.
+            let (scope, y) = live_scroll();
+            h.entries[h.index].scope = scope;
+            h.entries[h.index].scroll = y;
+            h.index = next as usize;
         }
-        snapshot(h)
+        let (b, f, c) = snapshot(h);
+        let e = &h.entries[h.index];
+        (b, f, c, e.scope.clone(), e.scroll)
     });
-    publish(can_back, can_forward, current);
+    // The destination is now the live page: seed the live pair with what it is
+    // about to restore to, so leaving it again before it has reported anything
+    // does not stamp the OUTGOING page's offset onto it.
+    set_live_scroll(&scope, scroll);
+    // Arm only for a position worth restoring. A page that was at the top
+    // needs no restore, and arming for 0 would leave a scope standing until
+    // some container happened to clear it.
+    let armed = if scroll > 0.5 && !scope.is_empty() {
+        scope
+    } else {
+        String::new()
+    };
+    log::debug!("[qbz-qt] scroll: {current:?} arms scope {armed:?} y={scroll}");
+    publish(can_back, can_forward, current, armed, scroll);
 }
 
 fn snapshot(h: &NavHistory) -> (bool, bool, String) {
     (
         h.index > 0,
         h.index + 1 < h.entries.len(),
-        h.entries[h.index].clone(),
+        h.entries[h.index].view.clone(),
     )
 }
 
-fn publish(can_back: bool, can_forward: bool, current: String) {
+/// ORDER IS LOAD-BEARING. `set_current_view` notifies synchronously, and that
+/// notify is what re-evaluates ContentRouter's `Loader.source` and BUILDS the
+/// destination view — synchronously, inside this closure. The scroll arming
+/// must therefore already be on the bridge when it happens, or the new view's
+/// `Component.onCompleted` reads an empty scope and nothing restores.
+fn publish(
+    can_back: bool,
+    can_forward: bool,
+    current: String,
+    restore_scope: String,
+    scroll_restore: f32,
+) {
     crate::shell_bridge::ui(move |mut b| {
         b.as_mut().set_can_back(can_back);
         b.as_mut().set_can_forward(can_forward);
+        b.as_mut()
+            .set_restore_scope(QString::from(restore_scope.as_str()));
+        b.as_mut().set_scroll_restore(scroll_restore);
         b.as_mut().set_current_view(QString::from(current.as_str()));
     });
 }
@@ -315,5 +436,26 @@ mod tests {
         super::back();
         // Forward -> playlist again. No panics = the invariants hold.
         super::forward();
+    }
+
+    /// The scroll memory: a page stamped on the way out comes back with the
+    /// same offset, and a fresh record resets the live value so the new page
+    /// does not inherit it.
+    #[test]
+    fn scroll_is_stamped_on_leave_and_returned_on_back() {
+        super::record("home");
+        super::set_live_scroll("home:home", 1234.0);
+        super::record("album");
+        // The new page starts at the top, with no scope of its own yet.
+        assert_eq!(super::live_scroll(), (String::new(), 0.0));
+        super::set_live_scroll("album", 88.0);
+        super::back();
+        // Back to the stamped page: scope AND offset come back together.
+        assert_eq!(super::current_view(), "home");
+        assert_eq!(super::live_scroll(), ("home:home".to_string(), 1234.0));
+        // ...and forward returns the album's own pair.
+        super::forward();
+        assert_eq!(super::current_view(), "album");
+        assert_eq!(super::live_scroll(), ("album".to_string(), 88.0));
     }
 }

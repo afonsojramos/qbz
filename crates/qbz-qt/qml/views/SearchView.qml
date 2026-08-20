@@ -1144,6 +1144,10 @@ Rectangle {
                     font.pixelSize: 14
                 }
             }
+            // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+            // this container's offset while it is the live page, and restores it
+            // when a back/forward step arms this route.
+            ScrollMemory { target: bodyFlick; scope: "search" }
             QbzScrollBar {
                 target: bodyFlick
                 anchors.right: parent.right

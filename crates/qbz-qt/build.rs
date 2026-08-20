@@ -433,6 +433,9 @@ fn main() {
                 "qml/controls/QbzPrimaryButton.qml",
                 "qml/controls/QbzRadioOption.qml",
                 "qml/controls/QbzSectionHeader.qml",
+                // Per-page scroll memory for the back/forward stack; mounted
+                // beside each view's scroll container.
+                "qml/controls/ScrollMemory.qml",
                 "qml/controls/QbzSegToggle.qml",
                 "qml/controls/QbzSelect.qml",
                 "qml/controls/QbzSlider.qml",

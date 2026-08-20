@@ -150,6 +150,8 @@ Item {
                     width: parent.width
                     height: parent.height - 30
 
+                    // Back/forward scroll memory (controls/ScrollMemory.qml).
+                    ScrollMemory { target: rail; scope: "local:artists" }
                     ListView {
                         id: rail
                         anchors.fill: parent

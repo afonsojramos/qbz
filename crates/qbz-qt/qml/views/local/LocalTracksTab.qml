@@ -288,6 +288,8 @@ Item {
                     list.positionViewAtIndex(index, ListView.Beginning)
                 }
             }
+            // Back/forward scroll memory (controls/ScrollMemory.qml).
+            ScrollMemory { target: list; scope: "local:tracks" }
             QbzScrollBar {
                 anchors.right: parent.right
                 // The bar belongs on the VIEW edge, not on the content edge.

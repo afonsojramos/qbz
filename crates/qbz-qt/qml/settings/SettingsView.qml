@@ -26,6 +26,7 @@
 
 import QtQuick
 import com.blitzfc.qbz
+import "../controls"
 import "../theme"
 
 Item {
@@ -310,6 +311,10 @@ Item {
                     }
                 }
 
+                // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+                // this container's offset while it is the live page, and restores it
+                // when a back/forward step arms this route.
+                ScrollMemory { target: flick; scope: "settings" }
                 QbzScrollBar {
                     target: flick
                     anchors.right: parent.right

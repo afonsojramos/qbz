@@ -497,6 +497,10 @@ Rectangle {
         }
         // The ListScrollbar replica — 14px gutter, inset 4 from the pane's
         // right edge, which is exactly the 18px the list gave back.
+        // Back/forward scroll memory (controls/ScrollMemory.qml): reports
+        // this container's offset while it is the live page, and restores it
+        // when a back/forward step arms this route.
+        ScrollMemory { target: rowList; scope: "blacklist" }
         QbzScrollBar {
             // The control's own rule is `visible: maxScroll > 0` (its auto-hide,
             // = the Slint ListScrollbar's `auto-hide: true`). Assigning `visible`
