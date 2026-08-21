@@ -347,65 +347,12 @@ pub(crate) fn quality_score(
 
 // ─────────────────────────── quality badge (tier) ──────────────────────────
 //
-// The reference calls `crate::quality::badge(format, bit, rate)`. This port has
-// no format-string-aware tier helper: `local_rows::tier_of` takes an
-// `AudioFormat` enum (and adds a "max" tier `QualityBadgeFull.qml:30` does not
-// know), and `home_qt::quality_tier_from_depth` ignores the container entirely.
-// So the tier arm below is a local 1:1 of `qbz/src/quality.rs:63,90` and the
-// DETAIL comes from the shared `home_qt::quality_detail_from_parts` (which the
-// spec pins as byte-identical to `quality.rs fn detail`).
-// HANDOFF: hoisting this into a shared `quality_qt.rs` is a named follow-up —
-// it must not be done in a domain commit.
-
-fn is_lossless_format(format: &str) -> bool {
-    matches!(
-        format.trim().to_ascii_lowercase().as_str(),
-        "flac" | "wav" | "wave" | "aiff" | "aif" | "alac" | "ape" | "dsd" | "dsf" | "dff"
-    )
-}
-
-fn is_dsd_format(format: &str) -> bool {
-    matches!(
-        format.trim().to_ascii_lowercase().as_str(),
-        "dsd" | "dsf" | "dff"
-    )
-}
-
-/// "DSD64" / "DSD128" / … from the DSD bit rate (Hz or kHz).
-fn dsd_multiple_label(sample_rate: Option<f64>) -> String {
-    let hz = match sample_rate {
-        Some(r) if r >= 1_000_000.0 => r,
-        Some(r) if r >= 1_000.0 => r * 1000.0,
-        _ => return "DSD".to_string(),
-    };
-    format!("DSD{}", ((hz / 2_822_400.0).round() as u32).saturating_mul(64))
-}
-
-/// `(tier, detail)` for `controls/QualityBadgeFull.qml` — tiers are exactly
-/// `hires | cd | mp3 | lossless | ""` (`QualityBadgeFull.qml:30`).
-fn badge(format: &str, bit_depth: Option<u32>, sample_rate: Option<f64>) -> (String, String) {
-    if is_dsd_format(format) {
-        return ("hires".to_string(), dsd_multiple_label(sample_rate));
-    }
-    let tier = if format.trim().eq_ignore_ascii_case("mp3") {
-        "mp3"
-    } else {
-        match bit_depth {
-            Some(b) if b >= 24 => "hires",
-            Some(_) => "cd",
-            None if is_lossless_format(format) => "lossless",
-            None => "",
-        }
-    };
-    match tier {
-        "" | "mp3" => (tier.to_string(), String::new()),
-        "lossless" => (tier.to_string(), format.trim().to_uppercase()),
-        _ => (
-            tier.to_string(),
-            crate::home_qt::quality_detail_from_parts(bit_depth, sample_rate),
-        ),
-    }
-}
+// The reference calls `crate::quality::badge(format, bit, rate)`. So does this
+// now: the four helpers that used to live inline here were hoisted VERBATIM
+// into `crate::quality_qt` — the named follow-up this block's own note asked
+// for, done in its own commit as that note required. Local Library badged DSD
+// as CD for want of exactly these.
+use crate::quality_qt::badge;
 
 // ──────────────────────────── buildGroups ─────────────────────────────────
 

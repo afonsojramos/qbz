@@ -245,9 +245,10 @@ fn album_header(id: &str, tracks: &[LocalTrack]) -> AlbumRow {
         track_count: tracks.len() as u32,
         duration: total_duration(tracks.iter().map(|t| t.duration_secs).sum()),
         quality_tier: tier_of(&best.format, best.bit_depth, best.sample_rate).into(),
-        quality_detail: crate::home_qt::quality_detail_from_parts(
+        quality_detail: crate::local_rows::detail_of(
+            &best.format,
             best.bit_depth,
-            Some(best.sample_rate),
+            best.sample_rate,
         ),
         format: best.format.to_string(),
         art_key: album_key(id),

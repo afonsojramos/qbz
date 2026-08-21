@@ -650,9 +650,10 @@ pub(crate) fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueT
                 // no bit depth.
                 quality_tier: crate::local_rows::tier_of(&t.format, t.bit_depth, t.sample_rate)
                     .to_string(),
-                quality_detail: crate::home_qt::quality_detail_from_parts(
+                quality_detail: crate::local_rows::detail_of(
+                    &t.format,
                     t.bit_depth,
-                    Some(t.sample_rate),
+                    t.sample_rate,
                 ),
                 // The raw numbers, normalized to kHz exactly like
                 // `local_playback::local_queue_track` (:155-159) does — a local

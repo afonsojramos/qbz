@@ -242,6 +242,7 @@ mod cast_qt;
 mod label_qt;
 mod now_playing;
 mod output_labels;
+mod quality_qt;
 mod quality_state;
 mod offline_fwd;
 // Offline cache (downloads tier): state activation on login + the action

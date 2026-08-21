@@ -196,9 +196,18 @@ pub fn total_duration(secs: u64) -> String {
 /// Tier for the shared QualityBadge, mirroring its own derivation order
 /// (MP3 first, then max / hires / cd) so a local card and a Qobuz card can
 /// never disagree.
+///
+/// DSD is answered before the depth match for the reason `quality_qt::badge`
+/// spells out: a DSD row arrives as depth 1 / rate 2 822 400, so `Some(_)`
+/// caught it and every DSD file in the library wore the CD mark. The extra
+/// `"max"` tier below is NOT folded into `hires` here — `LocalLibraryView
+/// .qml:435` filters hi-res on the word and `QualityBadge.qml:66` folds it.
 pub fn tier_of(format: &AudioFormat, bit_depth: Option<u32>, sample_rate_hz: f64) -> &'static str {
     if matches!(format, AudioFormat::Mp3) {
         return "mp3";
+    }
+    if matches!(format, AudioFormat::Dsd) {
+        return "hires";
     }
     let khz = if sample_rate_hz >= 1000.0 {
         sample_rate_hz / 1000.0
@@ -212,6 +221,19 @@ pub fn tier_of(format: &AudioFormat, bit_depth: Option<u32>, sample_rate_hz: f64
         None if khz >= 44.1 => "cd",
         None => "",
     }
+}
+
+/// The detail line that rides under `tier_of`'s tier. Its ONLY job beyond
+/// `home_qt::quality_detail_from_parts` is the DSD arm: that helper takes no
+/// format, so it read a DSD row's nominal 1-bit depth and 2 822 400 Hz bit
+/// rate literally and printed "1-bit / 2822.4 kHz" where the rest of the app
+/// (and MyQBZ, via `quality_qt::badge`) prints `DSD64`. Every caller of
+/// `tier_of` pairs with this so the two halves of one badge cannot disagree.
+pub fn detail_of(format: &AudioFormat, bit_depth: Option<u32>, sample_rate_hz: f64) -> String {
+    if matches!(format, AudioFormat::Dsd) {
+        return crate::quality_qt::dsd_multiple_label(Some(sample_rate_hz));
+    }
+    crate::home_qt::quality_detail_from_parts(bit_depth, Some(sample_rate_hz))
 }
 
 pub fn basename(path: &str) -> String {
@@ -328,7 +350,7 @@ pub fn map_album(a: LocalAlbum, art: &mut HashMap<String, (SourceId, String)>) -
         .unwrap_or(0);
     AlbumRow {
         quality_tier: tier_of(&a.format, a.bit_depth, a.sample_rate).into(),
-        quality_detail: crate::home_qt::quality_detail_from_parts(a.bit_depth, Some(a.sample_rate)),
+        quality_detail: detail_of(&a.format, a.bit_depth, a.sample_rate),
         format: a.format.to_string(),
         year: a.year.map(|y| y.to_string()).unwrap_or_default(),
         duration: total_duration(a.total_duration_secs),
@@ -363,7 +385,7 @@ pub fn map_track(t: &LocalTrack, art: &mut HashMap<String, (SourceId, String)>) 
         disc: t.disc_number.unwrap_or(1),
         duration: mmss(t.duration_secs),
         quality_tier: tier_of(&t.format, t.bit_depth, t.sample_rate).into(),
-        quality_detail: crate::home_qt::quality_detail_from_parts(t.bit_depth, Some(t.sample_rate)),
+        quality_detail: detail_of(&t.format, t.bit_depth, t.sample_rate),
         format: t.format.to_string(),
         year: t.year.map(|y| y.to_string()).unwrap_or_default(),
         art_key: key,
