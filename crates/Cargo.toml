@@ -16,6 +16,10 @@ members = [
     "qbz-cast",
     "qbz-cmaf",
     "qbz-dsd",
+    # Optical media (CD-DA now; SACD/ISO next). Frontend-agnostic, and NOT a
+    # dependency of qbz-dsd's reverse: qbz-dsd will depend on THIS, never the
+    # other way, or the two close a cycle.
+    "qbz-disc",
     "qbz-secrets",
     "qbz-offline-cache",
     "qbz-plex",

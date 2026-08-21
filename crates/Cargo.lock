@@ -6370,6 +6370,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-disc"
+version = "2.0.2"
+dependencies = [
+ "libc",
+ "log",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "qbz-dsd"
 version = "2.0.2"
 dependencies = [
@@ -6670,6 +6679,7 @@ dependencies = [
  "qbz-core",
  "qbz-credentials",
  "qbz-dac-wizard-core",
+ "qbz-disc",
  "qbz-external-reco",
  "qbz-i18n",
  "qbz-integrations",
@@ -6760,6 +6770,7 @@ version = "2.0.2"
 dependencies = [
  "async-trait",
  "log",
+ "qbz-disc",
  "qbz-jellyfin",
  "qbz-library",
  "qbz-media-cache",
