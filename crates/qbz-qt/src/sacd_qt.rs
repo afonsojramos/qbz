@@ -38,6 +38,27 @@ pub fn open_image(path: &std::path::Path) -> Result<usize, String> {
     });
 
     let artist = area.artist.clone().filter(|a| !a.is_empty());
+
+    // Cover art. A disc image carries none, but the file it was downloaded as
+    // almost always sits next to one — `cover.jpg` beside the `.iso`, or one
+    // level up when the rip is split into "Disc 1" / "Disc 2" folders, which
+    // is exactly the shape of the owner's Rheingold.
+    //
+    // `find_folder_artwork` already knows that walk (it is what a scanned
+    // folder uses), so this reuses it rather than growing a second rule about
+    // where covers live. No cover is not an error — the pane draws its disc
+    // glyph and the album plays.
+    let artwork = qbz_library::MetadataExtractor::find_folder_artwork(path, Some(&album))
+        .and_then(|found| {
+            qbz_library::MetadataExtractor::cache_artwork_file(
+                std::path::Path::new(&found),
+                &qbz_library::get_artwork_cache_dir(),
+            )
+        });
+    match artwork.as_deref() {
+        Some(a) => log::info!("[qbz-qt] sacd: cover {a}"),
+        None => log::info!("[qbz-qt] sacd: no cover beside the image"),
+    }
     let tracks: Vec<LocalTrack> = area
         .tracks
         .iter()
@@ -62,6 +83,7 @@ pub fn open_image(path: &std::path::Path) -> Result<usize, String> {
             sample_rate: 2_822_400.0,
             bit_depth: Some(1),
             format: AudioFormat::Dsd,
+            artwork_path: artwork.clone(),
             file_path: qbz_disc::SacdRef {
                 image: path.to_path_buf(),
                 track: t.number,

@@ -182,6 +182,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("copy", include_str!("../qml/assets/icons/primary/copy.svg")),
     ("disc-3", include_str!("../qml/assets/icons/primary/disc-3.svg")),
     ("disc", include_str!("../qml/assets/icons/primary/disc.svg")),
+    ("disc-folder", include_str!("../qml/assets/icons/primary/disc-folder.svg")),
     ("element-connect", include_str!("../qml/assets/icons/primary/element-connect.svg")),
     ("ellipsis", include_str!("../qml/assets/icons/primary/ellipsis.svg")),
     ("crown", include_str!("../qml/assets/icons/primary/crown.svg")),

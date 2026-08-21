@@ -163,7 +163,7 @@ Item {
                         // something the user already has.
                         QbzCircleAction {
                             visible: QbzLocal.localEphemeralIsCd && !QbzLocal.localRipActive
-                            name: "cloud-download"
+                            name: "disc-folder"
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: QbzLocal.ripDisc()
                         }
@@ -185,13 +185,6 @@ Item {
                                 color: theme.textSecondary
                                 font.pixelSize: theme.fontLegal
                             }
-                        }
-                        // Kept: this is the ONLY way to close the session, and
-                        // with it the only way to make the tab go away.
-                        QbzCircleAction {
-                            name: "x"
-                            anchors.verticalCenter: parent.verticalCenter
-                            onClicked: QbzLocal.ephemeralClear()
                         }
                     }
                 }
@@ -362,6 +355,24 @@ Item {
             }
         }
     }
+    // Close, pinned to the pane's top-right corner.
+    //
+    // It used to sit in the action row between Shuffle and the rest, which is
+    // where a hand goes without looking — a destructive action one pixel from
+    // "play". Up here it is deliberate, and it is the same place every other
+    // dismissable surface in this app puts its close.
+    //
+    // OUTSIDE the Flickable on purpose: scrolling a long disc must not carry
+    // the only way to close the session off the top of the screen.
+    QbzCircleAction {
+        name: "x"
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.rightMargin: 32
+        anchors.topMargin: 16
+        onClicked: QbzLocal.ephemeralClear()
+    }
+
     QbzScrollBar {
         anchors.right: parent.right
         anchors.rightMargin: 4
