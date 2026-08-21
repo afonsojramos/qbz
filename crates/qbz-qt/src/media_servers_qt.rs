@@ -369,7 +369,15 @@ fn parse_audio_format(container: &str, codec: Option<&str>) -> qbz_library::Audi
     use qbz_library::AudioFormat as F;
     let probe = |s: &str| -> Option<F> {
         let s = s.to_ascii_lowercase();
-        if s.contains("flac") {
+        // DSD first, and it matters MORE here than in the sibling parsers:
+        // this one falls back to `Flac`, not `Unknown`, so an unrecognised DSD
+        // track from Jellyfin/Navidrome does not merely lose its format — it
+        // is actively mislabelled lossless-PCM, with a "24-bit / …" badge it
+        // never had. Jellyfin reports `Container: "dsf"`, Subsonic a `suffix`
+        // of `dsf`/`dff` and a MIME of `audio/x-dsf`.
+        if s.contains("dsd") || s.contains("dsf") || s.contains("dff") {
+            Some(F::Dsd)
+        } else if s.contains("flac") {
             Some(F::Flac)
         } else if s.contains("mp3") || s.contains("mpeg") {
             Some(F::Mp3)

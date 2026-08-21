@@ -303,6 +303,11 @@ pub fn thumb_url(path: &str, size: Option<u32>) -> String {
 // Cache reads, mapped into the local-library shapes
 // ---------------------------------------------------------------------------
 
+/// Plex reports a codec/container word. The DSD arm is not decoration: the
+/// identical omission in `LibraryDatabase::parse_format` is what made every
+/// local DSD track read back as `Unknown`, print "UNKNOWN" as its format and
+/// wear the CD badge. A Plex server serving DSD hits the same fold, and a fold
+/// to `Unknown` is a VALID answer — which is why no test ever sees it.
 fn parse_audio_format(s: &str) -> qbz_library::AudioFormat {
     use qbz_library::AudioFormat;
     match s.to_ascii_lowercase().as_str() {
@@ -312,6 +317,7 @@ fn parse_audio_format(s: &str) -> qbz_library::AudioFormat {
         "aiff" | "aif" => AudioFormat::Aiff,
         "ape" => AudioFormat::Ape,
         "mp3" => AudioFormat::Mp3,
+        "dsd" | "dsf" | "dff" => AudioFormat::Dsd,
         _ => AudioFormat::Unknown,
     }
 }

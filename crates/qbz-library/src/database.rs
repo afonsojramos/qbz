@@ -3309,6 +3309,18 @@ impl LibraryDatabase {
     }
 
     /// Parse format string to AudioFormat
+    /// Inverse of `AudioFormat`'s `Display` (`models.rs:24`), which is what
+    /// the scanner stores. It MUST answer every variant that `Display` can
+    /// write: an unlisted one folds to `Unknown` silently and the format is
+    /// destroyed on the way out of the DB, not on the way in.
+    ///
+    /// `"DSD"` was exactly that hole. `MetadataExtractor::detect_format` has
+    /// mapped `.dsf`/`.dff` to `AudioFormat::Dsd` since DSD landed
+    /// (`metadata.rs:824`) and the rows on disk say `DSD` — but every read
+    /// handed back `Unknown`, so a DSD track showed "UNKNOWN" as its format,
+    /// took the CD quality badge (depth 1 is a KNOWN depth < 24) and printed
+    /// "1-bit / 2822.4 kHz". The now-playing bar was right all along because
+    /// it reads the decoder, not the row.
     fn parse_format(s: &str) -> AudioFormat {
         match s.to_uppercase().as_str() {
             "FLAC" => AudioFormat::Flac,
@@ -3317,6 +3329,7 @@ impl LibraryDatabase {
             "AIFF" => AudioFormat::Aiff,
             "APE" => AudioFormat::Ape,
             "MP3" => AudioFormat::Mp3,
+            "DSD" => AudioFormat::Dsd,
             _ => AudioFormat::Unknown,
         }
     }
@@ -7398,5 +7411,57 @@ mod remote_union_tests {
             remote_source_filter(&["jellyfin", "'; --"]),
             "source IN ('jellyfin')"
         );
+    }
+}
+
+#[cfg(test)]
+mod audio_format_roundtrip_tests {
+    use super::*;
+
+    /// `parse_format` is the inverse of `AudioFormat`'s `Display`, and the
+    /// scanner writes exactly what `Display` produces. This asserts the pair
+    /// for EVERY variant rather than for one format, because the defect it
+    /// guards is structural: `"DSD"` had no arm, so every DSD row read back
+    /// as `Unknown` — the format printed "UNKNOWN", the quality badge said CD
+    /// and the detail said "1-bit / 2822.4 kHz". A fold to `Unknown` is a
+    /// VALID answer, which is why nothing else caught it.
+    ///
+    /// Adding a variant to `AudioFormat` without an arm here fails this test
+    /// instead of shipping the same silent loss again.
+    #[test]
+    fn every_variant_survives_the_display_parse_round_trip() {
+        let all = [
+            AudioFormat::Flac,
+            AudioFormat::Alac,
+            AudioFormat::Wav,
+            AudioFormat::Aiff,
+            AudioFormat::Ape,
+            AudioFormat::Mp3,
+            AudioFormat::Dsd,
+        ];
+        for f in all {
+            let written = f.to_string();
+            let read_back = LibraryDatabase::parse_format(&written);
+            assert_eq!(
+                read_back, f,
+                "AudioFormat::{f:?} is stored as {written:?} and read back as \
+                 {read_back:?} — parse_format is missing its arm"
+            );
+        }
+    }
+
+    /// The `Unknown` fold stays reachable for genuinely unknown words; it just
+    /// must not be where a KNOWN format lands.
+    #[test]
+    fn an_unknown_word_still_folds_to_unknown() {
+        assert_eq!(LibraryDatabase::parse_format("opus"), AudioFormat::Unknown);
+        assert_eq!(LibraryDatabase::parse_format(""), AudioFormat::Unknown);
+    }
+
+    /// The scanner's own casing must not matter (rows written by older builds).
+    #[test]
+    fn parsing_is_case_insensitive() {
+        assert_eq!(LibraryDatabase::parse_format("dsd"), AudioFormat::Dsd);
+        assert_eq!(LibraryDatabase::parse_format("Dsd"), AudioFormat::Dsd);
     }
 }
