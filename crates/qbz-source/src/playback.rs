@@ -88,6 +88,24 @@ pub enum PlaybackTicket {
     /// if stage 3 confirms the frontend never wants a source to say it, this is
     /// the variant to cut.
     SeekLoaded { play_id: u64, secs: f64 },
+    /// A CD-DA track: read the drive's raw sectors and feed them to the
+    /// player as 44.1 kHz / 16-bit / stereo PCM.
+    ///
+    /// A track on a disc is NOT a file, so no path-shaped variant fits it: it
+    /// is a device plus a sector RANGE, and the bytes only exist while that
+    /// medium is in that drive. It is also the one ticket whose source can be
+    /// physically removed mid-play, which is why the feeder that performs it
+    /// must stop on a read error instead of filling the gap with zeros —
+    /// silence indistinguishable from music is the failure a bit-perfect
+    /// player must never ship.
+    CdTrack {
+        device: PathBuf,
+        start_lsn: u32,
+        /// Sectors of 2352 bytes. `sectors * 588` is the PCM frame count the
+        /// player is promised up front.
+        sectors: u32,
+        play_id: u64,
+    },
 }
 
 /// Hand-written so `Bytes` prints its LENGTH, not a megabyte of FLAC, and so
@@ -141,6 +159,18 @@ impl std::fmt::Debug for PlaybackTicket {
                 .field("play_id", play_id)
                 .field("secs", secs)
                 .finish(),
+            PlaybackTicket::CdTrack {
+                device,
+                start_lsn,
+                sectors,
+                play_id,
+            } => f
+                .debug_struct("CdTrack")
+                .field("device", device)
+                .field("start_lsn", start_lsn)
+                .field("sectors", sectors)
+                .field("play_id", play_id)
+                .finish(),
         }
     }
 }
@@ -164,7 +194,8 @@ impl PlaybackTicket {
             | PlaybackTicket::DsdFile { play_id, .. }
             | PlaybackTicket::Bytes { play_id, .. }
             | PlaybackTicket::Stream { play_id, .. }
-            | PlaybackTicket::SeekLoaded { play_id, .. } => Some(*play_id),
+            | PlaybackTicket::SeekLoaded { play_id, .. }
+            | PlaybackTicket::CdTrack { play_id, .. } => Some(*play_id),
             PlaybackTicket::Catalog { .. } => None,
         }
     }

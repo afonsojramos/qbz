@@ -757,6 +757,28 @@ impl Source for LocalSource {
         // track id (local_playback.rs:55-59).
         let play_id = track.id;
 
+        // A CD track is answered FIRST and never reaches the extension tests
+        // below, because it is not a file: `path` here is a `cdda:` reference
+        // and `File`/`DsdFile` would both hand it to something that opens it.
+        // The test is `CdRef::is_cd_path`, not a second `starts_with` written
+        // out here — one parser, one shape, so this cannot drift from the
+        // encoder the way a hand-copied prefix list does.
+        if qbz_disc::CdRef::is_cd_path(&row.file_path) {
+            return match qbz_disc::CdRef::parse(&row.file_path) {
+                Some(r) => Ok(PlaybackTicket::CdTrack {
+                    device: r.device,
+                    start_lsn: r.start_lsn,
+                    sectors: r.sectors,
+                    play_id,
+                }),
+                None => Err(SourceError::BadIdShape {
+                    by: SourceId::LOCAL,
+                    id: row.file_path.clone(),
+                    why: "a cdda: reference is device#start+sectors",
+                }),
+            };
+        }
+
         let lower = row.file_path.to_lowercase();
         if lower.ends_with(".dsf") || lower.ends_with(".dff") {
             return Ok(PlaybackTicket::DsdFile { path, play_id });

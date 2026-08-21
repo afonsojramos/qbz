@@ -396,6 +396,44 @@ impl EphemeralLibraryState {
         })
     }
 
+    /// Install a track list that did NOT come from scanning a directory — a
+    /// CD in the drive, and later a disc image.
+    ///
+    /// `open_folder` cannot serve these: it takes a `&Path`, rejects anything
+    /// that is not a real directory (`:118`), and derives every field by
+    /// reading files off a filesystem. A disc has no filesystem to read.
+    ///
+    /// `label` is what the medium is CALLED (the album title, or "Audio CD"),
+    /// and it is stored where a folder path would be, because everything
+    /// downstream — the pane header, the tab, the persisted-session check —
+    /// asks the session what it is, not where it lives.
+    ///
+    /// Ids are assigned from the SAME synthetic range as a folder session, so
+    /// every playback caller keeps routing them to this store without knowing
+    /// a disc exists.
+    pub fn open_tracks(
+        &self,
+        label: &str,
+        tracks: Vec<LocalTrack>,
+    ) -> Result<EphemeralFolderResult, EphemeralError> {
+        let mut inner = self.inner.lock().map_err(|_| EphemeralError::Lock)?;
+        inner.reset();
+        let mut out = Vec::with_capacity(tracks.len());
+        for mut track in tracks {
+            track.id = inner.next_id;
+            inner.next_id += 1;
+            track.source = Some("ephemeral".to_string());
+            inner.tracks.insert(track.id, track.clone());
+            out.push(track);
+        }
+        inner.current_folder_path = Some(label.to_string());
+        Ok(EphemeralFolderResult {
+            folder_path: label.to_string(),
+            tracks: out,
+            skipped_files: 0,
+        })
+    }
+
     pub fn clear(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.reset();
