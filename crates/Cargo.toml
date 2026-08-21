@@ -20,6 +20,7 @@ members = [
     # dependency of qbz-dsd's reverse: qbz-dsd will depend on THIS, never the
     # other way, or the two close a cycle.
     "qbz-disc",
+    "qbz-rip",
     "qbz-secrets",
     "qbz-offline-cache",
     "qbz-plex",
