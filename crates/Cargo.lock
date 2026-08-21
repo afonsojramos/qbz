@@ -6373,8 +6373,10 @@ dependencies = [
 name = "qbz-disc"
 version = "2.0.2"
 dependencies = [
+ "base64",
  "libc",
  "log",
+ "sha1",
  "thiserror 2.0.18",
 ]
 
@@ -6384,6 +6386,7 @@ version = "2.0.2"
 dependencies = [
  "id3",
  "log",
+ "qbz-disc",
  "thiserror 2.0.18",
 ]
 
