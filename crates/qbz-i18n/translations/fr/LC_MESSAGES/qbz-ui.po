@@ -5373,3 +5373,24 @@ msgstr "Doublons : {}"
 
 msgid "Media"
 msgstr "Média"
+
+msgid "Open audio CD"
+msgstr "Ouvrir le CD audio"
+
+msgid "Audio CD"
+msgstr "CD audio"
+
+msgid "No optical drive found."
+msgstr "Aucun lecteur optique trouvé."
+
+msgid "No disc in the drive."
+msgstr "Aucun disque dans le lecteur."
+
+msgid "That disc has no audio tracks."
+msgstr "Ce disque n'a aucune piste audio."
+
+msgid "Could not read the disc."
+msgstr "Impossible de lire le disque."
+
+msgid "Track {}"
+msgstr "Piste {}"

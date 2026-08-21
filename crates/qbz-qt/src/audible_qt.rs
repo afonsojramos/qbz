@@ -120,6 +120,13 @@ pub(crate) async fn play_ticket(runtime: &Runtime, ticket: PlaybackTicket) -> bo
             seek_secs,
         } => play_file(runtime, path, play_id, seek_secs).await,
 
+        PlaybackTicket::CdTrack {
+            device,
+            start_lsn,
+            sectors,
+            play_id,
+        } => play_cd_track(runtime, device, start_lsn, sectors, play_id),
+
         PlaybackTicket::Bytes { bytes, play_id } => {
             let len = bytes.len();
             if let Err(e) = runtime.core().player().play_data(bytes, play_id) {
@@ -364,4 +371,167 @@ mod tests {
         assert_eq!(slot.0, 8);
         assert_eq!(slot.1, PathBuf::from("/m/album.flac"));
     }
+}
+
+/// The play_id of the CD feeder that should be running. A newer disc play
+/// stores its own id here and the older thread retires itself on its next
+/// block — a signal the audio thread plays no part in, which is the whole
+/// point (see the reasoning inside `play_cd_track`).
+static CD_FEEDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Feed one CD-DA track into the player as a finite WAV.
+///
+/// The SHAPE is the shipping DSD-to-PCM path (`player/mod.rs:5224`): declare a
+/// content length, hand back a `BufferWriter`, push a header and then blocks
+/// from a thread. That is deliberate — it is the one locally-produced stream
+/// this app already has, and it works.
+///
+/// Three things differ, and each is a decision rather than a detail:
+///
+/// 1. **A 16-bit header.** `qbz_dsd::wav_header` is hardcoded to 24-bit, the
+///    depth its converter emits. Reusing it would either lie in the header or
+///    promote 16-bit samples to 24 — and while that shift is arithmetically
+///    lossless, it makes the DAC open at 24 bits for a 16-bit source. That is
+///    the silent conversion a bit-perfect path must not contain.
+///
+/// 2. **The feeder stops when the track changes.** The DSD thread used to
+///    rely on `push_chunk` returning `Err`, which it cannot do; this one polls
+///    `current_track_id()`, the same signal `play_file` above reads, and stops
+///    the moment the player is on something else. Without it, skipping a track
+///    would leave the drive spinning and a 160 MB buffer growing for nothing.
+///
+/// 3. **A read error ends the track.** No zero-fill, no skip-ahead. A hole
+///    that sounds like silence is indistinguishable from music that was meant
+///    to be quiet, and on a bit-perfect path that is worse than stopping.
+fn play_cd_track(
+    runtime: &Runtime,
+    device: std::path::PathBuf,
+    start_lsn: u32,
+    sectors: u32,
+    play_id: u64,
+) -> bool {
+    let track = qbz_disc::cdda::TocTrack {
+        number: 0,
+        start_lsn,
+        sectors,
+        is_audio: true,
+    };
+    let mut reader = match qbz_disc::cdda::TrackReader::open(&device, &track) {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("[qbz-qt] audible: cannot read {} : {e}", device.display());
+            crate::toast_qt::error(qbz_i18n::t("Could not read the disc."));
+            return false;
+        }
+    };
+
+    let frames = track.frames();
+    let content_length = qbz_disc::wav_total_size_16(frames, qbz_disc::CDDA_CHANNELS);
+    let duration_secs = track.duration_secs();
+    log::info!(
+        "[qbz-qt] audible: CD track {play_id} — {} sectors, {}s, {} bytes WAV \
+         ({} Hz / {}-bit / {}ch)",
+        sectors,
+        duration_secs,
+        content_length,
+        qbz_disc::CDDA_SAMPLE_RATE,
+        qbz_disc::CDDA_BITS,
+        qbz_disc::CDDA_CHANNELS
+    );
+
+    let player = runtime.core().player();
+    // `play_streaming` does not publish the bit depth (only its dynamic
+    // sibling does), so a CD would inherit whatever the previous track left
+    // behind. Say it explicitly.
+    player
+        .state
+        .set_stream_quality(qbz_disc::CDDA_SAMPLE_RATE, qbz_disc::CDDA_BITS as u32);
+
+    let writer = match player.play_streaming(
+        play_id,
+        qbz_disc::CDDA_SAMPLE_RATE,
+        qbz_disc::CDDA_CHANNELS,
+        content_length,
+        3,
+        duration_secs,
+        0,
+    ) {
+        Ok(w) => w,
+        Err(e) => {
+            log::error!("[qbz-qt] audible: play_streaming for CD {play_id} failed: {e}");
+            return false;
+        }
+    };
+
+    // Claim the feeder slot BEFORE spawning: whoever claims last wins, and the
+    // previous feeder sees the change on its next block.
+    CD_FEEDER.store(play_id, std::sync::atomic::Ordering::SeqCst);
+
+    let state = player.state.clone();
+    std::thread::spawn(move || {
+        if writer
+            .push_chunk(&qbz_disc::wav_header_16(
+                frames,
+                qbz_disc::CDDA_CHANNELS,
+                qbz_disc::CDDA_SAMPLE_RATE,
+            ))
+            .is_err()
+        {
+            return;
+        }
+        let mut buf = Vec::new();
+        // Liveness, third attempt — the first two were both wrong and in
+        // opposite directions, so the reasoning is written down.
+        //
+        //  1. `current_track_id() != play_id` alone: WRONG. `play_streaming`
+        //     posts to the audio thread and returns, so the id is not ours yet
+        //     and the feeder decides it was superseded before reading a sector.
+        //     Nothing played.
+        //  2. Adding a wall-clock grace: WORSE, and a deadlock. That field is
+        //     stored at `player/mod.rs:2814`, which the audio thread only
+        //     reaches once the initial buffer is READY — and the buffer is
+        //     what this thread is filling. Waiting on it means waiting on
+        //     ourselves, so the grace expired and the track stopped.
+        //
+        // The signal has to be one the audio thread is not part of.
+        // `CD_FEEDER` is bumped by the play that spawned us, so a NEWER CD
+        // play retires this one immediately — which is the supersede that
+        // actually happens (skip to the next track of the same disc).
+        //
+        // For "a non-CD track superseded us", the acknowledgement path still
+        // applies, but only ONCE the player has confirmed our id: after that
+        // it changing means something else really is playing. There is no
+        // timeout, because a timeout is what can kill a healthy feeder.
+        let mut acknowledged = false;
+        loop {
+            if CD_FEEDER.load(std::sync::atomic::Ordering::SeqCst) != play_id {
+                log::info!("[qbz-qt] CD feeder {play_id} retired by a newer disc play");
+                return;
+            }
+            let current = state.current_track_id();
+            if current == play_id {
+                acknowledged = true;
+            } else if acknowledged {
+                log::info!("[qbz-qt] CD feeder for superseded track {play_id} stopping");
+                return;
+            }
+            match reader.next_chunk(&mut buf) {
+                Ok(0) => {
+                    let _ = writer.complete();
+                    return;
+                }
+                Ok(_) => {
+                    if writer.push_chunk(&buf).is_err() {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    log::error!("[qbz-qt] CD read failed mid-track: {e}");
+                    let _ = writer.error(format!("CD read failed: {e}"));
+                    return;
+                }
+            }
+        }
+    });
+    true
 }

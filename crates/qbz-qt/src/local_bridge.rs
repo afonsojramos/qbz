@@ -295,6 +295,11 @@ pub mod qbz_local {
         /// Close the session (stops playback if it came from the session).
         #[qinvokable]
         fn ephemeral_clear(self: Pin<&mut QbzLocal>);
+        /// `Open > Open CD…`: read the audio disc in the drive and make it the
+        /// ephemeral session. Toasts on every failure it can name (no drive,
+        /// no disc, a data-only disc) rather than opening an empty pane.
+        #[qinvokable]
+        fn ephemeral_open_cd(self: Pin<&mut QbzLocal>);
         /// Header Play / Shuffle: the whole session becomes the queue. Same
         /// `(id, shuffle)` shape as `play_album`, so the two headers behave
         /// identically.
@@ -1083,6 +1088,19 @@ impl qbz_local::QbzLocal {
 
     pub fn ephemeral_clear(self: Pin<&mut Self>) {
         crate::local_ephemeral::clear();
+    }
+
+    pub fn ephemeral_open_cd(self: Pin<&mut Self>) {
+        // Reading a TOC spins the drive up and can take a second or two, so it
+        // does not run on the UI thread.
+        crate::spawn(async move {
+            let outcome = tokio::task::spawn_blocking(crate::cdda_qt::open_disc).await;
+            match outcome {
+                Ok(Ok(n)) => log::info!("[qbz-qt] cd opened: {n} tracks"),
+                Ok(Err(msg)) => crate::toast_qt::error(msg),
+                Err(e) => log::warn!("[qbz-qt] cd open task failed: {e}"),
+            }
+        });
     }
 
     pub fn ephemeral_play_all(self: Pin<&mut Self>, shuffle: bool) {

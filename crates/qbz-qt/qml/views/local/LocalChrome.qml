@@ -195,10 +195,13 @@ Item {
         menuWidth: 220
         entries: [
             { "label": QbzSession.tr("Open folder…", QbzSession.trRev),
-              "icon": "folder-open", "action": "folder" }
+              "icon": "folder-open", "action": "folder" },
+            { "label": QbzSession.tr("Open audio CD", QbzSession.trRev),
+              "icon": "disc", "action": "cd" }
         ]
         onPicked: function (action) {
             if (action === "folder") QbzLocal.ephemeralOpen()
+            else if (action === "cd") QbzLocal.ephemeralOpenCd()
         }
     }
 

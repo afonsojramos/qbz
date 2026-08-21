@@ -5358,3 +5358,24 @@ msgstr "重複: {}"
 
 msgid "Media"
 msgstr "メディア"
+
+msgid "Open audio CD"
+msgstr "オーディオCDを開く"
+
+msgid "Audio CD"
+msgstr "オーディオCD"
+
+msgid "No optical drive found."
+msgstr "光学ドライブが見つかりません。"
+
+msgid "No disc in the drive."
+msgstr "ドライブにディスクがありません。"
+
+msgid "That disc has no audio tracks."
+msgstr "このディスクにはオーディオトラックがありません。"
+
+msgid "Could not read the disc."
+msgstr "ディスクを読み取れませんでした。"
+
+msgid "Track {}"
+msgstr "トラック {}"

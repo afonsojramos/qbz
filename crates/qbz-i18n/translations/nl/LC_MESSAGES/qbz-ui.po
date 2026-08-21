@@ -5363,3 +5363,24 @@ msgstr "Duplicaten: {}"
 
 msgid "Media"
 msgstr "Medium"
+
+msgid "Open audio CD"
+msgstr "Audio-cd openen"
+
+msgid "Audio CD"
+msgstr "Audio-cd"
+
+msgid "No optical drive found."
+msgstr "Geen optisch station gevonden."
+
+msgid "No disc in the drive."
+msgstr "Geen schijf in het station."
+
+msgid "That disc has no audio tracks."
+msgstr "Die schijf heeft geen audiotracks."
+
+msgid "Could not read the disc."
+msgstr "Kon de schijf niet lezen."
+
+msgid "Track {}"
+msgstr "Track {}"

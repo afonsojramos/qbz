@@ -920,3 +920,24 @@ msgstr "Default"
 
 msgid "Media"
 msgstr "Media"
+
+msgid "Open audio CD"
+msgstr "Open audio CD"
+
+msgid "Audio CD"
+msgstr "Audio CD"
+
+msgid "No optical drive found."
+msgstr "No optical drive found."
+
+msgid "No disc in the drive."
+msgstr "No disc in the drive."
+
+msgid "That disc has no audio tracks."
+msgstr "That disc has no audio tracks."
+
+msgid "Could not read the disc."
+msgstr "Could not read the disc."
+
+msgid "Track {}"
+msgstr "Track {}"

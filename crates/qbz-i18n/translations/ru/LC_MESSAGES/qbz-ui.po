@@ -5392,3 +5392,24 @@ msgstr "Дубликаты: {}"
 
 msgid "Media"
 msgstr "Носитель"
+
+msgid "Open audio CD"
+msgstr "Открыть аудио-CD"
+
+msgid "Audio CD"
+msgstr "Аудио-CD"
+
+msgid "No optical drive found."
+msgstr "Оптический привод не найден."
+
+msgid "No disc in the drive."
+msgstr "В приводе нет диска."
+
+msgid "That disc has no audio tracks."
+msgstr "На этом диске нет аудиодорожек."
+
+msgid "Could not read the disc."
+msgstr "Не удалось прочитать диск."
+
+msgid "Track {}"
+msgstr "Дорожка {}"

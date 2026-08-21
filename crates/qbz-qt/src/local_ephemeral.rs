@@ -327,6 +327,44 @@ pub fn open_path(path: String) {
     });
 }
 
+/// Publish a session built from a track list rather than a directory scan —
+/// a CD today, a disc image next.
+///
+/// It goes through the SAME `publish_doc` as a folder, so the pane, the tab,
+/// the label and the open sequence all behave identically: a disc is not a
+/// second kind of session, it is the same session with a different source of
+/// tracks.
+///
+/// The path is NOT persisted. A folder is still there tomorrow; a disc is a
+/// piece of plastic that gets taken out, and re-opening a drive at boot to
+/// find a different album (or none) is worse than starting clean. Restoring a
+/// medium needs the TOC fingerprint check the contract specifies, and that is
+/// not built yet — so this deliberately does nothing rather than half of it.
+pub fn adopt_tracks(label: &str, tracks: Vec<LocalTrack>) {
+    let label = label.to_string();
+    crate::spawn(async move {
+        wipe_if_playing(&crate::app()).await;
+        let seq = OPEN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        ui(move |mut b| {
+            b.as_mut().set_local_ephemeral_open_seq(seq);
+        });
+        match STATE.open_tracks(&label, tracks) {
+            Ok(res) => {
+                log::info!(
+                    "[qbz-qt] ephemeral adopted {} ({} tracks)",
+                    label,
+                    res.tracks.len()
+                );
+                publish_doc(&build_doc(&label, &label, &res.tracks), false);
+            }
+            Err(e) => {
+                log::warn!("[qbz-qt] ephemeral adopt failed: {e}");
+                publish_closed();
+            }
+        }
+    });
+}
+
 /// Boot: re-open the persisted folder, if any. Silent — a folder that moved
 /// away just clears the stale pref.
 pub fn rehydrate() {

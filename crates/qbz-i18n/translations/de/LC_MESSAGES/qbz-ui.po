@@ -5375,3 +5375,24 @@ msgstr "Duplikate: {}"
 
 msgid "Media"
 msgstr "Medium"
+
+msgid "Open audio CD"
+msgstr "Audio-CD öffnen"
+
+msgid "Audio CD"
+msgstr "Audio-CD"
+
+msgid "No optical drive found."
+msgstr "Kein optisches Laufwerk gefunden."
+
+msgid "No disc in the drive."
+msgstr "Keine Disc im Laufwerk."
+
+msgid "That disc has no audio tracks."
+msgstr "Diese Disc hat keine Audiotitel."
+
+msgid "Could not read the disc."
+msgstr "Die Disc konnte nicht gelesen werden."
+
+msgid "Track {}"
+msgstr "Titel {}"
