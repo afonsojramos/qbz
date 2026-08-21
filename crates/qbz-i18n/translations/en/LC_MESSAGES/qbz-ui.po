@@ -917,3 +917,6 @@ msgstr "Default ({})"
 
 msgid "Default"
 msgstr "Default"
+
+msgid "Media"
+msgstr "Media"

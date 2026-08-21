@@ -5389,3 +5389,6 @@ msgstr "Введите публичное имя пользователя."
 
 msgid "Duplicates: {}"
 msgstr "Дубликаты: {}"
+
+msgid "Media"
+msgstr "Носитель"

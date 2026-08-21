@@ -223,12 +223,50 @@ fn build_doc(name: &str, path: &str, tracks: &[LocalTrack]) -> EphemeralDoc {
 // Publishing
 // ---------------------------------------------------------------------------
 
+/// Longest tab label we will hand the segmented bar. `QbzTabBar` sizes a
+/// segment to its text (`QbzTabBar.qml:47` implicitWidth), so an unbounded
+/// folder name would push the whole bar off screen next to four one-word
+/// siblings.
+const LABEL_MAX: usize = 24;
+
+/// What the tab and the nav flyout call this session — the name of the THING
+/// that is open, never a verb. ("Now Playing" was considered and rejected: it
+/// is false the moment a folder sits open while something else plays, and the
+/// tab would then contradict the now-playing bar on the same screen.)
+///
+/// Most specific first: a single-album session is named by its album, because
+/// that is the usual case — a folder IS an album, and a disc IS an album. A
+/// multi-album folder, or one whose tags gave no title, falls back to the
+/// medium's display name, which is exactly what the pane's own header shows.
+fn display_label(doc: &EphemeralDoc) -> String {
+    let raw = if !doc.multi_album && doc.albums.len() == 1 && !doc.albums[0].title.is_empty() {
+        doc.albums[0].title.as_str()
+    } else {
+        doc.name.as_str()
+    };
+    if raw.is_empty() {
+        return qbz_i18n::t("Media");
+    }
+    // Count CHARACTERS, not bytes: truncating a UTF-8 string by byte index
+    // panics mid-codepoint, and this text is user data — a Japanese album
+    // title is three bytes per character.
+    if raw.chars().count() > LABEL_MAX {
+        let cut: String = raw.chars().take(LABEL_MAX - 1).collect();
+        format!("{cut}…")
+    } else {
+        raw.to_string()
+    }
+}
+
 fn publish_doc(doc: &EphemeralDoc, loading: bool) {
     let json = to_json(doc);
+    let label = display_label(doc);
     ui(move |mut b| {
         b.as_mut().set_local_ephemeral_active(true);
         b.as_mut()
             .set_local_ephemeral_json(QString::from(json.as_str()));
+        b.as_mut()
+            .set_local_ephemeral_label(QString::from(label.as_str()));
         b.as_mut().set_local_ephemeral_loading(loading);
     });
 }
@@ -240,6 +278,7 @@ fn publish_closed() {
         b.as_mut().set_local_ephemeral_active(false);
         b.as_mut().set_local_ephemeral_loading(false);
         b.as_mut().set_local_ephemeral_json(QString::from(""));
+        b.as_mut().set_local_ephemeral_label(QString::from(""));
     });
 }
 
@@ -498,3 +537,77 @@ async fn play_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, start: usize) {
     crate::playback_qt::refresh_now_playing(runtime).await;
 }
 
+#[cfg(test)]
+mod display_label_tests {
+    use super::*;
+
+    fn doc(name: &str, albums: Vec<(&str, &str)>, multi: bool) -> EphemeralDoc {
+        EphemeralDoc {
+            name: name.to_string(),
+            path: "/tmp/x".to_string(),
+            track_count: 0,
+            multi_album: multi,
+            albums: albums
+                .into_iter()
+                .map(|(title, artist)| EphemeralAlbumBlock {
+                    group_key: String::new(),
+                    title: title.to_string(),
+                    artist: artist.to_string(),
+                    meta: String::new(),
+                    is_cue: false,
+                    art_key: String::new(),
+                    tracks: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn one_album_is_named_by_its_album() {
+        // The usual case, and the reason the chain starts here: a folder IS
+        // an album, and so is a disc.
+        let d = doc("Pink Floyd London Live 8 Reunion 2005", vec![("Live 8", "Pink Floyd")], false);
+        assert_eq!(display_label(&d), "Live 8");
+    }
+
+    #[test]
+    fn several_albums_fall_back_to_the_medium_name() {
+        let d = doc("dsdsmoke", vec![("A", "x"), ("B", "y")], true);
+        assert_eq!(display_label(&d), "dsdsmoke");
+    }
+
+    #[test]
+    fn an_untitled_album_falls_back_too() {
+        // Tags gave no album title: naming the tab "" would render an empty
+        // segment with a lone count badge.
+        let d = doc("Disc 1", vec![("", "")], false);
+        assert_eq!(display_label(&d), "Disc 1");
+    }
+
+    #[test]
+    fn a_nameless_session_gets_the_generic_word() {
+        assert_eq!(display_label(&doc("", vec![], false)), qbz_i18n::t("Media"));
+    }
+
+    #[test]
+    fn a_long_name_is_elided_by_CHARACTERS_not_bytes() {
+        // The elision exists because QbzTabBar sizes a segment to its text.
+        let long = "Symphony No. 9 in D minor, Op. 125 — Choral";
+        let out = display_label(&doc(long, vec![], false));
+        assert_eq!(out.chars().count(), LABEL_MAX);
+        assert!(out.ends_with('…'));
+
+        // And the byte-vs-char part is not theoretical: slicing this by byte
+        // index would panic mid-codepoint.
+        let jp = "交響曲第九番ニ短調作品百二十五合唱付きベートーヴェン不滅の傑作";
+        assert!(jp.chars().count() > LABEL_MAX);
+        let out = display_label(&doc(jp, vec![], false));
+        assert_eq!(out.chars().count(), LABEL_MAX);
+    }
+
+    #[test]
+    fn a_name_exactly_at_the_cap_is_left_alone() {
+        let exact: String = "a".repeat(LABEL_MAX);
+        assert_eq!(display_label(&doc(&exact, vec![], false)), exact);
+    }
+}

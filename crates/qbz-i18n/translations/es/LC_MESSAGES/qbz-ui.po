@@ -5378,3 +5378,6 @@ msgstr "Escribe un usuario público."
 
 msgid "Duplicates: {}"
 msgstr "Duplicados: {}"
+
+msgid "Media"
+msgstr "Medio"

@@ -5360,3 +5360,6 @@ msgstr "Voer een openbare gebruikersnaam in."
 
 msgid "Duplicates: {}"
 msgstr "Duplicaten: {}"
+
+msgid "Media"
+msgstr "Medium"

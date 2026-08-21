@@ -5355,3 +5355,6 @@ msgstr "公開ユーザー名を入力してください。"
 
 msgid "Duplicates: {}"
 msgstr "重複: {}"
+
+msgid "Media"
+msgstr "メディア"

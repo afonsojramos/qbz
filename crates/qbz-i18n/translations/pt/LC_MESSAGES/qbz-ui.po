@@ -5370,3 +5370,6 @@ msgstr "Introduza um utilizador público."
 
 msgid "Duplicates: {}"
 msgstr "Duplicados: {}"
+
+msgid "Media"
+msgstr "Mídia"

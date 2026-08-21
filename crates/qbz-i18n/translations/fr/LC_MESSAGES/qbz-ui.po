@@ -5370,3 +5370,6 @@ msgstr "Saisissez un nom d'utilisateur public."
 
 msgid "Duplicates: {}"
 msgstr "Doublons : {}"
+
+msgid "Media"
+msgstr "Média"

@@ -107,12 +107,20 @@ pub mod qbz_local {
         /// {"tab":"albums|artists|tracks","query":"..."}.
         #[qproperty(QString, local_pending_route)]
         // --- Ephemeral folder (an ad-hoc folder outside the index) ---------
-        /// A session is open: the Folders tab shows the ephemeral pane.
+        /// A session is open: its OWN tab appears in Local Library.
         #[qproperty(bool, local_ephemeral_active)]
         /// The folder is being scanned (metadata + CUE + artwork).
         #[qproperty(bool, local_ephemeral_loading)]
         /// {name, path, trackCount, multiAlbum, albums:[…]} — "" while closed.
         #[qproperty(QString, local_ephemeral_json)]
+        /// The session's DISPLAY NAME — what the tab and the nav flyout call
+        /// it. Computed once here rather than derived twice in QML: the view
+        /// already parses the document, but `NavFlyout` does not, and a second
+        /// derivation is a second thing that can drift.
+        ///
+        /// The name is the CONTENT, never a verb: "Now Playing" would be false
+        /// the moment a folder is open while something else plays.
+        #[qproperty(QString, local_ephemeral_label)]
 
         // --- Plex ----------------------------------------------------------
         /// Master toggle (Settings > Local Library > Plex). Drives whether
@@ -458,6 +466,7 @@ pub struct QbzLocalRust {
     local_ephemeral_active: bool,
     local_ephemeral_loading: bool,
     local_ephemeral_json: QString,
+    local_ephemeral_label: QString,
     plex_enabled: bool,
     plex_available: bool,
     plex_syncing: bool,
@@ -506,6 +515,7 @@ impl Default for QbzLocalRust {
             local_ephemeral_active: false,
             local_ephemeral_loading: false,
             local_ephemeral_json: QString::from(""),
+            local_ephemeral_label: QString::from(""),
             plex_enabled: false,
             plex_available: false,
             plex_syncing: false,
