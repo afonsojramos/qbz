@@ -5420,3 +5420,17 @@ msgstr "Ese archivo no es una imagen de disco."
 
 msgid "SACD"
 msgstr "SACD"
+
+msgid "Where should the ripped album go?"
+msgstr "¿Dónde guardo el álbum ripeado?"
+
+msgid "Ripping"
+msgstr "Ripeando"
+
+msgid "Nothing to rip."
+msgstr "No hay nada que ripear."
+
+msgid "Ripped {} track to your library"
+msgid_plural "Ripped {} tracks to your library"
+msgstr[0] "Se ripeó {} pista a tu biblioteca"
+msgstr[1] "Se ripearon {} pistas a tu biblioteca"

@@ -241,6 +241,7 @@ mod browse_qt;
 mod cast_qt;
 mod cdda_qt;
 mod sacd_qt;
+mod rip_qt;
 mod label_qt;
 mod now_playing;
 mod output_labels;

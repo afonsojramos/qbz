@@ -129,6 +129,16 @@ pub mod qbz_local {
         /// sequence changes on every open, which is what "take me to what I
         /// just opened" actually needs.
         #[qproperty(i32, local_ephemeral_open_seq)]
+        /// The open session came from a physical CD, so it can be RIPPED.
+        /// Derived from the rows themselves rather than passed in — a flag
+        /// somebody has to remember to set is a flag that eventually is not.
+        #[qproperty(bool, local_ephemeral_is_cd)]
+        /// A rip is running; the pane shows progress instead of the button.
+        #[qproperty(bool, local_rip_active)]
+        /// "3/7 · 45%" — already formatted, because the number of things that
+        /// can disagree about how to format it is otherwise the number of
+        /// places that show it.
+        #[qproperty(QString, local_rip_progress)]
 
         // --- Plex ----------------------------------------------------------
         /// Master toggle (Settings > Local Library > Plex). Drives whether
@@ -303,6 +313,10 @@ pub mod qbz_local {
         /// `Open > Open SACD image…`: pick a .iso and play its stereo area.
         #[qinvokable]
         fn ephemeral_open_sacd(self: Pin<&mut QbzLocal>);
+        /// Rip the open CD into a folder the user picks. No-op unless the
+        /// session is a disc.
+        #[qinvokable]
+        fn rip_disc(self: Pin<&mut QbzLocal>);
         /// Header Play / Shuffle: the whole session becomes the queue. Same
         /// `(id, shuffle)` shape as `play_album`, so the two headers behave
         /// identically.
@@ -486,6 +500,9 @@ pub struct QbzLocalRust {
     local_ephemeral_json: QString,
     local_ephemeral_label: QString,
     local_ephemeral_open_seq: i32,
+    local_ephemeral_is_cd: bool,
+    local_rip_active: bool,
+    local_rip_progress: QString,
     plex_enabled: bool,
     plex_available: bool,
     plex_syncing: bool,
@@ -536,6 +553,9 @@ impl Default for QbzLocalRust {
             local_ephemeral_json: QString::from(""),
             local_ephemeral_label: QString::from(""),
             local_ephemeral_open_seq: 0,
+            local_ephemeral_is_cd: false,
+            local_rip_active: false,
+            local_rip_progress: QString::default(),
             plex_enabled: false,
             plex_available: false,
             plex_syncing: false,
@@ -1120,6 +1140,10 @@ impl qbz_local::QbzLocal {
                 Err(e) => log::warn!("[qbz-qt] sacd open task failed: {e}"),
             }
         });
+    }
+
+    pub fn rip_disc(self: Pin<&mut Self>) {
+        crate::rip_qt::start();
     }
 
     pub fn ephemeral_play_all(self: Pin<&mut Self>, shuffle: bool) {

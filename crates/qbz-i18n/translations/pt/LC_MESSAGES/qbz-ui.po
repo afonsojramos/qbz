@@ -5412,3 +5412,17 @@ msgstr "Esse arquivo não é uma imagem de disco."
 
 msgid "SACD"
 msgstr "SACD"
+
+msgid "Where should the ripped album go?"
+msgstr "Onde salvar o álbum extraído?"
+
+msgid "Ripping"
+msgstr "Extraindo"
+
+msgid "Nothing to rip."
+msgstr "Nada para extrair."
+
+msgid "Ripped {} track to your library"
+msgid_plural "Ripped {} tracks to your library"
+msgstr[0] "{} faixa extraída para sua biblioteca"
+msgstr[1] "{} faixas extraídas para sua biblioteca"

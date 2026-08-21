@@ -5397,3 +5397,17 @@ msgstr "そのファイルはディスクイメージではありません。"
 
 msgid "SACD"
 msgstr "SACD"
+
+msgid "Where should the ripped album go?"
+msgstr "取り込んだアルバムの保存先は?"
+
+msgid "Ripping"
+msgstr "取り込み中"
+
+msgid "Nothing to rip."
+msgstr "取り込むものがありません。"
+
+msgid "Ripped {} track to your library"
+msgid_plural "Ripped {} tracks to your library"
+msgstr[0] "{} 曲をライブラリに取り込みました"
+msgstr[1] "{} 曲をライブラリに取り込みました"

@@ -5402,3 +5402,17 @@ msgstr "Dat bestand is geen schijfimage."
 
 msgid "SACD"
 msgstr "SACD"
+
+msgid "Where should the ripped album go?"
+msgstr "Waar moet het geripte album heen?"
+
+msgid "Ripping"
+msgstr "Rippen"
+
+msgid "Nothing to rip."
+msgstr "Niets om te rippen."
+
+msgid "Ripped {} track to your library"
+msgid_plural "Ripped {} tracks to your library"
+msgstr[0] "{} track naar je bibliotheek geript"
+msgstr[1] "{} tracks naar je bibliotheek geript"

@@ -32,6 +32,7 @@ log = { workspace = true }
 # a transitive dep of half the tree; this only makes it direct.
 libc = "0.2"
 qbz-disc = { path = "../qbz-disc" }
+qbz-rip = { path = "../qbz-rip" }
 rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

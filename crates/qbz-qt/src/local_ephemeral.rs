@@ -74,6 +74,35 @@ pub fn get_track(id: i64) -> Option<LocalTrack> {
     STATE.get_track(id)
 }
 
+/// True when the open session is a physical CD — the only medium this app
+/// can rip, since an image is already a file.
+pub fn session_is_cd() -> bool {
+    STATE
+        .tracks_snapshot()
+        .first()
+        .map(|t| qbz_disc::CdRef::is_cd_path(&t.file_path))
+        .unwrap_or(false)
+}
+
+/// Where to put a rip. A folder chooser, and the answer is never guessed.
+pub(crate) fn pick_folder_for_rip() -> Option<String> {
+    let title = qbz_i18n::t("Where should the ripped album go?");
+    let start = dirs::audio_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let start = start.to_string_lossy().into_owned();
+    let candidates: [(&str, Vec<String>); 4] = [
+        ("zenity", vec!["--file-selection".into(), "--directory".into(),
+            format!("--title={title}"), format!("--filename={start}/")]),
+        ("qarma", vec!["--file-selection".into(), "--directory".into(),
+            format!("--title={title}"), format!("--filename={start}/")]),
+        ("kdialog", vec!["--getexistingdirectory".into(), start.clone(),
+            "--title".into(), title.clone()]),
+        ("yad", vec!["--file".into(), "--directory".into(), format!("--title={title}")]),
+    ];
+    run_chooser(&candidates)
+}
+
 /// Every track of the current session, in scan (= display) order.
 pub fn tracks_snapshot() -> Vec<LocalTrack> {
     STATE.tracks_snapshot()
@@ -287,6 +316,7 @@ fn publish_closed() {
         b.as_mut().set_local_ephemeral_loading(false);
         b.as_mut().set_local_ephemeral_json(QString::from(""));
         b.as_mut().set_local_ephemeral_label(QString::from(""));
+        b.as_mut().set_local_ephemeral_is_cd(false);
     });
 }
 
@@ -348,8 +378,18 @@ pub fn adopt_tracks(label: &str, tracks: Vec<LocalTrack>) {
         ui(move |mut b| {
             b.as_mut().set_local_ephemeral_open_seq(seq);
         });
+        // Derived from the rows, not passed in: whoever builds the session
+        // already knows what the tracks are, and a separate flag is one more
+        // thing a future medium can forget to set.
+        let is_cd = tracks
+            .first()
+            .map(|t| qbz_disc::CdRef::is_cd_path(&t.file_path))
+            .unwrap_or(false);
         match STATE.open_tracks(&label, tracks) {
             Ok(res) => {
+                ui(move |mut b| {
+                    b.as_mut().set_local_ephemeral_is_cd(is_cd);
+                });
                 log::info!(
                     "[qbz-qt] ephemeral adopted {} ({} tracks)",
                     label,

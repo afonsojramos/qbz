@@ -959,3 +959,17 @@ msgstr "That file is not a disc image."
 
 msgid "SACD"
 msgstr "SACD"
+
+msgid "Where should the ripped album go?"
+msgstr "Where should the ripped album go?"
+
+msgid "Ripping"
+msgstr "Ripping"
+
+msgid "Nothing to rip."
+msgstr "Nothing to rip."
+
+msgid "Ripped {} track to your library"
+msgid_plural "Ripped {} tracks to your library"
+msgstr[0] "Ripped {} track to your library"
+msgstr[1] "Ripped {} tracks to your library"

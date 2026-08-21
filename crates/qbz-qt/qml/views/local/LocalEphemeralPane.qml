@@ -158,6 +158,34 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: QbzLocal.ephemeralPlayAll(true)
                         }
+                        // Rip — a PHYSICAL disc only. An image is already a
+                        // file, so offering it there would be offering to copy
+                        // something the user already has.
+                        QbzCircleAction {
+                            visible: QbzLocal.localEphemeralIsCd && !QbzLocal.localRipActive
+                            name: "cloud-download"
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzLocal.ripDisc()
+                        }
+                        // While it runs the button gives way to its progress —
+                        // one control, one state, rather than a button that
+                        // looks pressable during a job it cannot start twice.
+                        Row {
+                            visible: QbzLocal.localRipActive
+                            spacing: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                            QbzSpinner {
+                                anchors.verticalCenter: parent.verticalCenter
+                                size: 15
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: QbzSession.tr("Ripping", QbzSession.trRev)
+                                    + " " + QbzLocal.localRipProgress
+                                color: theme.textSecondary
+                                font.pixelSize: theme.fontLegal
+                            }
+                        }
                         // Kept: this is the ONLY way to close the session, and
                         // with it the only way to make the tab go away.
                         QbzCircleAction {

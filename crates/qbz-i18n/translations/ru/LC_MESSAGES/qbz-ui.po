@@ -5431,3 +5431,17 @@ msgstr "Это не образ диска."
 
 msgid "SACD"
 msgstr "SACD"
+
+msgid "Where should the ripped album go?"
+msgstr "Куда сохранить извлечённый альбом?"
+
+msgid "Ripping"
+msgstr "Извлечение"
+
+msgid "Nothing to rip."
+msgstr "Нечего извлекать."
+
+msgid "Ripped {} track to your library"
+msgid_plural "Ripped {} tracks to your library"
+msgstr[0] "Извлечена {} дорожка в вашу библиотеку"
+msgstr[1] "Извлечено {} дорожек в вашу библиотеку"
