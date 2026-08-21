@@ -473,6 +473,85 @@ async fn wipe_if_playing(runtime: &Runtime) {
 /// Ask the desktop for a folder. Returns None on cancel AND when no chooser is
 /// installed (logged, so a dead button is never silent). BLOCKING — the caller
 /// runs it on `spawn_blocking`.
+/// File chooser for a disc IMAGE. Same four-chooser ladder as the folder
+/// picker — the difference is a file selection with an `*.iso` filter, and a
+/// start directory of Downloads rather than Music, because that is where a
+/// downloaded image lands.
+pub(crate) fn pick_image_blocking() -> Option<String> {
+    let title = qbz_i18n::t("Choose a disc image");
+    let start = dirs::download_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let start = start.to_string_lossy().into_owned();
+    let candidates: [(&str, Vec<String>); 4] = [
+        (
+            "zenity",
+            vec![
+                "--file-selection".into(),
+                format!("--title={title}"),
+                format!("--filename={start}/"),
+                "--file-filter=Disc images (*.iso) | *.iso *.ISO".into(),
+            ],
+        ),
+        (
+            "qarma",
+            vec![
+                "--file-selection".into(),
+                format!("--title={title}"),
+                format!("--filename={start}/"),
+                "--file-filter=Disc images (*.iso) | *.iso *.ISO".into(),
+            ],
+        ),
+        (
+            "kdialog",
+            vec![
+                "--getopenfilename".into(),
+                start.clone(),
+                "*.iso *.ISO|Disc images".into(),
+                "--title".into(),
+                title.clone(),
+            ],
+        ),
+        (
+            "yad",
+            vec![
+                "--file".into(),
+                format!("--title={title}"),
+                "--file-filter=Disc images | *.iso *.ISO".into(),
+            ],
+        ),
+    ];
+    run_chooser(&candidates)
+}
+
+/// The shared "run the first chooser that exists" loop.
+fn run_chooser(candidates: &[(&str, Vec<String>)]) -> Option<String> {
+    for (bin, args) in candidates {
+        match std::process::Command::new(bin).args(args.iter()).output() {
+            // The chooser ran: a path on stdout, or an empty/failed exit =
+            // the user cancelled. Either way we stop looking.
+            Ok(out) => {
+                if !out.status.success() {
+                    return None;
+                }
+                let picked = String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                return (!picked.is_empty()).then_some(picked);
+            }
+            // Not installed — try the next one.
+            Err(_) => continue,
+        }
+    }
+    log::error!(
+        "[qbz-qt] ephemeral: no chooser found (zenity / qarma / kdialog / yad)"
+    );
+    None
+}
+
 fn pick_folder_blocking() -> Option<String> {
     let title = qbz_i18n::t("Choose a folder to play");
     let start = dirs::audio_dir()
@@ -518,31 +597,7 @@ fn pick_folder_blocking() -> Option<String> {
             ],
         ),
     ];
-    for (bin, args) in candidates {
-        match std::process::Command::new(bin).args(&args).output() {
-            // The chooser ran: a path on stdout, or an empty/failed exit =
-            // the user cancelled. Either way we stop looking.
-            Ok(out) => {
-                if !out.status.success() {
-                    return None;
-                }
-                let picked = String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                return (!picked.is_empty()).then_some(picked);
-            }
-            // Not installed — try the next one.
-            Err(_) => continue,
-        }
-    }
-    log::error!(
-        "[qbz-qt] ephemeral: no folder chooser found (zenity / qarma / kdialog / yad) — \
-         call ephemeralOpenPath(path) with a known folder instead"
-    );
-    None
+    run_chooser(&candidates)
 }
 
 // ---------------------------------------------------------------------------

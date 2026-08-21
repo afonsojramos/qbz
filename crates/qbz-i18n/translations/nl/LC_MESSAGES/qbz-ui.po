@@ -5384,3 +5384,21 @@ msgstr "Kon de schijf niet lezen."
 
 msgid "Track {}"
 msgstr "Track {}"
+
+msgid "Open SACD image…"
+msgstr "SACD-image openen…"
+
+msgid "Choose a disc image"
+msgstr "Kies een schijfimage"
+
+msgid "That image has no stereo audio area."
+msgstr "Die image heeft geen stereo-audiogebied."
+
+msgid "This disc is DST-compressed, which QBZ cannot play yet."
+msgstr "Deze schijf is DST-gecomprimeerd; QBZ kan die nog niet afspelen."
+
+msgid "That file is not a disc image."
+msgstr "Dat bestand is geen schijfimage."
+
+msgid "SACD"
+msgstr "SACD"

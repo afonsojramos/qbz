@@ -5379,3 +5379,21 @@ msgstr "ディスクを読み取れませんでした。"
 
 msgid "Track {}"
 msgstr "トラック {}"
+
+msgid "Open SACD image…"
+msgstr "SACDイメージを開く…"
+
+msgid "Choose a disc image"
+msgstr "ディスクイメージを選択"
+
+msgid "That image has no stereo audio area."
+msgstr "このイメージにはステレオ領域がありません。"
+
+msgid "This disc is DST-compressed, which QBZ cannot play yet."
+msgstr "このディスクはDST圧縮のため、QBZではまだ再生できません。"
+
+msgid "That file is not a disc image."
+msgstr "そのファイルはディスクイメージではありません。"
+
+msgid "SACD"
+msgstr "SACD"

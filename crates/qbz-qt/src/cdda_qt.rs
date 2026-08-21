@@ -51,54 +51,104 @@ fn to_local_track(track: &qbz_disc::cdda::TocTrack, album: &str) -> LocalTrack {
     }
 }
 
-/// Read the disc in the first drive that has one and publish it as the
-/// ephemeral session. Returns the number of audio tracks, or an error string
-/// already translated for a toast.
-pub fn open_disc() -> Result<usize, String> {
+/// What MusicBrainz knows about a disc, reduced to what a track list needs.
+#[derive(Debug, Default)]
+pub struct DiscMeta {
+    pub album: Option<String>,
+    pub artist: Option<String>,
+    pub year: Option<i32>,
+    /// Track titles in disc order. Shorter than the disc if MusicBrainz and
+    /// the drive disagree about the track count — the caller must index
+    /// defensively rather than assume alignment.
+    pub titles: Vec<String>,
+}
+
+/// Ask MusicBrainz what this disc is.
+///
+/// Best effort by design: no network, a rate limit, an unknown disc or a
+/// malformed answer all give `None`, and the caller keeps its honest
+/// "Track N" names. A CD that plays with plain numbers is a small
+/// disappointment; a CD labelled with the WRONG album is a bug the user has to
+/// notice and undo.
+async fn lookup_musicbrainz(disc_id: &str) -> Option<DiscMeta> {
+    // MusicBrainz requires a descriptive User-Agent and blocks clients that
+    // do not send one. It also rate-limits to ~1 request/second, which this
+    // respects by only ever asking once per disc open.
+    let client = reqwest::Client::builder()
+        .user_agent(concat!(
+            "QBZ/",
+            env!("CARGO_PKG_VERSION"),
+            " (https://github.com/vicrodh/qbz)"
+        ))
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .ok()?;
+
+    let body = client
+        .get(qbz_disc::discid::lookup_url(disc_id))
+        .send()
+        .await
+        .ok()?
+        .json::<serde_json::Value>()
+        .await
+        .ok()?;
+
+    // The answer can list SEVERAL releases for one disc (different pressings
+    // of the same record). They share the geometry, so the first is as good as
+    // any for titles — and picking one is better than showing a chooser for a
+    // difference the user cannot hear.
+    let release = body.get("releases")?.as_array()?.first()?;
+    let media = release
+        .get("media")?
+        .as_array()?
+        .iter()
+        .find(|m| m.get("tracks").is_some())?;
+
+    let titles: Vec<String> = media
+        .get("tracks")?
+        .as_array()?
+        .iter()
+        .filter_map(|t| t.get("title")?.as_str().map(str::to_string))
+        .collect();
+
+    let artist = release
+        .get("artist-credit")
+        .and_then(|a| a.as_array())
+        .and_then(|a| a.first())
+        .and_then(|a| a.get("name"))
+        .and_then(|n| n.as_str())
+        .map(str::to_string);
+
+    let year = release
+        .get("date")
+        .and_then(|d| d.as_str())
+        .and_then(|d| d.get(0..4))
+        .and_then(|y| y.parse::<i32>().ok());
+
+    Some(DiscMeta {
+        album: release
+            .get("title")
+            .and_then(|t| t.as_str())
+            .map(str::to_string),
+        artist,
+        year,
+        titles,
+    })
+}
+
+/// Read the table of contents of the first drive that has an audio disc.
+/// BLOCKING — spinning a drive up takes a second or two.
+fn read_first_disc() -> Result<(std::path::PathBuf, qbz_disc::Toc), String> {
     let devices = qbz_disc::list_devices();
     if devices.is_empty() {
         return Err(qbz_i18n::t("No optical drive found."));
     }
-
-    // Several drives are legal; take the first one that actually has an audio
-    // disc rather than assuming /dev/sr0 is the interesting one.
+    // Several drives are legal; take the first that actually HAS an audio disc
+    // rather than assuming /dev/sr0 is the interesting one.
     let mut last_err = None;
     for dev in &devices {
         match qbz_disc::read_toc(dev) {
-            Ok(toc) => {
-                let album = disc_label();
-                let audio: Vec<_> = toc.audio_tracks().collect();
-                let skipped = toc.tracks.len() - audio.len();
-                if skipped > 0 {
-                    // Mixed-mode disc. Say so rather than quietly showing
-                    // fewer tracks than the case insert lists.
-                    log::info!(
-                        "[qbz-qt] cd: {skipped} data track(s) skipped on {}",
-                        dev.display()
-                    );
-                }
-                let tracks: Vec<LocalTrack> = audio
-                    .iter()
-                    .map(|t| {
-                        let mut lt = to_local_track(t, &album);
-                        lt.file_path = qbz_disc::CdRef {
-                            device: dev.clone(),
-                            start_lsn: t.start_lsn,
-                            sectors: t.sectors,
-                        }
-                        .to_path_string();
-                        lt
-                    })
-                    .collect();
-                let count = tracks.len();
-                log::info!(
-                    "[qbz-qt] cd: {} — {count} audio tracks, fingerprint {}",
-                    dev.display(),
-                    toc.fingerprint()
-                );
-                local_ephemeral::adopt_tracks(&album, tracks);
-                return Ok(count);
-            }
+            Ok(toc) => return Ok((dev.clone(), toc)),
             Err(e) => {
                 log::info!("[qbz-qt] cd: {} unusable: {e}", dev.display());
                 last_err = Some(e);
@@ -111,6 +161,93 @@ pub fn open_disc() -> Result<usize, String> {
         Some(e) => format!("{e}"),
         None => qbz_i18n::t("No optical drive found."),
     })
+}
+
+/// Read the disc in the drive, name it if MusicBrainz knows it, and publish it
+/// as the ephemeral session. Returns the number of audio tracks, or an error
+/// string already translated for a toast.
+pub async fn open_disc() -> Result<usize, String> {
+    let (dev, toc) = tokio::task::spawn_blocking(read_first_disc)
+        .await
+        .map_err(|e| format!("{e}"))??;
+
+    let audio: Vec<qbz_disc::TocTrack> = toc.audio_tracks().cloned().collect();
+    let skipped = toc.tracks.len() - audio.len();
+    if skipped > 0 {
+        // Mixed-mode disc. Say so rather than quietly showing fewer tracks
+        // than the case insert lists.
+        log::info!(
+            "[qbz-qt] cd: {skipped} data track(s) skipped on {}",
+            dev.display()
+        );
+    }
+
+    // The Disc ID is computed from the AUDIO tracks' geometry, which is what
+    // MusicBrainz hashes. Failing to compute one (an empty or absurd disc) is
+    // not an error — it just means no names.
+    let starts: Vec<u32> = audio.iter().map(|t| t.start_lsn).collect();
+    let meta = match qbz_disc::discid::disc_id(&starts, toc.leadout_lsn) {
+        Some(id) => {
+            log::info!("[qbz-qt] cd: disc id {id}");
+            lookup_musicbrainz(&id).await
+        }
+        None => None,
+    }
+    .unwrap_or_default();
+
+    let album = meta
+        .album
+        .clone()
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(disc_label);
+    if let Some(a) = meta.album.as_deref() {
+        log::info!(
+            "[qbz-qt] cd: identified as {:?} by {:?} ({} titles)",
+            a,
+            meta.artist.as_deref().unwrap_or("?"),
+            meta.titles.len()
+        );
+    } else {
+        log::info!("[qbz-qt] cd: not identified — tracks keep their numbers");
+    }
+
+    let tracks: Vec<LocalTrack> = audio
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let mut lt = to_local_track(t, &album);
+            lt.file_path = qbz_disc::CdRef {
+                device: dev.clone(),
+                start_lsn: t.start_lsn,
+                sectors: t.sectors,
+            }
+            .to_path_string();
+            // Index defensively: MusicBrainz and the drive can disagree about
+            // the track count (a hidden track, a mixed-mode disc), and pairing
+            // them by position without checking is how track 5 gets track 6's
+            // name.
+            if let Some(title) = meta.titles.get(i).filter(|s| !s.is_empty()) {
+                lt.title = title.clone();
+            }
+            if let Some(artist) = meta.artist.as_deref() {
+                lt.artist = artist.to_string();
+                lt.album_artist = Some(artist.to_string());
+            }
+            // `LocalTrack.year` is u32; a release date before year zero is not a
+            // thing, so a negative parse is simply dropped.
+            lt.year = meta.year.and_then(|y| u32::try_from(y).ok());
+            lt
+        })
+        .collect();
+
+    let count = tracks.len();
+    log::info!(
+        "[qbz-qt] cd: {} — {count} audio tracks, fingerprint {}",
+        dev.display(),
+        toc.fingerprint()
+    );
+    local_ephemeral::adopt_tracks(&album, tracks);
+    Ok(count)
 }
 
 #[cfg(test)]

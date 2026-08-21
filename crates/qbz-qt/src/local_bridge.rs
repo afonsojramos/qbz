@@ -300,6 +300,9 @@ pub mod qbz_local {
         /// no disc, a data-only disc) rather than opening an empty pane.
         #[qinvokable]
         fn ephemeral_open_cd(self: Pin<&mut QbzLocal>);
+        /// `Open > Open SACD image…`: pick a .iso and play its stereo area.
+        #[qinvokable]
+        fn ephemeral_open_sacd(self: Pin<&mut QbzLocal>);
         /// Header Play / Shuffle: the whole session becomes the queue. Same
         /// `(id, shuffle)` shape as `play_album`, so the two headers behave
         /// identically.
@@ -1094,11 +1097,27 @@ impl qbz_local::QbzLocal {
         // Reading a TOC spins the drive up and can take a second or two, so it
         // does not run on the UI thread.
         crate::spawn(async move {
-            let outcome = tokio::task::spawn_blocking(crate::cdda_qt::open_disc).await;
+            match crate::cdda_qt::open_disc().await {
+                Ok(n) => log::info!("[qbz-qt] cd opened: {n} tracks"),
+                Err(msg) => crate::toast_qt::error(msg),
+            }
+        });
+    }
+
+    pub fn ephemeral_open_sacd(self: Pin<&mut Self>) {
+        crate::spawn(async move {
+            let picked = tokio::task::spawn_blocking(crate::local_ephemeral::pick_image_blocking)
+                .await
+                .ok()
+                .flatten();
+            let Some(path) = picked else { return };
+            let p = std::path::PathBuf::from(&path);
+            // Reading the area TOC seeks around a multi-gigabyte file.
+            let outcome = tokio::task::spawn_blocking(move || crate::sacd_qt::open_image(&p)).await;
             match outcome {
-                Ok(Ok(n)) => log::info!("[qbz-qt] cd opened: {n} tracks"),
+                Ok(Ok(n)) => log::info!("[qbz-qt] sacd opened: {n} tracks"),
                 Ok(Err(msg)) => crate::toast_qt::error(msg),
-                Err(e) => log::warn!("[qbz-qt] cd open task failed: {e}"),
+                Err(e) => log::warn!("[qbz-qt] sacd open task failed: {e}"),
             }
         });
     }

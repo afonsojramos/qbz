@@ -5396,3 +5396,21 @@ msgstr "Die Disc konnte nicht gelesen werden."
 
 msgid "Track {}"
 msgstr "Titel {}"
+
+msgid "Open SACD image…"
+msgstr "SACD-Image öffnen…"
+
+msgid "Choose a disc image"
+msgstr "Disc-Image auswählen"
+
+msgid "That image has no stereo audio area."
+msgstr "Dieses Image hat keinen Stereo-Audiobereich."
+
+msgid "This disc is DST-compressed, which QBZ cannot play yet."
+msgstr "Diese Disc ist DST-komprimiert; QBZ kann sie noch nicht abspielen."
+
+msgid "That file is not a disc image."
+msgstr "Diese Datei ist kein Disc-Image."
+
+msgid "SACD"
+msgstr "SACD"

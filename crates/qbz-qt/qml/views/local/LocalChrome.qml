@@ -197,11 +197,14 @@ Item {
             { "label": QbzSession.tr("Open folder…", QbzSession.trRev),
               "icon": "folder-open", "action": "folder" },
             { "label": QbzSession.tr("Open audio CD", QbzSession.trRev),
-              "icon": "disc", "action": "cd" }
+              "icon": "disc", "action": "cd" },
+            { "label": QbzSession.tr("Open SACD image…", QbzSession.trRev),
+              "icon": "disc-3", "action": "sacd" }
         ]
         onPicked: function (action) {
             if (action === "folder") QbzLocal.ephemeralOpen()
             else if (action === "cd") QbzLocal.ephemeralOpenCd()
+            else if (action === "sacd") QbzLocal.ephemeralOpenSacd()
         }
     }
 

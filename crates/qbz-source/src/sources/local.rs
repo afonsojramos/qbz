@@ -779,6 +779,15 @@ impl Source for LocalSource {
             };
         }
 
+        // A SACD track rides the DSD ticket unchanged: `open_dsd` recognises
+        // the reference and returns a demuxer, so the player's PCM, DoP and
+        // native paths all inherit disc images with no arm of their own.
+        // Answered before the extension tests because a `sacd:` string is not
+        // a path and must never be opened as one.
+        if qbz_disc::SacdRef::is_sacd_path(&row.file_path) {
+            return Ok(PlaybackTicket::DsdFile { path, play_id });
+        }
+
         let lower = row.file_path.to_lowercase();
         if lower.ends_with(".dsf") || lower.ends_with(".dff") {
             return Ok(PlaybackTicket::DsdFile { path, play_id });

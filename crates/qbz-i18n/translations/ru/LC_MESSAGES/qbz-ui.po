@@ -5413,3 +5413,21 @@ msgstr "Не удалось прочитать диск."
 
 msgid "Track {}"
 msgstr "Дорожка {}"
+
+msgid "Open SACD image…"
+msgstr "Открыть образ SACD…"
+
+msgid "Choose a disc image"
+msgstr "Выберите образ диска"
+
+msgid "That image has no stereo audio area."
+msgstr "В этом образе нет стереообласти."
+
+msgid "This disc is DST-compressed, which QBZ cannot play yet."
+msgstr "Диск сжат в DST — QBZ пока не может его воспроизвести."
+
+msgid "That file is not a disc image."
+msgstr "Это не образ диска."
+
+msgid "SACD"
+msgstr "SACD"
