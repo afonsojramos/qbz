@@ -47,20 +47,16 @@ Item {
                 iconSize: 15
                 onClicked: QbzLocal.treeCollapseAll()
             }
-            QbzIconButton {
-                name: "folder-open"
-                btnSize: 30
-                iconSize: 15
-                onClicked: QbzLocal.ephemeralOpen()
-            }
             // Filler: the search collapses to a 30px magnifier, so the slot
             // stays right-aligned and the field opens LEFT over this gap.
             Item {
-                width: Math.max(0, parent.width - 3 * 30 - 30 - 4 * 4)
+                // TWO buttons now, not three: "open folder" moved to the
+                // header's `Open` menu, which serves every medium.
+                width: Math.max(0, parent.width - 2 * 30 - 30 - 3 * 4)
                 height: 1
             }
             LocalSearchBox {
-                boxWidth: parent.width - 3 * 34
+                boxWidth: parent.width - 2 * 34
                 placeholder: QbzSession.tr("Search folders", QbzSession.trRev)
                 onEdited: function (v) {
                     root.view.treeSearch = v

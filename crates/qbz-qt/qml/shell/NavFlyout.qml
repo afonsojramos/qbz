@@ -161,12 +161,19 @@ Item {
                 "label": nav.trs("Local Library"),
                 "qobuz": false,
                 "enabled": true,
+                // The `Open` entry is APPENDED, not marked enabled:false —
+                // a disabled row still renders (NavFlyout.qml:329,364), and a
+                // permanently greyed "Open" would advertise a tab that mostly
+                // does not exist. `localEphemeralActive` is the same flag the
+                // tab bar and the pane read.
                 "entries": [
                     { "label": nav.trs("Albums"), "icon": "disc", "view": "local", "tab": "albums", "enabled": true },
                     { "label": nav.trs("Artists"), "icon": "user", "view": "local", "tab": "artists", "enabled": true },
                     { "label": nav.trs("Folders"), "icon": "folder", "view": "local", "tab": "folders", "enabled": true },
                     { "label": nav.trs("Tracks"), "icon": "music", "view": "local", "tab": "tracks", "enabled": true }
-                ]
+                ].concat(QbzLocal.localEphemeralActive
+                    ? [{ "label": QbzLocal.localEphemeralLabel, "icon": "folder-open", "view": "local", "tab": "ephemeral", "enabled": true }]
+                    : [])
             },
             {
                 "id": "myqbz",

@@ -293,7 +293,6 @@ Row {
     // ============================ FOLDERS ================================
     Row {
         visible: root.view && root.view.activeTab === "folders"
-            && !root.view.ephemeralActive
         spacing: 8
         height: parent.height
 

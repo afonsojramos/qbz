@@ -186,6 +186,21 @@ Rectangle {
 
     readonly property bool ephemeralActive: QbzLocal.localEphemeralActive
 
+    /// Badge count for the ephemeral tab. Reads the SAME document the pane
+    /// renders, so the number on the tab and the rows behind it are one fact.
+    readonly property int ephemeralTrackCount:
+        ephemeral && ephemeral.trackCount ? ephemeral.trackCount : 0
+
+    /// The ephemeral tab's LABEL — the name of the thing you opened, with no
+    /// verb in front of it. Computed in Rust (`local_ephemeral::display_label`)
+    /// and read here, so this view and `NavFlyout` cannot name it differently:
+    /// the flyout does not parse the ephemeral document and should not start.
+    ///
+    /// A verb was tried and rejected: "Now Playing" / "Playing: …" is false the
+    /// moment a folder sits open while something else plays, and the tab would
+    /// contradict the now-playing bar on the same screen.
+    readonly property string ephemeralLabel: QbzLocal.localEphemeralLabel
+
     // ---------------------------- documents ------------------------------
     function parseDoc(json, fallback) {
         if (json === "") return fallback
@@ -974,6 +989,19 @@ Rectangle {
                 anchors.fill: parent
                 active: QbzLocal.localAvailable && root.activeTab === "tracks"
                 sourceComponent: LocalTracksTab { view: root }
+            }
+            // The `Open` tab, previously the ephemeral ARM of the Folders tab.
+            //
+            // NOT gated on `localAvailable`, unlike its four siblings: an
+            // ephemeral session is content from OUTSIDE the indexed library,
+            // so a user with an empty (or unscanned) library must still be
+            // able to open a folder or a disc and play it. Gating it would
+            // hide the pane behind the "no local library" empty state for
+            // exactly the people the feature exists for.
+            Loader {
+                anchors.fill: parent
+                active: root.activeTab === "ephemeral" && root.ephemeralActive
+                sourceComponent: LocalEphemeralPane { view: root }
             }
         }
     }

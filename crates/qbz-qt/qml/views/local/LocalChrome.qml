@@ -1,8 +1,19 @@
 // Local Library FIXED CHROME (LocalLibraryView.slint:710-1125) — the
 // mandatory two-row header this app's list views all share:
 //
-//   row 1 (46px)  "Local Library" + the settings gear + the Plex re-sync
-//                 button (#573, only when Plex is enabled + authenticated)
+//   row 1 (46px)  "Local Library" + the settings gear + the `Open` menu +
+//                 the `Refresh` menu
+//
+//                 `Open` is ALWAYS present: it is the one door for every
+//                 medium that can become an ephemeral session (a folder
+//                 today; a CD and a SACD image next). It replaces the
+//                 folder-open icon that used to sit in the Folders tree rail,
+//                 where it was reachable only from one arm of one tab.
+//
+//                 `Refresh` replaces the Plex-only re-sync icon (#573). Every
+//                 row is gated on a source actually being configured, so a
+//                 user with no media servers still sees exactly one usable
+//                 entry (local folders) plus "all".
 //   row 2 (44px)  the segmented tab bar with count badges on the left, the
 //                 per-tab toolbar floated right
 //   then the 1px divider.
@@ -45,19 +56,32 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzShell.navigateTo("settings")
             }
+            // ---- Open ▾ ----------------------------------------------
+            QbzNavButton {
+                id: openBtn
+                name: "folder-open"
+                anchors.verticalCenter: parent.verticalCenter
+                onClicked: openMenu.openBelowLeft(openBtn)
+            }
+            // ---- Refresh ▾ -------------------------------------------
             Item {
-                visible: QbzLocal.plexAvailable
-                width: visible ? 28 : 0
+                width: 28
                 height: 28
                 anchors.verticalCenter: parent.verticalCenter
                 QbzNavButton {
+                    id: refreshBtn
                     anchors.fill: parent
                     name: "refresh-cw"
-                    btnEnabled: !QbzLocal.plexSyncing
-                    onClicked: QbzLocal.syncPlex()
+                    // The button stays reachable while a sync runs — the
+                    // individual rows are what go muted, so the user can still
+                    // start a DIFFERENT source's sync (they are independent
+                    // jobs on independent stores).
+                    onClicked: refreshMenu.openBelowLeft(refreshBtn)
                 }
                 QbzSpinner {
-                    visible: QbzLocal.plexSyncing
+                    // ANY sync in flight, not just Plex's: the media-server
+                    // sweep has its own flag and its own progress string.
+                    visible: QbzLocal.plexSyncing || QbzLocal.mediaSyncing
                     anchors.centerIn: parent
                     size: 15
                 }
@@ -80,12 +104,24 @@ Item {
             // NOTE the `root.view.` prefix: QbzTabBar has its OWN `counts`
             // property (the badge arm), so an unqualified `counts` here
             // would resolve to that bool, not to the view's document.
-            tabs: [
-                { "id": "albums", "label": QbzSession.tr("Albums", QbzSession.trRev), "count": root.view.counts.albums || 0 },
-                { "id": "artists", "label": QbzSession.tr("Artists", QbzSession.trRev), "count": root.view.counts.artists || 0 },
-                { "id": "folders", "label": QbzSession.tr("Folders", QbzSession.trRev), "count": root.view.counts.folders || 0 },
-                { "id": "tracks", "label": QbzSession.tr("Tracks", QbzSession.trRev), "count": root.view.counts.tracks || 0 },
-            ]
+            // The fifth tab EXISTS only while an ephemeral session does. It is
+            // appended rather than rendered disabled, because a tab for a
+            // medium that is not inserted is worse than no tab: it invites a
+            // click that can only fail. `ephemeralActive` is the same flag the
+            // pane itself keys on, so the tab and its body cannot disagree.
+            tabs: {
+                var t = [
+                    { "id": "albums", "label": QbzSession.tr("Albums", QbzSession.trRev), "count": root.view.counts.albums || 0 },
+                    { "id": "artists", "label": QbzSession.tr("Artists", QbzSession.trRev), "count": root.view.counts.artists || 0 },
+                    { "id": "folders", "label": QbzSession.tr("Folders", QbzSession.trRev), "count": root.view.counts.folders || 0 },
+                    { "id": "tracks", "label": QbzSession.tr("Tracks", QbzSession.trRev), "count": root.view.counts.tracks || 0 },
+                ]
+                if (root.view.ephemeralActive)
+                    t.push({ "id": "ephemeral",
+                             "label": root.view.ephemeralLabel,
+                             "count": root.view.ephemeralTrackCount })
+                return t
+            }
             onSelected: function (id) { root.view.activeTab = id }
         }
 
@@ -101,5 +137,74 @@ Item {
         width: parent.width
         height: 1
         color: theme.borderSubtle
+    }
+
+    // ---------------------------- the two menus ---------------------------
+    // Both are CardMenu (the shared ⋯ surface): an `entries` model in, a
+    // `picked(action)` out. No new component, and the rows inherit the app's
+    // one menu chrome.
+
+    CardMenu {
+        id: openMenu
+        menuWidth: 220
+        entries: [
+            { "label": QbzSession.tr("Open folder…", QbzSession.trRev),
+              "icon": "folder-open", "action": "folder" }
+        ]
+        onPicked: function (action) {
+            if (action === "folder") QbzLocal.ephemeralOpen()
+        }
+    }
+
+    CardMenu {
+        id: refreshMenu
+        menuWidth: 240
+        // Built as a list so the optional rows can be appended rather than
+        // rendered muted: a user with no Plex must not see a Plex row at all.
+        //
+        // `cloud-download`, not `server`: QbzIcon draws PRE-BAKED svgs from
+        // `qml/assets/icons/<tint>/`, and a name with no bake renders NOTHING
+        // — no warning, no error, no failing test. `server` has no bake, and
+        // the three rows below shipped iconless in the first smoke because of
+        // it. Check the tint directory before inventing a glyph name.
+        // `mediaHasJellyfin` / `mediaHasSubsonic` are the SAME gates the media
+        // server settings panel publishes, so this menu cannot drift from what
+        // is actually configured.
+        entries: {
+            var out = [
+                { "label": QbzSession.tr("Resync all", QbzSession.trRev),
+                  "icon": "refresh-cw", "action": "all",
+                  "enabled": !QbzLocal.mediaSyncing && !QbzLocal.plexSyncing },
+                { "sep": true },
+                { "label": QbzSession.tr("Resync local folders", QbzSession.trRev),
+                  "icon": "hard-drive", "action": "local" }
+            ]
+            if (QbzLocal.plexAvailable)
+                out.push({ "label": QbzSession.tr("Resync Plex", QbzSession.trRev),
+                           "icon": "cloud-download", "action": "plex",
+                           "enabled": !QbzLocal.plexSyncing })
+            if (QbzLocal.mediaHasJellyfin)
+                out.push({ "label": QbzSession.tr("Resync Jellyfin", QbzSession.trRev),
+                           "icon": "cloud-download", "action": "jellyfin",
+                           "enabled": !QbzLocal.mediaSyncing })
+            if (QbzLocal.mediaHasSubsonic)
+                out.push({ "label": QbzSession.tr("Resync Navidrome", QbzSession.trRev),
+                           "icon": "cloud-download", "action": "subsonic",
+                           "enabled": !QbzLocal.mediaSyncing })
+            return out
+        }
+        onPicked: function (action) {
+            // "library-scan" with an empty payload = every ENABLED folder,
+            // which is what the settings panel's own Scan button sends
+            // (LibraryFolderTable.qml:75).
+            if (action === "local" || action === "all")
+                QbzBridge.settingsString("library-scan", "")
+            if ((action === "plex" || action === "all") && QbzLocal.plexAvailable)
+                QbzLocal.syncPlex()
+            if ((action === "jellyfin" || action === "all") && QbzLocal.mediaHasJellyfin)
+                QbzLocal.mediaSync("jellyfin", false)
+            if ((action === "subsonic" || action === "all") && QbzLocal.mediaHasSubsonic)
+                QbzLocal.mediaSync("subsonic", false)
+        }
     }
 }

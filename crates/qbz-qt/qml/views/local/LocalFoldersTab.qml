@@ -1,7 +1,11 @@
-// Folders tab body (LocalLibraryView.slint:1531) — three mutually exclusive
-// arms: the ephemeral pane (an ad-hoc folder is open), FLAT mode (the album
-// collection grouped by directory) and TREE mode (the two-pane filesystem
-// browser).
+// Folders tab body (LocalLibraryView.slint:1531) — two mutually exclusive
+// arms: FLAT mode (the album collection grouped by directory) and TREE mode
+// (the two-pane filesystem browser).
+//
+// The ephemeral pane USED to be a third arm here, gated on
+// `view.ephemeralActive`. It is now a tab of its own (`"ephemeral"`), so an
+// open folder or disc no longer hides the folder browser you were using —
+// and a medium that comes and goes cannot take a permanent tab hostage.
 //
 // The tree divider is also the drag handle that resizes the rail: min 136px
 // (half the 272px default), max half the content area — the Slint's own
@@ -19,19 +23,12 @@ Item {
 
     QbzTheme { id: theme }
 
-    // ---- Ephemeral ----
-    LocalEphemeralPane {
-        anchors.fill: parent
-        visible: root.view.ephemeralActive
-        view: root.view
-    }
-
     // Loading = the shape of the arm that is coming. FLAT mode is the same
     // collection the Albums tab renders; TREE mode is the rail + detail pair
     // (the rail rows are 34px folder rows with a leading glyph, so the
     // placeholder uses the small square art cell).
     QbzSkeleton {
-        visible: QbzLocal.localFoldersLoading && !root.view.ephemeralActive
+        visible: QbzLocal.localFoldersLoading
             && root.view.foldersMode === "flat"
         variant: root.view.foldersGridView === "grid" ? "cardGrid" : "rowList"
         anchors.fill: parent
@@ -46,7 +43,7 @@ Item {
         phase: root.view.skelPhase
     }
     Row {
-        visible: QbzLocal.localFoldersLoading && !root.view.ephemeralActive
+        visible: QbzLocal.localFoldersLoading
             && root.view.foldersMode !== "flat"
         anchors.fill: parent
         anchors.topMargin: 12
@@ -73,7 +70,7 @@ Item {
         }
     }
     LocalNote {
-        visible: !QbzLocal.localFoldersLoading && !root.view.ephemeralActive
+        visible: !QbzLocal.localFoldersLoading
             && root.view.folders.length === 0 && root.view.foldersSearch === ""
         text: QbzSession.tr("No folders in your local library yet.", QbzSession.trRev)
     }
@@ -81,7 +78,7 @@ Item {
     // ---------------------------- FLAT MODE ------------------------------
     Item {
         anchors.fill: parent
-        visible: !QbzLocal.localFoldersLoading && !root.view.ephemeralActive
+        visible: !QbzLocal.localFoldersLoading
             && root.view.folders.length > 0 && root.view.foldersMode === "flat"
 
         LocalNote {
@@ -114,7 +111,7 @@ Item {
     // ---------------------------- TREE MODE ------------------------------
     Item {
         anchors.fill: parent
-        visible: !QbzLocal.localFoldersLoading && !root.view.ephemeralActive
+        visible: !QbzLocal.localFoldersLoading
             && root.view.folders.length > 0 && root.view.foldersMode === "tree"
 
         LocalTreeRail {

@@ -209,6 +209,12 @@ pub(crate) fn load_tab_impl(tab: String) {
         "artists" => load_artists(),
         "folders" => load_folders(),
         "tracks" => load_tracks(true),
+        // The ephemeral session lives in memory and is published the moment it
+        // is opened — there is nothing to fetch when its tab is selected. It
+        // still needs an ARM: without one it lands in the `_` below and every
+        // switch to the tab logs "unknown tab", which is how a real routing
+        // bug would look.
+        "ephemeral" => {}
         _ => log::warn!("[qbz-qt] local: unknown tab {tab}"),
     }
 }
