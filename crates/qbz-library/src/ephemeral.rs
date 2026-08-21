@@ -434,6 +434,28 @@ impl EphemeralLibraryState {
         })
     }
 
+    /// Swap the stored rows for an updated copy, KEEPING their ids.
+    ///
+    /// Used when something about the session changes after it opened — the
+    /// cover arriving late is the case that motivated it. Re-running
+    /// `open_tracks` would renumber every row from the floor, and the queue
+    /// may already hold the old ids: a playing track would lose its source
+    /// mid-song.
+    pub fn replace_tracks_preserving_ids(
+        &self,
+        tracks: &[LocalTrack],
+    ) -> Result<(), EphemeralError> {
+        let mut inner = self.inner.lock().map_err(|_| EphemeralError::Lock)?;
+        for t in tracks {
+            // Only rows this session already knows; an unknown id here means
+            // the caller built its list from something else.
+            if inner.tracks.contains_key(&t.id) {
+                inner.tracks.insert(t.id, t.clone());
+            }
+        }
+        Ok(())
+    }
+
     pub fn clear(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.reset();

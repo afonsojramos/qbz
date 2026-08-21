@@ -68,7 +68,8 @@ pub fn disc_id(starts: &[u32], leadout: u32) -> Option<String> {
 /// so both belong to whoever performs the request, not here.
 pub fn lookup_url(disc_id: &str) -> String {
     format!(
-        "https://musicbrainz.org/ws/2/discid/{disc_id}?fmt=json&inc=recordings+artist-credits"
+        "https://musicbrainz.org/ws/2/discid/{disc_id}\
+         ?fmt=json&inc=recordings+artist-credits+release-groups"
     )
 }
 
@@ -136,8 +137,11 @@ mod tests {
         let u = lookup_url(FEAR_INOCULUM_ID);
         assert!(u.contains(FEAR_INOCULUM_ID));
         // Without `recordings` the answer has releases but no track titles,
-        // which is the entire point of asking.
+        // which is the entire point of asking. `release-groups` matters for a
+        // different reason: cover art is far more reliably attached to the
+        // GROUP than to one pressing.
         assert!(u.contains("inc=recordings"));
+        assert!(u.contains("release-groups"));
         assert!(u.contains("fmt=json"));
     }
 }

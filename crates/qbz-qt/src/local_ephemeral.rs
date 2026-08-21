@@ -405,6 +405,39 @@ pub fn adopt_tracks(label: &str, tracks: Vec<LocalTrack>) {
     });
 }
 
+/// Attach artwork to the OPEN session after the fact.
+///
+/// A disc's cover does not come with the disc — it is fetched, and fetching it
+/// took 9.4 s on the owner's album because the Cover Art Archive redirects to
+/// archive.org. Blocking the session on that meant a click that appeared to do
+/// nothing, so the tracks land first and this patches the art in when it
+/// arrives.
+///
+/// A no-op once the user has moved on: if the session was replaced or closed
+/// while the download ran, a late cover must not resurrect it or paint itself
+/// onto whatever is open now.
+pub fn set_session_artwork(path: &str) {
+    let path = path.to_string();
+    let Some(label) = STATE.current_folder_path() else {
+        return;
+    };
+    let mut tracks = STATE.tracks_snapshot();
+    if tracks.is_empty() {
+        return;
+    }
+    for t in tracks.iter_mut() {
+        t.artwork_path = Some(path.clone());
+    }
+    // Re-seat the rows so the ids stay the same — the queue may already hold
+    // them, and a re-numbered session would leave a playing track orphaned.
+    if let Err(e) = STATE.replace_tracks_preserving_ids(&tracks) {
+        log::warn!("[qbz-qt] ephemeral: artwork update failed: {e}");
+        return;
+    }
+    log::info!("[qbz-qt] ephemeral: cover attached to {label}");
+    publish_doc(&build_doc(&label, &label, &tracks), false);
+}
+
 /// Boot: re-open the persisted folder, if any. Silent — a folder that moved
 /// away just clears the stale pref.
 pub fn rehydrate() {

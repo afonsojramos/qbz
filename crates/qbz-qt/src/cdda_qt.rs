@@ -61,19 +61,32 @@ pub struct DiscMeta {
     /// the drive disagree about the track count — the caller must index
     /// defensively rather than assume alignment.
     pub titles: Vec<String>,
+    /// MusicBrainz release id, which is also a key to its cover art.
+    pub release_id: Option<String>,
+    /// The RELEASE GROUP id — the album as a work, rather than one pressing
+    /// of it. Cover art lives here far more reliably: a specific pressing
+    /// often has none of its own, and the owner's Fear Inoculum answers 500
+    /// for its release while the group answers 200.
+    pub release_group_id: Option<String>,
 }
 
 /// Ask MusicBrainz what this disc is.
 ///
-/// Best effort by design: no network, a rate limit, an unknown disc or a
-/// malformed answer all give `None`, and the caller keeps its honest
-/// "Track N" names. A CD that plays with plain numbers is a small
-/// disappointment; a CD labelled with the WRONG album is a bug the user has to
-/// notice and undo.
+/// Best effort, but NOT silent. The first version swallowed every failure into
+/// one `None` and logged "not identified", so a disc nobody has submitted, a
+/// dropped connection and a 503 from an overloaded server were indistinguishable
+/// — and when the owner hit one, the log could not say which. Every exit below
+/// says what happened, because the next person to see "Track 1" needs to know
+/// whether to retry, wait, or submit the disc.
+///
+/// A 503 is RETRIED once after a pause: MusicBrainz rate-limits anonymous
+/// clients and explicitly asks them to back off rather than give up. Its 503
+/// body is valid JSON with an `error` field, which is exactly why the naive
+/// parse mistook it for an unknown disc — `.json()` succeeded and `releases`
+/// simply was not there.
 async fn lookup_musicbrainz(disc_id: &str) -> Option<DiscMeta> {
-    // MusicBrainz requires a descriptive User-Agent and blocks clients that
-    // do not send one. It also rate-limits to ~1 request/second, which this
-    // respects by only ever asking once per disc open.
+    // MusicBrainz requires a descriptive User-Agent and blocks clients that do
+    // not send one.
     let client = reqwest::Client::builder()
         .user_agent(concat!(
             "QBZ/",
@@ -82,34 +95,102 @@ async fn lookup_musicbrainz(disc_id: &str) -> Option<DiscMeta> {
         ))
         .timeout(std::time::Duration::from_secs(10))
         .build()
+        .map_err(|e| log::warn!("[qbz-qt] cd: http client: {e}"))
         .ok()?;
 
-    let body = client
-        .get(qbz_disc::discid::lookup_url(disc_id))
-        .send()
-        .await
-        .ok()?
-        .json::<serde_json::Value>()
-        .await
-        .ok()?;
+    let url = qbz_disc::discid::lookup_url(disc_id);
+    let mut body: Option<serde_json::Value> = None;
 
-    // The answer can list SEVERAL releases for one disc (different pressings
-    // of the same record). They share the geometry, so the first is as good as
-    // any for titles — and picking one is better than showing a chooser for a
-    // difference the user cannot hear.
-    let release = body.get("releases")?.as_array()?.first()?;
+    for attempt in 0..2 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        }
+        let resp = match client.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("[qbz-qt] cd: lookup request failed: {e}");
+                return None;
+            }
+        };
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+
+        if status.as_u16() == 503 {
+            log::warn!(
+                "[qbz-qt] cd: MusicBrainz is rate-limiting (503){}",
+                if attempt == 0 { ", retrying once" } else { ", giving up" }
+            );
+            continue;
+        }
+        if !status.is_success() {
+            log::warn!(
+                "[qbz-qt] cd: MusicBrainz answered {status}: {}",
+                &text[..text.len().min(200)]
+            );
+            return None;
+        }
+        match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(v) => {
+                body = Some(v);
+                break;
+            }
+            Err(e) => {
+                log::warn!(
+                    "[qbz-qt] cd: lookup answer was not JSON ({e}): {}",
+                    &text[..text.len().min(200)]
+                );
+                return None;
+            }
+        }
+    }
+    let body = body?;
+
+    // An `error` field is how MusicBrainz reports a problem in a 200-shaped
+    // body too. Naming it beats reporting an unknown disc.
+    if let Some(err) = body.get("error").and_then(|e| e.as_str()) {
+        log::warn!("[qbz-qt] cd: MusicBrainz error: {err}");
+        return None;
+    }
+
+    let releases = body.get("releases").and_then(|r| r.as_array());
+    match releases {
+        None => {
+            log::warn!(
+                "[qbz-qt] cd: answer has no `releases` (keys: {:?})",
+                body.as_object().map(|o| o.keys().collect::<Vec<_>>())
+            );
+            return None;
+        }
+        // THE one case that genuinely means "nobody has submitted this disc".
+        Some(r) if r.is_empty() => {
+            log::info!("[qbz-qt] cd: MusicBrainz does not know this disc yet");
+            return None;
+        }
+        _ => {}
+    }
+    let release = releases?.first()?;
+
+    // Several releases can share a disc (different pressings of one record).
+    // They share the geometry, so the first is as good as any for titles, and
+    // picking one beats a chooser for a difference nobody can hear.
     let media = release
-        .get("media")?
-        .as_array()?
-        .iter()
-        .find(|m| m.get("tracks").is_some())?;
+        .get("media")
+        .and_then(|m| m.as_array())
+        .and_then(|m| m.iter().find(|m| m.get("tracks").is_some()));
+    let Some(media) = media else {
+        log::warn!("[qbz-qt] cd: release {:?} carries no track list", release.get("title"));
+        return None;
+    };
 
     let titles: Vec<String> = media
-        .get("tracks")?
-        .as_array()?
-        .iter()
-        .filter_map(|t| t.get("title")?.as_str().map(str::to_string))
-        .collect();
+        .get("tracks")
+        .and_then(|t| t.as_array())
+        .map(|t| {
+            t.iter()
+                .filter_map(|x| x.get("title")?.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let artist = release
         .get("artist-credit")
@@ -133,7 +214,84 @@ async fn lookup_musicbrainz(disc_id: &str) -> Option<DiscMeta> {
         artist,
         year,
         titles,
+        release_id: release
+            .get("id")
+            .and_then(|i| i.as_str())
+            .map(str::to_string),
+        release_group_id: release
+            .get("release-group")
+            .and_then(|g| g.get("id"))
+            .and_then(|i| i.as_str())
+            .map(str::to_string),
     })
+}
+
+/// Fetch the front cover for a MusicBrainz release and cache it.
+///
+/// A CD carries no artwork — the disc is the artwork, and it is in a case the
+/// computer cannot see. The Cover Art Archive is keyed by the same release id
+/// the disc lookup already returned, so this costs one more request and no
+/// new identity.
+///
+/// Everything about it is optional: no cover, no network, a redirect that
+/// leads nowhere — all give `None`, and the pane draws its disc glyph. A
+/// missing cover is a cosmetic gap; a wrong one is a lie about what you are
+/// holding.
+async fn fetch_cover(release_id: &str, group_id: Option<&str>) -> Option<String> {
+    // Two keys, in order. A RELEASE is one pressing and often has no art of
+    // its own — the owner's disc answers 500 for its release and 200 for its
+    // group — while the RELEASE GROUP is the album as a work and is where the
+    // canonical cover lives. Trying only the first is why the first version
+    // came back empty.
+    for key in [
+        Some(format!("release/{release_id}")),
+        group_id.map(|g| format!("release-group/{g}")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(p) = fetch_cover_at(&key).await {
+            return Some(p);
+        }
+    }
+    None
+}
+
+async fn fetch_cover_at(key: &str) -> Option<String> {
+    // 500px: the pane draws it at 224 and the grid at 220, so anything larger
+    // is bytes nobody looks at.
+    let url = format!("https://coverartarchive.org/{key}/front-500");
+    let client = reqwest::Client::builder()
+        .user_agent(concat!(
+            "QBZ/",
+            env!("CARGO_PKG_VERSION"),
+            " (https://github.com/vicrodh/qbz)"
+        ))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .ok()?;
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        // 404 is the ordinary answer for something nobody has photographed;
+        // 500 happens for a release whose art lives on its group instead.
+        log::info!("[qbz-qt] cd: no cover at {key} ({})", resp.status());
+        return None;
+    }
+    let bytes = resp.bytes().await.ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+
+    // Write it beside the thumbnails the rest of Local Library uses, keyed by
+    // the release so a disc re-inserted tomorrow does not fetch it again.
+    let dir = qbz_library::get_artwork_cache_dir();
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("cd-{}.jpg", key.replace('/', "-")));
+    if !path.exists() {
+        std::fs::write(&path, &bytes).ok()?;
+    }
+    log::info!("[qbz-qt] cd: cover from {key} — {} bytes", bytes.len());
+    qbz_library::MetadataExtractor::cache_artwork_file(&path, &dir)
 }
 
 /// Read the table of contents of the first drive that has an audio disc.
@@ -247,6 +405,20 @@ pub async fn open_disc() -> Result<usize, String> {
         toc.fingerprint()
     );
     local_ephemeral::adopt_tracks(&album, tracks);
+
+    // The cover comes AFTER the session is on screen, never before it.
+    // Measured on the owner's disc: the Cover Art Archive took 9.4 s to
+    // answer — it redirects to archive.org, which is slow — and awaiting it
+    // here meant ten seconds of nothing happening after a click. The album
+    // appears with its names immediately and the art lands when it lands.
+    if let Some(id) = meta.release_id.clone() {
+        let group = meta.release_group_id.clone();
+        crate::spawn(async move {
+            if let Some(art) = fetch_cover(&id, group.as_deref()).await {
+                local_ephemeral::set_session_artwork(&art);
+            }
+        });
+    }
     Ok(count)
 }
 
