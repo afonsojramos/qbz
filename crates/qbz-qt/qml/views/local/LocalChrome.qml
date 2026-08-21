@@ -56,14 +56,10 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzShell.navigateTo("settings")
             }
-            // ---- Open ▾ ----------------------------------------------
-            QbzNavButton {
-                id: openBtn
-                name: "folder-open"
-                anchors.verticalCenter: parent.verticalCenter
-                onClicked: openMenu.openBelowLeft(openBtn)
-            }
             // ---- Refresh ▾ -------------------------------------------
+            // Before Open, per the owner's layout: the two maintenance glyphs
+            // (settings, resync) sit together, and the ACTION that produces
+            // new content reads last and carries a label.
             Item {
                 width: 28
                 height: 28
@@ -84,6 +80,56 @@ Item {
                     visible: QbzLocal.plexSyncing || QbzLocal.mediaSyncing
                     anchors.centerIn: parent
                     size: 15
+                }
+            }
+
+            // ---- [icon] Open ▾ ---------------------------------------
+            // A LABELLED chip, not a bare glyph: this is the one door for
+            // every medium, and a folder icon alone reads as "browse folders"
+            // next to a tab literally called Folders. 30px / radius 6 is the
+            // small toolbar-control contract this header's own selects use.
+            Rectangle {
+                id: openBtn
+                anchors.verticalCenter: parent.verticalCenter
+                width: openRow.width + 20
+                height: 30
+                radius: 6
+                color: openArea.containsMouse || openMenu.opened
+                    ? theme.surfaceHover
+                    : (theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated)
+
+                Row {
+                    id: openRow
+                    anchors.centerIn: parent
+                    spacing: 6
+                    QbzIcon {
+                        name: "folder-open"
+                        width: 15
+                        height: 15
+                        anchors.verticalCenter: parent.verticalCenter
+                        tintName: openArea.containsMouse ? "textPrimary" : "secondary"
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: QbzSession.tr("Open", QbzSession.trRev)
+                        color: openArea.containsMouse ? theme.textPrimary : theme.textSecondary
+                        font.pixelSize: 13
+                    }
+                    QbzIcon {
+                        name: "chevron-down"
+                        width: 13
+                        height: 13
+                        anchors.verticalCenter: parent.verticalCenter
+                        tintName: openArea.containsMouse ? "textPrimary" : "secondary"
+                    }
+                }
+
+                MouseArea {
+                    id: openArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: openMenu.openBelowLeft(openBtn)
                 }
             }
         }
