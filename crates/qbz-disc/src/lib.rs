@@ -17,6 +17,16 @@
 #[cfg(target_os = "linux")]
 pub mod cdda;
 
+/// Disc IMAGES are portable — a .iso is a file, and reading one needs no
+/// device and no privileges. Only the live-drive path is Linux-gated.
+pub mod iso9660;
+
+/// Naming a disc that carries no names.
+pub mod discid;
+
+/// SACD disc images (Scarlet Book).
+pub mod sacd;
+
 #[cfg(target_os = "linux")]
 pub use cdda::{list_devices, read_audio, read_toc, CdError, Toc, TocTrack};
 
@@ -127,6 +137,48 @@ impl CdRef {
     }
 }
 
+/// A SACD track inside an image, as ONE string that rides in a
+/// `LocalTrack.file_path` — the same trick `CdRef` plays, for the same reason.
+///
+/// `sacd:/path/to/disc.iso#7`
+///
+/// The track NUMBER, not its sector range: the area TOC is the authority on
+/// extents and re-reading it costs one 18 KB read, so encoding the geometry
+/// here would only create a second copy that can go stale. The image path may
+/// contain `#` (a filename is user data), so the split is from the RIGHT.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SacdRef {
+    pub image: std::path::PathBuf,
+    pub track: u8,
+}
+
+impl SacdRef {
+    pub const SCHEME: &'static str = "sacd:";
+
+    /// Cheap test callers use to route BEFORE touching the filesystem — an
+    /// image path IS a real file, but `open_dsd` must not try to sniff DSF
+    /// magic at its first byte.
+    pub fn is_sacd_path(s: &str) -> bool {
+        s.starts_with(Self::SCHEME)
+    }
+
+    pub fn to_path_string(&self) -> String {
+        format!("{}{}#{}", Self::SCHEME, self.image.display(), self.track)
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        let rest = s.strip_prefix(Self::SCHEME)?;
+        let (image, track) = rest.rsplit_once('#')?;
+        if image.is_empty() {
+            return None;
+        }
+        Some(Self {
+            image: std::path::PathBuf::from(image),
+            track: track.parse().ok()?,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +250,37 @@ mod tests {
             "cdda:#0+1",
         ] {
             assert_eq!(CdRef::parse(bad), None, "{bad} parsed");
+        }
+    }
+
+    #[test]
+    fn a_sacd_reference_round_trips_even_with_a_hash_in_the_name() {
+        // A filename is user data and may contain '#', which is why the split
+        // is from the right rather than the left.
+        let r = SacdRef {
+            image: std::path::PathBuf::from("/m/Wagner #1/disc.iso"),
+            track: 7,
+        };
+        let s = r.to_path_string();
+        assert_eq!(s, "sacd:/m/Wagner #1/disc.iso#7");
+        assert_eq!(SacdRef::parse(&s), Some(r));
+        assert!(SacdRef::is_sacd_path(&s));
+    }
+
+    #[test]
+    fn the_two_disc_schemes_never_claim_each_other() {
+        let cd = "cdda:/dev/sr0#0+46577";
+        let sacd = "sacd:/m/d.iso#3";
+        assert!(CdRef::is_cd_path(cd) && !SacdRef::is_sacd_path(cd));
+        assert!(SacdRef::is_sacd_path(sacd) && !CdRef::is_cd_path(sacd));
+        assert_eq!(CdRef::parse(sacd), None);
+        assert_eq!(SacdRef::parse(cd), None);
+    }
+
+    #[test]
+    fn a_malformed_sacd_reference_is_rejected() {
+        for bad in ["sacd:", "sacd:/x.iso", "sacd:#3", "sacd:/x.iso#", "sacd:/x.iso#abc"] {
+            assert_eq!(SacdRef::parse(bad), None, "{bad} parsed");
         }
     }
 }

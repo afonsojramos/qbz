@@ -6,6 +6,8 @@ edition.workspace = true
 [dependencies]
 log = { workspace = true }
 thiserror = { workspace = true }
+sha1 = "0.10"
+base64 = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

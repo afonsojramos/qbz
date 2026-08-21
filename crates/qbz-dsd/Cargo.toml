@@ -6,6 +6,7 @@ license.workspace = true
 description = "DSD (DSF/DFF) demuxing and DSD-to-PCM conversion"
 
 [dependencies]
+qbz-disc = { path = "../qbz-disc" }
 thiserror = { workspace = true }
 log = { workspace = true }
 id3 = "1"

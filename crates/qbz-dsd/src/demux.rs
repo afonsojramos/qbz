@@ -85,8 +85,30 @@ pub trait DsdDemuxer: Send {
 
 const VALID_RATES: [u32; 4] = [2_822_400, 5_644_800, 11_289_600, 22_579_200];
 
-/// Open a DSD file, sniffing DSF vs DFF from the leading magic.
+/// Open a DSD source: a DSF or DFF file, or a track inside a SACD image.
+///
+/// The SACD arm is answered FIRST, before `File::open`. A `sacd:` reference is
+/// not a filesystem path — opening it would fail, and sniffing DSF magic at
+/// its first byte is meaningless. Routing here rather than at every call site
+/// is what lets the PCM, DoP, native and gapless paths inherit disc images
+/// without one line changing in the player: all six of them already call this.
 pub fn open_dsd(path: &Path) -> Result<Box<dyn DsdDemuxer>, DsdError> {
+    let as_str = path.to_string_lossy();
+    if qbz_disc::SacdRef::is_sacd_path(&as_str) {
+        let r = qbz_disc::SacdRef::parse(&as_str)
+            .ok_or_else(|| DsdError::Corrupt(format!("malformed sacd reference: {as_str}")))?;
+        let area = qbz_disc::sacd::read_area(&r.image)
+            .map_err(|e| DsdError::Corrupt(e.to_string()))?;
+        let track = area
+            .tracks
+            .iter()
+            .find(|t| t.number == r.track)
+            .ok_or_else(|| DsdError::Corrupt(format!("no track {} on this image", r.track)))?;
+        return Ok(Box::new(crate::sacd_source::SacdDemuxer::open_default(
+            &r.image, track,
+        )?));
+    }
+
     let mut file = File::open(path)?;
     let mut magic = [0u8; 4];
     file.read_exact(&mut magic)?;
