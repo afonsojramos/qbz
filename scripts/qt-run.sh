@@ -29,7 +29,7 @@
 # ─── THE QML AUDITS RUN FIRST, BY DESIGN ────────────────────────────────────
 # `cargo check` sees NOTHING of the QML: a missing component or a call to a
 # bridge member that does not exist compiles clean and throws when the user
-# opens that view. The two static audits are ~1s and catch exactly that, so they
+# opens that view. The five static audits are ~1s and catch exactly that, so they
 # run BEFORE the build — failing in one second beats failing after two minutes,
 # or worse, at the owner's smoke. NO_AUDIT=1 skips them.
 #
@@ -38,7 +38,7 @@
 #   NORUN=1     ./scripts/qt-run.sh   # build only, don't exec
 #   TEST=1      ./scripts/qt-run.sh   # also run `cargo test -p qbz-qt`
 #   SMOKE=1     ./scripts/qt-run.sh   # offscreen gate instead of the GUI
-#   NO_AUDIT=1  ./scripts/qt-run.sh   # skip the two QML audits
+#   NO_AUDIT=1  ./scripts/qt-run.sh   # skip the five QML audits
 #   JOBS=4      ./scripts/qt-run.sh   # cargo build jobs (default: auto)
 #   MOLD=1      ./scripts/qt-run.sh   # link with mold (forces a full rebuild)
 #   FORCE=1     ./scripts/qt-run.sh   # build even if another cargo/rustc is up
@@ -146,7 +146,11 @@ if [[ "${NO_AUDIT:-0}" != 1 ]]; then
     # missing from build.rs is not in the QML MODULE, so it resolves fine on
     # disk, compiles nothing, and blanks a whole page at runtime with
     # "<Component> is not a type" (2026-08-20, the media-server panel).
-    for a in qml_resolution_audit.py qml_singleton_xref.py qml_eager_tab_audit.py qml_module_registration_audit.py; do
+    # qml_icon_bake_audit.py joined on 2026-08-20: QbzIcon draws PRE-BAKED
+    # per-tint svgs, so an icon name with no bake renders NOTHING — no error,
+    # no failing test, no complaint from the other four. Three menu rows
+    # shipped iconless through a green build before anyone looked at the menu.
+    for a in qml_resolution_audit.py qml_singleton_xref.py qml_eager_tab_audit.py qml_module_registration_audit.py qml_icon_bake_audit.py; do
       [[ -r "${AUDIT_DIR}/${a}" ]] || { warn "audit ${a} not found — skipped"; continue; }
       if ! python3 "${AUDIT_DIR}/${a}" "${audit_abs}"; then
         die "${a} FAILED — fix it before burning a build (QML resolves lazily; this is what cargo cannot tell you)."
