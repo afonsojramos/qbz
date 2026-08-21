@@ -419,7 +419,20 @@ Rectangle {
     readonly property bool hovered: trArea.containsMouse || favArea.containsMouse
         || moreArea.containsMouse || playArea.containsMouse
         || chevUp.hovered || chevDown.hovered
-    readonly property bool isActive: QbzPlayer.npTrackId === (item.id || "")
+    // THIS row is the now-playing one. Two ids are compared, not one, and the
+    // second is not redundancy: an OFFLINE row's queue id is the QOBUZ CATALOG
+    // id (the offline tier is keyed on it) while every Local Library list
+    // draws that row with its `library.db` id, so the first test alone can
+    // never match a downloaded track on the very view it was played from — the
+    // pill and the eq bars stayed dark there. `npLocalTrackId` is published
+    // for Offline rows ONLY (playback_qt::refresh_now_playing says why), so
+    // the second test is inert for every other source and cannot light a row
+    // by colliding with an id from another space. Mirrors the reference's
+    // TrackRow.slint:116-118 / TrackPlayCell.slint:85-87.
+    readonly property bool isActive: (item.id || "") !== ""
+        && (QbzPlayer.npTrackId === (item.id || "")
+            || (QbzPlayer.npLocalTrackId !== ""
+                && QbzPlayer.npLocalTrackId === (item.id || "")))
 
     // The animated now-playing indicator pref (AppearanceState
     // .play-indicator-animation; the toggle lives in AppearanceSettings).

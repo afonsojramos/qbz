@@ -118,6 +118,18 @@ pub mod qbz_player {
         #[qproperty(bool, np_remote_volume_locked)]
         // Now-playing track id (playing-row indicator in track lists).
         #[qproperty(QString, np_track_id)]
+        // The SAME row's `library.db` id, for OFFLINE rows only, and it is an
+        // alias rather than a second identity: a `qobuz_download` row's queue
+        // id is the QOBUZ CATALOG id (the offline tier is keyed on it), while
+        // every Local Library list draws that row with its library row id. So
+        // `np_track_id` alone never matched a downloaded track's row and the
+        // playing affordance stayed dark on the one view the track was played
+        // from. Empty for every other source — ports Slint's
+        // `NowPlayingState.local-track-id` (playback.rs:1978-1986), including
+        // its restriction: the hint that feeds it carries an ALBUM key for a
+        // Plex row and a server item id for a media-server row, so trusting it
+        // for anything but Offline would light the wrong row.
+        #[qproperty(QString, np_local_track_id)]
         #[qproperty(QString, np_album)]
         #[qproperty(QString, np_album_id)]
         #[qproperty(QString, np_artist_id)]
@@ -288,6 +300,7 @@ pub struct QbzPlayerRust {
     np_cast_protocol: QString,
     np_remote_volume_locked: bool,
     np_track_id: QString,
+    np_local_track_id: QString,
     np_album: QString,
     np_album_id: QString,
     np_artist_id: QString,
@@ -343,6 +356,7 @@ impl Default for QbzPlayerRust {
             np_cast_protocol: QString::default(),
             np_remote_volume_locked: false,
             np_track_id: QString::default(),
+            np_local_track_id: QString::default(),
             np_album: QString::default(),
             np_album_id: QString::default(),
             np_artist_id: QString::default(),

@@ -2377,6 +2377,7 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
         crate::now_playing::clear_track();
         crate::player_bridge::ui(move |mut b| {
             b.as_mut().set_np_track_id(QString::from(""));
+            b.as_mut().set_np_local_track_id(QString::from(""));
         });
         crate::lyrics_qt::publish_idle();
         // Tray tooltip: the no-track arm. 1:1 with the reference, where
@@ -2403,8 +2404,27 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
         None => track.title.clone(),
     };
     let track_id_str = track.id.to_string();
+    // Active-row ALIAS for an offline row (Slint playback.rs:1978-1986). Its
+    // queue id is the Qobuz catalog id — that is what the offline tier is
+    // keyed on — but every Local Library list draws the row with its
+    // `library.db` id, so `np_track_id` alone never matched the row the user
+    // just played and the playing affordance stayed dark there.
+    //
+    // Restricted to Offline on purpose, and the restriction is the whole
+    // safety of it: `source_item_id_hint` is a shared slot that carries a
+    // Plex ALBUM key and a media server's own item id for those sources
+    // (`local_queue_track`). Publishing it unconditionally would hand a row
+    // list a number from another id space and light the wrong row.
+    let local_track_id_str =
+        if qbz_source::RawRef::from_queue_track(&track).badge == qbz_source::SourceBadge::Offline {
+            track.source_item_id_hint.clone().unwrap_or_default()
+        } else {
+            String::new()
+        };
     crate::player_bridge::ui(move |mut b| {
         b.as_mut().set_np_track_id(QString::from(track_id_str.as_str()));
+        b.as_mut()
+            .set_np_local_track_id(QString::from(local_track_id_str.as_str()));
     });
     log::info!(
         "[qbz-qt] now playing: '{title}' — {} ({}s)",
