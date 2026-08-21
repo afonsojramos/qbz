@@ -5231,6 +5231,19 @@ impl Player {
             0,
         )?;
 
+        // Cancel-on-supersede, the same contract `register_stream_feeder`
+        // gives the CMAF feeder. This loop USED to rely on `push_chunk`
+        // returning `Err` to notice the track had changed — but `push_chunk`
+        // only extends a `Vec` and fails solely on a poisoned mutex
+        // (`streaming_source.rs:541`), and `BufferState` carries no
+        // reader-gone flag, so that check could never fire. Skipping a DSD
+        // track therefore left this thread converting to the END of the file,
+        // growing a buffer no reader would ever read: a 60-minute DSD64 album
+        // track is ~1.9 GB of 88.2 kHz/24-bit PCM held for nothing.
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let slot_writer = writer.clone();
+        let play_gen = self.state.current_play_generation();
+
         std::thread::spawn(move || {
             if writer
                 .push_chunk(&qbz_dsd::wav_header(total_frames, channels, rate))
@@ -5240,12 +5253,26 @@ impl Player {
             }
             let mut pcm = Vec::new();
             loop {
+                // Cooperative, checked per block (~a fraction of a second of
+                // audio), so a skip stops the conversion promptly. Like the
+                // CMAF feeder's own cancel, this deliberately neither errors
+                // nor completes the buffer: the outgoing engine keeps playing
+                // what is already buffered until the new source is installed,
+                // and `seal_stream_feeder` closes it from there.
+                if *cancel_rx.borrow() {
+                    log::info!(
+                        "Player: DSD conversion for superseded track {} cancelled",
+                        track_id
+                    );
+                    return;
+                }
                 match conv.next_block() {
                     Ok(Some(frames)) => {
                         pcm.clear();
                         qbz_dsd::frames_to_pcm24(&frames, &mut pcm);
                         if writer.push_chunk(&pcm).is_err() {
-                            // Reader gone (track changed/stopped) — just stop.
+                            // Only a poisoned buffer lock reaches here; the
+                            // track-changed case is the cancel check above.
                             return;
                         }
                     }
@@ -5261,6 +5288,11 @@ impl Player {
                 }
             }
         });
+        // After the spawn, and with the generation this play was born under:
+        // a supersede that landed in between makes `register_stream_feeder`
+        // cancel the thread instead of registering it.
+        self.state
+            .register_stream_feeder(track_id, cancel_tx, slot_writer, play_gen);
         Ok(())
     }
 
