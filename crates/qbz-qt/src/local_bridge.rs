@@ -121,6 +121,14 @@ pub mod qbz_local {
         /// The name is the CONTENT, never a verb: "Now Playing" would be false
         /// the moment a folder is open while something else plays.
         #[qproperty(QString, local_ephemeral_label)]
+        /// Bumped ONCE per user-initiated open, and never by the boot restore.
+        ///
+        /// `local_ephemeral_active` cannot carry this: it is already `true`
+        /// when you open a SECOND folder over a first, so a handler watching
+        /// it never fires and the view stays on whatever tab you were on. A
+        /// sequence changes on every open, which is what "take me to what I
+        /// just opened" actually needs.
+        #[qproperty(i32, local_ephemeral_open_seq)]
 
         // --- Plex ----------------------------------------------------------
         /// Master toggle (Settings > Local Library > Plex). Drives whether
@@ -287,9 +295,11 @@ pub mod qbz_local {
         /// Close the session (stops playback if it came from the session).
         #[qinvokable]
         fn ephemeral_clear(self: Pin<&mut QbzLocal>);
-        /// Header Play: the whole folder becomes the queue.
+        /// Header Play / Shuffle: the whole session becomes the queue. Same
+        /// `(id, shuffle)` shape as `play_album`, so the two headers behave
+        /// identically.
         #[qinvokable]
-        fn ephemeral_play_all(self: Pin<&mut QbzLocal>);
+        fn ephemeral_play_all(self: Pin<&mut QbzLocal>, shuffle: bool);
         /// Per-album Play (multi-album sessions only).
         #[qinvokable]
         fn ephemeral_play_album(self: Pin<&mut QbzLocal>, group_key: QString);
@@ -467,6 +477,7 @@ pub struct QbzLocalRust {
     local_ephemeral_loading: bool,
     local_ephemeral_json: QString,
     local_ephemeral_label: QString,
+    local_ephemeral_open_seq: i32,
     plex_enabled: bool,
     plex_available: bool,
     plex_syncing: bool,
@@ -516,6 +527,7 @@ impl Default for QbzLocalRust {
             local_ephemeral_loading: false,
             local_ephemeral_json: QString::from(""),
             local_ephemeral_label: QString::from(""),
+            local_ephemeral_open_seq: 0,
             plex_enabled: false,
             plex_available: false,
             plex_syncing: false,
@@ -1073,10 +1085,10 @@ impl qbz_local::QbzLocal {
         crate::local_ephemeral::clear();
     }
 
-    pub fn ephemeral_play_all(self: Pin<&mut Self>) {
+    pub fn ephemeral_play_all(self: Pin<&mut Self>, shuffle: bool) {
         let runtime = crate::app();
         crate::spawn(async move {
-            crate::local_ephemeral::play_all(&runtime).await;
+            crate::local_ephemeral::play_all(&runtime, shuffle).await;
         });
     }
 

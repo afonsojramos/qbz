@@ -201,6 +201,33 @@ Rectangle {
     /// contradict the now-playing bar on the same screen.
     readonly property string ephemeralLabel: QbzLocal.localEphemeralLabel
 
+    /// The ephemeral tab is the only one that can VANISH while the user stands
+    /// on it (the folder is closed, the disc is ejected). Without this the view
+    /// keeps `activeTab === "ephemeral"` with no tab in the bar and no Loader
+    /// active: a blank content area and no way back except another tab. Albums
+    /// is the fallback because it is this view's own default (:63).
+    onEphemeralActiveChanged: {
+        if (!ephemeralActive && activeTab === "ephemeral") activeTab = "albums"
+    }
+
+    /// Opening something must LAND you on it. While the pane was an arm of the
+    /// Folders tab this was implicit — the arm simply took the tab over.
+    ///
+    /// This watches the open SEQUENCE, not `ephemeralActive`. The flag is
+    /// already `true` when you open a SECOND folder over a first, so a handler
+    /// on the flag fires exactly once in the life of the app and then never
+    /// again — which is precisely the reported symptom: the view stayed on
+    /// whatever tab you were reading. A sequence changes on every open.
+    ///
+    /// It also excludes the boot restore by construction:
+    /// `local_ephemeral::scan` bumps it only when a runtime is passed, and only
+    /// `open`/`open_path` pass one. A remembered folder therefore never steals
+    /// the tab you actually navigated to.
+    Connections {
+        target: QbzLocal
+        function onLocalEphemeralOpenSeqChanged() { root.activeTab = "ephemeral" }
+    }
+
     // ---------------------------- documents ------------------------------
     function parseDoc(json, fallback) {
         if (json === "") return fallback

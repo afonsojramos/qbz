@@ -123,6 +123,11 @@ struct EphemeralDoc {
     path: String,
     #[serde(rename = "trackCount")]
     track_count: usize,
+    /// Total playing time, already formatted ("1 h 12 min" / "42 min") by the
+    /// SAME helper every other Local Library surface uses, so the pane header
+    /// and an album card can never render the same duration two ways.
+    #[serde(rename = "totalDuration")]
+    total_duration: String,
     /// > 1 album in the folder: the per-album play button appears only then.
     #[serde(rename = "multiAlbum")]
     multi_album: bool,
@@ -214,6 +219,9 @@ fn build_doc(name: &str, path: &str, tracks: &[LocalTrack]) -> EphemeralDoc {
         name: name.to_string(),
         path: path.to_string(),
         track_count: tracks.len(),
+        total_duration: crate::local_rows::total_duration(
+            tracks.iter().map(|t| t.duration_secs).sum(),
+        ),
         multi_album,
         albums,
     }
@@ -345,9 +353,24 @@ pub fn clear() {
 /// rehydrate. When a runtime is given (a user-driven open), a currently
 /// playing ephemeral track is wiped FIRST — the next session reuses its
 /// synthetic ids, so a survivor would false-highlight a row in the new folder.
+/// Counts USER-initiated opens. The boot restore does not touch it.
+static OPEN_SEQ: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
 async fn scan(runtime: Option<Runtime>, path: String) {
     if let Some(rt) = &runtime {
         wipe_if_playing(rt).await;
+        // `runtime.is_some()` is ALREADY the "the user asked for this"
+        // discriminator: `open()` and `open_path()` pass one, `rehydrate()`
+        // passes None. Bumping here — before the loading frame below — is what
+        // moves the view onto the session's tab, and it must be a SEQUENCE
+        // rather than the `active` flag: opening a second folder over a first
+        // leaves `active` true, so nothing watching that flag ever fires.
+        // Bumping only for a user open is what keeps the boot restore from
+        // hijacking whatever tab the user actually opened the view on.
+        let seq = OPEN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        ui(move |mut b| {
+            b.as_mut().set_local_ephemeral_open_seq(seq);
+        });
     }
     let name = folder_display_name(&path);
     // Header + spinner immediately; the scan of a big folder is not instant.
@@ -356,6 +379,7 @@ async fn scan(runtime: Option<Runtime>, path: String) {
             name: name.clone(),
             path: path.clone(),
             track_count: 0,
+            total_duration: String::new(),
             multi_album: false,
             albums: Vec::new(),
         },
@@ -488,8 +512,95 @@ fn pick_folder_blocking() -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Play-all header button: the whole folder becomes the queue, scan order.
-pub async fn play_all(runtime: &Runtime) {
-    play_rows(runtime, tracks_snapshot(), 0).await;
+pub async fn play_all(runtime: &Runtime, shuffle: bool) {
+    let mut rows = tracks_snapshot();
+    if shuffle {
+        // The same shape `lib::play_album(.., shuffle)` gives an indexed
+        // album: the QUEUE is shuffled once and playback starts at its head,
+        // rather than leaving the order alone and flipping a player mode.
+        // That keeps the queue panel honest — what you see is what plays.
+        shuffle_in_place(&mut rows);
+    }
+    play_rows(runtime, rows, 0).await;
+}
+
+/// Fisher-Yates over splitmix64. No `rand` dependency (this crate has none),
+/// but NOT a throwaway generator either.
+///
+/// The first version used a bare xorshift64 seeded from the clock, with a
+/// comment claiming a folder shuffle "is not a place that needs a good
+/// generator". Measured over eight consecutive shuffles of a ten-track album,
+/// one track opened FOUR of them. Shuffle quality is something the listener
+/// sees directly, so the comment was wrong and this is the fix.
+///
+/// splitmix64 finalises each state with two xor-shift-multiplies, which
+/// avalanche far better than a raw xorshift — and the modulo below reads the
+/// LOW bits, which is exactly where a weak generator is weakest. The counter
+/// in the seed is what keeps two shuffles inside the same clock tick from
+/// producing the same permutation.
+fn shuffle_in_place<T>(v: &mut [T]) {
+    static NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x2545_F491_4F6C_DD1D);
+    let mut state = nanos
+        ^ NONCE
+            .fetch_add(0x9E37_79B9_7F4A_7C15, std::sync::atomic::Ordering::Relaxed)
+            .rotate_left(32);
+
+    let mut next = || {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+
+    for i in (1..v.len()).rev() {
+        v.swap(i, (next() % (i as u64 + 1)) as usize);
+    }
+}
+
+#[cfg(test)]
+mod shuffle_tests {
+    use super::*;
+
+    /// Not "is it random" — that is not testable here — but the two failures
+    /// that actually shipped: a permutation that loses or duplicates items,
+    /// and a first position that is effectively pinned. 2000 shuffles of ten
+    /// items should put every item first roughly 200 times; the old xorshift
+    /// put one item first 50% of the time in a hand sample.
+    #[test]
+    fn every_item_survives_and_no_position_is_pinned() {
+        let mut firsts = [0usize; 10];
+        for _ in 0..2000 {
+            let mut v: Vec<usize> = (0..10).collect();
+            shuffle_in_place(&mut v);
+            let mut seen = v.clone();
+            seen.sort_unstable();
+            assert_eq!(seen, (0..10).collect::<Vec<_>>(), "shuffle lost or duplicated items");
+            firsts[v[0]] += 1;
+        }
+        // Generous bounds: this guards against a PINNED position, not against
+        // a merely mediocre generator. Uniform is 200; anything outside
+        // 100..350 means the low bits are not moving.
+        for (item, &count) in firsts.iter().enumerate() {
+            assert!(
+                (100..=350).contains(&count),
+                "item {item} opened {count}/2000 shuffles — the distribution is skewed"
+            );
+        }
+    }
+
+    #[test]
+    fn the_degenerate_lengths_do_not_panic() {
+        let mut empty: Vec<u8> = vec![];
+        shuffle_in_place(&mut empty);
+        let mut one = vec![7];
+        shuffle_in_place(&mut one);
+        assert_eq!(one, vec![7]);
+    }
 }
 
 /// Per-album play (multi-album sessions only): that block becomes the queue.
@@ -546,6 +657,7 @@ mod display_label_tests {
             name: name.to_string(),
             path: "/tmp/x".to_string(),
             track_count: 0,
+            total_duration: String::new(),
             multi_album: multi,
             albums: albums
                 .into_iter()
