@@ -1198,54 +1198,11 @@ Rectangle {
         width: parent ? parent.width : 0
         spacing: 40
 
-        // ── PROGRESSIVE MOUNT — the rails BELOW THE FOLD are not built with
-        //    the page ──────────────────────────────────────────────────────
-        //
-        // 2026-08-17 fixed the tabs (`visible: false` does not stop QML from
-        // instantiating, so all four Discover tabs were built on every mount).
-        // This is the same disease one level down, and it is what was left:
-        // a Repeater builds EVERY delegate in its model, so a ten-section tab
-        // built ten rails — and each rail's horizontal ListView then created
-        // its own delegates during the first layout pass — while the viewport
-        // has room for about two and a half.
-        //
-        // Measured on 2026-08-21 by capturing the real window frame by frame:
-        // Discover > Home froze for 590 ms with ZERO pixels changing, and the
-        // Loader's own stopwatch attributed only 263 ms of that to the mount.
-        // The rest was `to-idle`: the layout and delegate refills the mount
-        // DEFERS, i.e. the seven rails nobody could see paying for their cards
-        // before the GUI thread could reach the event loop and let a frame out.
-        //
-        // So the seed is "one viewport" and the rest arrive after the first
-        // frame. A rail is ~328px tall with the Column spacing, the content
-        // pane is ~740px, so three covers the fold with room to spare; +2 per
-        // tick reaches even the twelve-section For You tab inside ~80 ms,
-        // which is far shorter than the flick that would be needed to outrun
-        // it. This is NOT `asynchronous: true` (see ContentRouter's header —
-        // incubation is time-sliced and was reverted the same day): every rail
-        // is still built synchronously, there are simply fewer of them in the
-        // turn that owes the user a frame.
-        property int budget: 3
-        readonly property int railCount: rails.sectionsModel ? rails.sectionsModel.length : 0
-        // Bounded by construction: it stops itself the moment the budget
-        // covers the model, and nothing restarts it (a republish rebuilds the
-        // delegates but the budget stays where it got to — the progressive
-        // path is for the MOUNT, not for every artwork refresh).
-        Timer {
-            interval: 16
-            repeat: true
-            running: rails.budget < rails.railCount
-            onTriggered: rails.budget += 2
-        }
-
         Repeater {
             model: sectionsModel
             delegate: Loader {
                 required property var modelData
-                required property int index
                 property string railTab: rails.tabId
-                // NOT built yet — see PROGRESSIVE MOUNT above.
-                active: index < rails.budget
                 width: parent ? parent.width : 0
                 // The pinned slot is always in the document (it is where the
                 // discover prefs put the rail); it renders only once the
@@ -1259,13 +1216,7 @@ Rectangle {
                 // `ForYouState.radio-stations.length > 0` /
                 // `spotlight-visible` gates. A Column skips invisible children
                 // entirely, spacing included, so an empty one leaves no gap.
-                // `active &&` is load-bearing: a Column skips INVISIBLE
-                // children entirely, spacing included, but an active:false
-                // Loader is still visible and 0px tall — which would reserve
-                // one 40px spacing slot per pending rail and then collapse it
-                // as the rail lands, i.e. the page reflowing under the user.
-                visible: !active ? false
-                    : modelData.kind === "pinned" ? root.pinnedItems.length > 0
+                visible: modelData.kind === "pinned" ? root.pinnedItems.length > 0
                     : modelData.kind === "radio" ? root.radioStations.length > 0
                     : modelData.kind === "spotlight" ? root.spotlight.visible === true
                     : root.isWeeklySlot(modelData.id) ? root.weeklyRows(modelData.id).length > 0
