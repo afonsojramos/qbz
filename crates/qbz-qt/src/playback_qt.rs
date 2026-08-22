@@ -17,7 +17,7 @@
 //! - Streaming quality: seeded from ui_prefs ("streaming_quality") and
 //!   live-updated by Settings > Audio (settings_qt). The #638 device-cap clamp
 //!   lives in the Slint glue and is NOT ported.
-//! - Offline-cache tier (offline bytes), prefetch warming, QConnect branches.
+//! - Offline-cache tier (offline bytes), QConnect branches.
 //!
 //! DONE, previously listed here — kept as one line each so the list above
 //! only ever names REAL gaps:
@@ -122,6 +122,144 @@ fn reconcile_device_cap(pref: Quality, cap: Option<Quality>) -> (Quality, qbz_mo
                 QualityLimit::None
             },
         ),
+    }
+}
+
+/// How many immediate successors a new-track edge warms into L1/L2. This is
+/// deliberately independent of the engine's `GAPLESS_LEAD_SECS`: the full
+/// downloads begin as soon as the current track surfaces, while the existing
+/// ~10 s gapless stage later consumes the first successor from cache (or its
+/// normal fallback) and hands it to `play_next`.
+const PREFETCH_LOOKAHEAD: usize = 2;
+
+/// Shared upper bound across overlapping track edges. A new current track can
+/// surface while the second successor of the previous edge is still warming;
+/// the player's own fetching marker de-duplicates the overlap, while this
+/// semaphore keeps unrelated downloads bounded.
+const MAX_CONCURRENT_PREFETCH: usize = 2;
+static PREFETCH_SEMAPHORE: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(MAX_CONCURRENT_PREFETCH);
+
+/// The prefetch edge is separate from `last_track_id`: the latter belongs to
+/// the LOCAL UI/integration pump and is intentionally reset while casting,
+/// whereas immediate warming must follow whichever transport owns playback.
+/// Zero means no owner/current track and rearms a later replay of the same id.
+#[derive(Debug, Default)]
+struct PrefetchTrackEdge {
+    last_track_id: u64,
+}
+
+impl PrefetchTrackEdge {
+    fn observe(&mut self, track_id: u64) -> bool {
+        if track_id == 0 {
+            self.last_track_id = 0;
+            return false;
+        }
+        if track_id == self.last_track_id {
+            return false;
+        }
+        self.last_track_id = track_id;
+        true
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PrefetchCandidate {
+    id: u64,
+    is_local: bool,
+}
+
+impl From<&QueueTrack> for PrefetchCandidate {
+    fn from(track: &QueueTrack) -> Self {
+        Self {
+            id: track.id,
+            is_local: track.is_local,
+        }
+    }
+}
+
+/// Pure policy seam for the deterministic contract tests. `upcoming` is
+/// already the queue's repeat/shuffle-aware next-two snapshot; filtering a
+/// local row does not reach beyond that snapshot and accidentally warm a third
+/// successor.
+fn prefetch_track_ids(
+    streaming_only: bool,
+    offline: bool,
+    throttle_cap: usize,
+    upcoming: &[PrefetchCandidate],
+) -> Vec<u64> {
+    if streaming_only || offline || throttle_cap == 0 {
+        return Vec::new();
+    }
+    upcoming
+        .iter()
+        .take(PREFETCH_LOOKAHEAD)
+        .filter(|track| track.id != 0 && !track.is_local)
+        .map(|track| track.id)
+        .collect()
+}
+
+fn prefetch_quality_tag(quality: Quality) -> qbz_audio::network_throttle::PlaybackQualityTag {
+    use qbz_audio::network_throttle::PlaybackQualityTag;
+    match quality {
+        Quality::UltraHiRes => PlaybackQualityTag::UltraHiRes,
+        Quality::HiRes => PlaybackQualityTag::HiRes,
+        Quality::Lossless => PlaybackQualityTag::Lossless,
+        Quality::Mp3 => PlaybackQualityTag::Lossy,
+    }
+}
+
+/// Warm the next two queue rows in the player's shared L1/L2 cache. This only
+/// performs cheap policy/queue work inline; every full download is spawned in
+/// the background and goes through `Player::prefetch_into_cache`, which owns
+/// the in-flight marker, cache re-check, 20 s failure cooldown and cache write.
+async fn kick_prefetch(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    let streaming_only = crate::settings_qt::audio_settings().streaming_only;
+    let offline = crate::offline_fwd::engine().is_offline();
+    if streaming_only || offline {
+        return;
+    }
+
+    // Resolve once so the bandwidth estimate and every spawned request agree.
+    // A renderer owns its own cap; the local DAC cap must never leak into the
+    // quality-blind cache that the cast path reads first.
+    let quality = crate::cast_qt::service()
+        .casting_prefetch_quality()
+        .await
+        .unwrap_or_else(|| local_playback_quality().0);
+    let throttle_cap = qbz_audio::network_throttle::state().current_prefetch_cap(
+        qbz_audio::network_throttle::playback_mbps_for_quality(prefetch_quality_tag(quality)),
+        MAX_CONCURRENT_PREFETCH,
+    );
+    if throttle_cap == 0 {
+        log::debug!("[qbz-qt] prefetch: skipped (network throttle cap 0)");
+        return;
+    }
+
+    let upcoming = runtime.core().peek_upcoming(PREFETCH_LOOKAHEAD).await;
+    let candidates: Vec<PrefetchCandidate> = upcoming.iter().map(PrefetchCandidate::from).collect();
+    let track_ids = prefetch_track_ids(streaming_only, offline, throttle_cap, &candidates);
+    for track_id in track_ids {
+        let player = runtime.core().player();
+        if player.is_track_cached(track_id) {
+            continue;
+        }
+        let runtime = runtime.clone();
+        tokio::spawn(async move {
+            let _permit = match PREFETCH_SEMAPHORE.acquire().await {
+                Ok(permit) => permit,
+                Err(_) => return,
+            };
+            let client_lock = runtime.core().client();
+            let guard = client_lock.read().await;
+            let Some(client) = guard.as_ref() else {
+                return;
+            };
+            let player = runtime.core().player();
+            if let Err(error) = player.prefetch_into_cache(client, track_id, quality).await {
+                log::debug!("[qbz-qt] prefetch: track {track_id} failed: {error}");
+            }
+        });
     }
 }
 
@@ -2614,6 +2752,10 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         // does not re-request it on every tick while the download is in flight
         // (playback.rs:5049-5051).
         let mut gapless_requested_for: u64 = 0;
+        // Immediate full-cache warming has a distinct edge because it follows
+        // both the local engine and the cast cursor. Unlike the gapless guard,
+        // it names the NEW current track whose two successors are being warmed.
+        let mut prefetch_track_edge = PrefetchTrackEdge::default();
 
         // QConnect renderer-report throttle (contract §6.2): the official
         // client reports RndrSrvrStateUpdated ~every 2s while playing PLUS
@@ -2802,41 +2944,57 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 last_track_id = 0;
                 was_playing = false;
                 seen_position = 0;
+                // A peer renderer owns its own playback/cache. Rearm only so a
+                // later hand-back to local/cast can warm from that real edge.
+                prefetch_track_edge.observe(0);
                 continue;
             }
 
             // CAST: the cast service runs its own 1 s poll and the local player is
-    // stopped, so this path would push position 0 / not-playing every
-    // second and fight it.
-    if crate::cast_qt::is_casting().await {
-        last_track_id = 0;
-        was_playing = false;
-        seen_position = 0;
-        // Same invariant for the PEER edge trackers (playback.rs:5268-5269):
-        // the remote branch above did not run, so without this reset a
-        // re-taken peer whose snapshot happens to match the last controller
-        // push would be skipped, leaving the cast renderer's values on the
-        // bar (mirrors the fall-through reset below).
-        last_peer_track_id = 0;
-        last_remote_ui_push = None;
-        // A cast target owns playback and there is no local download to
-        // outrun: seek is unlocked while casting, the way the Slint cast
-        // publish forces it (`cast_service.rs:1118`). Without this the last
-        // local stream's fraction would stay latched on the bar.
-        crate::now_playing::set_seekable_max(1.0);
-        continue;
-    }
-    // Not in controller mode (no peer / returned to local): reset the
-    // peer-track edge var so re-entering the peer state refreshes meta
-    // (playback.rs:5274-5277).
-    last_peer_track_id = 0;
-    last_remote_ui_push = None;
-    // §11.1: deliberately NO lyrics anchor clear here (the Slint clears
-    // per-tick at playback.rs:5279) — the Qt anchor clears from the single
-    // `now_playing::set_remote(false)` choke point, which unlike this
-    // fallthrough also runs while the cast branch owns the loop. See the
-    // note in `now_playing::set_remote`.
-    let event = runtime.core().player().get_playback_event();
+            // stopped, so this path would push position 0 / not-playing every
+            // second and fight it.
+            if crate::cast_qt::is_casting().await {
+                // The local engine is stopped while casting, so its PlaybackEvent can
+                // never surface a track edge. The cast service advances the shared
+                // core cursor; observe that cursor here and warm once per new current
+                // track at the renderer-effective tier.
+                let cast_track_id = runtime
+                    .core()
+                    .current_track()
+                    .await
+                    .map(|track| track.id)
+                    .unwrap_or(0);
+                if prefetch_track_edge.observe(cast_track_id) {
+                    kick_prefetch(&runtime).await;
+                }
+                last_track_id = 0;
+                was_playing = false;
+                seen_position = 0;
+                // Same invariant for the PEER edge trackers (playback.rs:5268-5269):
+                // the remote branch above did not run, so without this reset a
+                // re-taken peer whose snapshot happens to match the last controller
+                // push would be skipped, leaving the cast renderer's values on the
+                // bar (mirrors the fall-through reset below).
+                last_peer_track_id = 0;
+                last_remote_ui_push = None;
+                // A cast target owns playback and there is no local download to
+                // outrun: seek is unlocked while casting, the way the Slint cast
+                // publish forces it (`cast_service.rs:1118`). Without this the last
+                // local stream's fraction would stay latched on the bar.
+                crate::now_playing::set_seekable_max(1.0);
+                continue;
+            }
+            // Not in controller mode (no peer / returned to local): reset the
+            // peer-track edge var so re-entering the peer state refreshes meta
+            // (playback.rs:5274-5277).
+            last_peer_track_id = 0;
+            last_remote_ui_push = None;
+            // §11.1: deliberately NO lyrics anchor clear here (the Slint clears
+            // per-tick at playback.rs:5279) — the Qt anchor clears from the single
+            // `now_playing::set_remote(false)` choke point, which unlike this
+            // fallthrough also runs while the cast branch owns the loop. See the
+            // note in `now_playing::set_remote`.
+            let event = runtime.core().player().get_playback_event();
             let track_id = event.track_id;
             let position = event.position;
             let duration = event.duration;
@@ -2848,6 +3006,12 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // `cache` above is the DECORATIVE overlay of the same fill — this
             // is the value the seek bars must enforce.
             let seekable_max = event.buffer_progress.map(|p| p.clamp(0.0, 1.0)).unwrap_or(1.0);
+
+            // This observation is cheap and happens each tick; the work does
+            // not. Only a NEW non-zero engine track — including a gapless
+            // handoff — enters `kick_prefetch`. A stop rearms replaying the
+            // same id later.
+            let immediate_prefetch_edge = prefetch_track_edge.observe(track_id);
 
             // --- Track-change edge (new current track surfaced) ----------
             if track_id != 0 && track_id != last_track_id {
@@ -2896,6 +3060,14 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 // track that just ended. Clear it so the NEW current track can
                 // arm its own prefetch (playback.rs:5353).
                 gapless_requested_for = 0;
+            }
+
+            // Separate from the UI edge above on purpose: a 0-id stop rearms
+            // this tracker, so replaying the same queue id warms again even if
+            // another local edge tracker has not yet been cleared by its
+            // end-of-track arm.
+            if immediate_prefetch_edge {
+                kick_prefetch(&runtime).await;
             }
 
             if track_id != 0 {
@@ -3219,9 +3391,73 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_queue_with, reconcile_device_cap, stream_error_text, xorshift_shuffle_seeded,
+        filter_queue_with, prefetch_track_ids, reconcile_device_cap, stream_error_text,
+        xorshift_shuffle_seeded, PrefetchCandidate, PrefetchTrackEdge,
     };
     use qbz_models::{Quality, QualityLimit};
+
+    fn remote(id: u64) -> PrefetchCandidate {
+        PrefetchCandidate {
+            id,
+            is_local: false,
+        }
+    }
+
+    fn local(id: u64) -> PrefetchCandidate {
+        PrefetchCandidate { id, is_local: true }
+    }
+
+    // --- #688: immediate two-successor L1/L2 warming ---------------------
+
+    #[test]
+    fn streaming_only_on_plans_zero_prefetches() {
+        assert!(prefetch_track_ids(true, false, 2, &[remote(2), remote(3)]).is_empty());
+    }
+
+    #[test]
+    fn streaming_only_off_plans_at_most_two_successors() {
+        assert_eq!(
+            prefetch_track_ids(false, false, 2, &[remote(2), remote(3), remote(4)]),
+            vec![2, 3]
+        );
+        assert_eq!(prefetch_track_ids(false, false, 2, &[remote(9)]), vec![9]);
+    }
+
+    #[test]
+    fn local_successors_are_never_prefetched() {
+        // The policy inspects the queue's immediate next-two snapshot. It does
+        // not skip across the local row and turn the third row into a hidden
+        // third-successor warmup.
+        assert_eq!(
+            prefetch_track_ids(false, false, 2, &[remote(2), local(3), remote(4)]),
+            vec![2]
+        );
+    }
+
+    #[test]
+    fn a_repeated_track_edge_does_not_trigger_twice() {
+        let mut edge = PrefetchTrackEdge::default();
+        assert!(edge.observe(41));
+        assert!(!edge.observe(41));
+        assert!(!edge.observe(41));
+    }
+
+    #[test]
+    fn a_gapless_new_current_edge_prefetches_that_tracks_successors() {
+        let mut edge = PrefetchTrackEdge::default();
+        assert!(edge.observe(41), "initial audible track must be an edge");
+        assert!(edge.observe(42), "gapless handoff must surface a new edge");
+        assert_eq!(
+            prefetch_track_ids(false, false, 2, &[remote(43), remote(44)]),
+            vec![43, 44]
+        );
+        assert!(!edge.observe(42), "republishing the handoff must dedupe");
+    }
+
+    #[test]
+    fn throttle_cap_zero_plans_zero_downloads() {
+        assert!(prefetch_track_ids(false, false, 0, &[remote(2), remote(3)]).is_empty());
+    }
 
     // --- #638 fix 3: the request tier reconciles preference against the
     // detected local device cap. -------------------------------------------

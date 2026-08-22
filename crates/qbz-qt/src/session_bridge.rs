@@ -102,6 +102,11 @@ pub mod qbz_session {
         /// derivative already on disk answers on the next event-loop pass.
         #[qinvokable]
         fn art_scaled(self: Pin<&mut QbzSession>, path: QString, w: i32, h: i32);
+        /// Synchronous WARM-CACHE probe for the exact derivative request.
+        /// This never decodes or writes: it returns the existing local file,
+        /// or "" so QML can fall through to the asynchronous arm above.
+        #[qinvokable]
+        fn art_scaled_cached(self: &QbzSession, path: QString, w: i32, h: i32) -> QString;
         /// (requested path, derivative url, requested w, requested h) — keyed
         /// by the WHOLE REQUEST. The path alone is not a key: it is normal for
         /// the same cover to be on screen at two sizes at once (a 200px card
@@ -250,4 +255,12 @@ impl qbz_session::QbzSession {
         });
     }
 
+    pub fn art_scaled_cached(&self, path: QString, w: i32, h: i32) -> QString {
+        if w <= 0 || h <= 0 {
+            return QString::default();
+        }
+        crate::artwork_qt::cached_scaled_path(&path.to_string(), w as u32, h as u32)
+            .map(|p| QString::from(crate::artwork_qt::file_url(&p.to_string_lossy()).as_str()))
+            .unwrap_or_default()
+    }
 }

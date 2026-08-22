@@ -132,6 +132,11 @@ Rectangle {
         }
     }
 
+    function openMenu(anchor, x, y) {
+        plMenuLoader.active = true
+        plMenuLoader.item.openAtCursor(anchor, x, y)
+    }
+
     Connections {
         target: QbzLibrary
         // Pin fan-out — the AlbumCard contract, playlist key (see AlbumCard.qml).
@@ -182,21 +187,27 @@ Rectangle {
             // with no flag at all. `auto` measures the ratio instead, so
             // those surfaces pad too, and a genuinely square cover
             // (`image.covers[0]`, the fallback that map picks) still crops.
-            RoundedImage {
+            Loader {
                 anchors.fill: parent
-                visible: root.artSource !== ""
-                source: root.artSource
-                radius: theme.radiusSm
-                fit: root.ownImage ? "pad" : "auto"
+                sourceComponent: root.artSource !== "" ? singleArtwork : collageArtwork
+            }
+            Component {
+                id: singleArtwork
+                RoundedImage {
+                    source: root.artSource
+                    radius: theme.radiusSm
+                    fit: root.ownImage ? "pad" : "auto"
+                }
             }
             // Arm 2 — the member-cover mosaic. A row that HAS its own
             // graphic passes no urls, so it shows the placeholder while
             // that graphic downloads instead of flashing a mosaic.
-            PlaylistCollage {
-                anchors.fill: parent
-                visible: root.artSource === ""
-                urls: root.ownImage ? [] : root.collageUrls
-                radius: theme.radiusSm
+            Component {
+                id: collageArtwork
+                PlaylistCollage {
+                    urls: root.ownImage ? [] : root.collageUrls
+                    radius: theme.radiusSm
+                }
             }
             Rectangle {
                 anchors.fill: parent
@@ -214,7 +225,7 @@ Rectangle {
                 // body-opens (every Slint mount); right press = the ⋯ menu.
                 onClicked: function (mouse) {
                     if (mouse.button === Qt.RightButton)
-                        plMenu.openAtCursor(plArtArea, mouse.x, mouse.y)
+                        root.openMenu(plArtArea, mouse.x, mouse.y)
                     else
                         QbzBridge.openPlaylist(root.item.id)
                 }
@@ -243,7 +254,7 @@ Rectangle {
                     id: plMore
                     name: "ellipsis"
                     anchors.verticalCenter: parent.verticalCenter
-                    onClicked: function (mouse) { plMenu.openAtCursor(plMore, mouse.x, mouse.y) }
+                    onClicked: function (mouse) { root.openMenu(plMore, mouse.x, mouse.y) }
                 }
             }
             // Pin badge — top-right (opacity follows overlay-on).
@@ -276,11 +287,14 @@ Rectangle {
                     }
                 }
             }
-            CardMenu {
-                id: plMenu
-                menuWidth: 196
-                entries: root.menuModel()
-                onPicked: function (a) { root.menuAction(a) }
+            Loader {
+                id: plMenuLoader
+                active: false
+                sourceComponent: CardMenu {
+                    menuWidth: 196
+                    entries: root.menuModel()
+                    onPicked: function (a) { root.menuAction(a) }
+                }
             }
         }
         Item { width: 1; height: 6 }
@@ -335,7 +349,7 @@ Rectangle {
         width: 200
         height: 40
         acceptedButtons: Qt.RightButton
-        onClicked: function (mouse) { plMenu.openAtCursor(plMetaArea, mouse.x, mouse.y) }
+        onClicked: function (mouse) { root.openMenu(plMetaArea, mouse.x, mouse.y) }
     }
 
     // PlaylistCard.slint's menu, in its order.

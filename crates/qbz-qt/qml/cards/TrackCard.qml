@@ -55,6 +55,11 @@ Rectangle {
         QbzLibrary.libraryToggleFavorite("track", root.item.id)
     }
 
+    function openMenu(anchor, x, y) {
+        trackMenuLoader.active = true
+        trackMenuLoader.item.openAtCursor(anchor, x, y)
+    }
+
     // Fan-out + rollback (the shape cards/AlbumCard.qml uses for pin).
     Connections {
         target: QbzLibrary
@@ -97,7 +102,7 @@ Rectangle {
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                 onClicked: function (mouse) {
                     if (mouse.button === Qt.RightButton)
-                        trackMenu.openAtCursor(tcArtArea, mouse.x, mouse.y)
+                        root.openMenu(tcArtArea, mouse.x, mouse.y)
                     else
                         QbzPlayer.playTrack(root.item.id)
                 }
@@ -126,7 +131,7 @@ Rectangle {
                     id: moreBtn
                     name: "ellipsis"
                     anchors.verticalCenter: parent.verticalCenter
-                    onClicked: function (mouse) { trackMenu.openAtCursor(moreBtn, mouse.x, mouse.y) }
+                    onClicked: function (mouse) { root.openMenu(moreBtn, mouse.x, mouse.y) }
                 }
             }
             // Source badge (All feed, show-local): bottom-right of the art.
@@ -166,11 +171,14 @@ Rectangle {
                     y: Math.round((parent.height - height) / 2)
                 }
             }
-            CardMenu {
-                id: trackMenu
-                menuWidth: 196
-                entries: root.menuModel()
-                onPicked: function (a) { root.trackAction(a) }
+            Loader {
+                id: trackMenuLoader
+                active: false
+                sourceComponent: CardMenu {
+                    menuWidth: 196
+                    entries: root.menuModel()
+                    onPicked: function (a) { root.trackAction(a) }
+                }
             }
         }
         Item { width: 1; height: 6 }
@@ -200,7 +208,7 @@ Rectangle {
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                         onClicked: function (mouse) {
                             if (mouse.button === Qt.RightButton)
-                                trackMenu.openAtCursor(tcTitleArea, mouse.x, mouse.y)
+                                root.openMenu(tcTitleArea, mouse.x, mouse.y)
                             else
                                 QbzPlayer.playTrack(root.item.id)
                         }

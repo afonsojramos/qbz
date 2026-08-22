@@ -114,6 +114,11 @@ Rectangle {
         QbzLibrary.libraryToggleFavorite(root.followKind, root.item.id)
     }
 
+    function openMenu(anchor, x, y) {
+        agMenuLoader.active = true
+        agMenuLoader.item.openAtCursor(anchor, x, y)
+    }
+
     Connections {
         target: QbzLibrary
         // Pin fan-out — the AlbumCard contract, artist key (see AlbumCard.qml:
@@ -192,7 +197,7 @@ Rectangle {
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onClicked: function (mouse) {
                         if (mouse.button === Qt.RightButton)
-                            agMenu.openAtCursor(agArea, mouse.x, mouse.y)
+                            root.openMenu(agArea, mouse.x, mouse.y)
                         else
                             QbzArtist.openArtist(root.item.id)
                     }
@@ -221,14 +226,17 @@ Rectangle {
                         id: agMore
                         name: "ellipsis"
                         anchors.verticalCenter: parent.verticalCenter
-                        onClicked: function (mouse) { agMenu.openAtCursor(agMore, mouse.x, mouse.y) }
+                        onClicked: function (mouse) { root.openMenu(agMore, mouse.x, mouse.y) }
                     }
                 }
-                CardMenu {
-                    id: agMenu
-                    menuWidth: 196
-                    entries: root.menuModel()
-                    onPicked: function (a) { root.menuAction(a) }
+                Loader {
+                    id: agMenuLoader
+                    active: false
+                    sourceComponent: CardMenu {
+                        menuWidth: 196
+                        entries: root.menuModel()
+                        onPicked: function (a) { root.menuAction(a) }
+                    }
                 }
             }
             // Pin badge — top-right of the FRAME (outside the circle clip),
@@ -289,7 +297,7 @@ Rectangle {
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onClicked: function (mouse) {
                         if (mouse.button === Qt.RightButton)
-                            agMenu.openAtCursor(agNameArea, mouse.x, mouse.y)
+                            root.openMenu(agNameArea, mouse.x, mouse.y)
                         else
                             QbzArtist.openArtist(root.item.id)
                     }

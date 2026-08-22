@@ -337,6 +337,19 @@ Item {
         var key = root.source + "|" + rw + "x" + rh
         if (key === root._reqKey) return
         root._reqKey = key
+
+        // Warm-cache fast path. Previously even a derivative already on disk
+        // took the async Rust -> Tokio -> Qt-thread round trip. The original
+        // pixmap therefore reached the scene graph first, then every card
+        // replaced a large texture with its derivative a few frames later — a
+        // visible burst of work when a cold ListView band mounted. The exact
+        // path lookup is one local stat and performs no decode/write; on a
+        // miss, generation remains off-thread through artScaled().
+        var cached = QbzSession.artScaledCached(root.source, rw, rh)
+        if (cached !== "") {
+            root._scaled = cached
+            return
+        }
         QbzSession.artScaled(root.source, rw, rh)
     }
     Connections {

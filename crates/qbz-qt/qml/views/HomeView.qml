@@ -67,11 +67,9 @@ Rectangle {
     QbzTheme { id: theme }
 
     // ---- mount stopwatch (same category as ContentRouter's) --------------
-    // OFF unless QT_LOGGING_RULES="qbz.nav.timing.info=true". It exists to
-    // attribute a Home mount: this view declares FOUR Discover tabs and QML
-    // instantiates all four (`visible: false` hides a Column, it does not stop
-    // it from being built), so the question "how much of the wait is the three
-    // tabs nobody asked for" needs per-tab numbers, not a single total.
+    // OFF unless QT_LOGGING_RULES="qbz.nav.timing.info=true". The sections
+    // count below is the DOCUMENT size, not the number of rails instantiated:
+    // the vertical ListView only builds its viewport and cache buffer.
     LoggingCategory {
         id: homeTiming
         name: "qbz.nav.timing"
@@ -80,9 +78,10 @@ Rectangle {
     // A property initialiser runs during creation, so this is stamped near the
     // start of the mount rather than at the end of it like Component.onCompleted.
     property double _mountT0: Date.now()
-    function _stampTab(id, count) {
-        console.info(homeTiming, "[hometiming] tab " + id + " (" + count
-                     + " sections) done at +" + (Date.now() - root._mountT0) + "ms")
+    function _stampViewport(id, count) {
+        console.info(homeTiming, "[hometiming] viewport " + id + " ("
+                     + count + " document sections) done at +"
+                     + (Date.now() - root._mountT0) + "ms")
     }
 
     // Reparsed whenever Rust republishes the JSON documents (one per
@@ -313,6 +312,13 @@ Rectangle {
     }
 
     property string activeTab: "home"
+    // Recommendations remains lazy. The old per-tab Loader called this when
+    // its body was constructed; with one virtualized ListView, selecting the
+    // tab is the equivalent existence boundary.
+    onActiveTabChanged: {
+        if (root.activeTab === "recommendations")
+            QbzHome.loadRecommendations()
+    }
 
     // Slint gates the 4th tab on the persisted `show_recommendations` pref
     // (discover_prefs.db). The port publishes it inside the settings document
@@ -361,6 +367,36 @@ Rectangle {
         : root.activeTab === "forYou" ? root.forYouSections
         : root.activeTab === "recommendations" ? root.recoSections
         : root.sections
+    /// Ordering slots stay in the document even before their out-of-document
+    /// rows arrive. Keep the descriptor stable, but do not instantiate its
+    /// heavy rail until it has something to show.
+    function sectionIsVisible(section) {
+        if (!section)
+            return false
+        return section.kind === "pinned" ? root.pinnedItems.length > 0
+            : section.kind === "radio" ? root.radioStations.length > 0
+            : section.kind === "spotlight" ? root.spotlight.visible === true
+            : root.isWeeklySlot(section.id) ? root.weeklyRows(section.id).length > 0
+            : true
+    }
+    /// The vertical ListView uses zero spacing so a hidden ordering slot leaves
+    /// no phantom gap. A visible delegate carries the old 40px Column spacing
+    /// only when a later visible section exists.
+    function hasVisibleSectionAfter(index) {
+        var model = root.activeSections
+        for (var i = index + 1; i < model.length; i++) {
+            if (root.sectionIsVisible(model[i]))
+                return true
+        }
+        return false
+    }
+    readonly property string activeHeaderKind:
+        root.activeTab === "home" && QbzHome.homeError !== "" ? "error"
+        : ((root.activeTab === "recommendations" ? QbzHome.recoLoading : QbzHome.homeLoading)
+           && root.activeSections.length === 0) ? "skeleton"
+        : (root.activeTab === "recommendations" && !QbzHome.recoLoading
+           && root.activeSections.length === 0) ? "empty"
+        : ""
     // Cheap "some card in the mounted rails has artUrl but no artPath yet"
     // probe — recomputed only when a sections document is republished. The
     // pinned rows are probed too: they no longer travel inside the sections
@@ -709,39 +745,35 @@ Rectangle {
                 readonly property real cellWidth: (width - 3 * 8) / 4
 
                 Repeater {
-                    model: sectionData.items
+                    // The grid is contractually capped at two pages. Model the
+                    // cap itself: a Loader existence gate prevented the heavy
+                    // row from being built past 24, but the old full-array
+                    // model still created an Item + two Components + Loader
+                    // shell for every discarded result.
+                    model: sgrid.total
                     delegate: Item {
-                        required property var modelData
+                        id: slimSlot
                         required property int index
+                        readonly property var cardData: sgrid.sectionData.items[index]
                         readonly property int slot: index % sgrid.perPage
                         readonly property int pageIdx: Math.floor(index / sgrid.perPage)
-                        visible: index < sgrid.total
                         width: grid.cellWidth
                         height: 60
                         x: pageIdx * grid.width + (slot % 4) * (grid.cellWidth + 8)
                         y: Math.floor(slot / 4) * (60 + 8)
 
                         // The PinnedRail dispatch pattern: Components declared
-                        // in the delegate scope, so `modelData` resolves.
+                        // in the delegate scope, sharing this capped slot row.
                         Component {
                             id: albumRowComp
-                            SlimCard { card: modelData }
+                            SlimCard { card: slimSlot.cardData }
                         }
                         Component {
                             id: trackRowComp
-                            TrackSlimRow { card: modelData }
+                            TrackSlimRow { card: slimSlot.cardData }
                         }
-                        // `active` matters as much as `sourceComponent`: the
-                        // Repeater above is fed the WHOLE item list, and the
-                        // rows past `total` were being built in full and then
-                        // hidden by the delegate's `visible`. A hidden row
-                        // costs exactly as much to construct as a shown one —
-                        // it just never repays it. `sectionData.items` can run
-                        // several times `total` (24), so this is most of the
-                        // grid.
                         Loader {
                             anchors.fill: parent
-                            active: index < sgrid.total
                             sourceComponent: sgrid.tracks ? trackRowComp : albumRowComp
                         }
                     }
@@ -1187,28 +1219,43 @@ Rectangle {
         }
     }
 
-    // The section-rails renderer (one per Discover tab — the tab bodies
-    // differ only in WHICH sections doc they mount).
-    component SectionRails: Column {
-        id: rails
-        property var sectionsModel: []
+    // ONE vertical section delegate. The page-level ListView below owns the
+    // model and therefore only asks for the rails in (or near) its viewport.
+    // This used to be a Column + Repeater: every section in the active tab
+    // existed at once, so every horizontal rail eagerly built its first screen
+    // of cards even when the rail was several viewports below the fold.
+    component SectionRail: Item {
+        id: railSlot
+        required property var modelData
+        required property int index
         /// "home" | "editorPicks" | "forYou" | "recommendations" — forwarded
-        /// to every rail so its "View all" resolves per tab.
-        property string tabId: "home"
+        /// to the rail so its "View all" resolves per tab.
+        property string railTab: "home"
+        readonly property bool shown: root.sectionIsVisible(modelData)
         width: parent ? parent.width : 0
-        spacing: 40
+        // ListView spacing would reserve a gap for zero-height hidden ordering
+        // slots. Carry the 40px gap inside each visible slot instead, and only
+        // when another visible section follows it.
+        height: shown && railLoader.item
+            ? railLoader.height + (root.hasVisibleSectionAfter(index) ? 40 : 0)
+            : 0
 
-        Repeater {
-            model: sectionsModel
-            delegate: Loader {
-                required property var modelData
-                property string railTab: rails.tabId
-                width: parent ? parent.width : 0
+        Loader {
+                id: railLoader
+                property var modelData: railSlot.modelData
+                property string railTab: railSlot.railTab
+                // ListView owns the delegate's x-position and forces it back
+                // to the content origin. Put the horizontal inset on the
+                // child it does not position: 32px on both sides, exactly the
+                // old padded Column geometry.
+                x: 32
+                width: parent.width - 64
+                height: item ? item.implicitHeight : 0
                 // The pinned slot is always in the document (it is where the
                 // discover prefs put the rail); it renders only once the
                 // store has rows — the Slint `PinnedState.items.length > 0`
-                // gate. A Column skips invisible children entirely, spacing
-                // included, so an empty pinned rail leaves no gap.
+                // gate. `active`, not only `visible`, is the existence gate:
+                // an empty out-of-document slot builds no rail subtree.
                 // The out-of-document rails are always IN the document (that
                 // is where the discover prefs put them) and render only once
                 // their own store has rows — the Slint
@@ -1216,11 +1263,8 @@ Rectangle {
                 // `ForYouState.radio-stations.length > 0` /
                 // `spotlight-visible` gates. A Column skips invisible children
                 // entirely, spacing included, so an empty one leaves no gap.
-                visible: modelData.kind === "pinned" ? root.pinnedItems.length > 0
-                    : modelData.kind === "radio" ? root.radioStations.length > 0
-                    : modelData.kind === "spotlight" ? root.spotlight.visible === true
-                    : root.isWeeklySlot(modelData.id) ? root.weeklyRows(modelData.id).length > 0
-                    : true
+                active: railSlot.shown
+                visible: active
                 sourceComponent: modelData.kind === "album" ? albumRailComp
                     : modelData.kind === "playlist" ? playlistRailComp
                     : modelData.kind === "slim" ? slimGridComp
@@ -1411,7 +1455,6 @@ Rectangle {
                         body: sectionData.hint
                     }
                 }
-            }
         }
     }
 
@@ -1582,226 +1625,143 @@ Rectangle {
         Item {
             width: parent.width
             height: parent.height - 57
-        Flickable {
-            id: homeFlick
-            width: parent.width
-            height: parent.height
-            clip: true
-            contentWidth: width
-            contentHeight: homeContent.implicitHeight
-            boundsBehavior: Flickable.StopAtBounds
-            Column {
-                id: homeContent
-                width: parent.width
-                padding: 32
-                spacing: 40
 
-                // ===== Home tab ==========================================
-                //
-                // ONE TAB EXISTS AT A TIME — and the `Loader` is what makes
-                // that true. The four tab bodies used to be four sibling
-                // Columns gated on `visible:`, which hides a Column but does
-                // NOT stop QML from building it: every Repeater under every
-                // tab still instantiated every rail and every card. Measured
-                // on this account (9 + 7 + 12 sections, 423 cards), a Home
-                // mount spent ~360 of its ~410 ms inside the tab columns, and
-                // three quarters of those sections belonged to tabs nobody was
-                // looking at. The proof was the per-tab stamp below firing for
-                // `forYou` and `editorPicks` while they were invisible.
-                //
-                // This is also what the REFERENCE does, and the port had
-                // simply diverged: HomeView.slint:321 runs ONE repeater whose
-                // model is picked by a ternary on the active tab, and mounts
-                // For You / Recommendations behind `if` (:579, :608). Its own
-                // comment — "the For You tab's lists are pushed empty so this
-                // repeater renders nothing for it" — is the same rule stated
-                // from the data side.
-                //
-                // SYNCHRONOUS on purpose (`asynchronous` is left at its
-                // default). Async incubation is time-sliced: it does not
-                // remove the work, it spreads it over more frames, which is
-                // why the router-level experiment made the app dramatically
-                // worse and was reverted the same day. See ContentRouter.qml.
-                //
-                // The trade is that switching tabs now builds the tab you
-                // switch TO, instead of it being pre-built. That is the right
-                // way round: a mount happens on every navigation into
-                // Discover, a tab switch only when asked for, and one tab
-                // costs a quarter of four.
-                Loader {
-                    width: parent.width - 64
-                    active: root.activeTab === "home"
-                    // Without this the Column reserves a spacing slot for an
-                    // inactive Loader (it is a zero-size but VISIBLE child),
-                    // leaving a 40px gap above the active tab.
-                    visible: active
-                    sourceComponent: Column {
-                    width: parent.width
-                    spacing: 40
+            // The vertical viewport is the model owner. A Column + Repeater
+            // built every section in the active tab and, through each
+            // horizontal ListView, at least one screenful of cards per section.
+            // ListView keeps that cost proportional to this viewport while
+            // preserving the same synchronous first paint.
+            ListView {
+                id: homeFlick
+                anchors.fill: parent
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                model: root.activeSections
+                reuseItems: true
+                spacing: 0
+                // A rail is a burst of 6-12 cards plus their artwork textures.
+                // Half a viewport left that burst inside the first fast wheel
+                // gesture: the user's custom Recently bands were mounted just
+                // as they crossed the screen, then felt progressively better
+                // after QML/pixmap/texture caches warmed. ListView creates its
+                // cache delegates asynchronously, so a 1.25-viewport runway
+                // moves that finite work ahead of the gesture without bringing
+                // back the old all-tabs/all-sections synchronous mount.
+                cacheBuffer: Math.max(720, Math.round(height * 1.25))
 
-                    // Loading skeleton (HomeSkeleton: two shimmer rows). The
-                    // pulse comes from the view-root Timer, which is itself
-                    // gated on visibility + window state.
+                delegate: SectionRail {
+                    width: homeFlick.width
+                    railTab: root.activeTab
+                }
+
+                // Loading, error and empty states remain inline at the top of
+                // the same scroll surface. Only the selected arm exists.
+                // Explicit header/footer spacers reproduce the old 32px
+                // Column padding without ListView margins changing contentY's
+                // zero-origin contract (ScrollMemory and QbzScrollBar both
+                // consume that coordinate).
+                header: Item {
+                    width: homeFlick.width
+                    height: 32 + discoverHeader.height
+                    Loader {
+                        id: discoverHeader
+                        x: 32
+                        y: 32
+                        width: homeFlick.width - 64
+                        property string kind: root.activeHeaderKind
+                        active: kind !== ""
+                        visible: active
+                        height: active && item ? item.implicitHeight : 0
+                        sourceComponent: kind === "error" ? homeErrorHeader
+                            : kind === "empty" ? recoEmptyHeader
+                            : tabSkeletonHeader
+                    }
+                }
+                footer: Item { width: homeFlick.width; height: 32 }
+
+                Component {
+                    id: tabSkeletonHeader
                     TabSkeleton {
-                        visible: QbzHome.homeLoading && root.sections.length === 0
                         phase: root.skelPhase
                     }
-
-                    // Error state with retry (the Slint Home has no error
-                    // arm; the box mirrors the FavoritesView Retry button).
-                    Rectangle {
-                        visible: QbzHome.homeError !== ""
-                        width: parent.width
-                        height: errorColumn.height + 28
-                        radius: theme.radiusSm
-                        color: theme.surfaceElevated
-                        border.width: 1
-                        border.color: theme.borderSubtle
-                        Column {
-                            id: errorColumn
-                            anchors.centerIn: parent
-                            spacing: 10
-                            Text {
-                                text: QbzHome.homeError
-                                color: theme.textSecondary
-                                font.pixelSize: 13
-                            }
-                            Rectangle {
-                                width: retryText.implicitWidth + 28
-                                height: 32
-                                radius: 6
-                                color: retryArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
-                                border.width: 1
-                                border.color: theme.borderSubtle
-                                Text {
-                                    id: retryText
-                                    anchors.centerIn: parent
-                                    text: QbzSession.tr("Retry", QbzSession.trRev)
-                                    color: theme.textPrimary
-                                    font.pixelSize: theme.fontLegal
-                                }
-                                MouseArea {
-                                    id: retryArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: QbzHome.reloadHome()
-                                }
-                            }
-                        }
-                    }
-
-                    // Section rails.
-                    SectionRails { sectionsModel: root.sections; tabId: "home" }
-                    Component.onCompleted: root._stampTab("home", root.sections.length)
-                    }
                 }
 
-                // ===== Editor's Picks (phase 13) ========================
-                // Loader-gated for the reason spelled out on the Home tab.
-                Loader {
-                    width: parent.width - 64
-                    active: root.activeTab === "editorPicks"
-                    visible: active
-                    sourceComponent: Column {
-                        width: parent.width
-                        spacing: 40
-                        TabSkeleton {
-                            visible: QbzHome.homeLoading && root.editorSections.length === 0
-                            phase: root.skelPhase
-                        }
-                        SectionRails { sectionsModel: root.editorSections; tabId: "editorPicks" }
-                        Component.onCompleted: root._stampTab("editorPicks", root.editorSections.length)
-                    }
-                }
-
-                // ===== For You (phase 13) =================================
-                // Loader-gated for the reason spelled out on the Home tab.
-                Loader {
-                    width: parent.width - 64
-                    active: root.activeTab === "forYou"
-                    visible: active
-                    sourceComponent: Column {
-                        width: parent.width
-                        spacing: 40
-                        TabSkeleton {
-                            visible: QbzHome.homeLoading && root.forYouSections.length === 0
-                            phase: root.skelPhase
-                        }
-                        SectionRails { sectionsModel: root.forYouSections; tabId: "forYou" }
-                        Component.onCompleted: root._stampTab("forYou", root.forYouSections.length)
-                    }
-                }
-
-                // ===== Recommendations (external reco engine) =============
-                // qbz-external-reco (Last.fm + ListenBrainz -> Qobuz), driven
-                // by src/recommendations_qt.rs. LAZY: the first time this
-                // column becomes visible it asks Rust to build the tab; every
-                // later entry repaints from memory / the engine's own result
-                // cache, so reopening Discover costs no external traffic.
-                //
-                // Loader-gated like the other three (see the Home tab), and
-                // the gate SIMPLIFIED the lazy-load hook it used to need. The
-                // old pair — `Component.onCompleted` plus `onVisibleChanged`,
-                // both funnelled through a `kick()` that re-checked
-                // `visible` — existed only because this Column was built
-                // eagerly while Home was the active tab: the mount fired too
-                // early to mean anything, so a second hook had to catch the
-                // tab actually being shown. Now the component does not exist
-                // until the tab is selected, so mounting IS being selected and
-                // one `Component.onCompleted` says it exactly.
-                Loader {
-                    width: parent.width - 64
-                    active: root.activeTab === "recommendations"
-                    visible: active
-                    sourceComponent: Column {
-                        width: parent.width
-                        spacing: 40
-
-                        // Every later entry repaints from memory / the
-                        // engine's own result cache, so re-selecting the tab
-                        // costs no external traffic even though the component
-                        // is rebuilt.
-                        Component.onCompleted: QbzHome.loadRecommendations()
-
-                        // Same two-row shimmer as the other tabs, while the
-                        // first build is in flight and nothing has painted yet.
-                        TabSkeleton {
-                            visible: QbzHome.recoLoading && root.recoSections.length === 0
-                            phase: root.skelPhase
-                        }
-
-                        // Rails resolve progressively — a row that is still
-                        // building, or whose service is not connected, is
-                        // simply ABSENT from the document (never an empty frame).
-                        SectionRails { sectionsModel: root.recoSections; tabId: "recommendations" }
-
-                        // Nothing built and nothing in flight: the Slint empty
-                        // state, verbatim msgids.
-                        QbzEmptyState {
-                            visible: !QbzHome.recoLoading && root.recoSections.length === 0
+                Component {
+                    id: homeErrorHeader
+                    Item {
+                        implicitHeight: errorBox.implicitHeight
+                            + (homeFlick.count > 0 ? 40 : 0)
+                        Rectangle {
+                            id: errorBox
                             width: parent.width
-                            title: QbzSession.tr("No recommendations yet", QbzSession.trRev)
-                            body: QbzSession.tr("Connect Last.fm or ListenBrainz in Settings, or play more music, to get personalized recommendations.", QbzSession.trRev)
-                            actionLabel: QbzSession.tr("Open Settings", QbzSession.trRev)
-                            onActionClicked: QbzShell.navigateTo("settings")
+                            implicitHeight: errorColumn.implicitHeight + 28
+                            height: implicitHeight
+                            radius: theme.radiusSm
+                            color: theme.surfaceElevated
+                            border.width: 1
+                            border.color: theme.borderSubtle
+                            Column {
+                                id: errorColumn
+                                anchors.centerIn: parent
+                                spacing: 10
+                                Text {
+                                    text: QbzHome.homeError
+                                    color: theme.textSecondary
+                                    font.pixelSize: 13
+                                }
+                                Rectangle {
+                                    width: retryText.implicitWidth + 28
+                                    height: 32
+                                    radius: 6
+                                    color: retryArea.containsMouse
+                                        ? theme.surfaceHover : theme.surfaceElevated
+                                    border.width: 1
+                                    border.color: theme.borderSubtle
+                                    Text {
+                                        id: retryText
+                                        anchors.centerIn: parent
+                                        text: QbzSession.tr("Retry", QbzSession.trRev)
+                                        color: theme.textPrimary
+                                        font.pixelSize: theme.fontLegal
+                                    }
+                                    MouseArea {
+                                        id: retryArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: QbzHome.reloadHome()
+                                    }
+                                }
+                            }
                         }
                     }
                 }
+
+                Component {
+                    id: recoEmptyHeader
+                    QbzEmptyState {
+                        title: QbzSession.tr("No recommendations yet", QbzSession.trRev)
+                        body: QbzSession.tr("Connect Last.fm or ListenBrainz in Settings, or play more music, to get personalized recommendations.", QbzSession.trRev)
+                        actionLabel: QbzSession.tr("Open Settings", QbzSession.trRev)
+                        onActionClicked: QbzShell.navigateTo("settings")
+                    }
+                }
+
+                Component.onCompleted:
+                    root._stampViewport(root.activeTab, root.activeSections.length)
             }
-        }
-        // Thin auto-hiding scrollbar in the right gutter (ListScrollbar).
-        // Back/forward scroll memory (controls/ScrollMemory.qml): reports
-        // this container's offset while it is the live page, and restores it
-        // when a back/forward step arms this route.
-        ScrollMemory { target: homeFlick; scope: "home:" + root.activeTab }
-        QbzScrollBar {
-            anchors.right: parent.right
-            anchors.rightMargin: 4
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            target: homeFlick
-        }
+
+            // Back/forward scroll memory and the custom gutter both accept a
+            // ListView because it is a Flickable. The per-tab scope is
+            // unchanged.
+            ScrollMemory { target: homeFlick; scope: "home:" + root.activeTab }
+            QbzScrollBar {
+                anchors.right: parent.right
+                anchors.rightMargin: 4
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                target: homeFlick
+            }
         }
     }
 

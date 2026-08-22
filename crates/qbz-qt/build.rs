@@ -581,6 +581,7 @@ fn main() {
                 "qml/immersive/VolumeBar.qml",
                 "qml/immersive/WaveBedPanel.qml",
                 "qml/theme/QbzIcon.qml",
+                "qml/theme/QbzKineticScroll.qml",
                 "qml/theme/QbzScrollBar.qml",
                 "qml/theme/QbzSpinner.qml",
                 "qml/theme/QbzTheme.qml",

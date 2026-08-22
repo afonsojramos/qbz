@@ -943,6 +943,42 @@ mod tests {
 // Scaled derivatives
 // ---------------------------------------------------------------------------
 
+/// The deterministic derivative path for one already-computed draw size.
+///
+/// Kept separate from [`scaled_path`] so the Qt GUI thread can perform the
+/// cheap warm-cache probe below without decoding the original, creating the
+/// directory, or touching the derivative's mtime.  The expensive/mutating arm
+/// remains on `spawn_blocking` through `QbzSession.artScaled()`.
+fn scaled_output_path(path: &str, w: u32, h: u32) -> Option<(String, PathBuf)> {
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let src = path.strip_prefix("file://").unwrap_or(path).to_string();
+    let dir = dirs::cache_dir()?.join("qbz").join("images").join("scaled");
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&src, &mut hasher);
+    let out = dir.join(format!(
+        "{:016x}_{w}x{h}.png",
+        std::hash::Hasher::finish(&hasher)
+    ));
+    Some((src, out))
+}
+
+/// Return an existing derivative without doing any image work.
+///
+/// `RoundedImage` calls this after its dimension probe computes the exact
+/// aspect-preserving draw size.  On a warm disk cache the answer is available
+/// in the SAME GUI event that made the original probe Ready, so the visible
+/// `Image` switches to the small derivative before the next scene-graph frame
+/// instead of painting/uploading the original and replacing that texture one
+/// or more event-loop turns later.  A miss is deliberately just one local
+/// `stat`; generation still goes through [`scaled_path`] off-thread.
+pub fn cached_scaled_path(path: &str, w: u32, h: u32) -> Option<PathBuf> {
+    let (_, out) = scaled_output_path(path, w, h)?;
+    out.is_file().then_some(out)
+}
+
 /// A cover re-encoded to fit inside `w`x`h`, ASPECT PRESERVED. Canvas
 /// `drawImage` does not filter when it scales — a 600px cover drawn into a
 /// 200px cell throws away 8 of every 9 pixels, which is the aliasing the
@@ -976,21 +1012,9 @@ mod tests {
 ///
 /// Blocking: decodes and resizes. Call from `spawn_blocking`.
 pub fn scaled_path(path: &str, w: u32, h: u32) -> Option<std::path::PathBuf> {
-    if w == 0 || h == 0 {
-        return None;
-    }
-    let src = path.strip_prefix("file://").unwrap_or(path);
-    let dir = dirs::cache_dir()?.join("qbz").join("images").join("scaled");
+    let (src, out) = scaled_output_path(path, w, h)?;
+    let dir = out.parent()?;
     std::fs::create_dir_all(&dir).ok()?;
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(&src, &mut hasher);
-    // `.png`, so the lossy `.jpg` generation already on disk is never served
-    // as if it were this one — the name IS the cache key.
-    let out = dir.join(format!(
-        "{:016x}_{w}x{h}.png",
-        std::hash::Hasher::finish(&hasher)
-    ));
     if out.is_file() {
         // Mark it used so `evict_scaled`'s mtime order is access order, not
         // creation order. Best-effort: a failure only degrades eviction to
@@ -1007,7 +1031,7 @@ pub fn scaled_path(path: &str, w: u32, h: u32) -> Option<std::path::PathBuf> {
     // The artwork cache stores files as `.img` — `image::open` guesses the
     // format from the EXTENSION and fails on it, which is why not one
     // derivative was ever produced. Sniff the content instead.
-    let img = image::ImageReader::open(src)
+    let img = image::ImageReader::open(&src)
         .ok()?
         .with_guessed_format()
         .ok()?

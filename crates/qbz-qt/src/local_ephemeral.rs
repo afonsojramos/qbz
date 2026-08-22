@@ -972,6 +972,8 @@ mod display_label_tests {
                 .into_iter()
                 .map(|(title, artist)| EphemeralAlbumBlock {
                     group_key: String::new(),
+                    disc: 0,
+                    sort_title: title.to_string(),
                     title: title.to_string(),
                     artist: artist.to_string(),
                     meta: String::new(),

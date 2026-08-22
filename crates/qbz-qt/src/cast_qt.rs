@@ -205,6 +205,21 @@ impl CastService {
         self.inner.lock().await.protocol.is_some()
     }
 
+    /// The tier the next connected-renderer request would use: the raw
+    /// streaming preference clamped by that renderer's manual cap, never by
+    /// the local DAC. Immediate queue warming consumes this because the cast
+    /// resolver is cache-first and the playback cache is quality-blind.
+    pub(crate) async fn casting_prefetch_quality(&self) -> Option<Quality> {
+        let cap_key = {
+            let inner = self.inner.lock().await;
+            if inner.protocol.is_none() {
+                return None;
+            }
+            inner.connected_cap_key.clone()
+        };
+        Some(effective_cast_quality(cap_key.as_deref()).0)
+    }
+
     // ---- Discovery ---------------------------------------------------------
 
     /// Start mDNS (Chromecast) + SSDP (DLNA) discovery, the 2 s device-refresh

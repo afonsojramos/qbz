@@ -581,10 +581,12 @@ Rectangle {
         model: root.listCells
         reuseItems: true
         currentIndex: -1
-        // One viewport of asynchronously incubated delegates gives a heavy
-        // rail time to finish before it becomes visible, without the old
-        // Loader's synchronous build in the wheel frame that crossed a band.
-        cacheBuffer: Math.max(600, height)
+        // The track tape is cheap enough that a fast wheel can consume one
+        // viewport before the first heavy card rail has finished incubating.
+        // Two viewports give those bottom rails roughly one kinetic-scroll
+        // window of lead time. Cache delegates are asynchronous and pooled;
+        // this does not restore the old eager footer mount.
+        cacheBuffer: Math.max(900, 2 * height)
 
         header: Item {
             width: pageFlick.width
