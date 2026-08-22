@@ -2,9 +2,10 @@
 // LocalLibrarySettings.slint (the folder half; the PLEX half is the sibling
 // PlexSettings.qml, mounted at the bottom exactly where the Slint has it).
 //
-// Group order is the Slint's: LIBRARY FOLDERS (toolbar + filter + table +
-// scan progress, in LibraryFolderTable.qml) · ALBUMS VIEW · LIBRARY › ALL ·
-// MAINTENANCE · DANGER ZONE · PLEX (PlexSettings.qml).
+// Group order is the Slint's: LIBRARY FOLDERS · ALBUMS VIEW · LIBRARY › ALL ·
+// MAINTENANCE · DANGER ZONE · the media servers. LIBRARY FOLDERS is a
+// one-row SUBSECTION since 2026-08-21 — the table itself lives in
+// views/LibraryFoldersView.qml; see the block comment on that row.
 //
 // Wiring: the folder table + the scan ride the settings document
 // (settings_qt/library.rs over `qbz_library`'s own scan engine); the album
@@ -46,10 +47,73 @@ Column {
     onVisibleChanged: if (visible) QbzBridge.settingsString("refresh", "")
 
     // ========================= LIBRARY FOLDERS ===========================
-    // Toolbar + add-path row + filter + the folder table + scan progress.
-    LibraryFolderTable {
+    // A SUBSECTION as of 2026-08-21 (owner): the toolbar + filter + folder
+    // table + scan progress moved to views/LibraryFoldersView.qml behind this
+    // row, exactly the shape Blacklist uses for its manager. The table is the
+    // tallest block in Settings and it sat at the TOP of this panel, pushing
+    // everything below it — Albums view, Library › All, Maintenance, Danger
+    // zone and the three media servers — off the first screen.
+    //
+    // Layout is BlacklistSettings.qml's, verbatim, so the two subsection rows
+    // in Settings are the same object: a 64px row, spacing 24, an 18px glyph
+    // + a text column at spacing 3 (title text-primary 15 medium over a
+    // text-muted LITERAL 12px status), and a right-aligned Manage button.
+    Item {
         width: parent.width
-        lib: root.lib
+        height: 64
+
+        Row {
+            anchors.fill: parent
+            spacing: 24
+
+            Row {
+                width: Math.max(0, parent.width - 24 - foldersManageBtn.width)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 12
+
+                QbzIcon {
+                    anchors.verticalCenter: parent.verticalCenter
+                    name: "folder"
+                    width: 18
+                    height: 18
+                    tintName: "secondary"
+                }
+                Column {
+                    // 30 = the 18px glyph + the 12px row spacing.
+                    width: Math.max(0, parent.width - 30)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 3
+                    Text {
+                        width: parent.width
+                        text: QbzSession.tr("Library folders", QbzSession.trRev)
+                        color: theme.textPrimary
+                        font.pixelSize: theme.fontBody
+                        font.weight: theme.weightMedium
+                    }
+                    Text {
+                        width: parent.width
+                        // A live scan is the one thing worth saying here that
+                        // the count cannot: the manager shows the progress bar
+                        // and the file, this row only says it is happening.
+                        text: root.lib.scanning === true
+                            ? QbzSession.tr("Scanning", QbzSession.trRev)
+                            : QbzSession.tr("{} folders", QbzSession.trRev)
+                                .replace("{}", (root.lib.folders || []).length)
+                        color: theme.textMuted
+                        font.pixelSize: 12
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+
+            SettingsButton {
+                id: foldersManageBtn
+                anchors.verticalCenter: parent.verticalCenter
+                text: QbzSession.tr("Manage", QbzSession.trRev)
+                trailingIconName: "chevron-right"
+                onClicked: QbzBridge.settingsString("library-open-folders", "")
+            }
+        }
     }
 
     Item { width: 1; height: 22 }

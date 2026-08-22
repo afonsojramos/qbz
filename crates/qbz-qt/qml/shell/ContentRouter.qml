@@ -222,6 +222,10 @@ Item {
             // Settings > Blacklist > Manage. Not reachable from the sidebar —
             // blacklist_qt::open_manager records the route.
             : v === "blacklist" ? "../views/BlacklistManagerView.qml"
+            // Settings > Local Library > Library folders > Manage. Same
+            // shape as the blacklist arm above: not a sidebar section, and
+            // the "library-open-folders" settings action records the route.
+            : v === "libraryfolders" ? "../views/LibraryFoldersView.qml"
             // Settings > Offline > Manage offline cache > Open manager. Same
             // shape again; offline_manager_qt::open() records the route.
             : v === "offlinemanager" ? "../views/OfflineManagerView.qml"

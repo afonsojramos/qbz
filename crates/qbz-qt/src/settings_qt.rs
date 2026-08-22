@@ -2853,6 +2853,19 @@ pub async fn settings_string(key: &str, value: String) {
                 crate::theme_qt::publish_theme();
             }
         }
+        "library-open-folders" => {
+            // Settings > Local Library > Library folders > Manage. The folder
+            // table is a full-page view now (owner 2026-08-21), reached the
+            // same way the Blacklist manager is: record the route and let
+            // ContentRouter mount it. `nav_qt::record` republishes canBack /
+            // canForward / currentView in one hop, so Back works without any
+            // further bookkeeping here.
+            //
+            // No load call beside it — unlike `blacklist_qt::open_manager`,
+            // this view reads the SETTINGS document, which is already live,
+            // and asks for its own "refresh" on mount.
+            crate::nav_qt::record("libraryfolders");
+        }
         "library-pick-folder" => {
             // Native chooser, then the SAME add path as the typed field —
             // the picker only supplies the string.

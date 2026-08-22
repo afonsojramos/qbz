@@ -594,6 +594,7 @@ fn main() {
                 "qml/views/MusicianPageView.qml",
                 "qml/views/ArtistView.qml",
                 "qml/views/BlacklistManagerView.qml",
+                "qml/views/LibraryFoldersView.qml",
                 "qml/views/HomeView.qml",
                 "qml/views/LibraryView.qml",
                 "qml/views/LocalLibraryView.qml",
