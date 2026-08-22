@@ -128,7 +128,7 @@ Item {
                     artSource: root.view.artMap[modelData.artKey] || ""
                     selectMode: root.view.albumsMultiSelect
                     checked: root.view.albumsSelected[modelData.id] === true
-                    onToggleSelect: root.view.toggleAlbumSelected(modelData.id)
+                    onToggleSelect: function (mods) { root.view.toggleAlbumSelected(modelData.id, mods) }
                 }
             }
 

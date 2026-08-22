@@ -827,15 +827,18 @@ Rectangle {
     readonly property bool multiSelectOn: root.multiSelect
     function setMultiSelect(on) {
         root.multiSelect = on
-        if (!on) root.selected = ({})
+        if (!on) { root.selected = ({}); sel.anchorId = "" }
     }
-    function toggleSelected(id) {
-        var m = root.selected
-        if (m[id] === true) delete m[id]
-        else m[id] = true
-        // A rebind needs a NEW object reference — mutating in place notifies
-        // nothing.
-        root.selected = Object.assign({}, m)
+    /// Excel-style selection lives in ONE place — controls/SelectionModel.qml
+    /// holds the anchor and the Shift-range rule; this view keeps owning its
+    /// map. The two lists are CONCATENATED in the order they are drawn, so a
+    /// range can run from the last top track into "Appears on" exactly as it
+    /// looks on screen — `selectedIdsInOrder` already walks them that way.
+    SelectionModel { id: sel }
+    function toggleSelected(id, mods) {
+        root.selected = sel.next(root.selected, id,
+                                 root.topTracks.concat(root.appearsOn),
+                                 mods === undefined ? Qt.NoModifier : mods)
     }
     function selectedIdsInOrder() {
         var out = []
@@ -856,7 +859,7 @@ Rectangle {
             root.selected = m
             return
         }
-        if (action === "clear") { root.selected = ({}); return }
+        if (action === "clear") { root.selected = ({}); sel.anchorId = ""; return }
         var ids = root.selectedIdsInOrder()
         if (ids.length === 0) return
         QbzPlayer.bulkTracksAction(JSON.stringify(ids), action, "artist", String(artist.id || ""))
@@ -1049,7 +1052,8 @@ Rectangle {
         // (TrackRow.slint:173-177, 392-417).
         property bool selectMode: false
         property bool checked: false
-        signal toggleSelect()
+        /// `modifiers` off the mouse event — see SelectionModel.
+        signal toggleSelect(int modifiers)
         // Live offline status for the row (seeded in the document; updates
         // arrive on QbzShell's trackCacheStatusChanged).
         property int cacheStatus: row.cacheStatus !== undefined ? row.cacheStatus : 0
@@ -1567,7 +1571,7 @@ Rectangle {
             onDoubleClicked: if (!popRow.selectMode && !popRow.pulledDead)
                 QbzPlayer.playArtistTrack(row.id)
             onClicked: {
-                if (popRow.selectMode) popRow.toggleSelect()
+                if (popRow.selectMode) popRow.toggleSelect(mouse.modifiers)
                 else mouse.accepted = false
             }
         }
@@ -2587,7 +2591,7 @@ Rectangle {
                         showAlbum: true
                         selectMode: root.multiSelect
                         checked: root.selected[row.id] === true
-                        onToggleSelect: root.toggleSelected(row.id)
+                        onToggleSelect: function (mods) { root.toggleSelected(row.id, mods) }
                     }
                 }
                 Item { visible: topTracks.length > root.preview; width: 1; height: 4 }
@@ -2684,7 +2688,7 @@ Rectangle {
                             showAlbum: false
                             selectMode: root.multiSelect
                             checked: root.selected[row.id] === true
-                            onToggleSelect: root.toggleSelected(row.id)
+                            onToggleSelect: function (mods) { root.toggleSelected(row.id, mods) }
                         }
                     }
                     Item { visible: appearsOn.length > root.preview; width: 1; height: 4 }
@@ -2826,7 +2830,7 @@ Rectangle {
                         showAlbum: true
                         selectMode: root.multiSelect
                         checked: root.selected[row.id] === true
-                        onToggleSelect: root.toggleSelected(row.id)
+                        onToggleSelect: function (mods) { root.toggleSelected(row.id, mods) }
                     }
                 }
                 Item { visible: libraryTab.libAlbums.length > 0; width: 1; height: 24 }

@@ -890,15 +890,19 @@ Rectangle {
 
     function toggleAlbumsMultiSelect() {
         albumsMultiSelect = !albumsMultiSelect
-        if (!albumsMultiSelect) albumsSelected = ({})
+        if (!albumsMultiSelect) { albumsSelected = ({}); albumSel.anchorId = "" }
     }
-    function toggleAlbumSelected(id) {
-        var s = Object.assign({}, albumsSelected)
-        if (s[id]) delete s[id]; else s[id] = true
-        albumsSelected = s
+    /// Excel-style selection — controls/SelectionModel.qml holds the anchor
+    /// and the Shift-range rule; this view keeps owning its maps. Ranges run
+    /// over the VISIBLE rows, because the toolbar's filter is a view filter
+    /// and `select-all` right below already means the filtered set.
+    SelectionModel { id: albumSel }
+    function toggleAlbumSelected(id, mods) {
+        albumsSelected = albumSel.next(albumsSelected, id, albumsVisible,
+                                       mods === undefined ? Qt.NoModifier : mods)
     }
     function albumsBulkAction(action) {
-        if (action === "clear") { albumsSelected = ({}); return }
+        if (action === "clear") { albumsSelected = ({}); albumSel.anchorId = ""; return }
         if (action === "select-all") {
             var s = {}
             for (var i = 0; i < albumsVisible.length; i++) s[albumsVisible[i].id] = true
@@ -910,15 +914,15 @@ Rectangle {
 
     function toggleTracksMultiSelect() {
         tracksMultiSelect = !tracksMultiSelect
-        if (!tracksMultiSelect) tracksSelected = ({})
+        if (!tracksMultiSelect) { tracksSelected = ({}); trackSel.anchorId = "" }
     }
-    function toggleTrackSelected(id) {
-        var s = Object.assign({}, tracksSelected)
-        if (s[id]) delete s[id]; else s[id] = true
-        tracksSelected = s
+    SelectionModel { id: trackSel }
+    function toggleTrackSelected(id, mods) {
+        tracksSelected = trackSel.next(tracksSelected, id, tracksVisible,
+                                       mods === undefined ? Qt.NoModifier : mods)
     }
     function tracksBulkAction(action) {
-        if (action === "clear") { tracksSelected = ({}); return }
+        if (action === "clear") { tracksSelected = ({}); trackSel.anchorId = ""; return }
         if (action === "select-all") {
             var s = {}
             for (var i = 0; i < tracksVisible.length; i++) s[tracksVisible[i].id] = true

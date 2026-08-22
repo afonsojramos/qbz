@@ -136,7 +136,10 @@ Rectangle {
     /// existing call site is untouched.
     property bool selectMode: false
     property bool checked: false
-    signal toggleSelect()
+    /// `modifiers` is the mouse event's, straight through — Shift is what
+    /// turns a click into a range (controls/SelectionModel.qml). Hosts that
+    /// do not care can keep a no-argument handler; QML allows it.
+    signal toggleSelect(int modifiers)
     // Per-row artwork placeholder (see the 36px cell below). The host view
     // owns the phase clock so one timer drives every row.
     property bool artPending: false
@@ -677,7 +680,7 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.toggleSelect()
+                    onClicked: root.toggleSelect(Qt.NoModifier)
                 }
             }
             Text {
@@ -1473,7 +1476,7 @@ Rectangle {
             // In select mode the WHOLE row body is a selection target
             // (TrackRow.slint:174) — never a play.
             if (root.selectMode) {
-                root.toggleSelect()
+                root.toggleSelect(mouse.modifiers)
                 mouse.accepted = true
                 return
             }

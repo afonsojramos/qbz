@@ -629,6 +629,7 @@ fn main() {
                 "qml/shell/LyricsSyncEngine.qml",
                 "qml/shell/NavGestureLayer.qml",
                 "qml/controls/QbzCheckbox.qml",
+                "qml/controls/SelectionModel.qml",
                 // Library lane (B1-B5): the promoted A-Z strip + the
                 // per-surface bodies LibraryView.qml was split into.
                 "qml/controls/QbzAlphaStrip.qml",

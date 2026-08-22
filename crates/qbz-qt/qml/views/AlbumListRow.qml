@@ -42,7 +42,9 @@ Rectangle {
     /// mode only). Default off, so the two catalog call sites are untouched.
     property bool selectMode: false
     property bool checked: false
-    signal toggleSelect()
+    /// `modifiers` rides straight off the mouse event: Shift is what turns
+    /// a click into a range (controls/SelectionModel.qml).
+    signal toggleSelect(int modifiers)
 
     QbzTheme { id: theme }
 
@@ -77,7 +79,7 @@ Rectangle {
                     rowMenu.openAtCursor(rowArea, mouse.x, mouse.y)
                 return
             }
-            if (root.selectMode) root.toggleSelect()
+            if (root.selectMode) root.toggleSelect(mouse.modifiers)
             else QbzAlbum.openAlbum(root.item.id || "")
         }
     }
@@ -138,7 +140,7 @@ Rectangle {
             QbzCheckbox {
                 anchors.centerIn: parent
                 checked: root.checked
-                onToggled: root.toggleSelect()
+                onToggled: function (mods) { root.toggleSelect(mods) }
             }
         }
 

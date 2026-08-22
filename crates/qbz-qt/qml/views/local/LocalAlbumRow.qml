@@ -33,7 +33,9 @@ Rectangle {
     signal opened()
     signal playRequested()
     signal enqueueRequested(string mode)
-    signal toggleSelect()
+    /// `modifiers` rides straight off the mouse event: Shift is what turns
+    /// a click into a range (controls/SelectionModel.qml).
+    signal toggleSelect(int modifiers)
 
     QbzTheme { id: theme }
 
@@ -52,7 +54,7 @@ Rectangle {
                 rowMenu.openAtCursor(rowArea, mouse.x, mouse.y)
                 return
             }
-            if (root.selectMode) root.toggleSelect()
+            if (root.selectMode) root.toggleSelect(mouse.modifiers)
             else root.opened()
         }
         onDoubleClicked: if (!root.selectMode) root.playRequested()
@@ -88,7 +90,7 @@ Rectangle {
             SelectCheck {
                 anchors.centerIn: parent
                 on: root.checked
-                onToggled: root.toggleSelect()
+                onToggled: function (mods) { root.toggleSelect(mods) }
             }
         }
         Rectangle {

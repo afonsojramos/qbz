@@ -118,11 +118,16 @@ Rectangle {
     // physical copy's. Both invalidate the ids, so the selection goes and
     // select mode with it (the same "leaving drops the selection" contract
     // `local_bulk::set_select_mode` documents for the tree rail).
-    onDocChanged: { multiSelect = false; selected = ({}) }
-    function toggleSelected(id) {
-        var s = Object.assign({}, selected)
-        if (s[id]) delete s[id]; else s[id] = true
-        selected = s
+    onDocChanged: { multiSelect = false; selected = ({}); sel.anchorId = "" }
+    /// Excel-style selection lives in ONE place — controls/SelectionModel.qml
+    /// holds the anchor and the Shift-range rule; this view keeps owning its
+    /// map. Ranges run over `visibleTracks`, not `tracks`: the search box is a
+    /// view filter, and a range over rows the user cannot see is not a range
+    /// they asked for — the same call `bulkAction`'s select-all already makes.
+    SelectionModel { id: sel }
+    function toggleSelected(id, mods) {
+        selected = sel.next(selected, id, visibleTracks,
+                            mods === undefined ? Qt.NoModifier : mods)
     }
     /// Selected ids in the order they are ON SCREEN, so a bulk enqueue lands
     /// in disc/track order. `Object.keys` on the selection map would sort the
@@ -137,7 +142,7 @@ Rectangle {
         return out
     }
     function bulkAction(action) {
-        if (action === "clear") { selected = ({}); return }
+        if (action === "clear") { selected = ({}); sel.anchorId = ""; return }
         if (action === "select-all") {
             // What the user can SEE: the search box is a view filter, so
             // "select all" means the filtered set (LocalLibraryView.qml:715).
@@ -679,7 +684,7 @@ Rectangle {
                                     onEnqueueRequested: function (m) {
                                         QbzLocal.enqueue("track", trackBlock.modelData.id, m)
                                     }
-                                    onToggleSelect: root.toggleSelected(trackBlock.modelData.id)
+                                    onToggleSelect: function (mods) { root.toggleSelected(trackBlock.modelData.id, mods) }
                                 }
                             }
                         }

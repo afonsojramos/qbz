@@ -27,7 +27,9 @@ Rectangle {
     property bool selectMode: false
     signal toggled()
     signal activated()
-    signal toggleSelect()
+    /// `modifiers` rides straight off the mouse event: Shift is what turns
+    /// a click into a range (controls/SelectionModel.qml).
+    signal toggleSelect(int modifiers)
 
     QbzTheme { id: theme }
 
@@ -93,7 +95,7 @@ Rectangle {
                 on: root.node.isFolder ? root.node.selectState === 2
                                        : root.node.selected === true
                 partial: root.node.isFolder === true && root.node.selectState === 1
-                onToggled: root.toggleSelect()
+                onToggled: function (mods) { root.toggleSelect(mods) }
             }
         }
 

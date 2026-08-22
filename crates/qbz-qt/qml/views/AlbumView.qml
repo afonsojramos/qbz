@@ -305,15 +305,16 @@ Rectangle {
     readonly property bool multiSelectOn: root.multiSelect
     function setMultiSelect(on) {
         root.multiSelect = on
-        if (!on) root.selected = ({})
+        if (!on) { root.selected = ({}); sel.anchorId = "" }
     }
-    function toggleSelected(id) {
-        var m = root.selected
-        if (m[id] === true) delete m[id]
-        else m[id] = true
-        // A rebind needs a NEW object reference — mutating in place notifies
-        // nothing.
-        root.selected = Object.assign({}, m)
+    /// Excel-style selection lives in ONE place — controls/SelectionModel.qml
+    /// holds the anchor and the Shift-range rule; this view keeps owning its
+    /// map. `mods` is the mouse event's modifiers, forwarded by the row; a
+    /// caller with no event (the checkbox, a keyboard path) may omit it.
+    SelectionModel { id: sel }
+    function toggleSelected(id, mods) {
+        root.selected = sel.next(root.selected, id, root.visibleTracks,
+                                 mods === undefined ? Qt.NoModifier : mods)
     }
     /// Selected ids in VISIBLE order — never Object.keys (integer-like keys
     /// iterate in NUMERIC order, not the user's).
@@ -332,7 +333,7 @@ Rectangle {
             root.selected = m
             return
         }
-        if (action === "clear") { root.selected = ({}); return }
+        if (action === "clear") { root.selected = ({}); sel.anchorId = ""; return }
         var ids = root.selectedIdsInOrder()
         if (ids.length === 0) return
         QbzAlbum.albumBulkAction(albumHeader.id, JSON.stringify(ids), action)
@@ -1354,7 +1355,7 @@ Rectangle {
                         downloadGlyph: true
                         selectMode: root.multiSelect
                         checked: root.selected[item.id] === true
-                        onToggleSelect: root.toggleSelected(item.id)
+                        onToggleSelect: function (mods) { root.toggleSelected(item.id, mods) }
                         // "Play later" is ON now. It was off because
                         // `enqueue_album_track` had no block-tail arm — "later"
                         // and "queue" both plain-appended, so the two entries

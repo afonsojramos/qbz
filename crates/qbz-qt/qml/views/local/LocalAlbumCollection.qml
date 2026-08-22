@@ -59,7 +59,9 @@ Item {
     signal openRequested(string id)
     signal playRequested(string id)
     signal enqueueRequested(string id, string mode)
-    signal toggleSelect(string id)
+    /// `modifiers` rides through from the card's mouse event — Shift is
+    /// what turns a click into a range (controls/SelectionModel.qml).
+    signal toggleSelect(string id, int modifiers)
 
     QbzTheme { id: theme }
 
@@ -501,7 +503,9 @@ Item {
                     onEnqueueRequested: function (m) {
                         root.enqueueRequested(modelData.items[0].id, m)
                     }
-                    onToggleSelect: root.toggleSelect(modelData.items[0].id)
+                    onToggleSelect: function (mods) {
+                        root.toggleSelect(modelData.items[0].id, mods)
+                    }
                 }
             }
         }

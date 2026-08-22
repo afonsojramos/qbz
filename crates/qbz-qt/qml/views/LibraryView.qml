@@ -596,17 +596,28 @@ Rectangle {
     // A rebind needs a NEW object reference — mutating the map in place
     // notifies nothing (the same rule artMap and every row's `favorite`
     // property follow).
-    function toggleTrackSelected(id) {
-        var m = root.tracksSelected
-        if (m[id] === true) delete m[id]
-        else m[id] = true
-        root.tracksSelected = Object.assign({}, m)
+    /// Excel-style selection — controls/SelectionModel.qml holds the anchor
+    /// and the Shift-range rule; this view keeps owning its two maps.
+    ///
+    /// TWO models, because tracks and albums are two independent selections
+    /// with two independent anchors, and the rows here are MIXED: `visibleRows`
+    /// carries both kinds, so each range is taken over the visible rows OF ITS
+    /// OWN KIND. Ranging over the mixed list would let a shift-click on a
+    /// track sweep up the albums drawn between it and the anchor.
+    SelectionModel { id: trackSel }
+    SelectionModel { id: albumSel }
+    function _rowsOfKind(kind) {
+        return root.visibleRows.filter(function (r) { return r.kind === kind })
     }
-    function toggleAlbumSelected(id) {
-        var m = root.albumsSelected
-        if (m[id] === true) delete m[id]
-        else m[id] = true
-        root.albumsSelected = Object.assign({}, m)
+    function toggleTrackSelected(id, mods) {
+        root.tracksSelected = trackSel.next(root.tracksSelected, id,
+                                            root._rowsOfKind("track"),
+                                            mods === undefined ? Qt.NoModifier : mods)
+    }
+    function toggleAlbumSelected(id, mods) {
+        root.albumsSelected = albumSel.next(root.albumsSelected, id,
+                                            root._rowsOfKind("album"),
+                                            mods === undefined ? Qt.NoModifier : mods)
     }
 
     /// Selected ids in VISIBLE order — never `Object.keys(map)`. Qobuz ids are
@@ -630,7 +641,7 @@ Rectangle {
             root.tracksSelected = m
             return
         }
-        if (action === "clear") { root.tracksSelected = ({}); return }
+        if (action === "clear") { root.tracksSelected = ({}); trackSel.anchorId = ""; return }
         var ids = root.selectedIdsInOrder("track", root.tracksSelected)
         if (ids.length === 0) return
         QbzLibrary.libraryBulkAction("track", JSON.stringify(ids), action)
@@ -649,7 +660,7 @@ Rectangle {
             root.albumsSelected = m
             return
         }
-        if (action === "clear") { root.albumsSelected = ({}); return }
+        if (action === "clear") { root.albumsSelected = ({}); albumSel.anchorId = ""; return }
         var ids = root.selectedIdsInOrder("album", root.albumsSelected)
         if (ids.length === 0) return
         QbzLibrary.libraryBulkAction("album", JSON.stringify(ids), action)
@@ -1158,7 +1169,7 @@ Rectangle {
                             number: modelData._no || (index + 1)
                             selectMode: root.tracksMultiSelect
                             checked: root.tracksSelected[modelData.id] === true
-                            onToggleSelect: root.toggleTrackSelected(modelData.id)
+                            onToggleSelect: function (mods) { root.toggleTrackSelected(modelData.id, mods) }
                             onPlayRequested: root.playTrackInContext(item.id)
                             onEnqueueRequested: function (m) { QbzPlayer.enqueueTrack(item.id, m) }
                             // MyQBZ "Add to mixtape" — the HOST builds the

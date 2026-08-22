@@ -71,7 +71,9 @@ Item {
     property bool zebra: false
     signal playRequested()
     signal enqueueRequested(string mode)
-    signal toggleSelect()
+    /// `modifiers` rides straight off the mouse event: Shift is what turns
+    /// a click into a range (controls/SelectionModel.qml).
+    signal toggleSelect(int modifiers)
 
     QbzTheme { id: theme }
 
@@ -137,7 +139,7 @@ Item {
         // the 14px accent disc the .slint actually specifies.
         selectMode: root.selectMode
         checked: root.checked
-        onToggleSelect: root.toggleSelect()
+        onToggleSelect: function (mods) { root.toggleSelect(mods) }
         onPlayRequested: root.playRequested()
         onEnqueueRequested: function (m) { root.enqueueRequested(m) }
     }

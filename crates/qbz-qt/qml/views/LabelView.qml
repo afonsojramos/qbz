@@ -96,15 +96,16 @@ Rectangle {
     readonly property bool multiSelectOn: root.multiSelect
     function setMultiSelect(on) {
         root.multiSelect = on
-        if (!on) root.selected = ({})
+        if (!on) { root.selected = ({}); sel.anchorId = "" }
     }
-    function toggleSelected(id) {
-        var m = root.selected
-        if (m[id] === true) delete m[id]
-        else m[id] = true
-        // A rebind needs a NEW object reference — mutating in place notifies
-        // nothing.
-        root.selected = Object.assign({}, m)
+    /// Excel-style selection lives in ONE place — controls/SelectionModel.qml
+    /// holds the anchor and the Shift-range rule; this view keeps owning its
+    /// map. `mods` is the mouse event's modifiers, forwarded by the row; a
+    /// caller with no event (the checkbox, a keyboard path) may omit it.
+    SelectionModel { id: sel }
+    function toggleSelected(id, mods) {
+        root.selected = sel.next(root.selected, id, root.topTracks,
+                                 mods === undefined ? Qt.NoModifier : mods)
     }
     function selectedIdsInOrder() {
         var rows = root.topTracks
@@ -121,7 +122,7 @@ Rectangle {
             root.selected = m
             return
         }
-        if (action === "clear") { root.selected = ({}); return }
+        if (action === "clear") { root.selected = ({}); sel.anchorId = ""; return }
         var ids = root.selectedIdsInOrder()
         if (ids.length === 0) return
         QbzPlayer.bulkTracksAction(JSON.stringify(ids), action, "label", String(doc.id || ""))
@@ -630,7 +631,7 @@ Rectangle {
                             showAlbum: true
                             selectMode: root.multiSelect
                             checked: root.selected[item.id] === true
-                            onToggleSelect: root.toggleSelected(item.id)
+                            onToggleSelect: function (mods) { root.toggleSelected(item.id, mods) }
                             onPlayRequested: QbzHome.labelPlayTrack(modelData.id)
                             onEnqueueRequested: function (mode) {
                                 QbzHome.labelEnqueueTrack(modelData.id, mode)

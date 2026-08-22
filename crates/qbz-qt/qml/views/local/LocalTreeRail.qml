@@ -149,6 +149,12 @@ Item {
                     selectMode: root.view.treeSelectMode
                     onToggled: QbzLocal.treeToggle(modelData.path, !modelData.expanded)
                     onActivated: root.view.selectFolder(modelData.path)
+                    // NO Shift-range here, deliberately: this rail's selection
+                    // lives in RUST (QbzLocal.treeToggle*Select owns the set),
+                    // not in a QML map, so controls/SelectionModel.qml has
+                    // nothing to hold an anchor against. Giving the tree ranges
+                    // means teaching the Rust side about an anchor, which is a
+                    // change of its own and not part of this port.
                     onToggleSelect: {
                         if (modelData.isFolder) QbzLocal.treeToggleFolderSelect(modelData.path)
                         else QbzLocal.treeToggleTrackSelect(modelData.path)

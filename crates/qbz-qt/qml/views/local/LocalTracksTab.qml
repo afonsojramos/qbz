@@ -255,7 +255,7 @@ Item {
                             onEnqueueRequested: function (m) {
                                 QbzLocal.enqueue("track", modelData.row.id, m)
                             }
-                            onToggleSelect: root.view.toggleTrackSelected(modelData.row.id)
+                            onToggleSelect: function (mods) { root.view.toggleTrackSelected(modelData.row.id, mods) }
                         }
                     }
                 }

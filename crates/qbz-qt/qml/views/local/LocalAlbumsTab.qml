@@ -129,7 +129,7 @@ Item {
                 onOpenRequested: function (id) { root.view.openAlbum(id) }
                 onPlayRequested: function (id) { QbzLocal.playAlbum(id, false) }
                 onEnqueueRequested: function (id, m) { QbzLocal.enqueue("album", id, m) }
-                onToggleSelect: function (id) { root.view.toggleAlbumSelected(id) }
+                onToggleSelect: function (id, mods) { root.view.toggleAlbumSelected(id, mods) }
             }
             QbzAlphaStrip {
                 visible: root.view.albumsGroup === "alpha"
