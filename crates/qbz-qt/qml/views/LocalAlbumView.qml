@@ -245,6 +245,33 @@ Rectangle {
             root.artMap = Object.assign({}, m)
         }
     }
+    /// The disc rows the document publishes for a MULTI-disc album
+    /// (local_album_actions.rs::disc_rows). Empty on a single-disc album.
+    readonly property var discRows: root.doc.discs || []
+    function discInfo(n) {
+        for (var i = 0; i < root.discRows.length; i++)
+            if ((root.discRows[i].disc || 0) === n)
+                return root.discRows[i]
+        return null
+    }
+    /// TRUE when the discs genuinely have DIFFERENT covers.
+    ///
+    /// `DiscRow.cover` is resolved in Rust from each disc's OWN folder, on
+    /// purpose: the scan-time artwork path is biased to the album ROOT, so a
+    /// box always reports one shared image and a thumbnail drawn from it would
+    /// be N copies of the same picture. This still guards the honest case — a
+    /// box that really does ship one cover for every disc — where drawing them
+    /// is noise rather than information.
+    readonly property bool discArtDistinct: {
+        var seen = {}
+        for (var i = 0; i < root.discRows.length; i++) {
+            var p = root.discRows[i].cover || ""
+            if (p === "") return false
+            if (seen[p]) return false
+            seen[p] = true
+        }
+        return root.discRows.length > 1
+    }
     onAlbumChanged: {
         if (album && album.artKey) {
             QbzLocal.artworkWindow(JSON.stringify([album.artKey]))
@@ -591,11 +618,38 @@ Rectangle {
                             sourceComponent: Item {
                             width: parent.width
                             height: 40
-                            Text {
+                            // The disc's OWN cover, when the discs differ.
+                            // Silent on a box with one shared cover — see
+                            // `discArtDistinct`.
+                            RoundedImage {
+                                id: discThumb
                                 x: 12
+                                width: 28
+                                height: 28
+                                radius: theme.radiusSm
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: QbzSession.tr("Disc", QbzSession.trRev) + " "
-                                    + root.discHeader(trackBlock.index)
+                                visible: root.discArtDistinct && source !== ""
+                                source: {
+                                    var d = root.discInfo(root.discHeader(trackBlock.index))
+                                    var c = d ? (d.cover || "") : ""
+                                    // A bare absolute path — the local art
+                                    // channel hands back file:// urls, this one
+                                    // comes straight off the filesystem.
+                                    return c === "" ? "" : (c.indexOf("file:") === 0 ? c : "file://" + c)
+                                }
+                            }
+                            Text {
+                                x: discThumb.visible ? 12 + 28 + 10 : 12
+                                anchors.verticalCenter: parent.verticalCenter
+                                // "Disc 2" alone when the box does not name its
+                                // discs — the behaviour this row has always had —
+                                // and "Disc 2 — Das Rheingold" when it does.
+                                text: {
+                                    var n = root.discHeader(trackBlock.index)
+                                    var base = QbzSession.tr("Disc", QbzSession.trRev) + " " + n
+                                    var d = root.discInfo(n)
+                                    return (d && d.title) ? base + " — " + d.title : base
+                                }
                                 color: theme.textMuted
                                 font.pixelSize: theme.fontLegal
                                 font.weight: theme.weightSemibold

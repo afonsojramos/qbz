@@ -192,6 +192,47 @@ impl MetadataExtractor {
     /// whitespace on one side, so `CD-Rom Favourites` is not a disc folder
     /// either — an accidental merge of two albums is worse than the split this
     /// fixes, so the rule stays narrow.
+    /// `strip_disc_suffix` for callers outside this crate — the disc-suffix
+    /// rule is the one that decides whether a tag NAMES a disc or merely
+    /// NUMBERS it, and a second copy of it elsewhere would drift.
+    pub fn strip_disc_suffix_public(title: &str) -> String {
+        Self::strip_disc_suffix(title)
+    }
+
+    /// The TITLE half of a titled disc folder — "Disc 1 - Rheingold" -> "Rheingold".
+    ///
+    /// `is_titled_disc_folder` already computes this split and throws the tail
+    /// away; this returns it. PURELY ADDITIVE: nothing about grouping changes.
+    /// In particular `strip_disc_suffix` and `album_root_dir` are untouched —
+    /// they are what make a box set fold into ONE album, there is a regression
+    /// test pinning that, and a per-disc LABEL must not be bought by breaking
+    /// it.
+    pub fn disc_title_from_name(name: &str) -> Option<String> {
+        let trimmed = name.trim();
+        let bytes = trimmed.as_bytes();
+
+        let mut split = None;
+        for (idx, ch) in trimmed.char_indices() {
+            if !matches!(ch, '-' | '\u{2013}' | '\u{2014}' | ':') {
+                continue;
+            }
+            let space_before = idx > 0 && bytes[idx - 1].is_ascii_whitespace();
+            let after = idx + ch.len_utf8();
+            let space_after = trimmed[after..].starts_with(char::is_whitespace);
+            if space_before || space_after {
+                split = Some((idx, after));
+                break;
+            }
+        }
+        let (head_end, tail_start) = split?;
+        let head = trimmed[..head_end].trim();
+        let tail = trimmed[tail_start..].trim();
+        if tail.is_empty() || !Self::is_bare_disc_folder(head) {
+            return None;
+        }
+        Some(tail.to_string())
+    }
+
     fn is_titled_disc_folder(name: &str) -> bool {
         let trimmed = name.trim();
         let bytes = trimmed.as_bytes();
@@ -896,6 +937,56 @@ impl MetadataExtractor {
     }
 
     /// Look for folder artwork by file name heuristics
+    /// A cover living in THIS directory, ignoring the album root.
+    ///
+    /// `find_folder_artwork` deliberately PREFERS the album root — it gives
+    /// index 0 a `dir_bonus` of 5 and compares with a strict `>`, so
+    /// `Box/cover.jpg` (105) beats `Box/Disc 01 - Name/cover.jpg` (100) on
+    /// every track of every disc. That is right for the album's own cover and
+    /// exactly wrong for a per-DISC one: it is why a box set whose discs each
+    /// ship their own art still resolved to one shared image on all of them.
+    ///
+    /// So this is the un-biased sibling, used only where the caller already
+    /// knows it is asking about one disc's folder. It does NOT touch the scan
+    /// path and changes no stored value.
+    pub fn folder_artwork_in_dir(dir: &Path) -> Option<String> {
+        let mut best: Option<(u32, PathBuf)> = None;
+        for entry in std::fs::read_dir(dir).ok()?.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .unwrap_or_default();
+            if !Self::is_supported_artwork_ext(&ext) {
+                continue;
+            }
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+            // Same vocabulary the scanner scores with, simplified: an exact
+            // well-known name wins, a name that merely contains one is a
+            // fallback, anything else is ignored.
+            const EXACT: &[&str] = &["cover", "folder", "front", "album", "artwork", "art"];
+            let score = if EXACT.contains(&stem.as_str()) {
+                2
+            } else if EXACT.iter().any(|k| stem.contains(k)) {
+                1
+            } else {
+                continue;
+            };
+            if best.as_ref().map(|(s, _)| score > *s).unwrap_or(true) {
+                best = Some((score, path));
+            }
+        }
+        best.map(|(_, p)| p.to_string_lossy().to_string())
+    }
+
     pub fn find_folder_artwork(
         audio_file_path: &Path,
         album_title: Option<&str>,
