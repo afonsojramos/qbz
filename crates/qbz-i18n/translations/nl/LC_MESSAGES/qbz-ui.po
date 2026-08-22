@@ -5416,3 +5416,225 @@ msgid "Ripped {} track to your library"
 msgid_plural "Ripped {} tracks to your library"
 msgstr[0] "{} track naar je bibliotheek geript"
 msgstr[1] "{} tracks naar je bibliotheek geript"
+
+# Discs: rip wizard, metadata lookup and the disc tooltips (2026-08-21)
+
+msgid "Play a folder, CD or disc image without adding it to your library"
+msgstr "Speel een map, cd of schijfkopie af zonder die aan je bibliotheek toe te voegen"
+
+msgid "Reading the disc…"
+msgstr "Schijf lezen…"
+
+msgid "Re-scan your folders and media servers for new music"
+msgstr "Scan je mappen en mediaservers opnieuw op nieuwe muziek"
+
+msgid "Manage the folders your library is built from"
+msgstr "Beheer de mappen waaruit je bibliotheek is opgebouwd"
+
+msgid "Play the whole disc from the first track"
+msgstr "Speel de hele schijf vanaf het eerste nummer"
+
+msgid "Play it in a shuffled order"
+msgstr "Speel af in willekeurige volgorde"
+
+msgid "Look this disc up and correct its details"
+msgstr "Zoek deze schijf op en corrigeer de gegevens"
+
+msgid "Copy this CD to your computer as FLAC files"
+msgstr "Kopieer deze cd naar je computer als FLAC-bestanden"
+
+msgid "Close this disc and go back to your library"
+msgstr "Sluit deze schijf en ga terug naar je bibliotheek"
+
+msgid "Correct disc details"
+msgstr "Schijfgegevens corrigeren"
+
+msgid "SACD image"
+msgstr "SACD-kopie"
+
+msgid "Close without changing anything"
+msgstr "Sluiten zonder iets te wijzigen"
+
+msgid "Community database. Knows discs by their table of contents."
+msgstr "Communitydatabase. Herkent schijven aan hun inhoudsopgave."
+
+msgid "Collector database. Stronger on pressings, editions and catalogue numbers."
+msgstr "Verzamelaarsdatabase. Sterker in persingen, edities en catalogusnummers."
+
+msgid "Search this provider"
+msgstr "Zoek bij deze aanbieder"
+
+msgid "The provider is rate-limiting right now. Try again in a moment."
+msgstr "De aanbieder beperkt op dit moment het aantal verzoeken. Probeer het zo opnieuw."
+
+msgid "No releases matched. Try fewer words, or the other provider."
+msgstr "Geen resultaten. Probeer minder woorden, of de andere aanbieder."
+
+msgid "Search for the release this disc actually is."
+msgstr "Zoek de uitgave die deze schijf werkelijk is."
+
+msgid "Remove my correction"
+msgstr "Mijn correctie verwijderen"
+
+msgid "Forget the saved details for this disc and look it up fresh next time"
+msgstr "Vergeet de opgeslagen gegevens van deze schijf en zoek ze de volgende keer opnieuw op"
+
+msgid "Applying..."
+msgstr "Toepassen..."
+
+msgid "Use these details"
+msgstr "Deze gegevens gebruiken"
+
+msgid "Rename this disc and remember it for next time"
+msgstr "Hernoem deze schijf en onthoud dit voor de volgende keer"
+
+msgid "Rip this CD"
+msgstr "Deze cd rippen"
+
+msgid "What will happen"
+msgstr "Wat er gaat gebeuren"
+
+msgid "Track names"
+msgstr "Nummernamen"
+
+msgid "Your library"
+msgstr "Je bibliotheek"
+
+msgid "Every track on the disc is read and written as a FLAC file — one folder per album, one file per track, with tags."
+msgstr "Elk nummer op de schijf wordt gelezen en als FLAC-bestand weggeschreven: één map per album, één bestand per nummer, met tags."
+
+msgid "Format: FLAC (lossless) — the only format QBZ writes"
+msgstr "Formaat: FLAC (lossless) — het enige formaat dat QBZ wegschrijft"
+
+msgid "Where the album goes"
+msgstr "Waar het album komt"
+
+msgid "Choose folder…"
+msgstr "Map kiezen…"
+
+msgid "Change…"
+msgstr "Wijzigen…"
+
+msgid "Pick the folder the album folder will be created in"
+msgstr "Kies de map waarin de albummap wordt aangemaakt"
+
+msgid "Nothing chosen yet"
+msgstr "Nog niets gekozen"
+
+msgid "This folder is already part of your Local Library."
+msgstr "Deze map maakt al deel uit van je lokale bibliotheek."
+
+msgid "This folder is outside your Local Library, so the album will not appear there on its own."
+msgstr "Deze map valt buiten je lokale bibliotheek, dus het album verschijnt daar niet vanzelf."
+
+msgid "Choose a destination first and this step will know what to offer."
+msgstr "Kies eerst een bestemming, dan weet deze stap wat er te bieden valt."
+
+msgid "Re-scan that folder when the rip finishes"
+msgstr "Scan die map opnieuw zodra het rippen klaar is"
+
+msgid "Only that folder, not your whole library."
+msgstr "Alleen die map, niet je hele bibliotheek."
+
+msgid "Do nothing"
+msgstr "Niets doen"
+
+msgid "The album appears the next time you scan."
+msgstr "Het album verschijnt bij de volgende scan."
+
+msgid "Add this folder to Local Library and scan it"
+msgstr "Voeg deze map toe aan je lokale bibliotheek en scan die"
+
+msgid "Future rips into the same folder will be picked up too."
+msgstr "Latere rips naar dezelfde map worden ook opgepikt."
+
+msgid "The files are written; the library will not know about them."
+msgstr "De bestanden worden weggeschreven; de bibliotheek weet er niets van."
+
+msgid "A simple ripper, made to get your CDs into the library quickly. For AccurateRip checks and advanced options, use a dedicated tool."
+msgstr "Een eenvoudige ripper, bedoeld om je cd's snel in je bibliotheek te krijgen. Voor AccurateRip-controles en geavanceerde opties kun je beter een gespecialiseerd programma gebruiken."
+
+msgid "Close without ripping anything"
+msgstr "Sluiten zonder iets te rippen"
+
+msgid "Go back a step"
+msgstr "Ga een stap terug"
+
+msgid "Start ripping"
+msgstr "Beginnen met rippen"
+
+msgid "Go to the next step"
+msgstr "Ga naar de volgende stap"
+
+msgid "Read the disc and write the FLAC files"
+msgstr "Lees de schijf en schrijf de FLAC-bestanden"
+
+msgid "Choose a destination folder first"
+msgstr "Kies eerst een bestemmingsmap"
+
+msgid "No disc is open."
+msgstr "Er is geen schijf geopend."
+
+msgid "Couldn't load that release."
+msgstr "Kon die uitgave niet laden."
+
+msgid "Disc details updated"
+msgstr "Schijfgegevens bijgewerkt"
+
+msgid "Correction removed. Re-open the disc to look it up again."
+msgstr "Correctie verwijderd. Open de schijf opnieuw om die weer op te zoeken."
+
+msgid "Only a physical CD can be ripped."
+msgstr "Alleen een fysieke cd kan worden geript."
+
+msgid "Choose where the album should go first."
+msgstr "Kies eerst waar het album moet komen."
+
+msgid "Couldn't add that folder to the library"
+msgstr "Kon die map niet aan de bibliotheek toevoegen"
+
+# Rip progress panel, cancel and partial rips (2026-08-21)
+
+msgid "Writing FLAC files to"
+msgstr "FLAC-bestanden worden geschreven naar"
+
+msgid "Hide this panel — the rip keeps going"
+msgstr "Verberg dit paneel — het rippen gaat door"
+
+msgid "Ripping — don't eject the disc until this finishes."
+msgstr "Bezig met rippen — werp de schijf pas uit als dit klaar is."
+
+msgid "Finished"
+msgstr "Klaar"
+
+msgid "Files already written stay on disk. Delete them yourself if you don't want them."
+msgstr "Al weggeschreven bestanden blijven op je schijf staan. Verwijder ze zelf als je ze niet wilt."
+
+msgid "Stop ripping"
+msgstr "Stop met rippen"
+
+msgid "Stopping…"
+msgstr "Bezig met stoppen…"
+
+msgid "Stop after the current track. Nothing is deleted."
+msgstr "Stop na het huidige nummer. Er wordt niets verwijderd."
+
+msgid "Rip stopped. The files already written are still there."
+msgstr "Rippen gestopt. De al weggeschreven bestanden staan er nog."
+
+msgid "See what the rip is doing, or stop it"
+msgstr "Bekijk wat het rippen doet, of stop het"
+
+msgid "Pick at least one track to rip."
+msgstr "Kies minstens één nummer om te rippen."
+
+# Ephemeral pane: per-disc blocks and the track filter (2026-08-21)
+
+msgid "Disc {}"
+msgstr "Schijf {}"
+
+msgid "Filter tracks"
+msgstr "Nummers filteren"
+
+msgid "No track matches that."
+msgstr "Geen enkel nummer komt overeen."

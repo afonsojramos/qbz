@@ -5411,3 +5411,225 @@ msgid "Ripped {} track to your library"
 msgid_plural "Ripped {} tracks to your library"
 msgstr[0] "{} 曲をライブラリに取り込みました"
 msgstr[1] "{} 曲をライブラリに取り込みました"
+
+# Discs: rip wizard, metadata lookup and the disc tooltips (2026-08-21)
+
+msgid "Play a folder, CD or disc image without adding it to your library"
+msgstr "フォルダー・CD・ディスクイメージを、ライブラリに追加せずに再生します"
+
+msgid "Reading the disc…"
+msgstr "ディスクを読み取り中…"
+
+msgid "Re-scan your folders and media servers for new music"
+msgstr "フォルダーとメディアサーバーを再スキャンして新しい音楽を探します"
+
+msgid "Manage the folders your library is built from"
+msgstr "ライブラリのもとになるフォルダーを管理します"
+
+msgid "Play the whole disc from the first track"
+msgstr "1曲目からディスク全体を再生します"
+
+msgid "Play it in a shuffled order"
+msgstr "シャッフル再生します"
+
+msgid "Look this disc up and correct its details"
+msgstr "このディスクを検索して情報を修正します"
+
+msgid "Copy this CD to your computer as FLAC files"
+msgstr "このCDをFLACファイルとしてパソコンにコピーします"
+
+msgid "Close this disc and go back to your library"
+msgstr "このディスクを閉じてライブラリに戻ります"
+
+msgid "Correct disc details"
+msgstr "ディスク情報を修正"
+
+msgid "SACD image"
+msgstr "SACDイメージ"
+
+msgid "Close without changing anything"
+msgstr "何も変更せずに閉じます"
+
+msgid "Community database. Knows discs by their table of contents."
+msgstr "コミュニティのデータベース。ディスクを目次から識別します。"
+
+msgid "Collector database. Stronger on pressings, editions and catalogue numbers."
+msgstr "コレクター向けデータベース。プレス・エディション・カタログ番号に強いです。"
+
+msgid "Search this provider"
+msgstr "この提供元で検索します"
+
+msgid "The provider is rate-limiting right now. Try again in a moment."
+msgstr "現在、提供元がリクエストを制限しています。少し待ってから再試行してください。"
+
+msgid "No releases matched. Try fewer words, or the other provider."
+msgstr "一致するリリースがありません。語数を減らすか、別の提供元を試してください。"
+
+msgid "Search for the release this disc actually is."
+msgstr "このディスクが実際にどのリリースなのかを検索します。"
+
+msgid "Remove my correction"
+msgstr "自分の修正を削除"
+
+msgid "Forget the saved details for this disc and look it up fresh next time"
+msgstr "このディスクの保存済み情報を破棄し、次回あらためて検索します"
+
+msgid "Applying..."
+msgstr "適用中..."
+
+msgid "Use these details"
+msgstr "この情報を使う"
+
+msgid "Rename this disc and remember it for next time"
+msgstr "このディスクの名前を変更し、次回のために記憶します"
+
+msgid "Rip this CD"
+msgstr "このCDを取り込む"
+
+msgid "What will happen"
+msgstr "これから行うこと"
+
+msgid "Track names"
+msgstr "トラック名"
+
+msgid "Your library"
+msgstr "ライブラリ"
+
+msgid "Every track on the disc is read and written as a FLAC file — one folder per album, one file per track, with tags."
+msgstr "ディスクの各トラックを読み取り、FLACファイルとして書き出します。アルバムごとに1フォルダー、トラックごとに1ファイル、タグ付きです。"
+
+msgid "Format: FLAC (lossless) — the only format QBZ writes"
+msgstr "形式: FLAC（ロスレス）— QBZが書き出せる唯一の形式です"
+
+msgid "Where the album goes"
+msgstr "アルバムの保存先"
+
+msgid "Choose folder…"
+msgstr "フォルダーを選択…"
+
+msgid "Change…"
+msgstr "変更…"
+
+msgid "Pick the folder the album folder will be created in"
+msgstr "アルバムのフォルダーを作成する場所を選びます"
+
+msgid "Nothing chosen yet"
+msgstr "まだ選択されていません"
+
+msgid "This folder is already part of your Local Library."
+msgstr "このフォルダーはすでにローカルライブラリの一部です。"
+
+msgid "This folder is outside your Local Library, so the album will not appear there on its own."
+msgstr "このフォルダーはローカルライブラリの外にあるため、アルバムは自動では表示されません。"
+
+msgid "Choose a destination first and this step will know what to offer."
+msgstr "先に保存先を選ぶと、このステップで何を提案できるかが決まります。"
+
+msgid "Re-scan that folder when the rip finishes"
+msgstr "取り込みが終わったら、そのフォルダーを再スキャンします"
+
+msgid "Only that folder, not your whole library."
+msgstr "そのフォルダーだけで、ライブラリ全体ではありません。"
+
+msgid "Do nothing"
+msgstr "何もしない"
+
+msgid "The album appears the next time you scan."
+msgstr "次回スキャンしたときにアルバムが表示されます。"
+
+msgid "Add this folder to Local Library and scan it"
+msgstr "このフォルダーをローカルライブラリに追加してスキャンします"
+
+msgid "Future rips into the same folder will be picked up too."
+msgstr "同じフォルダーへの今後の取り込みも検出されます。"
+
+msgid "The files are written; the library will not know about them."
+msgstr "ファイルは書き出されますが、ライブラリはそれを認識しません。"
+
+msgid "A simple ripper, made to get your CDs into the library quickly. For AccurateRip checks and advanced options, use a dedicated tool."
+msgstr "ライブラリにCDをすばやく取り込むための、シンプルな取り込み機能です。AccurateRipによる検証や高度な設定が必要な場合は、専用ソフトをお使いください。"
+
+msgid "Close without ripping anything"
+msgstr "何も取り込まずに閉じます"
+
+msgid "Go back a step"
+msgstr "1つ前の手順に戻ります"
+
+msgid "Start ripping"
+msgstr "取り込みを開始"
+
+msgid "Go to the next step"
+msgstr "次の手順へ進みます"
+
+msgid "Read the disc and write the FLAC files"
+msgstr "ディスクを読み取り、FLACファイルを書き出します"
+
+msgid "Choose a destination folder first"
+msgstr "先に保存先フォルダーを選んでください"
+
+msgid "No disc is open."
+msgstr "ディスクが開かれていません。"
+
+msgid "Couldn't load that release."
+msgstr "そのリリースを読み込めませんでした。"
+
+msgid "Disc details updated"
+msgstr "ディスク情報を更新しました"
+
+msgid "Correction removed. Re-open the disc to look it up again."
+msgstr "修正を削除しました。もう一度検索するには、ディスクを開き直してください。"
+
+msgid "Only a physical CD can be ripped."
+msgstr "取り込めるのは物理CDだけです。"
+
+msgid "Choose where the album should go first."
+msgstr "先にアルバムの保存先を選んでください。"
+
+msgid "Couldn't add that folder to the library"
+msgstr "そのフォルダーをライブラリに追加できませんでした"
+
+# Rip progress panel, cancel and partial rips (2026-08-21)
+
+msgid "Writing FLAC files to"
+msgstr "FLACファイルの書き出し先:"
+
+msgid "Hide this panel — the rip keeps going"
+msgstr "このパネルを閉じます（取り込みは続きます）"
+
+msgid "Ripping — don't eject the disc until this finishes."
+msgstr "取り込み中です。完了するまでディスクを取り出さないでください。"
+
+msgid "Finished"
+msgstr "完了"
+
+msgid "Files already written stay on disk. Delete them yourself if you don't want them."
+msgstr "すでに書き出されたファイルはディスクに残ります。不要な場合はご自身で削除してください。"
+
+msgid "Stop ripping"
+msgstr "取り込みを停止"
+
+msgid "Stopping…"
+msgstr "停止中…"
+
+msgid "Stop after the current track. Nothing is deleted."
+msgstr "現在のトラックの後で停止します。何も削除されません。"
+
+msgid "Rip stopped. The files already written are still there."
+msgstr "取り込みを停止しました。すでに書き出されたファイルはそのまま残っています。"
+
+msgid "See what the rip is doing, or stop it"
+msgstr "取り込みの状況を見る、または停止します"
+
+msgid "Pick at least one track to rip."
+msgstr "取り込むトラックを1つ以上選んでください。"
+
+# Ephemeral pane: per-disc blocks and the track filter (2026-08-21)
+
+msgid "Disc {}"
+msgstr "ディスク {}"
+
+msgid "Filter tracks"
+msgstr "トラックを絞り込む"
+
+msgid "No track matches that."
+msgstr "一致するトラックがありません。"

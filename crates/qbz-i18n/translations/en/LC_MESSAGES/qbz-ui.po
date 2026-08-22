@@ -973,3 +973,234 @@ msgid "Ripped {} track to your library"
 msgid_plural "Ripped {} tracks to your library"
 msgstr[0] "Ripped {} track to your library"
 msgstr[1] "Ripped {} tracks to your library"
+
+# Discs: rip wizard, metadata lookup and the disc tooltips (2026-08-21)
+
+msgid "Play a folder, CD or disc image without adding it to your library"
+msgstr "Play a folder, CD or disc image without adding it to your library"
+
+msgid "Reading the disc…"
+msgstr "Reading the disc…"
+
+msgid "Re-scan your folders and media servers for new music"
+msgstr "Re-scan your folders and media servers for new music"
+
+msgid "Manage the folders your library is built from"
+msgstr "Manage the folders your library is built from"
+
+msgid "Play the whole disc from the first track"
+msgstr "Play the whole disc from the first track"
+
+msgid "Play it in a shuffled order"
+msgstr "Play it in a shuffled order"
+
+msgid "Look this disc up and correct its details"
+msgstr "Look this disc up and correct its details"
+
+msgid "Copy this CD to your computer as FLAC files"
+msgstr "Copy this CD to your computer as FLAC files"
+
+msgid "Close this disc and go back to your library"
+msgstr "Close this disc and go back to your library"
+
+msgid "Correct disc details"
+msgstr "Correct disc details"
+
+msgid "SACD image"
+msgstr "SACD image"
+
+msgid "Close without changing anything"
+msgstr "Close without changing anything"
+
+msgid "Community database. Knows discs by their table of contents."
+msgstr "Community database. Knows discs by their table of contents."
+
+msgid "Collector database. Stronger on pressings, editions and catalogue numbers."
+msgstr "Collector database. Stronger on pressings, editions and catalogue numbers."
+
+msgid "Search this provider"
+msgstr "Search this provider"
+
+msgid "The provider is rate-limiting right now. Try again in a moment."
+msgstr "The provider is rate-limiting right now. Try again in a moment."
+
+msgid "No releases matched. Try fewer words, or the other provider."
+msgstr "No releases matched. Try fewer words, or the other provider."
+
+msgid "Search for the release this disc actually is."
+msgstr "Search for the release this disc actually is."
+
+msgid "Remove my correction"
+msgstr "Remove my correction"
+
+msgid "Forget the saved details for this disc and look it up fresh next time"
+msgstr "Forget the saved details for this disc and look it up fresh next time"
+
+msgid "Applying..."
+msgstr "Applying..."
+
+msgid "Use these details"
+msgstr "Use these details"
+
+msgid "Rename this disc and remember it for next time"
+msgstr "Rename this disc and remember it for next time"
+
+msgid "Rip this CD"
+msgstr "Rip this CD"
+
+msgid "What will happen"
+msgstr "What will happen"
+
+msgid "Track names"
+msgstr "Track names"
+
+msgid "Your library"
+msgstr "Your library"
+
+msgid "Every track on the disc is read and written as a FLAC file — one folder per album, one file per track, with tags."
+msgstr "Every track on the disc is read and written as a FLAC file — one folder per album, one file per track, with tags."
+
+msgid "Format: FLAC (lossless) — the only format QBZ writes"
+msgstr "Format: FLAC (lossless) — the only format QBZ writes"
+
+msgid "Album artist"
+msgstr "Album artist"
+
+msgid "Where the album goes"
+msgstr "Where the album goes"
+
+msgid "Choose folder…"
+msgstr "Choose folder…"
+
+msgid "Change…"
+msgstr "Change…"
+
+msgid "Pick the folder the album folder will be created in"
+msgstr "Pick the folder the album folder will be created in"
+
+msgid "Nothing chosen yet"
+msgstr "Nothing chosen yet"
+
+msgid "This folder is already part of your Local Library."
+msgstr "This folder is already part of your Local Library."
+
+msgid "This folder is outside your Local Library, so the album will not appear there on its own."
+msgstr "This folder is outside your Local Library, so the album will not appear there on its own."
+
+msgid "Choose a destination first and this step will know what to offer."
+msgstr "Choose a destination first and this step will know what to offer."
+
+msgid "Re-scan that folder when the rip finishes"
+msgstr "Re-scan that folder when the rip finishes"
+
+msgid "Only that folder, not your whole library."
+msgstr "Only that folder, not your whole library."
+
+msgid "Do nothing"
+msgstr "Do nothing"
+
+msgid "The album appears the next time you scan."
+msgstr "The album appears the next time you scan."
+
+msgid "Add this folder to Local Library and scan it"
+msgstr "Add this folder to Local Library and scan it"
+
+msgid "Future rips into the same folder will be picked up too."
+msgstr "Future rips into the same folder will be picked up too."
+
+msgid "The files are written; the library will not know about them."
+msgstr "The files are written; the library will not know about them."
+
+msgid "A simple ripper, made to get your CDs into the library quickly. For AccurateRip checks and advanced options, use a dedicated tool."
+msgstr "A simple ripper, made to get your CDs into the library quickly. For AccurateRip checks and advanced options, use a dedicated tool."
+
+msgid "Close without ripping anything"
+msgstr "Close without ripping anything"
+
+msgid "Go back a step"
+msgstr "Go back a step"
+
+msgid "Start ripping"
+msgstr "Start ripping"
+
+msgid "Go to the next step"
+msgstr "Go to the next step"
+
+msgid "Read the disc and write the FLAC files"
+msgstr "Read the disc and write the FLAC files"
+
+msgid "Choose a destination folder first"
+msgstr "Choose a destination folder first"
+
+msgid "No disc is open."
+msgstr "No disc is open."
+
+msgid "Couldn't load that release."
+msgstr "Couldn't load that release."
+
+msgid "Disc details updated"
+msgstr "Disc details updated"
+
+msgid "Correction removed. Re-open the disc to look it up again."
+msgstr "Correction removed. Re-open the disc to look it up again."
+
+msgid "Only a physical CD can be ripped."
+msgstr "Only a physical CD can be ripped."
+
+msgid "Choose where the album should go first."
+msgstr "Choose where the album should go first."
+
+msgid "Couldn't add that folder to the library"
+msgstr "Couldn't add that folder to the library"
+
+# Rip progress panel, cancel and partial rips (2026-08-21)
+
+msgid "Writing FLAC files to"
+msgstr "Writing FLAC files to"
+
+msgid "Hide this panel — the rip keeps going"
+msgstr "Hide this panel — the rip keeps going"
+
+msgid "Ripping — don't eject the disc until this finishes."
+msgstr "Ripping — don't eject the disc until this finishes."
+
+msgid "Track"
+msgstr "Track"
+
+msgid "Finished"
+msgstr "Finished"
+
+msgid "Files already written stay on disk. Delete them yourself if you don't want them."
+msgstr "Files already written stay on disk. Delete them yourself if you don't want them."
+
+msgid "Stop ripping"
+msgstr "Stop ripping"
+
+msgid "Stopping…"
+msgstr "Stopping…"
+
+msgid "Stop after the current track. Nothing is deleted."
+msgstr "Stop after the current track. Nothing is deleted."
+
+msgid "Rip stopped. The files already written are still there."
+msgstr "Rip stopped. The files already written are still there."
+
+msgid "See what the rip is doing, or stop it"
+msgstr "See what the rip is doing, or stop it"
+
+msgid "selected"
+msgstr "selected"
+
+msgid "Pick at least one track to rip."
+msgstr "Pick at least one track to rip."
+
+# Ephemeral pane: per-disc blocks and the track filter (2026-08-21)
+
+msgid "Disc {}"
+msgstr "Disc {}"
+
+msgid "Filter tracks"
+msgstr "Filter tracks"
+
+msgid "No track matches that."
+msgstr "No track matches that."

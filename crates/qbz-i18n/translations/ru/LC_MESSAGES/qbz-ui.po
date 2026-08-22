@@ -5445,3 +5445,225 @@ msgid "Ripped {} track to your library"
 msgid_plural "Ripped {} tracks to your library"
 msgstr[0] "Извлечена {} дорожка в вашу библиотеку"
 msgstr[1] "Извлечено {} дорожек в вашу библиотеку"
+
+# Discs: rip wizard, metadata lookup and the disc tooltips (2026-08-21)
+
+msgid "Play a folder, CD or disc image without adding it to your library"
+msgstr "Воспроизвести папку, CD или образ диска, не добавляя их в медиатеку"
+
+msgid "Reading the disc…"
+msgstr "Чтение диска…"
+
+msgid "Re-scan your folders and media servers for new music"
+msgstr "Повторно просканировать папки и медиасерверы в поисках новой музыки"
+
+msgid "Manage the folders your library is built from"
+msgstr "Управление папками, из которых собрана медиатека"
+
+msgid "Play the whole disc from the first track"
+msgstr "Воспроизвести весь диск с первого трека"
+
+msgid "Play it in a shuffled order"
+msgstr "Воспроизвести в случайном порядке"
+
+msgid "Look this disc up and correct its details"
+msgstr "Найти этот диск и исправить его сведения"
+
+msgid "Copy this CD to your computer as FLAC files"
+msgstr "Скопировать этот CD на компьютер в файлы FLAC"
+
+msgid "Close this disc and go back to your library"
+msgstr "Закрыть этот диск и вернуться в медиатеку"
+
+msgid "Correct disc details"
+msgstr "Исправить сведения о диске"
+
+msgid "SACD image"
+msgstr "Образ SACD"
+
+msgid "Close without changing anything"
+msgstr "Закрыть, ничего не меняя"
+
+msgid "Community database. Knows discs by their table of contents."
+msgstr "Общественная база данных. Определяет диски по оглавлению."
+
+msgid "Collector database. Stronger on pressings, editions and catalogue numbers."
+msgstr "База данных коллекционеров. Лучше знает прессы, издания и каталожные номера."
+
+msgid "Search this provider"
+msgstr "Искать в этом источнике"
+
+msgid "The provider is rate-limiting right now. Try again in a moment."
+msgstr "Источник сейчас ограничивает запросы. Попробуйте через минуту."
+
+msgid "No releases matched. Try fewer words, or the other provider."
+msgstr "Совпадений нет. Попробуйте меньше слов или другой источник."
+
+msgid "Search for the release this disc actually is."
+msgstr "Найдите издание, которым этот диск является на самом деле."
+
+msgid "Remove my correction"
+msgstr "Удалить мою правку"
+
+msgid "Forget the saved details for this disc and look it up fresh next time"
+msgstr "Забыть сохранённые сведения об этом диске и найти их заново в следующий раз"
+
+msgid "Applying..."
+msgstr "Применение..."
+
+msgid "Use these details"
+msgstr "Использовать эти сведения"
+
+msgid "Rename this disc and remember it for next time"
+msgstr "Переименовать этот диск и запомнить на будущее"
+
+msgid "Rip this CD"
+msgstr "Извлечь этот CD"
+
+msgid "What will happen"
+msgstr "Что произойдёт"
+
+msgid "Track names"
+msgstr "Названия треков"
+
+msgid "Your library"
+msgstr "Ваша медиатека"
+
+msgid "Every track on the disc is read and written as a FLAC file — one folder per album, one file per track, with tags."
+msgstr "Каждый трек диска считывается и записывается в файл FLAC: одна папка на альбом, один файл на трек, с тегами."
+
+msgid "Format: FLAC (lossless) — the only format QBZ writes"
+msgstr "Формат: FLAC (без потерь) — единственный формат, который пишет QBZ"
+
+msgid "Where the album goes"
+msgstr "Куда попадёт альбом"
+
+msgid "Choose folder…"
+msgstr "Выбрать папку…"
+
+msgid "Change…"
+msgstr "Изменить…"
+
+msgid "Pick the folder the album folder will be created in"
+msgstr "Выберите папку, в которой будет создана папка альбома"
+
+msgid "Nothing chosen yet"
+msgstr "Пока ничего не выбрано"
+
+msgid "This folder is already part of your Local Library."
+msgstr "Эта папка уже входит в вашу локальную медиатеку."
+
+msgid "This folder is outside your Local Library, so the album will not appear there on its own."
+msgstr "Эта папка вне вашей локальной медиатеки, поэтому альбом сам там не появится."
+
+msgid "Choose a destination first and this step will know what to offer."
+msgstr "Сначала выберите папку — тогда этот шаг поймёт, что предложить."
+
+msgid "Re-scan that folder when the rip finishes"
+msgstr "Просканировать эту папку заново, когда извлечение закончится"
+
+msgid "Only that folder, not your whole library."
+msgstr "Только эту папку, а не всю медиатеку."
+
+msgid "Do nothing"
+msgstr "Ничего не делать"
+
+msgid "The album appears the next time you scan."
+msgstr "Альбом появится при следующем сканировании."
+
+msgid "Add this folder to Local Library and scan it"
+msgstr "Добавить эту папку в локальную медиатеку и просканировать её"
+
+msgid "Future rips into the same folder will be picked up too."
+msgstr "Последующие извлечения в эту же папку тоже будут найдены."
+
+msgid "The files are written; the library will not know about them."
+msgstr "Файлы будут записаны, но медиатека о них не узнает."
+
+msgid "A simple ripper, made to get your CDs into the library quickly. For AccurateRip checks and advanced options, use a dedicated tool."
+msgstr "Простой риппер: он нужен, чтобы быстро добавить компакт-диски в медиатеку. Для проверки AccurateRip и продвинутых настроек используйте специализированную программу."
+
+msgid "Close without ripping anything"
+msgstr "Закрыть, ничего не извлекая"
+
+msgid "Go back a step"
+msgstr "Вернуться на шаг назад"
+
+msgid "Start ripping"
+msgstr "Начать извлечение"
+
+msgid "Go to the next step"
+msgstr "Перейти к следующему шагу"
+
+msgid "Read the disc and write the FLAC files"
+msgstr "Прочитать диск и записать файлы FLAC"
+
+msgid "Choose a destination folder first"
+msgstr "Сначала выберите папку назначения"
+
+msgid "No disc is open."
+msgstr "Ни один диск не открыт."
+
+msgid "Couldn't load that release."
+msgstr "Не удалось загрузить это издание."
+
+msgid "Disc details updated"
+msgstr "Сведения о диске обновлены"
+
+msgid "Correction removed. Re-open the disc to look it up again."
+msgstr "Правка удалена. Откройте диск заново, чтобы найти его снова."
+
+msgid "Only a physical CD can be ripped."
+msgstr "Извлекать можно только физический CD."
+
+msgid "Choose where the album should go first."
+msgstr "Сначала выберите, куда поместить альбом."
+
+msgid "Couldn't add that folder to the library"
+msgstr "Не удалось добавить эту папку в медиатеку"
+
+# Rip progress panel, cancel and partial rips (2026-08-21)
+
+msgid "Writing FLAC files to"
+msgstr "Файлы FLAC записываются в"
+
+msgid "Hide this panel — the rip keeps going"
+msgstr "Скрыть эту панель — извлечение продолжится"
+
+msgid "Ripping — don't eject the disc until this finishes."
+msgstr "Идёт извлечение — не вынимайте диск, пока оно не закончится."
+
+msgid "Finished"
+msgstr "Готово"
+
+msgid "Files already written stay on disk. Delete them yourself if you don't want them."
+msgstr "Уже записанные файлы останутся на диске. Если они не нужны, удалите их сами."
+
+msgid "Stop ripping"
+msgstr "Остановить извлечение"
+
+msgid "Stopping…"
+msgstr "Останавливается…"
+
+msgid "Stop after the current track. Nothing is deleted."
+msgstr "Остановить после текущего трека. Ничего не удаляется."
+
+msgid "Rip stopped. The files already written are still there."
+msgstr "Извлечение остановлено. Уже записанные файлы на месте."
+
+msgid "See what the rip is doing, or stop it"
+msgstr "Посмотреть, что делает извлечение, или остановить его"
+
+msgid "Pick at least one track to rip."
+msgstr "Выберите хотя бы один трек для извлечения."
+
+# Ephemeral pane: per-disc blocks and the track filter (2026-08-21)
+
+msgid "Disc {}"
+msgstr "Диск {}"
+
+msgid "Filter tracks"
+msgstr "Фильтр треков"
+
+msgid "No track matches that."
+msgstr "Ни один трек не подходит."
