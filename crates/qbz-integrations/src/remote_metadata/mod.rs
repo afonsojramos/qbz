@@ -386,3 +386,182 @@ pub fn discogs_full_to_metadata(
         source_url: release.uri.clone(),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Orchestration — "ask a provider what this record is"
+// ---------------------------------------------------------------------------
+//
+// The converters above are pure; these two are the thin async layer that puts
+// a client in front of them. They live HERE rather than in the frontend for
+// the reason ADR-006 gives: which provider answers, how a search query is
+// built and what an empty answer means are domain decisions, and a second
+// frontend must not have to re-derive them.
+//
+// The Tauri reference is `src-tauri/src/commands_v2/integrations.rs`
+// (`v2_remote_metadata_search` / `v2_remote_metadata_get_album`). This is that
+// orchestration with its Tauri `State` arguments removed — the clients are
+// created per call, because both are thin wrappers over a `reqwest::Client`
+// and MusicBrainz's rate limiter lives inside its own client.
+
+/// Search one provider. Never panics, never blocks; a provider that is
+/// disabled, rate-limited or simply silent answers with an EMPTY result set
+/// rather than an error, because "nobody has this record" and "the server said
+/// no" look identical to a user staring at a list — and the distinction that
+/// does matter (rate limiting) rides its own flag.
+pub async fn search(request: &RemoteSearchRequest) -> RemoteSearchResponse {
+    let limit = request.limit();
+    match request.provider {
+        RemoteProvider::MusicBrainz => {
+            let client = crate::musicbrainz::MusicBrainzClient::new();
+            // The query is "artist album" by convention (the caller builds
+            // it), but MusicBrainz wants the two apart. Splitting on the
+            // caller's own `artist` hint is exact when it has one, and the
+            // whole string is a title otherwise.
+            let artist = request.artist.clone().unwrap_or_default();
+            let title = strip_prefix_ci(&request.query, &artist);
+            match client
+                .search_releases_extended(&title, &artist, request.catalog_id.as_deref(), limit)
+                .await
+            {
+                Ok(found) => RemoteSearchResponse {
+                    provider: RemoteProvider::MusicBrainz,
+                    results: found
+                        .releases
+                        .iter()
+                        .map(musicbrainz_release_to_search_result)
+                        .collect(),
+                    total_count: usize::try_from(found.count).ok(),
+                    rate_limited: false,
+                },
+                Err(e) => {
+                    log::warn!("[remote-metadata] musicbrainz search failed: {e}");
+                    empty(RemoteProvider::MusicBrainz, is_rate_limit(&e.to_string()))
+                }
+            }
+        }
+        RemoteProvider::Discogs => {
+            let client = crate::discogs::DiscogsClient::new();
+            let artist = request.artist.clone().unwrap_or_default();
+            let title = strip_prefix_ci(&request.query, &artist);
+            match client
+                .search_releases(&artist, &title, request.catalog_id.as_deref(), limit)
+                .await
+            {
+                Ok(found) => RemoteSearchResponse {
+                    provider: RemoteProvider::Discogs,
+                    total_count: Some(found.len()),
+                    results: found
+                        .iter()
+                        .map(discogs_extended_to_search_result)
+                        .collect(),
+                    rate_limited: false,
+                },
+                Err(e) => {
+                    log::warn!("[remote-metadata] discogs search failed: {e}");
+                    empty(RemoteProvider::Discogs, is_rate_limit(&e))
+                }
+            }
+        }
+    }
+}
+
+/// Fetch one release in full, with its track list.
+pub async fn get_album(
+    provider: RemoteProvider,
+    provider_id: &str,
+) -> Result<RemoteAlbumMetadata, RemoteMetadataError> {
+    match provider {
+        RemoteProvider::MusicBrainz => {
+            let client = crate::musicbrainz::MusicBrainzClient::new();
+            let full = client
+                .get_release_with_tracks(provider_id)
+                .await
+                .map_err(|e| RemoteMetadataError::ProviderUnavailable(e.to_string()))?;
+            Ok(musicbrainz_full_to_metadata(&full))
+        }
+        RemoteProvider::Discogs => {
+            // A Discogs release id is numeric. Saying so beats sending a
+            // MusicBrainz UUID to Discogs and reporting whatever it answers.
+            let id: u64 = provider_id
+                .trim()
+                .parse()
+                .map_err(|_| RemoteMetadataError::InvalidProviderId(provider_id.to_string()))?;
+            let client = crate::discogs::DiscogsClient::new();
+            let full = client
+                .get_release_metadata(id)
+                .await
+                .map_err(RemoteMetadataError::ProviderUnavailable)?;
+            Ok(discogs_full_to_metadata(&full))
+        }
+    }
+}
+
+fn empty(provider: RemoteProvider, rate_limited: bool) -> RemoteSearchResponse {
+    RemoteSearchResponse {
+        provider,
+        results: Vec::new(),
+        total_count: None,
+        rate_limited,
+    }
+}
+
+/// A 429, however the provider spells it. Both clients hand back a formatted
+/// string rather than a status, so this reads the string — narrowly, on the
+/// two spellings that actually occur, rather than on the word "limit" which
+/// appears in perfectly ordinary messages.
+fn is_rate_limit(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    m.contains("429") || m.contains("rate limit") || m.contains("too many requests")
+}
+
+/// `"Tool Fear Inoculum"` minus `"Tool"` = `"Fear Inoculum"`.
+///
+/// Case-insensitive and prefix-only: a band whose name also appears inside the
+/// album title ("Black Sabbath — Black Sabbath") must lose exactly one copy,
+/// and only the leading one.
+fn strip_prefix_ci(query: &str, artist: &str) -> String {
+    let q = query.trim();
+    let a = artist.trim();
+    if a.is_empty() || q.len() < a.len() {
+        return q.to_string();
+    }
+    if q[..a.len()].eq_ignore_ascii_case(a) {
+        return q[a.len()..].trim().to_string();
+    }
+    q.to_string()
+}
+
+#[cfg(test)]
+mod orchestration_tests {
+    use super::*;
+
+    #[test]
+    fn the_artist_is_taken_off_the_front_of_the_query_once() {
+        assert_eq!(strip_prefix_ci("Tool Fear Inoculum", "Tool"), "Fear Inoculum");
+        assert_eq!(
+            strip_prefix_ci("Black Sabbath Black Sabbath", "Black Sabbath"),
+            "Black Sabbath",
+            "only the LEADING copy comes off"
+        );
+        assert_eq!(strip_prefix_ci("tool Lateralus", "Tool"), "Lateralus");
+    }
+
+    #[test]
+    fn a_query_that_does_not_start_with_the_artist_is_left_alone() {
+        assert_eq!(strip_prefix_ci("Fear Inoculum", "Tool"), "Fear Inoculum");
+        assert_eq!(strip_prefix_ci("Fear Inoculum", ""), "Fear Inoculum");
+        // Shorter than the artist: the slice would panic, so it must not be taken.
+        assert_eq!(strip_prefix_ci("Up", "Peter Gabriel"), "Up");
+    }
+
+    #[test]
+    fn rate_limiting_is_recognised_without_swallowing_ordinary_messages() {
+        assert!(is_rate_limit("HTTP 429 Too Many Requests"));
+        assert!(is_rate_limit("rate limit exceeded"));
+        assert!(!is_rate_limit("Failed to parse Discogs response"));
+        assert!(
+            !is_rate_limit("limit must be between 1 and 25"),
+            "the bare word `limit` is not a 429"
+        );
+    }
+}
