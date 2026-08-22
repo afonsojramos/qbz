@@ -551,14 +551,35 @@ Item {
     // the target is destroyed on unload. An in-view tab-bar click writes
     // `activeTab` directly and simply wins until the next flyout click —
     // this Binding does not refire without a dependency change.
+    /// Does the MOUNTED view have an `activeTab` at all?
+    ///
+    /// Captured in a HANDLER, never inside the Binding's `when`. Reading
+    /// `typeof viewLoader.item.activeTab` from `when` makes the condition
+    /// depend on the very property the Binding WRITES, and QML reports the
+    /// cycle on every flyout navigation:
+    ///
+    ///   QML Binding: Binding loop detected for property "when"
+    ///
+    /// (Pre-existing — reproduced on the pre-2026-08-21 binary by navigating
+    /// through a nav flyout, where it logs from the same Binding at its own
+    /// line number.) A handler runs once per item change and registers no
+    /// dependency, so the guard survives and the cycle does not.
+    property bool _itemTabbed: false
+    Connections {
+        target: viewLoader
+        function onItemChanged() {
+            root._itemTabbed = viewLoader.item !== null
+                && typeof viewLoader.item.activeTab === "string"
+        }
+    }
+
     Binding {
         target: viewLoader.item
         property: "activeTab"
         when: !root._armed
-              && viewLoader.item !== null
+              && root._itemTabbed
               && QbzShell.navTab !== ""
               && QbzShell.navTabView === QbzShell.currentView
-              && typeof viewLoader.item.activeTab === "string"
         value: (QbzShell.navTabSeq, QbzShell.navTab)
         restoreMode: Binding.RestoreNone
     }

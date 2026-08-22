@@ -282,6 +282,7 @@ impl EphemeralLibraryState {
         // `std::thread::scope`, not a new dependency: this is I/O-bound, the
         // work items are independent, and borrowing `scan.audio_files` across
         // the scope needs no Arc.
+        let t_probe = std::time::Instant::now();
         let probed: Vec<(std::path::PathBuf, Result<LocalTrack, LibraryError>)> = {
             let files: &[std::path::PathBuf] = &scan.audio_files;
             let workers = std::thread::available_parallelism()
@@ -316,6 +317,12 @@ impl EphemeralLibraryState {
             out.into_iter().flatten().collect()
         };
 
+        log::info!(
+            "[ephemeral][perf] parallel tag reads: {:?} for {} files",
+            t_probe.elapsed(),
+            probed.len()
+        );
+        let t_rest = std::time::Instant::now();
         for (audio_file, (canonical_audio, extracted)) in
             scan.audio_files.iter().zip(probed.into_iter())
         {
@@ -404,6 +411,11 @@ impl EphemeralLibraryState {
                 }
             }
         }
+
+        log::info!(
+            "[ephemeral][perf] serial bookkeeping (artwork + ids): {:?}",
+            t_rest.elapsed()
+        );
 
         // Musical order (album, then disc/track/title — same as the DB-backed
         // folder view): the extraction order above is readdir order, which is
