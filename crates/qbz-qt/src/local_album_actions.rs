@@ -100,12 +100,21 @@ pub struct DiscRow {
     pub cover: String,
 }
 
-/// This disc's own folder cover, ignoring the album root's.
+/// This disc's own folder cover as a `file://` URL, ignoring the album root's.
+///
+/// Encoded through `artwork_qt::file_url`, which is not optional: this box's
+/// disc folders are named "Disc 07 - TV Series Soundtrack #05", and a raw
+/// concatenation gives QML `file:///…Soundtrack #05/cover.jpg`, where the `#`
+/// opens a URL FRAGMENT and the path silently truncates at "Soundtrack ".
+/// Caught on the owner's own library, 2026-08-22 — every disc logged
+/// "QML Image: Cannot open".
 fn disc_cover(t: &LocalTrack) -> String {
     let Some(dir) = std::path::Path::new(&t.file_path).parent() else {
         return String::new();
     };
-    MetadataExtractor::folder_artwork_in_dir(dir).unwrap_or_default()
+    MetadataExtractor::folder_artwork_in_dir(dir)
+        .map(|p| crate::artwork_qt::file_url(&p))
+        .unwrap_or_default()
 }
 
 /// `{album:{…}, tracks:[…], discs:[…]}` — the `localAlbumJson` document.

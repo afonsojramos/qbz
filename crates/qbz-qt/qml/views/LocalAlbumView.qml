@@ -247,7 +247,7 @@ Rectangle {
     }
     /// The disc rows the document publishes for a MULTI-disc album
     /// (local_album_actions.rs::disc_rows). Empty on a single-disc album.
-    readonly property var discRows: root.doc.discs || []
+    readonly property var discRows: (root.doc && root.doc.discs) || []
     function discInfo(n) {
         for (var i = 0; i < root.discRows.length; i++)
             if ((root.discRows[i].disc || 0) === n)
@@ -629,13 +629,12 @@ Rectangle {
                                 radius: theme.radiusSm
                                 anchors.verticalCenter: parent.verticalCenter
                                 visible: root.discArtDistinct && source !== ""
+                                // Already a percent-encoded file:// url —
+                                // artwork_qt::file_url built it, because these
+                                // folder names contain '#'.
                                 source: {
                                     var d = root.discInfo(root.discHeader(trackBlock.index))
-                                    var c = d ? (d.cover || "") : ""
-                                    // A bare absolute path — the local art
-                                    // channel hands back file:// urls, this one
-                                    // comes straight off the filesystem.
-                                    return c === "" ? "" : (c.indexOf("file:") === 0 ? c : "file://" + c)
+                                    return d ? (d.cover || "") : ""
                                 }
                             }
                             Text {
