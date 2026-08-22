@@ -5650,3 +5650,27 @@ msgstr "Titel filtern"
 
 msgid "No track matches that."
 msgstr "Kein Titel passt dazu."
+
+msgid "NAVIGATION"
+msgstr "NAVIGATION"
+
+msgid "SEARCH"
+msgstr "SUCHE"
+
+msgid "PLAYER & VISUALS"
+msgstr "PLAYER & VISUELLES"
+
+msgid "WINDOW"
+msgstr "FENSTER"
+
+msgid "SYSTEM INTEGRATION"
+msgstr "SYSTEMINTEGRATION"
+
+msgid "The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine."
+msgstr "Die Schriftart der gesamten App. Angeboten werden nur die mit QBZ gelieferten Schriften, damit die Auswahl auf jedem Rechner gleich aussieht."
+
+msgid "Library folders"
+msgstr "Bibliotheksordner"
+
+msgid "{} folders"
+msgstr "{} Ordner"

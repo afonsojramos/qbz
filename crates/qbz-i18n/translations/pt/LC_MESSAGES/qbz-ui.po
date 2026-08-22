@@ -5648,3 +5648,27 @@ msgstr "Filtrar faixas"
 
 msgid "No track matches that."
 msgstr "Nenhuma faixa corresponde."
+
+msgid "NAVIGATION"
+msgstr "NAVEGAÇÃO"
+
+msgid "SEARCH"
+msgstr "PESQUISA"
+
+msgid "PLAYER & VISUALS"
+msgstr "REPRODUTOR E VISUAIS"
+
+msgid "WINDOW"
+msgstr "JANELA"
+
+msgid "SYSTEM INTEGRATION"
+msgstr "INTEGRAÇÃO COM O SISTEMA"
+
+msgid "The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine."
+msgstr "A fonte usada em todo o app. Só são oferecidas as fontes que acompanham o QBZ, para ficar igual em qualquer máquina."
+
+msgid "Library folders"
+msgstr "Pastas da biblioteca"
+
+msgid "{} folders"
+msgstr "{} pastas"

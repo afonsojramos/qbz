@@ -5638,3 +5638,27 @@ msgstr "Nummers filteren"
 
 msgid "No track matches that."
 msgstr "Geen enkel nummer komt overeen."
+
+msgid "NAVIGATION"
+msgstr "NAVIGATIE"
+
+msgid "SEARCH"
+msgstr "ZOEKEN"
+
+msgid "PLAYER & VISUALS"
+msgstr "SPELER & VISUALS"
+
+msgid "WINDOW"
+msgstr "VENSTER"
+
+msgid "SYSTEM INTEGRATION"
+msgstr "SYSTEEMINTEGRATIE"
+
+msgid "The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine."
+msgstr "Het lettertype voor de hele app. Alleen lettertypen die met QBZ worden meegeleverd, zodat het er op elke machine hetzelfde uitziet."
+
+msgid "Library folders"
+msgstr "Bibliotheekmappen"
+
+msgid "{} folders"
+msgstr "{} mappen"

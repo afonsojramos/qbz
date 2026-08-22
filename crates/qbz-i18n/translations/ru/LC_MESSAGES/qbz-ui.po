@@ -5667,3 +5667,27 @@ msgstr "Фильтр треков"
 
 msgid "No track matches that."
 msgstr "Ни один трек не подходит."
+
+msgid "NAVIGATION"
+msgstr "НАВИГАЦИЯ"
+
+msgid "SEARCH"
+msgstr "ПОИСК"
+
+msgid "PLAYER & VISUALS"
+msgstr "ПЛЕЕР И ВИЗУАЛИЗАЦИЯ"
+
+msgid "WINDOW"
+msgstr "ОКНО"
+
+msgid "SYSTEM INTEGRATION"
+msgstr "ИНТЕГРАЦИЯ С СИСТЕМОЙ"
+
+msgid "The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine."
+msgstr "Шрифт для всего приложения. Предлагаются только шрифты, входящие в состав QBZ, поэтому вид одинаков на любом компьютере."
+
+msgid "Library folders"
+msgstr "Папки библиотеки"
+
+msgid "{} folders"
+msgstr "Папок: {}"

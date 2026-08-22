@@ -5633,3 +5633,27 @@ msgstr "トラックを絞り込む"
 
 msgid "No track matches that."
 msgstr "一致するトラックがありません。"
+
+msgid "NAVIGATION"
+msgstr "ナビゲーション"
+
+msgid "SEARCH"
+msgstr "検索"
+
+msgid "PLAYER & VISUALS"
+msgstr "プレーヤーと表示"
+
+msgid "WINDOW"
+msgstr "ウィンドウ"
+
+msgid "SYSTEM INTEGRATION"
+msgstr "システム連携"
+
+msgid "The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine."
+msgstr "アプリ全体で使う書体です。QBZ に同梱されたフォントのみを選べるので、どの環境でも同じ見た目になります。"
+
+msgid "Library folders"
+msgstr "ライブラリフォルダー"
+
+msgid "{} folders"
+msgstr "{} 個のフォルダー"

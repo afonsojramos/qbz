@@ -5648,3 +5648,27 @@ msgstr "Filtrer les pistes"
 
 msgid "No track matches that."
 msgstr "Aucune piste ne correspond."
+
+msgid "NAVIGATION"
+msgstr "NAVIGATION"
+
+msgid "SEARCH"
+msgstr "RECHERCHE"
+
+msgid "PLAYER & VISUALS"
+msgstr "LECTEUR ET VISUELS"
+
+msgid "WINDOW"
+msgstr "FENÊTRE"
+
+msgid "SYSTEM INTEGRATION"
+msgstr "INTÉGRATION SYSTÈME"
+
+msgid "The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine."
+msgstr "La police utilisée dans toute l'application. Seules les polices fournies avec QBZ sont proposées, pour un rendu identique sur chaque machine."
+
+msgid "Library folders"
+msgstr "Dossiers de la bibliothèque"
+
+msgid "{} folders"
+msgstr "{} dossiers"
