@@ -191,6 +191,11 @@ pub struct TrackRow {
     pub artist: String,
     #[serde(rename = "artistId")]
     pub artist_id: String,
+    /// The album's TITLE. `album_id` alone is not enough for the row's album
+    /// column: TrackRow.qml draws `item.album` as the label and uses
+    /// `item.albumId` for the click, so without this the column renders empty
+    /// and the only way to the album is the context menu.
+    pub album: String,
     #[serde(rename = "albumId")]
     pub album_id: String,
     pub duration: String,
@@ -375,6 +380,11 @@ fn map_track(track: &Track) -> TrackRow {
         .and_then(|a| a.image.best().cloned())
         .unwrap_or_default();
     let album_id = track.album.as_ref().map(|a| a.id.clone()).unwrap_or_default();
+    let album = track
+        .album
+        .as_ref()
+        .map(|a| a.title.clone())
+        .unwrap_or_default();
     let (artist, artist_id) = track
         .performer
         .clone()
@@ -390,6 +400,7 @@ fn map_track(track: &Track) -> TrackRow {
         title,
         artist,
         artist_id,
+        album,
         album_id,
         duration: mmss(track.duration),
         quality_tier: tier(track.maximum_bit_depth).to_string(),

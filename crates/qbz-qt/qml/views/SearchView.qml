@@ -828,6 +828,24 @@ Rectangle {
                                 item: modelData
                                 number: index + 1
                                 menuShowFavorite: false
+                                // THE ROW'S OWN AFFORDANCES, which this call
+                                // site had never switched on. TrackRow draws
+                                // an artwork thumb, a clickable artist and a
+                                // clickable album column, and search left all
+                                // three off — so the only way from a result to
+                                // its album was the context menu's "Go to",
+                                // three clicks deep, on the surface where
+                                // people are most often hunting for exactly
+                                // that (owner smoke 2026-08-22).
+                                //
+                                // Nothing here is new machinery: every other
+                                // track list in the app already mounts the row
+                                // this way, and `search_qt::TrackRow` now
+                                // carries the album TITLE the column needs to
+                                // have something to draw.
+                                showArtwork: true
+                                showAlbum: true
+                                artistLink: true
                                 onPlayRequested: QbzPlayer.playTrack(item.id)
                                 onEnqueueRequested: function (m) { QbzPlayer.enqueueTrack(item.id, m) }
                                 // MyQBZ "Add to mixtape" — the HOST builds the
