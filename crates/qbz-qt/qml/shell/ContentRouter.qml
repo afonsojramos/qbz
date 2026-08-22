@@ -33,6 +33,7 @@
 // kiosk re-hosts the desktop components for them.
 
 import QtQuick
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../controls"
 
@@ -93,7 +94,9 @@ Item {
     // be rebuilt freely as long as it only builds what is on screen. That rule
     // is now enforced statically — qml_eager_tab_audit.py runs in qt-run.sh
     // and fails the build on a heavy per-tab body gated only by `visible:`.
-    // Synchronous stays, and is correct.
+    // Synchronous stays, and is correct — what changed on 2026-08-21 is
+    // WHEN it runs, not how. See THE TWO-PHASE ROUTE COMMIT below.
+
     // Route-change stopwatch. OFF by default (a LoggingCategory at Warning
     // emits nothing at Info), so the only cost on a normal run is one
     // Date.now() per route change. Turn it on with:
@@ -109,55 +112,248 @@ Item {
         defaultLogLevel: LoggingCategory.Warning
     }
     property double _routeT0: 0
-    // Stamped from INSIDE the source binding rather than from a
-    // currentViewChanged handler: binding re-evaluation and signal handlers
-    // have no guaranteed order, and this way the stamp is by construction the
-    // last thing before the Loader instantiates.
-    function _stampRoute(path) {
+
+    // ── THE TWO-PHASE ROUTE COMMIT (the dead click) ────────────────────────
+    //
+    // MEASURED 2026-08-21, by driving the real app under Xvfb and diffing the
+    // captured frames: a click on Discover > Home left the window showing the
+    // OLD page — flyout still open, not one pixel changing anywhere — for
+    // 590 ms. The route change is synchronous (read the Loader's header above, which
+    // is still correct), so the click handler, the flyout close, the sidebar
+    // highlight, the page blank AND the whole mount all happened inside ONE
+    // turn of the event loop, and the first frame that could be presented was
+    // the one that already had the new page in it. Nothing the user did was
+    // acknowledged until everything was finished.
+    //
+    // The breakdown of that 590 ms is worth keeping, because only ONE of the
+    // three parts is what it looks like:
+    //     navigate_to (Rust, on the GUI thread)     7.6 ms
+    //     bridge queue hop                          1   ms
+    //     the QML mount (`built`)                 263   ms
+    //     post-mount work before the first frame  ~290  ms   <-- `to-idle`
+    // `built` is under half of it. The other half is everything the mount
+    // DEFERS — layout and the first delegate refills — which the GUI thread
+    // pays before it can reach the event loop again and let a frame out. So
+    // `to-idle`, not `built`, is the number that matches the freeze.
+    //
+    // THE SPLIT: arm on the route change, commit on the next PRESENTED frame.
+    // Frame N carries the cheap half — flyout gone, nav highlight moved, page
+    // blanked — and only then does frame N+1 pay for the mount. The click is
+    // acknowledged in one frame instead of in `to-idle`.
+    //
+    // `frameSwapped` and not a zero-interval Timer: the timer fires on the
+    // next event-loop iteration, which is NOT the same thing as "after a frame
+    // reached the screen" — the render pass is scheduled through the event
+    // loop too, so a Timer can easily win the race and put the mount back in
+    // the same frame, which is the bug. `frameSwapped` is emitted after the
+    // buffer swap (verified against this Qt build with a standalone scene),
+    // and its queued delivery lands the handler on the GUI thread.
+    //
+    // Cost: ONE frame (~16 ms) of added latency to the content, in exchange
+    // for the whole `to-idle` window becoming visibly alive.
+
+    /// The file the CURRENT route wants. Pure — no side effects — so that the
+    /// "two ids, one file" cases (recentalbums / mostplayedalbums) simply do
+    /// not change it, and the arm below never fires for them. That is the same
+    /// guard the old `_fade.path` holder carried, expressed as the identity of
+    /// the thing being watched rather than as a manual comparison.
+    readonly property string _wantedPath: root._pathFor(QbzShell.currentView)
+
+    /// What the Loader has actually been given. Assigned, never bound: it
+    /// trails `_wantedPath` by exactly one presented frame.
+    property string _loaderPath: ""
+
+    /// A route is waiting for its frame.
+    property bool _armed: false
+
+    function _pathFor(v) {
+        return v === "home"
+                ? (root.kiosk ? "../kiosk/KioskDiscover.qml" : "../views/HomeView.qml")
+            : v === "library"
+                ? (root.kiosk ? "../kiosk/KioskLibrary.qml" : "../views/LibraryView.qml")
+            : v === "local"
+                ? (root.kiosk ? "../kiosk/KioskLocalLibrary.qml" : "../views/LocalLibraryView.qml")
+            : v === "localalbum" ? "../views/LocalAlbumView.qml"
+            : v === "album"
+                ? (root.kiosk ? "../kiosk/KioskAlbum.qml" : "../views/AlbumView.qml")
+            : v === "artist"
+                ? (root.kiosk ? "../kiosk/KioskArtist.qml" : "../views/ArtistView.qml")
+            : v === "settings" ? "../settings/SettingsView.qml"
+            : v === "search"
+                ? (root.kiosk ? "../kiosk/KioskSearch.qml" : "../views/SearchView.qml")
+            : v === "playlist" ? "../views/PlaylistView.qml"
+            : v === "discoverbrowse" ? "../views/DiscoverBrowseView.qml"
+            : v === "playlistbrowse" ? "../views/PlaylistBrowseView.qml"
+            : v === "recentalbums" ? "../views/PlayHistoryView.qml"
+            : v === "mostplayedalbums" ? "../views/PlayHistoryView.qml"
+            : v === "label" ? "../views/LabelView.qml"
+            : v === "labelreleases" ? "../views/LabelReleasesView.qml"
+            // Artist page > a release section > "See discography", and the
+            // album page's "From the same artist" View all. Same two-file
+            // contract as the rest of this chain (nav_qt.rs:9-19):
+            // artist_releases_qt::open records the id, this arm mounts it.
+            // Forgetting the arm is NOT a crash — the ternary falls through
+            // to "" and the pane goes blank with nothing logged, i.e. the
+            // dead "See discography" in a new costume.
+            : v === "artistreleases" ? "../views/ArtistReleasesView.qml"
+            // Artist page > Network > Origin > the location link, and the
+            // header ⋯ > "Artist Scene". Both doors call QbzScene.open(...),
+            // which records this id (artist_scene_qt.rs:430).
+            : v === "scene" ? "../views/ArtistSceneView.qml"
+            // A credited musician who did NOT resolve to a Qobuz artist:
+            // musician_qt.rs:362 records this on the `contextual` branch only.
+            // `weak`/`none` are a global modal, not a route — see AppShell.
+            : v === "musician" ? "../views/MusicianPageView.qml"
+            // For You > Qobuz Mixes. The whole chain existed — HomeView's tile
+            // -> QbzHome.openMix -> foryou_qt -> nav_qt records the "mix" view
+            // — and MixView.qml is written and registered in build.rs, but
+            // this arm was missing, so every mix tile navigated to a view
+            // nobody mounted and the content pane simply went blank.
+            : v === "mix" ? "../views/MixView.qml"
+            // MyQBZ. Mixtapes and Collections are ONE file — the two pages
+            // differ only in their filter row and their empty state, so
+            // MyQbzGridView carries a `kind` discriminator (see the Binding
+            // below, which is how it gets set). The kiosk does the same with
+            // ONE component on both routes (KioskShell.slint:512,517).
+            : (v === "mixtapes" || v === "collections")
+                ? (root.kiosk ? "../kiosk/KioskMyQBZ.qml" : "../views/myqbz/MyQbzGridView.qml")
+            : v === "mixtapedetail" ? "../views/myqbz/MyQbzDetailView.qml"
+            : v === "discobuilder" ? "../views/myqbz/DiscoBuilderView.qml"
+            // Settings > Blacklist > Manage. Not reachable from the sidebar —
+            // blacklist_qt::open_manager records the route.
+            : v === "blacklist" ? "../views/BlacklistManagerView.qml"
+            // Settings > Offline > Manage offline cache > Open manager. Same
+            // shape again; offline_manager_qt::open() records the route.
+            : v === "offlinemanager" ? "../views/OfflineManagerView.qml"
+            // Awards — reached from the album sidebar's laurel, an "Other
+            // awards" card or the landing page's all-awards dropdown. Both
+            // routes are recorded by award_qt (open_award / open_albums); the
+            // id lives in the controller, not in the route, exactly like
+            // "label" / "labelreleases" next to them.
+            : v === "award" ? "../views/AwardView.qml"
+            : v === "awardalbums" ? "../views/AwardAlbumsView.qml"
+            // Sidebar > Playlists ⋯ > Manage playlists. Not a sidebar
+            // section — playlist_manager_qt::navigate() records the route.
+            : v === "playlistmanager" ? "../views/PlaylistManagerView.qml"
+            // Purchases — the opt-in Qobuz store surface (Settings >
+            // Appearance > Navigation > Show Purchases, default OFF). The
+            // sidebar's direct row records "purchases"; a purchased album's
+            // card records "purchase-album" through
+            // QbzPurchases.openAlbum(id), which holds the id — the route
+            // carries none, exactly like "localalbum".
+            //
+            // BOTH arms land in the same edit on purpose. This chain's failure
+            // mode is a blank pane logged nowhere, and Purchases is the one
+            // feature nobody on this team can smoke-test (the owner's region
+            // does not sell it, so the account returns an empty list forever):
+            // a missing arm here would first be seen by a stranger.
+            : v === "purchases" ? "../views/PurchasesView.qml"
+            : v === "purchase-album" ? "../views/PurchaseAlbumView.qml"
+            // KIOSK-ONLY route (nav_qt.rs:46-51): the NavRail's fifth tile,
+            // the full-screen player. The desktop shell has no equivalent —
+            // its transport is the persistent bar — so outside kiosk this id
+            // falls through to "" and the pane is blank, which is the desktop
+            // behaviour before this router existed.
+            : (root.kiosk && v === "nowplaying") ? "../kiosk/KioskNowPlaying.qml" : ""
+    }
+
+    /// ARM. Runs the instant the route resolves to a DIFFERENT file: blank the
+    /// page and start the stopwatch, but do not touch the Loader yet.
+    // `on_Wanted...`, NOT `onWanted...`: QML derives a change handler's name by
+    // upper-casing the property's FIRST letter, and for `_wantedPath` that
+    // first letter is the underscore — so the handler is `on_WantedPathChanged`
+    // (the same shape `theme/RoundedImage.qml` already uses for
+    // `on_EffectiveSourceChanged` and `on_DprChanged`).
+    //
+    // Worth the comment because of HOW it fails: `onWantedPathChanged` is not a
+    // syntax error, qmlcachegen compiles it without a word, and the app starts
+    // fine — the first route is armed by Component.onCompleted below. Every
+    // navigation AFTER that silently does nothing. Proven against this Qt build
+    // with a standalone scene before it could ship.
+    on_WantedPathChanged: {
         root._routeT0 = Date.now()
-        // Drop the page to transparent HERE and not in an onCurrentViewChanged
-        // handler, for the same reason the stopwatch is stamped here: binding
-        // re-evaluation and signal handlers have no guaranteed order, and a
-        // drop applied after the Loader had already rebuilt would flash the new
-        // page at full opacity, blank it, and fade it in again. Inside the
-        // binding it is by construction the last thing that happens before the
-        // instantiation.
-        //
-        // The guard matters: two ids can resolve to the SAME file
-        // ("recentalbums" / "mostplayedalbums" both mount PlayHistoryView),
-        // and then the Loader does not reload, `onLoaded` never fires and
-        // nothing would ever bring the page back — a permanently invisible
-        // pane. Same for the "" fall-through of an unmapped route.
-        if (path !== root._fade.path) {
-            root._fade.path = path
-            if (path !== "" && !QbzShell.reduceMotion) {
-                // Stop first: a second navigation inside the 300 ms would
-                // otherwise have a running render-thread Animator writing the
-                // property back from underneath this assignment.
-                fadeIn.stop()
-                viewLoader.opacity = 0
-                fadeGuard.restart()
-            }
+        root._armed = true
+        // An unmapped route unloads the Loader; there is nothing to reveal, so
+        // there is nothing to blank either.
+        if (root._wantedPath !== "" && !QbzShell.reduceMotion) {
+            // Stop first: a second navigation inside the 300 ms would
+            // otherwise have a running render-thread Animator writing the
+            // property back from underneath this assignment.
+            fadeIn.stop()
+            viewLoader.opacity = 0
+            fadeGuard.restart()
         }
-        return path
+        commitGuard.restart()
+    }
+
+    function _commit() {
+        if (!root._armed)
+            return
+        commitGuard.stop()
+        // ORDER MATTERS. `_armed` is what keeps the two Bindings below OFF the
+        // OUTGOING view (see their `when`), and the Loader builds the new item
+        // SYNCHRONOUSLY inside this assignment — so clearing the flag first
+        // would re-evaluate those `when` clauses one statement too early, while
+        // `viewLoader.item` is still the view on its way out. Assign, then
+        // disarm.
+        root._loaderPath = root._wantedPath
+        root._armed = false
+    }
+
+    /// The frame that carries the acknowledgement has reached the screen —
+    /// build the view now.
+    Connections {
+        target: root.Window.window
+        ignoreUnknownSignals: true
+        function onFrameSwapped() { root._commit() }
+    }
+
+    /// Backstop, and NOTHING ELSE. A window that is minimized or hidden
+    /// presents no frames at all, and a route that never commits is a
+    /// permanently blank content pane — the worst failure this file can
+    /// produce. So there has to be a timer; the only question is how long.
+    ///
+    /// IT WAS 32 ms AND THAT WAS A RACE, measured 2026-08-21 by capturing two
+    /// navigations frame by frame: Discover > Home got its acknowledgement
+    /// frame at +90 ms, and Library > All got NONE — one step at +290 ms with
+    /// nothing before it, i.e. the old dead click, on the same build, minutes
+    /// apart. The path is render-at-the-next-vsync (16.67 ms on this driver,
+    /// confirmed with QSG_INFO=1) plus a QUEUED delivery of `frameSwapped`
+    /// back to the GUI thread, so the honest range is ~16-33 ms and a 32 ms
+    /// guard wins the coin flip often enough to make navigation feel
+    /// inconsistent — which is worse than being slow, because the user cannot
+    /// learn it.
+    ///
+    /// 250 ms puts the guard far outside that range: `frameSwapped` wins on
+    /// every visible window, and the only thing the timer still covers is the
+    /// case it was written for, where nobody can see the delay anyway.
+    Timer {
+        id: commitGuard
+        interval: 250
+        repeat: false
+        onTriggered: root._commit()
+    }
+
+    /// THE FIRST ROUTE. `on_WantedPathChanged` covers every navigation, but the
+    /// startup view arrives as the INITIAL evaluation of the binding, and
+    /// whether that counts as a change is not something to bet the whole
+    /// content pane on: if it does not fire, `_loaderPath` stays "" and the
+    /// app opens to a blank page with nothing logged. Arm it explicitly.
+    Component.onCompleted: {
+        if (root._loaderPath !== root._wantedPath) {
+            root._armed = true
+            commitGuard.restart()
+        }
     }
 
     // --- Page fade ---------------------------------------------------------
-    // COSMETIC, FIXED DURATION, AND IT NEVER WAITS FOR CONTENT. The route
-    // change below is synchronous by design (read the Loader's header), so the
-    // UI thread is frozen while the new view is built and there is no frame in
-    // which a fade-OUT could be shown: the page therefore snaps to transparent
-    // in the same turn as the rebuild — invisible, because nothing renders
-    // during it — and only the REVEAL is animated. Net added latency: zero.
-    // The content is built exactly as fast as it was before; what changed is
-    // that its first frame arrives transparent and on its way in.
-    //
-    // (A real fade-OUT is possible and costs ~32 ms: latch the route, run an
-    // Animator 1 -> 0, and let a Timer defer the swap by one frame so the
-    // out-fade runs on the render thread DURING the freeze. It is not here
-    // because the brief was "sobre todo no añadir latencia extra", and 32 ms
-    // is not zero. The seam is one latched property away if that trade is ever
-    // taken.)
+    // COSMETIC, FIXED DURATION, AND IT NEVER WAITS FOR CONTENT. Only the
+    // REVEAL is animated: the page snaps to transparent when the route is
+    // ARMED (the frame that acknowledges the click), and fades back in from
+    // the moment the view has been built. There is no fade-OUT because there
+    // is nothing to fade out of — the acknowledgement frame is where the old
+    // page leaves, and animating that would put a 300 ms wait in front of a
+    // navigation the whole two-phase commit exists to make feel instant.
     //
     // OpacityAnimator, not NumberAnimation, and this is the whole trick: an
     // Animator runs on the RENDER thread, so it keeps advancing while the GUI
@@ -174,19 +370,7 @@ Item {
     // presents the whole window at ~1.2% GPU. This one is bounded and
     // user-initiated: one navigation buys ~18 presents at 60 Hz, and at rest
     // it writes NOTHING (the Animator is stopped and opacity is a flat 1).
-    // The last path handed to the Loader, in a NON-NOTIFYING holder.
     //
-    // A plain `property string` here is a BINDING LOOP, and the app said so:
-    // "QML Loader: Binding loop detected for property source". The `source`
-    // binding calls `_stampRoute`, which READS this to decide whether the route
-    // actually changed and then WRITES it — so the binding depends on a
-    // property it mutates. QML detects the cycle, warns, and stops
-    // re-evaluating, which is a broken router, not just a noisy log.
-    //
-    // Mutating a MEMBER of an object emits no change signal. The object
-    // reference never changes, so the binding's dependency on `_fade` is
-    // satisfied once and never fires again.
-    readonly property var _fade: ({ path: "" })
     // 300 ms. The contract's first proposal was 120-150 ms; at 140 the owner
     // could not see it at all. Part of that was the duration and part was a
     // real defect (see the note on WHAT fades, below) — 300 fixes the half
@@ -265,105 +449,7 @@ Item {
     Loader {
         id: viewLoader
         anchors.fill: parent
-        source: root._stampRoute(QbzShell.currentView === "home"
-                ? (root.kiosk ? "../kiosk/KioskDiscover.qml" : "../views/HomeView.qml")
-            : QbzShell.currentView === "library"
-                ? (root.kiosk ? "../kiosk/KioskLibrary.qml" : "../views/LibraryView.qml")
-            : QbzShell.currentView === "local"
-                ? (root.kiosk ? "../kiosk/KioskLocalLibrary.qml" : "../views/LocalLibraryView.qml")
-            : QbzShell.currentView === "localalbum" ? "../views/LocalAlbumView.qml"
-            : QbzShell.currentView === "album"
-                ? (root.kiosk ? "../kiosk/KioskAlbum.qml" : "../views/AlbumView.qml")
-            : QbzShell.currentView === "artist"
-                ? (root.kiosk ? "../kiosk/KioskArtist.qml" : "../views/ArtistView.qml")
-            : QbzShell.currentView === "settings" ? "../settings/SettingsView.qml"
-            : QbzShell.currentView === "search"
-                ? (root.kiosk ? "../kiosk/KioskSearch.qml" : "../views/SearchView.qml")
-            : QbzShell.currentView === "playlist" ? "../views/PlaylistView.qml"
-            : QbzShell.currentView === "discoverbrowse" ? "../views/DiscoverBrowseView.qml"
-            : QbzShell.currentView === "playlistbrowse" ? "../views/PlaylistBrowseView.qml"
-            : QbzShell.currentView === "recentalbums" ? "../views/PlayHistoryView.qml"
-            : QbzShell.currentView === "mostplayedalbums" ? "../views/PlayHistoryView.qml"
-            : QbzShell.currentView === "label" ? "../views/LabelView.qml"
-            : QbzShell.currentView === "labelreleases" ? "../views/LabelReleasesView.qml"
-            // Artist page > a release section > "See discography", and the
-            // album page's "From the same artist" View all. Same two-file
-            // contract as the rest of this chain (nav_qt.rs:9-19):
-            // artist_releases_qt::open records the id, this arm mounts it.
-            // Forgetting the arm is NOT a crash — the ternary falls through
-            // to "" and the pane goes blank with nothing logged, i.e. the
-            // dead "See discography" in a new costume.
-            : QbzShell.currentView === "artistreleases" ? "../views/ArtistReleasesView.qml"
-            // Artist page > Network > Origin > the location link, and the
-            // header ⋯ > "Artist Scene". Both doors call QbzScene.open(...),
-            // which records this id (artist_scene_qt.rs:430). Same two-file
-            // contract as everything else in this chain — and the same failure
-            // mode if the arm is forgotten: a blank pane, logged nowhere,
-            // recoverable with Back, i.e. indistinguishable from the dead
-            // click the whole feature exists to fix.
-            : QbzShell.currentView === "scene" ? "../views/ArtistSceneView.qml"
-            // A credited musician who did NOT resolve to a Qobuz artist:
-            // musician_qt.rs:362 records this on the `contextual` branch only.
-            // `weak`/`none` are a global modal, not a route — see AppShell.
-            : QbzShell.currentView === "musician" ? "../views/MusicianPageView.qml"
-            // For You > Qobuz Mixes. The whole chain existed —
-            // HomeView's tile -> QbzHome.openMix -> foryou_qt -> nav_qt
-            // records the "mix" view — and MixView.qml is written and
-            // registered in build.rs, but this arm was missing, so every
-            // mix tile navigated to a view nobody mounted and the content
-            // pane simply went blank (back recovered, which is why it read
-            // as "nothing happens" rather than a crash).
-            : QbzShell.currentView === "mix" ? "../views/MixView.qml"
-            // MyQBZ. Mixtapes and Collections are ONE file — the two
-            // pages differ only in their filter row and their empty
-            // state, so MyQbzGridView carries a `kind` discriminator
-            // (see the Binding below, which is how it gets set). The kiosk
-            // does the same with ONE component on both routes
-            // (KioskShell.slint:512,517).
-            : QbzShell.currentView === "mixtapes"
-              || QbzShell.currentView === "collections"
-                ? (root.kiosk ? "../kiosk/KioskMyQBZ.qml" : "../views/myqbz/MyQbzGridView.qml")
-            : QbzShell.currentView === "mixtapedetail" ? "../views/myqbz/MyQbzDetailView.qml"
-            : QbzShell.currentView === "discobuilder" ? "../views/myqbz/DiscoBuilderView.qml"
-            // Settings > Blacklist > Manage. Not reachable from the
-            // sidebar — blacklist_qt::open_manager records the route.
-            : QbzShell.currentView === "blacklist" ? "../views/BlacklistManagerView.qml"
-            // Settings > Offline > Manage offline cache > Open manager. Same
-            // shape as the blacklist arm above: not a sidebar section, and
-            // offline_manager_qt::open() is what records the route.
-            : QbzShell.currentView === "offlinemanager" ? "../views/OfflineManagerView.qml"
-            // Awards — reached from the album sidebar's laurel, an "Other
-            // awards" card or the landing page's all-awards dropdown. Both
-            // routes are recorded by award_qt (open_award / open_albums); the
-            // id lives in the controller, not in the route, exactly like
-            // "label" / "labelreleases" next to them.
-            : QbzShell.currentView === "award" ? "../views/AwardView.qml"
-            : QbzShell.currentView === "awardalbums" ? "../views/AwardAlbumsView.qml"
-            // Sidebar > Playlists ⋯ > Manage playlists. Not a sidebar
-            // section — playlist_manager_qt::navigate() records the route.
-            // The route is a TWO-FILE contract (nav_qt.rs:9-19): the caller
-            // records the id, this arm mounts it, and the failure mode for a
-            // missing arm is a BLANK content pane, logged nowhere.
-            : QbzShell.currentView === "playlistmanager" ? "../views/PlaylistManagerView.qml"
-            // Purchases — the opt-in Qobuz store surface (Settings >
-            // Appearance > Show Purchases, default OFF). The sidebar's direct
-            // row records "purchases"; a purchased album's card records
-            // "purchase-album" through QbzPurchases.openAlbum(id), which holds
-            // the id — the route carries none, exactly like "localalbum".
-            //
-            // BOTH arms land in the same edit on purpose. This chain's failure
-            // mode is a blank pane logged nowhere, and Purchases is the one
-            // feature nobody on this team can smoke-test (the owner's region
-            // does not sell it, so the account returns an empty list forever):
-            // a missing arm here would first be seen by a stranger.
-            : QbzShell.currentView === "purchases" ? "../views/PurchasesView.qml"
-            : QbzShell.currentView === "purchase-album" ? "../views/PurchaseAlbumView.qml"
-            // KIOSK-ONLY route (nav_qt.rs:46-51): the NavRail's fifth tile,
-            // the full-screen player. The desktop shell has no equivalent —
-            // its transport is the persistent bar — so outside kiosk this id
-            // falls through to "" and the pane is blank, which is the desktop
-            // behaviour before this router existed.
-            : root.kiosk && QbzShell.currentView === "nowplaying" ? "../kiosk/KioskNowPlaying.qml" : "")
+        source: root._loaderPath
 
         onLoaded: {
             // The reveal starts in the same turn the view finished building,
@@ -379,7 +465,7 @@ Item {
             }
             var built = Date.now() - root._routeT0
             console.info(navTiming, "[navtiming] " + QbzShell.currentView
-                         + " built=" + built + "ms")
+                         + " built=" + built + "ms at=" + Date.now())
             // One more turn of the event loop: everything the mount deferred
             // (layout, the first delegate refills, the pending property
             // updates) has run by the time this fires, so the delta is the
@@ -414,13 +500,33 @@ Item {
     // routes as one component (KioskShell.slint:512,517), so without the
     // discriminator Collections would render the Mixtapes page there for
     // exactly the same reason.
+    //
+    // `!root._armed` IS LOAD-BEARING ON BOTH BINDINGS BELOW, and it is newer
+    // than the rest of these comments. The two-phase commit means
+    // `QbzShell.currentView` is the NEW route for one frame while
+    // `viewLoader.item` is still the OLD view — so without it, every
+    // navigation applies the incoming route's discriminators to the OUTGOING
+    // view.
+    //
+    // That is not theoretical: it shipped for one build and a frame capture
+    // caught it. Library -> Discover > Home wrote `activeTab = "home"` onto
+    // the LIBRARY view (which has an `activeTab`, so the `typeof` guard passes
+    // happily), whose tabs are all/tracks/albums/… — the body emptied, the tab
+    // bar stayed with nothing selected, and the `onActiveTabChanged` that
+    // followed restarted the page fade and brought the OUTGOING page back up
+    // over the blank. Visible as a flash of the previous section, mid-flight.
+    //
+    // The `typeof` guards stay as well: they are what keeps the `kind` Binding
+    // from warning against views that have no such property at all.
     Binding {
         target: viewLoader.item
         property: "kind"
         value: QbzShell.currentView === "collections" ? "collection" : "mixtape"
-        when: viewLoader.item !== null
+        when: !root._armed
+              && viewLoader.item !== null
               && (QbzShell.currentView === "mixtapes"
                   || QbzShell.currentView === "collections")
+              && typeof viewLoader.item.kind === "string"
         restoreMode: Binding.RestoreNone
     }
 
@@ -444,7 +550,8 @@ Item {
     Binding {
         target: viewLoader.item
         property: "activeTab"
-        when: viewLoader.item !== null
+        when: !root._armed
+              && viewLoader.item !== null
               && QbzShell.navTab !== ""
               && QbzShell.navTabView === QbzShell.currentView
               && typeof viewLoader.item.activeTab === "string"
