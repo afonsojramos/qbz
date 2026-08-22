@@ -1,8 +1,31 @@
 // Settings > Appearance — the QML port of crates/qbz-ui/ui/settings/
-// AppearanceSettings.slint. Group order, row order, labels, descriptions and
-// gating are 1:1 with the Slint; every control rides the settingsJson
-// document (root.doc) and the settingsBool/Select/String invokables — never
-// local truth.
+// AppearanceSettings.slint. Every control rides the settingsJson document
+// (root.doc) and the settingsBool/Select/String invokables — never local
+// truth.
+//
+// ── THE GROUPING IS THE OWNER'S, NOT THE SLINT'S (2026-08-21) ─────────────
+// Row wiring is still 1:1 with the reference — nothing here changed what a
+// control DOES — but the groups were re-cut, so do not "restore parity" by
+// reading the group order out of AppearanceSettings.slint:
+//
+//   THEME                  the picker and the rows that exist only for it
+//                          (auto's Source/Image/Regenerate, custom's editor)
+//   TYPOGRAPHY & LANGUAGE  Language · Interface size · Font (NEW)
+//   NAVIGATION             was LIBRARY & VISUALS, minus the visual rows;
+//                          gained the three Purchases/menu rows from
+//                          PLAYER VIEWS
+//   SEARCH                 NEW — Intelligent Search came out of THEME,
+//                          Immersive search out of TYPOGRAPHY & LANGUAGE
+//   PLAYER & VISUALS       was PLAYER VIEWS; gained the visual rows
+//   WINDOW                 WINDOW TITLE + TITLE BAR + WINDOW CONTROLS, merged
+//   SYSTEM INTEGRATION     NOTIFICATIONS + SYSTEM TRAY, merged
+//   RENDERER               unchanged
+//
+// FOUR rows are now ABSENT rather than rendered-and-disabled, because a
+// control that cannot do anything should not be on screen: Purchases in
+// title bar (Show Purchases off), Window controls position (system title bar
+// on), Close to tray and Tray icon variant (tray icon off). Each keeps its
+// stored value, so turning the parent back on restores the user's answer.
 //
 // The THEME row is live: QbzShell.themeSlug / themeListJson / themeFilter
 // (theme_qt.rs) and themeSet() repaints the whole app through QbzTheme.qml
@@ -102,14 +125,6 @@ Column {
             options: root.doc.appBackgroundModes || []
             currentIndex: root.doc.appBackgroundIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("app-background", i) }
-        }
-    }
-    SettingRow {
-        label: QbzSession.tr("Intelligent Search", QbzSession.trRev)
-        description: QbzSession.tr("Smart search cache, ranking, and the search preview dropdown. On by default.", QbzSession.trRev)
-        QbzToggle {
-            checked: root.doc.intelligentSearch === true
-            onToggled: function (v) { QbzBridge.settingsBool("intelligent-search", v) }
         }
     }
     // Auto-theme rows (the "auto" theme only).
@@ -224,24 +239,19 @@ Column {
             onSelected: function (i) { QbzBridge.settingsSelect("ui-scale", i) }
         }
     }
+    // The app-wide typeface. The families are the ones already BUNDLED —
+    // the same set the lyrics panel offers (shell/LyricsControlsFlyout.qml)
+    // and the same mechanism the Tauri build had — so picking one costs no
+    // download and cannot fail on a machine that lacks the face. "System"
+    // means the window default, which is Inter (Main.qml).
     SettingRow {
-        label: QbzSession.tr("Immersive search", QbzSession.trRev)
-        description: QbzSession.tr("What selecting a result in the Immersive search does. Disabled turns the in-immersive search off.", QbzSession.trRev)
+        label: QbzSession.tr("Font", QbzSession.trRev)
+        description: QbzSession.tr("The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine.", QbzSession.trRev)
         QbzSelect {
             menuWidth: 200
-            options: root.doc.immersiveSearchActions || []
-            currentIndex: root.doc.immersiveSearchActionIndex || 0
-            onSelected: function (i) { QbzBridge.settingsSelect("immersive-search-action", i) }
-        }
-    }
-    SettingRow {
-        label: QbzSession.tr("Immersive default view", QbzSession.trRev)
-        description: QbzSession.tr("Which immersive view opens by default. 'Remember last' restores your last view.", QbzSession.trRev)
-        QbzSelect {
-            menuWidth: 200
-            options: root.doc.immersiveDefaultViews || []
-            currentIndex: root.doc.immersiveDefaultViewIndex || 0
-            onSelected: function (i) { QbzBridge.settingsSelect("immersive-default-view", i) }
+            options: root.doc.appFonts || []
+            currentIndex: root.doc.appFontIndex || 0
+            onSelected: function (i) { QbzBridge.settingsSelect("app-font", i) }
         }
     }
 
@@ -249,8 +259,9 @@ Column {
     SettingsDivider { }
     SettingsSpacer { }
 
-    // ======================= LIBRARY & VISUALS ===========================
-    GroupHeader { text: QbzSession.tr("LIBRARY & VISUALS", QbzSession.trRev) }
+    // ============================ NAVIGATION ============================
+    GroupHeader { text: QbzSession.tr("NAVIGATION", QbzSession.trRev) }
+
     SettingRow {
         label: QbzSession.tr("Show navigation in sidebar", QbzSession.trRev)
         description: QbzSession.tr("Move the Discover, Library, Local Library and My QBZ sections out of the header and into the sidebar.", QbzSession.trRev)
@@ -274,14 +285,6 @@ Column {
         description: QbzSession.tr("Rename the My QBZ hub. Leave the name blank (or hit reset) to restore the default.", QbzSession.trRev)
         Row {
             spacing: 8
-            // Fixed icon preview (RENAME ONLY — no custom icon, owner DQ3).
-            RoundedImage {
-                width: 34
-                height: 34
-                anchors.verticalCenter: parent.verticalCenter
-                source: "../assets/qbz-logo.png"
-                radius: theme.radiusSm
-            }
             QbzLineEdit {
                 width: 150
                 anchors.verticalCenter: parent.verticalCenter
@@ -294,6 +297,122 @@ Column {
                 iconName: "rotate-ccw"
                 onClicked: QbzBridge.settingsString("myqbz-label", "")
             }
+        }
+    }
+    SettingRow {
+        label: QbzSession.tr("Invert swipe navigation direction", QbzSession.trRev)
+        description: QbzSession.tr("Swap the two-finger touchpad swipe: left goes back, right goes forward.", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.invertSwipeNavigation === true
+            onToggled: function (v) { QbzBridge.settingsBool("invert-swipe-navigation", v) }
+        }
+    }
+    SettingRow {
+        label: QbzSession.tr("Click on menu item navigates to first tab", QbzSession.trRev)
+        description: QbzSession.tr("Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.navClickFirstTab === true
+            onToggled: function (v) { QbzBridge.settingsBool("nav-click-first-tab", v) }
+        }
+    }
+    SettingRow {
+        label: QbzSession.tr("Show Purchases", QbzSession.trRev)
+        description: QbzSession.tr("Show the Purchases section in the sidebar for browsing and downloading your purchased music", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.showPurchases === true
+            onToggled: function (v) { QbzBridge.settingsBool("show-purchases", v) }
+        }
+    }
+    SettingRow {
+        // Nothing to place while the section itself is off (owner
+        // 2026-08-21) — absent rather than rendered-and-inert.
+        visible: root.doc.showPurchases === true
+        label: QbzSession.tr("Purchases in title bar", QbzSession.trRev)
+        description: QbzSession.tr("Place the Purchases entry in the custom title bar instead of the sidebar", QbzSession.trRev)
+        rowEnabled: !root.tbLocked
+        QbzToggle {
+            enabled: !root.tbLocked
+            checked: root.doc.navTbPurchases === true
+            onToggled: function (v) { QbzBridge.settingsBool("nav-tb-purchases", v) }
+        }
+    }
+
+    SettingsSpacer { }
+    SettingsDivider { }
+    SettingsSpacer { }
+
+    // ============================== SEARCH ==============================
+    GroupHeader { text: QbzSession.tr("SEARCH", QbzSession.trRev) }
+
+    SettingRow {
+        label: QbzSession.tr("Intelligent Search", QbzSession.trRev)
+        description: QbzSession.tr("Smart search cache, ranking, and the search preview dropdown. On by default.", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.intelligentSearch === true
+            onToggled: function (v) { QbzBridge.settingsBool("intelligent-search", v) }
+        }
+    }
+    SettingRow {
+        label: QbzSession.tr("Immersive search", QbzSession.trRev)
+        description: QbzSession.tr("What selecting a result in the Immersive search does. Disabled turns the in-immersive search off.", QbzSession.trRev)
+        QbzSelect {
+            menuWidth: 200
+            options: root.doc.immersiveSearchActions || []
+            currentIndex: root.doc.immersiveSearchActionIndex || 0
+            onSelected: function (i) { QbzBridge.settingsSelect("immersive-search-action", i) }
+        }
+    }
+
+    SettingsSpacer { }
+    SettingsDivider { }
+    SettingsSpacer { }
+
+    // ========================= PLAYER & VISUALS =========================
+    GroupHeader { text: QbzSession.tr("PLAYER & VISUALS", QbzSession.trRev) }
+
+    SettingRow {
+        label: QbzSession.tr("Show volume +/- buttons", QbzSession.trRev)
+        description: QbzSession.tr("Add discrete plus and minus buttons next to the volume slider in the player bar.", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.showVolumeSteppers === true
+            onToggled: function (v) { QbzBridge.settingsBool("show-volume-steppers", v) }
+        }
+    }
+    SettingRow {
+        label: QbzSession.tr("Startup page", QbzSession.trRev)
+        description: QbzSession.tr("Choose which page to show when the app starts", QbzSession.trRev)
+        QbzSelect {
+            menuWidth: 200
+            options: root.doc.startupPages || []
+            currentIndex: root.doc.startupPageIndex || 0
+            onSelected: function (i) { QbzBridge.settingsSelect("startup-page", i) }
+        }
+    }
+    SettingRow {
+        label: QbzSession.tr("Immersive default view", QbzSession.trRev)
+        description: QbzSession.tr("Which immersive view opens by default. 'Remember last' restores your last view.", QbzSession.trRev)
+        QbzSelect {
+            menuWidth: 200
+            options: root.doc.immersiveDefaultViews || []
+            currentIndex: root.doc.immersiveDefaultViewIndex || 0
+            onSelected: function (i) { QbzBridge.settingsSelect("immersive-default-view", i) }
+        }
+    }
+    SettingRow {
+        label: QbzSession.tr("Mini player default view", QbzSession.trRev)
+        QbzSelect {
+            menuWidth: 200
+            options: root.doc.miniDefaultViews || []
+            currentIndex: root.doc.miniDefaultViewIndex || 0
+            onSelected: function (i) { QbzBridge.settingsSelect("mini-default-view", i) }
+        }
+    }
+    SettingRow {
+        label: QbzSession.tr("Play indicator animation", QbzSession.trRev)
+        description: QbzSession.tr("Animate the now-playing row with equalizer bars. Off (default) shows a static pause icon with an accent edge mark — lighter on CPU.", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.playIndicatorAnimation === true
+            onToggled: function (v) { QbzBridge.settingsBool("play-indicator-animation", v) }
         }
     }
     SettingRow {
@@ -312,58 +431,12 @@ Column {
             onToggled: function (v) { QbzBridge.settingsBool("local-library-track-artwork", v) }
         }
     }
-    SettingRow {
-        label: QbzSession.tr("Play indicator animation", QbzSession.trRev)
-        description: QbzSession.tr("Animate the now-playing row with equalizer bars. Off (default) shows a static pause icon with an accent edge mark — lighter on CPU.", QbzSession.trRev)
-        QbzToggle {
-            checked: root.doc.playIndicatorAnimation === true
-            onToggled: function (v) { QbzBridge.settingsBool("play-indicator-animation", v) }
-        }
-    }
-    SettingRow {
-        label: QbzSession.tr("Invert swipe navigation direction", QbzSession.trRev)
-        description: QbzSession.tr("Swap the two-finger touchpad swipe: left goes back, right goes forward.", QbzSession.trRev)
-        QbzToggle {
-            checked: root.doc.invertSwipeNavigation === true
-            onToggled: function (v) { QbzBridge.settingsBool("invert-swipe-navigation", v) }
-        }
-    }
 
     SettingsSpacer { }
     SettingsDivider { }
     SettingsSpacer { }
 
-    // ========================= NOTIFICATIONS =============================
-    GroupHeader { text: QbzSession.tr("NOTIFICATIONS", QbzSession.trRev) }
-    SettingRow {
-        label: QbzSession.tr("In-app toasts notifications", QbzSession.trRev)
-        QbzToggle {
-            checked: root.doc.inAppToasts === true
-            onToggled: function (v) { QbzBridge.settingsBool("in-app-toasts", v) }
-        }
-    }
-    SettingRow {
-        label: QbzSession.tr("System Notifications", QbzSession.trRev)
-        QbzToggle {
-            checked: root.doc.systemNotifications === true
-            onToggled: function (v) { QbzBridge.settingsBool("system-notifications", v) }
-        }
-    }
-
-    SettingsSpacer { }
-    SettingsDivider { }
-    SettingsSpacer { }
-
-    // ========================= WINDOW TITLE ==============================
-    GroupHeader { text: QbzSession.tr("WINDOW TITLE", QbzSession.trRev) }
-    SettingRow {
-        label: QbzSession.tr("Show track in window title", QbzSession.trRev)
-        QbzToggle {
-            checked: root.doc.windowTitleShow === true
-            onToggled: function (v) { QbzBridge.settingsBool("window-title-show", v) }
-        }
-    }
-
+    // ============================== WINDOW ==============================
     // OWNER RULING 2026-08-05, and a DELIBERATE divergence from the
     // reference: Slint hides the whole TITLE BAR and WINDOW CONTROLS groups on
     // macOS (AppearanceSettings.slint:723-800). The owner wants the SWITCH
@@ -379,12 +452,13 @@ Column {
     //
     // "Show window controls" stays: it gates whether the cluster is drawn at
     // all, which is a meaningful answer on every platform.
-    SettingsSpacer { }
-    SettingsDivider { }
-    SettingsSpacer { }
+    //
+    // The three groups this used to be (WINDOW TITLE / TITLE BAR / WINDOW
+    // CONTROLS) are ONE group as of 2026-08-21: they are all answers to
+    // "what does the window frame look like", and split three ways each held
+    // one or two rows.
+    GroupHeader { text: QbzSession.tr("WINDOW", QbzSession.trRev) }
 
-    // ========================== TITLE BAR ================================
-    GroupHeader { text: QbzSession.tr("TITLE BAR", QbzSession.trRev) }
     SettingRow {
         label: QbzSession.tr("Use system title bar", QbzSession.trRev)
         description: QbzSession.tr("Keep your system's native window decorations. Turn off to use the QBZ header as the title bar, with its own window controls and drag support. Takes effect after restarting QBZ.", QbzSession.trRev)
@@ -394,30 +468,12 @@ Column {
         }
     }
     SettingRow {
-        visible: !QbzShell.isMacos
-        label: QbzSession.tr("Hide title bar", QbzSession.trRev)
-        description: QbzSession.tr("Frameless window without window controls or header drag (for tiling window manager users)", QbzSession.trRev)
-        rowEnabled: root.doc.useSystemTitleBar !== true
-        QbzToggle {
-            enabled: root.doc.useSystemTitleBar !== true
-            checked: root.doc.hideTitleBar === true
-            onToggled: function (v) { QbzBridge.settingsBool("hide-title-bar", v) }
-        }
-    }
-
-    // The whole group is macOS-hidden now: both of its rows are, so leaving
-    // the header and separators behind printed an empty titled group.
-    SettingsSpacer { visible: !QbzShell.isMacos }
-    SettingsDivider { visible: !QbzShell.isMacos }
-    SettingsSpacer { visible: !QbzShell.isMacos }
-
-    // ======================= WINDOW CONTROLS =============================
-    GroupHeader {
-        visible: !QbzShell.isMacos
-        text: QbzSession.tr("WINDOW CONTROLS", QbzSession.trRev)
-    }
-    SettingRow {
-        visible: !QbzShell.isMacos
+        // ABSENT, not disabled, while the system title bar is in charge:
+        // there is no QBZ-drawn cluster to place then, so the row cannot do
+        // anything (owner 2026-08-21). `rowEnabled` still covers the OTHER
+        // way it goes inert — "Hide title bar", which removes the cluster
+        // rather than handing it to the system.
+        visible: !QbzShell.isMacos && root.doc.useSystemTitleBar !== true
         label: QbzSession.tr("Window controls position", QbzSession.trRev)
         description: QbzSession.tr("Place the window control buttons on the left or right side of the title bar", QbzSession.trRev)
         rowEnabled: !root.tbLocked
@@ -444,64 +500,22 @@ Column {
             onToggled: function (v) { QbzBridge.settingsBool("show-window-controls", v) }
         }
     }
-
-    SettingsSpacer { }
-    SettingsDivider { }
-    SettingsSpacer { }
-
-    // ========================= PLAYER VIEWS ==============================
-    GroupHeader { text: QbzSession.tr("PLAYER VIEWS", QbzSession.trRev) }
     SettingRow {
-        label: QbzSession.tr("Show volume +/- buttons", QbzSession.trRev)
-        description: QbzSession.tr("Add discrete plus and minus buttons next to the volume slider in the player bar.", QbzSession.trRev)
+        visible: !QbzShell.isMacos
+        label: QbzSession.tr("Hide title bar", QbzSession.trRev)
+        description: QbzSession.tr("Frameless window without window controls or header drag (for tiling window manager users)", QbzSession.trRev)
+        rowEnabled: root.doc.useSystemTitleBar !== true
         QbzToggle {
-            checked: root.doc.showVolumeSteppers === true
-            onToggled: function (v) { QbzBridge.settingsBool("show-volume-steppers", v) }
+            enabled: root.doc.useSystemTitleBar !== true
+            checked: root.doc.hideTitleBar === true
+            onToggled: function (v) { QbzBridge.settingsBool("hide-title-bar", v) }
         }
     }
     SettingRow {
-        label: QbzSession.tr("Mini player default view", QbzSession.trRev)
-        QbzSelect {
-            menuWidth: 200
-            options: root.doc.miniDefaultViews || []
-            currentIndex: root.doc.miniDefaultViewIndex || 0
-            onSelected: function (i) { QbzBridge.settingsSelect("mini-default-view", i) }
-        }
-    }
-    SettingRow {
-        label: QbzSession.tr("Startup page", QbzSession.trRev)
-        description: QbzSession.tr("Choose which page to show when the app starts", QbzSession.trRev)
-        QbzSelect {
-            menuWidth: 200
-            options: root.doc.startupPages || []
-            currentIndex: root.doc.startupPageIndex || 0
-            onSelected: function (i) { QbzBridge.settingsSelect("startup-page", i) }
-        }
-    }
-    SettingRow {
-        label: QbzSession.tr("Click on menu item navigates to first tab", QbzSession.trRev)
-        description: QbzSession.tr("Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu", QbzSession.trRev)
+        label: QbzSession.tr("Show track in window title", QbzSession.trRev)
         QbzToggle {
-            checked: root.doc.navClickFirstTab === true
-            onToggled: function (v) { QbzBridge.settingsBool("nav-click-first-tab", v) }
-        }
-    }
-    SettingRow {
-        label: QbzSession.tr("Show Purchases", QbzSession.trRev)
-        description: QbzSession.tr("Show the Purchases section in the sidebar for browsing and downloading your purchased music", QbzSession.trRev)
-        QbzToggle {
-            checked: root.doc.showPurchases === true
-            onToggled: function (v) { QbzBridge.settingsBool("show-purchases", v) }
-        }
-    }
-    SettingRow {
-        label: QbzSession.tr("Purchases in title bar", QbzSession.trRev)
-        description: QbzSession.tr("Place the Purchases entry in the custom title bar instead of the sidebar", QbzSession.trRev)
-        rowEnabled: !root.tbLocked
-        QbzToggle {
-            enabled: !root.tbLocked
-            checked: root.doc.navTbPurchases === true
-            onToggled: function (v) { QbzBridge.settingsBool("nav-tb-purchases", v) }
+            checked: root.doc.windowTitleShow === true
+            onToggled: function (v) { QbzBridge.settingsBool("window-title-show", v) }
         }
     }
 
@@ -509,12 +523,25 @@ Column {
     SettingsDivider { }
     SettingsSpacer { }
 
-    // ==================== SYSTEM TRAY  (macOS: MENU BAR) =================
-    // The header swaps on the platform, 1:1 with AppearanceSettings.slint:884.
-    GroupHeader {
-        text: root.doc.isMacos === true
-              ? QbzSession.tr("MENU BAR", QbzSession.trRev)
-              : QbzSession.tr("SYSTEM TRAY", QbzSession.trRev)
+    // ======================== SYSTEM INTEGRATION ========================
+    // NOTIFICATIONS and SYSTEM TRAY merged 2026-08-21: both are "how QBZ
+    // shows up in the rest of the desktop". The tray rows keep their own
+    // platform wording (macOS calls it the menu bar).
+    GroupHeader { text: QbzSession.tr("SYSTEM INTEGRATION", QbzSession.trRev) }
+
+    SettingRow {
+        label: QbzSession.tr("In-app toasts notifications", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.inAppToasts === true
+            onToggled: function (v) { QbzBridge.settingsBool("in-app-toasts", v) }
+        }
+    }
+    SettingRow {
+        label: QbzSession.tr("System Notifications", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.systemNotifications === true
+            onToggled: function (v) { QbzBridge.settingsBool("system-notifications", v) }
+        }
     }
     SettingRow {
         label: QbzSession.tr("Enable tray icon", QbzSession.trRev)
@@ -539,9 +566,11 @@ Column {
         description: root.doc.isMacos === true
                      ? QbzSession.tr("Keep playing in the menu bar instead of quitting when you close the window", QbzSession.trRev)
                      : QbzSession.tr("Keep playing in the tray instead of quitting when you close the window", QbzSession.trRev)
-        rowEnabled: root.doc.trayEnable === true
+        // Absent while there is no tray icon to close to (owner
+        // 2026-08-21). The value still round-trips through the store, so
+        // turning the tray back on restores the answer the user gave.
+        visible: root.doc.trayEnable === true
         QbzToggle {
-            enabled: root.doc.trayEnable === true
             checked: root.doc.trayCloseToTray === true
             onToggled: function (v) { QbzBridge.settingsBool("tray-close-to-tray", v) }
         }
@@ -565,6 +594,9 @@ Column {
         }
     }
     SettingRow {
+        // Absent while the tray is off — there is no icon to give a
+        // variant to (owner 2026-08-21).
+        visible: root.doc.trayEnable === true
         label: QbzSession.tr("Tray icon variant", QbzSession.trRev)
         description: QbzSession.tr("Pick a mono glyph to match your panel (Plasma, GNOME's permanently dark top bar) or the full colour vinyl logo", QbzSession.trRev)
         QbzSelect {
