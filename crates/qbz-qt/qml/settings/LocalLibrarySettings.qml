@@ -152,9 +152,12 @@ Column {
     SettingRow {
         label: QbzSession.tr("Local items in Library All", QbzSession.trRev)
         description: QbzSession.tr("Favorited items only: what you hearted. Entire local library: every folder and Plex album, artist and track.", QbzSession.trRev)
+        // NO `sm:` — this row used to be the ONE select in Settings drawn at
+        // the small size, which read as a rendering bug next to its
+        // neighbours (owner 2026-08-21). The control-alignment standard
+        // (qbz-nix-docs/guides/native-ui/) has one size for a settings row.
         QbzSelect {
             menuWidth: 210
-            sm: true
             options: [
                 QbzSession.tr("Favorited items only", QbzSession.trRev),
                 QbzSession.tr("Entire local library", QbzSession.trRev)
