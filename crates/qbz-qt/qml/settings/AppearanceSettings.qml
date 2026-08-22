@@ -246,7 +246,7 @@ Column {
     // means the window default, which is Inter (Main.qml).
     SettingRow {
         label: QbzSession.tr("Font", QbzSession.trRev)
-        description: QbzSession.tr("The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine.", QbzSession.trRev)
+        description: QbzSession.tr("The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine (requires restart)", QbzSession.trRev)
         QbzSelect {
             menuWidth: 200
             options: root.doc.appFonts || []

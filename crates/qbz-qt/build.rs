@@ -395,6 +395,7 @@ fn main() {
             qml_files: &[
                 "qml/LoginScreen.qml",
                 "qml/Main.qml",
+                "qml/FontPreload.qml",
                 "qml/cards/AlbumCard.qml",
                 "qml/cards/ArtistCard.qml",
                 "qml/cards/CollectionMosaic.qml",

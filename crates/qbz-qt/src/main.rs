@@ -3050,6 +3050,43 @@ fn main() {
     let mut app = QGuiApplication::new();
     let mut engine = QQmlApplicationEngine::new();
 
+    // ── THE APP TYPEFACE, AND WHY IT IS SET RIGHT HERE ────────────────────
+    //
+    // Settings > Appearance > Typography & Language > Font. This is the only
+    // place it CAN be applied, and the ordering below is the whole feature:
+    //
+    //   1. FontPreload.qml registers the bundled faces. A family does not
+    //      exist for Qt until something loads its file, and `load()` returns
+    //      with its FontLoaders already in the font database.
+    //   2. The application font is set from the persisted choice. A plain
+    //      `Text` reads the application font when it is CONSTRUCTED — it does
+    //      not follow ApplicationWindow.font (Controls only), and it ignores
+    //      a later QGuiApplication::setFont. Both measured against this Qt
+    //      build; the evidence is written up in qml/FontPreload.qml.
+    //   3. Main.qml builds the UI, and every one of its 1082 Text items is
+    //      born with the chosen face.
+    //
+    // Swap any two of those steps and the setting silently does nothing,
+    // which is exactly how it shipped the first time.
+    //
+    // "System" resolves to "" and takes no branch at all, so a user who never
+    // opens the row gets precisely the font this app rendered before the
+    // setting existed.
+    if let Some(engine) = engine.as_mut() {
+        engine.load(&QUrl::from(
+            "qrc:/qt/qml/com/blitzfc/qbz/qml/FontPreload.qml",
+        ));
+    }
+    let app_font_family = settings_qt::app_font_family();
+    if !app_font_family.is_empty() {
+        if let Some(app) = app.as_mut() {
+            let mut font = cxx_qt_lib::QFont::default();
+            font.set_family(&QString::from(app_font_family.as_str()));
+            app.set_application_font(&font);
+            log::info!("[qbz-qt] app font -> {app_font_family}");
+        }
+    }
+
     if let Some(engine) = engine.as_mut() {
         engine.load(&QUrl::from(
             "qrc:/qt/qml/com/blitzfc/qbz/qml/Main.qml",

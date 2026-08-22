@@ -179,36 +179,18 @@ ApplicationWindow {
     // own loader into every row it renders in.
     FontLoader { id: lineSeed; source: "assets/fonts/LINESeedJP-Regular.ttf" }
 
-    // ── Settings > Appearance > Typography & Language > Font ───────────────
-    // The app-wide typeface. Every Text in the tree that does not name a
-    // family of its own inherits THIS one, which is why the setting lives on
-    // the ApplicationWindow and applies live with no restart.
+    // Settings > Appearance > Typography & Language > Font — the CONTROLS half.
     //
-    // The catalog is settings_qt::APP_FONT_VALUES and the index rides
-    // `QbzShell.appFontIndex` — a property of its own rather than a read out
-    // of settingsJson, so the root window does not parse the whole settings
-    // document to find one integer.
+    // The app's own text does not come from here: a plain `Text` takes the
+    // APPLICATION font at construction, which main() sets before this document
+    // is even loaded (see qml/FontPreload.qml for the measurements). What this
+    // line still owns is Qt Quick Controls, which follow ApplicationWindow.font
+    // and would otherwise sit on Inter while every label around them moved.
     //
-    // LAZY, exactly like the lyrics panel's own picker
-    // (shell/LyricsLinesView.qml:66-80): a family nobody selected is never
-    // loaded, and a family that has not FINISHED loading falls back to Inter
-    // rather than rendering the app in a wrong face for a frame.
-    FontLoader { id: appMontserrat; source: QbzShell.appFontIndex === 2 ? "assets/fonts/Montserrat-VariableFont_wght.ttf" : "" }
-    FontLoader { id: appNoto; source: QbzShell.appFontIndex === 3 ? "assets/fonts/NotoSans-VariableFont_wdth,wght.ttf" : "" }
-    FontLoader { id: appSource; source: QbzShell.appFontIndex === 4 ? "assets/fonts/SourceSans3-VariableFont_wght.ttf" : "" }
-    readonly property string appFontFamily: {
-        if (QbzShell.appFontIndex === 1)
-            return lineSeed.status === FontLoader.Ready ? lineSeed.name : ""
-        if (QbzShell.appFontIndex === 2)
-            return appMontserrat.status === FontLoader.Ready ? appMontserrat.name : ""
-        if (QbzShell.appFontIndex === 3)
-            return appNoto.status === FontLoader.Ready ? appNoto.name : ""
-        if (QbzShell.appFontIndex === 4)
-            return appSource.status === FontLoader.Ready ? appSource.name : ""
-        return ""
-    }
-    font.family: window.appFontFamily !== ""
-        ? window.appFontFamily
+    // "" = System, i.e. leave Qt's own choice alone, which is what this app
+    // rendered before the setting existed.
+    font.family: QbzShell.appFontFamily !== ""
+        ? QbzShell.appFontFamily
         : (interRegular.status === FontLoader.Ready ? interRegular.name : "Sans Serif")
 
     // Phase 23: every domain singleton boots (registers its Qt-thread

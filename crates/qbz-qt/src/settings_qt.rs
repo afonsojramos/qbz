@@ -1326,10 +1326,33 @@ const APP_FONT_VALUES: &[&str] = &[
     "source-sans-3",
 ];
 
+/// The family names the slugs resolve to, as the font files register them.
+/// Index-aligned with [`APP_FONT_VALUES`]; "system" maps to the empty string.
+const APP_FONT_FAMILIES: &[&str] = &[
+    "",
+    "LINE Seed JP",
+    "Montserrat",
+    "Noto Sans",
+    "Source Sans 3",
+];
+
 /// The persisted app-font choice as an index into [`APP_FONT_VALUES`].
-/// `pub` because shell_bridge seeds `app_font_index` from it at boot.
 pub fn app_font_index() -> i32 {
     index_of(APP_FONT_VALUES, &pref_str("app_font", "system"), 0)
+}
+
+/// The family the persisted choice resolves to, or "" for "System".
+///
+/// "System" means the font Qt would pick on its own, i.e. exactly what this
+/// app rendered before the setting existed. It deliberately does NOT mean
+/// Inter: the bundled Inter has only ever reached Qt Quick CONTROLS (see
+/// qml/FontPreload.qml), so making "System" mean Inter would change every
+/// label in the app for people who never touched the setting.
+pub fn app_font_family() -> String {
+    APP_FONT_FAMILIES
+        .get(app_font_index() as usize)
+        .unwrap_or(&"")
+        .to_string()
 }
 const IMMERSIVE_SEARCH_LABELS: &[&str] =
     &["Disabled", "Replace current queue", "Play next", "Add to queue"];
@@ -2624,12 +2647,18 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
                 return;
             };
             save_pref("app_font", serde_json::json!(font));
-            // LIVE, no restart: Main.qml rebinds the ApplicationWindow's
-            // `font.family` off this property and every unstyled Text in the
-            // tree inherits it.
-            let idx = index as i32;
-            crate::shell_bridge::ui(move |mut b| b.as_mut().set_app_font_index(idx));
-            log::info!("[qbz-qt] app_font -> {font}");
+            // APPLIED AT THE NEXT START, and that is not a shortcut.
+            //
+            // The app's text is 1082 plain `Text` items, and a plain Text
+            // takes the APPLICATION font at CONSTRUCTION — it does not follow
+            // ApplicationWindow.font (Controls only) and it does not react to
+            // QGuiApplication::setFont afterwards. Both were measured against
+            // this Qt build before this arm was written; the notes are in
+            // qml/FontPreload.qml. So a running app cannot be re-faced without
+            // rebuilding every item, and the honest thing is to persist the
+            // choice and let main() apply it on the next start, exactly like
+            // the Interface size row two lines above.
+            log::info!("[qbz-qt] app_font -> {font} (applies at next start)");
         }
         "ui-scale" => {
             let Some(scale) = UI_SCALE_VALUES.get(index) else {
