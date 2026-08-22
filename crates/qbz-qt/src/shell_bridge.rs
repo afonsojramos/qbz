@@ -108,6 +108,15 @@ pub mod qbz_shell {
         #[qproperty(QString, theme_list_json)]
         // Dropdown filter: 0 All / 1 Dark / 2 Light (ui_prefs theme_filter).
         #[qproperty(i32, theme_filter)]
+        // Settings > Appearance > Typography & Language > Font: an index into
+        // settings_qt::APP_FONT_VALUES (0 = System = the window default).
+        //
+        // It rides its OWN property rather than the settings document because
+        // the consumer is Main.qml — the ApplicationWindow whose `font.family`
+        // every unstyled Text inherits — and making the root window parse the
+        // whole settingsJson on every republish to read one integer is the
+        // wrong trade. Same shape as `theme_filter` above.
+        #[qproperty(i32, app_font_index)]
         // The custom-theme EDITOR state (custom_theme_qt.rs):
         // {"isDark":bool,"tokens":{"<kebab-key>":"#aarrggbb"}} — the eleven
         // editable base tokens plus the polarity, mirroring the Slint
@@ -749,6 +758,7 @@ pub struct QbzShellRust {
     theme_slug: QString,
     theme_list_json: QString,
     theme_filter: i32,
+    app_font_index: i32,
     custom_theme_json: QString,
     diagnostics_json: QString,
     log_viewer_json: QString,
@@ -841,6 +851,7 @@ impl Default for QbzShellRust {
             theme_slug: QString::from(crate::theme_qt::current_slug().as_str()),
             theme_list_json: QString::from(crate::theme_qt::theme_list_json().as_str()),
             theme_filter: crate::theme_qt::theme_filter(),
+            app_font_index: crate::settings_qt::app_font_index(),
             custom_theme_json: QString::from(crate::custom_theme_qt::state_json().as_str()),
             diagnostics_json: QString::from(
                 crate::diagnostics_qt::empty_doc_json().as_str(),

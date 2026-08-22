@@ -1301,6 +1301,36 @@ const LANGUAGE_LABELS: &[&str] = &[
 const LANGUAGE_VALUES: &[&str] = &["auto", "en", "es", "fr", "de", "pt", "ru", "ja", "nl"];
 const UI_SCALE_LABELS: &[&str] = &["Extra small", "Small", "Default", "Large", "Extra large"];
 const UI_SCALE_VALUES: &[&str] = &["xs", "small", "default", "large", "xl"];
+/// The app-wide typeface (Settings > Appearance > Typography & Language).
+///
+/// The SAME five the lyrics panel offers (`lyrics_qt::FONTS`) and the same
+/// slugs, because they are the same files: everything here is BUNDLED in
+/// `qml/assets/fonts/`, so a choice cannot fail on a machine that does not
+/// have the face installed, and it looks identical everywhere. That is the
+/// Tauri build's mechanism, which is what the owner asked for.
+///
+/// Only "System" is translated — a typeface name is a proper noun.
+/// "System" resolves to the window default, which is Inter (Main.qml).
+const APP_FONT_LABELS: &[&str] = &[
+    "System",
+    "LINE Seed JP",
+    "Montserrat",
+    "Noto Sans",
+    "Source Sans 3",
+];
+const APP_FONT_VALUES: &[&str] = &[
+    "system",
+    "line-seed-jp",
+    "montserrat",
+    "noto-sans",
+    "source-sans-3",
+];
+
+/// The persisted app-font choice as an index into [`APP_FONT_VALUES`].
+/// `pub` because shell_bridge seeds `app_font_index` from it at boot.
+pub fn app_font_index() -> i32 {
+    index_of(APP_FONT_VALUES, &pref_str("app_font", "system"), 0)
+}
 const IMMERSIVE_SEARCH_LABELS: &[&str] =
     &["Disabled", "Replace current queue", "Play next", "Add to queue"];
 const IMMERSIVE_SEARCH_VALUES: &[&str] = &["disabled", "replace", "next", "queue"];
@@ -1483,6 +1513,10 @@ pub struct SettingsDoc {
     pub ui_scales: Vec<String>,
     #[serde(rename = "uiScaleIndex")]
     pub ui_scale_index: i32,
+    #[serde(rename = "appFonts")]
+    pub app_fonts: Vec<String>,
+    #[serde(rename = "appFontIndex")]
+    pub app_font_index: i32,
     #[serde(rename = "immersiveSearchActions")]
     pub immersive_search_actions: Vec<String>,
     #[serde(rename = "immersiveSearchActionIndex")]
@@ -1930,6 +1964,14 @@ pub async fn publish_snapshot() {
             language_index: index_of(LANGUAGE_VALUES, &pref_str("language", "auto"), 0),
             ui_scales: UI_SCALE_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             ui_scale_index: index_of(UI_SCALE_VALUES, &pref_str("ui_scale", "default"), 2),
+            // Only the first label is a word; the rest are typeface names and
+            // are passed through untranslated.
+            app_fonts: APP_FONT_LABELS
+                .iter()
+                .enumerate()
+                .map(|(i, l)| if i == 0 { qbz_i18n::t(l) } else { (*l).to_string() })
+                .collect(),
+            app_font_index: app_font_index(),
             immersive_search_actions: IMMERSIVE_SEARCH_LABELS
                 .iter()
                 .map(|l| qbz_i18n::t(l))
@@ -2576,6 +2618,18 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             save_pref("language", serde_json::json!(lang));
             // Live switch (phase 20): trRev bump + doc republish.
             crate::apply_language(lang.to_string());
+        }
+        "app-font" => {
+            let Some(font) = APP_FONT_VALUES.get(index) else {
+                return;
+            };
+            save_pref("app_font", serde_json::json!(font));
+            // LIVE, no restart: Main.qml rebinds the ApplicationWindow's
+            // `font.family` off this property and every unstyled Text in the
+            // tree inherits it.
+            let idx = index as i32;
+            crate::shell_bridge::ui(move |mut b| b.as_mut().set_app_font_index(idx));
+            log::info!("[qbz-qt] app_font -> {font}");
         }
         "ui-scale" => {
             let Some(scale) = UI_SCALE_VALUES.get(index) else {
