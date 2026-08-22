@@ -782,7 +782,8 @@ pub fn bulk_action(album_id: String, ids_json: String, action: String) {
                 };
                 let wanted: std::collections::HashSet<String> =
                     ids.iter().map(|s| s.clone()).collect();
-                let art = album.image.thumbnail.clone().or(album.image.small.clone());
+                // Same nullable-variant trap as the album add above — `best()`.
+                let art = album.image.best().cloned();
                 let album_artist = album.artist.name.clone();
                 let items: Vec<crate::myqbz_add_qt::AddItem> = album
                     .tracks
@@ -968,11 +969,18 @@ pub fn add_to_mixtape(album_id: String) {
             source_item_id: album.id.clone(),
             title: format_album_title(&album.title, album.version.as_deref()),
             subtitle: Some(album.artist.name.clone()).filter(|s| !s.is_empty()),
-            artwork_url: album
-                .image
-                .thumbnail
-                .clone()
-                .or_else(|| album.image.small.clone()),
+            // `best()`, NOT `thumbnail.or(small)`. Both of those are NULLABLE in the
+            // Qobuz ImageSet, and this file already reads every OTHER album cover
+            // through `best()` (:657, :689, :1175) — this add path was the outlier.
+            // An album whose ImageSet carries only `large`/`extralarge` therefore
+            // stored NULL, and `mixtape_collection_items.artwork_url` is a SNAPSHOT
+            // written once at add time: the grid tile and the hero mosaic read that
+            // column and stop, so the row stayed coverless for its whole life.
+            // Owner report 2026-08-22: two Qobuz albums added to a collection with
+            // no art. `best()` walks mega -> extralarge -> large -> thumbnail ->
+            // small, and `small_qobuz_url` re-rungs whatever it gets at render
+            // time, so handing it a larger variant costs nothing.
+            artwork_url: album.image.best().cloned(),
             year: album
                 .release_date_original
                 .as_deref()

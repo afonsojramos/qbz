@@ -652,7 +652,9 @@ Rectangle {
                                 "sourceItemId": modelData.id,
                                 "title": modelData.title || "",
                                 "subtitle": modelData.artist || "",
-                                "artworkUrl": "", "year": null, "trackCount": null
+                                "artworkUrl": item.artUrl || ""  // label_qt serializes the shared
+                                // TrackRow, which carries artUrl; only artPath is
+                                // patched on top for this page's 36px art cell., "year": null, "trackCount": null
                             }]))
                         }
                     }

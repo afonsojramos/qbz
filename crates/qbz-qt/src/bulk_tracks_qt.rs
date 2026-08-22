@@ -143,10 +143,10 @@ pub fn run(ids_json: String, action: String, context_kind: String, context_id: S
                         source_item_id: t.id.to_string(),
                         title: t.title.clone(),
                         subtitle: t.performer.as_ref().map(|p| p.name.clone()),
-                        artwork_url: t
-                            .album
-                            .as_ref()
-                            .and_then(|a| a.image.thumbnail.clone().or(a.image.small.clone())),
+                        // `best()` — see the note in album_qt.rs: thumbnail and
+                        // small are both nullable, and the stored artwork_url is a
+                        // snapshot the mosaics never re-derive.
+                        artwork_url: t.album.as_ref().and_then(|a| a.image.best().cloned()),
                         year: None,
                         track_count: None,
                     })

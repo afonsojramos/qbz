@@ -1548,7 +1548,7 @@ Rectangle {
                     QbzMyQbzAdd.open(JSON.stringify([{
                         "itemType": "track", "source": "qobuz",
                         "sourceItemId": id, "title": popRow.row.title || "",
-                        "subtitle": popRow.row.artist || "", "artworkUrl": "",
+                        "subtitle": popRow.row.artist || "", "artworkUrl": popRow.row.artUrl || "",
                         "year": null, "trackCount": null
                     }]))
                 }

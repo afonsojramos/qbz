@@ -403,6 +403,11 @@ Rectangle {
                     QbzMyQbzAdd.open(JSON.stringify([{
                         "itemType": "track", "source": root.npSource,
                         "sourceItemId": id, "title": QbzPlayer.npTitle,
+                        // artworkUrl STAYS EMPTY here, deliberately: the player bridge exposes only np_artwork_path.
+                        // A file:// cache path must NOT be stored — the collection's
+                        // artwork_url is a snapshot other machines read — so this needs a
+                        // remote-url field on the document first. The five sister sites
+                        // that HAD one were stamped 2026-08-22.
                         "subtitle": QbzPlayer.npArtist, "artworkUrl": "",
                         "year": null, "trackCount": null
                     }]))

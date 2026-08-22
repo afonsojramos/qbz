@@ -1370,7 +1370,12 @@ Rectangle {
                         onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
                             "itemType": "track", "source": "qobuz",
                             "sourceItemId": item.id, "title": item.title || "",
-                            "subtitle": item.artist || "", "artworkUrl": "",
+                            "subtitle": item.artist || "",
+                            // The HEADER's url, not `item.artUrl`: album-view
+                            // track rows are published with an empty artUrl
+                            // (album_qt.rs:90 says so out loud), and every
+                            // track on an album shares the album cover anyway.
+                            "artworkUrl": (albumHeader && albumHeader.artUrl) || "",
                             "year": null, "trackCount": null
                         }]))
                     }

@@ -304,6 +304,11 @@ Rectangle {
                         "sourceItemId": modelData.id,
                         "title": modelData.title || "",
                         "subtitle": modelData.artist || "",
+                        // artworkUrl STAYS EMPTY here, deliberately: the mix row carries no remote art url.
+                        // A file:// cache path must NOT be stored — the collection's
+                        // artwork_url is a snapshot other machines read — so this needs a
+                        // remote-url field on the document first. The five sister sites
+                        // that HAD one were stamped 2026-08-22.
                         "artworkUrl": "", "year": null, "trackCount": null
                     }]))
                 }

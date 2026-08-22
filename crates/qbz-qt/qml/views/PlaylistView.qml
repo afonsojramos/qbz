@@ -980,7 +980,7 @@ Rectangle {
                         "source": (item.source === "local" || item.source === "plex")
                             ? "local" : "qobuz",
                         "sourceItemId": item.id, "title": item.title || "",
-                        "subtitle": item.artist || "", "artworkUrl": "",
+                        "subtitle": item.artist || "", "artworkUrl": item.artUrl || "",
                         "year": null, "trackCount": null
                     }]))
                     onBodyDragStarted: function (n) {

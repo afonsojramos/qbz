@@ -30,7 +30,7 @@ use std::sync::Arc;
 use cxx_qt_lib::QString;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
-use qbz_library::LocalTrack;
+use qbz_library::{LocalTrack, MetadataExtractor};
 use qbz_models::QueueTrack;
 use serde::Serialize;
 
@@ -72,11 +72,50 @@ pub struct AlbumHeaderDoc {
     pub version_index: i32,
 }
 
-/// `{album:{…}, tracks:[…]}` — the `localAlbumJson` document.
+/// One disc of a multi-disc album: what the divider needs and nothing else.
+///
+/// A SEPARATE ARRAY, not extra columns on `TrackRow`. The divider is one item
+/// per disc — two to four of them — where the track list is the freeze surface
+/// that can run to hundreds of rows; paying for a title and an art key on
+/// every row to label three would be the wrong trade.
+#[derive(Clone, Serialize)]
+pub struct DiscRow {
+    /// `TrackRow.disc` for the tracks this describes.
+    pub disc: u32,
+    /// The disc's OWN name ("Das Rheingold", "TV Series Soundtrack #01"), or
+    /// empty when the box does not name its discs — QML then draws the bare
+    /// "Disc N" it drew before.
+    pub title: String,
+    /// Art index key for this disc's own cover (the first track's), so the
+    /// divider can show the disc's artwork rather than the box's.
+    #[serde(rename = "artKey")]
+    pub art_key: String,
+    /// Absolute path to THIS disc's own cover, or empty.
+    ///
+    /// Resolved here rather than read off the track, because the scan-time
+    /// `artwork_path` is deliberately biased to the ALBUM ROOT
+    /// (`find_folder_artwork` gives the root a +5 bonus), so every disc of a
+    /// box carries the SAME file and a per-disc thumbnail drawn from it would
+    /// be N copies of one image.
+    pub cover: String,
+}
+
+/// This disc's own folder cover, ignoring the album root's.
+fn disc_cover(t: &LocalTrack) -> String {
+    let Some(dir) = std::path::Path::new(&t.file_path).parent() else {
+        return String::new();
+    };
+    MetadataExtractor::folder_artwork_in_dir(dir).unwrap_or_default()
+}
+
+/// `{album:{…}, tracks:[…], discs:[…]}` — the `localAlbumJson` document.
 #[derive(Clone, Serialize)]
 pub struct AlbumDetailDoc {
     pub album: AlbumHeaderDoc,
     pub tracks: Vec<TrackRow>,
+    /// EMPTY for a single-disc album. Present only so a multi-disc box can
+    /// label and illustrate its dividers — see `DiscRow`.
+    pub discs: Vec<DiscRow>,
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +230,7 @@ pub fn version_doc(id: &str, index: usize) -> Option<AlbumDetailDoc> {
         }
         tracks.iter().map(|t| map_track(t, art)).collect::<Vec<TrackRow>>()
     });
+    let discs = disc_rows(&tracks, &row.title);
     Some(AlbumDetailDoc {
         album: AlbumHeaderDoc {
             row,
@@ -198,7 +238,70 @@ pub fn version_doc(id: &str, index: usize) -> Option<AlbumDetailDoc> {
             version_index: index as i32,
         },
         tracks: rows,
+        discs,
     })
+}
+
+/// One row per disc of a MULTI-disc album, for the track list's divider.
+///
+/// WHY THIS IS NEEDED AT ALL. In FOLDER grouping a box set is deliberately ONE
+/// album, so `TrackRow.album` is `album_group_title` — the group name with the
+/// disc suffix STRIPPED (metadata.rs::strip_disc_suffix). "Box (Disc 1)" and
+/// "Box (Disc 2)" both collapse to "Box", which is exactly what makes the box
+/// hold together, and it is also why the divider had nothing to say: the only
+/// thing distinguishing disc 1 from disc 2 in the published document was the
+/// integer. Owner report 2026-08-22, a Saint Seiya box whose discs each have
+/// their own name and cover: "el separador no hizo nada al respecto".
+///
+/// METADATA grouping shows them correctly for an unrelated reason — there each
+/// disc is its OWN album row, keyed `album || artist`, so it keeps its raw tag
+/// and its own artwork. Nothing below changes that path.
+///
+/// The title is resolved in this order, most trustworthy first:
+///   1. the disc FOLDER's own titled tail ("Disc 1 - Rheingold" -> "Rheingold").
+///      This is where a box that names its discs usually says so, and it is the
+///      only source the tag cannot contradict.
+///   2. the track's RAW album tag, when it names something the group title does
+///      not already say. Compared AFTER stripping the disc suffix, so a tag of
+///      "Box (Disc 2)" — which carries no name, only a number — is correctly
+///      rejected instead of being echoed next to the "Disc 2" label.
+///   3. nothing, and the divider stays the bare "Disc N" it has always been.
+///
+/// EMPTY for a single-disc album: there is no divider there to feed.
+fn disc_rows(tracks: &[LocalTrack], group_title: &str) -> Vec<DiscRow> {
+    use std::collections::BTreeMap;
+    let mut first: BTreeMap<u32, &LocalTrack> = BTreeMap::new();
+    for t in tracks {
+        first.entry(t.disc_number.unwrap_or(1)).or_insert(t);
+    }
+    if first.len() < 2 {
+        return Vec::new();
+    }
+    let group_stripped = MetadataExtractor::strip_disc_suffix_public(group_title);
+    first
+        .into_iter()
+        .map(|(disc, t)| {
+            let from_folder = std::path::Path::new(&t.file_path)
+                .parent()
+                .and_then(|d| d.file_name())
+                .and_then(|n| n.to_str())
+                .and_then(MetadataExtractor::disc_title_from_name);
+            let title = from_folder.unwrap_or_else(|| {
+                let tag = MetadataExtractor::strip_disc_suffix_public(&t.album);
+                if tag.is_empty() || tag.eq_ignore_ascii_case(&group_stripped) {
+                    String::new()
+                } else {
+                    tag
+                }
+            });
+            DiscRow {
+                disc,
+                title,
+                art_key: crate::local_rows::track_key(t.id),
+                cover: disc_cover(t),
+            }
+        })
+        .collect()
 }
 
 /// The header for ONE version — recomputed per version (the Slint recomputes
@@ -422,7 +525,7 @@ pub fn add_to_playlist(id: String) {
     crate::playlist_picker_qt::open_for_local_refs(&crate::app(), refs);
 }
 
-/// Album header 📼: ONE `album` payload (source "local", no artwork_url, no
+/// Album header 📼: ONE `album` payload (source "local", the album cover, no
 /// year) plus the SELECTED version's track count, then the Mixtape/Collection
 /// picker — 1:1 with `LocalAlbumActions::on_add_to_mixtape`
 /// (`qbz/src/main.rs:18714-18737`).
@@ -452,7 +555,25 @@ pub fn add_to_mixtape(id: String) {
         source_item_id: id,
         title: row.title,
         subtitle: (!row.artist.is_empty()).then_some(row.artist),
-        artwork_url: None,
+        // THE COVER, which this payload used to drop on the floor.
+        //
+        // `mixtape_collection_items.artwork_url` is a SNAPSHOT written once at
+        // add time — the grid tile and the hero mosaic read that column and
+        // stop, so a row stored without one is coverless for the life of the
+        // row. Measured in the owner's live library.db on 2026-08-22: EIGHT
+        // rows with an empty artwork_url, every one of them
+        // `item_type='album' source='local'`, while every Qobuz album row
+        // carried a url. This call site was the only place that could produce
+        // them.
+        //
+        // A local absolute path is CORRECT here and is not the file:// cache
+        // path the track sites are warned off: the store keeps local paths raw
+        // and the mosaic passes them through unrewritten, which is what lets a
+        // collection of local albums render with no network at all.
+        artwork_url: tracks
+            .iter()
+            .find_map(|t| t.artwork_path.as_ref().filter(|p| !p.is_empty()))
+            .cloned(),
         year: None,
         track_count: Some(tracks.len() as i32),
     };
