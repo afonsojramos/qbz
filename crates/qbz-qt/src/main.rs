@@ -2035,9 +2035,29 @@ pub(crate) fn transport_cycle_repeat() {
 /// Whether the Library view has been loaded this session.
 static LIBRARY_LOADED: Mutex<bool> = Mutex::new(false);
 
+/// TEMPORARY nav probe (QBZ_QT_NAV_PROBE=1) — the GUI-thread cost between the
+/// click and the moment the route reaches QML. Remove with the fix.
+pub(crate) fn nav_probe_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("QBZ_QT_NAV_PROBE").is_ok())
+}
+fn epoch_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
 /// Sidebar navigation: record the view and lazy-load its data.
 pub(crate) fn navigate_to(view: &str) {
+    let probe = nav_probe_on().then(std::time::Instant::now);
+    if probe.is_some() {
+        log::info!("[navprobe] enter navigate_to({view}) at={}", epoch_ms());
+    }
     nav_qt::record(view);
+    if let Some(t) = probe {
+        log::info!("[navprobe] record({view}) = {:?}", t.elapsed());
+    }
     // A plain section navigation carries no landing tab: clear any request
     // a flyout click left behind, or the next mount of a tabbed view would
     // be dragged onto a stale tab.
@@ -2047,7 +2067,18 @@ pub(crate) fn navigate_to(view: &str) {
         }
     });
     LAST_DETAIL.lock().unwrap().0.clear();
+    let th = nav_probe_on().then(std::time::Instant::now);
     hydrate_view(view);
+    if let Some(t) = th {
+        log::info!("[navprobe] hydrate({view}) = {:?}", t.elapsed());
+    }
+    if let Some(t) = probe {
+        log::info!(
+            "[navprobe] leave navigate_to({view}) sync={:?} at={}",
+            t.elapsed(),
+            epoch_ms()
+        );
+    }
 }
 
 /// The per-view lazy load that a section navigation owes its destination.
