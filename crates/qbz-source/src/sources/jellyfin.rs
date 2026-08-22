@@ -115,17 +115,32 @@ impl Default for JellyfinSource {
 /// is guaranteed, and guessing a source from a string's alphabet is exactly the
 /// class of inference the seam exists to delete.
 pub(crate) fn recognises(raw: &RawRef) -> bool {
-    raw.source == Some(SourceId::JELLYFIN)
-        // The PREFIXED album key the Local Library grid publishes. Without
-        // this arm an album card carrying no source word — which is every card
-        // that round-trips through a QML string property — would be claimed by
-        // nobody and the album page would open empty. Plex solves the same
-        // problem the same way, with its `plex:` keys.
-        || raw.id.trim().starts_with("jellyfin:")
-        || raw
-            .numeric()
-            .map(|n| RemoteSource::of_id(n as i64) == Some(RemoteSource::Jellyfin))
-            .unwrap_or(false)
+    if raw.source == Some(SourceId::JELLYFIN) {
+        return true;
+    }
+    // AN EXPLICIT, DIFFERENT SOURCE WORD IS EVIDENCE AGAINST OWNERSHIP — see
+    // the long note in sources/subsonic.rs. A namespace bit must never
+    // outvote a caller who already said which source this is.
+    if raw.source.is_some() {
+        return false;
+    }
+
+    // The PREFIXED album key the Local Library grid publishes. Without
+    // this arm an album card carrying no source word — which is every card
+    // that round-trips through a QML string property — would be claimed by
+    // nobody and the album page would open empty.
+    if raw.id.trim().starts_with("jellyfin:") {
+        return true;
+    }
+
+    // A namespaced numeric is a TRACK rowid by construction; a Jellyfin album
+    // id is a 32-character hex GUID, never one of these.
+    if raw.kind == Some(ItemKind::Album) {
+        return false;
+    }
+    raw.numeric()
+        .map(|n| RemoteSource::of_id(n as i64) == Some(RemoteSource::Jellyfin))
+        .unwrap_or(false)
 }
 
 #[async_trait::async_trait]
@@ -634,5 +649,33 @@ mod tests {
         let s = JellyfinSource::new();
         s.set_creds(Some(Arc::new(Off)));
         assert!(s.server().is_none());
+    }
+
+    /// THE BARCODE THAT BROKE FOUR ALBUMS AT ONCE (2026-08-22).
+    ///
+    /// `2500000000000` is a 13-digit barcode in Jellyfin's reserved band. It has
+    /// bit 41 set and nothing above the payload, i.e. it satisfies the
+    /// Subsonic namespace predicate exactly, so this source used to claim it
+    /// alongside Qobuz and `claim` returned `Ambiguous`.
+    ///
+    /// The reserved band is 2_199_023_255_552 ..= 3_298_534_883_327 — EVERY
+    /// 13-digit barcode from 2199… to 3298…. The pre-existing disjointness tests all used
+    /// "0060254702523", whose LEADING ZERO puts it below every floor, so this
+    /// entire class was untested.
+    #[test]
+    fn an_ean13_barcode_in_the_namespace_band_is_not_ours() {
+        let id = "2500000000000";
+        assert_eq!(
+            id.parse::<i64>().unwrap() & (1 << 41),
+            1 << 41,
+            "the barcode really does sit in the reserved band — if this ever \
+             fails the test has stopped covering the case it was written for"
+        );
+        // Named by the caller: the source word must win outright.
+        assert!(!recognises(&RawRef::new("qobuz", ItemKind::Album, id)));
+        // Even unnamed, an ALBUM id is never a namespaced track rowid.
+        let mut unnamed = RawRef::new("qobuz", ItemKind::Album, id);
+        unnamed.source = None;
+        assert!(!recognises(&unnamed));
     }
 }

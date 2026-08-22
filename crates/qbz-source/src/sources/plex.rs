@@ -240,12 +240,32 @@ pub fn is_thumb_path(path: &str) -> bool {
 /// Split out of `claim` so the predicate is testable without touching
 /// `plex_cache.db` (the rating-key ladder's case 2 queries it).
 pub(crate) fn recognises(raw: &RawRef) -> bool {
-    raw.source == Some(SourceId::PLEX)
-        || raw.id.trim().starts_with("plex:")
-        || raw
-            .numeric()
-            .map(|n| n & PLEX_TRACK_ID_FLOOR != 0)
-            .unwrap_or(false)
+    if raw.source == Some(SourceId::PLEX) {
+        return true;
+    }
+    // AN EXPLICIT, DIFFERENT SOURCE WORD IS EVIDENCE AGAINST OWNERSHIP — see
+    // the long note in sources/subsonic.rs. A namespace bit must never
+    // outvote a caller who already said which source this is.
+    if raw.source.is_some() {
+        return false;
+    }
+
+    if raw.id.trim().starts_with("plex:") {
+        return true;
+    }
+
+    // A namespaced numeric is a TRACK rowid by construction. This arm is the
+    // LOOSEST of the three (a bare bit test, no payload bound), so an album
+    // barcode with bit 40 set used to land in `claim`'s Album branch and come
+    // back as `Err(BadIdShape)` — which registry.rs propagates IMMEDIATELY,
+    // ahead of any tiebreak. That failed the caller with a confusing *Plex*
+    // error on an id Plex never owned.
+    if raw.kind == Some(ItemKind::Album) {
+        return false;
+    }
+    raw.numeric()
+        .map(|n| n & PLEX_TRACK_ID_FLOOR != 0)
+        .unwrap_or(false)
 }
 
 #[async_trait::async_trait]

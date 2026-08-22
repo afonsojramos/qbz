@@ -102,17 +102,51 @@ impl Default for SubsonicSource {
 /// POSITIVE ownership: the source word (in any of its brand spellings, which
 /// `SourceId::from_word` has already folded), or the namespace bit.
 pub(crate) fn recognises(raw: &RawRef) -> bool {
-    raw.source == Some(SourceId::SUBSONIC)
-        // The PREFIXED album key the Local Library grid publishes. Without
-        // this arm an album card carrying no source word — which is every card
-        // that round-trips through a QML string property — would be claimed by
-        // nobody and the album page would open empty. Plex solves the same
-        // problem the same way, with its `plex:` keys.
-        || raw.id.trim().starts_with("subsonic:")
-        || raw
-            .numeric()
-            .map(|n| RemoteSource::of_id(n as i64) == Some(RemoteSource::Subsonic))
-            .unwrap_or(false)
+    if raw.source == Some(SourceId::SUBSONIC) {
+        return true;
+    }
+
+    // AN EXPLICIT, DIFFERENT SOURCE WORD IS EVIDENCE AGAINST OWNERSHIP.
+    //
+    // Without this the namespace-bit arm below OUTVOTES the caller. Measured
+    // 2026-08-22 from the owner's log: four George Harrison albums played
+    // from a MyQBZ collection failed with
+    //   ambiguous id "5099951336752" (Some(Album)):
+    //   candidates [SourceId("qobuz"), SourceId("subsonic")]
+    // `5099951336752` is an EAN-13 BARCODE. It happens to have bit 42 set and
+    // nothing above the payload, which is exactly the Subsonic predicate, so
+    // this source claimed an id it can never own while Qobuz claimed it
+    // legitimately off the stored source word — two hits, and `claim` refuses
+    // to guess.
+    //
+    // The collision is not a freak: the reserved band is
+    // 4_398_046_511_104 ..= 5_497_558_138_879, which is EVERY 13-digit barcode
+    // from 4398… to 5497… — all of EMI/Parlophone's 5099… prefix. That is why
+    // four albums failed together and why it is deterministic, not flaky.
+    if raw.source.is_some() {
+        return false;
+    }
+
+    // The PREFIXED album key the Local Library grid publishes. Without
+    // this arm an album card carrying no source word — which is every card
+    // that round-trips through a QML string property — would be claimed by
+    // nobody and the album page would open empty. Plex solves the same
+    // problem the same way, with its `plex:` keys.
+    if raw.id.trim().starts_with("subsonic:") {
+        return true;
+    }
+
+    // A NAMESPACED NUMERIC IS A TRACK ROWID BY CONSTRUCTION
+    // (qbz-media-cache mints them from cache rowids), so this arm must not
+    // fire in ALBUM position at all: a Subsonic album id is the server's own
+    // opaque string, never one of these. That alone would have spared the
+    // barcode above, and it is the narrower statement of the two.
+    if raw.kind == Some(ItemKind::Album) {
+        return false;
+    }
+    raw.numeric()
+        .map(|n| RemoteSource::of_id(n as i64) == Some(RemoteSource::Subsonic))
+        .unwrap_or(false)
 }
 
 #[async_trait::async_trait]
@@ -508,5 +542,35 @@ mod tests {
         let item = MediaRef::new(SourceId::SUBSONIC, ItemKind::Track, "x");
         let err = s.playback(&item, &qt(0, 0)).await.unwrap_err();
         assert!(matches!(err, SourceError::NotConfigured { by: SourceId::SUBSONIC, .. }));
+    }
+
+    /// THE BARCODE THAT BROKE FOUR ALBUMS AT ONCE (2026-08-22).
+    ///
+    /// `5099951336752` is George Harrison's "Somewhere In England" on
+    /// EMI/Parlophone — an EAN-13 barcode Qobuz uses as an album id. It has
+    /// bit 42 set and nothing above the payload, i.e. it satisfies the
+    /// Subsonic namespace predicate exactly, so this source used to claim it
+    /// alongside Qobuz and `claim` returned `Ambiguous`.
+    ///
+    /// The reserved band is 4_398_046_511_104 ..= 5_497_558_138_879 — EVERY
+    /// 13-digit barcode from 4398… to 5497…, which is all of EMI/Parlophone's
+    /// 5099… prefix. The pre-existing disjointness tests all used
+    /// "0060254702523", whose LEADING ZERO puts it below every floor, so this
+    /// entire class was untested.
+    #[test]
+    fn an_ean13_barcode_in_the_namespace_band_is_not_ours() {
+        let id = "5099951336752";
+        assert_eq!(
+            id.parse::<i64>().unwrap() & (1 << 42),
+            1 << 42,
+            "the barcode really does sit in the reserved band — if this ever \
+             fails the test has stopped covering the case it was written for"
+        );
+        // Named by the caller: the source word must win outright.
+        assert!(!recognises(&RawRef::new("qobuz", ItemKind::Album, id)));
+        // Even unnamed, an ALBUM id is never a namespaced track rowid.
+        let mut unnamed = RawRef::new("qobuz", ItemKind::Album, id);
+        unnamed.source = None;
+        assert!(!recognises(&unnamed));
     }
 }
