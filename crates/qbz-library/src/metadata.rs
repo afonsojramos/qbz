@@ -1,6 +1,7 @@
 //! Metadata extraction for audio files
 
 use lofty::prelude::*;
+use lofty::config::ParseOptions;
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use std::fs;
@@ -590,9 +591,26 @@ impl MetadataExtractor {
             return Self::extract_dsd(file_path, library_roots);
         }
 
-        // Probe the file
+        // Probe the file — WITHOUT pulling the embedded cover art.
+        //
+        // MEASURED 2026-08-22 on a 247-file box set on a NAS: reading tags
+        // took 9.27 s of a 9.30 s open, while everything else — artwork
+        // caching, ids, grouping, sorting — took 29 ms. And parallelising the
+        // reads across 8 threads had bought only 1.6x, which is the signature
+        // of a bandwidth wall rather than a latency one.
+        //
+        // A FLAC's cover art lives INSIDE the tag, so `read()` was pulling
+        // multiple megabytes of picture data per file across the network to
+        // recover a title and a track number. The pictures are not wanted
+        // here: this function fills a row, and the cover is resolved
+        // separately by `extract_artwork` / `find_folder_artwork` for ONE file
+        // per album (13 of 247 in that box).
+        //
+        // `read_properties` stays on — duration, bit depth and sample rate
+        // come from the header and are cheap.
         let tagged_file = Probe::open(file_path)
             .map_err(|e| LibraryError::Metadata(format!("Failed to open file: {}", e)))?
+            .options(ParseOptions::new().read_cover_art(false))
             .read()
             .map_err(|e| LibraryError::Metadata(format!("Failed to read file: {}", e)))?;
 
@@ -833,8 +851,11 @@ impl MetadataExtractor {
             });
         }
 
+        // Properties only — the embedded cover is megabytes of pure waste on
+        // this path (see the note in `extract_with_roots`).
         let tagged_file = Probe::open(file_path)
             .map_err(|e| LibraryError::Metadata(format!("Failed to open file: {}", e)))?
+            .options(ParseOptions::new().read_cover_art(false))
             .read()
             .map_err(|e| LibraryError::Metadata(format!("Failed to read file: {}", e)))?;
 
