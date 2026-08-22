@@ -5672,8 +5672,8 @@ msgstr "VENTANA"
 msgid "SYSTEM INTEGRATION"
 msgstr "INTEGRACIÓN CON EL SISTEMA"
 
-msgid "The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine."
-msgstr "La tipografía que usa toda la app. Solo se ofrecen las fuentes que vienen con QBZ, así se ve igual en cualquier equipo."
+msgid "The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine (requires restart)"
+msgstr "La tipografía que usa toda la app. Solo se ofrecen las fuentes que vienen con QBZ, así se ve igual en cualquier equipo (requiere reiniciar)"
 
 msgid "Library folders"
 msgstr "Carpetas de la biblioteca"
