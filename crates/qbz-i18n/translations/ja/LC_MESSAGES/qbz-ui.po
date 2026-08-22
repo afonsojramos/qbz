@@ -5657,3 +5657,9 @@ msgstr "ライブラリフォルダー"
 
 msgid "{} folders"
 msgstr "{} 個のフォルダー"
+
+msgid "No Qobuz account? You can still use QBZ as a player for your own music library"
+msgstr "Qobuz アカウントがなくても、QBZ を自分の音楽ライブラリのプレーヤーとして使えます"
+
+msgid "You're using QBZ without a Qobuz account. Your local library and downloads keep working."
+msgstr "Qobuz アカウントなしで QBZ を使っています。ローカルライブラリとダウンロードはそのまま使えます。"

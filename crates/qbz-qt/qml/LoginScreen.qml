@@ -283,10 +283,21 @@ Rectangle {
             Item { width: 1; height: 10 }
 
             // --- Offline-boot callout (spec §4.1) --------------------
-            // No connectivity: point the user at the Start-offline link
-            // right below. Gated on has-previous-session too.
+            // Points at the Start-offline link right below. TWO audiences, and
+            // until 2026-08-22 it served only one of them:
+            //
+            //   returning user, no network   — the case it was written for.
+            //   NEVER HAD AN ACCOUNT         — the case it was invisible for.
+            //
+            // The old gate was `hasPreviousSession && connectivity === 2`, and
+            // `hasPreviousSession` is seeded from `load_last_user_id()` — None
+            // on a fresh profile, and only ever set true by a successful Qobuz
+            // login. So the one piece of UI that points at "you can use this
+            // without an account" was structurally unreachable for exactly the
+            // person who needs it. Verified by driving a fresh profile: the
+            // capability works, the signpost never appears.
             Column {
-                visible: QbzSession.hasPreviousSession && QbzSession.connectivity === 2
+                visible: QbzSession.connectivity === 2 || !QbzSession.hasPreviousSession
                 width: parent.width
                 spacing: 2
                 Rectangle {
@@ -305,14 +316,24 @@ Rectangle {
                         spacing: 4
                         Text {
                             width: parent.width
-                            text: QbzSession.tr("No internet connection — you can start in offline mode with your local library and downloads", QbzSession.trRev)
+                            // Say the RIGHT thing to each audience. Telling a
+                            // first-run user with working internet that they
+                            // have "no internet connection" is simply false,
+                            // and it is what the screen used to imply the
+                            // moment this box became visible to them.
+                            text: QbzSession.connectivity === 2
+                                ? QbzSession.tr("No internet connection — you can start in offline mode with your local library and downloads", QbzSession.trRev)
+                                : QbzSession.tr("No Qobuz account? You can still use QBZ as a player for your own music library", QbzSession.trRev)
                             color: theme.textSecondary
                             font.pixelSize: theme.fontBody
                             horizontalAlignment: Text.AlignHCenter
                             wrapMode: Text.WordWrap
                         }
                         Text {
-                            visible: QbzSession.captivePortal
+                            // ALSO gated on connectivity: a captive-portal line
+                            // under a "No Qobuz account?" heading would be a
+                            // non-sequitur for a first-run user who is online.
+                            visible: QbzSession.captivePortal && QbzSession.connectivity === 2
                             width: parent.width
                             text: QbzSession.tr("A network sign-in page may be blocking the connection", QbzSession.trRev)
                             color: theme.textMuted

@@ -5691,3 +5691,9 @@ msgstr "Папки библиотеки"
 
 msgid "{} folders"
 msgstr "Папок: {}"
+
+msgid "No Qobuz account? You can still use QBZ as a player for your own music library"
+msgstr "Нет аккаунта Qobuz? QBZ всё равно можно использовать как плеер для своей музыки"
+
+msgid "You're using QBZ without a Qobuz account. Your local library and downloads keep working."
+msgstr "Вы используете QBZ без аккаунта Qobuz. Локальная библиотека и загрузки продолжают работать."

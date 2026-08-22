@@ -5672,3 +5672,9 @@ msgstr "Dossiers de la bibliothèque"
 
 msgid "{} folders"
 msgstr "{} dossiers"
+
+msgid "No Qobuz account? You can still use QBZ as a player for your own music library"
+msgstr "Pas de compte Qobuz ? Vous pouvez tout de même utiliser QBZ comme lecteur de votre propre musique"
+
+msgid "You're using QBZ without a Qobuz account. Your local library and downloads keep working."
+msgstr "Vous utilisez QBZ sans compte Qobuz. Votre bibliothèque locale et vos téléchargements continuent de fonctionner."

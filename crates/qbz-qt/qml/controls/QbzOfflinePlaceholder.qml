@@ -35,9 +35,17 @@ Column {
     Item { width: 1; height: 8 }
     Text {
         width: 420
+        // THREE cases, not two. The third is a session that was started
+        // WITHOUT a Qobuz account at all ("Start offline" on the login
+        // screen): that user has working internet, and telling them "no
+        // internet connection" is simply false — measured on a fresh profile
+        // 2026-08-22, where the log read `connectivity Up, offline_session
+        // true` while this line claimed the network was down.
         text: induced
             ? QbzSession.tr("Offline mode is enabled. Disable it in Settings to use Qobuz.", QbzSession.trRev)
-            : QbzSession.tr("No internet connection. Your local library and downloads keep working.", QbzSession.trRev)
+            : QbzSession.offlineSession
+                ? QbzSession.tr("You're using QBZ without a Qobuz account. Your local library and downloads keep working.", QbzSession.trRev)
+                : QbzSession.tr("No internet connection. Your local library and downloads keep working.", QbzSession.trRev)
         color: theme.textSecondary
         font.pixelSize: theme.fontBody
         horizontalAlignment: Text.AlignHCenter

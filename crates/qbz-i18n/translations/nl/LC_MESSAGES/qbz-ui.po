@@ -5662,3 +5662,9 @@ msgstr "Bibliotheekmappen"
 
 msgid "{} folders"
 msgstr "{} mappen"
+
+msgid "No Qobuz account? You can still use QBZ as a player for your own music library"
+msgstr "Geen Qobuz-account? Je kunt QBZ nog steeds gebruiken als speler voor je eigen muziek"
+
+msgid "You're using QBZ without a Qobuz account. Your local library and downloads keep working."
+msgstr "Je gebruikt QBZ zonder Qobuz-account. Je lokale bibliotheek en downloads blijven werken."
