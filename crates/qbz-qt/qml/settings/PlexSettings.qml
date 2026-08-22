@@ -78,22 +78,46 @@ Column {
     }
 
     // ===================== header: title + toggle + chevron ================
+    // HOMOLOGATED with Jellyfin and Subsonic on 2026-08-21 (owner). The three
+    // media servers sit one under the other in this panel and Plex was the odd
+    // one out: a small-caps "PLEX" eyebrow with no brand mark, in a 64px band,
+    // against the 44px `SourceIcon` + 14px DemiBold title the other two use.
+    // Same header, same metrics, same glyph pipeline — `SourceIcon` already
+    // draws the full-colour Plex mark untinted (controls/SourceIcon.qml).
+    //
+    // ONE affordance the other two have is NOT copied: the "· <server name>"
+    // suffix. `PlexFields` (settings_qt/library.rs:51) carries no name — Plex
+    // pairing stores a url and a token — so the row would be permanently
+    // invisible. An empty binding is not parity, it is a dead branch.
+    //
+    // Deliberately NOT folded into MediaServerSettings.qml: that component is
+    // one FORM twice (address / account / password / connect / sweep), and
+    // Plex's body is a different shape — a PIN pairing flow, a server picker
+    // and a per-library table. Only the header is the same.
     Item {
         width: parent.width
-        height: 64
+        height: 44
         Column {
             anchors.left: parent.left
             anchors.right: plexControls.left
             anchors.rightMargin: 24
             anchors.verticalCenter: parent.verticalCenter
             spacing: 2
-            Text {
-                width: parent.width
-                text: QbzSession.tr("PLEX", QbzSession.trRev)
-                color: theme.textMuted
-                font.pixelSize: 11
-                font.letterSpacing: 1.5
-                font.weight: theme.weightSemibold
+            Row {
+                spacing: 8
+                SourceIcon {
+                    anchors.verticalCenter: parent.verticalCenter
+                    kind: "plex"
+                    glyphSize: 18
+                    plexSize: 18
+                }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Plex"
+                    color: theme.textPrimary
+                    font.pixelSize: 14
+                    font.weight: Font.DemiBold
+                }
             }
             Text {
                 width: parent.width
