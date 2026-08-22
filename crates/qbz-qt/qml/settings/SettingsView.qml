@@ -258,55 +258,121 @@ Item {
                         width: flick.width - 60 // 20 left + 40 right padding
                         spacing: 4
 
-                        AudioSettings {
-                            visible: root.section === 0
-                            width: parent.width
-                            doc: root.doc
+                        // ── ONE PANEL IS BUILT, NOT NINE ──────────────
+                        //
+                        // These used to be nine siblings gated only by
+                        // `visible:`, which in QML hides an item and does NOT
+                        // stop it from being instantiated — the same defect
+                        // 2026-08-17 found in HomeView's four Discover tabs.
+                        // So every mount of Settings built the 30 KB
+                        // Appearance panel, the 19 KB Plex panel and the rest,
+                        // to show one of them. Measured 2026-08-21: Settings
+                        // was the slowest route in the app at `built=326ms`.
+                        //
+                        // A Loader with `active:` is the fix that shipped for
+                        // the tabs and it is the fix here. `visible: active`
+                        // keeps the Column from reserving a slot for the eight
+                        // that are not mounted. NOT `asynchronous: true` — see
+                        // shell/ContentRouter.qml for why that was reverted.
+                        //
+                        // The two overlay modals below (LibFolderEditModal,
+                        // DacWizardModal) are still built unconditionally and
+                        // are the next item of the same kind; they own their
+                        // own open state, so gating them is a separate change.
+                        component Panel: Loader {
+                            /// Deliberately NOT called `section`: the view root
+                            /// already has one, and `root.section === section`
+                            /// inside an inline component is a name-resolution
+                            /// question nobody should have to answer.
+                            property int panelIndex: -1
+                            active: root.section === panelIndex
+                            visible: active
+                            width: parent ? parent.width : 0
                         }
-                        PlaybackSettings {
-                            visible: root.section === 1
-                            width: parent.width
-                            doc: root.doc
+
+                        Panel {
+                            panelIndex: 0
+                            sourceComponent: Component {
+                                AudioSettings {
+                                    width: parent.width
+                                    doc: root.doc
+                                }
+                            }
                         }
-                        AppearanceSettings {
-                            visible: root.section === 2
-                            width: parent.width
-                            doc: root.doc
+                        Panel {
+                            panelIndex: 1
+                            sourceComponent: Component {
+                                PlaybackSettings {
+                                    width: parent.width
+                                    doc: root.doc
+                                }
+                            }
                         }
-                        OfflineSettings {
-                            visible: root.section === 3
-                            width: parent.width
-                            doc: root.doc
-                            // "Clear all" purges every downloaded track and
-                            // there is no undo — same treatment as the Local
-                            // Library danger zone below.
-                            confirmHost: confirmHost
+                        Panel {
+                            panelIndex: 2
+                            sourceComponent: Component {
+                                AppearanceSettings {
+                                    width: parent.width
+                                    doc: root.doc
+                                }
+                            }
                         }
-                        LocalLibrarySettings {
-                            visible: root.section === 4
-                            width: parent.width
-                            doc: root.doc
-                            confirmHost: confirmHost
+                        Panel {
+                            panelIndex: 3
+                            sourceComponent: Component {
+                                OfflineSettings {
+                                    width: parent.width
+                                    doc: root.doc
+                                confirmHost: confirmHost
+                                }
+                            }
                         }
-                        BlacklistSettings {
-                            visible: root.section === 5
-                            width: parent.width
-                            doc: root.doc
+                        Panel {
+                            panelIndex: 4
+                            sourceComponent: Component {
+                                LocalLibrarySettings {
+                                    width: parent.width
+                                    doc: root.doc
+                                confirmHost: confirmHost
+                                }
+                            }
                         }
-                        IntegrationsSettings {
-                            visible: root.section === 6
-                            width: parent.width
-                            doc: root.doc
+                        Panel {
+                            panelIndex: 5
+                            sourceComponent: Component {
+                                BlacklistSettings {
+                                    width: parent.width
+                                    doc: root.doc
+                                }
+                            }
                         }
-                        DeveloperSettings {
-                            visible: root.section === 7
-                            width: parent.width
-                            doc: root.doc
+                        Panel {
+                            panelIndex: 6
+                            sourceComponent: Component {
+                                IntegrationsSettings {
+                                    width: parent.width
+                                    doc: root.doc
+                                }
+                            }
                         }
-                        SandboxSettings {
-                            visible: root.section === 8 && root.sandboxed
-                            width: parent.width
-                            doc: root.doc
+                        Panel {
+                            panelIndex: 7
+                            sourceComponent: Component {
+                                DeveloperSettings {
+                                    width: parent.width
+                                    doc: root.doc
+                                }
+                            }
+                        }
+                        Panel {
+                            panelIndex: 8
+                            active: root.section === 8 && root.sandboxed
+                            sourceComponent: Component {
+                                SandboxSettings {
+                                    width: parent.width
+                                    doc: root.doc
+                                }
+                            }
                         }
                     }
                 }
