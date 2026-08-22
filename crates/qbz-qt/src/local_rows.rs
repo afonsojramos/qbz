@@ -250,6 +250,65 @@ pub fn basename(path: &str) -> String {
 pub fn album_key(id: &str) -> String {
     format!("album:{id}")
 }
+/// THE disc's own display name, or empty when the box does not name its discs.
+///
+/// Shared by the album page's divider (`local_album_actions::disc_rows`) and
+/// the ephemeral pane's block headers, because they are answering the same
+/// question and two copies would drift.
+///
+/// WHY IT CANNOT JUST READ `album_group_title`: in folder grouping a box set
+/// is deliberately ONE album, so that field is the group name with the disc
+/// suffix STRIPPED (metadata.rs::strip_disc_suffix) — "Box (Disc 1)" and
+/// "Box (Disc 2)" both collapse to "Box". That is what holds the box together
+/// and it is also why every disc used to show the same heading.
+///
+/// Most trustworthy first:
+///   1. the disc FOLDER's own titled tail ("Disc 01 - TV Series Soundtrack
+///      #01" -> "TV Series Soundtrack #01"). This is where a box that names
+///      its discs usually says so, and a tag cannot contradict it.
+///   2. the raw `album` tag, when it names something the group title does not
+///      already say. Compared AFTER stripping the disc suffix, so a tag of
+///      "Box (Disc 2)" — which numbers rather than names — is rejected instead
+///      of being echoed next to a "Disc 2" label.
+///   3. empty, and the caller keeps whatever it drew before.
+pub fn disc_display_title(t: &LocalTrack, group_title: &str) -> String {
+    use qbz_library::MetadataExtractor;
+    if let Some(from_folder) = std::path::Path::new(&t.file_path)
+        .parent()
+        .and_then(|d| d.file_name())
+        .and_then(|n| n.to_str())
+        .and_then(MetadataExtractor::disc_title_from_name)
+    {
+        return from_folder;
+    }
+    let tag = MetadataExtractor::strip_disc_suffix_public(&t.album);
+    let group = MetadataExtractor::strip_disc_suffix_public(group_title);
+    if tag.is_empty() || tag.eq_ignore_ascii_case(&group) {
+        String::new()
+    } else {
+        tag
+    }
+}
+
+/// THIS disc's own folder cover as an encoded `file://` url, or empty.
+///
+/// NOT the track's scan-time `artwork_path`: `find_folder_artwork` gives the
+/// album ROOT a +5 bonus against a strict `>`, so `Box/cover.jpg` beats
+/// `Box/Disc 01 - X/cover.jpg` on every track of every disc and a per-disc
+/// thumbnail drawn from it would be N copies of one image.
+///
+/// Encoded through `artwork_qt::file_url`, which is not optional: these folder
+/// names contain '#', and in a URL that opens a FRAGMENT — a raw concatenation
+/// truncates the path and QML logs "Cannot open".
+pub fn disc_cover_url(t: &LocalTrack) -> String {
+    let Some(dir) = std::path::Path::new(&t.file_path).parent() else {
+        return String::new();
+    };
+    qbz_library::MetadataExtractor::folder_artwork_in_dir(dir)
+        .map(|p| crate::artwork_qt::file_url(&p))
+        .unwrap_or_default()
+}
+
 pub fn track_key(id: i64) -> String {
     format!("track:{id}")
 }

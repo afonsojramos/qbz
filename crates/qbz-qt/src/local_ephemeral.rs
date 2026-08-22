@@ -204,6 +204,15 @@ struct EphemeralDoc {
 struct EphemeralAlbumBlock {
     #[serde(rename = "groupKey")]
     group_key: String,
+    /// Which disc this block is, for ordering. A box's blocks otherwise tie on
+    /// title and fall back to the lexicographic order of their string keys.
+    #[serde(skip)]
+    disc: u32,
+    /// The ALBUM's title, without the per-disc name. The sort key, so the
+    /// blocks of one box stay together and in disc order instead of being
+    /// scattered by what each disc happens to be called.
+    #[serde(skip)]
+    sort_title: String,
     title: String,
     artist: String,
     /// "1998 · 12 tracks" (already formatted + translated).
@@ -250,10 +259,22 @@ fn build_doc(name: &str, path: &str, tracks: &[LocalTrack]) -> EphemeralDoc {
             .into_iter()
             .map(|(key, group)| {
                 let first = group[0];
-                let title = if first.album_group_title.is_empty() {
+                let group_title = if first.album_group_title.is_empty() {
                     first.album.clone()
                 } else {
                     first.album_group_title.clone()
+                };
+                // A BOX NAMES ITS DISCS, so a block that IS a disc says which.
+                // `album_group_title` is the group name with the disc suffix
+                // stripped, identical for all 13 blocks of a box — which is
+                // why every heading used to read "Saint Seiya Eternal CD-Box"
+                // (owner report 2026-08-22, with a screenshot of the Folders
+                // grid getting it right from the same files).
+                let disc_name = crate::local_rows::disc_display_title(first, &group_title);
+                let title = if disc_name.is_empty() {
+                    group_title.clone()
+                } else {
+                    format!("{group_title} — {disc_name}")
                 };
                 let artist = first
                     .album_artist
@@ -291,7 +312,18 @@ fn build_doc(name: &str, path: &str, tracks: &[LocalTrack]) -> EphemeralDoc {
                 // second time, and the cover sat in the index unrequested —
                 // missing on every surface at once. A key that does not change
                 // when the thing it names changes is a key that lies.
-                let cover = first.artwork_path.as_deref().filter(|p| !p.is_empty());
+                // THIS disc's own cover. `artwork_path` is biased to the album
+                // ROOT by the scanner, so all 13 blocks resolved to one image.
+                // `disc_cover_url` reads the disc's own folder; it falls back
+                // to the scanned value for anything that is not a titled disc
+                // folder.
+                let own = crate::local_rows::disc_cover_url(first);
+                let own_path = crate::artwork_qt::local_path(&own);
+                let cover = if own.is_empty() {
+                    first.artwork_path.as_deref().filter(|p| !p.is_empty())
+                } else {
+                    Some(own_path.as_str())
+                };
                 let art_key = match cover {
                     Some(p) => album_key(&format!("eph:{key}:{p}")),
                     None => album_key(&format!("eph:{key}")),
@@ -304,6 +336,8 @@ fn build_doc(name: &str, path: &str, tracks: &[LocalTrack]) -> EphemeralDoc {
                 let rows: Vec<TrackRow> = group.iter().map(|t| map_track(*t, art)).collect();
                 EphemeralAlbumBlock {
                     group_key: key,
+                    disc,
+                    sort_title: group_title,
                     title,
                     artist,
                     meta,
@@ -314,7 +348,30 @@ fn build_doc(name: &str, path: &str, tracks: &[LocalTrack]) -> EphemeralDoc {
             })
             .collect()
     });
-    albums.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    // ORDER BY TITLE, THEN BY DISC NUMBER — and the second half is the fix.
+    //
+    // The blocks of a box all shared one title, so this comparison tied on
+    // every pair and the BTreeMap's insertion order showed through. That key
+    // is the STRING "{album}#disc{n}", which sorts lexicographically:
+    // #disc1, #disc10, #disc11, #disc12, #disc13, #disc2, #disc3 — exactly the
+    // order the owner saw. Comparing the disc as an INTEGER is what fixes it,
+    // and it keeps working now that the titles differ.
+    // ORDER BY THE ALBUM, THEN BY DISC NUMBER.
+    //
+    // `sort_title` is the BOX's name, deliberately not the block's displayed
+    // title. Sorting on what is shown looks right and is not: once each disc
+    // carries its own name, an alphabetical pass puts "Complete Song
+    // Collection 1" (disc 11) ahead of "TV Series Soundtrack #01" (disc 1) —
+    // measured, that is exactly what a first attempt did. And before the names
+    // existed every block tied here, so the BTreeMap's string key showed
+    // through as 1, 10, 11, 12, 13, 2, 3. Both failures are the same mistake:
+    // ordering discs by anything other than their number.
+    albums.sort_by(|a, b| {
+        a.sort_title
+            .to_lowercase()
+            .cmp(&b.sort_title.to_lowercase())
+            .then(a.disc.cmp(&b.disc))
+    });
     EphemeralDoc {
         name: name.to_string(),
         path: path.to_string(),

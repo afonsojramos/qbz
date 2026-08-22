@@ -30,7 +30,7 @@ use std::sync::Arc;
 use cxx_qt_lib::QString;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
-use qbz_library::{LocalTrack, MetadataExtractor};
+use qbz_library::LocalTrack;
 use qbz_models::QueueTrack;
 use serde::Serialize;
 
@@ -100,22 +100,6 @@ pub struct DiscRow {
     pub cover: String,
 }
 
-/// This disc's own folder cover as a `file://` URL, ignoring the album root's.
-///
-/// Encoded through `artwork_qt::file_url`, which is not optional: this box's
-/// disc folders are named "Disc 07 - TV Series Soundtrack #05", and a raw
-/// concatenation gives QML `file:///…Soundtrack #05/cover.jpg`, where the `#`
-/// opens a URL FRAGMENT and the path silently truncates at "Soundtrack ".
-/// Caught on the owner's own library, 2026-08-22 — every disc logged
-/// "QML Image: Cannot open".
-fn disc_cover(t: &LocalTrack) -> String {
-    let Some(dir) = std::path::Path::new(&t.file_path).parent() else {
-        return String::new();
-    };
-    MetadataExtractor::folder_artwork_in_dir(dir)
-        .map(|p| crate::artwork_qt::file_url(&p))
-        .unwrap_or_default()
-}
 
 /// `{album:{…}, tracks:[…], discs:[…]}` — the `localAlbumJson` document.
 #[derive(Clone, Serialize)]
@@ -286,29 +270,13 @@ fn disc_rows(tracks: &[LocalTrack], group_title: &str) -> Vec<DiscRow> {
     if first.len() < 2 {
         return Vec::new();
     }
-    let group_stripped = MetadataExtractor::strip_disc_suffix_public(group_title);
     first
         .into_iter()
-        .map(|(disc, t)| {
-            let from_folder = std::path::Path::new(&t.file_path)
-                .parent()
-                .and_then(|d| d.file_name())
-                .and_then(|n| n.to_str())
-                .and_then(MetadataExtractor::disc_title_from_name);
-            let title = from_folder.unwrap_or_else(|| {
-                let tag = MetadataExtractor::strip_disc_suffix_public(&t.album);
-                if tag.is_empty() || tag.eq_ignore_ascii_case(&group_stripped) {
-                    String::new()
-                } else {
-                    tag
-                }
-            });
-            DiscRow {
-                disc,
-                title,
-                art_key: crate::local_rows::track_key(t.id),
-                cover: disc_cover(t),
-            }
+        .map(|(disc, t)| DiscRow {
+            disc,
+            title: crate::local_rows::disc_display_title(t, group_title),
+            art_key: crate::local_rows::track_key(t.id),
+            cover: crate::local_rows::disc_cover_url(t),
         })
         .collect()
 }

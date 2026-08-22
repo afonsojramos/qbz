@@ -265,13 +265,64 @@ impl EphemeralLibraryState {
             }
         }
 
-        for audio_file in &scan.audio_files {
+        // ── THE FILE READS RUN IN PARALLEL; EVERYTHING ELSE STAYS SERIAL ──
+        //
+        // Opening a folder of 247 FLACs on a NAS took ~15 s between "Scanned"
+        // and "ephemeral opened" (owner's log, 2026-08-22), on what is meant to
+        // be the QUICK way to play something outside the library. The cost is
+        // not computation: it is 247 sequential `canonicalize` + tag-read round
+        // trips over the network, each a few tens of milliseconds, one after
+        // another.
+        //
+        // So only the READS move. The bookkeeping below — the CUE-dedup check,
+        // the APE skip, id assignment, the artwork caches, the push order — is
+        // untouched and still runs in scan order, because ids and ordering are
+        // observable and a parallel loop must not renumber anything.
+        //
+        // `std::thread::scope`, not a new dependency: this is I/O-bound, the
+        // work items are independent, and borrowing `scan.audio_files` across
+        // the scope needs no Arc.
+        let probed: Vec<(std::path::PathBuf, Result<LocalTrack, LibraryError>)> = {
+            let files: &[std::path::PathBuf] = &scan.audio_files;
+            let workers = std::thread::available_parallelism()
+                .map(|n| n.get().min(8))
+                .unwrap_or(4)
+                .max(1);
+            let chunk = files.len().div_ceil(workers).max(1);
+            let mut out: Vec<Vec<(std::path::PathBuf, Result<LocalTrack, LibraryError>)>> =
+                Vec::new();
+            std::thread::scope(|sc| {
+                let handles: Vec<_> = files
+                    .chunks(chunk)
+                    .map(|part| {
+                        sc.spawn(move || {
+                            part.iter()
+                                .map(|f| {
+                                    let canonical = std::fs::canonicalize(f)
+                                        .unwrap_or_else(|_| f.clone());
+                                    (canonical, MetadataExtractor::extract(f))
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                for h in handles {
+                    // A panicking worker must not take the whole open down: the
+                    // chunk is dropped and its files are simply absent, which
+                    // the counters below already report as skipped.
+                    out.push(h.join().unwrap_or_default());
+                }
+            });
+            out.into_iter().flatten().collect()
+        };
+
+        for (audio_file, (canonical_audio, extracted)) in
+            scan.audio_files.iter().zip(probed.into_iter())
+        {
             // Skip audio files that were already exploded into tracks via
             // a CUE sheet — listing them again as a single row would
             // duplicate the album and confuse playback (the CUE-derived
             // track ids are the canonical ones).
-            let canonical_audio =
-                std::fs::canonicalize(audio_file).unwrap_or_else(|_| audio_file.clone());
             if cue_referenced_audio.contains(&canonical_audio) {
                 continue;
             }
@@ -293,7 +344,7 @@ impl EphemeralLibraryState {
                 skipped_files += 1;
                 continue;
             }
-            match MetadataExtractor::extract(audio_file) {
+            match extracted {
                 Ok(mut track) => {
                     track.id = inner.next_id;
                     inner.next_id += 1;
