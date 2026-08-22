@@ -24,23 +24,44 @@ const REFILL_SECTORS: usize = 200;
 /// Both schemes exist in the wild — DFF interleaves per BYTE, DSF per block —
 /// so this was not obvious from first principles and was not left to a guess.
 ///
-/// MEASURED on the owner's Rheingold, track 4, by converting twelve seconds
-/// with the real FIR and looking at where the ENERGY lands:
+/// IT WAS ANSWERED WRONG ONCE, AND THE WRONG ANSWER SHIPPED. The first
+/// measurement converted twelve seconds of track 4 and looked at where the
+/// ENERGY landed:
 ///
-///   BlockPerChannel   77.0 % of energy in the audible band, 23 % above it
+///   BlockPerChannel   77 % of energy in the audible band, 23 % above it
 ///   ByteInterleaved   99.8 % audible, 0.2 % above
 ///
-/// A correctly decoded DSD64 stream MUST carry a large ultrasonic component —
-/// that rising noise floor is the defining artefact of 1-bit sigma-delta, and
-/// no filter puts it back once it is gone. Byte-interleaving effectively
-/// decimates the stream and folds that noise away, so its absence is proof
-/// the bits were scrambled. `BlockPerChannel` is therefore the layout, and
-/// the argument is physical rather than statistical.
+/// and reasoned that a real DSD64 stream must carry a large ultrasonic
+/// component, so the layout with one had to be right. **That argument is
+/// backwards for this pipeline.** `DsdPcmConverter` low-passes and decimates
+/// to 88.2 kHz, so it REMOVES sigma-delta noise shaping by design — a correct
+/// decode has nothing above 24 kHz. The 23 % was aliased garbage from bits
+/// read out of order, which is to say the measurement was reading the
+/// symptom as the proof. Neither does the ratio discriminate: scrambled bits
+/// and shaped noise both put energy up high.
 ///
-/// (Three statistical probes tried before this one — per-frame level
-/// variance, L/R envelope correlation and a crude spectral centroid — all
-/// came back inconclusive or contradictory. They were measuring the noise
-/// floor, not the music.)
+/// RE-MEASURED with a statistic that CAN falsify — decode with the real
+/// converter, then look at the shape of the audible band and at whether the
+/// two channels are a stereo pair at all. Music has a peaky spectrum (low
+/// spectral flatness) and two channels of one orchestra are positively
+/// correlated; two independent noise streams are flat and uncorrelated.
+/// Tracks 1, 4 and 13 of disc 1 and track 5 of disc 2:
+///
+///   layout             spectral flatness        L/R correlation
+///   BlockPerChannel    0.038 … 0.107            -0.17 … -0.06
+///   ByteInterleaved    0.0036 … 0.0093          +0.24 … +0.48
+///
+/// A negative correlation between the channels of an orchestral recording is
+/// not a subtle hint, and a spectrum 10-20x flatter is noise. The layout is
+/// `ByteInterleaved`, on every track of both discs.
+///
+/// (Three statistical probes tried before any of this — per-frame level
+/// variance, L/R envelope correlation and a crude spectral centroid — came
+/// back inconclusive. So did a fourth, which measured how far the 64-bit local
+/// mean of the raw bit stream swings: it answers the same for clean and
+/// scrambled bits, because the local mean of a byte-level mix of two
+/// correlated channels is still roughly the audio. A measurement that cannot
+/// come out differently is not a measurement.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelLayout {
     /// `[ch0 4704][ch1 4704]` — one contiguous block per channel per frame.
@@ -62,7 +83,7 @@ pub struct SacdDemuxer {
 impl Default for ChannelLayout {
     /// The measured layout. A caller that does not care gets the right one.
     fn default() -> Self {
-        Self::BlockPerChannel
+        Self::ByteInterleaved
     }
 }
 
@@ -80,8 +101,28 @@ impl SacdDemuxer {
         track: &SacdTrack,
         layout: ChannelLayout,
     ) -> Result<Self, DsdError> {
-        let reader = SacdTrackReader::open(image, track)
-            .map_err(|e| DsdError::Corrupt(e.to_string()))?;
+        Self::open_with(image, track, layout, true)
+    }
+
+    /// The probe's door: `sync = false` reproduces the stream that shipped
+    /// before the frame boundary was read, which is what lets a measurement
+    /// show the difference instead of asserting it.
+    pub fn open_with(
+        image: &std::path::Path,
+        track: &SacdTrack,
+        layout: ChannelLayout,
+        sync: bool,
+    ) -> Result<Self, DsdError> {
+        let reader = SacdTrackReader::open_with(
+            image,
+            track,
+            if sync {
+                qbz_disc::sacd::FrameSync::ToFirstFrame
+            } else {
+                qbz_disc::sacd::FrameSync::FromPayloadStart
+            },
+        )
+        .map_err(|e| DsdError::Corrupt(e.to_string()))?;
         Ok(Self {
             reader,
             info: DsdStreamInfo {
@@ -112,8 +153,16 @@ impl SacdDemuxer {
         }
         let mut chunk = Vec::new();
         match self.reader.next_chunk(&mut chunk, REFILL_SECTORS) {
-            Ok(0) => self.done = true,
-            Ok(_) => self.pending.extend_from_slice(&chunk),
+            // ZERO IS NOT THE END. While the reader is still hunting for the
+            // first frame boundary it drops every audio byte it sees, so an
+            // empty chunk is an ordinary early read. Only the reader knows
+            // whether the track is over, and it is asked.
+            Ok(_) => {
+                self.pending.extend_from_slice(&chunk);
+                if self.reader.finished() {
+                    self.done = true;
+                }
+            }
             Err(e) => return Err(DsdError::Corrupt(e.to_string())),
         }
         Ok(())
@@ -193,5 +242,35 @@ mod tests {
         // and half 0x55 — a completely different signal, which is why picking
         // the wrong one is audible rather than subtle.
         assert!(inter0.iter().any(|b| *b == 0x55));
+    }
+
+    /// THE regression guard for the 2026-08-21 correction.
+    ///
+    /// A default is not a detail here: `open_default` is what playback uses,
+    /// and getting it wrong does not fail — it plays, as noise with the music
+    /// audible behind it, in every delivery mode at once. The measurement
+    /// that settled it is in `ChannelLayout`'s own doc; this pins the answer
+    /// so a future tidy-up cannot quietly put the old one back.
+    #[test]
+    fn the_default_layout_is_the_one_that_was_measured() {
+        assert_eq!(ChannelLayout::default(), ChannelLayout::ByteInterleaved);
+    }
+
+    /// The split has to be exact in BOTH directions, or one channel silently
+    /// carries the other's bits.
+    #[test]
+    fn byte_interleaving_separates_the_channels_without_losing_a_byte() {
+        // Even bytes are channel 0, odd bytes channel 1 — build a frame that
+        // says so unambiguously.
+        let frame: Vec<u8> = (0..FRAME)
+            .map(|i| if i % 2 == 0 { 0x11 } else { 0x22 })
+            .collect();
+        let l: Vec<u8> = frame.chunks_exact(2).map(|p| p[0]).collect();
+        let r: Vec<u8> = frame.chunks_exact(2).map(|p| p[1]).collect();
+        assert_eq!(l.len(), FRAME_PER_CH);
+        assert_eq!(r.len(), FRAME_PER_CH);
+        assert!(l.iter().all(|b| *b == 0x11), "channel 0 is the even bytes");
+        assert!(r.iter().all(|b| *b == 0x22), "channel 1 is the odd bytes");
+        assert_eq!(l.len() + r.len(), FRAME, "no byte is dropped or doubled");
     }
 }

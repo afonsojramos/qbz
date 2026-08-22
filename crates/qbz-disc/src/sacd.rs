@@ -30,7 +30,7 @@ pub const SECTORS_PER_SEC: u32 = 350;
 pub const DSD64_STEREO_FRAME: u32 = 9408;
 
 /// Packet data types seen across both discs: {2, 3, 7}. Only 2 is audio.
-const DATA_TYPE_AUDIO: u16 = 2;
+pub const DATA_TYPE_AUDIO: u16 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SacdError {
@@ -78,6 +78,40 @@ pub struct SacdArea {
     pub album: Option<String>,
     /// Album artist, same source.
     pub artist: Option<String>,
+}
+
+impl SacdArea {
+    /// A stable identity for this disc, from its GEOMETRY alone.
+    ///
+    /// The twin of [`crate::cdda::Toc::fingerprint`], and the same FNV-1a for
+    /// the same reason: no dependency, and it only has to tell two records
+    /// apart. It exists so `crate::store` can remember a correction for a SACD
+    /// too — an image names itself, but "names itself" and "names itself
+    /// CORRECTLY" are different claims, and the second one is the user's to
+    /// make.
+    ///
+    /// Deliberately NOT the file path: the same disc ripped to two folders is
+    /// one record, and a `.iso` that gets moved must not lose its correction.
+    /// Deliberately not the titles either — a fingerprint that changes when
+    /// the user edits a title could never find the edit again.
+    pub fn fingerprint(&self) -> String {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |v: u32| {
+            for b in v.to_le_bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x1000_0000_01b3);
+            }
+        };
+        for t in &self.tracks {
+            eat(t.start_lsn);
+            eat(t.length_lsn);
+            eat(t.number as u32);
+        }
+        eat(self.track_start_lsn);
+        eat(self.track_end_lsn);
+        eat(self.channels as u32);
+        format!("sacd-{h:016x}")
+    }
 }
 
 fn be32(b: &[u8], at: usize) -> u32 {
@@ -321,20 +355,57 @@ pub fn parse_sector(sector: &[u8], lsn: u64) -> Result<Vec<Packet>, SacdError> {
 }
 
 /// Streams the raw DSD of one track out of an image.
+/// Where the first DSD frame is taken to begin.
+///
+/// MEASURED on the owner's Rheingold, both discs, every track: audio frames
+/// are 9408 bytes and spaced exactly 9408 apart, but the FIRST one does not
+/// begin at the start of a track's payload. It begins at 0, 672 or 1344 bytes
+/// in, depending on the track — the packet descriptors carry a `frame_start`
+/// bit precisely so a reader can find it.
+///
+/// Ignoring that bit puts every 9408-byte window across two real frames, so
+/// each channel is assembled from the tail of one and the head of the next.
+/// It plays; it plays as noise with the music audible behind it, in EVERY
+/// delivery mode, because the damage is done before PCM/DoP/native is chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameSync {
+    /// Skip audio bytes until the first packet that declares a frame start.
+    /// The correct reading, and what playback uses.
+    ToFirstFrame,
+    /// Take the payload as it comes. Kept because it is what shipped, and
+    /// because a probe has to be able to reproduce the broken stream to show
+    /// the difference.
+    FromPayloadStart,
+}
+
 pub struct SacdTrackReader {
     iso: IsoImage,
     next_lsn: u64,
     end_lsn: u64,
+    /// Set once the first frame boundary has been found; until then audio
+    /// bytes are DROPPED rather than emitted. It IS the sync mode after
+    /// construction — `FromPayloadStart` simply starts out true — so the mode
+    /// itself is not kept around to be read twice.
+    synced: bool,
 }
 
 impl SacdTrackReader {
     pub fn open(path: &Path, track: &SacdTrack) -> Result<Self, SacdError> {
+        Self::open_with(path, track, FrameSync::ToFirstFrame)
+    }
+
+    pub fn open_with(
+        path: &Path,
+        track: &SacdTrack,
+        sync: FrameSync,
+    ) -> Result<Self, SacdError> {
         Ok(Self {
             iso: IsoImage::open(path)?,
             next_lsn: track.start_lsn as u64,
             // `length_lsn` is how many sectors to read, including the shared
             // boundary sector — the disc's own accounting, not ours.
             end_lsn: track.start_lsn as u64 + track.length_lsn as u64,
+            synced: matches!(sync, FrameSync::FromPayloadStart),
         })
     }
 
@@ -343,7 +414,11 @@ impl SacdTrackReader {
     }
 
     /// Append the next chunk of AUDIO payload to `out`, skipping every
-    /// non-audio packet. Returns bytes appended; 0 means the track is done.
+    /// non-audio packet — and, until the first frame boundary is found, every
+    /// audio byte too (see [`FrameSync`]). Returns bytes appended.
+    ///
+    /// Zero appended does NOT mean the track is done while the reader is still
+    /// hunting for its first frame: the caller must ask [`Self::finished`].
     ///
     /// Supplementary and padding packets (`data_type` 3 and 7 on these discs)
     /// are dropped rather than passed through: they are not audio, and a DSD
@@ -359,9 +434,20 @@ impl SacdTrackReader {
             let lsn = self.next_lsn + s as u64;
             let sector = &raw[s * SECTOR as usize..(s + 1) * SECTOR as usize];
             for p in parse_sector(sector, lsn)? {
-                if p.data_type == DATA_TYPE_AUDIO {
-                    out.extend_from_slice(&sector[p.at..p.at + p.len]);
+                if p.data_type != DATA_TYPE_AUDIO {
+                    continue;
                 }
+                // Everything before the first declared frame start belongs to
+                // the previous track's last frame — the areas share boundary
+                // sectors — and emitting it shifts the whole stream.
+                if !self.synced {
+                    if !p.frame_start {
+                        continue;
+                    }
+                    self.synced = true;
+                    log::debug!("[sacd] frame sync at lsn {lsn} offset {}", p.at);
+                }
+                out.extend_from_slice(&sector[p.at..p.at + p.len]);
             }
         }
         self.next_lsn += want as u64;
