@@ -32,6 +32,10 @@ fn main() {
                 sectors: t.sectors,
             },
         }],
+        disc_id: Some(id.clone()),
+        toc_fingerprint: Some(toc.fingerprint()),
+        disc_track_count: toc.audio_tracks().count(),
+        cover: None,
     };
     let started = std::time::Instant::now();
     let mut last = -1i32;
