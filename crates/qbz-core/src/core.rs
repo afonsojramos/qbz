@@ -902,6 +902,23 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         current_patched
     }
 
+    /// Attach a resolved cover to any queued track in `ids` that has none.
+    /// Frontend-agnostic hook for art that resolves AFTER the row was
+    /// enqueued — a disc's cover is fetched, and the fetch outlives the click
+    /// that started playback. Returns true if the CURRENT track was patched;
+    /// the caller then re-pushes the now-playing stamp.
+    pub async fn patch_queue_artwork(&self, ids: &[u64], url: &str) -> bool {
+        let queue = self.queue.write().await;
+        let (any, current_patched) = queue.patch_artwork(ids, url);
+        if any {
+            self.emit(CoreEvent::QueueUpdated {
+                state: queue.get_state(),
+            })
+            .await;
+        }
+        current_patched
+    }
+
     // ==================== Search & Catalog ====================
 
     /// Search for albums

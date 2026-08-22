@@ -119,6 +119,48 @@ impl QueueManager {
         current_patched
     }
 
+    /// Attach an artwork url to every queued track whose id is in `ids`.
+    ///
+    /// The sibling of [`Self::patch_plex_quality`], for the other thing a row
+    /// can learn AFTER it was enqueued: a cover. A disc carries none — it is
+    /// fetched, and the fetch outlives the click that started playback — so a
+    /// CD queued at second two is still holding `artwork_url: None` when the
+    /// cover lands at second ten. Every consumer downstream reads the QUEUE
+    /// row (the now-playing bar, the miniplayer, MPRIS through
+    /// `art_url_for`), so patching the session store alone leaves all of them
+    /// blank.
+    ///
+    /// Rows that already have art are left alone: this fills a gap, it does
+    /// not overwrite a cover somebody else resolved.
+    ///
+    /// Returns `(any patched, the CURRENT track was patched)`. The two are
+    /// separate answers because they drive different work: any patch makes the
+    /// queue panel's thumbnails stale, while only the current one needs the
+    /// now-playing stamp re-pushed.
+    pub fn patch_artwork(&self, ids: &[u64], url: &str) -> (bool, bool) {
+        if ids.is_empty() || url.is_empty() {
+            return (false, false);
+        }
+        let mut state = self.state.lock().unwrap();
+        let current_idx = state.current_index;
+        let mut any = false;
+        let mut current_patched = false;
+        for (idx, track) in state.tracks.iter_mut().enumerate() {
+            if track.artwork_url.as_deref().is_some_and(|u| !u.is_empty()) {
+                continue;
+            }
+            if !ids.contains(&track.id) {
+                continue;
+            }
+            track.artwork_url = Some(url.to_string());
+            any = true;
+            if current_idx == Some(idx) {
+                current_patched = true;
+            }
+        }
+        (any, current_patched)
+    }
+
     /// Add a track to the end of the queue
     pub fn add_track(&self, track: QueueTrack) {
         let mut state = self.state.lock().unwrap();
