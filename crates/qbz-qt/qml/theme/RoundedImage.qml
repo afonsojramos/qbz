@@ -402,26 +402,99 @@ Item {
         }
     }
 
+    /// ── THE ARRIVAL FADE ───────────────────────────────────────────────────
+    /// Owner, 2026-08-21: "una vez que la imagen esta lista, esta aparece de
+    /// golpe, parece un glitch... quiero evitar la sensación de salpicado."
+    ///
+    /// Every cover in the app comes through this file, so the fade belongs
+    /// HERE and not in the cards: AlbumCard, PlaylistCard, TrackCard,
+    /// ArtistCard, SlimCard, LabelCard and RadioCard all mount a RoundedImage,
+    /// and 81 files in the tree do. A per-card animation would be seven copies
+    /// that drift, and it would still miss the detail headers and the rows.
+    ///
+    /// WHAT TRIGGERS IT is `ready`, not the path and not `status`. `ready` is
+    /// the readiness contract at the top of this file — MONOTONE WITHIN ONE
+    /// SOURCE — which is exactly the property this fade needs: the derivative
+    /// swap (`_effectiveSource`) sends `status` back to `Image.Loading`
+    /// mid-life, and fading again there would flash a cover that is already on
+    /// screen. A recycled delegate DOES re-fade, because `onSourceChanged`
+    /// clears the latch, and that is correct: it is a different cover.
+    ///
+    /// GPU DOCTRINE (qt-frontend/2026-08-11-scenegraph-batches §9). The rule
+    /// is that CONTINUOUS animation rides the shared shell pulse, because any
+    /// dirty item presents the WHOLE window at ~1.2% GPU. This one is not
+    /// continuous: it runs once per cover, for `fadeMs`, and then writes
+    /// nothing forever. Nor does a grid multiply the bill — Qt advances every
+    /// running animation on one animation tick and the window presents ONCE
+    /// per frame regardless of how many items are dirty, so fifty covers
+    /// arriving together cost the same presents as one. What extends the
+    /// window is covers STREAMING in, and that is bounded by the load itself.
+    ///
+    /// OpacityAnimator, not a Behavior: an Animator runs on the render thread,
+    /// so the fade keeps advancing while the GUI thread is still paying off a
+    /// page mount — which is precisely when covers land. Same reasoning, and
+    /// the same measurement, as ContentRouter's page fade.
+    ///
+    /// reduceMotion skips it: the art simply appears.
+    property int fadeMs: 200
+
     // ── The two arms ────────────────────────────────────────────────────────
     // One Loader swap at startup (when GraphicsInfo.api resolves), not per
     // frame. `active` is a live binding on `_useCanvas`, which also follows
     // `_fit` — a `fit: "auto"` cell that resolves to "pad" moves to the canvas
     // arm on the same pass that resolves it.
-    Loader {
-        id: fastArm
+    //
+    // BOTH arms live inside `art` so the fade is ONE animator on ONE item
+    // whichever arm is mounted. Only one is ever active, so per-node alpha on
+    // this Item is group opacity in practice and no layer FBO is needed.
+    Item {
+        id: art
         anchors.fill: parent
-        active: !root._useCanvas
-        sourceComponent: imageComp
+        // Starts hidden; `_fade` reveals it. With reduceMotion on, the
+        // Component.onCompleted below puts it straight to 1.
+        opacity: 0.0
+
+        Loader {
+            id: fastArm
+            anchors.fill: parent
+            active: !root._useCanvas
+            sourceComponent: imageComp
+        }
+        Loader {
+            id: canvasArm
+            anchors.fill: parent
+            active: root._useCanvas
+            sourceComponent: canvasComp
+            // A newly created Canvas has loaded no image yet (the root-level
+            // handlers already fired), so prime it here as well as there.
+            onLoaded: root._repaint()
+        }
     }
-    Loader {
-        id: canvasArm
-        anchors.fill: parent
-        active: root._useCanvas
-        sourceComponent: canvasComp
-        // A newly created Canvas has loaded no image yet (the root-level
-        // handlers already fired), so prime it here as well as there.
-        onLoaded: root._repaint()
+
+    OpacityAnimator {
+        id: fadeIn
+        target: art
+        from: 0.0
+        to: 1.0
+        duration: root.fadeMs
+        easing.type: Easing.OutCubic
     }
+
+    /// Drive the fade off the readiness contract. A `ready` that goes false
+    /// (a new source on a recycled delegate) re-arms by snapping back to 0,
+    /// which is what stops the OLD cover from being visible under the new
+    /// one's load.
+    onReadyChanged: {
+        fadeIn.stop()
+        if (!root.ready) {
+            art.opacity = 0.0
+        } else if (QbzShell.reduceMotion) {
+            art.opacity = 1.0
+        } else {
+            fadeIn.restart()
+        }
+    }
+
 
     Component {
         id: imageComp
@@ -554,7 +627,16 @@ Item {
         root._repaint()
     }
     on_EffectiveSourceChanged: root._repaint()
-    Component.onCompleted: root._repaint()
+    Component.onCompleted: {
+        root._repaint()
+        // THE ARRIVAL FADE's self-heal: an already-cached pixmap can reach
+        // Image.Ready DURING creation, i.e. before `onReadyChanged` is
+        // connected — the same discipline the display Image's `_sync()`
+        // documents. Without this a cover that was already in
+        // QQuickPixmapCache would sit at opacity 0 forever.
+        if (root.ready)
+            art.opacity = 1.0
+    }
     onWidthChanged: { root._repaint(); root._requestScaled() }
     onHeightChanged: { root._repaint(); root._requestScaled() }
 
