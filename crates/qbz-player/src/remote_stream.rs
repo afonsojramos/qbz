@@ -44,6 +44,8 @@ pub struct RemoteStreamInfo {
     pub sample_rate: u32,
     pub channels: u16,
     pub bit_depth: u32,
+    /// Container/codec family detected from the bytes actually served.
+    pub format: &'static str,
     pub speed_mbps: f64,
 }
 
@@ -63,13 +65,14 @@ pub async fn stream_remote_track_into_player(
 ) -> Result<(), String> {
     let stream_info = probe_remote_stream_info(url).await?;
     log::info!(
-        "[{}/STREAMING] Track {} - {:.2} MB, {}Hz, {} ch, {}-bit, {:.1} MB/s",
+        "[{}/STREAMING] Track {} - {:.2} MB, {}Hz, {} ch, {}-bit {}, {:.1} MB/s",
         log_tag,
         track_id,
         stream_info.content_length as f64 / (1024.0 * 1024.0),
         stream_info.sample_rate,
         stream_info.channels,
         stream_info.bit_depth,
+        stream_info.format,
         stream_info.speed_mbps
     );
 
@@ -105,11 +108,19 @@ pub async fn stream_remote_track_into_player(
     Ok(())
 }
 
-/// HEAD for content-length, then a small `Range: bytes=0-65535` GET to (a)
-/// measure throughput and (b) parse the FLAC `STREAMINFO` block for the real
-/// sample rate / channels / bit depth. Never defaults silently for FLAC (a
-/// wrong sample rate would silently resample hi-res).
+/// One small `Range: bytes=0-65535` GET supplies content length, throughput and
+/// the audio header. The old HEAD + Range sequence paid two serial round trips
+/// before the real body request; on Plex that was visible on every MP3 start,
+/// and a surprising number of otherwise-valid media servers reject HEAD.
+///
+/// A server that ignores Range may answer 200 with the whole file. We consume
+/// only the first 64 KiB from its byte stream and drop the response, rather
+/// than downloading the track once as a "probe" and then a second time into
+/// the player.
 pub async fn probe_remote_stream_info(url: &str) -> Result<RemoteStreamInfo, String> {
+    use futures_util::StreamExt;
+    use reqwest::header::{ACCEPT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE};
+    use reqwest::StatusCode;
     use std::time::Instant;
 
     let client = reqwest::Client::builder()
@@ -118,31 +129,11 @@ pub async fn probe_remote_stream_info(url: &str) -> Result<RemoteStreamInfo, Str
         .build()
         .map_err(|err| format!("create stream probe client: {err}"))?;
 
-    let head_response = client
-        .head(url)
-        .header("User-Agent", "Mozilla/5.0")
-        .send()
-        .await
-        .map_err(|err| format!("probe HEAD request failed: {}", describe_reqwest_error(&err)))?;
-
-    if !head_response.status().is_success() {
-        return Err(format!(
-            "probe HEAD request failed with status {}",
-            head_response.status()
-        ));
-    }
-
-    let content_length = head_response
-        .headers()
-        .get("content-length")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .ok_or_else(|| "probe missing content-length header".to_string())?;
-
     let start_time = Instant::now();
     let range_response = client
         .get(url)
         .header("User-Agent", "Mozilla/5.0")
+        .header(ACCEPT_ENCODING, "identity")
         .header("Range", "bytes=0-65535")
         .send()
         .await
@@ -155,10 +146,31 @@ pub async fn probe_remote_stream_info(url: &str) -> Result<RemoteStreamInfo, Str
         ));
     }
 
-    let initial_bytes = range_response
-        .bytes()
-        .await
-        .map_err(|err| format!("read probe bytes failed: {}", describe_reqwest_error(&err)))?;
+    let partial = range_response.status() == StatusCode::PARTIAL_CONTENT;
+    let content_range = range_response
+        .headers()
+        .get(CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok());
+    let response_length = range_response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok());
+    let content_length = probe_content_length(partial, content_range, response_length)
+        .ok_or_else(|| "probe missing content length/range header".to_string())?;
+
+    const PROBE_BYTES: usize = 65_536;
+    let mut initial_bytes = Vec::with_capacity(PROBE_BYTES);
+    let mut stream = range_response.bytes_stream();
+    while initial_bytes.len() < PROBE_BYTES {
+        let Some(chunk) = stream.next().await else { break };
+        let chunk = chunk
+            .map_err(|err| format!("read probe bytes failed: {}", describe_reqwest_error(&err)))?;
+        let take = (PROBE_BYTES - initial_bytes.len()).min(chunk.len());
+        initial_bytes.extend_from_slice(&chunk[..take]);
+    }
+    if initial_bytes.is_empty() {
+        return Err("probe returned no audio bytes".to_string());
+    }
 
     let elapsed = start_time.elapsed();
     let speed_mbps = if elapsed.as_secs_f64() > 0.0 {
@@ -167,24 +179,66 @@ pub async fn probe_remote_stream_info(url: &str) -> Result<RemoteStreamInfo, Str
         10.0
     };
 
-    // STREAMINFO parse via the shared prober (hoisted to qbz-models for the
-    // cast path, #638 fix 1). The prober never guesses — the CD-shaped
-    // defaults for a non-FLAC probe stay HERE so this path's behavior is
-    // byte-identical to the original inline parse.
-    let (sample_rate, channels, bit_depth) = match qbz_models::probe_streaminfo(&initial_bytes) {
-        Some(p) => (p.sample_rate, p.channels, p.bits_per_sample),
-        None => {
-            log::warn!("[remote-stream] Non-FLAC probe for remote handoff, using defaults");
-            (44_100, 2, 16)
-        }
-    };
+    // FLAC's fixed STREAMINFO parser remains the strongest answer. For MP3,
+    // AAC, ALAC and the other direct-play containers, ask the same Symphonia
+    // probe the player itself uses. This removes the old unconditional
+    // 44.1/16 guess (wrong for 48 kHz MP3) before the protected backend opens.
+    let (sample_rate, channels, bit_depth, format) =
+        match qbz_models::probe_streaminfo(&initial_bytes) {
+            Some(p) => (p.sample_rate, p.channels, p.bits_per_sample, "FLAC"),
+            None => match crate::player::extract_audio_metadata_full(&initial_bytes) {
+                Ok(meta) => {
+                    let format = if meta.codec == symphonia::core::codecs::CODEC_TYPE_MP3 {
+                        "MP3"
+                    } else {
+                        "AUDIO"
+                    };
+                    (
+                        meta.sample_rate,
+                        meta.channels,
+                        meta.bit_depth.unwrap_or(16),
+                        format,
+                    )
+                }
+                Err(err) => {
+                    log::warn!(
+                        "[remote-stream] Header probe failed ({err}); using conservative 44.1/16"
+                    );
+                    (44_100, 2, 16, "AUDIO")
+                }
+            },
+        };
 
     Ok(RemoteStreamInfo {
         content_length,
         sample_rate,
         channels,
         bit_depth,
+        format,
         speed_mbps,
+    })
+}
+
+/// Parse the total from RFC 7233's `Content-Range`, e.g.
+/// `bytes 0-65535/44790678`. `*` means the server does not know the total.
+fn content_range_total(value: &str) -> Option<u64> {
+    value.rsplit_once('/')?.1.trim().parse().ok()
+}
+
+/// A 206 `Content-Length` describes only the returned slice, never the media
+/// object. Accept it as the total only for a 200 response where the server
+/// ignored Range and sent the complete representation.
+fn probe_content_length(
+    partial: bool,
+    content_range: Option<&str>,
+    content_length: Option<&str>,
+) -> Option<u64> {
+    content_range.and_then(content_range_total).or_else(|| {
+        if partial {
+            None
+        } else {
+            content_length?.parse().ok()
+        }
     })
 }
 
@@ -199,6 +253,7 @@ pub async fn download_and_stream_remote_track(
     log_tag: &str,
 ) -> Result<(), String> {
     use futures_util::StreamExt;
+    use reqwest::header::ACCEPT_ENCODING;
     use std::time::Instant;
 
     struct FailGuard {
@@ -229,6 +284,7 @@ pub async fn download_and_stream_remote_track(
     let response = client
         .get(url)
         .header("User-Agent", "Mozilla/5.0")
+        .header(ACCEPT_ENCODING, "identity")
         .send()
         .await
         .map_err(|err| {
@@ -332,4 +388,39 @@ pub fn describe_reqwest_error(err: &reqwest::Error) -> String {
 pub fn is_header_flood_error(message: &str) -> bool {
     let haystack = message.to_ascii_lowercase();
     haystack.contains("message head is too large") || haystack.contains("too many headers")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{content_range_total, probe_content_length};
+
+    #[test]
+    fn content_range_uses_the_whole_object_length() {
+        assert_eq!(
+            content_range_total("bytes 0-65535/44790678"),
+            Some(44_790_678)
+        );
+        assert_eq!(content_range_total("bytes 0-65535/*"), None);
+    }
+
+    #[test]
+    fn partial_content_length_is_never_mistaken_for_the_track_size() {
+        assert_eq!(
+            probe_content_length(
+                true,
+                Some("bytes 0-65535/44790678"),
+                Some("65536")
+            ),
+            Some(44_790_678)
+        );
+        assert_eq!(probe_content_length(true, None, Some("65536")), None);
+    }
+
+    #[test]
+    fn full_response_length_is_valid_when_range_is_ignored() {
+        assert_eq!(
+            probe_content_length(false, None, Some("44790678")),
+            Some(44_790_678)
+        );
+    }
 }

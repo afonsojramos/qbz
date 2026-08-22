@@ -167,6 +167,87 @@ pub(crate) async fn play_ticket(runtime: &Runtime, ticket: PlaybackTicket) -> bo
     }
 }
 
+/// Resolve a source-owned successor into the engine's gapless queue.
+///
+/// This is deliberately a sibling of [`play_ticket`]: both consume the same
+/// exhaustive ticket vocabulary. The previous poll-loop implementation had a
+/// second, filesystem-only interpretation of "local" and therefore silently
+/// dropped `PlaybackTicket::Stream` (Plex/Jellyfin/Subsonic). Keeping the
+/// conversion here means a new source ticket cannot gain normal playback
+/// without the compiler also forcing a gapless decision.
+pub(crate) async fn queue_gapless_successor(
+    runtime: &Runtime,
+    predecessor_id: u64,
+    track: &QueueTrack,
+) -> Result<bool, String> {
+    let ticket = qbz_source::registry()
+        .playback(track)
+        .await
+        .map_err(|e| e.to_string())?;
+    let next_id = track.id;
+    let player = runtime.core().player();
+
+    let bytes = match ticket {
+        PlaybackTicket::File {
+            path,
+            seek_secs: None,
+            ..
+        } => Some(
+            tokio::task::spawn_blocking(move || std::fs::read(path))
+                .await
+                .map_err(|e| format!("gapless file task failed: {e}"))?
+                .map_err(|e| format!("gapless file read failed: {e}"))?,
+        ),
+        // CUE virtual tracks share a container. Appending the file would append
+        // the whole image, not the virtual range; retain the normal end-edge.
+        PlaybackTicket::File {
+            seek_secs: Some(_), ..
+        }
+        | PlaybackTicket::SeekLoaded { .. }
+        | PlaybackTicket::CdTrack { .. }
+        | PlaybackTicket::Catalog { .. } => return Ok(false),
+        PlaybackTicket::Bytes { bytes, .. } => Some(bytes),
+        PlaybackTicket::Stream { url, log_tag, .. } => {
+            let started = std::time::Instant::now();
+            let bytes = fetch_body(&url).await?;
+            log::info!(
+                "[qbz-qt][GAPLESS] {log_tag} successor {next_id}: {} bytes in {:?}",
+                bytes.len(),
+                started.elapsed()
+            );
+            Some(bytes)
+        }
+        PlaybackTicket::DsdFile { path, .. } => {
+            // Native DoP can append the DSD file directly; PCM mode performs
+            // the proven whole-file conversion inside the player.
+            if player.state.current_track_id() != predecessor_id
+                || player.state.get_gapless_next_track_id() != 0
+            {
+                return Ok(false);
+            }
+            let dsd_player = player.clone();
+            return tokio::task::spawn_blocking(move || dsd_player.play_next_dsd(path, next_id))
+                .await
+                .map_err(|e| format!("gapless DSD task failed: {e}"))?
+                .map(|()| true);
+        }
+    };
+
+    let Some(bytes) = bytes else { return Ok(false) };
+    // A remote body can finish after the ten-second window. Never append it to
+    // whichever track happens to be current by then, and never replace a
+    // successor another path already queued.
+    if player.state.current_track_id() != predecessor_id
+        || player.state.get_gapless_next_track_id() != 0
+    {
+        log::debug!(
+            "[qbz-qt][GAPLESS] successor {next_id} arrived after its predecessor moved"
+        );
+        return Ok(false);
+    }
+    player.play_next(bytes, next_id).map(|()| true)
+}
+
 /// Read a file and hand the bytes to the player, with the CUE fast path in
 /// front of it.
 async fn play_file(

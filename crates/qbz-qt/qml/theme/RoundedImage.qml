@@ -294,6 +294,20 @@ Item {
     /// is already pending or on disk.
     property string _reqKey: ""
 
+    /// Accept a derivative outside the Image binding's evaluation stack.
+    /// A warm-cache hit is synchronous: assigning `_scaled` from
+    /// `probe.onSourceSizeChanged` changes `_effectiveSource`, which changes
+    /// that same probe's `source` while Qt is still evaluating it. Qt reports
+    /// the cycle and may discard the binding. One event-loop turn preserves
+    /// the pre-scenegraph fast path while making the handoff non-reentrant.
+    function _acceptScaledLater(scaled, key) {
+        if (scaled === "") return
+        Qt.callLater(function() {
+            if (root._reqKey === key && root._scaled !== scaled)
+                root._scaled = scaled
+        })
+    }
+
     /// Latch the original's intrinsic size the first time it is knowable for
     /// the CURRENT source, then ask for the derivative.
     ///
@@ -347,7 +361,7 @@ Item {
         // miss, generation remains off-thread through artScaled().
         var cached = QbzSession.artScaledCached(root.source, rw, rh)
         if (cached !== "") {
-            root._scaled = cached
+            root._acceptScaledLater(cached, key)
             return
         }
         QbzSession.artScaled(root.source, rw, rh)
@@ -361,8 +375,9 @@ Item {
             // slim thumbnail no longer accepts the 200px card's derivative for
             // the same cover, which point-sampled it right back to where this
             // whole mechanism started.
-            if (scaled !== "" && root._reqKey === path + "|" + w + "x" + h)
-                root._scaled = scaled
+            var key = path + "|" + w + "x" + h
+            if (root._reqKey === key)
+                root._acceptScaledLater(scaled, key)
         }
     }
 

@@ -1872,7 +1872,7 @@ where
                             log::warn!("[QConnect/Transport] Reconnect scheduled: attempt={} backoff={}ms reason={}", attempt, backoff_ms, reason);
                         }
                         TransportEvent::InboundQueueServerEvent(evt) => {
-                            log::info!(
+                            log::debug!(
                                 "[QConnect] <-- Inbound queue event: {} payload={}",
                                 evt.message_type(),
                                 evt.payload
@@ -1894,7 +1894,7 @@ where
                                 .await;
                         }
                         TransportEvent::InboundRendererServerCommand(cmd) => {
-                            log::info!(
+                            log::debug!(
                                 "[QConnect] <-- Inbound renderer command: {} payload={}",
                                 cmd.message_type(),
                                 cmd.payload
@@ -1904,7 +1904,7 @@ where
                             cloud_message_type,
                             payload_size,
                         } => {
-                            log::info!(
+                            log::debug!(
                                 "[QConnect/Transport] <-- Frame decoded: cloud_type={} size={}",
                                 cloud_message_type,
                                 payload_size
@@ -1914,13 +1914,13 @@ where
                             cloud_message_type,
                             payload,
                         } => {
-                            log::info!("[QConnect/Transport] <-- Payload bytes: cloud_type={} len={} hex={}", cloud_message_type, payload.len(), hex_preview(payload, 64));
+                            log::debug!("[QConnect/Transport] <-- Payload bytes: cloud_type={} len={} hex={}", cloud_message_type, payload.len(), hex_preview(payload, 64));
                         }
                         TransportEvent::OutboundSent {
                             message_type,
                             action_uuid,
                         } => {
-                            log::info!(
+                            log::debug!(
                                 "[QConnect/Transport] --> Outbound sent: {} uuid={}",
                                 message_type,
                                 action_uuid

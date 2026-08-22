@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::codecs::{CodecType, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::{MediaSource, MediaSourceStream};
@@ -273,10 +273,11 @@ fn is_isomp4(data: &[u8]) -> bool {
 /// This is much faster than decode_with_symphonia as it only reads headers.
 /// Audio metadata extracted from file headers
 #[allow(dead_code)]
-struct AudioMetadata {
-    sample_rate: u32,
-    channels: u16,
-    bit_depth: Option<u32>,
+pub(crate) struct AudioMetadata {
+    pub(crate) sample_rate: u32,
+    pub(crate) channels: u16,
+    pub(crate) bit_depth: Option<u32>,
+    pub(crate) codec: CodecType,
 }
 
 #[allow(dead_code)]
@@ -285,7 +286,7 @@ fn extract_audio_metadata(data: &[u8]) -> Result<(u32, u16), String> {
     Ok((meta.sample_rate, meta.channels))
 }
 
-fn extract_audio_metadata_full(data: &[u8]) -> Result<AudioMetadata, String> {
+pub(crate) fn extract_audio_metadata_full(data: &[u8]) -> Result<AudioMetadata, String> {
     // For non-isomp4 files (FLAC, etc.), try symphonia directly to get all metadata
     // Symphonia gives us bits_per_sample which rodio doesn't expose
 
@@ -332,6 +333,7 @@ fn extract_audio_metadata_full(data: &[u8]) -> Result<AudioMetadata, String> {
         sample_rate,
         channels,
         bit_depth,
+        codec: track.codec_params.codec,
     })
 }
 

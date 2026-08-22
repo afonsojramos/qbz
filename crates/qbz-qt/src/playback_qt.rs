@@ -980,11 +980,30 @@ pub(crate) async fn fetch_album_queue(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     album_id: &str,
 ) -> Result<Vec<QueueTrack>, String> {
-    let album = runtime
-        .core()
-        .get_album(album_id)
-        .await
-        .map_err(|e| format!("get_album {album_id} failed: {e}"))?;
+    let album = match runtime.core().get_album(album_id).await {
+        Ok(album) => album,
+        Err(catalog_error) => {
+            // An offline album card already has every playable byte and enough
+            // metadata in index.db/library.db to build a queue. Requiring
+            // /album/get before consulting that index made its overlay Play a
+            // network button in disguise; AlbumView appeared to work only
+            // because its document had already materialized the tracks.
+            match offline_album_queue(album_id).await {
+                Ok(tracks) if !tracks.is_empty() => {
+                    log::info!(
+                        "[qbz-qt] play_album {album_id}: catalog unavailable; using {} offline row(s)",
+                        tracks.len()
+                    );
+                    return Ok(tracks);
+                }
+                Ok(_) => {}
+                Err(e) => log::debug!(
+                    "[qbz-qt] play_album {album_id}: offline fallback unavailable: {e}"
+                ),
+            }
+            return Err(format!("get_album {album_id} failed: {catalog_error}"));
+        }
+    };
 
     let album_title = album.title.clone();
     let album_artist = album.artist.name.clone();
@@ -1045,6 +1064,98 @@ pub(crate) async fn fetch_album_queue(
         })
         .collect();
     Ok(tracks)
+}
+
+/// Build a Qobuz album queue entirely from the user's offline index.
+///
+/// The encrypted CMAF bundle remains owned by `play_resolved_offline_aware`;
+/// this function only reconstructs queue metadata. `library.db` enriches the
+/// index with disc/track order when available. Pre-migration rows that have no
+/// library twin still play in a deterministic created/id order rather than
+/// making the whole album unavailable.
+async fn offline_album_queue(album_id: &str) -> Result<Vec<QueueTrack>, String> {
+    use qbz_offline_cache::OfflineCacheStatus;
+    use std::collections::HashMap;
+
+    let off = crate::offline_qt::get()
+        .await
+        .ok_or_else(|| "offline cache is not active".to_string())?;
+    let cache_path = off.get_cache_path();
+    let mut cached = {
+        let db = off.db.lock().await;
+        db.as_ref()
+            .ok_or_else(|| "offline index is not open".to_string())?
+            .get_album_tracks(album_id)?
+    };
+    cached.retain(|track| track.status == OfflineCacheStatus::Ready);
+    if cached.is_empty() {
+        return Err("album has no ready offline tracks".to_string());
+    }
+
+    let library_rows: HashMap<u64, qbz_library::LocalTrack> = {
+        let db = off.library_db.lock().await;
+        db.as_ref()
+            .and_then(|db| db.get_qobuz_download_tracks().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|row| row.qobuz_track_id.map(|id| (id as u64, row)))
+            .collect()
+    };
+    cached.sort_by_key(|track| {
+        let local = library_rows.get(&track.track_id);
+        (
+            local.and_then(|row| row.disc_number).unwrap_or(u32::MAX),
+            local.and_then(|row| row.track_number).unwrap_or(u32::MAX),
+            track.created_at.clone(),
+            track.track_id,
+        )
+    });
+
+    Ok(cached
+        .into_iter()
+        .map(|cached| {
+            let local = library_rows.get(&cached.track_id);
+            let artwork = local
+                .and_then(|row| row.artwork_path.clone())
+                .or_else(|| cached.resolve_cover_path(&cache_path))
+                .map(|path| {
+                    if path.starts_with("file://") {
+                        path
+                    } else {
+                        format!("file://{path}")
+                    }
+                });
+            let album = cached.album.clone().unwrap_or_default();
+            let sample_rate = cached
+                .sample_rate
+                .or_else(|| local.map(|row| row.sample_rate).filter(|rate| *rate > 0.0));
+            let bit_depth = cached.bit_depth.or_else(|| local.and_then(|row| row.bit_depth));
+            QueueTrack {
+                id: cached.track_id,
+                title: cached.title,
+                version: None,
+                artist: cached.artist,
+                album,
+                album_version: None,
+                duration_secs: cached.duration_secs,
+                artwork_url: artwork,
+                hires: bit_depth.is_some_and(|bits| bits >= 24),
+                bit_depth,
+                sample_rate,
+                // This row bypasses the Qobuz network tier but is explicitly
+                // excluded from the file-source resolver by its Offline badge.
+                is_local: true,
+                album_id: Some(album_id.to_string()),
+                artist_id: None,
+                streamable: true,
+                source: Some("qobuz_download".to_string()),
+                parental_warning: false,
+                source_item_id_hint: local.map(|row| row.id.to_string()),
+                context_kind: Some("album".to_string()),
+                context_id: Some(album_id.to_string()),
+            }
+        })
+        .collect())
 }
 
 /// The /artist/page top-tracks -> QueueTrack mapping shared by `play_artist`
@@ -2585,7 +2696,7 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
     if let Some(t) = crate::tray_qt::handle() {
         t.set_track(title.clone(), track.artist.clone(), track.album.clone());
     }
-    let (tier, label) = quality_badge(&track);
+    let (tier, label) = quality_badge(&track).await;
     let album_id = track.album_id.clone().unwrap_or_default();
     // Album with its release variant appended ("Octavarium (2009 Remaster)"),
     // 1:1 with the Slint `album_display` (playback.rs:1941-1949).
@@ -2695,21 +2806,68 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
 ///    TIER is unknown or BOTH params are missing; the fork blanked it whenever
 ///    either one was missing, so a track with a known rate and no depth lost
 ///    its whole detail line instead of taking the formatter's depth default.
-fn quality_badge(track: &QueueTrack) -> (String, String) {
-    let tier = match track.bit_depth {
+async fn quality_badge(track: &QueueTrack) -> (String, String) {
+    // Server-backed rows already retain their codec/container in the source
+    // cache, but QueueTrack predates that vocabulary. Ask the owning source
+    // once on the track edge instead of guessing from decoded PCM: an MP3
+    // decodes to 16-bit samples too, and calling that "CD" is a lie.
+    let source_hint = match qbz_source::SourceBadge::from_word(track.source.as_deref()) {
+        qbz_source::SourceBadge::Plex
+        | qbz_source::SourceBadge::Jellyfin
+        | qbz_source::SourceBadge::Subsonic => {
+            let raw = qbz_source::RawRef::from_queue_track(track);
+            match qbz_source::registry().claim(&raw) {
+                Ok(item) => qbz_source::registry()
+                    .meta(&item)
+                    .await
+                    .ok()
+                    .map(|meta| meta.quality),
+                Err(_) => None,
+            }
+        }
+        _ => None,
+    };
+    quality_badge_from(track, source_hint)
+}
+
+fn quality_badge_from(
+    track: &QueueTrack,
+    source_hint: Option<qbz_source::QualityHint>,
+) -> (String, String) {
+    let bit_depth = track
+        .bit_depth
+        .or_else(|| source_hint.and_then(|hint| hint.bit_depth));
+    let sample_rate = track
+        .sample_rate
+        .or_else(|| source_hint.and_then(|hint| hint.sample_rate_khz));
+    let is_mp3 = source_hint
+        .is_some_and(|hint| hint.format.eq_ignore_ascii_case("mp3"));
+    if is_mp3 {
+        let label = sample_rate
+            .filter(|rate| *rate > 0.0)
+            .map(|rate| {
+                let khz = if rate >= 1000.0 { rate / 1000.0 } else { rate };
+                format!("{} kHz · MP3", crate::home_qt::format_rate(khz))
+            })
+            .unwrap_or_else(|| "MP3".to_string());
+        return ("mp3".to_string(), label);
+    }
+
+    let tier = match bit_depth {
         Some(1) => "hires",
         Some(d) if d >= 24 => "hires",
         Some(_) => "cd",
+        None if sample_rate.is_some_and(|rate| rate > 0.0) => "cd",
         None if track.hires => "hires",
         None => "",
     }
     .to_string();
-    let label = if tier.is_empty() || (track.bit_depth.is_none() && track.sample_rate.is_none()) {
+    let label = if tier.is_empty() || (bit_depth.is_none() && sample_rate.is_none()) {
         String::new()
-    } else if track.bit_depth == Some(1) {
-        crate::quality_state::dsd_multiple_label(track.sample_rate)
+    } else if bit_depth == Some(1) {
+        crate::quality_state::dsd_multiple_label(sample_rate)
     } else {
-        crate::quality_state::detail(track.bit_depth, track.sample_rate)
+        crate::quality_state::detail(bit_depth, sample_rate)
     };
     (tier, label)
 }
@@ -3168,61 +3326,32 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                             }
                         });
                     } else if next.id != track_id && next.is_local {
-                        // LOCAL gapless: resolve the file path and hand it to
-                        // the engine's gapless queue — DSD through
-                        // `play_next_dsd` (DoP append when a DoP stream is
-                        // live, else an in-memory converted WAV), everything
-                        // else as raw bytes. CUE virtual tracks are skipped:
-                        // they share one file and the engine would append the
-                        // whole album image.
+                        // Source-owned gapless. `is_local` means "does not use
+                        // Qobuz's tier walk", NOT "has a filesystem path": it
+                        // also covers Plex/Jellyfin/Subsonic streams. Resolve
+                        // the same PlaybackTicket normal playback consumes and
+                        // let the shared exhaustive matcher turn files, bytes,
+                        // DSD and remote streams into `play_next`.
                         gapless_requested_for = track_id;
                         let runtime = runtime.clone();
-                        let next_id = next.id;
                         tokio::spawn(async move {
-                            let info = if crate::local_ephemeral::is_ephemeral_id(next_id as i64) {
-                                crate::local_ephemeral::get_track(next_id as i64)
-                                    .map(|t| (t.file_path, t.cue_start_secs))
-                            } else {
-                                tokio::task::spawn_blocking(move || {
-                                    crate::local_state::with_db(|db| db.get_track(next_id as i64))
-                                        .flatten()
-                                        .map(|t| (t.file_path, t.cue_start_secs))
-                                })
-                                .await
-                                .ok()
-                                .flatten()
-                            };
-                            let Some((path, cue)) = info else { return };
-                            if cue.is_some() {
-                                return;
-                            }
-                            let res = tokio::task::spawn_blocking(move || {
-                                let p = std::path::PathBuf::from(&path);
-                                let player = runtime.core().player();
-                                // The reference calls `qbz_dsd::is_dsd_path`,
-                                // but `qbz-dsd` is not a dependency of this
-                                // crate and `local_playback.rs:139` already
-                                // makes the same decision from the extension.
-                                // Same two extensions, no new dependency.
-                                let lower = p.to_string_lossy().to_lowercase();
-                                if lower.ends_with(".dsf") || lower.ends_with(".dff") {
-                                    player.play_next_dsd(p, next_id)
-                                } else {
-                                    let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
-                                    player.play_next(bytes, next_id)
-                                }
-                            })
-                            .await;
-                            match res {
-                                Ok(Ok(())) => log::info!(
-                                    "[qbz-qt] [GAPLESS] queued local track {next_id} for gapless"
+                            let next_id = next.id;
+                            match crate::audible_qt::queue_gapless_successor(
+                                &runtime,
+                                track_id,
+                                &next,
+                            )
+                            .await
+                            {
+                                Ok(true) => log::info!(
+                                    "[qbz-qt] [GAPLESS] queued source track {next_id} for gapless"
                                 ),
-                                Ok(Err(e)) => log::info!(
-                                    "[qbz-qt] [GAPLESS] local pre-queue {next_id} skipped: {e}"
+                                Ok(false) => log::debug!(
+                                    "[qbz-qt] [GAPLESS] source pre-queue {next_id} not applicable"
                                 ),
-                                Err(e) => {
-                                    log::warn!("[qbz-qt] [GAPLESS] local pre-queue task failed: {e}")
-                                }
+                                Err(e) => log::warn!(
+                                    "[qbz-qt] [GAPLESS] source pre-queue {next_id} failed: {e}"
+                                ),
                             }
                         });
                     }
@@ -3391,10 +3520,11 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_queue_with, prefetch_track_ids, reconcile_device_cap, stream_error_text,
-        xorshift_shuffle_seeded, PrefetchCandidate, PrefetchTrackEdge,
+        filter_queue_with, prefetch_track_ids, quality_badge_from, reconcile_device_cap,
+        stream_error_text, xorshift_shuffle_seeded, PrefetchCandidate, PrefetchTrackEdge,
     };
-    use qbz_models::{Quality, QualityLimit};
+    use qbz_models::{Quality, QualityLimit, QueueTrack};
+    use qbz_source::QualityHint;
 
     fn remote(id: u64) -> PrefetchCandidate {
         PrefetchCandidate {
@@ -3405,6 +3535,75 @@ mod tests {
 
     fn local(id: u64) -> PrefetchCandidate {
         PrefetchCandidate { id, is_local: true }
+    }
+
+    fn queue_track() -> QueueTrack {
+        QueueTrack {
+            id: 1,
+            title: String::new(),
+            version: None,
+            artist: String::new(),
+            album: String::new(),
+            album_version: None,
+            duration_secs: 0,
+            artwork_url: None,
+            hires: false,
+            bit_depth: None,
+            sample_rate: None,
+            is_local: true,
+            album_id: None,
+            artist_id: None,
+            streamable: true,
+            source: Some("navidrome".to_string()),
+            parental_warning: false,
+            source_item_id_hint: None,
+            context_kind: None,
+            context_id: None,
+        }
+    }
+
+    // --- Source-backed NPB quality --------------------------------------
+
+    #[test]
+    fn mp3_source_hint_is_not_mislabeled_as_cd() {
+        let badge = quality_badge_from(
+            &queue_track(),
+            Some(QualityHint {
+                bit_depth: None,
+                sample_rate_khz: Some(44.1),
+                format: "MP3",
+            }),
+        );
+        assert_eq!(badge, ("mp3".to_string(), "44.1 kHz · MP3".to_string()));
+    }
+
+    #[test]
+    fn lossless_source_rate_can_fill_thin_queue_metadata() {
+        let badge = quality_badge_from(
+            &queue_track(),
+            Some(QualityHint {
+                bit_depth: None,
+                sample_rate_khz: Some(48.0),
+                format: "FLAC",
+            }),
+        );
+        assert_eq!(badge, ("cd".to_string(), "16-bit / 48 kHz".to_string()));
+    }
+
+    #[test]
+    fn queue_metadata_wins_over_the_source_fallback() {
+        let mut row = queue_track();
+        row.bit_depth = Some(24);
+        row.sample_rate = Some(96.0);
+        let badge = quality_badge_from(
+            &row,
+            Some(QualityHint {
+                bit_depth: Some(16),
+                sample_rate_khz: Some(44.1),
+                format: "FLAC",
+            }),
+        );
+        assert_eq!(badge, ("hires".to_string(), "24-bit / 96 kHz".to_string()));
     }
 
     // --- #688: immediate two-successor L1/L2 warming ---------------------

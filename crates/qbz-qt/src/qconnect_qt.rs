@@ -93,6 +93,29 @@ fn qconnect_now_ms() -> u64 {
 
 type Runtime = Arc<AppRuntime<LoggingAdapter>>;
 
+/// QConnect's cloud queue accepts Qobuz catalog ids only. An offline Qobuz
+/// download is still the same catalog id and is eligible; every server/file
+/// source is not, even when its numeric id happens to look like a Qobuz id.
+fn is_qconnect_queue_track(track: &qbz_models::QueueTrack) -> bool {
+    if track.id == 0 {
+        return false;
+    }
+    match track
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|source| !source.is_empty())
+    {
+        Some(source) => matches!(
+            source.to_ascii_lowercase().as_str(),
+            "qobuz" | "qobuz_download" | "qobuz_purchase" | "offline"
+        ),
+        // Legacy catalog rows predate the source stamp. Their explicit
+        // non-local bit is the compatibility discriminator.
+        None => !track.is_local,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Publish layer (B4: routed onto the `QbzQConnect` bridge singleton)
 //
@@ -876,8 +899,25 @@ impl QtQconnectService {
             }
         }
 
-        let (current_qid, next_qid) =
+        let (mut current_qid, mut next_qid) =
             resolve_queue_item_ids_by_track_id(&app, &sync_state, track_id).await;
+        if current_qid.is_none() {
+            // Becoming the active local renderer is not necessarily a core
+            // track edge: playback may already be running when Connect joins.
+            // In that case the poll's transition-only queue sync never fires,
+            // and sending a position report with no matching queue item makes
+            // the cloud reject us every two seconds. Reconcile first, then
+            // report only once the cloud snapshot can name this track.
+            self.sync_local_queue_if_changed().await;
+            (current_qid, next_qid) =
+                resolve_queue_item_ids_by_track_id(&app, &sync_state, track_id).await;
+            if current_qid.is_none() {
+                log::debug!(
+                    "[QConnect] renderer report deferred: track {track_id} is not in the cloud queue"
+                );
+                return;
+            }
+        }
         let queue_version = app.queue_state_snapshot().await.version;
 
         let report = RendererReport::new(
@@ -1179,14 +1219,7 @@ impl QtQconnectService {
         }
 
         // Admission: refuse the whole push if any track isn't Qobuz-castable.
-        let all_eligible = tracks.iter().all(|track| {
-            let source = track
-                .source
-                .as_deref()
-                .unwrap_or("qobuz")
-                .to_ascii_lowercase();
-            source != "local" && source != "plex" && track.id > 0
-        });
+        let all_eligible = tracks.iter().all(is_qconnect_queue_track);
         if !all_eligible {
             log::info!("[QConnect] Local queue has non-Qobuz tracks; not casting to Connect");
             crate::toast_qt::error(qbz_i18n::t("Mixed queue — not cast to Qobuz Connect"));
@@ -1274,14 +1307,7 @@ impl QtQconnectService {
         let ordered_ids: Vec<u64> = tracks.iter().map(|track| track.id).collect();
 
         // Admission: refuse the whole push if any track isn't Qobuz-castable.
-        let all_eligible = tracks.iter().all(|track| {
-            let source = track
-                .source
-                .as_deref()
-                .unwrap_or("qobuz")
-                .to_ascii_lowercase();
-            source != "local" && source != "plex" && track.id > 0
-        });
+        let all_eligible = tracks.iter().all(is_qconnect_queue_track);
         if !all_eligible {
             log::info!("[QConnect] Local queue has non-Qobuz tracks; not casting to Connect");
             crate::toast_qt::error(qbz_i18n::t("Mixed queue — not cast to Qobuz Connect"));
@@ -3203,5 +3229,59 @@ async fn deferred_renderer_join(
     {
         let mut st = sync_state.lock().await;
         st.last_joined_session_uuid = Some(session_uuid.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_qconnect_queue_track;
+    use qbz_models::QueueTrack;
+
+    fn track(source: Option<&str>, is_local: bool) -> QueueTrack {
+        QueueTrack {
+            id: 42,
+            title: String::new(),
+            version: None,
+            artist: String::new(),
+            album: String::new(),
+            album_version: None,
+            duration_secs: 0,
+            artwork_url: None,
+            hires: false,
+            bit_depth: None,
+            sample_rate: None,
+            is_local,
+            album_id: None,
+            artist_id: None,
+            streamable: true,
+            source: source.map(str::to_string),
+            parental_warning: false,
+            source_item_id_hint: None,
+            context_kind: None,
+            context_id: None,
+        }
+    }
+
+    #[test]
+    fn qconnect_admits_catalog_and_offline_catalog_rows() {
+        for source in ["qobuz", "qobuz_download", "qobuz_purchase", "offline"] {
+            assert!(is_qconnect_queue_track(&track(Some(source), true)), "{source}");
+        }
+        assert!(is_qconnect_queue_track(&track(None, false)));
+    }
+
+    #[test]
+    fn qconnect_rejects_every_server_and_file_source() {
+        for source in ["local", "plex", "jellyfin", "subsonic", "navidrome"] {
+            assert!(!is_qconnect_queue_track(&track(Some(source), true)), "{source}");
+        }
+        assert!(!is_qconnect_queue_track(&track(None, true)));
+    }
+
+    #[test]
+    fn qconnect_rejects_zero_even_when_stamped_qobuz() {
+        let mut row = track(Some("qobuz"), false);
+        row.id = 0;
+        assert!(!is_qconnect_queue_track(&row));
     }
 }

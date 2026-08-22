@@ -438,16 +438,29 @@ impl QconnectEventSink for QtQconnectEventSink {
                 message_type,
                 payload,
             } => {
-                log::info!(
-                    "[QConnect] Session management: {} payload={}",
-                    message_type,
-                    serde_json::to_string(payload).unwrap_or_else(|_| "?".to_string())
-                );
+                let payload_json =
+                    serde_json::to_string(payload).unwrap_or_else(|_| "?".to_string());
+                // The server echoes renderer position/state every two seconds.
+                // Keep topology/session changes visible at info, but do not turn
+                // ordinary playback into an unbounded terminal transcript.
+                if message_type == "MESSAGE_TYPE_SRVR_CTRL_RENDERER_STATE_UPDATED" {
+                    log::debug!(
+                        "[QConnect] Session management: {} payload={}",
+                        message_type,
+                        payload_json
+                    );
+                } else {
+                    log::info!(
+                        "[QConnect] Session management: {} payload={}",
+                        message_type,
+                        payload_json
+                    );
+                }
                 self.apply_session_management_event(message_type, payload)
                     .await;
             }
             QconnectAppEvent::RendererUpdated(renderer_state) => {
-                log::info!(
+                log::debug!(
                     "[QConnect] Renderer updated: playing_state={:?} volume={:?} position={:?}",
                     renderer_state.playing_state,
                     renderer_state.volume,
@@ -483,7 +496,13 @@ impl QconnectEventSink for QtQconnectEventSink {
                 self.refresh_local_ui().await;
             }
             QconnectAppEvent::RendererCommandApplied { command, state } => {
-                log::info!("[QConnect] Renderer command applied: {:?}", command);
+                // SetState is the routine playback/position command and may be
+                // republished. Lifecycle commands remain visible at info.
+                if matches!(command, RendererCommand::SetState { .. }) {
+                    log::debug!("[QConnect] Renderer command applied: {:?}", command);
+                } else {
+                    log::info!("[QConnect] Renderer command applied: {:?}", command);
+                }
                 let became_active =
                     matches!(command, RendererCommand::SetActive { active: true });
                 if let Err(err) = qconnect_app::renderer::apply_renderer_command(
