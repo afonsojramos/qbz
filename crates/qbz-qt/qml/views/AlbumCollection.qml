@@ -16,14 +16,14 @@
 // a trap the Rust seeding avoids anyway, but there is no reason to reproduce
 // a blank page here.
 //
-// WINDOWING (flat grid only, opt-in via `flick`): only cards within ~one
-// viewport of the visible band mount a real AlbumCard; the rest keep their
-// footprint as bare Items, so the grid height — and therefore the scroll
-// geometry — never changes. The band is SAMPLED by a timer rather than bound
-// to `flick.contentY`: a direct binding re-evaluates every delegate on every
-// scroll frame, which is the O(n)-per-frame cost the .slint's own sampler
-// exists to avoid (see its "POST-LAYOUT SNAPSHOT SAMPLING" note). Grouped
-// sections are never windowed — same call the .slint makes (:265-277).
+// WINDOWING (flat grid/list, opt-in via `flick`): only rows within ~one
+// viewport of the visible band exist. The collection keeps the FULL footprint
+// as one cheap Item, so its height — and therefore the scroll geometry — never
+// changes, but there is no longer one Loader shell per off-screen result.
+// The band is sampled from scroll events rather than bound to `contentY`: a
+// direct binding re-evaluates every delegate on every frame, while a forever
+// 80ms Timer spends CPU at rest. Grouped sections remain eager — the same call
+// the .slint makes (:265-277).
 //
 // TAIL FADE (opt-in via armTailFade(), see the block below): the arrival half
 // of the Load-more round. OFF unless a host arms it, so the two hosts that do
@@ -70,31 +70,53 @@ Column {
     // --- Windowing band (row indices), sampled ---------------------------
     property int bandFirst: 0
     property int bandLast: 9999
-    readonly property bool windowed: flick !== null
+    readonly property bool windowed: flick !== null && !root.isGrouped
 
     function sampleBand() {
-        if (!root.windowed || flatGrid.columns <= 0)
+        if (!root.windowed)
             return
-        var pitch = root.cardHeight + root.cardGap
-        var top = root.flick.contentY - root.contentOffset
+        var listMode = root.viewMode === "list"
+        var pitch = listMode ? 64 + root.listRowGap
+                             : root.cardHeight + root.cardGap
+        // The list rows begin after their 32px column header. The grid starts
+        // at the collection origin.
+        var rowsTop = root.contentOffset + (listMode ? 32 : 0)
+        var top = root.flick.contentY - rowsTop
         var h = root.flick.height
         // One viewport of prefetch on each side.
         root.bandFirst = Math.max(0, Math.floor((top - h) / pitch))
         root.bandLast = Math.max(0, Math.ceil((top + 2 * h) / pitch))
     }
+
+    function scheduleBandSample() {
+        if (root.windowed && root.visible && !bandSampler.running)
+            bandSampler.start()
+    }
+
     Timer {
-        interval: 80
-        repeat: true
-        running: root.windowed && root.visible
+        id: bandSampler
+        interval: 40
+        repeat: false
         onTriggered: {
             root.sampleBand()
             root.reportArtWindow()
         }
     }
+
+    Connections {
+        target: root.flick
+        ignoreUnknownSignals: true
+        function onContentYChanged() { root.scheduleBandSample() }
+        function onHeightChanged() { root.scheduleBandSample() }
+    }
+
     Component.onCompleted: {
         root.sampleBand()
         root.reportArtWindow()
     }
+    onWidthChanged: root.scheduleBandSample()
+    onViewModeChanged: root.scheduleBandSample()
+    onVisibleChanged: root.scheduleBandSample()
 
     // --- Windowed artwork -------------------------------------------------
     //
@@ -116,8 +138,8 @@ Column {
     // local tabs that host this collection are served by the same call.
     property var artMap: ({})
     /// Urls already handed to the bridge. A NON-notifying holder on purpose:
-    /// the sampler runs every 80 ms, and without this each unresolved cover
-    /// would be re-dispatched twelve times a second until it landed.
+    /// several scroll samples may cover the same window before a download
+    /// lands, and none should dispatch the same unresolved cover twice.
     readonly property var _artAsked: ({ seen: ({}) })
 
     function artOf(m) {
@@ -130,11 +152,15 @@ Column {
     }
 
     function reportArtWindow() {
-        if (!root.windowed || flatGrid.columns <= 0)
+        if (!root.windowed)
             return
-        var cols = flatGrid.columns
+        var listMode = root.viewMode === "list"
+        var cols = listMode ? 1 : flatGrid.columns
+        if (cols <= 0)
+            return
         var lo = Math.max(0, root.bandFirst * cols)
-        var hi = Math.min(root.albums.length - 1, (root.bandLast + 1) * cols - 1)
+        var hi = Math.min(root.albums.length - 1,
+                          (root.bandLast + 1) * cols - 1)
         var pending = []
         var asked = root._artAsked.seen
         for (var i = lo; i <= hi; i++) {
@@ -270,9 +296,10 @@ Column {
 
     onAlbumsChanged: {
         root._maybeStartTailFade()
-        // A new page appended -> new covers to ask for. ONE handler per
-        // signal: declaring a second `onAlbumsChanged` is a hard qmlcachegen
-        // error ("Property value set multiple times"), not a silent last-wins.
+        // A new page appended -> recompute the exact mounted slice before
+        // asking for its covers. ONE handler per signal: declaring a second
+        // `onAlbumsChanged` is a hard qmlcachegen error.
+        root.sampleBand()
         root.reportArtWindow()
     }
     onGroupedChanged: root._maybeStartTailFade()
@@ -411,22 +438,36 @@ Column {
         }
     }
 
-    // --- Flat list --------------------------------------------------------
-    Column {
+    // --- Flat list (windowed) ---------------------------------------------
+    Item {
+        id: flatList
         visible: !root.isGrouped && root.viewMode === "list" && root.albums.length > 0
         width: parent.width
-        spacing: root.listRowGap
+        readonly property int rowPitch: 64 + root.listRowGap
+        readonly property int mountedFrom: root.windowed
+            ? Math.min(root.albums.length, Math.max(0, root.bandFirst)) : 0
+        readonly property int mountedTo: root.windowed
+            ? Math.min(root.albums.length, Math.max(mountedFrom, root.bandLast + 1))
+            : root.albums.length
+        readonly property int mountedCount: Math.max(0, mountedTo - mountedFrom)
+        height: 32 + (root.albums.length > 0
+            ? root.albums.length * 64 + (root.albums.length - 1) * root.listRowGap
+            : 0)
 
-        AlbumListHeader { }
+        AlbumListHeader { id: flatListHeader }
         Repeater {
-            model: (!root.isGrouped && root.viewMode === "list") ? root.albums : []
+            model: flatList.visible ? flatList.mountedCount : 0
             delegate: AlbumListRow {
-                required property var modelData
                 required property int index
-                item: modelData
-                artSource: root.artOf(modelData)
-                rowIndex: index
-                opacity: root.tailOpacity(modelData ? modelData.id : "")
+                readonly property int globalIndex: flatList.mountedFrom + index
+                readonly property var cardData: root.albums[globalIndex] || ({})
+                x: 0
+                y: flatListHeader.height + globalIndex * flatList.rowPitch
+                width: flatList.width
+                item: cardData
+                artSource: root.artOf(cardData)
+                rowIndex: globalIndex
+                opacity: root.tailOpacity(cardData.id || "")
             }
         }
     }
@@ -439,18 +480,28 @@ Column {
         readonly property int columns: Math.max(
             1, Math.floor((width + root.cardGap) / (root.cardWidth + root.cardGap)))
         readonly property int rows: Math.ceil(root.albums.length / flatGrid.columns)
+        readonly property int mountedFrom: root.windowed
+            ? Math.min(root.albums.length,
+                       Math.max(0, root.bandFirst * flatGrid.columns)) : 0
+        readonly property int mountedTo: root.windowed
+            ? Math.min(root.albums.length,
+                       Math.max(mountedFrom,
+                                (root.bandLast + 1) * flatGrid.columns))
+            : root.albums.length
+        readonly property int mountedCount: Math.max(0, mountedTo - mountedFrom)
         height: flatGrid.rows > 0
             ? flatGrid.rows * root.cardHeight + (flatGrid.rows - 1) * root.cardGap
             : 0
 
         Repeater {
-            model: (!root.isGrouped && root.viewMode !== "list") ? root.albums : []
+            model: flatGrid.visible ? flatGrid.mountedCount : 0
             delegate: Item {
                 id: cell
-                required property var modelData
                 required property int index
-                readonly property int rowIndex: Math.floor(cell.index / flatGrid.columns)
-                x: (cell.index % flatGrid.columns) * (root.cardWidth + root.cardGap)
+                readonly property int globalIndex: flatGrid.mountedFrom + index
+                readonly property var cardData: root.albums[globalIndex] || ({})
+                readonly property int rowIndex: Math.floor(globalIndex / flatGrid.columns)
+                x: (globalIndex % flatGrid.columns) * (root.cardWidth + root.cardGap)
                 y: cell.rowIndex * (root.cardHeight + root.cardGap)
                 width: root.cardWidth
                 height: root.cardHeight
@@ -461,34 +512,40 @@ Column {
                 // at the wrong one. Everything the arm saw — and everything,
                 // on every host that never arms — reads 1.0 and never even
                 // depends on `_tailReveal`.
-                opacity: root.tailOpacity(cell.modelData ? cell.modelData.id : "")
+                opacity: root.tailOpacity(cell.cardData.id || "")
 
-                // Component declared in the DELEGATE scope so `modelData`
-                // resolves (the PinnedRail dispatch pattern).
-                Component {
-                    id: cardComp
-                    AlbumCard {
-                        albumId: cell.modelData.id
-                        title: cell.modelData.title
-                        artist: cell.modelData.artist
-                        artistId: cell.modelData.artistId
-                        genre: cell.modelData.genre
-                        year: cell.modelData.year
-                        qualityTier: cell.modelData.qualityTier
-                        ribbon: cell.modelData.ribbon || ""
-                        ribbonKind: cell.modelData.ribbonKind || ""
-                        artSource: root.artOf(cell.modelData)
-                        isPinned: cell.modelData.isPinned === true
-                        artworkUrl: cell.modelData.artUrl || ""
-                        plays: root.showPlays ? (cell.modelData.plays || 0) : 0
-                        isFavorite: cell.modelData.isFavorite === true
-                    }
+                // Numeric slice windowing reuses this viewport slot for a new
+                // global index. AlbumCard's optimistic heart/pin assignments
+                // intentionally break their host bindings; explicitly restore
+                // those bindings when the slot changes identity so state from
+                // the old album can never leak into the new one.
+                onCardDataChanged: {
+                    if (!mountedCard)
+                        return
+                    mountedCard.isPinned = Qt.binding(function () {
+                        return cell.cardData.isPinned === true
+                    })
+                    mountedCard.isFavorite = Qt.binding(function () {
+                        return cell.cardData.isFavorite === true
+                    })
                 }
-                Loader {
-                    anchors.fill: parent
-                    active: !root.windowed
-                        || (cell.rowIndex >= root.bandFirst && cell.rowIndex <= root.bandLast)
-                    sourceComponent: cardComp
+
+                AlbumCard {
+                    id: mountedCard
+                    albumId: cell.cardData.id
+                    title: cell.cardData.title
+                    artist: cell.cardData.artist
+                    artistId: cell.cardData.artistId
+                    genre: cell.cardData.genre
+                    year: cell.cardData.year
+                    qualityTier: cell.cardData.qualityTier
+                    ribbon: cell.cardData.ribbon || ""
+                    ribbonKind: cell.cardData.ribbonKind || ""
+                    artSource: root.artOf(cell.cardData)
+                    isPinned: cell.cardData.isPinned === true
+                    artworkUrl: cell.cardData.artUrl || ""
+                    plays: root.showPlays ? (cell.cardData.plays || 0) : 0
+                    isFavorite: cell.cardData.isFavorite === true
                 }
             }
         }

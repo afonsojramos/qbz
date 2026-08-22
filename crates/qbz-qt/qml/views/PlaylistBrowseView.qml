@@ -282,7 +282,7 @@ Rectangle {
                         font.pixelSize: 14
                     }
 
-                    // --- Grid ----------------------------------------------
+                    // --- Virtualized collection ----------------------------
                     Item {
                         id: plGrid
                         // --- Windowing + windowed artwork -----------------
@@ -293,26 +293,36 @@ Rectangle {
                         // solved this for the album pages and this one never
                         // got it.
                         //
-                        // The band is SAMPLED on a timer rather than bound to
-                        // `flick.contentY`: a direct binding re-evaluates every
-                        // delegate on every scroll frame, which is the
-                        // O(n)-per-frame cost the sampler exists to avoid (same
-                        // reasoning, same 80 ms, as AlbumCollection).
+                        // The band is sampled through a one-shot timer fed by
+                        // scroll events rather than bound to `contentY`: this
+                        // avoids O(n) work per frame and wakes nothing at rest.
                         //
-                        // Cards outside the band keep their FOOTPRINT as bare
-                        // Items, so the grid height — and with it the scroll
-                        // geometry and the infinite-scroll trigger above —
-                        // never changes.
+                        // The FULL footprint stays on this one Item, while the
+                        // Repeater model is only the sampled slice. This avoids
+                        // both the old card cost and one Loader shell per
+                        // off-screen result. The list arm uses the same band.
                         property int bandFirst: 0
                         property int bandLast: 9999
                         function sampleBand() {
-                            if (plGrid.columns <= 0)
+                            if (plGrid.columns <= 0 || !plGrid.visible)
                                 return
-                            var pitch = plGrid.cardH + plGrid.gap
+                            var listMode = root.viewMode === "list"
+                            var pitch = listMode ? plGrid.listH + plGrid.listGap
+                                                 : plGrid.cardH + plGrid.gap
                             var top = flick.contentY - plGrid.y
                             var h = flick.height
                             plGrid.bandFirst = Math.max(0, Math.floor((top - h) / pitch))
                             plGrid.bandLast = Math.max(0, Math.ceil((top + 2 * h) / pitch))
+                        }
+
+                        function scheduleBandSample() {
+                            if (plGrid.visible && !plBandSampler.running)
+                                plBandSampler.start()
+                        }
+
+                        function refreshBand() {
+                            plGrid.sampleBand()
+                            plGrid.reportArtWindow()
                         }
 
                         // Covers, one key at a time and only near the viewport
@@ -332,11 +342,12 @@ Rectangle {
                             return m.artPath || ""
                         }
                         function reportArtWindow() {
-                            if (plGrid.columns <= 0)
+                            if (plGrid.columns <= 0 || !plGrid.visible)
                                 return
-                            var lo = Math.max(0, plGrid.bandFirst * plGrid.columns)
+                            var cols = root.viewMode === "list" ? 1 : plGrid.columns
+                            var lo = Math.max(0, plGrid.bandFirst * cols)
                             var hi = Math.min(root.items.length - 1,
-                                              (plGrid.bandLast + 1) * plGrid.columns - 1)
+                                              (plGrid.bandLast + 1) * cols - 1)
                             var pending = []
                             var asked = plGrid._artAsked.seen
                             for (var i = lo; i <= hi; i++) {
@@ -354,17 +365,23 @@ Rectangle {
                                 QbzShell.sidebarArtworkWindow(JSON.stringify(pending))
                         }
                         Timer {
-                            interval: 80
-                            repeat: true
-                            running: plGrid.visible
-                            onTriggered: {
-                                plGrid.sampleBand()
-                                plGrid.reportArtWindow()
-                            }
+                            id: plBandSampler
+                            interval: 40
+                            repeat: false
+                            onTriggered: plGrid.refreshBand()
+                        }
+                        Connections {
+                            target: flick
+                            function onContentYChanged() { plGrid.scheduleBandSample() }
+                            function onHeightChanged() { plGrid.scheduleBandSample() }
+                        }
+                        Connections {
+                            target: root
+                            function onItemsChanged() { plGrid.refreshBand() }
+                            function onViewModeChanged() { plGrid.refreshBand() }
                         }
                         Component.onCompleted: {
-                            plGrid.sampleBand()
-                            plGrid.reportArtWindow()
+                            plGrid.refreshBand()
                         }
                         Connections {
                             target: QbzLibrary
@@ -378,40 +395,58 @@ Rectangle {
                             }
                         }
 
-                        visible: !QbzHome.playlistBrowseLoading && root.viewMode !== "list"
+                        visible: !QbzHome.playlistBrowseLoading
                         width: parent.width - 64
                         readonly property int cardW: 200
                         readonly property int cardH: 246
                         readonly property int gap: 24
+                        readonly property int listH: 60
+                        readonly property int listGap: 2
                         readonly property int columns: Math.max(
                             1, Math.floor((width + gap) / (cardW + gap)))
                         readonly property int rows: Math.ceil(root.items.length / columns)
-                        height: rows > 0 ? rows * cardH + (rows - 1) * gap : 0
+                        readonly property int gridFrom: Math.min(root.items.length,
+                            Math.max(0, bandFirst * columns))
+                        readonly property int gridTo: Math.min(root.items.length,
+                            Math.max(gridFrom, (bandLast + 1) * columns))
+                        readonly property int listFrom: Math.min(root.items.length,
+                            Math.max(0, bandFirst))
+                        readonly property int listTo: Math.min(root.items.length,
+                            Math.max(listFrom, bandLast + 1))
+                        height: root.viewMode === "list"
+                            ? (root.items.length > 0
+                               ? root.items.length * listH
+                                 + (root.items.length - 1) * listGap : 0)
+                            : (rows > 0 ? rows * cardH + (rows - 1) * gap : 0)
 
                         Repeater {
-                            model: (root.viewMode !== "list") ? root.items : []
+                            model: root.viewMode !== "list"
+                                ? Math.max(0, plGrid.gridTo - plGrid.gridFrom) : 0
                             delegate: Item {
                                 id: plCell
-                                required property var modelData
                                 required property int index
-                                x: (plCell.index % plGrid.columns) * (plGrid.cardW + plGrid.gap)
-                                y: Math.floor(plCell.index / plGrid.columns) * (plGrid.cardH + plGrid.gap)
+                                readonly property int globalIndex: plGrid.gridFrom + index
+                                readonly property var cardData: root.items[globalIndex] || ({})
+                                x: (globalIndex % plGrid.columns) * (plGrid.cardW + plGrid.gap)
+                                y: Math.floor(globalIndex / plGrid.columns) * (plGrid.cardH + plGrid.gap)
                                 width: plGrid.cardW
                                 height: plGrid.cardH
-                                readonly property int rowIndex:
-                                    Math.floor(plCell.index / plGrid.columns)
 
-                                // Component in the DELEGATE scope so
-                                // `modelData` resolves (the AlbumCollection
-                                // pattern).
-                                Component {
-                                    id: plCardComp
+                                onCardDataChanged: {
+                                    if (!browseCard)
+                                        return
+                                    browseCard.isPinned = Qt.binding(function () {
+                                        return plCell.cardData.isPinned === true
+                                    })
+                                }
+
                                 PlaylistCard {
+                                    id: browseCard
                                     // `body-opens: true` in the .slint — the
                                     // card's body click opens the playlist and
                                     // the overlay button plays it.
-                                    item: plCell.modelData
-                                    artSource: plGrid.artOf(plCell.modelData)
+                                    item: plCell.cardData
+                                    artSource: plGrid.artOf(plCell.cardData)
                                     // The row carries the pin state
                                     // (home_qt `map_playlist`, which this page
                                     // reuses); the card defaults to false, so
@@ -420,31 +455,24 @@ Rectangle {
                                     // and the first click un-pinned it.
                                     // `artworkUrl` needs no hand-over: the
                                     // card defaults it to `item.artUrl`.
-                                    isPinned: plCell.modelData.isPinned === true
-                                }
-                                }
-                                Loader {
-                                    anchors.fill: parent
-                                    active: plCell.rowIndex >= plGrid.bandFirst
-                                            && plCell.rowIndex <= plGrid.bandLast
-                                    sourceComponent: plCardComp
+                                    isPinned: plCell.cardData.isPinned === true
                                 }
                             }
                         }
-                    }
 
-                    // --- List ----------------------------------------------
-                    Column {
-                        visible: !QbzHome.playlistBrowseLoading && root.viewMode === "list"
-                        width: parent.width - 64
-                        spacing: 2
                         Repeater {
-                            model: (root.viewMode === "list") ? root.items : []
+                            model: root.viewMode === "list"
+                                ? Math.max(0, plGrid.listTo - plGrid.listFrom) : 0
                             delegate: PlaylistListRow {
-                                required property var modelData
                                 required property int index
-                                item: modelData
-                                rowIndex: index
+                                readonly property int globalIndex: plGrid.listFrom + index
+                                readonly property var rowData: root.items[globalIndex] || ({})
+                                x: 0
+                                y: globalIndex * (plGrid.listH + plGrid.listGap)
+                                width: plGrid.width
+                                item: rowData
+                                artSource: plGrid.artOf(rowData)
+                                rowIndex: globalIndex
                             }
                         }
                     }

@@ -2559,13 +2559,15 @@ Rectangle {
                 Item { visible: topTracks.length > 0; width: 1; height: 10 }
 
                 Repeater {
-                    model: topTracks.length
+                    // Do not build the unrevealed tail. Numeric growth keeps
+                    // the preview delegates and adds only the requested rows.
+                    model: root.topTracksExpanded ? topTracks.length
+                        : Math.min(topTracks.length, root.preview)
                     delegate: PopularTrackRow {
                         // Smooth reveal (owner, 2026-08-02). This expander is
-                        // CLIENT-SIDE: the model is a COUNT, so every row is
-                        // already instantiated and "Load more" only flipped
-                        // `visible` — twenty rows arriving in one frame, which
-                        // is the "carga de golpe" the owner reported.
+                        // CLIENT-SIDE: numeric model growth now creates only
+                        // the revealed tail. The former full count built every
+                        // row up front and only flipped `visible`.
                         //
                         // OPACITY ONLY, deliberately: the row is 50 tall with
                         // a 36px cover and text anchored to its verticalCenter
@@ -2576,16 +2578,14 @@ Rectangle {
                         // dissolves into it. Same 220ms / OutCubic the
                         // appended release cards use.
                         //
-                        // The gate is this explicit `revealed`, not the item's
-                        // own `visible`: Item.visible is EFFECTIVE visibility,
-                        // so binding opacity to it would re-fade every row
-                        // whenever the whole catalog Column is shown again
-                        // (tab switch, artistLoading clearing).
-                        readonly property bool revealed: root.topTracksExpanded || index < root.preview
-                        visible: revealed
-                        height: revealed ? 50 : 0
+                        // The gate is this explicit local `revealed`, not the
+                        // item's effective visibility, so showing the catalog
+                        // tab again does not re-fade surviving delegates.
+                        property bool revealed: false
+                        height: 50
                         opacity: revealed ? 1.0 : 0.0
                         Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                        Component.onCompleted: revealed = true
                         row: topTracks[index]
                         rowIndex: index
                         showAlbum: true
@@ -2647,12 +2647,16 @@ Rectangle {
 
                 // --- Release sections ------------------------------------
                 Repeater {
-                    model: releaseSections
+                    // `visible: false` does not prevent delegate construction.
+                    // Feed this arm only regular buckets so the collapsed
+                    // Other bucket is not built once here and again below.
+                    model: releaseSections.filter(function (s) {
+                        return s.releaseType !== "other"
+                    })
                     delegate: Column {
                         required property var modelData
                         width: parent ? parent.width : 0
                         spacing: 0
-                        visible: modelData.releaseType !== "other"
                         Item { width: 1; height: 32 }
                         ReleaseSection { section: modelData; anchorId: modelData.releaseType }
                     }
@@ -2673,16 +2677,17 @@ Rectangle {
                     }
                     Item { width: 1; height: 10 }
                     Repeater {
-                        model: appearsOn.length
+                        model: root.appearsOnExpanded ? appearsOn.length
+                            : Math.min(appearsOn.length, root.preview)
                         delegate: PopularTrackRow {
                             // Same client-side reveal as Popular Tracks above
                             // — same component, same 50px pitch, same reason
                             // for fading opacity and letting height snap.
-                            readonly property bool revealed: root.appearsOnExpanded || index < root.preview
-                            visible: revealed
-                            height: revealed ? 50 : 0
+                            property bool revealed: false
+                            height: 50
                             opacity: revealed ? 1.0 : 0.0
                             Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                            Component.onCompleted: revealed = true
                             row: appearsOn[index]
                             rowIndex: index
                             showAlbum: false
@@ -2727,12 +2732,13 @@ Rectangle {
 
                 // --- Other (collapsed) ------------------------------------
                 Repeater {
-                    model: releaseSections
+                    model: releaseSections.filter(function (s) {
+                        return s.releaseType === "other"
+                    })
                     delegate: Column {
                         required property var modelData
                         width: parent ? parent.width : 0
                         spacing: 0
-                        visible: modelData.releaseType === "other"
                         Item { width: 1; height: 32 }
                         Row {
                             width: parent.width
@@ -2768,7 +2774,9 @@ Rectangle {
                             columnSpacing: 24
                             rowSpacing: 24
                             Repeater {
-                                model: modelData.cards
+                                // A hidden Grid still constructs its Repeater.
+                                // The collapsed bucket must cost zero cards.
+                                model: root.otherExpanded ? modelData.cards : []
                                 delegate: AlbumCard {
                                     albumId: modelData.id
                                     title: modelData.title

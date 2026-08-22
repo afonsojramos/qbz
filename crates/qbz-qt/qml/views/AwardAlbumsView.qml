@@ -180,6 +180,7 @@ Rectangle {
             }
 
             AlbumCollection {
+                id: collection
                 visible: !root.loading && !root.loadError && root.albums.length > 0
                 width: parent.width
                 collectionKey: root.doc.id || ""
@@ -189,6 +190,8 @@ Rectangle {
                 cardWidth: 200
                 cardHeight: 266
                 cardGap: 24
+                flick: page
+                contentOffset: collection.y
             }
 
             // Tail spinner for the next page.

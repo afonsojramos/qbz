@@ -18,8 +18,9 @@
 //   primitives/SearchTrackHero.slint, NOT discover/TrackCard.slint —
 //   the POC variant is 200x246 (centered play, quality as text) to match
 //   the ArtistGridCard hero slot it shares the row with.
-// - The Slint's windowed grid virtualization is not replicated (page size
-//   is 20 — the whole set mounts).
+// - Per-type grids and the track tape are windowed against the outer page
+//   Flickable; their full footprint remains stable for scrolling, while only
+//   the viewport runway exists as QML delegates.
 //
 // LOADING (a deliberate ADDITION over the Slint's bare LoadingSpinner): the
 // view mounts QbzSkeleton placeholders in the shape of the tab that is
@@ -85,6 +86,30 @@ Rectangle {
     readonly property string query: doc.query || ""
     readonly property bool hasResults: albums.length + tracks.length + artists.length + playlists.length > 0
     readonly property int previewCap: 6
+
+    // The per-type result tabs live inside the page Flickable, so a GridView
+    // sized to its whole content is not virtualized: from that GridView's
+    // perspective every row is in its viewport. Sample one shared vertical
+    // band and feed only that slice to the manual grids/tape below. Event-
+    // driven and one-shot: no timer wakes while Search is idle.
+    property real bodyBandTop: 0
+    property real bodyBandBottom: 1000000
+    function sampleBodyBand() {
+        if (!bodyFlick || bodyFlick.height <= 0)
+            return
+        root.bodyBandTop = Math.max(0, bodyFlick.contentY - bodyFlick.height)
+        root.bodyBandBottom = bodyFlick.contentY + 2 * bodyFlick.height
+    }
+    function scheduleBodyBand() {
+        if (root.visible && !searchBandSampler.running)
+            searchBandSampler.start()
+    }
+    Timer {
+        id: searchBandSampler
+        interval: 40
+        repeat: false
+        onTriggered: root.sampleBodyBand()
+    }
 
     // ======================= skeleton plumbing ===========================
     // ONE 900ms Timer drives EVERY placeholder in this view (QbzSkeleton's
@@ -179,7 +204,10 @@ Rectangle {
     // stale threshold must never fade the first page of the next thing.
     onQueryChanged: root.clearFade()
     onFilterIndexChanged: root.clearFade()
-    onTabChanged: root.clearFade()
+    onTabChanged: {
+        root.clearFade()
+        root.scheduleBodyBand()
+    }
 
     function armLoadMore(t) {
         root.moreTab = t
@@ -239,6 +267,155 @@ Rectangle {
         // A cover whose download fails republishes the document with an
         // empty artPath — without this the tile would shimmer forever.
         settleMs: 6000
+    }
+
+    // A flat, fixed-pitch result grid whose footprint covers the full result
+    // set while only the sampled rows exist as QML objects. This is the same
+    // ownership boundary as Home's vertical ListView, adapted to the composite
+    // Search page where the outer Flickable owns scrolling.
+    component SearchResultGrid: Item {
+        id: resultGrid
+        property var rows: []
+        property string kind: "album" // album | artist | playlist
+        property int tabId: 1
+        property int cellW: 224
+        property int cellH: 270
+        property int cardW: 200
+        property int cardH: 246
+        property real bandTop: 0
+        property real bandBottom: 1000000
+        property bool phase: false
+        property int fadeTab: -1
+        property int fadeFrom: -1
+
+        // The final card has no trailing gutter: six 200px cards on a 224px
+        // pitch consume 6*200 + 5*24, not 6*224.
+        readonly property int columns: Math.max(1,
+            Math.floor((width + cellW - cardW) / cellW))
+        readonly property int rowCount: Math.ceil(rows.length / columns)
+        readonly property int firstRow: Math.max(0,
+            Math.floor((bandTop - y) / cellH))
+        readonly property int lastRow: Math.max(firstRow,
+            Math.ceil((bandBottom - y) / cellH))
+        readonly property int mountedFrom: Math.min(rows.length, firstRow * columns)
+        readonly property int mountedTo: Math.min(rows.length,
+            Math.max(mountedFrom, (lastRow + 1) * columns))
+
+        height: rowCount > 0 ? rowCount * cellH - (cellH - cardH) : 0
+
+        Repeater {
+            model: resultGrid.visible
+                ? Math.max(0, resultGrid.mountedTo - resultGrid.mountedFrom) : 0
+            delegate: Item {
+                id: resultCell
+                required property int index
+                readonly property int globalIndex: resultGrid.mountedFrom + index
+                readonly property var cardData: resultGrid.rows[globalIndex] || ({})
+                readonly property bool fadeIn: resultGrid.fadeTab === resultGrid.tabId
+                    && resultGrid.fadeFrom >= 0 && globalIndex >= resultGrid.fadeFrom
+                x: (globalIndex % resultGrid.columns) * resultGrid.cellW
+                y: Math.floor(globalIndex / resultGrid.columns) * resultGrid.cellH
+                width: resultGrid.cardW
+                height: resultGrid.cardH
+                opacity: 0
+                Behavior on opacity {
+                    enabled: resultCell.fadeIn
+                    NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+                }
+                Component.onCompleted: opacity = 1
+
+                // The sampled slice reuses viewport slots as its first global
+                // index moves. Card actions intentionally break optimistic
+                // scalar bindings, so restore them at the identity edge.
+                function restoreMutableBindings() {
+                    if (!cardLoader.item)
+                        return
+                    cardLoader.item.isPinned = Qt.binding(function () {
+                        return resultCell.cardData.isPinned === true
+                    })
+                    if (resultGrid.kind === "album") {
+                        cardLoader.item.isFavorite = Qt.binding(function () {
+                            return resultCell.cardData.isFavorite === true
+                        })
+                    }
+                }
+                onCardDataChanged: resultCell.restoreMutableBindings()
+
+                Component {
+                    id: albumResult
+                    AlbumCard {
+                        albumId: resultCell.cardData.id
+                        title: resultCell.cardData.title
+                        artist: resultCell.cardData.artist
+                        artistId: resultCell.cardData.artistId
+                        genre: resultCell.cardData.genre
+                        year: resultCell.cardData.year
+                        qualityTier: resultCell.cardData.qualityTier
+                        artSource: resultCell.cardData.artPath || ""
+                        isFavorite: resultCell.cardData.isFavorite === true
+                        isPinned: resultCell.cardData.isPinned === true
+                        artworkUrl: resultCell.cardData.artUrl || ""
+                    }
+                }
+                Component {
+                    id: artistResult
+                    ArtistCard {
+                        item: resultCell.cardData
+                        artSource: resultCell.cardData.artPath || ""
+                        isPinned: resultCell.cardData.isPinned === true
+                        artworkUrl: resultCell.cardData.artUrl || ""
+                    }
+                }
+                Component {
+                    id: playlistResult
+                    PlaylistCard {
+                        item: resultCell.cardData
+                        artSource: resultCell.cardData.artPath || ""
+                        isPinned: resultCell.cardData.isPinned === true
+                    }
+                }
+                Loader {
+                    id: cardLoader
+                    anchors.fill: parent
+                    sourceComponent: resultGrid.kind === "artist" ? artistResult
+                        : resultGrid.kind === "playlist" ? playlistResult
+                        : albumResult
+                    onLoaded: resultCell.restoreMutableBindings()
+                }
+                CardArtSkeleton {
+                    visible: resultGrid.kind !== "artist"
+                    card: resultCell.cardData
+                    phase: resultGrid.phase
+                    cellIndex: resultCell.globalIndex
+                }
+            }
+        }
+    }
+
+    component SearchTrackResult: TrackRow {
+        id: searchTrackRow
+        property int resultIndex: 0
+        property bool fadeIn: false
+
+        number: resultIndex + 1
+        opacity: 0
+        Behavior on opacity {
+            enabled: searchTrackRow.fadeIn
+            NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+        }
+        Component.onCompleted: opacity = 1
+        menuShowFavorite: false
+        showArtwork: true
+        showAlbum: true
+        artistLink: true
+        onPlayRequested: QbzPlayer.playTrack(item.id)
+        onEnqueueRequested: function (m) { QbzPlayer.enqueueTrack(item.id, m) }
+        onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
+            "itemType": "track", "source": "qobuz",
+            "sourceItemId": item.id, "title": item.title || "",
+            "subtitle": item.artist || "", "artworkUrl": item.artUrl || "",
+            "year": null, "trackCount": null
+        }]))
     }
 
     // Track hero (SearchTrackHero: the 200x246 track card + the quality
@@ -517,6 +694,9 @@ Rectangle {
                 contentHeight: bodyCol.height + 32
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
+                onContentYChanged: root.scheduleBodyBand()
+                onHeightChanged: root.scheduleBodyBand()
+                Component.onCompleted: root.sampleBodyBand()
 
                 Column {
                     id: bodyCol
@@ -627,7 +807,7 @@ Rectangle {
                                 spacing: 32
                                 clip: true
                                 boundsBehavior: Flickable.StopAtBounds
-                                model: root.artistsCarousel
+                                model: root.tab === 0 ? root.artistsCarousel : []
                                 delegate: ArtistCard {
                                     item: modelData
                                     artSource: modelData.artPath || ""
@@ -656,7 +836,7 @@ Rectangle {
                             spacing: 32
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
-                            model: root.artists
+                            model: root.tab === 0 ? root.artists : []
                             delegate: ArtistCard {
                                 item: modelData
                                 artSource: modelData.artPath || ""
@@ -685,7 +865,7 @@ Rectangle {
                             spacing: 32
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
-                            model: root.albums
+                            model: root.tab === 0 ? root.albums : []
                             delegate: Item {
                                 required property var modelData
                                 required property int index
@@ -716,55 +896,19 @@ Rectangle {
                         }
                     }
                     // Albums tab: the full grid + Load more.
-                    GridView {
+                    SearchResultGrid {
                         visible: root.tab === 1
                         width: parent.width
-                        height: Math.max(0, Math.ceil(count / Math.max(1, Math.floor((width + 24) / 224))) * 270 - 24)
-                        cellWidth: 224
-                        cellHeight: 270
-                        clip: true
-                        boundsBehavior: Flickable.StopAtBounds
-                        interactive: false
-                        model: root.albums
-                        delegate: Item {
-                            id: albumCell
-                            required property var modelData
-                            required property int index
-                            width: 200
-                            height: 246
-                            // The appended tail dissolves in; every other
-                            // delegate is created at 1.0 with the Behavior
-                            // DISABLED, so the republishes that recreate this
-                            // grid (artwork, pins, tab switch) cost no fade at
-                            // all. `opacity` is a plain value, never a
-                            // binding, so the assignment below clobbers
-                            // nothing.
-                            readonly property bool fadeIn: root.fadeAt(1, albumCell.index)
-                            opacity: 0
-                            Behavior on opacity {
-                                enabled: albumCell.fadeIn
-                                NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
-                            }
-                            Component.onCompleted: opacity = 1
-                            AlbumCard {
-                                albumId: modelData.id
-                                title: modelData.title
-                                artist: modelData.artist
-                                artistId: modelData.artistId
-                                genre: modelData.genre
-                                year: modelData.year
-                                qualityTier: modelData.qualityTier
-                                artSource: modelData.artPath || ""
-                                isFavorite: modelData.isFavorite === true
-                                isPinned: modelData.isPinned === true
-                                artworkUrl: modelData.artUrl || ""
-                            }
-                            CardArtSkeleton {
-                                card: modelData
-                                phase: root.skelPhase
-                                cellIndex: index
-                            }
-                        }
+                        rows: root.albums
+                        kind: "album"
+                        tabId: 1
+                        cellW: 224
+                        cellH: 270
+                        bandTop: root.bodyBandTop
+                        bandBottom: root.bodyBandBottom
+                        phase: root.skelPhase
+                        fadeTab: root.fadeTab
+                        fadeFrom: root.fadeFrom
                     }
                     // The page that "Load more" asked for, in the shape it
                     // will arrive in: one row of 224x270 cells on one
@@ -799,76 +943,71 @@ Rectangle {
 
                     // ---- Tracks --------------------------------------------
                     Column {
-                        visible: (root.tab === 0 || root.tab === 2) && root.tracks.length > 0
+                        // The All tab is deliberately bounded to six rows. The
+                        // unbounded type tab has its own windowed tape below.
+                        visible: root.tab === 0 && root.tracks.length > 0
                         width: parent.width
                         spacing: 4
                         QbzSectionHeader {
                             title: QbzSession.tr("Tracks", QbzSession.trRev)
-                            showViewAll: root.tab === 0 && (root.doc.tracksTotal || 0) > root.previewCap
+                            showViewAll: (root.doc.tracksTotal || 0) > root.previewCap
                             viewAllAccent: true
                             showChevrons: false
                             onViewAllClicked: QbzSearch.searchTabChanged(2)
                         }
                         Repeater {
-                            model: root.tab === 2 ? root.tracks : root.tracks.slice(0, root.previewCap)
-                            delegate: TrackRow {
-                                id: trackCell
-                                // Tail fade, tab 2 only: this Repeater also
-                                // draws the All tab's 6-row preview, which has
-                                // no Load more of its own — `fadeAt` keys on
-                                // the tab that armed the threshold, so the
-                                // preview can never inherit it.
-                                readonly property bool fadeIn: root.fadeAt(2, index)
-                                opacity: 0
-                                Behavior on opacity {
-                                    enabled: trackCell.fadeIn
-                                    NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
-                                }
-                                Component.onCompleted: opacity = 1
+                            model: root.tab === 0
+                                ? root.tracks.slice(0, root.previewCap) : []
+                            delegate: SearchTrackResult {
+                                required property var modelData
+                                required property int index
                                 item: modelData
-                                number: index + 1
-                                menuShowFavorite: false
-                                // THE ROW'S OWN AFFORDANCES, which this call
-                                // site had never switched on. TrackRow draws
-                                // an artwork thumb, a clickable artist and a
-                                // clickable album column, and search left all
-                                // three off — so the only way from a result to
-                                // its album was the context menu's "Go to",
-                                // three clicks deep, on the surface where
-                                // people are most often hunting for exactly
-                                // that (owner smoke 2026-08-22).
-                                //
-                                // Nothing here is new machinery: every other
-                                // track list in the app already mounts the row
-                                // this way, and `search_qt::TrackRow` now
-                                // carries the album TITLE the column needs to
-                                // have something to draw.
-                                showArtwork: true
-                                showAlbum: true
-                                artistLink: true
-                                onPlayRequested: QbzPlayer.playTrack(item.id)
-                                onEnqueueRequested: function (m) { QbzPlayer.enqueueTrack(item.id, m) }
-                                // MyQBZ "Add to mixtape" — the HOST builds the
-                                // AddItem array (TrackRow does not know
-                                // itemType/source).
-                                //
-                                // SOURCE: the results page has ONE source.
-                                // `search_qt::TrackRow` carries no source
-                                // word because every row on THIS page is
-                                // mapped from a Qobuz `Track` (`map_track`):
-                                // the results page is still Qobuz-only. The
-                                // CORTINILLA is not — it has on-device
-                                // sections now — but its rows carry their own
-                                // `source` field and are a different document
-                                // entirely.
-                                // `item.id` is a Qobuz catalog id by
-                                // construction, not by assumption here.
-                                onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
-                                    "itemType": "track", "source": "qobuz",
-                                    "sourceItemId": item.id, "title": item.title || "",
-                                    "subtitle": item.artist || "", "artworkUrl": item.artUrl || "",
-                                    "year": null, "trackCount": null
-                                }]))
+                                resultIndex: index
+                            }
+                        }
+                    }
+
+                    Column {
+                        id: trackResults
+                        visible: root.tab === 2 && root.tracks.length > 0
+                        width: parent.width
+                        spacing: 4
+
+                        QbzSectionHeader {
+                            title: QbzSession.tr("Tracks", QbzSession.trRev)
+                            showViewAll: false
+                            showChevrons: false
+                        }
+
+                        Item {
+                            id: trackTape
+                            width: parent.width
+                            readonly property int pitch: 54
+                            readonly property real pageY: trackResults.y + y
+                            readonly property int firstRow: Math.max(0,
+                                Math.floor((root.bodyBandTop - pageY) / pitch))
+                            readonly property int lastRow: Math.max(firstRow,
+                                Math.ceil((root.bodyBandBottom - pageY) / pitch))
+                            readonly property int mountedFrom: Math.min(
+                                root.tracks.length, firstRow)
+                            readonly property int mountedTo: Math.min(
+                                root.tracks.length, Math.max(mountedFrom, lastRow + 1))
+                            height: root.tracks.length > 0
+                                ? root.tracks.length * 50 + (root.tracks.length - 1) * 4 : 0
+
+                            Repeater {
+                                model: root.tab === 2
+                                    ? Math.max(0, trackTape.mountedTo - trackTape.mountedFrom) : 0
+                                delegate: SearchTrackResult {
+                                    required property int index
+                                    readonly property int globalIndex: trackTape.mountedFrom + index
+                                    x: 0
+                                    y: globalIndex * trackTape.pitch
+                                    width: trackTape.width
+                                    item: root.tracks[globalIndex] || ({})
+                                    resultIndex: globalIndex
+                                    fadeIn: root.fadeAt(2, globalIndex)
+                                }
                             }
                         }
                     }
@@ -901,36 +1040,19 @@ Rectangle {
                     }
 
                     // ---- Artists grid (per-type tab) ------------------------
-                    GridView {
+                    SearchResultGrid {
                         visible: root.tab === 3
                         width: parent.width
-                        height: Math.max(0, Math.ceil(count / Math.max(1, Math.floor((width + 16) / 216))) * 262 - 16)
-                        cellWidth: 216
-                        cellHeight: 262
-                        clip: true
-                        boundsBehavior: Flickable.StopAtBounds
-                        interactive: false
-                        model: root.artists
-                        delegate: ArtistCard {
-                            id: artistCell
-                            // Tail fade — same rule as the album grid. This
-                            // delegate declares no REQUIRED properties, so
-                            // `index` stays the injected context property the
-                            // view provides (adding a required one here would
-                            // switch the whole delegate to required-property
-                            // mode and strand `modelData`).
-                            readonly property bool fadeIn: root.fadeAt(3, index)
-                            opacity: 0
-                            Behavior on opacity {
-                                enabled: artistCell.fadeIn
-                                NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
-                            }
-                            Component.onCompleted: opacity = 1
-                            item: modelData
-                            artSource: modelData.artPath || ""
-                            isPinned: modelData.isPinned === true
-                            artworkUrl: modelData.artUrl || ""
-                        }
+                        rows: root.artists
+                        kind: "artist"
+                        tabId: 3
+                        cellW: 216
+                        cellH: 262
+                        bandTop: root.bodyBandTop
+                        bandBottom: root.bodyBandBottom
+                        phase: root.skelPhase
+                        fadeTab: root.fadeTab
+                        fadeFrom: root.fadeFrom
                     }
                     // Artists: this grid's own 216x262 pitch, NOT the 224x270
                     // the album/playlist grids use — the cells here are the
@@ -974,7 +1096,7 @@ Rectangle {
                             spacing: 32
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
-                            model: root.playlists
+                            model: root.tab === 0 ? root.playlists : []
                             delegate: Item {
                                 required property var modelData
                                 required property int index
@@ -996,41 +1118,19 @@ Rectangle {
                             }
                         }
                     }
-                    GridView {
+                    SearchResultGrid {
                         visible: root.tab === 4
                         width: parent.width
-                        height: Math.max(0, Math.ceil(count / Math.max(1, Math.floor((width + 24) / 224))) * 270 - 24)
-                        cellWidth: 224
-                        cellHeight: 270
-                        clip: true
-                        boundsBehavior: Flickable.StopAtBounds
-                        interactive: false
-                        model: root.playlists
-                        delegate: Item {
-                            id: playlistCell
-                            required property var modelData
-                            required property int index
-                            width: 200
-                            height: 246
-                            // Tail fade — same rule as the album grid.
-                            readonly property bool fadeIn: root.fadeAt(4, playlistCell.index)
-                            opacity: 0
-                            Behavior on opacity {
-                                enabled: playlistCell.fadeIn
-                                NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
-                            }
-                            Component.onCompleted: opacity = 1
-                            PlaylistCard {
-                                item: modelData
-                                artSource: modelData.artPath || ""
-                                isPinned: modelData.isPinned === true
-                            }
-                            CardArtSkeleton {
-                                card: modelData
-                                phase: root.skelPhase
-                                cellIndex: index
-                            }
-                        }
+                        rows: root.playlists
+                        kind: "playlist"
+                        tabId: 4
+                        cellW: 224
+                        cellH: 270
+                        bandTop: root.bodyBandTop
+                        bandBottom: root.bodyBandBottom
+                        phase: root.skelPhase
+                        fadeTab: root.fadeTab
+                        fadeFrom: root.fadeFrom
                     }
                     // Playlists share the album grid's 224x270 pitch.
                     QbzLoadMore {

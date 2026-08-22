@@ -583,58 +583,45 @@ Rectangle {
                     Item { width: 1; height: 10 }
 
                     Repeater {
-                        model: root.topTracks
+                        // Numeric growth preserves the five existing delegates
+                        // and creates only the newly revealed rows. The old
+                        // full-array model built up to 50 TrackRows at first
+                        // paint and merely gave 45 of them height zero.
+                        model: Math.min(root.previewCount, root.topTracks.length)
                         delegate: TrackRow {
-                            required property var modelData
                             required property int index
                             width: parent ? parent.width : 0
-                            visible: index < root.previewCount
-                            height: visible ? 50 : 0
+                            height: 50
                             // SMOOTH REVEAL (owner, 2026-08-02: "que la
                             // aparicion de lo que se cargue, sea smooth").
-                            // This site is CLIENT-SIDE: every row of
-                            // topTracks is already instantiated by the
-                            // Repeater and only gated on `previewCount`
-                            // (LabelPageView.slint:426, which snaps), so the
-                            // fade goes on the rows themselves — there is no
-                            // appended tail and therefore no `fadeFrom`
-                            // threshold to keep.
-                            //
-                            // It is safe to fade UNCONDITIONALLY here, which
-                            // is NOT true of the network-backed Load-more
-                            // sites: a QML Behavior does not run while its
-                            // object is being created, so when the label
-                            // document is republished (the artwork pass —
-                            // see onDocChanged above) and the Repeater
-                            // rebuilds every delegate, each one takes its
-                            // opacity as a plain initial value and NOTHING
-                            // re-fades. The animation only ever runs when
-                            // `previewCount` moves on delegates that already
-                            // exist, i.e. exactly on the reveal.
+                            // This site is CLIENT-SIDE. Numeric model growth
+                            // adds only the requested rows; each new delegate
+                            // flips `revealed` after creation and dissolves in.
+                            // There is no appended network tail or threshold.
                             //
                             // 220ms / OutCubic = the content duration this
                             // round standardises on (controls/QbzLoadMore
                             // .qml uses 180ms for its skeleton).
-                            // The COLLAPSE back to 5 stays instant on
-                            // purpose: `visible` is left snapping, so the
-                            // rows leave the layout in the same frame. Held
-                            // open for a 220ms fade-out instead, the page
-                            // would show ~2200px of blank list and then jump
-                            // — worse than the snap, not better.
-                            opacity: index < root.previewCount ? 1.0 : 0.0
+                            // Collapse stays instant because numeric shrink
+                            // removes the tail in the same frame. Holding its
+                            // layout open for a fade-out would leave a large
+                            // blank band and then jump.
+                            property bool revealed: false
+                            opacity: revealed ? 1.0 : 0.0
                             Behavior on opacity {
                                 NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
                             }
-                            item: modelData
+                            Component.onCompleted: revealed = true
+                            item: root.topTracks[index] || ({})
                             number: index + 1
                             showArtwork: true
                             showAlbum: true
                             selectMode: root.multiSelect
                             checked: root.selected[item.id] === true
                             onToggleSelect: function (mods) { root.toggleSelected(item.id, mods) }
-                            onPlayRequested: QbzHome.labelPlayTrack(modelData.id)
+                            onPlayRequested: QbzHome.labelPlayTrack(item.id)
                             onEnqueueRequested: function (mode) {
-                                QbzHome.labelEnqueueTrack(modelData.id, mode)
+                                QbzHome.labelEnqueueTrack(item.id, mode)
                             }
                             // MyQBZ "Add to mixtape" — the HOST builds the
                             // AddItem array (TrackRow does not know
@@ -645,13 +632,13 @@ Rectangle {
                             // `top_tracks` mapped to track rows
                             // (label_qt.rs:280-287) — there is no local label
                             // library and no non-Qobuz row can reach this
-                            // Repeater, so `modelData.id` is a Qobuz catalog
+                            // Repeater, so `item.id` is a Qobuz catalog
                             // id by construction of the document.
                             onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
                                 "itemType": "track", "source": "qobuz",
-                                "sourceItemId": modelData.id,
-                                "title": modelData.title || "",
-                                "subtitle": modelData.artist || "",
+                                "sourceItemId": item.id,
+                                "title": item.title || "",
+                                "subtitle": item.artist || "",
                                 "artworkUrl": item.artUrl || ""  // label_qt serializes the shared
                                 // TrackRow, which carries artUrl; only artPath is
                                 // patched on top for this page's 36px art cell., "year": null, "trackCount": null
