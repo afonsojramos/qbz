@@ -14,8 +14,17 @@
 //! of zeros. Silence that pretends to be audio is the one outcome a
 //! bit-perfect player must never produce.
 
-#[cfg(target_os = "linux")]
+/// What a table of contents IS — shared by every platform's reader.
+pub mod toc;
+
+/// Reading a CD, whichever way this platform offers. Always present: the
+/// answer on a platform with no reader is "no drive", never a build failure.
 pub mod cdda;
+
+#[cfg(target_os = "linux")]
+mod cdda_linux;
+#[cfg(target_os = "macos")]
+mod cdda_macos;
 
 /// Disc IMAGES are portable — a .iso is a file, and reading one needs no
 /// device and no privileges. Only the live-drive path is Linux-gated.
@@ -27,8 +36,11 @@ pub mod discid;
 /// SACD disc images (Scarlet Book).
 pub mod sacd;
 
-#[cfg(target_os = "linux")]
-pub use cdda::{list_devices, read_audio, read_toc, CdError, Toc, TocTrack};
+/// What a disc is called, remembered after it has been ejected.
+pub mod store;
+
+pub use cdda::{drive_model, list_devices, read_audio, read_toc};
+pub use toc::{CdError, Toc, TocTrack};
 
 /// Bytes per CD-DA sector (a "frame" in the kernel's vocabulary): 588 stereo
 /// 16-bit sample pairs.
