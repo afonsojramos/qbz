@@ -75,6 +75,13 @@ Rectangle {
             QbzArtist.openArtist(root.ctxId)
         } else if (root.ctxKind === "playlist") {
             QbzBridge.openPlaylist(root.ctxId)
+        } else if (root.ctxKind === "ephemeral") {
+            // A disc or an ad-hoc folder. Its "album" is a synthetic grouping
+            // key (`cdda|||Fear Inoculum`) that no catalogue can open, so the
+            // origin is the SESSION and the place that shows it is the Open
+            // pane's own tab in Local Library.
+            QbzLocal.setPendingRoute('{"tab":"ephemeral"}')
+            QbzShell.navigateTo("locallibrary")
         } else if (root.ctxKind === "album") {
             QbzAlbum.openAlbum(root.ctxId)
         } else if (QbzPlayer.npAlbumId !== "") {

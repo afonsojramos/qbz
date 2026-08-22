@@ -29,15 +29,42 @@ pub fn open_image(path: &std::path::Path) -> Result<usize, String> {
         }
     })?;
 
-    // The album name comes off the disc; the file name is only a fallback for
-    // an image whose Master TOC carries no text.
-    let album = area.album.clone().unwrap_or_else(|| {
-        path.file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| qbz_i18n::t("SACD"))
+    // Which disc this is, so a correction can be written under a key that
+    // outlives the session — and found again if the .iso moves.
+    let fingerprint = area.fingerprint();
+    crate::disc_identity::set(crate::disc_identity::DiscIdentity {
+        fingerprint: fingerprint.clone(),
+        // A SACD has no MusicBrainz DiscID. It is not missing data — the
+        // format has no such thing.
+        disc_id: None,
+        kind: crate::disc_identity::DiscKind::Sacd,
     });
 
-    let artist = area.artist.clone().filter(|a| !a.is_empty());
+    // A SACD names itself, so unlike a CD there is nothing to look up and the
+    // remembered row is used ONLY where a human overrode the disc. "Names
+    // itself" and "names itself CORRECTLY" are different claims: the Master
+    // TOC of a European pressing can carry the wrong spelling, or nothing at
+    // all, and the second claim is the user's to make.
+    let remembered = qbz_disc::store::get(&fingerprint).filter(|m| m.edited);
+    if remembered.is_some() {
+        log::info!("[qbz-qt] sacd: corrected by hand — using the remembered naming");
+    }
+
+    // The album name comes off the disc; the file name is only a fallback for
+    // an image whose Master TOC carries no text.
+    let album = match remembered.as_ref().filter(|m| !m.album.is_empty()) {
+        Some(m) => m.album.clone(),
+        None => area.album.clone().unwrap_or_else(|| {
+            path.file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| qbz_i18n::t("SACD"))
+        }),
+    };
+
+    let artist = match remembered.as_ref().filter(|m| !m.album_artist.is_empty()) {
+        Some(m) => Some(m.album_artist.clone()),
+        None => area.artist.clone().filter(|a| !a.is_empty()),
+    };
 
     // Cover art. A disc image carries none, but the file it was downloaded as
     // almost always sits next to one — `cover.jpg` beside the `.iso`, or one
@@ -62,16 +89,28 @@ pub fn open_image(path: &std::path::Path) -> Result<usize, String> {
     let tracks: Vec<LocalTrack> = area
         .tracks
         .iter()
-        .map(|t| LocalTrack {
-            title: t
-                .title
-                .clone()
+        .enumerate()
+        .map(|(i, t)| LocalTrack {
+            // A corrected title wins over the disc's own; the disc's own wins
+            // over the number. Indexed defensively — a remembered row can be
+            // shorter than the disc if it was written for a different area.
+            title: remembered
+                .as_ref()
+                .and_then(|m| m.tracks.get(i))
+                .map(|r| r.title.clone())
                 .filter(|s| !s.is_empty())
+                .or_else(|| t.title.clone().filter(|s| !s.is_empty()))
                 .unwrap_or_else(|| qbz_i18n::t_args("Track {}", &[&t.number.to_string()])),
             album: album.clone(),
             album_group_title: album.clone(),
             album_group_key: format!("sacd|||{album}"),
-            artist: artist.clone().unwrap_or_default(),
+            artist: remembered
+                .as_ref()
+                .and_then(|m| m.tracks.get(i))
+                .map(|r| r.artist.clone())
+                .filter(|s| !s.is_empty())
+                .or_else(|| artist.clone())
+                .unwrap_or_default(),
             album_artist: artist.clone(),
             track_number: Some(t.number as u32),
             disc_number: Some(1),
@@ -100,6 +139,33 @@ pub fn open_image(path: &std::path::Path) -> Result<usize, String> {
         area.total_playtime_secs,
         album
     );
+
+    // Remember what the DISC said, so the metadata button has a baseline to
+    // show and the rip wizard has defaults. `put_auto` will not touch a row a
+    // human corrected — that rule lives in the store, not here.
+    qbz_disc::store::put_auto(
+        &fingerprint,
+        None,
+        &qbz_disc::store::DiscMemory {
+            album: album.clone(),
+            album_artist: artist.clone().unwrap_or_default(),
+            year: None,
+            tracks: tracks
+                .iter()
+                .enumerate()
+                .map(|(i, t)| qbz_disc::store::TrackMemory {
+                    number: t.track_number.unwrap_or(i as u32 + 1),
+                    title: t.title.clone(),
+                    artist: t.artist.clone(),
+                })
+                .collect(),
+            release_id: None,
+            release_group_id: None,
+            cover_path: artwork.clone(),
+            edited: false,
+        },
+    );
+
     local_ephemeral::adopt_tracks(&album, tracks);
     Ok(count)
 }

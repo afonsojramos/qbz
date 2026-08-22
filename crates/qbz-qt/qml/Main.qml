@@ -347,6 +347,10 @@ ApplicationWindow {
         // spinning, since its `loading` flag is only ever taken down by a
         // publish.
         QbzTrackReplace.boot()
+        // The disc-metadata modal. Same story: closed until the pane's search
+        // button opens it, and without this line the search would spin
+        // forever, because only a publish takes `searching` back down.
+        QbzDiscMeta.boot()
         // HiFi Wizard. Nothing to seed — the modal is closed until the
         // Settings > Audio row opens it — but without this line every publish
         // the wizard makes is dropped on the floor: the health verdict, the

@@ -21,7 +21,54 @@ Item {
     QbzTheme { id: theme }
 
     readonly property var eph: view ? view.ephemeral : null
-    readonly property var albums: eph && eph.albums ? eph.albums : []
+    readonly property var allAlbums: eph && eph.albums ? eph.albums : []
+
+    /// A CLIENT-side filter over the session that is already on screen.
+    ///
+    /// It exists because a box set is not a browsable list: the owner's Saint
+    /// Seiya Eternal CD-Box is 247 tracks, and reaching one of them meant
+    /// scrolling past the other 246. Nothing here asks Rust for anything — the
+    /// whole session is already in this document, so filtering it is a pass
+    /// over an array the pane is holding anyway.
+    property string query: ""
+    readonly property var albums: {
+        var q = root.query.trim().toLowerCase()
+        if (q === "")
+            return root.allAlbums
+        var out = []
+        for (var i = 0; i < root.allAlbums.length; i++) {
+            var a = root.allAlbums[i]
+            var src = a.tracks || []
+            // A block whose ALBUM matches keeps ALL of its tracks: searching
+            // for a record means wanting the record, not only the rows whose
+            // titles happen to repeat its name.
+            var albumHit = (a.title || "").toLowerCase().indexOf(q) !== -1
+                || (a.artist || "").toLowerCase().indexOf(q) !== -1
+            var hits = []
+            if (albumHit) {
+                hits = src
+            } else {
+                for (var j = 0; j < src.length; j++) {
+                    var t = src[j]
+                    if ((t.title || "").toLowerCase().indexOf(q) !== -1
+                        || (t.artist || "").toLowerCase().indexOf(q) !== -1)
+                        hits.push(t)
+                }
+            }
+            if (hits.length === 0)
+                continue
+            out.push({ "groupKey": a.groupKey, "title": a.title, "artist": a.artist,
+                       "meta": a.meta, "isCue": a.isCue, "artKey": a.artKey,
+                       "tracks": hits })
+        }
+        return out
+    }
+    readonly property int matchCount: {
+        var n = 0
+        for (var i = 0; i < root.albums.length; i++)
+            n += (root.albums[i].tracks || []).length
+        return n
+    }
 
     /// Art for the 224px header cell: the FIRST block's key. For the common
     /// one-album session that is simply "the cover"; for a multi-album folder
@@ -29,7 +76,7 @@ Item {
     /// below. Empty when the session has no art at all, which collapses the
     /// cell instead of reserving an empty square.
     readonly property string headerArtKey:
-        albums.length > 0 && albums[0].artKey ? albums[0].artKey : ""
+        allAlbums.length > 0 && allAlbums[0].artKey ? allAlbums[0].artKey : ""
 
     // Same rule as LocalFolderDetail: the host reports this pane's covers as
     // one window when the document changes, so re-opening the pane on an
@@ -129,6 +176,28 @@ Item {
                         font.weight: theme.weightBold
                         elide: Text.ElideRight
                     }
+                    // The artist, in LocalAlbumHeader's own shape (fontHeading,
+                    // bold, text-secondary) — for a one-album session this pane
+                    // IS an album page, and the two must not present the same
+                    // record differently.
+                    //
+                    // NOT clickable, unlike the album header's: that one routes
+                    // into the Artists tab, and the act on a CD the library has
+                    // never seen is a route to an empty page. A disc names its
+                    // artist; it does not promise the library knows them.
+                    //
+                    // Hidden rather than blank when there is none: an
+                    // unidentified disc has no artist to state, and an empty
+                    // bold line reads as a loading failure.
+                    Text {
+                        width: parent.width
+                        visible: text !== ""
+                        text: root.allAlbums.length > 0 ? (root.allAlbums[0].artist || "") : ""
+                        color: theme.textSecondary
+                        font.pixelSize: theme.fontHeading
+                        font.weight: theme.weightBold
+                        elide: Text.ElideRight
+                    }
                     // "10 tracks · 42 min". The PATH used to live here and no
                     // longer does: the medium's name is already the line above
                     // and the tab, and the duration is what a listener actually
@@ -145,45 +214,116 @@ Item {
                         font.pixelSize: theme.fontLegal
                         elide: Text.ElideRight
                     }
+                    // Every control here is a bare glyph, and three of them do
+                    // things that are not guessable from a circle with an icon
+                    // in it — so each one says what it does on hover.
                     Row {
                         spacing: 12
                         topPadding: 4
                         QbzCircleAction {
+                            id: playAllBtn
                             name: "play-fill"
                             primary: true
                             onClicked: QbzLocal.ephemeralPlayAll(false)
+                            HoverHandler {
+                                onHoveredChanged: tips.hover(hovered, playAllBtn, "eph-play",
+                                    QbzSession.tr("Play the whole disc from the first track",
+                                                  QbzSession.trRev))
+                            }
                         }
                         QbzCircleAction {
+                            id: shuffleBtn
                             name: "shuffle"
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: QbzLocal.ephemeralPlayAll(true)
+                            HoverHandler {
+                                onHoveredChanged: tips.hover(hovered, shuffleBtn, "eph-shuffle",
+                                    QbzSession.tr("Play it in a shuffled order", QbzSession.trRev))
+                            }
+                        }
+                        // Fix the names. Offered for both DISC media — a
+                        // CD-DA carries no titles at all, and a SACD's Master
+                        // TOC can carry the wrong ones ("names itself" and
+                        // "names itself correctly" are different claims) — and
+                        // for NEITHER on an opened folder, which has no disc
+                        // identity to write a correction under.
+                        //
+                        // `tags`, not a magnifier: the button edits this
+                        // record's metadata. The search is only how it gets
+                        // there, and a magnifier next to a search field that
+                        // filters tracks reads as the same control twice.
+                        QbzCircleAction {
+                            id: metaBtn
+                            visible: QbzLocal.localSessionIsDisc && !QbzLocal.localRipActive
+                            name: "tags"
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzDiscMeta.open()
+                            HoverHandler {
+                                onHoveredChanged: tips.hover(hovered, metaBtn, "eph-meta",
+                                    QbzSession.tr("Look this disc up and correct its details",
+                                                  QbzSession.trRev))
+                            }
                         }
                         // Rip — a PHYSICAL disc only. An image is already a
                         // file, so offering it there would be offering to copy
                         // something the user already has.
                         QbzCircleAction {
+                            id: ripBtn
                             visible: QbzLocal.localEphemeralIsCd && !QbzLocal.localRipActive
                             name: "disc-folder"
                             anchors.verticalCenter: parent.verticalCenter
-                            onClicked: QbzLocal.ripDisc()
+                            onClicked: QbzLocal.ripWizardOpen()
+                            HoverHandler {
+                                onHoveredChanged: tips.hover(hovered, ripBtn, "eph-rip",
+                                    QbzSession.tr("Copy this CD to your computer as FLAC files",
+                                                  QbzSession.trRev))
+                            }
                         }
                         // While it runs the button gives way to its progress —
                         // one control, one state, rather than a button that
                         // looks pressable during a job it cannot start twice.
-                        Row {
+                        //
+                        // And the indicator is a DOOR, not a label: it is the
+                        // only thing on screen while a rip runs, and the two
+                        // questions it cannot answer — which track, and is it
+                        // safe to eject — are the ones worth opening a panel
+                        // for.
+                        Rectangle {
+                            id: ripChip
                             visible: QbzLocal.localRipActive
-                            spacing: 8
+                            width: ripRow.width + 20
+                            height: 32
+                            radius: 6
                             anchors.verticalCenter: parent.verticalCenter
-                            QbzSpinner {
-                                anchors.verticalCenter: parent.verticalCenter
-                                size: 15
+                            color: ripArea.containsMouse
+                                ? theme.surfaceHover
+                                : (theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated)
+                            Row {
+                                id: ripRow
+                                anchors.centerIn: parent
+                                spacing: 8
+                                QbzSpinner {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    size: 15
+                                }
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: QbzSession.tr("Ripping", QbzSession.trRev)
+                                        + " " + QbzLocal.localRipProgress
+                                    color: theme.textSecondary
+                                    font.pixelSize: theme.fontLegal
+                                }
                             }
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: QbzSession.tr("Ripping", QbzSession.trRev)
-                                    + " " + QbzLocal.localRipProgress
-                                color: theme.textSecondary
-                                font.pixelSize: theme.fontLegal
+                            MouseArea {
+                                id: ripArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: QbzLocal.ripPanel(true)
+                                onContainsMouseChanged: tips.hover(containsMouse, ripChip,
+                                    "rip-open",
+                                    QbzSession.tr("See what the rip is doing, or stop it",
+                                                  QbzSession.trRev))
                             }
                         }
                     }
@@ -205,10 +345,58 @@ Item {
 
             // Empty (no playable tracks).
             Text {
-                visible: !QbzLocal.localEphemeralLoading && root.albums.length === 0
+                visible: !QbzLocal.localEphemeralLoading && root.allAlbums.length === 0
                 width: parent.width
                 topPadding: 24
                 text: QbzSession.tr("No playable tracks in this folder.", QbzSession.trRev)
+                color: theme.textMuted
+                font.pixelSize: theme.fontBody
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            // ---- Filter ----
+            //
+            // Above the blocks rather than in the header: it acts on the LIST,
+            // and a control that sits with the play buttons reads as another
+            // thing you do to the album. Only drawn once there is enough to be
+            // worth filtering — on a seven-track CD it would be furniture.
+            Item {
+                visible: !QbzLocal.localEphemeralLoading && root.eph
+                         && (root.eph.trackCount || 0) > 12
+                width: parent.width
+                height: visible ? 40 : 0
+
+                QbzLineEdit {
+                    id: filterBox
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 260
+                    sm: true
+                    searchMode: true
+                    placeholder: QbzSession.tr("Filter tracks", QbzSession.trRev)
+                    text: root.query
+                    onEdited: function (v) { root.query = v }
+                }
+                Text {
+                    anchors.right: filterBox.left
+                    anchors.rightMargin: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: root.query.trim() !== ""
+                    text: root.matchCount + " / " + (root.eph ? (root.eph.trackCount || 0) : 0)
+                    color: theme.textMuted
+                    font.pixelSize: theme.fontLegal
+                }
+            }
+
+            // Nothing matched. Distinct from "no playable tracks": the session
+            // is fine, the filter is what is empty, and saying so is what
+            // stops it reading as a folder that failed to scan.
+            Text {
+                visible: !QbzLocal.localEphemeralLoading
+                         && root.allAlbums.length > 0 && root.albums.length === 0
+                width: parent.width
+                topPadding: 24
+                text: QbzSession.tr("No track matches that.", QbzSession.trRev)
                 color: theme.textMuted
                 font.pixelSize: theme.fontBody
                 horizontalAlignment: Text.AlignHCenter
@@ -344,7 +532,13 @@ Item {
                                 showAlbum: false
                                 showFavorite: false
                                 showDownload: false
-                                showMenu: false
+                                // The menu is BACK, but only its queue block.
+                                // A disc track can be queued, played next and
+                                // played later; it cannot be favourited, put
+                                // in a playlist or cached, because none of
+                                // those references survive the eject.
+                                showMenu: true
+                                queueOnly: true
                                 draggable: false
                                 zebra: true
                                 onPlayRequested: QbzLocal.ephemeralPlayTrack(modelData.id)
@@ -365,12 +559,26 @@ Item {
     // OUTSIDE the Flickable on purpose: scrolling a long disc must not carry
     // the only way to close the session off the top of the screen.
     QbzCircleAction {
+        id: closeSession
         name: "x"
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.rightMargin: 32
         anchors.topMargin: 16
         onClicked: QbzLocal.ephemeralClear()
+        HoverHandler {
+            onHoveredChanged: tips.hover(hovered, closeSession, "eph-close",
+                QbzSession.tr("Close this disc and go back to your library",
+                              QbzSession.trRev))
+        }
+    }
+
+    // The pane's own tooltip overlay. It takes no pointer and owns no
+    // animator, so an idle one costs nothing (QbzTooltip's header).
+    QbzTooltip {
+        id: tips
+        anchors.fill: parent
+        z: 900
     }
 
     QbzScrollBar {

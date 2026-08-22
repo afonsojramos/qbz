@@ -61,6 +61,13 @@ pub struct DiscMeta {
     /// the drive disagree about the track count — the caller must index
     /// defensively rather than assume alignment.
     pub titles: Vec<String>,
+    /// PER-TRACK artists, parallel to `titles` and usually empty.
+    ///
+    /// A single `artist` is right for an album by one act and wrong for every
+    /// compilation, which is the case a human is most likely to be correcting
+    /// by hand. Empty means "they are all `artist`", which is what a plain
+    /// album lookup answers and what the remembered row round-trips.
+    pub track_artists: Vec<String>,
     /// MusicBrainz release id, which is also a key to its cover art.
     pub release_id: Option<String>,
     /// The RELEASE GROUP id — the album as a work, rather than one pressing
@@ -182,12 +189,39 @@ async fn lookup_musicbrainz(disc_id: &str) -> Option<DiscMeta> {
         return None;
     };
 
-    let titles: Vec<String> = media
-        .get("tracks")
-        .and_then(|t| t.as_array())
+    let mb_tracks = media.get("tracks").and_then(|t| t.as_array());
+    let titles: Vec<String> = mb_tracks
         .map(|t| {
             t.iter()
                 .filter_map(|x| x.get("title")?.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Per-track credits. Present on a compilation, absent on a plain album —
+    // and the empty string is how a row says "I am the album artist", which is
+    // exactly what the track builder falls back to.
+    let track_artists: Vec<String> = mb_tracks
+        .map(|t| {
+            t.iter()
+                .map(|x| {
+                    x.get("artist-credit")
+                        .and_then(|a| a.as_array())
+                        .map(|credits| {
+                            credits
+                                .iter()
+                                .filter_map(|c| {
+                                    let name = c.get("name").and_then(|n| n.as_str())?;
+                                    let join = c
+                                        .get("joinphrase")
+                                        .and_then(|j| j.as_str())
+                                        .unwrap_or("");
+                                    Some(format!("{name}{join}"))
+                                })
+                                .collect::<String>()
+                        })
+                        .unwrap_or_default()
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -214,6 +248,7 @@ async fn lookup_musicbrainz(disc_id: &str) -> Option<DiscMeta> {
         artist,
         year,
         titles,
+        track_artists,
         release_id: release
             .get("id")
             .and_then(|i| i.as_str())
@@ -237,7 +272,7 @@ async fn lookup_musicbrainz(disc_id: &str) -> Option<DiscMeta> {
 /// leads nowhere — all give `None`, and the pane draws its disc glyph. A
 /// missing cover is a cosmetic gap; a wrong one is a lie about what you are
 /// holding.
-async fn fetch_cover(release_id: &str, group_id: Option<&str>) -> Option<String> {
+pub(crate) async fn fetch_cover_for(release_id: &str, group_id: Option<&str>) -> Option<String> {
     // Two keys, in order. A RELEASE is one pressing and often has no art of
     // its own — the owner's disc answers 500 for its release and 200 for its
     // group — while the RELEASE GROUP is the album as a work and is where the
@@ -344,14 +379,59 @@ pub async fn open_disc() -> Result<usize, String> {
     // MusicBrainz hashes. Failing to compute one (an empty or absurd disc) is
     // not an error — it just means no names.
     let starts: Vec<u32> = audio.iter().map(|t| t.start_lsn).collect();
-    let meta = match qbz_disc::discid::disc_id(&starts, toc.leadout_lsn) {
-        Some(id) => {
-            log::info!("[qbz-qt] cd: disc id {id}");
-            lookup_musicbrainz(&id).await
+    let disc_id = qbz_disc::discid::disc_id(&starts, toc.leadout_lsn);
+    let fingerprint = toc.fingerprint();
+
+    // Which disc this is, for the two features that name the MEDIUM rather
+    // than the session: the metadata button writes its correction under this
+    // key, and the rip wizard reads it back.
+    crate::disc_identity::set(crate::disc_identity::DiscIdentity {
+        fingerprint: fingerprint.clone(),
+        disc_id: disc_id.clone(),
+        kind: crate::disc_identity::DiscKind::Cd,
+    });
+
+    // MEMORY FIRST, and it is not an optimisation.
+    //
+    // One DiscID can name several pressings (this disc answers with four), so
+    // once there is a button to pick the right one that choice has to outlive
+    // the eject — otherwise correcting a disc is a toy. A remembered row is
+    // therefore used AS IS and the lookup is skipped entirely: re-asking would
+    // risk replacing a good answer with a different pressing, and it is also
+    // what makes an inserted disc name itself with no network at all.
+    // Refreshing is the metadata button's job, never a side effect of opening.
+    let remembered = qbz_disc::store::get(&fingerprint);
+    let meta = match remembered.as_ref().filter(|m| !m.album.is_empty()) {
+        Some(m) => {
+            log::info!(
+                "[qbz-qt] cd: remembered as {:?} ({})",
+                m.album,
+                if m.edited { "corrected by hand" } else { "from a previous lookup" }
+            );
+            meta_from_memory(m)
         }
-        None => None,
-    }
-    .unwrap_or_default();
+        None => {
+            let found = match disc_id.as_deref() {
+                Some(id) => {
+                    log::info!("[qbz-qt] cd: disc id {id}");
+                    lookup_musicbrainz(id).await
+                }
+                None => None,
+            }
+            .unwrap_or_default();
+            // Remember it, so the next insert needs no network. `put_auto`
+            // refuses to touch a row a human has corrected — the rule lives in
+            // the store, not here.
+            if found.album.is_some() {
+                qbz_disc::store::put_auto(
+                    &fingerprint,
+                    disc_id.as_deref(),
+                    &memory_from_meta(&found, audio.len()),
+                );
+            }
+            found
+        }
+    };
 
     let album = meta
         .album
@@ -369,11 +449,31 @@ pub async fn open_disc() -> Result<usize, String> {
         log::info!("[qbz-qt] cd: not identified — tracks keep their numbers");
     }
 
+    // A cover we have already fetched for this disc is put ON THE ROWS, not
+    // patched in afterwards.
+    //
+    // Patching was the bug: `adopt_tracks` spawns, so a `set_session_artwork`
+    // called right after it runs BEFORE the session exists and bails out
+    // silently (`current_folder_path()` is still None). The late FETCH path
+    // does not hit that — it takes seconds — which is exactly why it looked
+    // like the cache was the thing that was broken. A row that carries its
+    // artwork from the start needs no patching and has no race.
+    //
+    // `is_file` rather than trust: the artwork cache is evictable.
+    let remembered_cover = remembered
+        .as_ref()
+        .and_then(|m| m.cover_path.clone())
+        .filter(|p| std::path::Path::new(p).is_file());
+    if remembered_cover.is_some() {
+        log::info!("[qbz-qt] cd: cover remembered — no fetch");
+    }
+
     let tracks: Vec<LocalTrack> = audio
         .iter()
         .enumerate()
         .map(|(i, t)| {
             let mut lt = to_local_track(t, &album);
+            lt.artwork_path = remembered_cover.clone();
             lt.file_path = qbz_disc::CdRef {
                 device: dev.clone(),
                 start_lsn: t.start_lsn,
@@ -387,9 +487,16 @@ pub async fn open_disc() -> Result<usize, String> {
             if let Some(title) = meta.titles.get(i).filter(|s| !s.is_empty()) {
                 lt.title = title.clone();
             }
+            // Per-track artist when the answer carries one (a compilation),
+            // the album artist otherwise. The album ARTIST stays the album's
+            // either way — a compilation whose album artist changes per row
+            // groups into one album per track.
             if let Some(artist) = meta.artist.as_deref() {
                 lt.artist = artist.to_string();
                 lt.album_artist = Some(artist.to_string());
+            }
+            if let Some(a) = meta.track_artists.get(i).filter(|s| !s.is_empty()) {
+                lt.artist = a.clone();
             }
             // `LocalTrack.year` is u32; a release date before year zero is not a
             // thing, so a negative parse is simply dropped.
@@ -400,11 +507,15 @@ pub async fn open_disc() -> Result<usize, String> {
 
     let count = tracks.len();
     log::info!(
-        "[qbz-qt] cd: {} — {count} audio tracks, fingerprint {}",
+        "[qbz-qt] cd: {} — {count} audio tracks, fingerprint {fingerprint}",
         dev.display(),
-        toc.fingerprint()
     );
     local_ephemeral::adopt_tracks(&album, tracks);
+
+    // Already covered above — the rows carry it, so there is nothing to fetch.
+    if remembered_cover.is_some() {
+        return Ok(count);
+    }
 
     // The cover comes AFTER the session is on screen, never before it.
     // Measured on the owner's disc: the Cover Art Archive took 9.4 s to
@@ -414,12 +525,58 @@ pub async fn open_disc() -> Result<usize, String> {
     if let Some(id) = meta.release_id.clone() {
         let group = meta.release_group_id.clone();
         crate::spawn(async move {
-            if let Some(art) = fetch_cover(&id, group.as_deref()).await {
+            if let Some(art) = fetch_cover_for(&id, group.as_deref()).await {
+                qbz_disc::store::set_cover(&fingerprint, &art);
                 local_ephemeral::set_session_artwork(&art);
             }
         });
     }
     Ok(count)
+}
+
+/// A remembered row, in the shape the track builder already speaks.
+fn meta_from_memory(m: &qbz_disc::store::DiscMemory) -> DiscMeta {
+    DiscMeta {
+        album: Some(m.album.clone()).filter(|a| !a.is_empty()),
+        artist: Some(m.album_artist.clone()).filter(|a| !a.is_empty()),
+        year: m.year.and_then(|y| i32::try_from(y).ok()),
+        titles: m.tracks.iter().map(|t| t.title.clone()).collect(),
+        track_artists: m.tracks.iter().map(|t| t.artist.clone()).collect(),
+        release_id: m.release_id.clone(),
+        release_group_id: m.release_group_id.clone(),
+    }
+}
+
+/// The inverse, for writing a lookup back.
+///
+/// `track_count` is the DISC's count, not the answer's: MusicBrainz and the
+/// drive can disagree, and remembering a short list would silently shorten the
+/// next insert too. The missing rows are stored empty, which reads back as
+/// "this one keeps its number".
+pub(crate) fn memory_from_meta(meta: &DiscMeta, track_count: usize) -> qbz_disc::store::DiscMemory {
+    let album_artist = meta.artist.clone().unwrap_or_default();
+    let tracks = (0..track_count)
+        .map(|i| qbz_disc::store::TrackMemory {
+            number: i as u32 + 1,
+            title: meta.titles.get(i).cloned().unwrap_or_default(),
+            artist: meta
+                .track_artists
+                .get(i)
+                .filter(|a| !a.is_empty())
+                .cloned()
+                .unwrap_or_else(|| album_artist.clone()),
+        })
+        .collect();
+    qbz_disc::store::DiscMemory {
+        album: meta.album.clone().unwrap_or_default(),
+        album_artist,
+        year: meta.year.and_then(|y| u32::try_from(y).ok()),
+        tracks,
+        release_id: meta.release_id.clone(),
+        release_group_id: meta.release_group_id.clone(),
+        cover_path: None,
+        edited: false,
+    }
 }
 
 #[cfg(test)]

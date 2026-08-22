@@ -84,6 +84,17 @@ Rectangle {
     property bool showDownload: false
     property bool downloadGlyph: false
     property bool showMenu: true
+    /// The row is EPHEMERAL — a disc, a disc image or an ad-hoc folder.
+    ///
+    /// It has no `library.db` row and no catalog id, so every entry that
+    /// writes a reference meant to outlive the session (favourite, playlist,
+    /// mixtape, offline cache, share) has nothing to point at once the disc
+    /// comes out. The QUEUE block stays, because a queue is exactly as
+    /// temporary as the session is.
+    ///
+    /// Entries are ABSENT rather than rendered-and-inert — the same rule the
+    /// `has*Seam` gates in `menuModel` already follow.
+    property bool queueOnly: false
     property bool zebra: false
     property bool artistLink: false
     property bool clickPlays: true
@@ -241,7 +252,7 @@ Rectangle {
     //                       there is no track to copy anywhere.
     //
     // Ephemeral rows never reach this decision: their surface sets
-    // `showMenu: false`, so the whole menu is absent (LocalEphemeralPane).
+    // `queueOnly: true`, so `menuModel` returns after the transport block.
     // An ALLOWLIST of non-catalog words, not `!== "qobuz"`: "offline" is an
     // offline-CACHED Qobuz row whose id IS a catalog id, so inverting the test
     // would strip Add-to-playlist from the rows that legitimately have it.
@@ -1151,6 +1162,11 @@ Rectangle {
                 m.push({ "label": t("Play later", r), "icon": "list-plus", "action": "later" })
             m.push({ "label": t("Add to queue", r), "icon": "list-end", "action": "queue" })
         }
+        // An ephemeral row stops here: everything below writes something that
+        // is supposed to survive the session, and there will be nothing left
+        // to resolve.
+        if (root.queueOnly)
+            return m
         // THE REPAIR. First entry on a dead row, because it is the only reason
         // that row's menu is worth opening at all. Host-routed — see
         // `routeReplaceExternally`.

@@ -78,6 +78,19 @@ Rectangle {
     // without it the bar kept a stale glyph until the track changed.
     property string favOverrideId: ""
     property bool favOverrideValue: false
+    /// The playing track is EPHEMERAL — a disc, an image or an ad-hoc folder.
+    /// Same flag and same rule as the full bar: nothing that implies
+    /// persistence is offered, because there is nothing to point at once the
+    /// session ends. `queue_qt.rs` publishes it on every row.
+    readonly property bool npEphemeral: {
+        try {
+            var d = JSON.parse(QbzQueue.queueJson)
+            return !!(d && d.current && d.current.isEphemeral)
+        } catch (e) {
+            return false
+        }
+    }
+
     readonly property bool npFavorite: {
         if (root.favOverrideId !== "" && root.favOverrideId === QbzPlayer.npTrackId)
             return root.favOverrideValue
@@ -367,6 +380,7 @@ Rectangle {
                     height: 34
                     playCircle: false
                     favorite: root.npFavorite
+                    ephemeral: root.npEphemeral
                     onAddRequested: function (anchorItem) { smallAddMenu.openBelowRight(anchorItem) }
                     onTrackInfoRequested: root.openTrackInfo()
                 }
@@ -593,18 +607,23 @@ Rectangle {
         id: smallAddMenu
         menuWidth: 232
         entries: {
-            var m = [
-                {
+            // The three QUEUE actions are the only ones an ephemeral track can
+            // honour; the rest write a reference that outlives the session.
+            var m = []
+            if (!root.npEphemeral) {
+                m.push({
                     "label": root.npFavorite
                         ? QbzSession.tr("Remove from library", QbzSession.trRev)
                         : QbzSession.tr("Add to library", QbzSession.trRev),
                     "icon": root.npFavorite ? "heart-filled" : "heart",
                     "action": "favorite"
-                },
-                { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-                { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
-                { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-            ]
+                })
+            }
+            m.push({ "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" })
+            m.push({ "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" })
+            m.push({ "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" })
+            if (root.npEphemeral)
+                return m
             // "Add to playlist" is SECOND (TransportControls.slint:143 — the
             // full bar carries the rationale). Same `npSource` gate as the
             // mixtape entry: the picker's Qobuz arm takes catalog ids and an

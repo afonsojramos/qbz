@@ -159,6 +159,28 @@ Rectangle {
         }
     }
 
+    /// The playing track is EPHEMERAL — a disc, an image or an ad-hoc folder.
+    ///
+    /// It leaves no trace in QBZ: no `library.db` row, no catalog id, nothing
+    /// a favourite or a playlist entry could point at tomorrow. So every
+    /// affordance that implies PERSISTENCE has to go, and the queue ones stay
+    /// — which is exactly what `QueueSidebar` already does with the same flag
+    /// (`queue_qt.rs` publishes `isEphemeral` on every row; this bar simply
+    /// never read it).
+    ///
+    /// Read from the queue's `current` row rather than guessed from the id
+    /// range: Rust tests BOTH halves there (the row's own source tag and the
+    /// id floor), and a second, weaker copy of that test in QML is a second
+    /// thing to get wrong.
+    readonly property bool npEphemeral: {
+        try {
+            var d = JSON.parse(QbzQueue.queueJson)
+            return !!(d && d.current && d.current.isEphemeral)
+        } catch (e) {
+            return false
+        }
+    }
+
     // SOURCE of the now-playing track — the word the MyQBZ AddItem payload
     // needs ("qobuz" | "local"), NEVER a literal.
     //
@@ -403,6 +425,7 @@ Rectangle {
                     playCircle: false
                     classicActions: true
                     favorite: root.npFavorite
+                    ephemeral: root.npEphemeral
                     onAddRequested: function (anchorItem) { addMenu.openBelowRight(anchorItem) }
                     onTrackInfoRequested: root.openTrackInfo()
                 }
@@ -640,18 +663,26 @@ Rectangle {
         id: addMenu
         menuWidth: 232
         entries: {
-            var m = [
-                {
+            // The three QUEUE actions are the only ones an ephemeral track can
+            // honour: everything else here writes a reference that outlives the
+            // session, and there is nothing to reference once the disc comes
+            // out. They are ABSENT rather than rendered-and-inert, the same
+            // rule the `npSource` gates below already follow.
+            var m = []
+            if (!root.npEphemeral) {
+                m.push({
                     "label": root.npFavorite
                         ? QbzSession.tr("Remove from library", QbzSession.trRev)
                         : QbzSession.tr("Add to library", QbzSession.trRev),
                     "icon": root.npFavorite ? "heart-filled" : "heart",
                     "action": "favorite"
-                },
-                { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-                { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
-                { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-            ]
+                })
+            }
+            m.push({ "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" })
+            m.push({ "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" })
+            m.push({ "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" })
+            if (root.npEphemeral)
+                return m
             // "Add to playlist" sits SECOND in TransportControls.slint:143 —
             // spliced in there rather than appended, because the flyout's
             // order is part of the parity. It rides the SAME `npSource` gate

@@ -281,6 +281,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("star", include_str!("../qml/assets/icons/primary/star.svg")),
     ("sun-moon", include_str!("../qml/assets/icons/primary/sun-moon.svg")),
     ("sun", include_str!("../qml/assets/icons/primary/sun.svg")),
+    ("tags", include_str!("../qml/assets/icons/primary/tags.svg")),
     ("thumbs-down", include_str!("../qml/assets/icons/primary/thumbs-down.svg")),
     // The Tidal wordmark. The ONE brand mark in this table on purpose: it is
     // monochrome (a black `fill` in the upstream asset), so the "never tint a

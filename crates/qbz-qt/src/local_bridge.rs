@@ -107,6 +107,15 @@ pub mod qbz_local {
         /// {"tab":"albums|artists|tracks","query":"..."}.
         #[qproperty(QString, local_pending_route)]
         // --- Ephemeral folder (an ad-hoc folder outside the index) ---------
+        /// An `Open` action is in flight — the chip is busy.
+        ///
+        /// NOT the same question as `local_ephemeral_loading`, which asks
+        /// whether the OPEN SESSION is still filling in. This one covers the
+        /// gap BEFORE there is a session at all: spinning a drive up and
+        /// reading a TOC takes seconds, and until this existed those seconds
+        /// looked exactly like a click that did nothing — so the user clicked
+        /// again, onto a drive that was already being read.
+        #[qproperty(bool, local_disc_opening)]
         /// A session is open: its OWN tab appears in Local Library.
         #[qproperty(bool, local_ephemeral_active)]
         /// The folder is being scanned (metadata + CUE + artwork).
@@ -129,16 +138,33 @@ pub mod qbz_local {
         /// sequence changes on every open, which is what "take me to what I
         /// just opened" actually needs.
         #[qproperty(i32, local_ephemeral_open_seq)]
+        /// The open session is a DISC — a CD in the drive or a disc image.
+        /// Distinct from `local_ephemeral_is_cd`, which is narrower (only a
+        /// physical CD can be ripped): this gates what applies to any medium
+        /// with an IDENTITY, like correcting its metadata. False for an opened
+        /// folder, which has no disc to correct.
+        #[qproperty(bool, local_session_is_disc)]
         /// The open session came from a physical CD, so it can be RIPPED.
         /// Derived from the rows themselves rather than passed in — a flag
         /// somebody has to remember to set is a flag that eventually is not.
         #[qproperty(bool, local_ephemeral_is_cd)]
+        /// The rip WIZARD's document — `{open, album, tracks, destination,
+        /// libraryState, …}`. "" only before the first publish.
+        ///
+        /// The wizard exists because a CD-DA carries no titles, so a wrong
+        /// name is the ordinary case and the only cheap moment to fix it is
+        /// before the first byte is written (`rip_wizard_qt`).
+        #[qproperty(QString, local_rip_plan)]
         /// A rip is running; the pane shows progress instead of the button.
         #[qproperty(bool, local_rip_active)]
         /// "3/7 · 45%" — already formatted, because the number of things that
         /// can disagree about how to format it is otherwise the number of
         /// places that show it.
         #[qproperty(QString, local_rip_progress)]
+        /// The whole job, for the progress modal: `{active, album,
+        /// destination, index, count, fraction, overall, tracks}`. Rate-limited
+        /// to ~10 Hz at the source — the rip callback fires per chunk.
+        #[qproperty(QString, local_rip_status)]
 
         // --- Plex ----------------------------------------------------------
         /// Master toggle (Settings > Local Library > Plex). Drives whether
@@ -271,6 +297,12 @@ pub mod qbz_local {
         /// The view applied the pending route — release it.
         #[qinvokable]
         fn clear_pending_route(self: Pin<&mut QbzLocal>);
+
+        /// Ask this view to open on a given tab — `{"tab":"ephemeral"}`. The
+        /// counterpart of `clear_pending_route`, and the seam the now-playing
+        /// song card uses to route a disc back to the pane it came from.
+        #[qinvokable]
+        fn set_pending_route(self: Pin<&mut QbzLocal>, route_json: QString);
         /// "Go to artist" on a local/Plex album — a NAME route, not an id.
         #[qinvokable]
         fn open_artist_by_name(self: Pin<&mut QbzLocal>, name: QString);
@@ -313,10 +345,24 @@ pub mod qbz_local {
         /// `Open > Open SACD image…`: pick a .iso and play its stereo area.
         #[qinvokable]
         fn ephemeral_open_sacd(self: Pin<&mut QbzLocal>);
-        /// Rip the open CD into a folder the user picks. No-op unless the
-        /// session is a disc.
+        /// Open the rip wizard for the CD on screen. No-op unless the
+        /// session is a physical disc.
         #[qinvokable]
-        fn rip_disc(self: Pin<&mut QbzLocal>);
+        fn rip_wizard_open(self: Pin<&mut QbzLocal>);
+        #[qinvokable]
+        fn rip_wizard_close(self: Pin<&mut QbzLocal>);
+        /// Ask for the destination and answer the Local Library question.
+        #[qinvokable]
+        fn rip_pick_destination(self: Pin<&mut QbzLocal>);
+        /// Run it, with the form's values.
+        #[qinvokable]
+        fn rip_start(self: Pin<&mut QbzLocal>, edits_json: QString);
+        /// Show or hide the rip PROGRESS panel. Never touches the job.
+        #[qinvokable]
+        fn rip_panel(self: Pin<&mut QbzLocal>, open: bool);
+        /// Stop the running rip after the current chunk. Deletes NOTHING.
+        #[qinvokable]
+        fn rip_cancel(self: Pin<&mut QbzLocal>);
         /// Header Play / Shuffle: the whole session becomes the queue. Same
         /// `(id, shuffle)` shape as `play_album`, so the two headers behave
         /// identically.
@@ -495,14 +541,18 @@ pub struct QbzLocalRust {
     local_track_artwork: bool,
     local_pending_artist: QString,
     local_pending_route: QString,
+    local_disc_opening: bool,
     local_ephemeral_active: bool,
     local_ephemeral_loading: bool,
     local_ephemeral_json: QString,
     local_ephemeral_label: QString,
     local_ephemeral_open_seq: i32,
+    local_session_is_disc: bool,
     local_ephemeral_is_cd: bool,
+    local_rip_plan: QString,
     local_rip_active: bool,
     local_rip_progress: QString,
+    local_rip_status: QString,
     plex_enabled: bool,
     plex_available: bool,
     plex_syncing: bool,
@@ -548,14 +598,18 @@ impl Default for QbzLocalRust {
             local_track_artwork: false,
             local_pending_artist: QString::default(),
             local_pending_route: QString::default(),
+            local_disc_opening: false,
             local_ephemeral_active: false,
             local_ephemeral_loading: false,
             local_ephemeral_json: QString::from(""),
             local_ephemeral_label: QString::from(""),
             local_ephemeral_open_seq: 0,
+            local_session_is_disc: false,
             local_ephemeral_is_cd: false,
+            local_rip_plan: QString::from("{\"open\":false}"),
             local_rip_active: false,
             local_rip_progress: QString::default(),
+            local_rip_status: QString::from("{\"active\":false}"),
             plex_enabled: false,
             plex_available: false,
             plex_syncing: false,
@@ -1067,6 +1121,14 @@ impl qbz_local::QbzLocal {
         crate::local_album_actions::clear_pending_artist();
     }
 
+    pub fn set_pending_route(mut self: Pin<&mut Self>, route_json: QString) {
+        // Cleared first: the property CHANGE is the trigger, so setting the
+        // same route twice in a row would otherwise fire nothing the second
+        // time (the same reason `local_ephemeral_open_seq` is a sequence).
+        self.as_mut().set_local_pending_route(QString::from(""));
+        self.as_mut().set_local_pending_route(route_json);
+    }
+
     pub fn clear_pending_route(self: Pin<&mut Self>) {
         crate::local_album_actions::clear_pending_route();
     }
@@ -1117,6 +1179,7 @@ impl qbz_local::QbzLocal {
         // Reading a TOC spins the drive up and can take a second or two, so it
         // does not run on the UI thread.
         crate::spawn(async move {
+            let _busy = crate::local_ephemeral::OpenBusy::begin();
             match crate::cdda_qt::open_disc().await {
                 Ok(n) => log::info!("[qbz-qt] cd opened: {n} tracks"),
                 Err(msg) => crate::toast_qt::error(msg),
@@ -1126,11 +1189,13 @@ impl qbz_local::QbzLocal {
 
     pub fn ephemeral_open_sacd(self: Pin<&mut Self>) {
         crate::spawn(async move {
-            let picked = tokio::task::spawn_blocking(crate::local_ephemeral::pick_image_blocking)
-                .await
-                .ok()
-                .flatten();
-            let Some(path) = picked else { return };
+            let _busy = crate::local_ephemeral::OpenBusy::begin();
+            // NOT `spawn_blocking`: `rfd`'s async dialog posts itself to the
+            // thread the platform requires (the main one, on macOS), which the
+            // blocking API does not.
+            let Some(path) = crate::local_ephemeral::pick_image_blocking().await else {
+                return;
+            };
             let p = std::path::PathBuf::from(&path);
             // Reading the area TOC seeks around a multi-gigabyte file.
             let outcome = tokio::task::spawn_blocking(move || crate::sacd_qt::open_image(&p)).await;
@@ -1142,8 +1207,28 @@ impl qbz_local::QbzLocal {
         });
     }
 
-    pub fn rip_disc(self: Pin<&mut Self>) {
-        crate::rip_qt::start();
+    pub fn rip_wizard_open(self: Pin<&mut Self>) {
+        crate::rip_wizard_qt::open();
+    }
+
+    pub fn rip_wizard_close(self: Pin<&mut Self>) {
+        crate::rip_wizard_qt::close();
+    }
+
+    pub fn rip_pick_destination(self: Pin<&mut Self>) {
+        crate::rip_wizard_qt::pick_destination();
+    }
+
+    pub fn rip_start(self: Pin<&mut Self>, edits_json: QString) {
+        crate::rip_wizard_qt::start(&edits_json.to_string());
+    }
+
+    pub fn rip_panel(self: Pin<&mut Self>, open: bool) {
+        crate::rip_qt::set_panel_open(open);
+    }
+
+    pub fn rip_cancel(self: Pin<&mut Self>) {
+        crate::rip_qt::cancel();
     }
 
     pub fn ephemeral_play_all(self: Pin<&mut Self>, shuffle: bool) {

@@ -15,6 +15,14 @@ Rectangle {
     /// Favorite state of the now-playing track (QueueState.now-playing-favorite
     /// in Slint) — the host bar already parses the queue document.
     property bool favorite: false
+    /// The playing track leaves no trace in QBZ (a disc, an image, an ad-hoc
+    /// folder). There is nothing a favourite could point at once the session
+    /// ends, so the heart goes OFF rather than writing a row that will dangle.
+    /// Dimmed and inert in place, not hidden: the transport keeps its shape
+    /// while a disc plays.
+    property bool disabled: false
+
+    readonly property bool actionable: QbzPlayer.npHasTrack && !root.disabled
 
     QbzTheme { id: theme }
 
@@ -28,8 +36,8 @@ Rectangle {
     width: 32
     height: 32
     radius: theme.radiusSm
-    opacity: QbzPlayer.npHasTrack ? 1.0 : 0.3
-    color: (favArea.containsMouse && QbzPlayer.npHasTrack) ? theme.surfaceHover : "transparent"
+    opacity: root.actionable ? 1.0 : 0.3
+    color: (favArea.containsMouse && root.actionable) ? theme.surfaceHover : "transparent"
 
     QbzIcon {
         name: root.favorite ? "heart-filled" : "heart"
@@ -43,8 +51,8 @@ Rectangle {
         id: favArea
         anchors.fill: parent
         hoverEnabled: true
-        cursorShape: QbzPlayer.npHasTrack ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onClicked: if (QbzPlayer.npHasTrack && QbzPlayer.npTrackId !== "")
+        cursorShape: root.actionable ? Qt.PointingHandCursor : Qt.ArrowCursor
+        onClicked: if (root.actionable && QbzPlayer.npTrackId !== "")
             QbzQueue.queueToggleFavorite("track", QbzPlayer.npTrackId)
     }
 }

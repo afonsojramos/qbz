@@ -30,11 +30,15 @@
 //! `ephemeral_folder`, shared with the Slint frontend); `rehydrate()` re-scans
 //! it at boot.
 //!
-//! POC-NOTE (folder picker): this port has no `rfd` dependency and cxx-qt-lib
-//! 0.7 exposes no QFileDialog, so `open()` shells out to the desktop's own
-//! folder chooser (zenity / qarma / kdialog / yad — the first one present).
-//! Swapping in `rfd::AsyncFileDialog` (what the Slint uses) is a five-line
-//! change to `pick_folder_blocking` once the dependency exists.
+//! FILE PICKERS use `rfd::AsyncFileDialog` — the platform's own dialog. They
+//! used to shell out to zenity / qarma / kdialog / yad under a POC-NOTE that
+//! said swapping in `rfd` was "a five-line change once the dependency exists".
+//! The dependency arrived (Settings > Local Library has called it from this
+//! same crate for weeks) and nobody came back for the note, so on macOS —
+//! where none of those four binaries exist — `Open folder…` and `Open SACD
+//! image…` opened nothing at all, in silence, while the Settings picker two
+//! menus away worked fine. Fixed 2026-08-21, on the owner's Mac mini. A stale
+//! note is not a comment; it is a downgrade with an excuse attached.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -85,22 +89,36 @@ pub fn session_is_cd() -> bool {
 }
 
 /// Where to put a rip. A folder chooser, and the answer is never guessed.
-pub(crate) fn pick_folder_for_rip() -> Option<String> {
-    let title = qbz_i18n::t("Where should the ripped album go?");
-    let start = dirs::audio_dir()
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("/"));
-    let start = start.to_string_lossy().into_owned();
-    let candidates: [(&str, Vec<String>); 4] = [
-        ("zenity", vec!["--file-selection".into(), "--directory".into(),
-            format!("--title={title}"), format!("--filename={start}/")]),
-        ("qarma", vec!["--file-selection".into(), "--directory".into(),
-            format!("--title={title}"), format!("--filename={start}/")]),
-        ("kdialog", vec!["--getexistingdirectory".into(), start.clone(),
-            "--title".into(), title.clone()]),
-        ("yad", vec!["--file".into(), "--directory".into(), format!("--title={title}")]),
-    ];
-    run_chooser(&candidates)
+pub(crate) async fn pick_folder_for_rip() -> Option<String> {
+    pick_dir(&qbz_i18n::t("Where should the ripped album go?"), dirs::audio_dir()).await
+}
+
+/// The one folder chooser, for every caller that needs one.
+///
+/// `rfd` gives the platform's OWN dialog — the Portal on Wayland, NSOpenPanel
+/// on macOS — instead of shelling out to whichever of zenity / qarma /
+/// kdialog / yad happens to be installed.
+///
+/// THAT SHELL-OUT IS WHY THIS EXISTS. It was written when this crate had no
+/// `rfd` dependency, under a POC-NOTE that said swapping it in "is a five-line
+/// change once the dependency exists". The dependency arrived — Settings >
+/// Local Library has been calling `rfd::AsyncFileDialog` from this same crate
+/// for weeks — and nobody came back for the note. On macOS none of those four
+/// binaries exist, so `Open folder…` and `Open SACD image…` opened NOTHING,
+/// silently, while the Settings picker two menus away worked fine. A stale
+/// note is not a comment; it is a downgrade with an excuse attached.
+///
+/// ASYNC, not blocking: `rfd::FileDialog`'s blocking API must run on the main
+/// thread on macOS, and every caller here is on a worker. The async one posts
+/// itself to the right thread, which is also what the Settings path does.
+async fn pick_dir(title: &str, start: Option<PathBuf>) -> Option<String> {
+    let start = start.or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("/"));
+    let handle = rfd::AsyncFileDialog::new()
+        .set_title(title)
+        .set_directory(&start)
+        .pick_folder()
+        .await?;
+    Some(handle.path().to_string_lossy().into_owned())
 }
 
 /// Every track of the current session, in scan (= display) order.
@@ -111,8 +129,14 @@ pub fn tracks_snapshot() -> Vec<LocalTrack> {
 /// The album grouping key for one ephemeral row — `album_group_key` when set,
 /// else `album|||album_artist`. Mirrors the scanner's own fallback so the
 /// pane's grouping and the play-album lookup can never disagree.
+/// "Disc 2", translated. Its own function so the eight catalogues carry ONE
+/// msgid rather than a formatted string built two ways.
+fn disc_label(n: u32) -> String {
+    qbz_i18n::t_args("Disc {}", &[&n.to_string()])
+}
+
 fn album_key_of(t: &LocalTrack) -> String {
-    if !t.album_group_key.is_empty() {
+    let album = if !t.album_group_key.is_empty() {
         t.album_group_key.clone()
     } else {
         format!(
@@ -120,7 +144,19 @@ fn album_key_of(t: &LocalTrack) -> String {
             t.album,
             t.album_artist.as_deref().unwrap_or(&t.artist)
         )
-    }
+    };
+    // AND THE DISC. A box set scans as ONE album — measured on the owner's
+    // Saint Seiya Eternal CD-Box, where `album_group_key` is the box's root
+    // folder for all 34 tracks and the disc number sits right there in the
+    // data, unused. Without this the pane is a single flat list 247 rows long,
+    // which is not a browsable thing; with it each disc is its own block with
+    // its own header and play button.
+    //
+    // Unconditional, including for a single-disc album (which keys as
+    // `…#disc1`), because the key ROUND-TRIPS: `album_tracks` looks a block up
+    // by re-deriving it per track, so a key built one way here and another way
+    // there is a play button that plays nothing.
+    format!("{album}#disc{}", t.disc_number.unwrap_or(1))
 }
 
 /// The tracks of one album block, in scan order.
@@ -201,6 +237,14 @@ fn build_doc(name: &str, path: &str, tracks: &[LocalTrack]) -> EphemeralDoc {
         groups.entry(album_key_of(t)).or_default().push(t);
     }
     let multi_album = groups.len() > 1;
+    // More than one DISC anywhere in the session — what decides whether a
+    // block's meta line names its disc.
+    let multi_disc = tracks
+        .iter()
+        .map(|t| t.disc_number.unwrap_or(1))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        > 1;
     let mut albums: Vec<EphemeralAlbumBlock> = with_art(|art| {
         groups
             .into_iter()
@@ -218,14 +262,41 @@ fn build_doc(name: &str, path: &str, tracks: &[LocalTrack]) -> EphemeralDoc {
                 let count = group.len();
                 let tracks_label =
                     qbz_i18n::tf("{} track", "{} tracks", count as i64, &[&count.to_string()]);
-                let meta = match first.year {
-                    Some(y) if y > 0 => format!("{y} · {tracks_label}"),
-                    _ => tracks_label,
+                // "2008 · Disc 2 · 17 tracks". The disc is named ONLY when the
+                // session actually holds more than one — on an ordinary album
+                // "Disc 1" is noise that distinguishes nothing.
+                let disc = first.disc_number.unwrap_or(1);
+                let meta = match (first.year, multi_disc) {
+                    (Some(y), true) if y > 0 => {
+                        format!("{y} · {} · {tracks_label}", disc_label(disc))
+                    }
+                    (Some(y), false) if y > 0 => format!("{y} · {tracks_label}"),
+                    (_, true) => format!("{} · {tracks_label}", disc_label(disc)),
+                    (_, false) => tracks_label,
                 };
-                // Namespaced so an ephemeral block can never claim the art
-                // key of an indexed album that happens to group the same.
-                let art_key = album_key(&format!("eph:{key}"));
-                if let Some(p) = first.artwork_path.as_ref().filter(|p| !p.is_empty()) {
+                // Namespaced so an ephemeral block can never claim the art key
+                // of an indexed album that happens to group the same — and it
+                // names the COVER, not just the album.
+                //
+                // Naming the cover is load-bearing, not tidiness. A disc's art
+                // arrives LATE (the Cover Art Archive took 9.4 s), and the only
+                // thing `set_session_artwork` can change is this document: the
+                // path itself rides the side channel, never the JSON. With the
+                // key fixed, the republished document was BYTE-IDENTICAL, and
+                // cxx-qt 0.7's generated setter drops an equal value without
+                // emitting `Changed` ("don't want to set the value again and
+                // reemit the signal, as this can cause binding loops",
+                // cxx-qt-gen/src/generator/rust/property/setter.rs:74). So the
+                // view never re-reported its window, never asked for the key a
+                // second time, and the cover sat in the index unrequested —
+                // missing on every surface at once. A key that does not change
+                // when the thing it names changes is a key that lies.
+                let cover = first.artwork_path.as_deref().filter(|p| !p.is_empty());
+                let art_key = match cover {
+                    Some(p) => album_key(&format!("eph:{key}:{p}")),
+                    None => album_key(&format!("eph:{key}")),
+                };
+                if let Some(p) = cover {
                     if let Some(t) = crate::local_rows::art_token(first.source.as_deref(), p) {
                         art.insert(art_key.clone(), t);
                     }
@@ -295,6 +366,40 @@ fn display_label(doc: &EphemeralDoc) -> String {
     }
 }
 
+/// Holds the `Open` chip busy for exactly as long as this value lives.
+///
+/// A guard rather than a matched pair of setters, because opening has more
+/// exits than it looks like it does: the picker is cancelled, the drive is
+/// empty, the image is not a SACD, the task fails. Every one of those has to
+/// give the button back, and a `Drop` is the only version of that which
+/// cannot be forgotten by the next medium somebody adds.
+///
+/// It counts rather than flips a bool because an open is a RELAY, not a single
+/// task: the reader hands off to `adopt_tracks`, which runs on a task of its
+/// own, and the two guards are deliberately alive at the same time so the
+/// spinner cannot blink off in the seam between them.
+static OPENING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub struct OpenBusy;
+
+impl OpenBusy {
+    pub fn begin() -> Self {
+        publish_opening(OPENING.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1);
+        Self
+    }
+}
+
+impl Drop for OpenBusy {
+    fn drop(&mut self) {
+        publish_opening(OPENING.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) - 1);
+    }
+}
+
+fn publish_opening(outstanding: usize) {
+    let busy = outstanding > 0;
+    ui(move |mut b| b.as_mut().set_local_disc_opening(busy));
+}
+
 fn publish_doc(doc: &EphemeralDoc, loading: bool) {
     let json = to_json(doc);
     let label = display_label(doc);
@@ -311,6 +416,7 @@ fn publish_doc(doc: &EphemeralDoc, loading: bool) {
 /// Back to the closed state (`""` parses to null QML-side, which collapses the
 /// pane and restores the normal flat/tree browse).
 fn publish_closed() {
+    crate::disc_identity::clear();
     ui(|mut b| {
         b.as_mut().set_local_ephemeral_active(false);
         b.as_mut().set_local_ephemeral_loading(false);
@@ -335,12 +441,10 @@ fn save_path(path: Option<&str>) {
 /// Toolbar button: native folder picker -> scan -> pane.
 pub fn open() {
     crate::spawn(async move {
-        let picked = tokio::task::spawn_blocking(pick_folder_blocking)
-            .await
-            .ok()
-            .flatten();
-        let Some(path) = picked else {
-            return; // cancelled, or no picker on this desktop (logged below).
+        let _busy = OpenBusy::begin();
+        let Some(path) = pick_dir(&qbz_i18n::t("Choose a folder to play"), dirs::audio_dir()).await
+        else {
+            return; // cancelled
         };
         scan(Some(crate::app()), path).await;
     });
@@ -372,7 +476,12 @@ pub fn open_path(path: String) {
 /// not built yet — so this deliberately does nothing rather than half of it.
 pub fn adopt_tracks(label: &str, tracks: Vec<LocalTrack>) {
     let label = label.to_string();
+    // Taken HERE, on the reader's own thread, so it overlaps the reader's
+    // guard: taken inside the task instead, the reader could have finished and
+    // released the chip before this task was ever scheduled.
+    let busy = OpenBusy::begin();
     crate::spawn(async move {
+        let _busy = busy;
         wipe_if_playing(&crate::app()).await;
         let seq = OPEN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         ui(move |mut b| {
@@ -403,6 +512,61 @@ pub fn adopt_tracks(label: &str, tracks: Vec<LocalTrack>) {
             }
         }
     });
+}
+
+/// Rename the OPEN session's rows — the metadata button's landing.
+///
+/// Deliberately a MUTATION of the live session rather than a re-open: the
+/// queue may already hold these ids and a re-open renumbers them from the
+/// synthetic floor, which would leave a playing track orphaned mid-song. Same
+/// reason `set_session_artwork` uses `replace_tracks_preserving_ids`.
+///
+/// `album_group_key` is deliberately NOT touched. It is the pane's grouping
+/// key, and rewriting it while the album title changes would split one disc
+/// into two blocks for exactly one frame — a flicker with no upside, since
+/// nothing keys off it but the grouping itself.
+///
+/// Track naming is positional and defensive: a provider's release can carry a
+/// different track count than the disc in the drive (a hidden track, a
+/// mixed-mode disc), and pairing by position without checking is how track 5
+/// gets track 6's name.
+pub fn apply_naming(album: &str, album_artist: &str, year: Option<u32>, titles: &[(String, String)]) {
+    let Some(label) = STATE.current_folder_path() else {
+        return;
+    };
+    let mut tracks = STATE.tracks_snapshot();
+    if tracks.is_empty() {
+        return;
+    }
+    for (i, t) in tracks.iter_mut().enumerate() {
+        if !album.is_empty() {
+            t.album = album.to_string();
+            t.album_group_title = album.to_string();
+        }
+        if !album_artist.is_empty() {
+            t.album_artist = Some(album_artist.to_string());
+            t.artist = album_artist.to_string();
+        }
+        t.year = year;
+        if let Some((title, artist)) = titles.get(i) {
+            if !title.is_empty() {
+                t.title = title.clone();
+            }
+            if !artist.is_empty() {
+                t.artist = artist.clone();
+            }
+        }
+    }
+    if let Err(e) = STATE.replace_tracks_preserving_ids(&tracks) {
+        log::warn!("[qbz-qt] ephemeral: naming update failed: {e}");
+        return;
+    }
+    // The LABEL follows the album — it is what the tab, the nav flyout and the
+    // pane header all read, and leaving it on the old name would make the
+    // correction look like it half-applied.
+    let name = if album.is_empty() { label.as_str() } else { album };
+    log::info!("[qbz-qt] ephemeral: renamed to {name:?}");
+    publish_doc(&build_doc(name, name, &tracks), false);
 }
 
 /// Attach artwork to the OPEN session after the fact.
@@ -436,6 +600,23 @@ pub fn set_session_artwork(path: &str) {
     }
     log::info!("[qbz-qt] ephemeral: cover attached to {label}");
     publish_doc(&build_doc(&label, &label, &tracks), false);
+
+    // The store is not the only copy. `local_queue_track` snapshots the row's
+    // artwork INTO the queue at enqueue time, and the now-playing bar, the
+    // miniplayer, the immersive view and MPRIS all read the QUEUE — so a disc
+    // the user started playing before its cover landed stays blank on every
+    // one of those surfaces no matter how correct this session is. The url is
+    // built the same way `local_queue_track` builds it (a local cover is a
+    // `file://`), because that is the form the whole taxonomy downstream
+    // expects.
+    let ids: Vec<u64> = tracks.iter().map(|t| t.id as u64).collect();
+    let url = format!("file://{path}");
+    crate::spawn(async move {
+        let runtime = crate::app();
+        if runtime.core().patch_queue_artwork(&ids, &url).await {
+            crate::playback_qt::refresh_now_playing(&runtime).await;
+        }
+    });
 }
 
 /// Boot: re-open the persisted folder, if any. Silent — a folder that moved
@@ -468,6 +649,10 @@ pub fn clear() {
 static OPEN_SEQ: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 async fn scan(runtime: Option<Runtime>, path: String) {
+    // A folder replaces whatever was open. If that was a disc, the identity
+    // has to go with it, or the metadata button would write a correction for
+    // a record nobody is holding.
+    crate::disc_identity::clear();
     if let Some(rt) = &runtime {
         wipe_if_playing(rt).await;
         // `runtime.is_some()` is ALREADY the "the user asked for this"
@@ -539,138 +724,22 @@ async fn wipe_if_playing(runtime: &Runtime) {
     crate::queue_qt::clear_queue(runtime).await;
 }
 
-// ---------------------------------------------------------------------------
-// Folder picker (POC-NOTE at the top of the file)
-// ---------------------------------------------------------------------------
-
-/// Ask the desktop for a folder. Returns None on cancel AND when no chooser is
-/// installed (logged, so a dead button is never silent). BLOCKING — the caller
-/// runs it on `spawn_blocking`.
-/// File chooser for a disc IMAGE. Same four-chooser ladder as the folder
-/// picker — the difference is a file selection with an `*.iso` filter, and a
-/// start directory of Downloads rather than Music, because that is where a
-/// downloaded image lands.
-pub(crate) fn pick_image_blocking() -> Option<String> {
-    let title = qbz_i18n::t("Choose a disc image");
+/// File chooser for a disc IMAGE. The folder picker's sibling: a FILE
+/// selection with an `*.iso` filter, starting in Downloads rather than Music,
+/// because that is where a downloaded image lands.
+pub(crate) async fn pick_image_blocking() -> Option<String> {
     let start = dirs::download_dir()
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("/"));
-    let start = start.to_string_lossy().into_owned();
-    let candidates: [(&str, Vec<String>); 4] = [
-        (
-            "zenity",
-            vec![
-                "--file-selection".into(),
-                format!("--title={title}"),
-                format!("--filename={start}/"),
-                "--file-filter=Disc images (*.iso) | *.iso *.ISO".into(),
-            ],
-        ),
-        (
-            "qarma",
-            vec![
-                "--file-selection".into(),
-                format!("--title={title}"),
-                format!("--filename={start}/"),
-                "--file-filter=Disc images (*.iso) | *.iso *.ISO".into(),
-            ],
-        ),
-        (
-            "kdialog",
-            vec![
-                "--getopenfilename".into(),
-                start.clone(),
-                "*.iso *.ISO|Disc images".into(),
-                "--title".into(),
-                title.clone(),
-            ],
-        ),
-        (
-            "yad",
-            vec![
-                "--file".into(),
-                format!("--title={title}"),
-                "--file-filter=Disc images | *.iso *.ISO".into(),
-            ],
-        ),
-    ];
-    run_chooser(&candidates)
-}
-
-/// The shared "run the first chooser that exists" loop.
-fn run_chooser(candidates: &[(&str, Vec<String>)]) -> Option<String> {
-    for (bin, args) in candidates {
-        match std::process::Command::new(bin).args(args.iter()).output() {
-            // The chooser ran: a path on stdout, or an empty/failed exit =
-            // the user cancelled. Either way we stop looking.
-            Ok(out) => {
-                if !out.status.success() {
-                    return None;
-                }
-                let picked = String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                return (!picked.is_empty()).then_some(picked);
-            }
-            // Not installed — try the next one.
-            Err(_) => continue,
-        }
-    }
-    log::error!(
-        "[qbz-qt] ephemeral: no chooser found (zenity / qarma / kdialog / yad)"
-    );
-    None
-}
-
-fn pick_folder_blocking() -> Option<String> {
-    let title = qbz_i18n::t("Choose a folder to play");
-    let start = dirs::audio_dir()
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("/"));
-    let start = start.to_string_lossy().into_owned();
-    // zenity/qarma go through the XDG portal on modern desktops; kdialog is
-    // the KDE native; yad is the last resort.
-    let candidates: [(&str, Vec<String>); 4] = [
-        (
-            "zenity",
-            vec![
-                "--file-selection".into(),
-                "--directory".into(),
-                format!("--title={title}"),
-                format!("--filename={start}/"),
-            ],
-        ),
-        (
-            "qarma",
-            vec![
-                "--file-selection".into(),
-                "--directory".into(),
-                format!("--title={title}"),
-                format!("--filename={start}/"),
-            ],
-        ),
-        (
-            "kdialog",
-            vec![
-                "--getexistingdirectory".into(),
-                start.clone(),
-                "--title".into(),
-                title.clone(),
-            ],
-        ),
-        (
-            "yad",
-            vec![
-                "--file".into(),
-                "--directory".into(),
-                format!("--title={title}"),
-            ],
-        ),
-    ];
-    run_chooser(&candidates)
+    let handle = rfd::AsyncFileDialog::new()
+        .set_title(&qbz_i18n::t("Choose a disc image"))
+        .set_directory(&start)
+        // Both cases: a filter is a match on the literal extension, and a
+        // `.ISO` off a Windows-written disc is the same file.
+        .add_filter(qbz_i18n::t("Disc images"), &["iso", "ISO"])
+        .pick_file()
+        .await?;
+    Some(handle.path().to_string_lossy().into_owned())
 }
 
 // ---------------------------------------------------------------------------
@@ -797,6 +866,23 @@ async fn play_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, start: usize) {
         .iter()
         .map(crate::local_playback::local_queue_track)
         .collect();
+    let start = start.min(queue.len() - 1);
+    // STAMP THE ORIGIN. Without it the song card falls back to the track's
+    // `album_id`, which for a disc is the synthetic grouping key
+    // (`cdda|||Fear Inoculum`) — not an album any catalogue can open, so the
+    // "playing from" glyph led to a page that does not exist. The session is
+    // the origin, and the place that shows it is the Open pane.
+    let label = STATE
+        .current_folder_path()
+        .filter(|l| !l.is_empty())
+        .unwrap_or_else(|| "session".to_string());
+    let queue = crate::playback_qt::stamped(
+        queue,
+        crate::playback_qt::PlayContext::new("ephemeral", &label),
+    );
+    if queue.is_empty() {
+        return;
+    }
     let start = start.min(queue.len() - 1);
     let first = queue[start].clone();
     runtime.core().set_queue(queue, Some(start)).await;

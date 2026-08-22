@@ -974,9 +974,22 @@ Rectangle {
             height: parent.height - 91
             clip: true
 
+            // The `Open` pane is showing. It is the ONE body that renders with
+            // no indexed library (see the Loader below), so it is also the one
+            // the empty state has to stand down for.
+            readonly property bool ephemeralShowing:
+                root.activeTab === "ephemeral" && root.ephemeralActive
+
             // "Nothing indexed yet" (no db / no registered folder).
+            //
+            // ALSO gated on the Open pane, and that second half is not
+            // hypothetical: on a machine with no library at all — a fresh
+            // install, or the owner's Mac mini — opening a CD drew the disc
+            // AND this empty state through it, both fully painted, because
+            // each was individually correct about its own condition. Reported
+            // as a transparency bug; it was two views agreeing to be visible.
             QbzEmptyState {
-                visible: !QbzLocal.localAvailable
+                visible: !QbzLocal.localAvailable && !contentArea.ephemeralShowing
                 anchors.centerIn: parent
                 iconName: "folder-plus"
                 title: QbzSession.tr("No local library yet", QbzSession.trRev)
@@ -1027,7 +1040,7 @@ Rectangle {
             // exactly the people the feature exists for.
             Loader {
                 anchors.fill: parent
-                active: root.activeTab === "ephemeral" && root.ephemeralActive
+                active: contentArea.ephemeralShowing
                 sourceComponent: LocalEphemeralPane { view: root }
             }
         }

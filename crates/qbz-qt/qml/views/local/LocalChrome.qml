@@ -52,9 +52,15 @@ Item {
             // Folder management, scan and maintenance do NOT live in this
             // view (Slint header note) — the gear routes out.
             QbzNavButton {
+                id: gearBtn
                 name: "settings-2"
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzShell.navigateTo("settings")
+                HoverHandler {
+                    onHoveredChanged: tips.hover(hovered, gearBtn, "local-gear",
+                        QbzSession.tr("Manage the folders your library is built from",
+                                      QbzSession.trRev))
+                }
             }
             // ---- Refresh ▾ -------------------------------------------
             // Before Open, per the owner's layout: the two maintenance glyphs
@@ -73,6 +79,11 @@ Item {
                     // start a DIFFERENT source's sync (they are independent
                     // jobs on independent stores).
                     onClicked: refreshMenu.openBelowLeft(refreshBtn)
+                    HoverHandler {
+                        onHoveredChanged: tips.hover(hovered, refreshBtn, "refresh-chip",
+                            QbzSession.tr("Re-scan your folders and media servers for new music",
+                                          QbzSession.trRev))
+                    }
                 }
                 QbzSpinner {
                     // ANY sync in flight, not just Plex's: the media-server
@@ -94,7 +105,15 @@ Item {
                 width: openRow.width + 20
                 height: 30
                 radius: 6
-                color: openArea.containsMouse || openMenu.opened
+
+                // An open is in flight. Spinning a drive up and reading a TOC
+                // takes SECONDS, and until this existed those seconds looked
+                // exactly like a click that missed — so the chip both says so
+                // and stops taking a second click onto a drive it is already
+                // reading.
+                readonly property bool busy: QbzLocal.localDiscOpening
+
+                color: (!openBtn.busy && (openArea.containsMouse || openMenu.opened))
                     ? theme.surfaceHover
                     : (theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated)
 
@@ -102,12 +121,27 @@ Item {
                     id: openRow
                     anchors.centerIn: parent
                     spacing: 6
-                    QbzIcon {
-                        name: "folder-open"
+                    // The spinner takes the ICON's slot rather than being
+                    // appended: the chip is 15px wider either way, so the
+                    // label and the chevron do not shuffle sideways the
+                    // instant the disc is picked.
+                    Item {
                         width: 15
                         height: 15
                         anchors.verticalCenter: parent.verticalCenter
-                        tintName: openArea.containsMouse ? "textPrimary" : "secondary"
+                        QbzIcon {
+                            anchors.fill: parent
+                            name: "folder-open"
+                            visible: !openBtn.busy
+                            tintName: openArea.containsMouse ? "textPrimary" : "secondary"
+                        }
+                        QbzSpinner {
+                            anchors.centerIn: parent
+                            size: 15
+                            // `visible` also stops the rotation (QbzSpinner
+                            // gates on it), so an idle chip presents nothing.
+                            visible: openBtn.busy
+                        }
                     }
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
@@ -127,9 +161,18 @@ Item {
                 MouseArea {
                     id: openArea
                     anchors.fill: parent
+                    enabled: !openBtn.busy
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: openMenu.openBelowLeft(openBtn)
+                    // What this door is FOR, in one line. "Open" next to a tab
+                    // called Folders reads as "browse my library", which is
+                    // the opposite of what it does.
+                    onContainsMouseChanged: tips.hover(containsMouse, openBtn, "open-chip",
+                        openBtn.busy
+                            ? QbzSession.tr("Reading the disc…", QbzSession.trRev)
+                            : QbzSession.tr("Play a folder, CD or disc image without adding it to your library",
+                                            QbzSession.trRev))
                 }
             }
         }
@@ -259,4 +302,13 @@ Item {
                 QbzLocal.mediaSync("subsonic", false)
         }
     }
+
+    // Hover tooltips for this header's controls. The overlay takes no pointer
+    // and owns no animator, so an idle one costs nothing.
+    QbzTooltip {
+        id: tips
+        anchors.fill: parent
+        z: 900
+    }
+
 }

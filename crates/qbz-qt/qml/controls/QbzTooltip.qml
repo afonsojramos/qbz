@@ -203,6 +203,24 @@ Item {
         root.ownerKey = key
     }
     // Race-safe close: only the owner may clear the bubble.
+    /// The whole boilerplate of a hover tooltip, in one call.
+    ///
+    /// Every call site was writing the same four lines — an
+    /// `onContainsMouseChanged` that branches on the flag and remembers to
+    /// pass the same key to both `showAbove` and `hide`. Two of them got the
+    /// key wrong, which does not fail: the bubble simply never goes away,
+    /// because `hide` only clears a tooltip it owns. One function, one key,
+    /// no way to mismatch them.
+    ///
+    /// `on` is the hover flag (a MouseArea's `containsMouse`, a HoverHandler's
+    /// `hovered`); `item` is what the bubble points at.
+    function hover(on, item, key, text) {
+        if (on)
+            root.showAbove(item, key, text)
+        else
+            root.hide(key)
+    }
+
     function hide(key) {
         if (root.ownerKey === key) {
             root.ownerKey = ""
@@ -274,8 +292,17 @@ Item {
     readonly property bool flipUp: root.isSummary
         && (root.belowY + root.bubbleH > root.height - 8)
         && (root.aboveY >= 8)
-    // True when the caret points UP at a control above the bubble.
-    readonly property bool caretUp: root.isSummary && !root.flipUp
+    // ...and the mirror of it for the ABOVE placement, which needed the same
+    // escape and did not have it: a control near the TOP of its host — the
+    // disc pane's close button sits 16px under the header — put the bubble at
+    // a negative y, where the header simply painted over it. Flips BELOW when
+    // there is no room above and there is room under.
+    readonly property bool flipDown: root.placement === 1
+        && (root.aboveY < 8)
+        && (root.belowY + root.bubbleH <= root.height - 8)
+    // True when the caret points UP at a control above the bubble — i.e.
+    // whenever the bubble ended up UNDER what it describes.
+    readonly property bool caretUp: (root.isSummary && !root.flipUp) || root.flipDown
 
     // ---- The bubble -------------------------------------------------------
     Item {
@@ -284,7 +311,7 @@ Item {
         x: Math.round(root.placement === 0 ? root.rightX : root.aboveX)
         y: Math.round(root.placement === 0 ? root.rightY
                       : root.isSummary ? (root.flipUp ? root.aboveY : root.belowY)
-                      : root.aboveY)
+                      : (root.flipDown ? root.belowY : root.aboveY))
         width: Math.ceil(root.bubbleW)
         height: Math.ceil(root.bubbleH)
 

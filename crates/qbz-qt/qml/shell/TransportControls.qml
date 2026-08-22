@@ -23,6 +23,8 @@ Row {
     property bool classicActions: false
     /// Now-playing favorite state, for the Classic heart.
     property bool favorite: false
+    /// The playing track is ephemeral — the heart has nothing to write to.
+    property bool ephemeral: false
 
     /// Emitted by "+" with the button as anchor, so the flyout is owned
     /// by the bar (one menu, both mount points).
@@ -172,6 +174,7 @@ Row {
     FavToggle {
         visible: tc.classicActions
         favorite: tc.favorite
+        disabled: tc.ephemeral
         anchors.verticalCenter: parent.verticalCenter
     }
 }

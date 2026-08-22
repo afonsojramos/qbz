@@ -720,6 +720,23 @@ Rectangle {
     TrackReplacementModal {
         anchors.fill: parent
     }
+    // The two DISC modals. Out here for the same reason as their neighbours:
+    // both of them RENAME the open session as their success case, so a modal
+    // parented into the Local Library pane would be torn down by the very
+    // publish that means it worked. Each self-gates on its own document, so a
+    // closed one is an invisible, non-interactive Item.
+    DiscMetaModal {
+        anchors.fill: parent
+    }
+    RipWizardModal {
+        anchors.fill: parent
+    }
+    // The rip's progress panel. Out here because the JOB outlives the pane —
+    // the user can navigate away mid-rip and the drive keeps spinning — so it
+    // must not be parented into a view that gets destroyed on a tab change.
+    RipProgressModal {
+        anchors.fill: parent
+    }
     MyQbzModals {
         anchors.fill: parent
     }
