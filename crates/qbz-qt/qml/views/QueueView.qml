@@ -90,6 +90,23 @@ Rectangle {
         onTriggered: root.requestVisibleCovers()
     }
 
+    // The current cover already has an authoritative resolved path on the
+    // player bridge. Reuse it for every row carrying that exact URL while the
+    // generic url-keyed artwork echo settles. This matters for adjacent tracks
+    // from one album: a missed/late echo otherwise leaves all of them as dark
+    // tiles even though the NPB is visibly rendering the same cached file.
+    function coverPath(row) {
+        var url = row ? (row.artUrl || "") : ""
+        var resolved = root.coverMap[url] || ""
+        if (resolved !== "")
+            return resolved
+        if (url !== "" && root.currentRow
+                && url === (root.currentRow.artUrl || "")
+                && QbzPlayer.npArtworkPath !== "")
+            return QbzPlayer.npArtworkPath
+        return ""
+    }
+
     // ----------------------------- actions ------------------------------
 
     function rowBlocked(row) {
@@ -496,7 +513,7 @@ Rectangle {
 
                     readonly property string heading: root.sectionText(index, modelData)
                     readonly property var displayItem: Object.assign({}, modelData, {
-                        "artPath": root.coverMap[modelData.artUrl || ""] || ""
+                        "artPath": root.coverPath(modelData)
                     })
 
                     width: queueList.width
@@ -545,7 +562,7 @@ Rectangle {
                             ? "circle-stop" : ""
                         menuEntriesOverride: root.queueMenu(rowHost.modelData)
                         artPending: (rowHost.modelData.artUrl || "") !== ""
-                            && !root.coverMap[rowHost.modelData.artUrl]
+                            && root.coverPath(rowHost.modelData) === ""
                         skelPhase: (Math.floor(Math.abs(QbzShell.pulseMs) / 900) % 2) === 1
                         artSettleMs: 2500
 
