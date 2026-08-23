@@ -89,6 +89,16 @@ Rectangle {
     readonly property var sections: JSON.parse(QbzHome.homeSectionsJson)
     readonly property var editorSections: JSON.parse(QbzHome.editorSectionsJson)
     readonly property var forYouSections: JSON.parse(QbzHome.forYouSectionsJson)
+    // Track edges replace only these three descriptors. Keeping them outside
+    // the tab documents preserves every unrelated rail's delegate model and
+    // horizontal scroll position.
+    readonly property var recentRails: {
+        try {
+            return JSON.parse(QbzHome.recentRailsJson)
+        } catch (e) {
+            return ({})
+        }
+    }
     // Recommendations (the 4th tab). Lazy: the document stays "[]" until the
     // tab is first shown and src/recommendations_qt.rs publishes into it.
     readonly property var recoSections: JSON.parse(QbzHome.recoSectionsJson)
@@ -194,12 +204,41 @@ Rectangle {
                 root.forYouArt = Object.assign({}, m)   // rebind needs a NEW ref
         }
     }
+    // Late covers for the three targeted recent rails. Like the For You and
+    // Recommendations maps, this patches tiles by URL instead of republishing
+    // a section document after an image download.
+    property var recentArt: ({})
+    Connections {
+        target: QbzHome
+        function onRecentArtReady(patchJson) {
+            var patch
+            try {
+                patch = JSON.parse(patchJson)
+            } catch (e) {
+                return
+            }
+            var m = root.recentArt
+            var changed = false
+            for (var url in patch) {
+                if (m[url] !== patch[url]) {
+                    m[url] = patch[url]
+                    changed = true
+                }
+            }
+            if (changed)
+                root.recentArt = Object.assign({}, m)
+        }
+    }
     // Re-hand the resolved covers to this (possibly brand-new) instance. Cheap
     // and idempotent: it re-reads the memoized cache paths off the Rust stores,
     // never downloads, never republishes a document, and emits nothing at all
     // when nothing is resolved yet — so the first, cold mount is a no-op and the
     // in-flight download's own emit still fills the map.
-    Component.onCompleted: { QbzHome.refreshForyouArt(); QbzHome.refreshRecoArt() }
+    Component.onCompleted: {
+        QbzHome.refreshForyouArt()
+        QbzHome.refreshRecoArt()
+        QbzHome.refreshRecentArt()
+    }
     // Recommendations' rails used to get their covers by REPUBLISHING
     // `recoSectionsJson` once per landing batch, which hands `model:` a new JS
     // array — `QQuickItemView::setModel()` then resets the rail's scroll and
@@ -238,7 +277,8 @@ Rectangle {
     /// `item.artPath` — byte for byte what the binding read before. No consumer
     /// of a baked `artPath` can lose its cover to this change.
     function sectionArtOf(item) {
-        return (item && item.artUrl && root.recoArt[item.artUrl])
+        return (item && item.artUrl && root.recentArt[item.artUrl])
+            || (item && item.artUrl && root.recoArt[item.artUrl])
             || (item ? (item.artPath || "") : "")
     }
 
@@ -367,16 +407,24 @@ Rectangle {
         : root.activeTab === "forYou" ? root.forYouSections
         : root.activeTab === "recommendations" ? root.recoSections
         : root.sections
+    /// Replace only a recent-history ordering slot with its live local-store
+    /// snapshot. Every other descriptor keeps the original object identity.
+    function effectiveSection(section) {
+        if (!section)
+            return section
+        return root.recentRails[section.id] || section
+    }
     /// Ordering slots stay in the document even before their out-of-document
     /// rows arrive. Keep the descriptor stable, but do not instantiate its
     /// heavy rail until it has something to show.
-    function sectionIsVisible(section) {
+    function sectionIsVisible(section, tab) {
         if (!section)
             return false
         return section.kind === "pinned" ? root.pinnedItems.length > 0
             : section.kind === "radio" ? root.radioStations.length > 0
             : section.kind === "spotlight" ? root.spotlight.visible === true
             : root.isWeeklySlot(section.id) ? root.weeklyRows(section.id).length > 0
+            : section.kind === "recentPlaceholder" && tab === "forYou" ? false
             : true
     }
     /// The vertical ListView uses zero spacing so a hidden ordering slot leaves
@@ -385,7 +433,7 @@ Rectangle {
     function hasVisibleSectionAfter(index) {
         var model = root.activeSections
         for (var i = index + 1; i < model.length; i++) {
-            if (root.sectionIsVisible(model[i]))
+            if (root.sectionIsVisible(root.effectiveSection(model[i]), root.activeTab))
                 return true
         }
         return false
@@ -419,7 +467,8 @@ Rectangle {
         || root.anyForYouArtPending(root.spotlight.visible === true ? [root.spotlight] : [])
     function anyArtPending(model) {
         for (var s = 0; s < model.length; s++) {
-            if (root.anyItemArtPending(model[s].items || []))
+            var section = root.effectiveSection(model[s])
+            if (root.anyItemArtPending(section.items || []))
                 return true
         }
         return false
@@ -1231,7 +1280,8 @@ Rectangle {
         /// "home" | "editorPicks" | "forYou" | "recommendations" — forwarded
         /// to the rail so its "View all" resolves per tab.
         property string railTab: "home"
-        readonly property bool shown: root.sectionIsVisible(modelData)
+        readonly property var effectiveData: root.effectiveSection(modelData)
+        readonly property bool shown: root.sectionIsVisible(effectiveData, railTab)
         width: parent ? parent.width : 0
         // ListView spacing would reserve a gap for zero-height hidden ordering
         // slots. Carry the 40px gap inside each visible slot instead, and only
@@ -1265,15 +1315,15 @@ Rectangle {
                 // entirely, spacing included, so an empty one leaves no gap.
                 active: railSlot.shown
                 visible: active
-                sourceComponent: modelData.kind === "album" ? albumRailComp
-                    : modelData.kind === "playlist" ? playlistRailComp
-                    : modelData.kind === "slim" ? slimGridComp
-                    : modelData.kind === "slimTracks" ? trackGridComp
-                    : modelData.kind === "artists" ? artistRailComp
-                    : modelData.kind === "pinned" ? pinnedRailComp
-                    : modelData.kind === "mixes" ? mixesRailComp
-                    : modelData.kind === "radio" ? radioRailComp
-                    : modelData.kind === "spotlight" ? spotlightRailComp
+                sourceComponent: sectionData.kind === "album" ? albumRailComp
+                    : sectionData.kind === "playlist" ? playlistRailComp
+                    : sectionData.kind === "slim" ? slimGridComp
+                    : sectionData.kind === "slimTracks" ? trackGridComp
+                    : sectionData.kind === "artists" ? artistRailComp
+                    : sectionData.kind === "pinned" ? pinnedRailComp
+                    : sectionData.kind === "mixes" ? mixesRailComp
+                    : sectionData.kind === "radio" ? radioRailComp
+                    : sectionData.kind === "spotlight" ? spotlightRailComp
                     : recentComp
                 // A Weekly slot arrives with EMPTY items and is filled from
                 // `recoWeekly` here. Object.assign builds a new descriptor
@@ -1281,9 +1331,10 @@ Rectangle {
                 // same `modelData` reference, so a Weekly landing re-evaluates
                 // all nine bindings but re-creates only the two delegates
                 // whose value actually changed.
-                property var sectionData: root.isWeeklySlot(modelData.id)
-                    ? Object.assign({}, modelData, { "items": root.weeklyRows(modelData.id) })
-                    : modelData
+                property var sectionData: root.isWeeklySlot(railSlot.effectiveData.id)
+                    ? Object.assign({}, railSlot.effectiveData,
+                                    { "items": root.weeklyRows(railSlot.effectiveData.id) })
+                    : railSlot.effectiveData
 
                 Component {
                     id: pinnedRailComp

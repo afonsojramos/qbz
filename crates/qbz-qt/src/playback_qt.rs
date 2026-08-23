@@ -3215,6 +3215,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 if !crate::local_ephemeral::is_ephemeral_id(track_id as i64) {
                     if let Some(track) = runtime.core().get_queue_state().await.current_track {
                         crate::recently_qt::record_queue_track(&track);
+                        crate::home_qt::note_recent_store_changed();
                     }
                 }
                 // Persist the session (queue + current track + position) so a

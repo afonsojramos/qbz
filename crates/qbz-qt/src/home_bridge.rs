@@ -45,6 +45,10 @@ pub mod qbz_home {
         // HomeSection shape, ordered by each tab's discover prefs).
         #[qproperty(QString, editor_sections_json)]
         #[qproperty(QString, for_you_sections_json)]
+        // The three local recently-played sections, keyed by section id. A
+        // track edge replaces only these rows; the large tab documents stay
+        // stable, so every unrelated carousel keeps its delegates and scroll.
+        #[qproperty(QString, recent_rails_json)]
         // The "Pinned" rail's ROWS, on their own property (a bare HomeCard
         // array). The three documents above carry only an EMPTY `pinned`
         // section, as the ordering slot the discover prefs place — 1:1 with
@@ -297,6 +301,11 @@ pub mod qbz_home {
         #[qinvokable]
         fn refresh_reco_art(self: Pin<&mut QbzHome>);
 
+        /// Re-hand late artwork for the targeted recent-rails document after
+        /// HomeView was destroyed and mounted again.
+        #[qinvokable]
+        fn refresh_recent_art(self: Pin<&mut QbzHome>);
+
         // --- Label releases sub-view --------------------------------------
         #[qinvokable]
         fn label_releases_load_more(self: Pin<&mut QbzHome>);
@@ -364,6 +373,11 @@ pub mod qbz_home {
         /// is `recoArtReady`, so the handler is `onRecoArtReady(patchJson)`.
         #[qsignal]
         fn reco_art_ready(self: Pin<&mut QbzHome>, patch_json: QString);
+
+        /// Same per-url patch contract for covers that land after a targeted
+        /// recently-played update. QML spelling: `recentArtReady`.
+        #[qsignal]
+        fn recent_art_ready(self: Pin<&mut QbzHome>, patch_json: QString);
     }
 
     impl cxx_qt::Threading for QbzHome {}
@@ -378,6 +392,7 @@ pub struct QbzHomeRust {
     home_sections_json: QString,
     editor_sections_json: QString,
     for_you_sections_json: QString,
+    recent_rails_json: QString,
     pinned_json: QString,
     radio_stations_json: QString,
     spotlight_json: QString,
@@ -414,6 +429,7 @@ impl Default for QbzHomeRust {
             home_sections_json: QString::from("[]"),
             editor_sections_json: QString::from("[]"),
             for_you_sections_json: QString::from("[]"),
+            recent_rails_json: QString::from("{}"),
             pinned_json: QString::from("[]"),
             radio_stations_json: QString::from("[]"),
             // "{}" so `JSON.parse(...).visible` is a plain `undefined` on the
@@ -719,6 +735,17 @@ impl qbz_home::QbzHome {
         }
         self.as_mut()
             .reco_art_ready(QString::from(patch.as_str()));
+    }
+
+    /// Synchronous, in-memory re-hand on HomeView mount. The history stores
+    /// are read only by the playback-edge worker, never from the Qt thread.
+    pub fn refresh_recent_art(mut self: Pin<&mut Self>) {
+        let patch = crate::home_qt::resolved_recent_art_patch();
+        if patch.is_empty() {
+            return;
+        }
+        self.as_mut()
+            .recent_art_ready(QString::from(patch.as_str()));
     }
 
     // --- Label releases ----------------------------------------------------

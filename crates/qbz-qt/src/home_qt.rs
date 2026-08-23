@@ -35,7 +35,10 @@
 //! - Recommendations tab: ported in `recommendations_qt` (this module only
 //!   supplies the shared `HomeSection`/`HomeCard` transport).
 
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use cxx_qt_lib::QString;
 use qbz_app::shell::AppRuntime;
@@ -312,6 +315,95 @@ pub(crate) fn publish_pinned() {
     });
 }
 
+/// Build the three local recently-played ordering slots from their stores.
+///
+/// Kept separate from [`build_candidates`] because a track edge refreshes
+/// these rows without fetching `/discover/index` or republishing the other
+/// rails. Empty stores still produce stable placeholder slots: Home renders
+/// their hints, while For You hides them until a later play turns them into
+/// real rails.
+fn build_recent_sections() -> Vec<HomeSection> {
+    let mut out = Vec::with_capacity(3);
+
+    let recent_albums: Vec<HomeCard> = crate::recently_qt::load_albums()
+        .into_iter()
+        .map(map_recent_album)
+        .collect();
+    if recent_albums.is_empty() {
+        out.push(HomeSection {
+            id: "recentlyPlayedAlbums".to_string(),
+            title: qbz_i18n::t("Recently Played Albums"),
+            kind: "recentPlaceholder".to_string(),
+            hint: qbz_i18n::t("Albums you play will appear here."),
+            endpoint: String::new(),
+            items: Vec::new(),
+        });
+    } else {
+        out.push(HomeSection {
+            id: "recentlyPlayedAlbums".to_string(),
+            title: qbz_i18n::t("Recently Played Albums"),
+            kind: "album".to_string(),
+            hint: String::new(),
+            endpoint: String::new(),
+            items: recent_albums,
+        });
+    }
+
+    // Playlist plays are recorded from QueueTrack::context_kind instead of
+    // being misclassified as album plays.
+    let recent_playlists: Vec<HomeCard> =
+        qbz_app::settings::playlist_play_history::recent_playlists(24)
+            .into_iter()
+            .map(map_recent_playlist)
+            .collect();
+    if recent_playlists.is_empty() {
+        out.push(HomeSection {
+            id: "recentlyPlayedPlaylists".to_string(),
+            title: qbz_i18n::t("Recently Played Playlists"),
+            kind: "recentPlaceholder".to_string(),
+            hint: qbz_i18n::t("Playlists you play will appear here."),
+            endpoint: String::new(),
+            items: Vec::new(),
+        });
+    } else {
+        out.push(HomeSection {
+            id: "recentlyPlayedPlaylists".to_string(),
+            title: qbz_i18n::t("Recently Played Playlists"),
+            kind: "playlist".to_string(),
+            hint: String::new(),
+            endpoint: String::new(),
+            items: recent_playlists,
+        });
+    }
+
+    let recent_tracks: Vec<HomeCard> = crate::recently_qt::load_tracks()
+        .into_iter()
+        .take(24)
+        .map(map_recent_track)
+        .collect();
+    if recent_tracks.is_empty() {
+        out.push(HomeSection {
+            id: "continueListening".to_string(),
+            title: qbz_i18n::t("Recently Played Tracks"),
+            kind: "recentPlaceholder".to_string(),
+            hint: qbz_i18n::t("Tracks you play will appear here."),
+            endpoint: String::new(),
+            items: Vec::new(),
+        });
+    } else {
+        out.push(HomeSection {
+            id: "continueListening".to_string(),
+            title: qbz_i18n::t("Recently Played Tracks"),
+            kind: "slimTracks".to_string(),
+            hint: String::new(),
+            endpoint: String::new(),
+            items: recent_tracks,
+        });
+    }
+
+    out
+}
+
 /// All sections any Discover tab can render, in construction order (the
 /// per-tab assembly clones from here). Ids are the DiscoverySectionId keys;
 /// "mostStreamed#album" is the EDITOR-tab variant (album carousel — the
@@ -430,93 +522,7 @@ fn build_candidates(
     // document carries both halves.
     set_playlist_tag_catalog(playlist_tags);
 
-    // Recently-played rails — the SHARED local history file
-    // (`recently_qt`, the same `recently_played.json` the Slint build
-    // writes). With data they are a real album carousel / slim TRACK
-    // carousel; empty they keep the Slint placeholders, which the For You
-    // assembly drops (its arms self-hide instead).
-    let recent_albums: Vec<HomeCard> = crate::recently_qt::load_albums()
-        .into_iter()
-        .map(map_recent_album)
-        .collect();
-    if recent_albums.is_empty() {
-        out.push(HomeSection {
-            id: "recentlyPlayedAlbums".to_string(),
-            title: qbz_i18n::t("Recently Played Albums"),
-            kind: "recentPlaceholder".to_string(),
-            hint: qbz_i18n::t("Albums you play will appear here."),
-            endpoint: String::new(),
-            items: Vec::new(),
-        });
-    } else {
-        out.push(HomeSection {
-            id: "recentlyPlayedAlbums".to_string(),
-            title: qbz_i18n::t("Recently Played Albums"),
-            kind: "album".to_string(),
-            hint: String::new(),
-            // Slint's "View all" here opens a LOCAL page (not a /discover
-            // endpoint); that page is not ported, so no header link.
-            endpoint: String::new(),
-            items: recent_albums,
-        });
-    }
-    // Recently Played PLAYLISTS — the rail that exists because its album
-    // sibling above used to answer for it. Every track start wrote its ALBUM
-    // into the recent history whatever the user had actually put on, so one
-    // 40-track playlist filled a 24-entry album rail with that playlist's
-    // contents and the playlist itself was recorded nowhere. Plays carry their
-    // context now (`recently_qt::record_queue_track` reads
-    // `QueueTrack::context_kind`), the album rail takes only album plays, and
-    // the playlist plays land here.
-    let recent_playlists: Vec<HomeCard> =
-        qbz_app::settings::playlist_play_history::recent_playlists(24)
-            .into_iter()
-            .map(map_recent_playlist)
-            .collect();
-    if recent_playlists.is_empty() {
-        out.push(HomeSection {
-            id: "recentlyPlayedPlaylists".to_string(),
-            title: qbz_i18n::t("Recently Played Playlists"),
-            kind: "recentPlaceholder".to_string(),
-            hint: qbz_i18n::t("Playlists you play will appear here."),
-            endpoint: String::new(),
-            items: Vec::new(),
-        });
-    } else {
-        out.push(HomeSection {
-            id: "recentlyPlayedPlaylists".to_string(),
-            title: qbz_i18n::t("Recently Played Playlists"),
-            kind: "playlist".to_string(),
-            hint: String::new(),
-            endpoint: String::new(),
-            items: recent_playlists,
-        });
-    }
-
-    let recent_tracks: Vec<HomeCard> = crate::recently_qt::load_tracks()
-        .into_iter()
-        .take(24)
-        .map(map_recent_track)
-        .collect();
-    if recent_tracks.is_empty() {
-        out.push(HomeSection {
-            id: "continueListening".to_string(),
-            title: qbz_i18n::t("Recently Played Tracks"),
-            kind: "recentPlaceholder".to_string(),
-            hint: qbz_i18n::t("Tracks you play will appear here."),
-            endpoint: String::new(),
-            items: Vec::new(),
-        });
-    } else {
-        out.push(HomeSection {
-            id: "continueListening".to_string(),
-            title: qbz_i18n::t("Recently Played Tracks"),
-            kind: "slimTracks".to_string(),
-            hint: String::new(),
-            endpoint: String::new(),
-            items: recent_tracks,
-        });
-    }
+    out.extend(build_recent_sections());
 
     // Most Played Albums — ranked by LOCAL play count
     // (`album_play_history`, the shared per-app SQLite store). No network.
@@ -861,12 +867,11 @@ fn assemble(
     let sizes = crate::discover_config_qt::rail_sizes();
     let home = order_by_prefs(candidates, prefs, DiscoveryTab::Home, "mostStreamed", true, &sizes);
     let editor = order_by_prefs(candidates, prefs, DiscoveryTab::EditorPicks, "mostStreamed#album", false, &sizes);
-    // For You: the local-history arms (recentPlaceholder) self-hide on
-    // empty data in Slint — drop them here (local store out of scope).
-    let for_you: Vec<HomeSection> = order_by_prefs(candidates, prefs, DiscoveryTab::ForYou, "mostStreamed", false, &sizes)
-        .into_iter()
-        .filter(|s| s.kind != "recentPlaceholder")
-        .collect();
+    // Keep empty recent-history ordering slots in For You. QML self-hides the
+    // placeholder, matching the reference, but retaining the descriptor lets
+    // a targeted recent-rails update reveal it after the first play without a
+    // full Home document republish.
+    let for_you = order_by_prefs(candidates, prefs, DiscoveryTab::ForYou, "mostStreamed", false, &sizes);
     DiscoverSections {
         home,
         editor,
@@ -896,10 +901,6 @@ pub(crate) fn renderable_ids(tab: qbz_app::settings::discover_prefs::DiscoveryTa
     };
     let mut out: Vec<String> = Vec::new();
     for section in candidates.iter() {
-        // The For You tab drops the local-history placeholders (see assemble).
-        if matches!(tab, DiscoveryTab::ForYou) && section.kind == "recentPlaceholder" {
-            continue;
-        }
         if section.id == variant {
             out.push("mostStreamed".to_string());
         } else if !section.id.contains('#') {
@@ -945,6 +946,112 @@ pub(crate) fn publish(sections: &DiscoverSections) {
             .set_editor_sections_json(QString::from(editor_json.as_str()));
         b.as_mut()
             .set_for_you_sections_json(QString::from(for_you_json.as_str()));
+    });
+}
+
+/// Latest track-edge revision. A short debounce coalesces skip storms while
+/// keeping the normal one-track transition effectively immediate. There is no
+/// timer that wakes while playback is idle and no discover/network reload.
+static RECENT_REFRESH_REVISION: AtomicU64 = AtomicU64::new(0);
+
+/// Artwork patches that landed after a targeted recent-rails document. The
+/// map survives HomeView destruction so a new instance can be re-handed the
+/// same paths without reading history stores on the Qt thread.
+static RECENT_ART_PATCH: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+
+fn recent_sections_json(sections: &[HomeSection]) -> String {
+    let by_id: BTreeMap<&str, &HomeSection> = sections
+        .iter()
+        .map(|section| (section.id.as_str(), section))
+        .collect();
+    serde_json::to_string(&by_id).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn push_recent_sections(sections: &[HomeSection]) {
+    // Keep configurator-triggered full republishes honest too: they clone this
+    // cache, so leaving its recent rows stale would briefly undo the targeted
+    // update when the user changes a rail preference.
+    if let Ok(mut candidates) = CANDIDATES.lock() {
+        for fresh in sections {
+            if let Some(slot) = candidates.iter_mut().find(|slot| slot.id == fresh.id) {
+                *slot = fresh.clone();
+            }
+        }
+    }
+    let json = recent_sections_json(sections);
+    crate::home_bridge::ui(move |mut b| {
+        b.as_mut().set_recent_rails_json(QString::from(json.as_str()));
+    });
+}
+
+fn emit_recent_art(patch: BTreeMap<String, String>) {
+    if patch.is_empty() {
+        return;
+    }
+    if let Ok(mut stored) = RECENT_ART_PATCH.lock() {
+        stored.extend(patch.clone());
+    }
+    let json = serde_json::to_string(&patch).unwrap_or_else(|_| "{}".to_string());
+    crate::home_bridge::ui(move |mut b| {
+        b.as_mut().recent_art_ready(QString::from(json.as_str()));
+    });
+}
+
+/// Re-hand artwork patches to a newly mounted HomeView. No store read, disk
+/// lookup or download occurs on the Qt thread.
+pub(crate) fn resolved_recent_art_patch() -> String {
+    let Ok(patch) = RECENT_ART_PATCH.lock() else {
+        return String::new();
+    };
+    if patch.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(&*patch).unwrap_or_default()
+    }
+}
+
+async fn publish_recent_rails(revision: u64) {
+    let mut sections = build_recent_sections();
+    let missing = crate::artwork_qt::attach_cached(&mut sections);
+    // A newer edge arrived while the local stores were being read. Its task
+    // will publish the authoritative snapshot; do not briefly put this older
+    // one on screen first.
+    if RECENT_REFRESH_REVISION.load(Ordering::Acquire) != revision {
+        return;
+    }
+    if let Ok(mut patch) = RECENT_ART_PATCH.lock() {
+        patch.clear();
+    }
+    push_recent_sections(&sections);
+    if missing.is_empty() {
+        return;
+    }
+
+    crate::artwork_qt::download_missing(missing.clone()).await;
+    // The next revision owns both the document and its late artwork.
+    if RECENT_REFRESH_REVISION.load(Ordering::Acquire) != revision {
+        return;
+    }
+    let patch = missing
+        .into_iter()
+        .filter_map(|url| {
+            let path = crate::artwork_qt::cached_path(&url);
+            (!path.is_empty()).then_some((url, path))
+        })
+        .collect();
+    emit_recent_art(patch);
+}
+
+/// A de-duplicated playback edge has already committed the three local
+/// history stores. Refresh just those rails after a 350 ms quiet window.
+pub(crate) fn note_recent_store_changed() {
+    let revision = RECENT_REFRESH_REVISION.fetch_add(1, Ordering::AcqRel) + 1;
+    crate::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        if RECENT_REFRESH_REVISION.load(Ordering::Acquire) != revision {
+            return;
+        }
+        publish_recent_rails(revision).await;
     });
 }
 
@@ -1871,5 +1978,45 @@ mod tests {
             pick_ribbon(Some(&[award(None, "NoId")])),
             ("NoId".to_string(), "press".to_string())
         );
+    }
+
+    #[test]
+    fn recent_sections_document_is_keyed_by_stable_ids() {
+        let sections = vec![
+            HomeSection {
+                id: "recentlyPlayedAlbums".to_string(),
+                title: "Albums".to_string(),
+                kind: "album".to_string(),
+                hint: String::new(),
+                endpoint: String::new(),
+                items: vec![HomeCard {
+                    id: "album-1".to_string(),
+                    ..HomeCard::default()
+                }],
+            },
+            HomeSection {
+                id: "recentlyPlayedPlaylists".to_string(),
+                title: "Playlists".to_string(),
+                kind: "playlist".to_string(),
+                hint: String::new(),
+                endpoint: String::new(),
+                items: Vec::new(),
+            },
+            HomeSection {
+                id: "continueListening".to_string(),
+                title: "Tracks".to_string(),
+                kind: "slimTracks".to_string(),
+                hint: String::new(),
+                endpoint: String::new(),
+                items: Vec::new(),
+            },
+        ];
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&recent_sections_json(&sections)).unwrap();
+        assert_eq!(doc.as_object().map(|o| o.len()), Some(3));
+        assert_eq!(doc["recentlyPlayedAlbums"]["items"][0]["id"], "album-1");
+        assert_eq!(doc["recentlyPlayedPlaylists"]["kind"], "playlist");
+        assert_eq!(doc["continueListening"]["kind"], "slimTracks");
     }
 }
