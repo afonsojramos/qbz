@@ -36,6 +36,11 @@ Item {
     // Programmatic viewport restoration emits the same Flickable signals as
     // user input. Keep those signals from recursively requesting another page.
     property bool restoringPageAnchor: false
+    // Captured at REQUEST time, while the old model is unquestionably still
+    // mounted. Bridge-property notifications may otherwise clear the loading
+    // latch before `tracksVisible` re-evaluates and make rebuild miss the only
+    // trustworthy viewport.
+    property var pendingPageAnchor: null
     // Invalidates a deferred viewport restore when another document/model
     // replacement wins before Qt's next event-loop turn.
     property int entriesEpoch: 0
@@ -61,13 +66,14 @@ Item {
         if (!force && !nearEnd)
             return
 
+        root.pendingPageAnchor = root.capturePageAnchor()
         root.pageRequestPending = true
+        pageRequestRelease.stop()
         QbzLocal.tracksLoadMore()
     }
 
     function capturePageAnchor() {
-        if (root.nativeModelActive || !root.pageRequestPending
-            || root.entries.length === 0 || !list.visible)
+        if (root.nativeModelActive || root.entries.length === 0 || !list.visible)
             return null
 
         // Preserve identity, not merely pixels. Group modes globally reorder
@@ -133,8 +139,11 @@ Item {
             var minY = list.originY
             var maxY = minY + Math.max(0, list.contentHeight - list.height)
             list.contentY = Math.max(minY, Math.min(wanted, maxY))
-            root.restoringPageAnchor = false
-            root.reportSoon()
+            // Keep the guard through Qt's polish pass. contentY/model signals
+            // can arrive after this callback returns; releasing synchronously
+            // is what allowed two extra 500-row requests and the ~1,000-row
+            // forward jump seen in the owner smoke.
+            pageAnchorSettle.restart()
         })
     }
 
@@ -147,7 +156,9 @@ Item {
     /// screen, by the number of headers scrolled past.
     property var rowIndex: []
     function rebuild() {
-        var anchor = root.capturePageAnchor()
+        var anchor = root.pendingPageAnchor
+        if (!anchor && root.pageRequestPending)
+            anchor = root.capturePageAnchor()
         root.entriesEpoch += 1
         var epoch = root.entriesEpoch
         if (root.nativeModelActive) {
@@ -205,12 +216,43 @@ Item {
         function onLocalTracksNativeJumpsJsonChanged() { root.rebuild() }
         function onLocalTracksLoadingMoreChanged() {
             if (!QbzLocal.localTracksLoadingMore)
-                root.pageRequestPending = false
+                pageRequestRelease.restart()
         }
         function onLocalTracksLoadingChanged() {
             // Search/sort/reset supersedes any compatibility-page request.
-            if (QbzLocal.localTracksLoading)
+            if (QbzLocal.localTracksLoading) {
+                pageAnchorSettle.stop()
+                pageRequestRelease.stop()
+                root.restoringPageAnchor = false
+                root.pendingPageAnchor = null
                 root.pageRequestPending = false
+            }
+        }
+    }
+    Timer {
+        id: pageAnchorSettle
+        interval: 50
+        repeat: false
+        onTriggered: {
+            root.restoringPageAnchor = false
+            root.pendingPageAnchor = null
+            root.pageRequestPending = false
+            root.reportSoon()
+        }
+    }
+    Timer {
+        id: pageRequestRelease
+        interval: 250
+        repeat: false
+        onTriggered: {
+            if (root.restoringPageAnchor) {
+                restart()
+                return
+            }
+            // Error/stale-result escape hatch: if no model publication ever
+            // consumed the request-time anchor, the list must remain usable.
+            root.pendingPageAnchor = null
+            root.pageRequestPending = false
         }
     }
     Connections {

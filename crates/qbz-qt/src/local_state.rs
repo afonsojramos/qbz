@@ -531,9 +531,12 @@ mod phase_a_tests {
         assert!(qml.contains("cell.y - list.contentY"));
         assert!(!qml.contains("cell.mapToItem(list"));
         assert!(qml.contains("|| root.restoringPageAnchor"));
-        assert!(qml.contains(
-            "var wanted = list.contentY + currentScreenY - anchor.screenY"
-        ));
+        assert!(qml.contains("root.pendingPageAnchor = root.capturePageAnchor()"));
+        assert!(qml.contains("var anchor = root.pendingPageAnchor"));
+        assert!(qml.contains("id: pageAnchorSettle"));
+        assert!(qml.contains("id: pageRequestRelease"));
+        assert!(qml.contains("pageAnchorSettle.restart()"));
+        assert!(qml.contains("var wanted = list.contentY + currentScreenY - anchor.screenY"));
         assert!(qml.contains("function restorePageAnchor(anchor, nextEntries, epoch)"));
         assert!(qml.contains("Qt.callLater(function ()"));
         assert!(qml.contains("list.positionViewAtIndex(target, ListView.Beginning)"));
