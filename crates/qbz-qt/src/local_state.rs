@@ -502,4 +502,20 @@ mod phase_a_tests {
             &new_request,
         ));
     }
+
+    #[test]
+    fn tracks_tab_keeps_an_origin_aware_page_trigger_and_manual_fallback() {
+        // Smoke regression (2026-08-23): the compatibility ListView reached
+        // exactly three 500-row pages and then stranded the remaining 27,871
+        // rows. ListView's visual offset is contentY - originY after repeated
+        // model replacement; a raw contentY comparison is not stable. Keep a
+        // second, explicit affordance so an omitted Flickable terminal signal
+        // can never make the catalog unreachable again.
+        let qml = include_str!("../qml/views/local/LocalTracksTab.qml");
+        assert!(qml.contains("list.contentY - list.originY"));
+        assert!(qml.contains("onAtYEndChanged"));
+        assert!(qml.contains("onMovementEnded"));
+        assert!(qml.contains("QbzLoadMore"));
+        assert!(qml.contains("onClicked: root.requestNextPage(true)"));
+    }
 }

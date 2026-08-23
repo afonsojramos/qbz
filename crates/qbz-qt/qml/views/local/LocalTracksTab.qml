@@ -28,6 +28,35 @@ Item {
     readonly property int rowH: 50
     readonly property int headerH: 32
     readonly property bool nativeModelActive: QbzLocal.localTracksNativeActive
+    // Synchronous QML-side latch. QbzLocal queues its loadingMore mutation
+    // onto the Qt event loop, so a kinetic-scroll burst can emit more than one
+    // contentY change before that property turns true. All of those changes
+    // describe the same page miss and must collapse into one bridge call.
+    property bool pageRequestPending: false
+
+    function requestNextPage(force) {
+        if (root.nativeModelActive
+            || root.pageRequestPending
+            || !QbzLocal.localTracksHasMore
+            || QbzLocal.localTracksLoadingMore
+            || QbzLocal.localTracksLoading)
+            return
+
+        // ListView coordinates are relative to originY, which is allowed to
+        // become non-zero when a variable-height model is replaced. The old
+        // `contentY + height` check silently stopped matching the visual end
+        // after repeated 500-row JSON republishes (the owner reached exactly
+        // 1,500 rows). QbzScrollBar already follows this same documented
+        // coordinate contract.
+        var scrollY = Math.max(0, list.contentY - list.originY)
+        var nearEnd = list.atYEnd
+            || scrollY + list.height >= list.contentHeight - 600
+        if (!force && !nearEnd)
+            return
+
+        root.pageRequestPending = true
+        QbzLocal.tracksLoadMore()
+    }
 
     // --------------------------- entry model ------------------------------
     property var entries: []
@@ -90,6 +119,15 @@ Item {
         target: QbzLocal
         function onLocalTracksNativeActiveChanged() { root.rebuild() }
         function onLocalTracksNativeJumpsJsonChanged() { root.rebuild() }
+        function onLocalTracksLoadingMoreChanged() {
+            if (!QbzLocal.localTracksLoadingMore)
+                root.pageRequestPending = false
+        }
+        function onLocalTracksLoadingChanged() {
+            // Search/sort/reset supersedes any compatibility-page request.
+            if (QbzLocal.localTracksLoading)
+                root.pageRequestPending = false
+        }
     }
     Connections {
         target: root.view ? root.view.nativeTracksModel : null
@@ -198,40 +236,15 @@ Item {
                 onContentYChanged: {
                     root.report()
                     // Infinite scroll: 600px of runway (Slint :1442).
-                    //
-                    // `contentHeight > height` states the precondition the
-                    // predicate always had: a list shorter than its viewport
-                    // has no bottom to run out of, so it cannot be "600px from
-                    // the end". Nothing is lost by it — a list that short
-                    // cannot scroll (StopAtBounds), so contentY never moves
-                    // and this handler never runs for it.
-                    //
-                    // It is ALSO the guard for this handler's one re-entrant
-                    // entry: it runs from INSIDE QQuickItemView::setModel()
-                    // (the same window that makes a `.model` readback segfault
-                    // — see views/LibraryView.qml), where contentY has been
-                    // reset but the layout has not been redone.
-                    //
-                    // MEASURED, so nobody re-hunts it: that entry does NOT in
-                    // fact misfire under qml6 6.11.1. contentHeight inside the
-                    // swap is the PREVIOUS model's value, not 0 — checked over
-                    // empty->long, short->long, long->short, long->empty,
-                    // same-length republishes, both with forceLayout and on
-                    // the real async polish path. Every one of them entered
-                    // the handler with (contentY 0, contentHeight stale-LARGE)
-                    // and evaluated FALSE. So this line changes no observed
-                    // behaviour today; it is kept because it is true and free,
-                    // and because the only shape that would misfire is the one
-                    // it covers.
-                    if (!root.nativeModelActive
-                        && contentHeight > height
-                        && contentY + height >= contentHeight - 600
-                        && QbzLocal.localTracksHasMore
-                        && !QbzLocal.localTracksLoadingMore
-                        && !QbzLocal.localTracksLoading) {
-                        QbzLocal.tracksLoadMore()
-                    }
+                    root.requestNextPage(false)
                 }
+                // `contentYChanged` is normally sufficient, but a scrollbar
+                // seek and a short, bounded flick may settle directly on the
+                // end without another coordinate signal after layout. These
+                // two public Flickable signals make that terminal state an
+                // explicit page request as well.
+                onAtYEndChanged: if (atYEnd) root.requestNextPage(false)
+                onMovementEnded: root.requestNextPage(false)
                 onModelChanged: root.report()
                 onHeightChanged: root.report()
                 onVisibleChanged: {
@@ -349,22 +362,25 @@ Item {
                     }
                 }
 
-                // Infinite scroll: the NEXT page in the shape it will arrive
-                // in (3 rows), appended below the last real row. Each
-                // placeholder is replaced by a real row as the page lands.
+                // Infinite scroll remains the fast path. The explicit shared
+                // affordance is the recovery path: a platform/input sequence
+                // that omits the expected end signal can never strand a large
+                // catalog at a page boundary again.
                 footer: Item {
                     width: list.width
-                    height: !root.nativeModelActive && QbzLocal.localTracksLoadingMore
-                        ? 3 * root.rowH : 0
-                    QbzSkeleton {
-                        variant: "rowList"
-                        anchors.fill: parent
-                        visible: !root.nativeModelActive && QbzLocal.localTracksLoadingMore
+                    height: loadMore.visible ? loadMore.height : 0
+                    QbzLoadMore {
+                        id: loadMore
+                        width: parent.width
+                        visible: !root.nativeModelActive
+                            && QbzLocal.localTracksHasMore
+                        busy: QbzLocal.localTracksLoadingMore
+                        skeleton: "rows"
                         rowH: root.rowH
                         rowGap: 0
-                        rowArt: root.view.trackArtwork
                         rowArtSize: 36
-                        phase: root.view.skelPhase
+                        rowCount: 3
+                        onClicked: root.requestNextPage(true)
                     }
                 }
             }
