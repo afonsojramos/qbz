@@ -1,8 +1,7 @@
-// Tracks tab body (LocalLibraryView.slint:1317) — the SERVER-PAGINATED flat
-// list. This is the surface that froze the Slint build at 16k tracks: the
-// model is never the whole table (500 rows per page, appended within 600px
-// of the tail — the Slint's own trigger distance at :1442) and the ListView
-// only ever instantiates its window.
+// Tracks tab body (LocalLibraryView.slint:1317). The compatibility reader is
+// server-paginated JSON; Phase E binds the same delegates to a native
+// QAbstractListModel with exact rowCount, 250-row keyset pages and an eight-page
+// LRU. Missing data is a placeholder and only emits an async page request.
 //
 // Grouping (off / album / artist / name) inserts 32px header rows, so the
 // model is an entry array — { t: 0, label } | { t: 1, row, n } — exactly as
@@ -28,6 +27,7 @@ Item {
 
     readonly property int rowH: 50
     readonly property int headerH: 32
+    readonly property bool nativeModelActive: QbzLocal.localTracksNativeActive
 
     // --------------------------- entry model ------------------------------
     property var entries: []
@@ -38,6 +38,17 @@ Item {
     /// screen, by the number of headers scrolled past.
     property var rowIndex: []
     function rebuild() {
+        if (root.nativeModelActive) {
+            entries = []
+            rowIndex = []
+            try {
+                alphaJumps = JSON.parse(QbzLocal.localTracksNativeJumpsJson) || []
+            } catch (e) {
+                alphaJumps = []
+            }
+            reportSoon()
+            return
+        }
         var rows = view ? view.tracksVisible : []
         var mode = view ? view.tracksGroup : "off"
         var out = []
@@ -68,12 +79,22 @@ Item {
     Component.onDestruction: if (view) view.releaseWindow("tracks")
     Connections {
         target: root.view
-        function onTracksVisibleChanged() { root.rebuild() }
+        function onTracksVisibleChanged() { if (!root.nativeModelActive) root.rebuild() }
         function onTracksGroupChanged() { root.rebuild() }
         // The row artwork column is OFF by default; turning it on has to ask
         // for the covers the rows are already bound to.
         function onTrackArtworkChanged() { root.reportSoon() }
         function onArtworkRefresh() { root.reportSoon() }
+    }
+    Connections {
+        target: QbzLocal
+        function onLocalTracksNativeActiveChanged() { root.rebuild() }
+        function onLocalTracksNativeJumpsJsonChanged() { root.rebuild() }
+    }
+    Connections {
+        target: root.view ? root.view.nativeTracksModel : null
+        function onDataChanged() { root.reportSoon() }
+        function onModelReset() { root.reportSoon() }
     }
 
     // --------------------------- row play ---------------------------------
@@ -94,8 +115,9 @@ Item {
         for (var i = 0; i < rows.length; i++) out.push(rows[i].id)
         return out
     }
-    function playRow(id) {
-        QbzLocal.playTracksVisible(JSON.stringify(visibleTrackIds()), id)
+    function playRow(index, id) {
+        if (root.nativeModelActive) QbzLocal.tracksNativePlay(index)
+        else QbzLocal.playTracksVisible(JSON.stringify(visibleTrackIds()), id)
     }
 
     // First page = the shape of the 50px track rows (the Slint mounts a bare
@@ -114,13 +136,17 @@ Item {
         phase: root.view.skelPhase
     }
     LocalNote {
-        visible: !QbzLocal.localTracksLoading && root.view.tracks.length === 0
+        visible: !QbzLocal.localTracksLoading
+            && (root.nativeModelActive ? QbzLocal.localTracksNativeTotal === 0
+                            : root.view.tracks.length === 0)
             && root.view.tracksSearch === ""
         text: QbzSession.tr("No tracks in your local library yet.", QbzSession.trRev)
     }
     LocalNote {
         visible: !QbzLocal.localTracksLoading
-            && (root.view.tracks.length === 0 || root.view.tracksVisible.length === 0)
+            && (root.nativeModelActive ? QbzLocal.localTracksNativeTotal === 0
+                            : (root.view.tracks.length === 0
+                               || root.view.tracksVisible.length === 0))
             && root.view.tracksSearch !== ""
         text: QbzSession.tr("No tracks match your search.", QbzSession.trRev)
     }
@@ -131,7 +157,9 @@ Item {
         anchors.rightMargin: root.sideInset
         anchors.topMargin: 12
         spacing: 8
-        visible: !QbzLocal.localTracksLoading && root.view.tracksVisible.length > 0
+        visible: !QbzLocal.localTracksLoading
+            && (root.nativeModelActive ? QbzLocal.localTracksNativeTotal > 0
+                            : root.view.tracksVisible.length > 0)
 
         QbzMultiSelectBar {
             visible: root.view.tracksMultiSelect
@@ -165,7 +193,7 @@ Item {
                 clip: true
                 cacheBuffer: 50 * 12
                 boundsBehavior: Flickable.StopAtBounds
-                model: root.entries
+                model: root.nativeModelActive ? root.view.nativeTracksModel : root.entries
 
                 onContentYChanged: {
                     root.report()
@@ -195,7 +223,8 @@ Item {
                     // behaviour today; it is kept because it is true and free,
                     // and because the only shape that would misfire is the one
                     // it covers.
-                    if (contentHeight > height
+                    if (!root.nativeModelActive
+                        && contentHeight > height
                         && contentY + height >= contentHeight - 600
                         && QbzLocal.localTracksHasMore
                         && !QbzLocal.localTracksLoadingMore
@@ -213,8 +242,11 @@ Item {
                 delegate: Loader {
                     required property var modelData
                     width: list.width
-                    height: modelData.t === 0 ? root.headerH : root.rowH
-                    sourceComponent: modelData.t === 0 ? headerComp : rowComp
+                    height: root.nativeModelActive
+                        ? root.rowH + (modelData.groupStart ? root.headerH : 0)
+                        : (modelData.t === 0 ? root.headerH : root.rowH)
+                    sourceComponent: root.nativeModelActive ? nativeRowComp
+                        : (modelData.t === 0 ? headerComp : rowComp)
 
                     Component {
                         id: headerComp
@@ -251,11 +283,68 @@ Item {
                             showArtwork: root.view.trackArtwork
                             selectMode: root.view.tracksMultiSelect
                             checked: root.view.tracksSelected[modelData.row.id] === true
-                            onPlayRequested: root.playRow(modelData.row.id)
+                            onPlayRequested: root.playRow(modelData.n - 1, modelData.row.id)
                             onEnqueueRequested: function (m) {
                                 QbzLocal.enqueue("track", modelData.row.id, m)
                             }
                             onToggleSelect: function (mods) { root.view.toggleTrackSelected(modelData.row.id, mods) }
+                        }
+                    }
+                    Component {
+                        id: nativeRowComp
+                        Item {
+                            Text {
+                                x: 2
+                                y: 0
+                                width: parent.width - 4
+                                height: root.headerH
+                                visible: modelData.groupStart && !modelData.loading
+                                verticalAlignment: Text.AlignVCenter
+                                text: modelData.groupLabel
+                                color: theme.textSecondary
+                                font.pixelSize: theme.fontLegal
+                                font.weight: theme.weightSemibold
+                                elide: Text.ElideRight
+                            }
+                            LocalTrackRow {
+                                y: modelData.groupStart ? root.headerH : 0
+                                width: parent.width
+                                height: root.rowH
+                                visible: !modelData.loading
+                                enabled: !modelData.loading
+                                view: root.view
+                                item: modelData.row
+                                artSource: modelData.row.artPath
+                                    || root.view.artMap[modelData.row.artKey] || ""
+                                number: modelData.n
+                                showAlbum: root.view.tracksGroup !== "album"
+                                showArtwork: root.view.trackArtwork
+                                selectMode: root.view.tracksMultiSelect
+                                checked: modelData.selected
+                                nativeActions: true
+                                nativeIndex: modelData.n - 1
+                                onPlayRequested: QbzLocal.tracksNativePlay(modelData.n - 1)
+                                onEnqueueRequested: function (m) {
+                                    QbzLocal.tracksNativeEnqueue(modelData.n - 1, m)
+                                }
+                                onToggleSelect: function (mods) {
+                                    QbzLocal.tracksNativeToggleSelect(
+                                        modelData.n - 1,
+                                        (mods & Qt.ShiftModifier) !== 0)
+                                }
+                            }
+                            QbzSkeleton {
+                                y: modelData.groupStart ? root.headerH : 0
+                                width: parent.width
+                                height: root.rowH
+                                visible: modelData.loading
+                                variant: "rowList"
+                                rowH: root.rowH
+                                rowGap: 0
+                                rowArt: root.view.trackArtwork
+                                rowArtSize: 36
+                                phase: root.view.skelPhase
+                            }
                         }
                     }
                 }
@@ -265,11 +354,12 @@ Item {
                 // placeholder is replaced by a real row as the page lands.
                 footer: Item {
                     width: list.width
-                    height: QbzLocal.localTracksLoadingMore ? 3 * root.rowH : 0
+                    height: !root.nativeModelActive && QbzLocal.localTracksLoadingMore
+                        ? 3 * root.rowH : 0
                     QbzSkeleton {
                         variant: "rowList"
                         anchors.fill: parent
-                        visible: QbzLocal.localTracksLoadingMore
+                        visible: !root.nativeModelActive && QbzLocal.localTracksLoadingMore
                         rowH: root.rowH
                         rowGap: 0
                         rowArt: root.view.trackArtwork
@@ -322,14 +412,31 @@ Item {
         // The row artwork column is gated on the appearance setting (default
         // OFF, for the 16K-track freeze). With it off nothing on this list
         // renders a cover, so nothing is worth decoding.
-        if (!list.visible || !view.trackArtwork || root.entries.length === 0) {
+        var modelCount = root.nativeModelActive
+            ? QbzLocal.localTracksNativeTotal : root.entries.length
+        if (!list.visible || !view.trackArtwork || modelCount === 0) {
             view.releaseWindow("tracks")
             return
         }
         var first = list.indexAt(4, list.contentY + 1)
         var last = list.indexAt(4, list.contentY + Math.max(1, list.height) - 1)
         if (first < 0) first = 0
-        if (last < 0) last = Math.min(root.entries.length - 1, first + 12)
+        if (last < 0) last = Math.min(modelCount - 1, first + 12)
+        if (root.nativeModelActive) {
+            var resident = []
+            var nativeFirst = Math.max(0, first - 4)
+            var nativeLast = Math.min(modelCount - 1, last + 4)
+            for (var j = nativeFirst; j <= nativeLast; j++) {
+                var data = root.view.nativeTracksModel.rowAt(j)
+                if (!data.loading && data.row && data.row.artKey) resident.push(data.row)
+            }
+            if (resident.length === 0) {
+                view.releaseWindow("tracks")
+                return
+            }
+            view.queueWindowReport(resident, 0, resident.length - 1, "tracks")
+            return
+        }
         // Entry band -> row band (group headers carry no cover).
         var lo = -1
         var hi = -1

@@ -923,6 +923,7 @@ fn upsert_track(
     } else {
         &track.album_artist
     });
+    let sort_track_artist = normalize_sort_key(&track.artist);
     let sort_album = normalize_sort_key(&track.album);
     let year_missing = i64::from(track.year.is_none());
     let year_value = track.year.unwrap_or(0) as i64;
@@ -944,6 +945,7 @@ fn upsert_track(
             track.track_ref.source.as_str(),
             track.track_ref.source_instance,
             track.track_ref.native_id,
+            track.source_raw,
             track.local_track_id,
             track.local_path,
             track.source_copy_id,
@@ -951,6 +953,7 @@ fn upsert_track(
             sort_title,
             track.artist,
             sort_artist,
+            sort_track_artist,
             track.album_artist,
             track.album,
             sort_album,
@@ -994,17 +997,19 @@ fn upsert_track(
 }
 
 const UPSERT_TRACK_SQL: &str = "INSERT INTO tracks (
-    source_kind, source_instance, native_track_id, local_track_id, local_path,
-    source_copy_id, title, sort_title, artist, sort_artist, album_artist,
-    album, sort_album, credits, duration_ms, year, year_missing, year_value,
+    source_kind, source_instance, native_track_id, source_raw, local_track_id,
+    local_path, source_copy_id, title, sort_title, artist, sort_artist,
+    sort_track_artist, album_artist, album, sort_album, credits, duration_ms,
+    year, year_missing, year_value,
     disc_number, disc_sort, track_number, track_sort, format, bit_depth,
     sample_rate_hz, artwork_token, isrc, musicbrainz_recording_id, added_at,
     available, last_observed_generation
 ) VALUES (
     ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,
-    ?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31
+    ?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33
 )
 ON CONFLICT(source_kind, source_instance, native_track_id) DO UPDATE SET
+    source_raw=excluded.source_raw,
     local_track_id=excluded.local_track_id,
     local_path=excluded.local_path,
     source_copy_id=excluded.source_copy_id,
@@ -1012,6 +1017,7 @@ ON CONFLICT(source_kind, source_instance, native_track_id) DO UPDATE SET
     sort_title=excluded.sort_title,
     artist=excluded.artist,
     sort_artist=excluded.sort_artist,
+    sort_track_artist=excluded.sort_track_artist,
     album_artist=excluded.album_artist,
     album=excluded.album,
     sort_album=excluded.sort_album,
@@ -1086,7 +1092,7 @@ fn filter_parts(
     }
 
     if let Some(cursor) = cursor {
-        let (predicate, cursor_values) = cursor_predicate(cursor, alias);
+        let (predicate, cursor_values) = cursor_predicate(cursor, descriptor.group(), alias);
         predicates.push(predicate);
         values.extend(cursor_values);
     }
@@ -1138,7 +1144,7 @@ fn page_query(
               ORDER BY {}
               LIMIT {}",
             parts.where_sql,
-            order_clause(parts.sort, "t"),
+            order_clause(parts.sort, descriptor.group(), "t"),
             limit + 1
         );
         return Ok((sql, parts.params, parts.sort));
@@ -1156,7 +1162,7 @@ fn page_query(
           ORDER BY {}
           LIMIT {}",
         parts.where_sql,
-        order_clause(parts.sort, "t"),
+        order_clause(parts.sort, descriptor.group(), "t"),
         limit + 1,
     );
     let mut values = vec![match_value];
@@ -1181,22 +1187,28 @@ fn effective_sort(descriptor: &QueryDescriptor) -> TrackSort {
     }
 }
 
-fn order_clause(sort: TrackSort, alias: &str) -> String {
-    let columns = match sort {
-        TrackSort::Default => {
-            "sort_album, sort_artist, disc_sort, track_sort, sort_title, catalog_id"
+fn order_clause(sort: TrackSort, group: TrackGroup, alias: &str) -> String {
+    let columns = if group == TrackGroup::Artist {
+        "sort_track_artist, sort_album, sort_title, catalog_id"
+    } else {
+        match sort {
+            TrackSort::Default => {
+                "sort_album, sort_artist, disc_sort, track_sort, sort_title, catalog_id"
+            }
+            TrackSort::TitleAsc => "sort_title, sort_artist, catalog_id",
+            TrackSort::TitleDesc => "sort_title DESC, sort_artist, catalog_id",
+            TrackSort::ArtistAsc => "sort_artist, sort_album, disc_sort, track_sort, catalog_id",
+            TrackSort::ArtistDesc => {
+                "sort_artist DESC, sort_album, disc_sort, track_sort, catalog_id"
+            }
+            TrackSort::YearAsc => {
+                "year_missing, year_value, sort_album, disc_sort, track_sort, catalog_id"
+            }
+            TrackSort::YearDesc => {
+                "year_missing, year_value DESC, sort_album, disc_sort, track_sort, catalog_id"
+            }
+            TrackSort::AddedDesc => "added_at DESC, sort_album, disc_sort, track_sort, catalog_id",
         }
-        TrackSort::TitleAsc => "sort_title, sort_artist, catalog_id",
-        TrackSort::TitleDesc => "sort_title DESC, sort_artist, catalog_id",
-        TrackSort::ArtistAsc => "sort_artist, sort_album, disc_sort, track_sort, catalog_id",
-        TrackSort::ArtistDesc => "sort_artist DESC, sort_album, disc_sort, track_sort, catalog_id",
-        TrackSort::YearAsc => {
-            "year_missing, year_value, sort_album, disc_sort, track_sort, catalog_id"
-        }
-        TrackSort::YearDesc => {
-            "year_missing, year_value DESC, sort_album, disc_sort, track_sort, catalog_id"
-        }
-        TrackSort::AddedDesc => "added_at DESC, sort_album, disc_sort, track_sort, catalog_id",
     };
     columns
         .split(", ")
@@ -1212,10 +1224,21 @@ fn order_clause(sort: TrackSort, alias: &str) -> String {
         .join(", ")
 }
 
-fn cursor_predicate(cursor: &TrackCursor, alias: &str) -> (String, Vec<Value>) {
+fn cursor_predicate(cursor: &TrackCursor, group: TrackGroup, alias: &str) -> (String, Vec<Value>) {
     let text = |value: &str| Value::Text(value.to_string());
     let integer = Value::Integer;
-    let (predicate, values) = match cursor.sort {
+    let (predicate, values) = if group == TrackGroup::Artist {
+        (
+            "(t.sort_track_artist,t.sort_album,t.sort_title,t.catalog_id) > (?,?,?,?)",
+            vec![
+                text(&cursor.sort_track_artist),
+                text(&cursor.sort_album),
+                text(&cursor.sort_title),
+                integer(cursor.row_id),
+            ],
+        )
+    } else {
+        match cursor.sort {
         TrackSort::Default => (
             "(t.sort_album,t.sort_artist,t.disc_sort,t.track_sort,t.sort_title,t.catalog_id) > (?,?,?,?,?,?)",
             vec![
@@ -1300,6 +1323,7 @@ fn cursor_predicate(cursor: &TrackCursor, alias: &str) -> (String, Vec<Value>) {
                 integer(cursor.row_id),
             ],
         ),
+        }
     };
     (predicate.replace("t.", &format!("{alias}.")), values)
 }
@@ -1307,15 +1331,16 @@ fn cursor_predicate(cursor: &TrackCursor, alias: &str) -> (String, Vec<Value>) {
 fn map_row(row: &Row<'_>) -> rusqlite::Result<RowWithCursor> {
     let source_word: String = row.get(0)?;
     let source = SourceKind::from_str(&source_word).expect("schema source CHECK");
-    let sort_title = row.get(18)?;
-    let sort_artist = row.get(19)?;
-    let sort_album = row.get(20)?;
-    let year_missing = row.get(21)?;
-    let year_value = row.get(22)?;
-    let disc_sort = row.get(23)?;
-    let track_sort = row.get(24)?;
-    let added_at = row.get(25)?;
-    let row_id = row.get(26)?;
+    let sort_title = row.get(20)?;
+    let sort_artist = row.get(21)?;
+    let sort_track_artist = row.get(22)?;
+    let sort_album = row.get(23)?;
+    let year_missing = row.get(24)?;
+    let year_value = row.get(25)?;
+    let disc_sort = row.get(26)?;
+    let track_sort = row.get(27)?;
+    let added_at = row.get(28)?;
+    let row_id = row.get(29)?;
     Ok(RowWithCursor {
         record: TrackRecord {
             track_ref: TrackRef {
@@ -1323,21 +1348,23 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<RowWithCursor> {
                 source_instance: row.get(1)?,
                 native_id: row.get(2)?,
             },
-            local_track_id: row.get(3)?,
-            local_path: row.get(4)?,
-            title: row.get(5)?,
-            artist: row.get(6)?,
-            album_artist: row.get(7)?,
-            album: row.get(8)?,
-            duration_ms: row.get::<_, i64>(9)?.max(0) as u64,
-            year: row.get::<_, Option<i64>>(10)?.map(|value| value as u32),
-            disc_number: row.get::<_, Option<i64>>(11)?.map(|value| value as u32),
-            track_number: row.get::<_, Option<i64>>(12)?.map(|value| value as u32),
-            format: row.get(13)?,
-            bit_depth: row.get::<_, Option<i64>>(14)?.map(|value| value as u32),
-            sample_rate_hz: row.get::<_, Option<i64>>(15)?.map(|value| value as u32),
-            artwork_token: row.get(16)?,
-            available: row.get::<_, i64>(17)? != 0,
+            source_raw: row.get(3)?,
+            local_track_id: row.get(4)?,
+            local_path: row.get(5)?,
+            native_album_id: row.get::<_, Option<String>>(6)?,
+            title: row.get(7)?,
+            artist: row.get(8)?,
+            album_artist: row.get(9)?,
+            album: row.get(10)?,
+            duration_ms: row.get::<_, i64>(11)?.max(0) as u64,
+            year: row.get::<_, Option<i64>>(12)?.map(|value| value as u32),
+            disc_number: row.get::<_, Option<i64>>(13)?.map(|value| value as u32),
+            track_number: row.get::<_, Option<i64>>(14)?.map(|value| value as u32),
+            format: row.get(15)?,
+            bit_depth: row.get::<_, Option<i64>>(16)?.map(|value| value as u32),
+            sample_rate_hz: row.get::<_, Option<i64>>(17)?.map(|value| value as u32),
+            artwork_token: row.get(18)?,
+            available: row.get::<_, i64>(19)? != 0,
         },
         cursor: TrackCursor {
             // Filled by query_tracks_timed after the effective sort is known.
@@ -1345,6 +1372,7 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<RowWithCursor> {
             descriptor_key: String::new(),
             sort_title,
             sort_artist,
+            sort_track_artist,
             sort_album,
             year_missing,
             year_value,
@@ -1357,11 +1385,14 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<RowWithCursor> {
 }
 
 const TRACK_COLUMNS: &str = "
-    t.source_kind, t.source_instance, t.native_track_id, t.local_track_id, t.local_path,
+    t.source_kind, t.source_instance, t.native_track_id, t.source_raw,
+    t.local_track_id, t.local_path,
+    (SELECT NULLIF(sc.native_album_id,'') FROM source_copies sc
+      WHERE sc.source_copy_id=t.source_copy_id),
     t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.year, t.disc_number,
     t.track_number, t.format, t.bit_depth, t.sample_rate_hz, t.artwork_token, t.available,
-    t.sort_title, t.sort_artist, t.sort_album, t.year_missing, t.year_value, t.disc_sort,
-    t.track_sort, t.added_at, t.catalog_id";
+    t.sort_title, t.sort_artist, t.sort_track_artist, t.sort_album, t.year_missing,
+    t.year_value, t.disc_sort, t.track_sort, t.added_at, t.catalog_id";
 
 /// Unicode-aware display sort key shared by ingest and query indices.
 pub fn normalize_sort_key(value: &str) -> String {

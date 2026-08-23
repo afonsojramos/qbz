@@ -20,8 +20,10 @@ pub use catalog::{
     normalize_artist_key, normalize_sort_key, Catalog, CatalogStats, IntegrityReport, QueryMetrics,
 };
 pub use legacy::{
-    bootstrap_legacy_caches, bootstrap_legacy_caches_with_progress, discover_legacy_sources,
-    reconcile_legacy_caches, reconcile_legacy_caches_with_progress, LegacySourceSpec,
+    bootstrap_legacy_caches, bootstrap_legacy_caches_at_with_progress,
+    bootstrap_legacy_caches_with_progress, discover_legacy_sources, discover_legacy_sources_at,
+    reconcile_legacy_caches, reconcile_legacy_caches_at_with_progress,
+    reconcile_legacy_caches_with_progress, LegacyLocations, LegacySourceSpec,
 };
 pub use model::{
     ArtistCredit, CreditRole, ProjectedTrack, QueryDescriptor, QuerySurface, SourceKey, SourceKind,

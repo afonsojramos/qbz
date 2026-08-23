@@ -58,6 +58,11 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    // Force construction before Rust publishes the first bounded page. The
+    // hand-written singleton owns the resident LRU; keeping this reference at
+    // the composition root also gives every Tracks delegate one stable model.
+    readonly property var nativeTracksModel: QbzLocalTracks
+
     // ============================ state ==================================
     // Slint defaults, verbatim (state.slint LocalLibraryState).
     property string activeTab: "albums"
@@ -98,7 +103,9 @@ Rectangle {
     readonly property string tracksGroup: QbzLocal.localTracksGroup
     property bool tracksMultiSelect: false
     property var tracksSelected: ({})
-    readonly property int tracksSelectedCount: Object.keys(tracksSelected).length
+    readonly property int tracksSelectedCount: QbzLocal.localTracksNativeActive
+        ? QbzLocal.localTracksNativeSelectedCount
+        : Object.keys(tracksSelected).length
 
     // Albums quality/format/source filter (LibAlbumFilterState).
     property bool filterOpen: false
@@ -323,6 +330,7 @@ Rectangle {
     Connections {
         target: QbzLocal
         function onLocalArtworkReady(key, path) {
+            root.nativeTracksModel.setArtwork(key, path)
             root._artInbox[key] = path
             if (!artFlush.running) artFlush.start()
             // An arrival is live evidence that the pass is still running, so
@@ -331,6 +339,12 @@ Rectangle {
             // local library resolves slower than that (see artPassMs).
             root.artPulse = true
             artPulseOff.restart()
+        }
+    }
+    Connections {
+        target: root.nativeTracksModel
+        function onPageMiss(page, generation) {
+            QbzLocal.tracksNativePageMiss(page, generation)
         }
     }
 
@@ -545,9 +559,10 @@ Rectangle {
         sortRows(filterRows(folders, foldersSearch), foldersSort)
     readonly property var foldersGrouped: groupRows(foldersVisible, foldersGroup)
 
-    // Tracks: search + sort are SERVER-side (they define the pagination
-    // order), so the loaded pages arrive already ordered and the visible set
-    // is the pages as published.
+    // Legacy Tracks: search + sort are server-side and grouping remains its
+    // client-side compatibility reorder. Phase E does not evaluate this array:
+    // its immutable SQL descriptor owns search/sort/group globally and the
+    // QAbstractListModel pages only the visible window.
     //
     // The GROUP modes are the exception: they are a CLIENT-side visual
     // reorder layered on top of that order (`derive_tracks`,
@@ -914,7 +929,10 @@ Rectangle {
 
     function toggleTracksMultiSelect() {
         tracksMultiSelect = !tracksMultiSelect
-        if (!tracksMultiSelect) { tracksSelected = ({}); trackSel.anchorId = "" }
+        if (!tracksMultiSelect) {
+            tracksSelected = ({}); trackSel.anchorId = ""
+            if (QbzLocal.localTracksNativeActive) QbzLocal.tracksNativeClearSelection()
+        }
     }
     SelectionModel { id: trackSel }
     function toggleTrackSelected(id, mods) {
@@ -922,6 +940,12 @@ Rectangle {
                                        mods === undefined ? Qt.NoModifier : mods)
     }
     function tracksBulkAction(action) {
+        if (QbzLocal.localTracksNativeActive) {
+            if (action === "clear") QbzLocal.tracksNativeClearSelection()
+            else if (action === "select-all") QbzLocal.tracksNativeSelectAll()
+            else QbzLocal.tracksNativeBulkAction(action)
+            return
+        }
         if (action === "clear") { tracksSelected = ({}); trackSel.anchorId = ""; return }
         if (action === "select-all") {
             var s = {}
@@ -951,7 +975,11 @@ Rectangle {
         // Same "leaving drops the selection" contract the toggle buttons
         // carry (toggleAlbumsMultiSelect / toggleTracksMultiSelect).
         if (root.albumsMultiSelect) { root.albumsMultiSelect = false; root.albumsSelected = ({}) }
-        if (root.tracksMultiSelect) { root.tracksMultiSelect = false; root.tracksSelected = ({}) }
+        if (root.tracksMultiSelect) {
+            root.tracksMultiSelect = false
+            root.tracksSelected = ({})
+            if (QbzLocal.localTracksNativeActive) QbzLocal.tracksNativeClearSelection()
+        }
     }
 
     function toggleTreeSelectMode() {

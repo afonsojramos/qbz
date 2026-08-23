@@ -252,7 +252,7 @@ fn format_ymd(epoch_secs: i64) -> String {
     format!("{year:04}-{m:02}-{d:02}")
 }
 
-/// The hand-written C++ QQuickRhiItems: A4's `LineBedItem`, A2's
+/// The hand-written C++ Qt types: A4's `LineBedItem`, A2's
 /// `PlasmaItem`, A3's `RibbonItem` and B1's `TunnelFlowItem` (`cxx/*_item.*`,
 /// the scenes a ShaderEffect cannot express — line strips / feedback
 /// ping-pong / persistent sub-rect texture writes — spec 01 §2.5/§2.1/§2.4,
@@ -297,7 +297,13 @@ fn build_rhi_items() {
         .std("c++17")
         .pic(true)
         .include("cxx"); // the moc outputs do `#include "<name>.h"`
-    for item in ["linebed_item", "plasma_item", "ribbon_item", "tunnelflow_item"] {
+    for item in [
+        "linebed_item",
+        "plasma_item",
+        "ribbon_item",
+        "tunnelflow_item",
+        "local_tracks_model",
+    ] {
         let header = format!("cxx/{item}.h");
         let source = format!("cxx/{item}.cpp");
         println!("cargo:rerun-if-changed={header}");
@@ -352,9 +358,8 @@ fn main() {
     // freshly compiled .qsb is the one that gets embedded.
     build_shaders();
 
-    // The hand-written C++ QQuickRhiItems (cxx/). Static lib linked into
-    // the binary; the QML types self-register at QGuiApplication
-    // construction.
+    // The hand-written C++ Qt types (cxx/). Static lib linked into the binary;
+    // the QML types self-register at QGuiApplication construction.
     build_rhi_items();
 
     // The WHOLE asset tree, recursively. This used to name the root-level

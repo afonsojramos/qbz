@@ -88,6 +88,14 @@ pub mod qbz_local {
         /// Slint writes — so it survives a restart and both frontends agree.
         #[qproperty(QString, local_tracks_group)]
         #[qproperty(QString, local_tracks_json)]
+        /// Phase-E surface switch. False keeps the existing JSON reader;
+        /// true binds LocalTracksTab to QbzLocalTracks (QAbstractListModel).
+        #[qproperty(bool, local_tracks_native_active)]
+        #[qproperty(i64, local_tracks_native_total)]
+        #[qproperty(i64, local_tracks_native_selected_count)]
+        /// Bounded A-Z jump metadata (`[{letter,index}]`), never track rows.
+        #[qproperty(QString, local_tracks_native_jumps_json)]
+        #[qproperty(QString, local_tracks_native_error)]
 
         // --- Local album detail (the album pane) ---------------------------
         #[qproperty(bool, local_album_loading)]
@@ -252,6 +260,41 @@ pub mod qbz_local {
         /// Infinite scroll: append the next page.
         #[qinvokable]
         fn tracks_load_more(self: Pin<&mut QbzLocal>);
+        /// QAbstractListModel page miss -> async catalog keyset page.
+        #[qinvokable]
+        fn tracks_native_page_miss(
+            self: Pin<&mut QbzLocal>,
+            page: i32,
+            generation: i32,
+        );
+        #[qinvokable]
+        fn tracks_native_toggle_select(
+            self: Pin<&mut QbzLocal>,
+            index: i64,
+            shift: bool,
+        );
+        #[qinvokable]
+        fn tracks_native_select_all(self: Pin<&mut QbzLocal>);
+        #[qinvokable]
+        fn tracks_native_clear_selection(self: Pin<&mut QbzLocal>);
+        /// Index-based actions keep the source-native TrackRef inside Rust;
+        /// QML never converts it back to a legacy integer id.
+        #[qinvokable]
+        fn tracks_native_play(self: Pin<&mut QbzLocal>, index: i64);
+        #[qinvokable]
+        fn tracks_native_enqueue(
+            self: Pin<&mut QbzLocal>,
+            index: i64,
+            mode: QString,
+        );
+        #[qinvokable]
+        fn tracks_native_row_action(
+            self: Pin<&mut QbzLocal>,
+            index: i64,
+            action: QString,
+        );
+        #[qinvokable]
+        fn tracks_native_bulk_action(self: Pin<&mut QbzLocal>, action: QString);
 
         // --- Folder tree ---------------------------------------------------
         /// Chevron: expand (lazy one-level fetch) or collapse (pure UI).
@@ -536,6 +579,11 @@ pub struct QbzLocalRust {
     local_tracks_sort: QString,
     local_tracks_group: QString,
     local_tracks_json: QString,
+    local_tracks_native_active: bool,
+    local_tracks_native_total: i64,
+    local_tracks_native_selected_count: i64,
+    local_tracks_native_jumps_json: QString,
+    local_tracks_native_error: QString,
     local_album_loading: bool,
     local_album_json: QString,
     local_track_artwork: bool,
@@ -593,6 +641,11 @@ impl Default for QbzLocalRust {
             local_tracks_sort: QString::from("default"),
             local_tracks_group: QString::from("off"),
             local_tracks_json: QString::from("[]"),
+            local_tracks_native_active: false,
+            local_tracks_native_total: 0,
+            local_tracks_native_selected_count: 0,
+            local_tracks_native_jumps_json: QString::from("[]"),
+            local_tracks_native_error: QString::default(),
             local_album_loading: false,
             local_album_json: QString::from(""),
             local_track_artwork: false,
@@ -726,9 +779,11 @@ impl qbz_local::QbzLocal {
             b.as_mut()
                 .set_local_tracks_group(QString::from(mode.as_str()));
         });
-        // NO reload: unlike the sort, grouping is a client-side visual
-        // reorder over the pages already loaded (the reference's
-        // `set_tracks_group` only persists + re-derives).
+        // The legacy reader keeps its QML reorder. Phase E makes grouping
+        // part of the immutable SQL descriptor, so only that arm resets.
+        if crate::local_tracks_model_qt::requested() {
+            load_tracks(true);
+        }
     }
 
     pub fn tracks_load_more(self: Pin<&mut Self>) {
@@ -736,6 +791,46 @@ impl qbz_local::QbzLocal {
             return;
         }
         load_tracks(false);
+    }
+
+    pub fn tracks_native_page_miss(self: Pin<&mut Self>, page: i32, generation: i32) {
+        crate::local_tracks_model_qt::request_page(page, generation);
+    }
+
+    pub fn tracks_native_toggle_select(
+        self: Pin<&mut Self>,
+        index: i64,
+        shift: bool,
+    ) {
+        crate::local_tracks_model_qt::toggle_selection(index, shift);
+    }
+
+    pub fn tracks_native_select_all(self: Pin<&mut Self>) {
+        crate::local_tracks_model_qt::select_all();
+    }
+
+    pub fn tracks_native_clear_selection(self: Pin<&mut Self>) {
+        crate::local_tracks_model_qt::clear_selection();
+    }
+
+    pub fn tracks_native_play(self: Pin<&mut Self>, index: i64) {
+        crate::local_tracks_model_qt::play(index);
+    }
+
+    pub fn tracks_native_enqueue(self: Pin<&mut Self>, index: i64, mode: QString) {
+        crate::local_tracks_model_qt::enqueue(index, mode.to_string());
+    }
+
+    pub fn tracks_native_row_action(
+        self: Pin<&mut Self>,
+        index: i64,
+        action: QString,
+    ) {
+        crate::local_tracks_model_qt::row_action(index, action.to_string());
+    }
+
+    pub fn tracks_native_bulk_action(self: Pin<&mut Self>, action: QString) {
+        crate::local_tracks_model_qt::bulk_action(action.to_string());
     }
 
     pub fn tree_toggle(self: Pin<&mut Self>, path: QString, expand: bool) {

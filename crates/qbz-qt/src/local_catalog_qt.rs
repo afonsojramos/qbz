@@ -8,12 +8,34 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use qbz_local_catalog::{BootstrapOutcome, CatalogError, ProjectionOutcome};
+use qbz_local_catalog::{
+    ActiveCatalog, BootstrapLayout, BootstrapOutcome, CatalogError, ProjectionOutcome,
+};
+
+enum RefreshOutcome {
+    Bootstrap(BootstrapOutcome),
+    Projection(ProjectionOutcome),
+}
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 static CATCHUP_RUNNING: AtomicBool = AtomicBool::new(false);
 static CATCHUP_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// One profile-scoped sidecar fed by the actual legacy cache locations. Plex
+/// remains installation-wide in the current backend; local and remote mirrors
+/// follow the active (or guest) user.
+pub(crate) fn locations() -> Option<qbz_local_catalog::LegacyLocations> {
+    let root = dirs::data_dir()?.join("qbz");
+    let user_id = qbz_app::user_data::UserDataPaths::load_last_user_id().unwrap_or(0);
+    let user_dir = root.join("users").join(user_id.to_string());
+    Some(qbz_local_catalog::LegacyLocations {
+        catalog_dir: user_dir.clone(),
+        local_database: user_dir.join("library.db"),
+        plex_database: root.join("plex_cache.db"),
+        remote_database: user_dir.join("remote_cache.db"),
+    })
+}
 
 pub(crate) fn start() {
     if STARTED.swap(true, Ordering::AcqRel) {
@@ -29,7 +51,7 @@ pub(crate) fn start() {
             worker_finished();
             return;
         }
-        let Some(data_dir) = dirs::data_dir().map(|root| root.join("qbz")) else {
+        let Some(locations) = locations() else {
             log::warn!("[local-catalog] fallback=missing-data-directory");
             worker_finished();
             return;
@@ -37,8 +59,8 @@ pub(crate) fn start() {
         let result = tokio::task::spawn_blocking(move || {
             let mut last_publish = std::time::Instant::now();
             let mut last_source = None;
-            let bootstrap = qbz_local_catalog::bootstrap_legacy_caches_with_progress(
-                &data_dir,
+            let bootstrap = qbz_local_catalog::bootstrap_legacy_caches_at_with_progress(
+                &locations,
                 &CANCELLED,
                 |progress| {
                     let source_changed = last_source.as_ref() != Some(&progress.source);
@@ -64,8 +86,8 @@ pub(crate) fn start() {
             {
                 let mut last_projection = std::time::Instant::now();
                 let mut last_projection_source = None;
-                Some(qbz_local_catalog::reconcile_legacy_caches_with_progress(
-                    &data_dir,
+                Some(qbz_local_catalog::reconcile_legacy_caches_at_with_progress(
+                    &locations,
                     &CANCELLED,
                     |progress| {
                         let source_changed =
@@ -96,6 +118,7 @@ pub(crate) fn start() {
         .await;
         match result {
             Ok(Ok((bootstrap, projection))) => {
+                let ready = matches!(&bootstrap, BootstrapOutcome::Activated { .. });
                 match bootstrap {
                     BootstrapOutcome::Activated {
                         generation,
@@ -117,6 +140,9 @@ pub(crate) fn start() {
                 }
                 if let Some(projection) = projection {
                     log_projection(projection);
+                }
+                if ready && crate::local_tracks_model_qt::requested() {
+                    crate::local_bridge_ops::load_tracks(true);
                 }
             }
             Ok(Err(CatalogError::InsufficientSpace {
@@ -146,16 +172,27 @@ pub(crate) fn request_catch_up() {
             worker_finished();
             return;
         }
-        let Some(data_dir) = dirs::data_dir().map(|root| root.join("qbz")) else {
+        let Some(locations) = locations() else {
             log::warn!("[local-catalog] fallback=missing-data-directory");
             worker_finished();
             return;
         };
         let result = tokio::task::spawn_blocking(move || {
+            if !matches!(
+                BootstrapLayout::new(&locations.catalog_dir).open_active(),
+                ActiveCatalog::Ready { .. }
+            ) {
+                return qbz_local_catalog::bootstrap_legacy_caches_at_with_progress(
+                    &locations,
+                    &CANCELLED,
+                    |_| {},
+                )
+                .map(RefreshOutcome::Bootstrap);
+            }
             let mut last_publish = std::time::Instant::now();
             let mut last_source = None;
-            qbz_local_catalog::reconcile_legacy_caches_with_progress(
-                &data_dir,
+            qbz_local_catalog::reconcile_legacy_caches_at_with_progress(
+                &locations,
                 &CANCELLED,
                 |progress| {
                     let source_changed = last_source.as_ref() != Some(&progress.source);
@@ -177,10 +214,45 @@ pub(crate) fn request_catch_up() {
                     }
                 },
             )
+            .map(RefreshOutcome::Projection)
         })
         .await;
         match result {
-            Ok(Ok(outcome)) => log_projection(outcome),
+            Ok(Ok(outcome)) => {
+                let ready = match outcome {
+                    RefreshOutcome::Projection(outcome) => {
+                        log_projection(outcome);
+                        true
+                    }
+                    RefreshOutcome::Bootstrap(BootstrapOutcome::Activated {
+                        generation,
+                        track_count,
+                        resumed_rows,
+                    }) => {
+                        log::info!(
+                            "[local-catalog] phase=active generation={generation} tracks={track_count} resumed_rows={resumed_rows}"
+                        );
+                        true
+                    }
+                    RefreshOutcome::Bootstrap(BootstrapOutcome::Paused {
+                        generation,
+                        source,
+                        committed_rows,
+                    }) => {
+                        log::info!(
+                            "[local-catalog] phase=paused generation={generation} source={source:?} committed_rows={committed_rows}"
+                        );
+                        false
+                    }
+                    RefreshOutcome::Bootstrap(BootstrapOutcome::Fallback(reason)) => {
+                        log::warn!("[local-catalog] fallback={reason:?}");
+                        false
+                    }
+                };
+                if ready && crate::local_tracks_model_qt::requested() {
+                    crate::local_bridge_ops::load_tracks(true);
+                }
+            }
             Ok(Err(CatalogError::InsufficientSpace {
                 required_bytes,
                 available_bytes,

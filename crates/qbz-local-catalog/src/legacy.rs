@@ -27,11 +27,39 @@ pub struct LegacySourceSpec {
     table: LegacyTable,
 }
 
+/// Physical locations of the authoritative caches for one user. Qt keeps the
+/// local and remote mirrors in the user's directory while the existing Plex
+/// cache is installation-wide, so assuming co-location would silently build
+/// an empty catalog for real profiles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyLocations {
+    pub catalog_dir: PathBuf,
+    pub local_database: PathBuf,
+    pub plex_database: PathBuf,
+    pub remote_database: PathBuf,
+}
+
+impl LegacyLocations {
+    pub fn co_located(data_dir: impl Into<PathBuf>) -> Self {
+        let catalog_dir = data_dir.into();
+        Self {
+            local_database: catalog_dir.join("library.db"),
+            plex_database: catalog_dir.join("plex_cache.db"),
+            remote_database: catalog_dir.join("remote_cache.db"),
+            catalog_dir,
+        }
+    }
+}
+
 pub fn discover_legacy_sources(data_dir: &Path) -> Result<Vec<LegacySourceSpec>> {
+    discover_legacy_sources_at(&LegacyLocations::co_located(data_dir))
+}
+
+pub fn discover_legacy_sources_at(locations: &LegacyLocations) -> Result<Vec<LegacySourceSpec>> {
     let mut specs = Vec::new();
-    discover_local(&data_dir.join("library.db"), &mut specs)?;
-    discover_plex(&data_dir.join("plex_cache.db"), &mut specs)?;
-    discover_remote(&data_dir.join("remote_cache.db"), &mut specs)?;
+    discover_local(&locations.local_database, &mut specs)?;
+    discover_plex(&locations.plex_database, &mut specs)?;
+    discover_remote(&locations.remote_database, &mut specs)?;
     specs.sort_by(|left, right| left.source.cmp(&right.source));
     specs.dedup_by(|left, right| left.source == right.source);
     Ok(specs)
@@ -47,9 +75,21 @@ pub fn bootstrap_legacy_caches(
 pub fn bootstrap_legacy_caches_with_progress(
     data_dir: &Path,
     cancelled: &AtomicBool,
+    publish: impl FnMut(&BootstrapProgress),
+) -> Result<BootstrapOutcome> {
+    bootstrap_legacy_caches_at_with_progress(
+        &LegacyLocations::co_located(data_dir),
+        cancelled,
+        publish,
+    )
+}
+
+pub fn bootstrap_legacy_caches_at_with_progress(
+    locations: &LegacyLocations,
+    cancelled: &AtomicBool,
     mut publish: impl FnMut(&BootstrapProgress),
 ) -> Result<BootstrapOutcome> {
-    let layout = BootstrapLayout::new(data_dir);
+    let layout = BootstrapLayout::new(&locations.catalog_dir);
     if let ActiveCatalog::Ready { catalog, manifest } = layout.open_active() {
         return Ok(BootstrapOutcome::Activated {
             generation: manifest.active_generation,
@@ -58,7 +98,7 @@ pub fn bootstrap_legacy_caches_with_progress(
         });
     }
 
-    let specs = discover_legacy_sources(data_dir)?;
+    let specs = discover_legacy_sources_at(locations)?;
     let mut readers = specs
         .into_iter()
         .map(LegacyReader::open)
@@ -147,9 +187,21 @@ pub fn reconcile_legacy_caches(
 pub fn reconcile_legacy_caches_with_progress(
     data_dir: &Path,
     cancelled: &AtomicBool,
+    publish: impl FnMut(&ProjectionProgress),
+) -> Result<ProjectionOutcome> {
+    reconcile_legacy_caches_at_with_progress(
+        &LegacyLocations::co_located(data_dir),
+        cancelled,
+        publish,
+    )
+}
+
+pub fn reconcile_legacy_caches_at_with_progress(
+    locations: &LegacyLocations,
+    cancelled: &AtomicBool,
     mut publish: impl FnMut(&ProjectionProgress),
 ) -> Result<ProjectionOutcome> {
-    let layout = BootstrapLayout::new(data_dir);
+    let layout = BootstrapLayout::new(&locations.catalog_dir);
     let (active, active_generation) = match layout.open_active() {
         ActiveCatalog::Ready { catalog, manifest } => (catalog, manifest.active_generation),
         ActiveCatalog::Fallback(reason) => {
@@ -158,7 +210,7 @@ pub fn reconcile_legacy_caches_with_progress(
             )))
         }
     };
-    let specs = discover_legacy_sources(data_dir)?;
+    let specs = discover_legacy_sources_at(locations)?;
     let mut readers = specs
         .into_iter()
         .map(LegacyReader::open)
@@ -437,10 +489,12 @@ fn legacy_cursor(row: &LegacyRow) -> i64 {
 fn read_local(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result<Vec<LegacyRow>> {
     let columns = table_columns(conn, "local_tracks")?;
     let album_id = optional_column(&columns, "album_group_key", "NULL");
+    let source_raw = optional_column(&columns, "source", "''");
     let sql = format!(
         "SELECT id, file_path, title, artist, COALESCE(album_artist,''), album,
                       duration_secs, year, disc_number, track_number, format, bit_depth,
-                      CAST(sample_rate AS INTEGER), artwork_path, indexed_at, {album_id}
+                      CAST(sample_rate AS INTEGER), artwork_path, indexed_at, {album_id},
+                      COALESCE({source_raw},'')
                  FROM local_tracks
                 WHERE id > ?1
                 ORDER BY id
@@ -460,6 +514,7 @@ fn read_local(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result<
                     source_instance: spec.source.source_instance.clone(),
                     native_id: id.to_string(),
                 },
+                source_raw: row.get(16)?,
                 local_track_id: Some(id),
                 local_path: row.get(1)?,
                 native_album_id: row.get(15)?,
@@ -605,6 +660,7 @@ fn map_remote_like(
                 source_instance: spec.source.source_instance.clone(),
                 native_id: value_as_string(row, 1)?,
             },
+            source_raw: source.as_str().to_string(),
             local_track_id: None,
             local_path: None,
             native_album_id: None,

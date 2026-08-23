@@ -237,6 +237,10 @@ async fn bind_per_user_stores(dir: &std::path::Path, user_id: u64) {
     // Offline DOWNLOAD cache (index.db + library.db + cached-id seed) —
     // awaited so the ready-set is seeded before any view can build rows.
     crate::offline_qt::activate(user_id).await;
+    // The catalog sidecar is profile-scoped. Coalescing here covers first
+    // login and account switches even when the one-shot boot worker began on
+    // the previous/guest profile.
+    crate::local_catalog_qt::request_catch_up();
 }
 
 /// Make sure the Qobuz client holds bundle tokens before a sign-in call.

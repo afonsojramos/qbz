@@ -64,6 +64,8 @@ Item {
     property var view: null
     property bool selectMode: false
     property bool checked: false
+    property bool nativeActions: false
+    property int nativeIndex: -1
     /// Alternating row tint, forwarded to the shared row. Off by default there
     /// (rows/TrackRow.qml), which is why the local album page had none while
     /// the Qobuz one (AlbumView.qml) did — the flag was simply never handed
@@ -246,7 +248,10 @@ Item {
                 // point, which owns the only source-aware row -> ref resolver
                 // (see the file header).
                 else if (a === "add-to-playlist" || a === "add-to-mixtape") {
-                    QbzLocal.bulkAction("track", JSON.stringify([String(root.item.id)]), a)
+                    if (root.nativeActions)
+                        QbzLocal.tracksNativeRowAction(root.nativeIndex, a)
+                    else
+                        QbzLocal.bulkAction("track", JSON.stringify([String(root.item.id)]), a)
                 }
                 else if (a === "go-album") {
                     QbzLocal.openAlbum(root.item.albumId)

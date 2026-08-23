@@ -37,6 +37,7 @@ fn row(source: &SourceKey, id: u64, title: impl Into<String>) -> ProjectedTrack 
             source_instance: source.source_instance.clone(),
             native_id: id.to_string(),
         },
+        source_raw: source.source.as_str().to_string(),
         local_track_id: (source.source == SourceKind::Local).then_some(id as i64),
         local_path: (source.source == SourceKind::Local).then(|| format!("/music/{id}.flac")),
         native_album_id: Some(format!("album-{}", id / 10)),

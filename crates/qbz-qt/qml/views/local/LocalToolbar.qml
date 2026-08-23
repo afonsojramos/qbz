@@ -235,7 +235,10 @@ Row {
     // ============================ TRACKS =================================
     Row {
         visible: root.view && root.view.activeTab === "tracks"
-            && (root.view.tracks.length > 0 || root.view.tracksSearch !== "")
+            && ((QbzLocal.localTracksNativeActive
+                    ? QbzLocal.localTracksNativeTotal > 0
+                    : root.view.tracks.length > 0)
+                || root.view.tracksSearch !== "")
         spacing: 8
         height: parent.height
 
@@ -272,9 +275,9 @@ Row {
             currentIndex: Math.max(0, root.tracksGroupIds.indexOf(root.view.tracksGroup))
             // Through the bridge, like the sort above and the album identity
             // below it: the choice is PERSISTED (locallibrary_ui.json, shared
-            // with the Slint build). Writing the QML property directly is what
-            // made it reset on every restart (PARITY-DEBT #13). No re-query —
-            // grouping is a client-side reorder, not a new ORDER BY.
+            // with the Slint build). The legacy reader reorders its loaded
+            // rows; Phase E resets an immutable SQL descriptor so grouping is
+            // global across every keyset page.
             onSelected: function (i) { QbzLocal.tracksSetGroup(root.tracksGroupIds[i]) }
         }
         // Multi-select LAST — never to the LEFT of a search box. The expandable

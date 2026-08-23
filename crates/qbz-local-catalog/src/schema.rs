@@ -2,7 +2,7 @@ use rusqlite::{params, Connection};
 
 use crate::{CatalogError, Result};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 pub const APPLICATION_ID: i64 = 0x5142_5A43; // "QBZC"
 
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -184,6 +184,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     ),
     source_instance            TEXT NOT NULL,
     native_track_id            TEXT NOT NULL,
+    source_raw                 TEXT NOT NULL DEFAULT '',
     local_track_id             INTEGER,
     local_path                 TEXT,
     source_copy_id             INTEGER REFERENCES source_copies(source_copy_id),
@@ -191,6 +192,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     sort_title                 TEXT NOT NULL,
     artist                     TEXT NOT NULL,
     sort_artist                TEXT NOT NULL,
+    sort_track_artist          TEXT NOT NULL,
     album_artist               TEXT NOT NULL,
     album                      TEXT NOT NULL,
     sort_album                 TEXT NOT NULL,
@@ -238,6 +240,8 @@ CREATE INDEX IF NOT EXISTS idx_tracks_artist_asc
     ON tracks(available, sort_artist, sort_album, disc_sort, track_sort, catalog_id);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist_desc
     ON tracks(available, sort_artist DESC, sort_album, disc_sort, track_sort, catalog_id);
+CREATE INDEX IF NOT EXISTS idx_tracks_group_artist
+    ON tracks(available, sort_track_artist, sort_album, sort_title, catalog_id);
 CREATE INDEX IF NOT EXISTS idx_tracks_year_asc
     ON tracks(available, year_missing, year_value, sort_album, disc_sort, track_sort, catalog_id);
 CREATE INDEX IF NOT EXISTS idx_tracks_year_desc

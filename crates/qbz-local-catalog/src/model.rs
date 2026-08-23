@@ -92,6 +92,10 @@ pub struct ArtistCredit {
 #[derive(Debug, Clone)]
 pub struct ProjectedTrack {
     pub track_ref: TrackRef,
+    /// Raw presentation provenance from the authoritative row. Local cache
+    /// rows may be `qobuz_download`/`qobuz_purchase` while their stable
+    /// ownership remains [`SourceKind::Local`].
+    pub source_raw: String,
     pub local_track_id: Option<i64>,
     pub local_path: Option<String>,
     /// Stable album id from the same authoritative source when available.
@@ -259,8 +263,10 @@ impl QueryDescriptor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackRecord {
     pub track_ref: TrackRef,
+    pub source_raw: String,
     pub local_track_id: Option<i64>,
     pub local_path: Option<String>,
+    pub native_album_id: Option<String>,
     pub title: String,
     pub artist: String,
     pub album_artist: String,
@@ -284,6 +290,7 @@ pub struct TrackCursor {
     pub(crate) descriptor_key: String,
     pub(crate) sort_title: String,
     pub(crate) sort_artist: String,
+    pub(crate) sort_track_artist: String,
     pub(crate) sort_album: String,
     pub(crate) year_missing: i64,
     pub(crate) year_value: i64,
@@ -291,6 +298,26 @@ pub struct TrackCursor {
     pub(crate) track_sort: i64,
     pub(crate) added_at: i64,
     pub(crate) row_id: i64,
+}
+
+impl TrackCursor {
+    /// Normalized grouping key of the row immediately before a keyset page.
+    /// This lets a paged frontend decide whether the first resident row starts
+    /// a new global group without issuing an overlap query.
+    pub fn group_key(&self, group: TrackGroup) -> String {
+        match group {
+            TrackGroup::Off => String::new(),
+            TrackGroup::Album => self.sort_album.clone(),
+            TrackGroup::Artist => self.sort_track_artist.clone(),
+            TrackGroup::Name => self
+                .sort_title
+                .chars()
+                .next()
+                .unwrap_or('#')
+                .to_uppercase()
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

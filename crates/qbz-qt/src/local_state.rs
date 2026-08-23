@@ -353,6 +353,10 @@ pub fn set_tracks_query(q: &str) {
     state(|s| s.tracks_query = q.to_string());
 }
 
+pub fn tracks_query() -> String {
+    state(|s| s.tracks_query.clone())
+}
+
 pub fn begin_tracks_load(reset: bool) -> TracksLoadRequest {
     state(|s| {
         if reset {

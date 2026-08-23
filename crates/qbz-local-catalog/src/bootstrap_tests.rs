@@ -7,9 +7,10 @@ use rusqlite::Connection;
 use tempfile::tempdir;
 
 use crate::{
-    bootstrap_legacy_caches, ActiveCatalog, BootstrapBatch, BootstrapLayout, BootstrapOutcome,
-    Catalog, CatalogError, FallbackReason, PreflightReport, ProjectedTrack, QueryDescriptor,
-    SourceKey, SourceKind, SourceProbe, TrackRef, BOOTSTRAP_BATCH_ROWS,
+    bootstrap_legacy_caches, bootstrap_legacy_caches_at_with_progress, ActiveCatalog,
+    BootstrapBatch, BootstrapLayout, BootstrapOutcome, Catalog, CatalogError, FallbackReason,
+    LegacyLocations, PreflightReport, ProjectedTrack, QueryDescriptor, SourceKey, SourceKind,
+    SourceProbe, TrackRef, BOOTSTRAP_BATCH_ROWS,
 };
 
 fn source(kind: SourceKind, instance: &str) -> SourceKey {
@@ -37,6 +38,7 @@ fn track(source: &SourceKey, id: u64) -> ProjectedTrack {
             source_instance: source.source_instance.clone(),
             native_id: id.to_string(),
         },
+        source_raw: source.source.as_str().to_string(),
         local_track_id: (source.source == SourceKind::Local).then_some(id as i64),
         local_path: (source.source == SourceKind::Local).then(|| format!("/music/{id}.flac")),
         native_album_id: Some(format!("album-{}", id / 20)),
@@ -353,6 +355,39 @@ fn legacy_fixture_bootstraps_all_sources_read_only_and_is_idempotent() {
         }
     ));
     assert!(!BootstrapLayout::new(temp.path()).building_path(2).exists());
+}
+
+#[test]
+fn split_profile_and_global_cache_locations_build_one_user_catalog() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("qbz");
+    let user = root.join("users/42");
+    fs::create_dir_all(&user).unwrap();
+    create_local_fixture(&user.join("library.db"));
+    create_plex_fixture(&root.join("plex_cache.db"));
+    create_remote_fixture(&user.join("remote_cache.db"));
+    let locations = LegacyLocations {
+        catalog_dir: user.clone(),
+        local_database: user.join("library.db"),
+        plex_database: root.join("plex_cache.db"),
+        remote_database: user.join("remote_cache.db"),
+    };
+
+    let outcome =
+        bootstrap_legacy_caches_at_with_progress(&locations, &AtomicBool::new(false), |_| {})
+            .unwrap();
+    assert!(matches!(
+        outcome,
+        BootstrapOutcome::Activated {
+            track_count: 505,
+            ..
+        }
+    ));
+    let ActiveCatalog::Ready { catalog, .. } = BootstrapLayout::new(&user).open_active() else {
+        panic!("profile catalog did not activate")
+    };
+    assert_eq!(catalog.stats().unwrap().track_count, 505);
+    assert!(!root.join("local_catalog-v1-manifest.json").exists());
 }
 
 fn create_local_fixture(path: &std::path::Path) {

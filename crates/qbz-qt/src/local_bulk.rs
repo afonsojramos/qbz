@@ -178,7 +178,7 @@ fn resolve_blocking(scope: &str, ids: &[String]) -> Vec<LocalTrack> {
 /// Run one action over already-resolved rows. Returns whether the caller
 /// should DROP its selection afterwards — the Slint clears after an enqueue
 /// and keeps it while a picker is still open.
-async fn apply(rows: Vec<LocalTrack>, action: &str) -> bool {
+pub(crate) async fn apply(rows: Vec<LocalTrack>, action: &str) -> bool {
     match action {
         "queue" | "play-next" | "play-later" => {
             if rows.is_empty() {

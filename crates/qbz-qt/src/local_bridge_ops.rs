@@ -322,11 +322,6 @@ pub(crate) fn load_folders() {
 }
 
 pub(crate) fn load_tracks(reset: bool) {
-    // Snapshot the query/sort and mint the generation before the worker is
-    // scheduled. A superseded worker may finish, but cannot mutate state or
-    // publish over the newer request.
-    let request = lib::begin_tracks_load(reset);
-    let generation = request.generation;
     ui(move |mut b| {
         if reset {
             b.as_mut().set_local_tracks_loading(true);
@@ -334,6 +329,31 @@ pub(crate) fn load_tracks(reset: bool) {
             b.as_mut().set_local_tracks_loading_more(true);
         }
     });
+    if reset && crate::local_tracks_model_qt::reset() {
+        return;
+    }
+    load_tracks_legacy_body(reset);
+}
+
+/// Per-surface rollback target for phase E. The native controller calls this
+/// after disabling itself for the session; the old reader remains intact.
+pub(crate) fn load_tracks_legacy(reset: bool) {
+    ui(move |mut b| {
+        if reset {
+            b.as_mut().set_local_tracks_loading(true);
+        } else {
+            b.as_mut().set_local_tracks_loading_more(true);
+        }
+    });
+    load_tracks_legacy_body(reset);
+}
+
+fn load_tracks_legacy_body(reset: bool) {
+    // Snapshot the query/sort and mint the generation before the worker is
+    // scheduled. A superseded worker may finish, but cannot mutate state or
+    // publish over the newer request.
+    let request = lib::begin_tracks_load(reset);
+    let generation = request.generation;
     crate::spawn(async move {
         let result = tokio::task::spawn_blocking(move || lib::load_tracks_page_blocking(request))
             .await

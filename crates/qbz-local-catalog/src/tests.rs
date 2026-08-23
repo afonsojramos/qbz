@@ -39,6 +39,7 @@ fn projected(index: usize, source: SourceKind) -> ProjectedTrack {
             source_instance: source_instance(source).to_string(),
             native_id: index.to_string(),
         },
+        source_raw: source.as_str().to_string(),
         local_track_id: (source == SourceKind::Local).then_some(index as i64 + 1),
         local_path: (source == SourceKind::Local)
             .then(|| format!("/fixture/artist-{artist_number:05}/track-{index:07}.{format}")),
@@ -100,7 +101,7 @@ fn collect_all(catalog: &Catalog, descriptor: &QueryDescriptor) -> Vec<TrackReco
 fn schema_is_versioned_frontend_agnostic_and_fts5_enabled() {
     let catalog = Catalog::open_in_memory(7).unwrap();
     let stats = catalog.stats().unwrap();
-    assert_eq!(stats.schema_version, 1);
+    assert_eq!(stats.schema_version, crate::SCHEMA_VERSION);
     assert_eq!(stats.generation, 7);
     assert_eq!(stats.track_count, 0);
     let fts5: i64 = catalog
@@ -166,6 +167,7 @@ fn identical_native_ids_from_distinct_sources_never_collide() {
     let mut catalog = Catalog::open_in_memory(1).unwrap();
     let mut local = projected(42, SourceKind::Local);
     let mut plex = projected(43, SourceKind::Plex);
+    local.source_raw = "qobuz_purchase".to_string();
     local.track_ref.native_id = "same".to_string();
     plex.track_ref.native_id = "same".to_string();
     catalog
@@ -185,6 +187,8 @@ fn identical_native_ids_from_distinct_sources_never_collide() {
         catalog.resolve(&plex.track_ref).unwrap().unwrap().track_ref,
         plex.track_ref
     );
+    let resolved = catalog.resolve(&local.track_ref).unwrap().unwrap();
+    assert_eq!(resolved.source_raw, "qobuz_purchase");
 }
 
 #[test]
@@ -336,6 +340,27 @@ fn search_source_format_availability_and_group_are_descriptor_scoped() {
 }
 
 #[test]
+fn artist_group_uses_track_artist_globally_across_keyset_pages() {
+    let mut catalog = Catalog::open_in_memory(1).unwrap();
+    let mut zed = projected(1, SourceKind::Local);
+    zed.artist = "Zed Performer".to_string();
+    zed.album_artist = "Alpha Album Artist".to_string();
+    let mut alpha = projected(2, SourceKind::Plex);
+    alpha.artist = "Alpha Performer".to_string();
+    alpha.album_artist = "Zed Album Artist".to_string();
+    catalog.upsert_tracks(&[zed, alpha]).unwrap();
+
+    let descriptor = QueryDescriptor::tracks().with_group(TrackGroup::Artist);
+    let first = catalog.query_tracks(&descriptor, None, 1).unwrap();
+    assert_eq!(first.rows[0].artist, "Alpha Performer");
+    let cursor = first.next_cursor.expect("second grouped page");
+    assert_eq!(cursor.group_key(TrackGroup::Artist), "alpha performer");
+    let second = catalog.query_tracks(&descriptor, Some(&cursor), 1).unwrap();
+    assert_eq!(second.rows[0].artist, "Zed Performer");
+    assert!(!second.has_more);
+}
+
+#[test]
 fn album_hierarchy_keeps_weak_same_name_matches_reversible() {
     let catalog = Catalog::open_in_memory(1).unwrap();
     catalog
@@ -391,6 +416,10 @@ fn sort_indices_match_the_actual_order_by_without_temp_sort() {
         (
             "idx_tracks_year_desc",
             "year_missing,year_value DESC,sort_album,disc_sort,track_sort,catalog_id",
+        ),
+        (
+            "idx_tracks_group_artist",
+            "sort_track_artist,sort_album,sort_title,catalog_id",
         ),
     ] {
         let sql = format!(
@@ -485,8 +514,8 @@ fn fixture_one_million_tracks_meets_the_query_shape_gate() {
     let deep_cursor = catalog
         .connection()
         .query_row(
-            "SELECT sort_title,sort_artist,sort_album,year_missing,year_value,
-                    disc_sort,track_sort,added_at,catalog_id
+            "SELECT sort_title,sort_artist,sort_track_artist,sort_album,
+                    year_missing,year_value,disc_sort,track_sort,added_at,catalog_id
                FROM tracks WHERE available=1
               ORDER BY sort_title,sort_artist,catalog_id
               LIMIT 1 OFFSET 800000",
@@ -499,13 +528,14 @@ fn fixture_one_million_tracks_meets_the_query_shape_gate() {
                     ),
                     sort_title: row.get(0)?,
                     sort_artist: row.get(1)?,
-                    sort_album: row.get(2)?,
-                    year_missing: row.get(3)?,
-                    year_value: row.get(4)?,
-                    disc_sort: row.get(5)?,
-                    track_sort: row.get(6)?,
-                    added_at: row.get(7)?,
-                    row_id: row.get(8)?,
+                    sort_track_artist: row.get(2)?,
+                    sort_album: row.get(3)?,
+                    year_missing: row.get(4)?,
+                    year_value: row.get(5)?,
+                    disc_sort: row.get(6)?,
+                    track_sort: row.get(7)?,
+                    added_at: row.get(8)?,
+                    row_id: row.get(9)?,
                 })
             },
         )

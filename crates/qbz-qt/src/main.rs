@@ -181,6 +181,9 @@ mod local_artist_match;
 mod local_rows;
 mod local_state;
 mod local_catalog_qt;
+// Native bounded Tracks QAbstractListModel + catalog query controller (phase E).
+// Plain Rust module; the QML type itself is hand-written C++ under cxx/.
+mod local_tracks_model_qt;
 mod local_plex;
 // Plex PIN sign-in (the "Authorize" half of the Plex settings) + the
 // Check-connection ping. Over `qbz_plex`'s existing pin/start, pin/check and
@@ -3031,6 +3034,9 @@ pub(crate) fn arm_hard_exit_watchdog(source: &'static str) {
 
 fn main() {
     qbz_log::install("info");
+    // Link anchor for the hand-written QAbstractListModel. Its QML singleton
+    // registration itself runs at QCoreApplication startup.
+    local_tracks_model_qt::register_qml_model();
     // BEFORE any restore reads a pref: read + increment the crash chain, so a
     // boot that dies from a restored view or queue degrades the NEXT boot
     // instead of trapping the user in a loop it cannot escape from inside the
