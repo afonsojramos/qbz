@@ -653,8 +653,8 @@ Rectangle {
             }
 
             // Classic lives between the REAL left transport and right action
-            // cluster. It may use at most 90% of that live gap, centred: the
-            // remaining 5% on each side keeps both the cover edge and the
+            // cluster. It may use at most 85% of that live gap, centred: the
+            // remaining 7.5% on each side keeps both the cover edge and the
             // in-card AudioStamp visibly detached from their neighbour controls.
             // Unlike the old fixed 560px cap this still scales with volume
             // steppers, remote state and the actual window width.
@@ -664,7 +664,7 @@ Rectangle {
                 readonly property real availableWidth: Math.max(0,
                     controlsLayout.rightControlsLeft
                         - controlsLayout.classicTransportRight)
-                width: availableWidth * 0.90
+                width: availableWidth * 0.85
                 x: controlsLayout.classicTransportRight
                     + (availableWidth - width) / 2
                 anchors.verticalCenter: parent.verticalCenter
