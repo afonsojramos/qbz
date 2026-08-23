@@ -165,6 +165,7 @@ pub(crate) fn run_sync() {
         match result {
             Ok(total) => {
                 log::info!("[qbz-qt] plex sync finished: {total} tracks");
+                crate::local_catalog_qt::request_catch_up();
                 ui(move |mut b| {
                     b.as_mut().set_plex_last_sync_tracks(total as i32);
                     b.as_mut().set_plex_syncing(false);

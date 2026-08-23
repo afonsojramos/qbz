@@ -11,6 +11,7 @@ use crate::{
     BootstrapProgress, CatalogError, CreditRole, ProjectedTrack, Result, SourceKey, SourceKind,
     SourceProbe, TrackRef, BOOTSTRAP_BATCH_ROWS,
 };
+use crate::{ProjectionOutcome, ProjectionProgress, ReconciliationBatch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LegacyTable {
@@ -136,6 +137,134 @@ pub fn bootstrap_legacy_caches_with_progress(
     })
 }
 
+pub fn reconcile_legacy_caches(
+    data_dir: &Path,
+    cancelled: &AtomicBool,
+) -> Result<ProjectionOutcome> {
+    reconcile_legacy_caches_with_progress(data_dir, cancelled, |_| {})
+}
+
+pub fn reconcile_legacy_caches_with_progress(
+    data_dir: &Path,
+    cancelled: &AtomicBool,
+    mut publish: impl FnMut(&ProjectionProgress),
+) -> Result<ProjectionOutcome> {
+    let layout = BootstrapLayout::new(data_dir);
+    let (active, active_generation) = match layout.open_active() {
+        ActiveCatalog::Ready { catalog, manifest } => (catalog, manifest.active_generation),
+        ActiveCatalog::Fallback(reason) => {
+            return Err(CatalogError::ActivationNotReady(format!(
+                "reconciliation fallback: {reason:?}"
+            )))
+        }
+    };
+    let specs = discover_legacy_sources(data_dir)?;
+    let mut readers = specs
+        .into_iter()
+        .map(LegacyReader::open)
+        .collect::<Result<Vec<_>>>()?;
+    let probes = readers
+        .iter()
+        .map(|reader| reader.probe.clone())
+        .collect::<Vec<_>>();
+    let changed_keys = readers
+        .iter()
+        .filter_map(|reader| {
+            let checkpoint = active.source_checkpoint(&reader.spec.source).ok().flatten();
+            (!checkpoint.is_some_and(|checkpoint| {
+                checkpoint.complete_generation > 0
+                    && checkpoint.checkpoint_version == reader.probe.snapshot_version
+                    && checkpoint.checkpoint_rows == reader.probe.row_count
+            }))
+            .then(|| reader.spec.source.clone())
+        })
+        .collect::<HashSet<_>>();
+    if changed_keys.is_empty() {
+        return Ok(ProjectionOutcome::UpToDate {
+            generation: active_generation,
+            track_count: active.stats()?.track_count,
+        });
+    }
+    drop(active);
+
+    let changed_probes = probes
+        .iter()
+        .filter(|probe| changed_keys.contains(&probe.source))
+        .cloned()
+        .collect::<Vec<_>>();
+    let (mut session, _) = layout.prepare_projection(&probes, None)?;
+    let mut resumed_rows = 0_u64;
+    let mut committed_rows = 0_u64;
+    for reader in readers
+        .iter_mut()
+        .filter(|reader| changed_keys.contains(&reader.spec.source))
+    {
+        let checkpoint = session.checkpoint(&reader.spec.source)?;
+        let mut cursor = if let Some(checkpoint) = checkpoint {
+            if checkpoint.complete
+                && checkpoint.checkpoint_version == reader.probe.snapshot_version
+                && checkpoint.checkpoint_rows == reader.probe.row_count
+            {
+                continue;
+            } else if checkpoint.checkpoint_version == reader.probe.snapshot_version
+                && !checkpoint.complete
+                && checkpoint.checkpoint_rows <= reader.probe.row_count
+            {
+                resumed_rows = resumed_rows.saturating_add(checkpoint.checkpoint_rows);
+                checkpoint.checkpoint_cursor
+            } else {
+                session.begin_source(&reader.spec.source, &reader.probe.snapshot_version)?;
+                String::new()
+            }
+        } else {
+            session.begin_source(&reader.spec.source, &reader.probe.snapshot_version)?;
+            String::new()
+        };
+        loop {
+            if cancelled.load(Ordering::Acquire) {
+                return Ok(ProjectionOutcome::Paused {
+                    generation: session.generation(),
+                    source: reader.spec.source.clone(),
+                    committed_rows,
+                });
+            }
+            let batch = reader.read_batch(&cursor)?;
+            let projection_batch = ReconciliationBatch {
+                source: batch.source,
+                snapshot_version: batch.snapshot_version,
+                expected_cursor: batch.expected_cursor,
+                next_cursor: batch.next_cursor,
+                tracks: batch.tracks,
+                complete: batch.complete,
+            };
+            let saved = session.apply_batch(&projection_batch)?;
+            committed_rows = committed_rows.saturating_add(projection_batch.tracks.len() as u64);
+            cursor = saved.checkpoint_cursor;
+            publish(&ProjectionProgress {
+                generation: session.generation(),
+                source: reader.spec.source.clone(),
+                rows_written: saved.checkpoint_rows,
+                checkpoint_cursor: cursor.clone(),
+                source_complete: saved.complete,
+                prune_authorized: saved.complete,
+            });
+            if saved.complete {
+                break;
+            }
+            std::thread::yield_now();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    let stats = session.stats()?;
+    let manifest = session.activate(&changed_probes)?;
+    Ok(ProjectionOutcome::Activated {
+        generation: manifest.active_generation,
+        track_count: stats.track_count,
+        changed_sources: changed_probes.len(),
+        resumed_rows,
+    })
+}
+
 fn discover_local(path: &Path, specs: &mut Vec<LegacySourceSpec>) -> Result<()> {
     let Some(conn) = open_if_present(path)? else {
         return Ok(());
@@ -255,8 +384,9 @@ impl LegacyReader {
         let page_count: i64 = conn.query_row("PRAGMA page_count", [], |row| row.get(0))?;
         let schema_version: i64 = conn.query_row("PRAGMA schema_version", [], |row| row.get(0))?;
         let (row_count, maximum_id, maximum_updated) = source_summary(&conn, &spec)?;
+        let file_epoch = sqlite_file_epoch(&spec.database_path)?;
         let snapshot_version =
-            format!("v1:{schema_version}:{page_count}:{row_count}:{maximum_id}:{maximum_updated}");
+            format!("v1:{schema_version}:{page_count}:{row_count}:{maximum_id}:{maximum_updated}:{file_epoch}");
         let probe = SourceProbe {
             source: spec.source.clone(),
             source_path: spec.database_path.clone(),
@@ -632,4 +762,29 @@ fn format_expression(columns: &HashSet<String>) -> String {
         (false, true) => "COALESCE(container,'')".to_string(),
         (false, false) => "''".to_string(),
     }
+}
+
+fn sqlite_file_epoch(path: &Path) -> Result<String> {
+    let mut parts = Vec::new();
+    for candidate in [
+        path.to_path_buf(),
+        PathBuf::from(format!("{}-wal", path.display())),
+    ] {
+        match std::fs::metadata(candidate) {
+            Ok(metadata) => {
+                let modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_nanos())
+                    .unwrap_or(0);
+                parts.push(format!("{}:{modified}", metadata.len()));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                parts.push("0:0".to_string())
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(parts.join(":"))
 }

@@ -787,6 +787,7 @@ pub fn scan(folder_id: Option<i64>) {
 
         SCANNING.store(false, Ordering::SeqCst);
         *CURRENT_FILE.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+        crate::local_catalog_qt::request_catch_up();
         refresh_browse();
         super::publish_snapshot().await;
     });
@@ -852,6 +853,9 @@ pub async fn cleanup_missing() {
         None => qbz_i18n::t("Cleanup failed."),
     };
     CLEANING.store(false, Ordering::SeqCst);
+    if result.is_some() {
+        crate::local_catalog_qt::request_catch_up();
+    }
     refresh_browse();
     super::publish_snapshot().await;
 }
@@ -870,6 +874,7 @@ pub async fn clear_library() {
     })
     .await;
     CLEARING.store(false, Ordering::SeqCst);
+    crate::local_catalog_qt::request_catch_up();
     refresh_browse();
     super::publish_snapshot().await;
 }
@@ -891,6 +896,7 @@ pub async fn plex_clear_cache() {
         }
     })
     .await;
+    crate::local_catalog_qt::request_catch_up();
     crate::local_bridge_ops::publish_plex_state();
     refresh_browse();
 }

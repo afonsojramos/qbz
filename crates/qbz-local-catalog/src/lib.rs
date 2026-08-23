@@ -8,6 +8,7 @@ mod bootstrap;
 mod catalog;
 mod legacy;
 mod model;
+mod projection;
 mod schema;
 
 pub use bootstrap::{
@@ -20,11 +21,14 @@ pub use catalog::{
 };
 pub use legacy::{
     bootstrap_legacy_caches, bootstrap_legacy_caches_with_progress, discover_legacy_sources,
-    LegacySourceSpec,
+    reconcile_legacy_caches, reconcile_legacy_caches_with_progress, LegacySourceSpec,
 };
 pub use model::{
     ArtistCredit, CreditRole, ProjectedTrack, QueryDescriptor, QuerySurface, SourceKey, SourceKind,
     TrackCursor, TrackGroup, TrackPage, TrackRecord, TrackRef, TrackSort,
+};
+pub use projection::{
+    ProjectionOutcome, ProjectionProgress, ProjectionSession, ReconciliationBatch,
 };
 pub use schema::SCHEMA_VERSION;
 
@@ -69,5 +73,7 @@ pub type Result<T> = std::result::Result<T, CatalogError>;
 
 #[cfg(test)]
 mod bootstrap_tests;
+#[cfg(test)]
+mod projection_tests;
 #[cfg(test)]
 mod tests;

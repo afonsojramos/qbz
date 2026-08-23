@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use rusqlite::types::Value;
 use rusqlite::{
-    params, params_from_iter, Connection, OpenFlags, OptionalExtension, Row, Statement,
+    params, params_from_iter, Connection, DatabaseName, OpenFlags, OptionalExtension, Row,
+    Statement,
 };
 
 use crate::bootstrap::{BootstrapBatch, SourceCheckpoint, BOOTSTRAP_BATCH_ROWS};
@@ -12,6 +13,7 @@ use crate::model::{
     ProjectedTrack, QueryDescriptor, SourceKey, SourceKind, TrackCursor, TrackGroup, TrackPage,
     TrackRecord, TrackRef, TrackSort,
 };
+use crate::projection::ReconciliationBatch;
 use crate::schema;
 use crate::{CatalogError, Result, SCHEMA_VERSION};
 
@@ -73,6 +75,67 @@ impl Catalog {
         Ok(Self { conn, generation })
     }
 
+    pub(crate) fn backup_to(&self, path: &Path) -> Result<()> {
+        self.conn.backup(DatabaseName::Main, path, None)?;
+        Ok(())
+    }
+
+    pub(crate) fn adopt_generation(
+        path: &Path,
+        previous_generation: u64,
+        generation: u64,
+    ) -> Result<Self> {
+        let conn = Connection::open(path)?;
+        schema::configure(&conn)?;
+        schema::verify(&conn, previous_generation)?;
+        conn.execute(
+            "UPDATE catalog_meta SET value=?1 WHERE key='generation'",
+            [generation.to_string()],
+        )?;
+        let mut catalog = Self { conn, generation };
+        catalog.set_build_phase("projection", previous_generation)?;
+        Ok(catalog)
+    }
+
+    pub(crate) fn set_build_phase(&mut self, phase: &str, base_generation: u64) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO catalog_meta(key,value) VALUES ('build_phase',?1)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [phase],
+        )?;
+        tx.execute(
+            "INSERT INTO catalog_meta(key,value) VALUES ('base_generation',?1)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [base_generation.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn build_phase(&self) -> Result<(String, u64)> {
+        let phase = self
+            .conn
+            .query_row(
+                "SELECT value FROM catalog_meta WHERE key='build_phase'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_default();
+        let base = self
+            .conn
+            .query_row(
+                "SELECT value FROM catalog_meta WHERE key='base_generation'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        Ok((phase, base))
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -127,6 +190,7 @@ impl Catalog {
                         checkpoint_cursor: row.get(1)?,
                         checkpoint_rows: row.get::<_, i64>(2)?.max(0) as u64,
                         checkpoint_version: row.get(3)?,
+                        complete_generation: row.get::<_, i64>(4)?.max(0) as u64,
                         complete: row.get::<_, i64>(4)? == self.generation as i64,
                     })
                 },
@@ -294,8 +358,177 @@ impl Catalog {
             checkpoint_cursor: batch.next_cursor.clone(),
             checkpoint_rows: next_rows.max(0) as u64,
             checkpoint_version: batch.snapshot_version.clone(),
+            complete_generation: if batch.complete { self.generation } else { 0 },
             complete: batch.complete,
         })
+    }
+
+    pub(crate) fn begin_reconciliation(
+        &mut self,
+        source: &SourceKey,
+        snapshot_version: &str,
+    ) -> Result<()> {
+        if source.source_instance.trim().is_empty() || snapshot_version.trim().is_empty() {
+            return Err(CatalogError::InvalidInput(
+                "source instance and snapshot version must not be empty".to_string(),
+            ));
+        }
+        let tx = self.conn.transaction()?;
+        // A restarted attempt in the same derived generation must not inherit
+        // observation marks from a superseded snapshot.
+        tx.execute(
+            "UPDATE tracks SET last_observed_generation=0
+              WHERE source_kind=?1 AND source_instance=?2",
+            params![source.source.as_str(), source.source_instance],
+        )?;
+        tx.execute(
+            "INSERT INTO source_state(
+                 source_kind,source_instance,available,last_observed_at,watermark,
+                 complete_generation,checkpoint_cursor,checkpoint_rows,checkpoint_version
+             ) VALUES (?1,?2,1,0,'',0,'',0,?3)
+             ON CONFLICT(source_kind,source_instance) DO UPDATE SET
+                 available=1,
+                 complete_generation=0,
+                 checkpoint_cursor='',
+                 checkpoint_rows=0,
+                 checkpoint_version=excluded.checkpoint_version",
+            params![
+                source.source.as_str(),
+                source.source_instance,
+                snapshot_version
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn apply_reconciliation_batch(
+        &mut self,
+        batch: &ReconciliationBatch,
+    ) -> Result<SourceCheckpoint> {
+        if batch.tracks.len() > BOOTSTRAP_BATCH_ROWS {
+            return Err(CatalogError::BatchTooLarge {
+                found: batch.tracks.len(),
+                maximum: BOOTSTRAP_BATCH_ROWS,
+            });
+        }
+        for track in &batch.tracks {
+            if track.track_ref.source != batch.source.source
+                || track.track_ref.source_instance != batch.source.source_instance
+            {
+                return Err(CatalogError::InvalidInput(format!(
+                    "reconciliation {:?} contains a row from {:?}/{}",
+                    batch.source, track.track_ref.source, track.track_ref.source_instance
+                )));
+            }
+        }
+        let tx = self.conn.transaction()?;
+        let (committed_cursor, committed_rows, committed_version): (String, i64, String) = tx
+            .query_row(
+                "SELECT checkpoint_cursor,checkpoint_rows,checkpoint_version
+                   FROM source_state
+                  WHERE source_kind=?1 AND source_instance=?2",
+                params![batch.source.source.as_str(), batch.source.source_instance],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        if committed_version != batch.snapshot_version {
+            return Err(CatalogError::SourceSnapshotChanged(batch.source.clone()));
+        }
+        if committed_cursor != batch.expected_cursor {
+            return Err(CatalogError::CheckpointMismatch(batch.source.clone()));
+        }
+        {
+            let mut upsert = tx.prepare_cached(UPSERT_TRACK_SQL)?;
+            let mut clear_credits =
+                tx.prepare_cached("DELETE FROM artist_credits WHERE catalog_id=?1")?;
+            let mut insert_credit = tx.prepare_cached(
+                "INSERT OR IGNORE INTO artist_credits(
+                     catalog_id,artist_key,display_name,role,ordinal
+                 ) VALUES (?1,?2,?3,?4,?5)",
+            )?;
+            for track in &batch.tracks {
+                let mut track = track.clone();
+                track.observed_generation = self.generation as i64;
+                track.source_copy_id = Some(ensure_source_copy(&tx, &track, self.generation)?);
+                validate_track(&track)?;
+                upsert_track(&mut upsert, &mut clear_credits, &mut insert_credit, &track)?;
+            }
+        }
+        let next_rows = committed_rows.saturating_add(batch.tracks.len() as i64);
+        if batch.complete {
+            tx.execute(
+                "DELETE FROM tracks
+                  WHERE source_kind=?1 AND source_instance=?2
+                    AND last_observed_generation != ?3",
+                params![
+                    batch.source.source.as_str(),
+                    batch.source.source_instance,
+                    self.generation as i64
+                ],
+            )?;
+            tx.execute(
+                "DELETE FROM source_copies
+                  WHERE source_kind=?1 AND source_instance=?2
+                    AND NOT EXISTS (
+                        SELECT 1 FROM tracks t
+                         WHERE t.source_copy_id=source_copies.source_copy_id
+                    )",
+                params![batch.source.source.as_str(), batch.source.source_instance],
+            )?;
+            tx.execute(
+                "DELETE FROM editions
+                  WHERE NOT EXISTS (
+                        SELECT 1 FROM source_copies sc
+                         WHERE sc.edition_id=editions.edition_id
+                  );
+                 DELETE FROM logical_albums
+                  WHERE NOT EXISTS (
+                        SELECT 1 FROM editions e
+                         WHERE e.logical_album_id=logical_albums.logical_album_id
+                  );",
+                [],
+            )?;
+        }
+        tx.execute(
+            "UPDATE source_state
+                SET available=1,last_observed_at=?3,
+                    watermark=CASE WHEN ?4 THEN ?5 ELSE watermark END,
+                    complete_generation=CASE WHEN ?4 THEN ?6 ELSE 0 END,
+                    checkpoint_cursor=?7,checkpoint_rows=?8
+              WHERE source_kind=?1 AND source_instance=?2",
+            params![
+                batch.source.source.as_str(),
+                batch.source.source_instance,
+                now_unix_seconds(),
+                batch.complete,
+                batch.snapshot_version,
+                self.generation as i64,
+                batch.next_cursor,
+                next_rows,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(SourceCheckpoint {
+            source: batch.source.clone(),
+            available: true,
+            checkpoint_cursor: batch.next_cursor.clone(),
+            checkpoint_rows: next_rows.max(0) as u64,
+            checkpoint_version: batch.snapshot_version.clone(),
+            complete_generation: if batch.complete { self.generation } else { 0 },
+            complete: batch.complete,
+        })
+    }
+
+    pub(crate) fn source_watermark(&self, source: &SourceKey) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT watermark FROM source_state
+                  WHERE source_kind=?1 AND source_instance=?2",
+                params![source.source.as_str(), source.source_instance],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     pub(crate) fn checkpoint_for_activation(&mut self) -> Result<()> {

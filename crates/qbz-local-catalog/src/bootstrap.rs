@@ -12,7 +12,7 @@ pub const BOOTSTRAP_BATCH_ROWS: usize = 250;
 const CATALOG_BYTES_PER_TRACK: u64 = 1_280;
 const SAFETY_FLOOR_BYTES: u64 = 256 * 1024 * 1024;
 const MANIFEST_NAME: &str = "local_catalog-v1-manifest.json";
-const LOCK_NAME: &str = "local_catalog-v1-bootstrap.lock";
+pub(crate) const LOCK_NAME: &str = "local_catalog-v1-bootstrap.lock";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceProbe {
@@ -77,6 +77,24 @@ impl PreflightReport {
         }
         Ok(report)
     }
+
+    pub(crate) fn with_catalog_floor(mut self, catalog_bytes: u64) -> Result<Self> {
+        if catalog_bytes <= self.estimated_catalog_bytes {
+            return Ok(self);
+        }
+        self.estimated_catalog_bytes = catalog_bytes;
+        let margin = catalog_bytes.saturating_add(3) / 4;
+        self.required_available_bytes = catalog_bytes
+            .saturating_add(margin)
+            .saturating_add(SAFETY_FLOOR_BYTES);
+        if self.available_bytes < self.required_available_bytes {
+            return Err(CatalogError::InsufficientSpace {
+                required_bytes: self.required_available_bytes,
+                available_bytes: self.available_bytes,
+            });
+        }
+        Ok(self)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -111,6 +129,7 @@ pub struct SourceCheckpoint {
     pub checkpoint_cursor: String,
     pub checkpoint_rows: u64,
     pub checkpoint_version: String,
+    pub complete_generation: u64,
     pub complete: bool,
 }
 
@@ -247,18 +266,33 @@ impl BootstrapLayout {
             .map(|manifest| manifest.active_generation);
         let generation = self.next_building_generation(active_generation)?;
         let building_path = self.building_path(generation);
-        let catalog = match Catalog::open(&building_path, generation) {
+        let base_generation = active_generation.unwrap_or(0);
+        let catalog = match Catalog::open(&building_path, generation).and_then(|mut catalog| {
+            let (phase, base) = catalog.build_phase()?;
+            if phase.is_empty() {
+                catalog.set_build_phase("bootstrap", base_generation)?;
+                Ok(catalog)
+            } else if phase == "bootstrap" && base == base_generation {
+                Ok(catalog)
+            } else {
+                Err(CatalogError::InvalidInput(format!(
+                    "building generation belongs to {phase:?} base {base}"
+                )))
+            }
+        }) {
             Ok(catalog) => catalog,
             Err(error) if building_path.is_file() => {
                 // Only the exact incomplete derived sidecar is recoverable here.
                 // Authoritative databases and active generations are never targets.
                 fs::remove_file(&building_path)?;
                 remove_sqlite_sidecars(&building_path)?;
-                Catalog::open(&building_path, generation).map_err(|retry| {
+                let mut catalog = Catalog::open(&building_path, generation).map_err(|retry| {
                     CatalogError::InvalidSource(format!(
                         "rebuild after rejected sidecar ({error}) also failed: {retry}"
                     ))
-                })?
+                })?;
+                catalog.set_build_phase("bootstrap", base_generation)?;
+                catalog
             }
             Err(error) => return Err(error),
         };
@@ -275,7 +309,7 @@ impl BootstrapLayout {
         ))
     }
 
-    fn write_manifest(&self, manifest: &BootstrapManifest) -> Result<()> {
+    pub(crate) fn write_manifest(&self, manifest: &BootstrapManifest) -> Result<()> {
         let path = self.manifest_path();
         let temporary = self.data_dir.join(format!("{MANIFEST_NAME}.tmp"));
         let bytes = serde_json::to_vec_pretty(manifest)?;
@@ -294,7 +328,7 @@ impl BootstrapLayout {
         Ok(())
     }
 
-    fn next_building_generation(&self, active_generation: Option<u64>) -> Result<u64> {
+    pub(crate) fn next_building_generation(&self, active_generation: Option<u64>) -> Result<u64> {
         let mut maximum_final = active_generation.unwrap_or(0);
         let mut building = Vec::new();
         for entry in fs::read_dir(&self.data_dir)? {
@@ -421,7 +455,7 @@ impl BootstrapSession {
     }
 }
 
-fn acquire_lock(path: &Path) -> Result<File> {
+pub(crate) fn acquire_lock(path: &Path) -> Result<File> {
     let file = OpenOptions::new()
         .create(true)
         .read(true)
@@ -441,7 +475,7 @@ fn acquire_lock(path: &Path) -> Result<File> {
     Ok(file)
 }
 
-fn remove_sqlite_sidecars(database: &Path) -> Result<()> {
+pub(crate) fn remove_sqlite_sidecars(database: &Path) -> Result<()> {
     for suffix in ["-wal", "-shm"] {
         let path = PathBuf::from(format!("{}{suffix}", database.display()));
         match fs::remove_file(path) {
@@ -453,7 +487,7 @@ fn remove_sqlite_sidecars(database: &Path) -> Result<()> {
     Ok(())
 }
 
-fn now_unix_ms() -> u64 {
+pub(crate) fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
@@ -486,12 +520,12 @@ fn filesystem_available_bytes(_path: &Path) -> Result<u64> {
 }
 
 #[cfg(unix)]
-fn sync_directory(path: &Path) -> Result<()> {
+pub(crate) fn sync_directory(path: &Path) -> Result<()> {
     File::open(path)?.sync_all()?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> Result<()> {
+pub(crate) fn sync_directory(_path: &Path) -> Result<()> {
     Ok(())
 }

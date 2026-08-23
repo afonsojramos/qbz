@@ -476,6 +476,7 @@ fn finish(
         "[qbz-qt] {} sync finished: {saved} saved, {pruned} pruned, {total} cached",
         kind.as_str()
     );
+    crate::local_catalog_qt::request_catch_up();
     Ok(SyncReport {
         saved,
         pruned,
