@@ -60,6 +60,31 @@ pub struct PersistedPlaybackSession {
     pub saved_at: i64,
 }
 
+/// Additive queue fields that the legacy portable session shape cannot carry
+/// without breaking older frontend struct literals. Positions refer to the
+/// simultaneously persisted `queue_tracks` vector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedQueueTrackEdition {
+    pub position: usize,
+    pub track_id: u64,
+    pub version: Option<String>,
+    pub album_version: Option<String>,
+}
+
+/// One oldest-first play-history entry. `track_id` validates that `position`
+/// still refers to the same queue snapshot before the entry is restored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedQueueHistoryEntry {
+    pub position: usize,
+    pub track_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PersistedQueueExtras {
+    pub editions: Vec<PersistedQueueTrackEdition>,
+    pub history: Vec<PersistedQueueHistoryEntry>,
+}
+
 impl Default for PersistedPlaybackSession {
     fn default() -> Self {
         Self {
@@ -159,6 +184,19 @@ impl SessionStore {
                 bit_depth INTEGER,
                 sample_rate REAL,
                 source TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS queue_track_extras (
+                position INTEGER PRIMARY KEY,
+                track_id INTEGER NOT NULL,
+                version TEXT,
+                album_version TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS queue_history (
+                sequence INTEGER PRIMARY KEY,
+                position INTEGER NOT NULL,
+                track_id INTEGER NOT NULL
             );
 
             INSERT OR IGNORE INTO player_state (id, current_position_secs, volume, shuffle_enabled, repeat_mode, was_playing, saved_at)
@@ -322,6 +360,14 @@ impl SessionStore {
             let _ = self.conn.execute("ROLLBACK", []);
             return Err(format!("Failed to clear queue: {}", e));
         }
+        if let Err(e) = self.conn.execute("DELETE FROM queue_track_extras", []) {
+            let _ = self.conn.execute("ROLLBACK", []);
+            return Err(format!("Failed to clear queue track extras: {e}"));
+        }
+        if let Err(e) = self.conn.execute("DELETE FROM queue_history", []) {
+            let _ = self.conn.execute("ROLLBACK", []);
+            return Err(format!("Failed to clear queue history: {e}"));
+        }
 
         for (pos, track) in session.playback.queue_tracks.iter().enumerate() {
             if let Err(e) = self.conn.execute(
@@ -484,6 +530,95 @@ impl SessionStore {
         })
     }
 
+    /// Persist edition subtitles and oldest-first playback history alongside
+    /// the portable session snapshot. Kept additive so older frontends that
+    /// construct `PersistedPlaybackSession` remain source-compatible.
+    pub fn save_queue_extras(&self, extras: &PersistedQueueExtras) -> Result<(), String> {
+        self.conn
+            .execute("BEGIN TRANSACTION", [])
+            .map_err(|e| format!("Failed to begin queue-extras transaction: {e}"))?;
+
+        let save = (|| -> Result<(), String> {
+            self.conn
+                .execute("DELETE FROM queue_track_extras", [])
+                .map_err(|e| format!("Failed to clear queue track extras: {e}"))?;
+            self.conn
+                .execute("DELETE FROM queue_history", [])
+                .map_err(|e| format!("Failed to clear queue history: {e}"))?;
+
+            for edition in &extras.editions {
+                self.conn
+                    .execute(
+                        "INSERT INTO queue_track_extras (position, track_id, version, album_version) VALUES (?1, ?2, ?3, ?4)",
+                        params![
+                            edition.position as i64,
+                            edition.track_id as i64,
+                            edition.version.as_deref(),
+                            edition.album_version.as_deref(),
+                        ],
+                    )
+                    .map_err(|e| format!("Failed to save queue track extra: {e}"))?;
+            }
+
+            for (sequence, entry) in extras.history.iter().enumerate() {
+                self.conn
+                    .execute(
+                        "INSERT INTO queue_history (sequence, position, track_id) VALUES (?1, ?2, ?3)",
+                        params![sequence as i64, entry.position as i64, entry.track_id as i64],
+                    )
+                    .map_err(|e| format!("Failed to save queue history: {e}"))?;
+            }
+            Ok(())
+        })();
+
+        if let Err(error) = save {
+            let _ = self.conn.execute("ROLLBACK", []);
+            return Err(error);
+        }
+        self.conn
+            .execute("COMMIT", [])
+            .map_err(|e| format!("Failed to commit queue-extras transaction: {e}"))?;
+        Ok(())
+    }
+
+    pub fn load_queue_extras(&self) -> Result<PersistedQueueExtras, String> {
+        let mut editions_stmt = self
+            .conn
+            .prepare(
+                "SELECT position, track_id, version, album_version FROM queue_track_extras ORDER BY position",
+            )
+            .map_err(|e| format!("Failed to prepare queue track extras query: {e}"))?;
+        let editions = editions_stmt
+            .query_map([], |row| {
+                Ok(PersistedQueueTrackEdition {
+                    position: row.get::<_, i64>(0)? as usize,
+                    track_id: row.get::<_, i64>(1)? as u64,
+                    version: row.get(2)?,
+                    album_version: row.get(3)?,
+                })
+            })
+            .map_err(|e| format!("Failed to query queue track extras: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read queue track extras: {e}"))?;
+
+        let mut history_stmt = self
+            .conn
+            .prepare("SELECT position, track_id FROM queue_history ORDER BY sequence")
+            .map_err(|e| format!("Failed to prepare queue history query: {e}"))?;
+        let history = history_stmt
+            .query_map([], |row| {
+                Ok(PersistedQueueHistoryEntry {
+                    position: row.get::<_, i64>(0)? as usize,
+                    track_id: row.get::<_, i64>(1)? as u64,
+                })
+            })
+            .map_err(|e| format!("Failed to query queue history: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read queue history: {e}"))?;
+
+        Ok(PersistedQueueExtras { editions, history })
+    }
+
     pub fn save_position(&self, position_secs: u64) -> Result<(), String> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -526,6 +661,12 @@ impl SessionStore {
         self.conn
             .execute("DELETE FROM queue_tracks", [])
             .map_err(|e| format!("Failed to clear queue: {}", e))?;
+        self.conn
+            .execute("DELETE FROM queue_track_extras", [])
+            .map_err(|e| format!("Failed to clear queue track extras: {e}"))?;
+        self.conn
+            .execute("DELETE FROM queue_history", [])
+            .map_err(|e| format!("Failed to clear queue history: {e}"))?;
 
         self.conn.execute(
             "UPDATE player_state SET current_index = NULL, current_position_secs = 0, was_playing = 0, last_view = 'home', view_context_id = NULL, view_context_type = NULL WHERE id = 1",
@@ -644,8 +785,58 @@ mod tests {
         assert!(loaded.playback.was_playing);
         assert!(loaded.playback.saved_at > 0);
         assert_eq!(loaded.shell_view.last_view, "album");
-        assert_eq!(loaded.shell_view.view_context_id.as_deref(), Some("album-1"));
-        assert_eq!(loaded.shell_view.view_context_type.as_deref(), Some("album"));
+        assert_eq!(
+            loaded.shell_view.view_context_id.as_deref(),
+            Some("album-1")
+        );
+        assert_eq!(
+            loaded.shell_view.view_context_type.as_deref(),
+            Some("album")
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn session_store_round_trips_queue_editions_and_history() {
+        let dir = unique_test_dir("session-queue-extras");
+        let store = SessionStore::new_at(&dir).expect("open store");
+        let session = PersistedSessionSnapshot {
+            playback: PersistedPlaybackSession {
+                queue_tracks: vec![sample_track()],
+                current_index: Some(0),
+                ..PersistedPlaybackSession::default()
+            },
+            shell_view: PersistedShellViewState::default(),
+        };
+        let extras = PersistedQueueExtras {
+            editions: vec![PersistedQueueTrackEdition {
+                position: 0,
+                track_id: 42,
+                version: Some("Backing Track / Bonus Track".to_string()),
+                album_version: Some("Remastered 2014".to_string()),
+            }],
+            history: vec![PersistedQueueHistoryEntry {
+                position: 0,
+                track_id: 42,
+            }],
+        };
+
+        store.save_session(&session).expect("save session");
+        store.save_queue_extras(&extras).expect("save queue extras");
+        drop(store);
+
+        let reopened = SessionStore::new_at(&dir).expect("reopen store");
+        assert_eq!(
+            reopened.load_queue_extras().expect("load queue extras"),
+            extras
+        );
+
+        reopened.clear_session().expect("clear session");
+        assert_eq!(
+            reopened.load_queue_extras().expect("load cleared extras"),
+            PersistedQueueExtras::default()
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }

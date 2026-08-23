@@ -484,6 +484,25 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         queue.get_all_tracks()
     }
 
+    /// Capture queue rows, cursor, and oldest-first playback history under one
+    /// queue lock for session persistence.
+    pub async fn get_persistable_queue_state(
+        &self,
+    ) -> (Vec<QueueTrack>, Option<usize>, Vec<usize>) {
+        let queue = self.queue.read().await;
+        queue.get_persistable_state()
+    }
+
+    /// Restore the oldest-first playback history after restoring its queue.
+    pub async fn restore_queue_history(&self, history: Vec<usize>) {
+        let queue = self.queue.write().await;
+        queue.restore_history_indices(history);
+        self.emit(CoreEvent::QueueUpdated {
+            state: queue.get_state(),
+        })
+        .await;
+    }
+
     /// Get the full queue state without the upcoming/history caps that
     /// `get_queue_state` applies. Used by clients that paginate the
     /// upcoming list and need the complete play history (Queue sidebar).

@@ -1139,6 +1139,34 @@ impl QueueManager {
         (state.tracks.clone(), state.current_index)
     }
 
+    /// Capture the queue rows, cursor, and chronological play-history indices
+    /// under one lock for durable session persistence.
+    ///
+    /// History is stored oldest-first internally. Its indices refer to the
+    /// returned `tracks` vector, so callers must persist the three values as a
+    /// single snapshot.
+    pub fn get_persistable_state(&self) -> (Vec<QueueTrack>, Option<usize>, Vec<usize>) {
+        let state = self.state.lock().unwrap();
+        (
+            state.tracks.clone(),
+            state.current_index,
+            state.history.iter().copied().collect(),
+        )
+    }
+
+    /// Restore a persisted oldest-first play history for the current queue.
+    /// Invalid indices are discarded and only the manager's newest 50 entries
+    /// survive, matching the live playback-history bound.
+    pub fn restore_history_indices(&self, history: Vec<usize>) {
+        let mut state = self.state.lock().unwrap();
+        let valid: Vec<usize> = history
+            .into_iter()
+            .filter(|&idx| idx < state.tracks.len())
+            .collect();
+        let keep_from = valid.len().saturating_sub(50);
+        state.history = valid.into_iter().skip(keep_from).collect();
+    }
+
     /// Get the full queue state without the upcoming/history caps applied by
     /// `get_state()`. Used by clients that paginate the upcoming list (e.g.
     /// the Queue sidebar's "UP NEXT" paginator) and need the complete history.
@@ -2431,6 +2459,45 @@ mod tests {
         assert_eq!(full.history.len(), 25, "get_state_full returns all history");
         // Newest-first ordering: most recently played sits at the front.
         assert_eq!(full.history.first().unwrap().id, 25);
+    }
+
+    #[test]
+    fn test_persistable_state_restores_bounded_history() {
+        let queue = QueueManager::new();
+        queue.set_queue((1..=60).map(create_test_track).collect(), Some(55));
+
+        // Oldest-first, as captured on disk. More than the live 50-entry cap.
+        queue.restore_history_indices((0..55).collect());
+
+        let (tracks, current, history) = queue.get_persistable_state();
+        assert_eq!(tracks.len(), 60);
+        assert_eq!(current, Some(55));
+        assert_eq!(history.len(), 50);
+        assert_eq!(history.first(), Some(&5));
+        assert_eq!(history.last(), Some(&54));
+
+        let full = queue.get_state_full();
+        assert_eq!(full.history.first().map(|track| track.id), Some(55));
+        assert_eq!(full.history.last().map(|track| track.id), Some(6));
+    }
+
+    #[test]
+    fn test_restore_history_discards_invalid_indices() {
+        let queue = QueueManager::new();
+        queue.set_queue((1..=3).map(create_test_track).collect(), Some(2));
+
+        queue.restore_history_indices(vec![0, usize::MAX, 1, 99]);
+
+        assert_eq!(queue.get_persistable_state().2, vec![0, 1]);
+        assert_eq!(
+            queue
+                .get_state_full()
+                .history
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
     }
 
     #[test]

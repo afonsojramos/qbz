@@ -62,7 +62,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::session_store::{
-    PersistedPlaybackSession, PersistedQueueTrack, PersistedSessionSnapshot,
+    PersistedPlaybackSession, PersistedQueueExtras, PersistedQueueHistoryEntry,
+    PersistedQueueTrack, PersistedQueueTrackEdition, PersistedSessionSnapshot,
     PersistedShellViewState, SessionStore,
 };
 use crate::settings::playback::PlaybackPreferencesStore;
@@ -228,14 +229,11 @@ fn from_persisted(t: PersistedQueueTrack) -> QueueTrack {
     QueueTrack {
         id: t.id,
         title: t.title,
-        // The persisted schema predates `version` (Tauri parity): the edition
-        // subtitle is not stored, so a restored track simply has no version.
+        // The portable session shape predates edition subtitles. The additive
+        // queue-extras snapshot patches these two fields after conversion.
         version: None,
         artist: t.artist,
         album: t.album,
-        // Album-version is cosmetic (now-playing/MPRIS); not persisted in the
-        // session schema, so a restored track shows the clean album until the
-        // next album-play repopulates it.
         album_version: None,
         duration_secs: t.duration_secs,
         artwork_url: t.artwork_url,
@@ -263,7 +261,8 @@ pub async fn capture_and_save<A: Adapter>(runtime: &Arc<AppRuntime<A>>) {
     if !persist_enabled() {
         return;
     }
-    let (tracks, current_index) = runtime.core().get_all_queue_tracks().await;
+    let (tracks, current_index, history_indices) =
+        runtime.core().get_persistable_queue_state().await;
     // Crash-chain level >=3 bypassed the restore this boot, so the queue on
     // disk is the GOOD copy the user wants back on a healthy start — don't
     // clobber it with this session's empty queue at exit. A queue the user
@@ -313,14 +312,41 @@ pub async fn capture_and_save<A: Adapter>(runtime: &Arc<AppRuntime<A>>) {
         // keep the Tauri view columns at their defaults so the schema round-trips.
         shell_view: PersistedShellViewState::default(),
     };
+    let extras = PersistedQueueExtras {
+        editions: tracks
+            .iter()
+            .enumerate()
+            .map(|(position, track)| PersistedQueueTrackEdition {
+                position,
+                track_id: track.id,
+                version: track.version.clone(),
+                album_version: track.album_version.clone(),
+            })
+            .collect(),
+        history: history_indices
+            .into_iter()
+            .filter_map(|position| {
+                tracks
+                    .get(position)
+                    .map(|track| PersistedQueueHistoryEntry {
+                        position,
+                        track_id: track.id,
+                    })
+            })
+            .collect(),
+    };
     let track_count = snapshot.playback.queue_tracks.len();
+    let history_count = extras.history.len();
     if let Some(store) = STORE.lock().unwrap().as_ref() {
         match store.save_session(&snapshot) {
-            Ok(()) => log::info!(
-                "[session] persist: saved {track_count} queue tracks (pos {}s, playing {})",
-                snapshot.playback.current_position_secs,
-                snapshot.playback.was_playing
-            ),
+            Ok(()) => match store.save_queue_extras(&extras) {
+                Ok(()) => log::info!(
+                    "[session] persist: saved {track_count} queue tracks and {history_count} history entries (pos {}s, playing {})",
+                    snapshot.playback.current_position_secs,
+                    snapshot.playback.was_playing
+                ),
+                Err(e) => log::warn!("[session] persist: queue extras save failed: {e}"),
+            },
             Err(e) => log::warn!("[session] persist: save failed: {e}"),
         }
     } else {
@@ -347,19 +373,27 @@ pub async fn restore<A: Adapter>(runtime: &Arc<AppRuntime<A>>) -> bool {
         log::info!("[session] persist: restore skipped (persist_session off)");
         return false;
     }
-    let snapshot = {
+    let (snapshot, extras) = {
         let guard = STORE.lock().unwrap();
         let Some(store) = guard.as_ref() else {
             log::warn!("[session] persist: restore skipped (store not open)");
             return false;
         };
-        match store.load_session() {
+        let snapshot = match store.load_session() {
             Ok(s) => s,
             Err(e) => {
                 log::warn!("[session] persist: load failed: {e}");
                 return false;
             }
-        }
+        };
+        let extras = match store.load_queue_extras() {
+            Ok(extras) => extras,
+            Err(e) => {
+                log::warn!("[session] persist: queue extras load failed: {e}");
+                PersistedQueueExtras::default()
+            }
+        };
+        (snapshot, extras)
     };
     let pb_sess = snapshot.playback;
     if pb_sess.queue_tracks.is_empty() {
@@ -369,11 +403,44 @@ pub async fn restore<A: Adapter>(runtime: &Arc<AppRuntime<A>>) -> bool {
     let position = pb_sess.current_position_secs;
     let count = pb_sess.queue_tracks.len();
     let index = pb_sess.current_index;
-    let tracks: Vec<QueueTrack> = pb_sess
+    let mut tracks: Vec<QueueTrack> = pb_sess
         .queue_tracks
         .into_iter()
         .map(from_persisted)
         .collect();
+    // Extras and the portable snapshot are committed independently for
+    // backward compatibility. Accept them only when every saved position/id
+    // still names this exact queue; this prevents a crash between commits from
+    // attaching stale editions or history to a newer session.
+    let extras_match = extras.editions.len() == tracks.len()
+        && extras.editions.iter().all(|edition| {
+            tracks
+                .get(edition.position)
+                .is_some_and(|track| track.id == edition.track_id)
+        });
+    let restored_history = if extras_match {
+        for edition in &extras.editions {
+            if let Some(track) = tracks.get_mut(edition.position) {
+                track.version = edition.version.clone();
+                track.album_version = edition.album_version.clone();
+            }
+        }
+        extras
+            .history
+            .iter()
+            .filter_map(|entry| {
+                tracks
+                    .get(entry.position)
+                    .filter(|track| track.id == entry.track_id)
+                    .map(|_| entry.position)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        if !extras.editions.is_empty() || !extras.history.is_empty() {
+            log::warn!("[session] persist: stale queue extras discarded");
+        }
+        Vec::new()
+    };
     // The current track's id, so the resume position is applied ONLY when this
     // exact track is the first one played after the restore.
     let current_track_id = index.and_then(|i| tracks.get(i)).map(|t| t.id).unwrap_or(0);
@@ -381,6 +448,8 @@ pub async fn restore<A: Adapter>(runtime: &Arc<AppRuntime<A>>) -> bool {
         .core()
         .set_queue_with_order(tracks, index, pb_sess.shuffle_enabled, None)
         .await;
+    let history_count = restored_history.len();
+    runtime.core().restore_queue_history(restored_history).await;
     runtime
         .core()
         .set_repeat_mode(repeat_from_str(&pb_sess.repeat_mode))
@@ -393,8 +462,9 @@ pub async fn restore<A: Adapter>(runtime: &Arc<AppRuntime<A>>) -> bool {
         PENDING_RESUME_TRACK.store(current_track_id, Ordering::Relaxed);
     }
     log::info!(
-        "[session] persist: restored {count} queue tracks (index {index:?}), paused; \
-         resume position {position}s (consumed on first play when enabled)"
+        "[session] persist: restored {count} queue tracks and {} history entries (index {index:?}), paused; \
+         resume position {position}s (consumed on first play when enabled)",
+        history_count
     );
     true
 }
