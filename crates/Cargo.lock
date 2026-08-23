@@ -6536,6 +6536,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-local-catalog"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "qbz-log"
 version = "2.0.2"
 dependencies = [

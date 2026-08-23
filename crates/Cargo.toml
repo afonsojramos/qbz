@@ -13,6 +13,9 @@ members = [
     "qbz-integrations",
     "qbz-cache",
     "qbz-library",
+    # Frontend-agnostic, derived Local Library read projection. It owns no
+    # source APIs and no Qt types; source caches project into this boundary.
+    "qbz-local-catalog",
     "qbz-cast",
     "qbz-cmaf",
     "qbz-dsd",
