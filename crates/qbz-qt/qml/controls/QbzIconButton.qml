@@ -32,6 +32,13 @@ Rectangle {
     property bool active: false
     property bool activeBackground: false
     property bool btnEnabled: true
+    /// Optional host for the shared QbzTooltip mechanism. Kept opt-in so the
+    /// many icon-only call sites that intentionally have no bubble stay inert.
+    property var tooltip: null
+    property string tooltipKey: ""
+    property string tooltipText: ""
+    readonly property string resolvedTooltipKey: tooltipKey !== ""
+        ? tooltipKey : "icon-" + name
     signal clicked()
 
     QbzTheme { id: theme }
@@ -62,6 +69,17 @@ Rectangle {
         enabled: parent.btnEnabled
         hoverEnabled: true
         cursorShape: parent.btnEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onClicked: if (parent.btnEnabled) parent.clicked()
+        onContainsMouseChanged: {
+            if (btn.tooltip && btn.tooltipText !== "")
+                btn.tooltip.hover(containsMouse, btn, btn.resolvedTooltipKey,
+                                  btn.tooltipText)
+        }
+        onClicked: {
+            if (!parent.btnEnabled)
+                return
+            if (btn.tooltip)
+                btn.tooltip.hide(btn.resolvedTooltipKey)
+            parent.clicked()
+        }
     }
 }

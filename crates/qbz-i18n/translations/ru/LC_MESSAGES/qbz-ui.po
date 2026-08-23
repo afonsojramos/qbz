@@ -5697,3 +5697,6 @@ msgstr "Нет аккаунта Qobuz? QBZ всё равно можно испо
 
 msgid "You're using QBZ without a Qobuz account. Your local library and downloads keep working."
 msgstr "Вы используете QBZ без аккаунта Qobuz. Локальная библиотека и загрузки продолжают работать."
+
+msgid "Continuous playback"
+msgstr "Непрерывное воспроизведение"

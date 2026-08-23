@@ -5680,3 +5680,6 @@ msgstr "Kein Qobuz-Konto? Du kannst QBZ trotzdem als Player für deine eigene Mu
 
 msgid "You're using QBZ without a Qobuz account. Your local library and downloads keep working."
 msgstr "Du nutzt QBZ ohne Qobuz-Konto. Deine lokale Bibliothek und Downloads funktionieren weiterhin."
+
+msgid "Continuous playback"
+msgstr "Kontinuierliche Wiedergabe"

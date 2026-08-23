@@ -5663,3 +5663,6 @@ msgstr "Qobuz アカウントがなくても、QBZ を自分の音楽ライブ�
 
 msgid "You're using QBZ without a Qobuz account. Your local library and downloads keep working."
 msgstr "Qobuz アカウントなしで QBZ を使っています。ローカルライブラリとダウンロードはそのまま使えます。"
+
+msgid "Continuous playback"
+msgstr "連続再生"

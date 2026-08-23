@@ -273,6 +273,8 @@ Rectangle {
         Rectangle {
             width: parent.width
             height: 54
+            topLeftRadius: theme.radiusMd
+            topRightRadius: theme.radiusMd
             color: theme.ambientOn ? theme.surfaceMainA30 : theme.surfaceMain
 
             Row {
@@ -283,7 +285,10 @@ Rectangle {
 
                 QbzIconButton {
                     btnSize: 32
-                    name: "chevron-left"
+                    name: "panel-right-close"
+                    tooltip: tips
+                    tooltipKey: "queue-view-close"
+                    tooltipText: QbzSession.tr("Back", QbzSession.trRev)
                     onClicked: QbzShell.navigateBack()
                 }
                 Text {
@@ -310,8 +315,8 @@ Rectangle {
                 spacing: theme.spacingXs
 
                 QbzLineEdit {
-                    width: Math.max(130, Math.min(240, root.width
-                        - (root.width >= 720 ? 330 : 210)))
+                    width: Math.max(110, Math.min(220, root.width
+                        - (root.width >= 720 ? 490 : 390)))
                     searchMode: true
                     text: root.doc.searchQuery || ""
                     placeholder: QbzSession.tr("Search queue", QbzSession.trRev)
@@ -321,6 +326,9 @@ Rectangle {
                     btnSize: 32
                     name: "trash-list"
                     btnEnabled: root.rows.length > 0
+                    tooltip: tips
+                    tooltipKey: "queue-view-clear"
+                    tooltipText: QbzSession.tr("Clear", QbzSession.trRev)
                     onClicked: QbzQueue.queueClear()
                 }
                 QbzIconButton {
@@ -328,19 +336,35 @@ Rectangle {
                     name: "add-to-list"
                     btnEnabled: root.rows.length > 0
                         && !(root.currentRow && root.currentRow.isEphemeral === true)
+                    tooltip: tips
+                    tooltipKey: "queue-view-save"
+                    tooltipText: QbzSession.tr("Add to Playlist", QbzSession.trRev)
                     onClicked: QbzQueue.queueSaveAsPlaylist()
                 }
-                QbzIconButton {
-                    btnSize: 32
-                    name: "infinity"
-                    active: root.doc.infinitePlay === true
-                    onClicked: QbzQueue.queueToggleInfinitePlay()
+                Row {
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 6
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: QbzSession.tr("Continuous playback", QbzSession.trRev)
+                        color: theme.textSecondary
+                        font.pixelSize: 11
+                    }
+                    QbzToggle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: root.doc.infinitePlay === true
+                        onToggled: QbzQueue.queueToggleInfinitePlay()
+                    }
                 }
                 QbzIconButton {
                     id: sleepButton
                     btnSize: 32
                     name: "clock"
                     active: QbzQueue.sleepActive
+                    tooltip: tips
+                    tooltipKey: "queue-view-sleep"
+                    tooltipText: QbzSession.tr("Set Timer", QbzSession.trRev)
                     onClicked: sleepMenu.openAtCursor(sleepButton, 0, sleepButton.height)
 
                     CardMenu {
@@ -563,5 +587,11 @@ Rectangle {
                     : QbzSession.tr("Play an album or track to get started", QbzSession.trRev)
             }
         }
+    }
+
+    QbzTooltip {
+        id: tips
+        anchors.fill: parent
+        z: 4000
     }
 }

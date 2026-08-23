@@ -106,6 +106,72 @@ pub fn model_track_to_core_queue_track(track: &Track) -> QueueTrack {
     }
 }
 
+/// Keep intrinsic metadata that was already present in the local queue when a
+/// QConnect cloud echo materializes the same catalog track again.
+///
+/// The queue wire carries ids only. Hydrating those ids through the batch
+/// track endpoint gives us enough to play, but that endpoint can omit the
+/// track `version` and cannot express the album release `version` at all
+/// (`Track::album` is only an `AlbumSummary`). Replacing an album-built queue
+/// with that terse projection therefore stripped edition suffixes from every
+/// downstream consumer: queue rows, Now Playing, MPRIS, lyrics and scrobbling.
+///
+/// Only missing intrinsic fields are filled, and only from a non-local track
+/// with the same catalog id. The remote source tag, availability answer and
+/// context remain authoritative; in particular, an unrelated local-library id
+/// collision can never leak file metadata into a Qobuz queue.
+fn preserve_existing_catalog_metadata(remote: &mut QueueTrack, existing: &QueueTrack) {
+    if remote.id != existing.id || existing.is_local {
+        return;
+    }
+
+    let missing = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+    };
+    if missing(&remote.version) && !missing(&existing.version) {
+        remote.version = existing.version.clone();
+    }
+    if missing(&remote.album_version) && !missing(&existing.album_version) {
+        remote.album_version = existing.album_version.clone();
+    }
+    if remote.title.trim().is_empty() && !existing.title.trim().is_empty() {
+        remote.title = existing.title.clone();
+    }
+    if (remote.artist.trim().is_empty() || remote.artist == "Unknown Artist")
+        && !existing.artist.trim().is_empty()
+    {
+        remote.artist = existing.artist.clone();
+    }
+    if (remote.album.trim().is_empty() || remote.album == "Unknown Album")
+        && !existing.album.trim().is_empty()
+    {
+        remote.album = existing.album.clone();
+    }
+    if missing(&remote.artwork_url) && !missing(&existing.artwork_url) {
+        remote.artwork_url = existing.artwork_url.clone();
+    }
+    if missing(&remote.album_id) && !missing(&existing.album_id) {
+        remote.album_id = existing.album_id.clone();
+    }
+    if remote.artist_id.is_none() {
+        remote.artist_id = existing.artist_id;
+    }
+    if remote.duration_secs == 0 {
+        remote.duration_secs = existing.duration_secs;
+    }
+    if remote.bit_depth.is_none() {
+        remote.bit_depth = existing.bit_depth;
+    }
+    if remote.sample_rate.is_none() {
+        remote.sample_rate = existing.sample_rate;
+    }
+    remote.hires |= existing.hires;
+}
+
 // ===================== Renderer orchestration (slice 6, step 6) =====================
 //
 // Engine-agnostic: written ONLY against `QconnectRendererEngine` + the shared
@@ -645,6 +711,18 @@ pub async fn materialize_remote_queue(
         return Ok(());
     }
 
+    // Preserve the richer QueueTrack built by album/playlist entry points
+    // before the id-only cloud echo replaces the core queue. Per-id enrichment
+    // is safe across reorder/insert operations because every copied field is
+    // intrinsic catalog metadata; queue context and the remote source word are
+    // deliberately not copied.
+    let (existing_tracks, _) = engine.get_all_queue_tracks().await;
+    let existing_by_id: HashMap<u64, QueueTrack> = existing_tracks
+        .into_iter()
+        .filter(|track| !track.is_local)
+        .map(|track| (track.id, track))
+        .collect();
+
     let unique_track_ids = dedupe_track_ids(queue_state);
     let fetched_tracks = engine
         .get_tracks_batch(&unique_track_ids)
@@ -653,7 +731,11 @@ pub async fn materialize_remote_queue(
 
     let mut tracks_by_id = HashMap::with_capacity(fetched_tracks.len());
     for track in fetched_tracks {
-        tracks_by_id.insert(track.id, model_track_to_core_queue_track(&track));
+        let mut mapped = model_track_to_core_queue_track(&track);
+        if let Some(existing) = existing_by_id.get(&track.id) {
+            preserve_existing_catalog_metadata(&mut mapped, existing);
+        }
+        tracks_by_id.insert(track.id, mapped);
     }
 
     let mut queue_tracks = Vec::with_capacity(queue_state.queue_items.len());
@@ -665,7 +747,10 @@ pub async fn materialize_remote_queue(
 
         match engine.get_track(item.track_id).await {
             Ok(track) => {
-                let mapped = model_track_to_core_queue_track(&track);
+                let mut mapped = model_track_to_core_queue_track(&track);
+                if let Some(existing) = existing_by_id.get(&track.id) {
+                    preserve_existing_catalog_metadata(&mut mapped, existing);
+                }
                 tracks_by_id.insert(item.track_id, mapped.clone());
                 queue_tracks.push(mapped);
             }
@@ -853,6 +938,7 @@ mod tests {
         set_shuffles: Vec<bool>,
         set_shuffle_flags: Vec<bool>,
         set_queue_with_order: Vec<(bool, Option<Vec<usize>>)>,
+        materialized_tracks: Vec<QueueTrack>,
         set_queues: u32,
         clear_queues: Vec<bool>,
         play_indexes: Vec<usize>,
@@ -931,12 +1017,14 @@ mod tests {
         }
         async fn set_queue_with_order(
             &self,
-            _tracks: Vec<QueueTrack>,
+            tracks: Vec<QueueTrack>,
             _start_index: Option<usize>,
             shuffle_enabled: bool,
             shuffle_order: Option<Vec<usize>>,
         ) {
-            self.calls()
+            let mut calls = self.calls();
+            calls.materialized_tracks = tracks;
+            calls
                 .set_queue_with_order
                 .push((shuffle_enabled, shuffle_order));
         }
@@ -1009,6 +1097,67 @@ mod tests {
 
     fn sync() -> Arc<Mutex<QconnectRemoteSyncState>> {
         Arc::new(Mutex::new(QconnectRemoteSyncState::default()))
+    }
+
+    /// A queue created from `/album/get` carries both edition suffixes. The
+    /// id-only QConnect echo must not replace them with the terse batch-track
+    /// response, because every metadata consumer reads the materialized core
+    /// queue after this point.
+    #[tokio::test]
+    async fn materialize_preserves_rich_metadata_from_matching_local_queue() {
+        let mut engine = MockEngine::new();
+        let mut rich = mock_queue_track(7);
+        rich.title = "What Is Life".to_string();
+        rich.version = Some("Backing Track / Bonus Track".to_string());
+        rich.artist = "George Harrison".to_string();
+        rich.album = "All Things Must Pass".to_string();
+        rich.album_version = Some("Remastered 2014".to_string());
+        rich.artwork_url = Some("https://example.test/cover.jpg".to_string());
+        rich.album_id = Some("album-7".to_string());
+        rich.artist_id = Some(42);
+        rich.bit_depth = Some(24);
+        rich.sample_rate = Some(96_000.0);
+        rich.hires = true;
+        rich.source = Some("qobuz".to_string());
+        rich.context_kind = Some("album".to_string());
+        rich.context_id = Some("album-7".to_string());
+        engine.queue_tracks = vec![rich];
+        engine.queue_index = Some(0);
+
+        materialize_remote_queue(
+            &engine,
+            &sync(),
+            &queue_state(QueueVersion::new(1, 0), vec![qi(7, 0)], false, None),
+        )
+        .await
+        .unwrap();
+
+        let calls = engine.calls();
+        let track = calls
+            .materialized_tracks
+            .first()
+            .expect("materialized track");
+        assert_eq!(
+            track.version.as_deref(),
+            Some("Backing Track / Bonus Track")
+        );
+        assert_eq!(track.album_version.as_deref(), Some("Remastered 2014"));
+        assert_eq!(track.artist, "George Harrison");
+        assert_eq!(track.album, "All Things Must Pass");
+        assert_eq!(track.album_id.as_deref(), Some("album-7"));
+        assert_eq!(track.artist_id, Some(42));
+        assert_eq!(track.bit_depth, Some(24));
+        assert_eq!(track.sample_rate, Some(96_000.0));
+        assert!(track.hires);
+        assert_eq!(track.source.as_deref(), Some(QCONNECT_REMOTE_QUEUE_SOURCE));
+        assert!(
+            track.context_kind.is_none(),
+            "remote context remains authoritative"
+        );
+        assert!(
+            track.context_id.is_none(),
+            "remote context remains authoritative"
+        );
     }
 
     /// #2 — two loads for the same track within the dedup window trigger exactly

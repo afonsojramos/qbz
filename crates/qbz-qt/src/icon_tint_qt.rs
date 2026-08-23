@@ -250,6 +250,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("network", include_str!("../qml/assets/icons/primary/network.svg")),
     ("panel-left", include_str!("../qml/assets/icons/primary/panel-left.svg")),
     ("panel-right-close", include_str!("../qml/assets/icons/primary/panel-right-close.svg")),
+    ("panel-right-open", include_str!("../qml/assets/icons/primary/panel-right-open.svg")),
     ("pause", include_str!("../qml/assets/icons/primary/pause.svg")),
     ("pen-line", include_str!("../qml/assets/icons/primary/pen-line.svg")),
     ("picture-in-picture-2", include_str!("../qml/assets/icons/primary/picture-in-picture-2.svg")),

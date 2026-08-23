@@ -5678,3 +5678,6 @@ msgstr "Pas de compte Qobuz ? Vous pouvez tout de même utiliser QBZ comme lecte
 
 msgid "You're using QBZ without a Qobuz account. Your local library and downloads keep working."
 msgstr "Vous utilisez QBZ sans compte Qobuz. Votre bibliothèque locale et vos téléchargements continuent de fonctionner."
+
+msgid "Continuous playback"
+msgstr "Lecture continue"

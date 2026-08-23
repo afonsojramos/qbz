@@ -772,7 +772,10 @@ Rectangle {
                 QbzIconButton {
                     btnSize: 28
                     iconSize: 15
-                    name: "maximize-2"
+                    name: "panel-right-open"
+                    tooltip: tips
+                    tooltipKey: "queue-view-open"
+                    tooltipText: QbzSession.tr("Queue View", QbzSession.trRev)
                     onClicked: QbzShell.navigateTo("queue-view")
                 }
                 QueueTab {
@@ -1527,5 +1530,11 @@ Rectangle {
                 }
             }
         }
+    }
+
+    QbzTooltip {
+        id: tips
+        anchors.fill: parent
+        z: 4000
     }
 }
