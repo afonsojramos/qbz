@@ -20,7 +20,8 @@ use qbz_library::LocalTrack;
 
 use crate::local_album_actions::AlbumDetailDoc;
 use crate::local_artist_match::{
-    album_matches_artist, merge_artists, normalize_artist, AlbumCredit, ArtistInput,
+    album_matches_artist_with_aliases, build_artist_family_aliases, merge_artists,
+    normalize_artist, AlbumCredit, ArtistInput,
 };
 use crate::local_rows::{
     artist_key, map_album, map_track, AlbumRow, ArtistRow, LocalCounts, TrackRow,
@@ -287,9 +288,20 @@ pub fn artist_album_ids(artist: &str) -> String {
         return "[]".to_string();
     }
     let ids: Vec<String> = state(|s| {
+        let mut names = s
+            .albums
+            .iter()
+            .map(|album| album.artist.as_str())
+            .collect::<Vec<_>>();
+        for album in &s.albums {
+            names.extend(album.all_artists.split(',').filter(|name| !name.is_empty()));
+        }
+        let aliases = build_artist_family_aliases(&names);
         s.albums
             .iter()
-            .filter(|a| album_matches_artist(&a.artist, &a.all_artists, &nsel))
+            .filter(|a| {
+                album_matches_artist_with_aliases(&a.artist, &a.all_artists, &nsel, &aliases)
+            })
             .map(|a| a.id.clone())
             .collect()
     });

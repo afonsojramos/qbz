@@ -1631,6 +1631,15 @@ mod tests {
     }
 
     #[test]
+    fn artist_qml_restarts_timer_ids_without_treating_them_as_root_properties() {
+        let qml = include_str!("../qml/views/local/LocalArtistsTab.qml");
+        assert!(qml.contains("nativeQueryCoalescer.restart()"));
+        assert!(qml.contains("detailQueryCoalescer.restart()"));
+        assert!(!qml.contains("root.nativeQueryCoalescer"));
+        assert!(!qml.contains("root.detailQueryCoalescer"));
+    }
+
+    #[test]
     fn artist_transport_is_bounded_to_one_visual_page() {
         const TOTAL: usize = 20_000;
         let legacy = (0..TOTAL)

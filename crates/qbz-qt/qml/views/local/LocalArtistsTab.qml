@@ -83,15 +83,15 @@ Item {
     Connections {
         target: root.view
         function onArtistsGroupedChanged() { root.rebuild() }
-        function onArtistsSearchChanged() { root.nativeQueryCoalescer.restart() }
-        function onSelectedArtistChanged() { root.detailQueryCoalescer.restart() }
+        function onArtistsSearchChanged() { nativeQueryCoalescer.restart() }
+        function onSelectedArtistChanged() { detailQueryCoalescer.restart() }
         function onArtworkRefresh() { root.reportSoon() }
     }
     Connections {
         target: QbzLocal
         function onLocalArtistsNativeActiveChanged() {
             root.rebuild()
-            if (root.nativeActive) root.detailQueryCoalescer.restart()
+            if (root.nativeActive) detailQueryCoalescer.restart()
         }
         function onLocalArtistsNativeJumpsJsonChanged() {
             if (root.nativeActive) root.alphaJumps = root.parseNativeJumps()
@@ -99,7 +99,7 @@ Item {
         function onLocalArtistsLoadingChanged() {
             if (!QbzLocal.localArtistsLoading) {
                 root.reportSoon()
-                root.detailQueryCoalescer.restart()
+                detailQueryCoalescer.restart()
             }
         }
     }
@@ -385,7 +385,7 @@ Item {
                     nativeActive: root.nativeActive
                     nativeModel: root.nativeAlbumModel
                     nativeJumpsJson: "[]"
-                    onColsChanged: root.detailQueryCoalescer.restart()
+                    onColsChanged: detailQueryCoalescer.restart()
                     onOpenRequested: function (id) { root.view.openAlbum(id) }
                     onPlayRequested: function (id) { QbzLocal.playAlbum(id, false) }
                     onEnqueueRequested: function (id, m) { QbzLocal.enqueue("album", id, m) }

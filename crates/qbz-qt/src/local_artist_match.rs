@@ -29,6 +29,37 @@
 
 use std::collections::{HashMap, HashSet};
 
+const ARTIST_FAMILY_SEPARATOR: &str = " • ";
+
+#[derive(Default)]
+struct ArtistFamilyEvidence {
+    display_counts: HashMap<String, usize>,
+    suffixes: HashSet<String>,
+    members: HashSet<String>,
+}
+
+/// Corpus-derived aliases for repeated `collection • contributor` credits.
+/// The full source names remain outside this value; it only answers which
+/// repeated members share one root identity.
+#[derive(Default)]
+pub struct ArtistFamilyAliases {
+    by_member: HashMap<String, String>,
+}
+
+impl ArtistFamilyAliases {
+    fn canonical_display<'a>(&'a self, name: &str) -> Option<&'a str> {
+        self.by_member
+            .get(&normalize_artist(name))
+            .map(String::as_str)
+    }
+
+    fn canonical_key(&self, name: &str) -> String {
+        self.canonical_display(name)
+            .map(normalize_artist)
+            .unwrap_or_else(|| normalize_artist(name))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Normalization
 // ---------------------------------------------------------------------------
@@ -60,7 +91,11 @@ pub fn normalize_artist(name: &str) -> String {
     let mut prev_space = false;
     for ch in name.to_lowercase().chars() {
         let c = fold_diacritic(ch);
-        if c.is_ascii_alphanumeric() {
+        // Artist identity is global metadata, not an ASCII search key. Using
+        // `is_ascii_alphanumeric` erased Japanese/CJK names entirely; the
+        // synthetic `family • latin contributor` rows only survived because
+        // their suffix happened to contain ASCII.
+        if c.is_alphanumeric() {
             out.push(c);
             prev_space = false;
         } else if !prev_space {
@@ -84,6 +119,58 @@ pub fn split_credit(s: &str) -> Vec<String> {
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+fn split_artist_family(name: &str) -> Option<(&str, &str)> {
+    let (prefix, suffix) = name.split_once(ARTIST_FAMILY_SEPARATOR)?;
+    let prefix = prefix.trim();
+    let suffix = suffix.trim();
+    (!prefix.is_empty() && !suffix.is_empty()).then_some((prefix, suffix))
+}
+
+/// A single bullet-bearing name may be intentional. A shared prefix with two
+/// distinct suffixes is the evidence that this collection encoded an album
+/// family as many synthetic root artists.
+pub fn build_artist_family_aliases(names: &[&str]) -> ArtistFamilyAliases {
+    let mut families = HashMap::<String, ArtistFamilyEvidence>::new();
+    for name in names {
+        let Some((prefix, suffix)) = split_artist_family(name) else {
+            continue;
+        };
+        let family_key = normalize_artist(prefix);
+        let suffix_key = normalize_artist(suffix);
+        let member_key = normalize_artist(name);
+        if family_key.is_empty() || suffix_key.is_empty() || member_key.is_empty() {
+            continue;
+        }
+        let evidence = families.entry(family_key).or_default();
+        evidence.suffixes.insert(suffix_key);
+        evidence.members.insert(member_key);
+        *evidence
+            .display_counts
+            .entry(prefix.to_string())
+            .or_default() += 1;
+    }
+
+    let mut aliases = ArtistFamilyAliases::default();
+    for evidence in families.into_values() {
+        if evidence.suffixes.len() < 2 {
+            continue;
+        }
+        let mut displays = evidence.display_counts.into_iter().collect::<Vec<_>>();
+        displays.sort_by(|(left_name, left_count), (right_name, right_count)| {
+            right_count
+                .cmp(left_count)
+                .then_with(|| left_name.cmp(right_name))
+        });
+        let Some((canonical, _)) = displays.into_iter().next() else {
+            continue;
+        };
+        for member in evidence.members {
+            aliases.by_member.insert(member, canonical.clone());
+        }
+    }
+    aliases
 }
 
 // ---------------------------------------------------------------------------
@@ -116,19 +203,28 @@ pub struct AlbumCredit<'a> {
 /// not match "Airbourne" or "Blair", and an album credited "A & B" must
 /// appear under "B".
 pub fn album_matches_artist(artist: &str, all_artists: &str, nsel: &str) -> bool {
+    album_matches_artist_with_aliases(artist, all_artists, nsel, &ArtistFamilyAliases::default())
+}
+
+pub fn album_matches_artist_with_aliases(
+    artist: &str,
+    all_artists: &str,
+    nsel: &str,
+    aliases: &ArtistFamilyAliases,
+) -> bool {
     if nsel == "various artists" {
         return normalize_artist(artist) == "various artists";
     }
-    if normalize_artist(artist) == nsel {
+    if aliases.canonical_key(artist) == nsel {
         return true;
     }
     for part in all_artists.split(',') {
-        if normalize_artist(part) == nsel {
+        if aliases.canonical_key(part) == nsel {
             return true;
         }
     }
     for part in split_credit(artist) {
-        if normalize_artist(&part) == nsel {
+        if aliases.canonical_key(&part) == nsel {
             return true;
         }
     }
@@ -137,19 +233,22 @@ pub fn album_matches_artist(artist: &str, all_artists: &str, nsel: &str) -> bool
 
 /// Build the per-normalized-artist set of album ids, so merged rows get an
 /// accurate unique album count independent of per-track spelling.
-pub fn build_artist_album_ids(albums: &[AlbumCredit<'_>]) -> HashMap<String, HashSet<String>> {
+fn build_artist_album_ids_with_aliases(
+    albums: &[AlbumCredit<'_>],
+    aliases: &ArtistFamilyAliases,
+) -> HashMap<String, HashSet<String>> {
     let mut map: HashMap<String, HashSet<String>> = HashMap::new();
     for al in albums {
         if !al.all_artists.is_empty() {
             for part in al.all_artists.split(',') {
-                let n = normalize_artist(part);
+                let n = aliases.canonical_key(part);
                 if n.is_empty() || n == "various artists" {
                     continue;
                 }
                 map.entry(n).or_default().insert(al.id.to_string());
             }
         } else {
-            let n = normalize_artist(al.artist);
+            let n = aliases.canonical_key(al.artist);
             if !n.is_empty() && n != "various artists" {
                 map.entry(n).or_default().insert(al.id.to_string());
             }
@@ -207,13 +306,27 @@ pub struct MergedArtist {
 /// with Plex off a local artist with no custom portrait keeps `image_path`
 /// empty, which is what leaves the Qobuz portrait fetch its slot.
 pub fn merge_artists(
-    artists: Vec<ArtistInput>,
+    mut artists: Vec<ArtistInput>,
     albums: &[AlbumCredit<'_>],
     custom_images: &HashMap<String, String>,
     plex_portraits: &HashMap<String, String>,
     album_thumb_fallback: bool,
 ) -> Vec<MergedArtist> {
-    let album_ids = build_artist_album_ids(albums);
+    let mut family_names = artists
+        .iter()
+        .map(|artist| artist.name.as_str())
+        .chain(albums.iter().map(|album| album.artist))
+        .collect::<Vec<_>>();
+    for album in albums {
+        family_names.extend(album.all_artists.split(',').filter(|name| !name.is_empty()));
+    }
+    let family_aliases = build_artist_family_aliases(&family_names);
+    let album_ids = build_artist_album_ids_with_aliases(albums, &family_aliases);
+    for artist in &mut artists {
+        if let Some(canonical) = family_aliases.canonical_display(&artist.name) {
+            artist.name = canonical.to_string();
+        }
+    }
     let norm_imgs: HashMap<String, String> = custom_images
         .iter()
         .map(|(k, v)| (normalize_artist(k), v.clone()))
@@ -225,7 +338,7 @@ pub fn merge_artists(
         for al in albums {
             if !al.artwork_path.is_empty() {
                 album_thumbs
-                    .entry(normalize_artist(al.artist))
+                    .entry(family_aliases.canonical_key(al.artist))
                     .or_insert_with(|| (al.artwork_path.to_string(), al.source.to_string()));
             }
         }
@@ -373,6 +486,12 @@ mod tests {
         assert_eq!(normalize_artist("Sigur Rós"), "sigur ros");
         assert_eq!(normalize_artist("Mötley Crüe"), "motley crue");
         assert_eq!(normalize_artist("Françoise"), "francoise");
+    }
+
+    #[test]
+    fn normalize_preserves_non_ascii_scripts() {
+        assert_eq!(normalize_artist("新世紀エヴァンゲリオン"), "新世紀エヴァンゲリオン");
+        assert_eq!(normalize_artist("林原めぐみ"), "林原めぐみ");
     }
 
     #[test]
@@ -573,6 +692,64 @@ mod tests {
         assert_eq!(merged[0].album_count, 11);
         assert_eq!(merged[0].track_count, 102);
         assert_eq!(merged[0].source, "mixed");
+    }
+
+    #[test]
+    fn repeated_bullet_families_collapse_but_one_off_collaborations_survive() {
+        let family = "新世紀エヴァンゲリオン";
+        let shiro = format!("{family} • Shiro Sagisu");
+        let megumi = format!("{family} • Megumi Hayashibara");
+        let yoko = format!("{family} • Yoko Takahashi");
+        let albums = vec![
+            credit("eva-0", family, "", ""),
+            credit("eva-1", &shiro, "", ""),
+            credit("eva-2", &megumi, "", ""),
+            credit("eva-3", &yoko, "", ""),
+            credit("duet-0", "Alice • Bob", "", ""),
+        ];
+        let merged = merge_artists(
+            vec![
+                input(family, 1, 40, "subsonic"),
+                input(&shiro, 1, 10, "subsonic"),
+                input(&megumi, 1, 20, "subsonic"),
+                input(&yoko, 1, 30, "subsonic"),
+                input("鷺巣詩郎", 1, 10, "subsonic"),
+                input("林原めぐみ", 1, 20, "subsonic"),
+                input("高橋洋子", 1, 30, "subsonic"),
+                input("Alice • Bob", 1, 7, "subsonic"),
+            ],
+            &albums,
+            &HashMap::new(),
+            &HashMap::new(),
+            false,
+        );
+
+        let family_rows = merged
+            .iter()
+            .filter(|artist| artist.name == family)
+            .collect::<Vec<_>>();
+        assert_eq!(family_rows.len(), 1);
+        assert_eq!(family_rows[0].album_count, 4);
+        assert_eq!(family_rows[0].track_count, 100);
+        assert!(merged.iter().any(|artist| artist.name == "鷺巣詩郎"));
+        assert!(merged.iter().any(|artist| artist.name == "林原めぐみ"));
+        assert!(merged.iter().any(|artist| artist.name == "高橋洋子"));
+        assert!(merged.iter().any(|artist| artist.name == "Alice • Bob"));
+
+        let names = albums.iter().map(|album| album.artist).collect::<Vec<_>>();
+        let aliases = build_artist_family_aliases(&names);
+        assert!(album_matches_artist_with_aliases(
+            &shiro,
+            "",
+            &normalize_artist(family),
+            &aliases,
+        ));
+        assert!(!album_matches_artist_with_aliases(
+            "Alice • Bob",
+            "",
+            &normalize_artist("Alice"),
+            &aliases,
+        ));
     }
 
     #[test]
