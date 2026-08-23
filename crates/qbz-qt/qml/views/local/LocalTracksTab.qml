@@ -33,6 +33,9 @@ Item {
     // contentY change before that property turns true. All of those changes
     // describe the same page miss and must collapse into one bridge call.
     property bool pageRequestPending: false
+    // Invalidates a deferred viewport restore when another document/model
+    // replacement wins before Qt's next event-loop turn.
+    property int entriesEpoch: 0
 
     function requestNextPage(force) {
         if (root.nativeModelActive
@@ -58,6 +61,73 @@ Item {
         QbzLocal.tracksLoadMore()
     }
 
+    function capturePageAnchor() {
+        if (root.nativeModelActive || !root.pageRequestPending
+            || root.entries.length === 0 || !list.visible)
+            return null
+
+        // Preserve identity, not merely pixels. Group modes globally reorder
+        // the accumulated rows when a page arrives, so the same contentY can
+        // point at a different track after the model swap.
+        var index = list.indexAt(4, list.contentY + 1)
+        if (index < 0)
+            index = Math.min(root.entries.length - 1,
+                             Math.max(0, list.count - 1))
+        var i = index
+        while (i < root.entries.length && root.entries[i].t !== 1)
+            i++
+        if (i >= root.entries.length) {
+            i = index - 1
+            while (i >= 0 && root.entries[i].t !== 1)
+                i--
+        }
+        if (i < 0 || !root.entries[i].row)
+            return null
+
+        var cell = list.itemAtIndex(i)
+        return {
+            "id": String(root.entries[i].row.id),
+            // Position inside the viewport, including a partially clipped
+            // first row or a group header immediately above it.
+            "screenY": cell ? cell.mapToItem(list, 0, 0).y : 0
+        }
+    }
+
+    function restorePageAnchor(anchor, nextEntries, epoch) {
+        if (!anchor)
+            return
+        var target = -1
+        for (var i = 0; i < nextEntries.length; i++) {
+            var entry = nextEntries[i]
+            if (entry.t === 1 && entry.row
+                && String(entry.row.id) === anchor.id) {
+                target = i
+                break
+            }
+        }
+        if (target < 0)
+            return
+
+        // Assigning a fresh JS array invokes QQuickItemView::setModel(); the
+        // reset and its content-height polish finish after `entries = out`.
+        // Restore on the next turn, then use the delegate's viewport position
+        // to retain the exact partial-row offset.
+        Qt.callLater(function () {
+            if (epoch !== root.entriesEpoch || root.nativeModelActive)
+                return
+            list.forceLayout()
+            list.positionViewAtIndex(target, ListView.Beginning)
+            list.forceLayout()
+            var cell = list.itemAtIndex(target)
+            var currentScreenY = cell ? cell.mapToItem(list, 0, 0).y : 0
+            var wanted = list.contentY + currentScreenY - anchor.screenY
+            var minY = list.originY
+            var maxY = minY + Math.max(0, list.contentHeight - list.height)
+            list.contentY = Math.max(minY, Math.min(wanted, maxY))
+            root.reportSoon()
+        })
+    }
+
     // --------------------------- entry model ------------------------------
     property var entries: []
     property var alphaJumps: []
@@ -67,6 +137,9 @@ Item {
     /// screen, by the number of headers scrolled past.
     property var rowIndex: []
     function rebuild() {
+        var anchor = root.capturePageAnchor()
+        root.entriesEpoch += 1
+        var epoch = root.entriesEpoch
         if (root.nativeModelActive) {
             entries = []
             rowIndex = []
@@ -103,6 +176,7 @@ Item {
         alphaJumps = jumps
         rowIndex = idx
         report()
+        root.restorePageAnchor(anchor, out, epoch)
     }
     Component.onCompleted: { rebuild(); reportSoon() }
     Component.onDestruction: if (view) view.releaseWindow("tracks")

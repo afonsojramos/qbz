@@ -518,4 +518,20 @@ mod phase_a_tests {
         assert!(qml.contains("QbzLoadMore"));
         assert!(qml.contains("onClicked: root.requestNextPage(true)"));
     }
+
+    #[test]
+    fn tracks_page_republish_keeps_the_visible_track_anchor() {
+        // A legacy page append republishes the accumulated rows as a fresh JS
+        // array, which makes QQuickItemView reset to the top. The restoration
+        // must follow track identity (grouping can move its index), retain a
+        // partially clipped row's pixel offset and run after the relayout.
+        let qml = include_str!("../qml/views/local/LocalTracksTab.qml");
+        assert!(qml.contains("function capturePageAnchor()"));
+        assert!(qml.contains("String(root.entries[i].row.id)"));
+        assert!(qml.contains("cell.mapToItem(list, 0, 0).y"));
+        assert!(qml.contains("function restorePageAnchor(anchor, nextEntries, epoch)"));
+        assert!(qml.contains("Qt.callLater(function ()"));
+        assert!(qml.contains("list.positionViewAtIndex(target, ListView.Beginning)"));
+        assert!(qml.contains("root.restorePageAnchor(anchor, out, epoch)"));
+    }
 }
