@@ -272,15 +272,23 @@ Rectangle {
 
         // === B. CONTROLS ROW — symmetric 3 columns =======================
         Item {
+            id: controlsLayout
             width: parent.width
             height: parent.height - 3
 
+            // Intrinsic boundary of the centred transport. The metadata/time
+            // group may use every pixel before it, regardless of how wide the
+            // nominal centre zone is at this window size.
+            readonly property real transportLeft:
+                centreZone.x + centreTransport.x
+
             // ---- LEFT column: SongCard + Sep + time column --------------
             Item {
+                id: leftZone
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
-                width: (root.width - 6) * root.sideFrac
+                width: Math.max(0, controlsLayout.transportLeft - 8)
                 // No clip: the Row sums to exactly this column (width-59 + 19
                 // + 40, spacing 0) and the two time Texts above are now
                 // bounded, which was the only escape path.
@@ -311,7 +319,8 @@ Rectangle {
                     // a 74px card would push the 37px cover off-centre.
                     SongCard {
                         height: parent.height
-                        width: parent.width - (QbzPlayer.npHasTrack ? 59 : 0)
+                        width: Math.max(0,
+                            parent.width - (QbzPlayer.npHasTrack ? 59 : 0))
                         artSize: 37
                         artBorderWidth: 3
                         artBorderColor: theme.surfaceCard
@@ -365,6 +374,7 @@ Rectangle {
 
             // ---- CENTER column: transport, window-centred --------------
             Item {
+                id: centreZone
                 anchors.left: parent.left
                 anchors.leftMargin: (root.width - 6) * root.sideFrac
                 anchors.top: parent.top
@@ -376,6 +386,7 @@ Rectangle {
                 // Small bar's own copy was a byte-for-byte twin of the full
                 // bar's at playCircle:false / classicActions:false.
                 TransportControls {
+                    id: centreTransport
                     anchors.centerIn: parent
                     height: 34
                     playCircle: false

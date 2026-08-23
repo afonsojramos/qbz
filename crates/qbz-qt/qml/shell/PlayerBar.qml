@@ -14,7 +14,7 @@
 // Classic uses a fixed 32.4/35.2/32.4 split (col-side 0.324).
 //
 //   New (0):     LEFT SongCard · CENTER transport (filled disc) · RIGHT cluster
-//   Classic (1): LEFT transport · CENTER glass SongCard (<=560px) · RIGHT cluster
+//   Classic (1): LEFT transport · elastic glass SongCard · RIGHT cluster
 //   Large (3):   LEFT SongCard WITHOUT the cover (it lives in the sidebar
 //                dock, shifted right to clear it) · CENTER transport ·
 //                RIGHT inline AudioStamp + cluster.
@@ -394,23 +394,40 @@ Rectangle {
 
         // --- Controls: the responsive symmetric zones -----------------------
         Item {
+            id: controlsLayout
             width: parent.width
             height: parent.height - 38
 
+            // The three zones keep PLAY centred and the right cluster pinned,
+            // but the SongCard is sized against the controls themselves, not
+            // against an arbitrary zone edge. This lets metadata consume the
+            // centre column's empty runway without ever crossing transport.
+            readonly property real transportLeft:
+                centreZone.x + centreTransport.x
+            readonly property real classicTransportRight: Math.min(
+                leftZone.x + leftZone.width,
+                leftZone.x + classicTransport.x + classicTransport.width)
+            readonly property real rightControlsLeft:
+                rightZone.x + Math.max(0, rightControls.x)
+
             // LEFT column.
             Item {
+                id: leftZone
                 anchors.left: parent.left
                 anchors.leftMargin: 6
                 width: (parent.width - 12) * root.colSide
                 height: parent.height
-                clip: true
 
                 // New (0) AND Large (3): the song card (Large drops the cover
-                // — it lives in the dock — and shifts right to clear it).
+                // — it lives in the dock — and shifts right to clear it). Its
+                // right edge follows the ACTUAL transport bounds; subtracting
+                // the 240px dock from this zone was the old Large-mode bug that
+                // left long titles only ~260px on a 1700px window.
                 SongCard {
                     visible: !root.isClassic
                     x: root.largeActive ? root.dockWidth + 8 : 0
-                    width: parent.width - x
+                    width: Math.max(0,
+                        controlsLayout.transportLeft - 10 - leftZone.x - x)
                     anchors.verticalCenter: parent.verticalCenter
                     showArt: !root.largeActive
                     showBadges: !root.largeActive
@@ -419,6 +436,7 @@ Rectangle {
                 // Classic: transport cluster hugging the left edge (plain
                 // play glyph + inline favorite, the Tauri arrangement).
                 TransportControls {
+                    id: classicTransport
                     visible: root.isClassic
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
@@ -433,6 +451,7 @@ Rectangle {
 
             // CENTRE column.
             Item {
+                id: centreZone
                 x: 6 + (parent.width - 12) * root.colSide
                 width: (parent.width - 12) * root.colCentre
                 height: parent.height
@@ -441,6 +460,7 @@ Rectangle {
                 // New (0) AND Large (3): centred transport, PLAY on the
                 // window centre.
                 TransportControls {
+                    id: centreTransport
                     visible: !root.isClassic
                     anchors.centerIn: parent
                     playCircle: true
@@ -448,20 +468,12 @@ Rectangle {
                     onAddRequested: function (anchorItem) { addMenu.openBelowRight(anchorItem) }
                     onTrackInfoRequested: root.openTrackInfo()
                 }
-                // Classic: the contained glass song card (<=560px cap).
-                SongCard {
-                    visible: root.isClassic
-                    glass: true
-                    width: Math.min(parent.width, 560)
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.verticalCenter: parent.verticalCenter
-                    onTrackInfoRequested: root.openTrackInfo()
-                }
             }
 
             // RIGHT column — secondary actions + volume, clustered at the
             // right wall.
             Item {
+                id: rightZone
                 anchors.right: parent.right
                 anchors.rightMargin: 6
                 width: (parent.width - 12) * root.colSide
@@ -469,6 +481,7 @@ Rectangle {
                 clip: true
 
                 Row {
+                    id: rightControls
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 1
@@ -637,6 +650,25 @@ Rectangle {
                         onClicked: QbzShell.toggleQueue()
                     }
                 }
+            }
+
+            // Classic lives between the REAL left transport and right action
+            // cluster. It may use at most 90% of that live gap, centred: the
+            // remaining 5% on each side keeps both the cover edge and the
+            // in-card AudioStamp visibly detached from their neighbour controls.
+            // Unlike the old fixed 560px cap this still scales with volume
+            // steppers, remote state and the actual window width.
+            SongCard {
+                visible: root.isClassic
+                glass: true
+                readonly property real availableWidth: Math.max(0,
+                    controlsLayout.rightControlsLeft
+                        - controlsLayout.classicTransportRight)
+                width: availableWidth * 0.90
+                x: controlsLayout.classicTransportRight
+                    + (availableWidth - width) / 2
+                anchors.verticalCenter: parent.verticalCenter
+                onTrackInfoRequested: root.openTrackInfo()
             }
         }
 

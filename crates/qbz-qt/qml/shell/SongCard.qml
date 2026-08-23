@@ -46,6 +46,14 @@ Rectangle {
     // full-height, space-distributed column.
     property bool textCenter: false
 
+    // Furniture is admitted by intrinsic fit, not by a window breakpoint.
+    // When a host becomes genuinely narrow, metadata keeps the runway and the
+    // cover/stamp yield before either can sit on top of text.
+    readonly property bool stampFits: root.width >= stamp.width + 24
+    readonly property bool effectiveShowArt: root.showArt
+        && root.width >= root.artSize + root.artTextGap
+            + (stamp.visible ? stamp.width + 4 : 0)
+
     /// Title clicked — the host opens the Track Info modal.
     signal trackInfoRequested()
 
@@ -116,8 +124,8 @@ Rectangle {
         spacing: 0
 
         Item {
-            visible: root.showArt
-            width: root.showArt ? root.artSize : 0
+            visible: root.effectiveShowArt
+            width: root.effectiveShowArt ? root.artSize : 0
             height: parent.height
             Rectangle {
                 width: root.artSize
@@ -186,10 +194,11 @@ Rectangle {
                 }
             }
         }
-        Item { width: root.showArt ? root.artTextGap : 0; height: 1 }
+        Item { width: root.effectiveShowArt ? root.artTextGap : 0; height: 1 }
 
         Column {
-            width: parent.width - (root.showArt ? root.artSize + root.artTextGap : 0)
+            width: Math.max(0, parent.width
+                - (root.effectiveShowArt ? root.artSize + root.artTextGap : 0))
             anchors.verticalCenter: parent.verticalCenter
             // textCenter tightens the inter-line gap to 1px so the two lines
             // read as one block beside the small cover (SongCard.slint:333);
@@ -350,7 +359,7 @@ Rectangle {
 
     SongCardStamp {
         id: stamp
-        visible: root.showBadges && QbzPlayer.npHasTrack
+        visible: root.showBadges && root.stampFits && QbzPlayer.npHasTrack
         anchors.right: parent.right
         // Classic (glass) insets the stamp by pad + stamp-right-margin
         // (2px each) so it clears the visible card border.

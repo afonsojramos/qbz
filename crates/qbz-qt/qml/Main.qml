@@ -27,8 +27,11 @@ ApplicationWindow {
     // This was the title-truncation bug: at the old hardcoded 1280 the
     // now-playing bar sat one responsive tier below the Slint build on the same
     // machine (1280 < 1366 -> side fraction 0.39 instead of 0.30), so the
-    // Classic song card capped at ~446px instead of 560 and elided titles ~114px
-    // early. The tier thresholds were right; the window was the wrong size.
+    // Classic song card received ~446px instead of the larger mid-tier runway
+    // and elided titles early. The tier thresholds were right; the window was
+    // the wrong size. The card now also measures its live neighbouring controls,
+    // so restored geometry and in-bar allocation solve different parts of the
+    // same problem rather than relying on a fixed card cap.
     //
     // These stay plain bindings so the size is correct before the window maps.
     // The WM's own resizes write `width`/`height` from C++ — that does not
