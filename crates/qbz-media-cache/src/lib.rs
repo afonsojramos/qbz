@@ -56,6 +56,7 @@
 //! to remove, so it is not worth reintroducing for a marginally simpler write.
 
 use std::path::Path;
+use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -166,6 +167,27 @@ pub struct CachedTrack {
     pub size_bytes: Option<u64>,
 }
 
+/// Quality-only update from a secondary server hydration pass.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CachedTrackQuality {
+    pub item_id: String,
+    pub container: String,
+    pub codec: Option<String>,
+    pub bit_depth: Option<u32>,
+    pub sample_rate_hz: Option<u32>,
+    pub channels: Option<u32>,
+    pub bitrate_kbps: Option<u32>,
+}
+
+/// One source sync generation. The authoritative cache remains readable while
+/// a newer generation is incomplete; only completion may prune older rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceSyncGeneration {
+    pub generation: u64,
+    pub observed_rows: u64,
+    pub resumed: bool,
+}
+
 /// One source-local artist aggregate for the Local Library rail.
 ///
 /// A row is emitted for both a track artist and a distinct album artist. The
@@ -203,6 +225,8 @@ pub fn open(path: &Path) -> Result<Connection> {
         std::fs::create_dir_all(dir).map_err(map_err("create dir"))?;
     }
     let conn = Connection::open(path).map_err(map_err("open"))?;
+    conn.busy_timeout(Duration::from_millis(2_500))
+        .map_err(map_err("busy timeout"))?;
     init_schema(&conn)?;
     Ok(conn)
 }
@@ -251,8 +275,19 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             bitrate_kbps    INTEGER,
             artwork_token   TEXT,
             size_bytes      INTEGER,
+            observed_generation INTEGER NOT NULL DEFAULT 0,
+            quality_hydrated INTEGER NOT NULL DEFAULT 0,
+            quality_retry_at INTEGER NOT NULL DEFAULT 0,
             updated_at      INTEGER NOT NULL,
             UNIQUE (source, item_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS remote_cache_source_sync (
+            source          TEXT PRIMARY KEY,
+            generation      INTEGER NOT NULL DEFAULT 0,
+            observed_rows   INTEGER NOT NULL DEFAULT 0,
+            status          TEXT NOT NULL DEFAULT 'idle',
+            updated_at      INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE INDEX IF NOT EXISTS idx_rct_source_album
@@ -265,7 +300,30 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_rct_title ON remote_cache_tracks(title);
         ",
     )
-    .map_err(map_err("schema"))
+    .map_err(map_err("schema"))?;
+
+    // Forward-only additive migration for caches created before incremental
+    // source generations and deferred Jellyfin quality existed.
+    for column in [
+        "observed_generation INTEGER NOT NULL DEFAULT 0",
+        "quality_hydrated INTEGER NOT NULL DEFAULT 0",
+        "quality_retry_at INTEGER NOT NULL DEFAULT 0",
+    ] {
+        let statement = format!("ALTER TABLE remote_cache_tracks ADD COLUMN {column}");
+        let _ = conn.execute(&statement, []);
+    }
+    let _ = conn.execute(
+        "ALTER TABLE remote_cache_source_sync
+         ADD COLUMN observed_rows INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rct_quality_pending
+         ON remote_cache_tracks(source,quality_hydrated,quality_retry_at,updated_at)",
+        [],
+    )
+    .map_err(map_err("quality index"))?;
+    Ok(())
 }
 
 fn now() -> i64 {
@@ -300,7 +358,9 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<CachedTrack> {
         container: row.get("container")?,
         codec: row.get("codec")?,
         bit_depth: row.get::<_, Option<i64>>("bit_depth")?.map(|v| v as u32),
-        sample_rate_hz: row.get::<_, Option<i64>>("sample_rate_hz")?.map(|v| v as u32),
+        sample_rate_hz: row
+            .get::<_, Option<i64>>("sample_rate_hz")?
+            .map(|v| v as u32),
         channels: row.get::<_, Option<i64>>("channels")?.map(|v| v as u32),
         bitrate_kbps: row.get::<_, Option<i64>>("bitrate_kbps")?.map(|v| v as u32),
         artwork_token: row.get("artwork_token")?,
@@ -320,7 +380,11 @@ const SELECT: &str = "SELECT id, source, item_id, server_id, library_id, title, 
 /// `session.db` row), so a re-scan must not mint a new one for a track that was
 /// already there. A user who re-syncs while a Jellyfin track is playing would
 /// otherwise find the queue pointing at nothing.
-pub fn save_tracks(conn: &mut Connection, source: RemoteSource, tracks: &[CachedTrack]) -> Result<usize> {
+pub fn save_tracks(
+    conn: &mut Connection,
+    source: RemoteSource,
+    tracks: &[CachedTrack],
+) -> Result<usize> {
     if tracks.is_empty() {
         return Ok(0);
     }
@@ -333,8 +397,8 @@ pub fn save_tracks(conn: &mut Connection, source: RemoteSource, tracks: &[Cached
                    (source, item_id, server_id, library_id, title, artist, album_artist, album,
                     album_id, track_number, disc_number, duration_ms, year, genre, container,
                     codec, bit_depth, sample_rate_hz, channels, bitrate_kbps, artwork_token,
-                    size_bytes, updated_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)
+                    size_bytes, quality_hydrated, quality_retry_at, updated_at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,1,0,?23)
                  ON CONFLICT(source, item_id) DO UPDATE SET
                     server_id=excluded.server_id, library_id=excluded.library_id,
                     title=excluded.title, artist=excluded.artist,
@@ -345,7 +409,8 @@ pub fn save_tracks(conn: &mut Connection, source: RemoteSource, tracks: &[Cached
                     codec=excluded.codec, bit_depth=excluded.bit_depth,
                     sample_rate_hz=excluded.sample_rate_hz, channels=excluded.channels,
                     bitrate_kbps=excluded.bitrate_kbps, artwork_token=excluded.artwork_token,
-                    size_bytes=excluded.size_bytes, updated_at=excluded.updated_at",
+                    size_bytes=excluded.size_bytes, quality_hydrated=1,
+                    quality_retry_at=0, updated_at=excluded.updated_at",
             )
             .map_err(map_err("prepare insert"))?;
         for t in tracks {
@@ -381,8 +446,375 @@ pub fn save_tracks(conn: &mut Connection, source: RemoteSource, tracks: &[Cached
     Ok(tracks.len())
 }
 
+fn next_source_revision(conn: &Connection, source: RemoteSource) -> Result<i64> {
+    let current = conn
+        .query_row(
+            "SELECT COALESCE(MAX(updated_at),0) FROM remote_cache_tracks WHERE source=?1",
+            params![source.as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(map_err("read source revision"))?;
+    Ok(now().max(current.saturating_add(1)))
+}
+
+/// Start a fresh authoritative generation for one remote source.
+///
+/// A previous interrupted generation is deliberately not resumed here: the
+/// Jellyfin essential pass is cheap and its offset spans multiple libraries.
+/// Long-running quality hydration resumes independently from persisted pending
+/// rows, while stale catalog rows remain intact until this generation finishes.
+pub fn begin_source_sync(
+    conn: &mut Connection,
+    source: RemoteSource,
+) -> Result<SourceSyncGeneration> {
+    let tx = conn.transaction().map_err(map_err("begin source sync"))?;
+    let previous = tx
+        .query_row(
+            "SELECT generation FROM remote_cache_source_sync WHERE source=?1",
+            params![source.as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(map_err("read source sync"))?
+        .unwrap_or(0)
+        .max(0) as u64;
+    let generation = previous.saturating_add(1).min(i64::MAX as u64).max(1);
+    tx.execute(
+        "INSERT INTO remote_cache_source_sync(source,generation,observed_rows,status,updated_at)
+         VALUES (?1,?2,0,'running',?3)
+         ON CONFLICT(source) DO UPDATE SET generation=excluded.generation,
+             observed_rows=0,status='running',updated_at=excluded.updated_at",
+        params![source.as_str(), generation as i64, now()],
+    )
+    .map_err(map_err("write source sync"))?;
+    tx.commit().map_err(map_err("commit source sync"))?;
+    Ok(SourceSyncGeneration {
+        generation,
+        observed_rows: 0,
+        resumed: false,
+    })
+}
+
+/// Upsert one cheap metadata page and mark its quality pending.
+///
+/// Existing quality values remain visible until their replacement arrives;
+/// `quality_hydrated=0` is the separate truth that makes even a legitimately
+/// NULL lossy bit depth distinguishable from "not fetched yet".
+pub fn save_essential_tracks(
+    conn: &mut Connection,
+    source: RemoteSource,
+    generation: u64,
+    tracks: &[CachedTrack],
+) -> Result<usize> {
+    if tracks.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn
+        .transaction()
+        .map_err(map_err("begin essential page"))?;
+    let state = tx
+        .query_row(
+            "SELECT status,observed_rows FROM remote_cache_source_sync
+              WHERE source=?1 AND generation=?2",
+            params![source.as_str(), generation.min(i64::MAX as u64) as i64],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .map_err(map_err("read essential generation"))?;
+    let Some((status, observed_rows)) = state else {
+        return Err("media cache: essential generation is missing".to_string());
+    };
+    if status != "running" {
+        return Err("media cache: essential generation is no longer current".to_string());
+    }
+    let revision = next_source_revision(&tx, source)?;
+    let generation = generation.min(i64::MAX as u64) as i64;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO remote_cache_tracks
+                   (source,item_id,server_id,library_id,title,artist,album_artist,album,
+                    album_id,track_number,disc_number,duration_ms,year,genre,container,
+                    codec,bit_depth,sample_rate_hz,channels,bitrate_kbps,artwork_token,
+                    size_bytes,observed_generation,quality_hydrated,quality_retry_at,updated_at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,
+                         ?16,?17,?18,?19,?20,?21,?22,?23,0,0,?24)
+                 ON CONFLICT(source,item_id) DO UPDATE SET
+                    server_id=excluded.server_id,library_id=excluded.library_id,
+                    title=excluded.title,artist=excluded.artist,
+                    album_artist=excluded.album_artist,album=excluded.album,
+                    album_id=excluded.album_id,track_number=excluded.track_number,
+                    disc_number=excluded.disc_number,duration_ms=excluded.duration_ms,
+                    year=excluded.year,genre=excluded.genre,
+                    container=COALESCE(NULLIF(excluded.container,''),remote_cache_tracks.container),
+                    artwork_token=excluded.artwork_token,size_bytes=excluded.size_bytes,
+                    observed_generation=excluded.observed_generation,quality_hydrated=0,
+                    quality_retry_at=0,updated_at=excluded.updated_at",
+            )
+            .map_err(map_err("prepare essential page"))?;
+        for track in tracks {
+            stmt.execute(params![
+                source.as_str(),
+                track.item_id,
+                track.server_id,
+                track.library_id,
+                track.title,
+                track.artist,
+                track.album_artist,
+                track.album,
+                track.album_id,
+                track.track_number.map(|value| value as i64),
+                track.disc_number.map(|value| value as i64),
+                track.duration_ms.min(i64::MAX as u64) as i64,
+                track.year.map(|value| value as i64),
+                track.genre,
+                track.container,
+                track.codec,
+                track.bit_depth.map(|value| value as i64),
+                track.sample_rate_hz.map(|value| value as i64),
+                track.channels.map(|value| value as i64),
+                track.bitrate_kbps.map(|value| value as i64),
+                track.artwork_token,
+                track
+                    .size_bytes
+                    .map(|value| value.min(i64::MAX as u64) as i64),
+                generation,
+                revision,
+            ])
+            .map_err(map_err("write essential track"))?;
+        }
+    }
+    let expected = (observed_rows.max(0) as u64).saturating_add(tracks.len() as u64);
+    let actual = tx
+        .query_row(
+            "SELECT COUNT(*) FROM remote_cache_tracks
+              WHERE source=?1 AND observed_generation=?2",
+            params![source.as_str(), generation],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(map_err("verify essential identities"))?
+        .max(0) as u64;
+    if actual != expected {
+        return Err("media cache: source repeated an item id across pages".to_string());
+    }
+    tx.execute(
+        "UPDATE remote_cache_source_sync SET observed_rows=?3,updated_at=?4
+          WHERE source=?1 AND generation=?2 AND status='running'",
+        params![source.as_str(), generation, actual as i64, now()],
+    )
+    .map_err(map_err("checkpoint essential page"))?;
+    tx.commit().map_err(map_err("commit essential page"))?;
+    Ok(tracks.len())
+}
+
+/// Finish a source generation and, for a full sweep, atomically prune rows the
+/// server did not observe. A failed/interrupted caller never reaches this gate.
+pub fn complete_source_sync(
+    conn: &mut Connection,
+    source: RemoteSource,
+    generation: u64,
+    prune_old: bool,
+) -> Result<usize> {
+    let tx = conn
+        .transaction()
+        .map_err(map_err("begin source completion"))?;
+    let generation = generation.min(i64::MAX as u64) as i64;
+    let state = tx
+        .query_row(
+            "SELECT status,observed_rows FROM remote_cache_source_sync
+              WHERE source=?1 AND generation=?2",
+            params![source.as_str(), generation],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .map_err(map_err("read source completion"))?;
+    let Some((status, observed_rows)) = state else {
+        return Err("media cache: source generation is missing".to_string());
+    };
+    if status != "running" {
+        return Err("media cache: source generation cannot authorize prune".to_string());
+    }
+    let actual = tx
+        .query_row(
+            "SELECT COUNT(*) FROM remote_cache_tracks
+              WHERE source=?1 AND observed_generation=?2",
+            params![source.as_str(), generation],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(map_err("verify source generation"))?;
+    if actual.max(0) != observed_rows.max(0) {
+        return Err("media cache: source generation identity count changed".to_string());
+    }
+    let pruned = if prune_old {
+        tx.execute(
+            "DELETE FROM remote_cache_tracks
+              WHERE source=?1 AND observed_generation<>?2",
+            params![source.as_str(), generation],
+        )
+        .map_err(map_err("prune source generation"))?
+    } else {
+        0
+    };
+    tx.execute(
+        "UPDATE remote_cache_source_sync SET status='complete',updated_at=?3
+          WHERE source=?1 AND generation=?2",
+        params![source.as_str(), generation, now()],
+    )
+    .map_err(map_err("finish source generation"))?;
+    tx.commit().map_err(map_err("commit source completion"))?;
+    Ok(pruned)
+}
+
+pub fn interrupt_source_sync(
+    conn: &Connection,
+    source: RemoteSource,
+    generation: u64,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE remote_cache_source_sync SET status='interrupted',updated_at=?3
+          WHERE source=?1 AND generation=?2 AND status='running'",
+        params![
+            source.as_str(),
+            generation.min(i64::MAX as u64) as i64,
+            now()
+        ],
+    )
+    .map(|_| ())
+    .map_err(map_err("interrupt source sync"))
+}
+
+/// Pending quality ids in deterministic order. The retry timestamp prevents a
+/// deleted item or down server from creating a hot loop.
+pub fn quality_candidates(
+    conn: &Connection,
+    source: RemoteSource,
+    limit: usize,
+) -> Result<Vec<String>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT item_id FROM remote_cache_tracks
+              WHERE source=?1 AND quality_hydrated=0 AND quality_retry_at<=?2
+              ORDER BY updated_at DESC,id LIMIT ?3",
+        )
+        .map_err(map_err("prepare quality candidates"))?;
+    let rows = stmt
+        .query_map(
+            params![source.as_str(), now(), limit.min(i64::MAX as usize) as i64],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(map_err("query quality candidates"))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(map_err("read quality candidates"))
+}
+
+/// Preserve caller priority while dropping ids already hydrated or deferred.
+pub fn pending_quality_ids(
+    conn: &Connection,
+    source: RemoteSource,
+    item_ids: &[String],
+) -> Result<Vec<String>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT EXISTS(
+                 SELECT 1 FROM remote_cache_tracks
+                  WHERE source=?1 AND item_id=?2 AND quality_hydrated=0
+                    AND quality_retry_at<=?3
+             )",
+        )
+        .map_err(map_err("prepare pending quality lookup"))?;
+    let mut pending = Vec::new();
+    for item_id in item_ids {
+        let exists = stmt
+            .query_row(params![source.as_str(), item_id, now()], |row| {
+                row.get::<_, bool>(0)
+            })
+            .map_err(map_err("read pending quality lookup"))?;
+        if exists {
+            pending.push(item_id.clone());
+        }
+    }
+    Ok(pending)
+}
+
+/// Apply a quality batch without rewriting metadata or changing published ids.
+pub fn update_track_quality(
+    conn: &mut Connection,
+    source: RemoteSource,
+    updates: &[CachedTrackQuality],
+) -> Result<usize> {
+    if updates.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn
+        .transaction()
+        .map_err(map_err("begin quality update"))?;
+    let revision = next_source_revision(&tx, source)?;
+    let mut affected = 0usize;
+    {
+        let mut stmt = tx
+            .prepare(
+                "UPDATE remote_cache_tracks SET
+                    container=COALESCE(NULLIF(?3,''),container),codec=?4,bit_depth=?5,
+                    sample_rate_hz=?6,channels=?7,bitrate_kbps=?8,
+                    quality_hydrated=1,quality_retry_at=0,updated_at=?9
+                  WHERE source=?1 AND item_id=?2",
+            )
+            .map_err(map_err("prepare quality update"))?;
+        for update in updates {
+            affected += stmt
+                .execute(params![
+                    source.as_str(),
+                    update.item_id,
+                    update.container,
+                    update.codec,
+                    update.bit_depth.map(|value| value as i64),
+                    update.sample_rate_hz.map(|value| value as i64),
+                    update.channels.map(|value| value as i64),
+                    update.bitrate_kbps.map(|value| value as i64),
+                    revision,
+                ])
+                .map_err(map_err("write quality update"))?;
+        }
+    }
+    tx.commit().map_err(map_err("commit quality update"))?;
+    Ok(affected)
+}
+
+pub fn defer_track_quality(
+    conn: &mut Connection,
+    source: RemoteSource,
+    item_ids: &[String],
+    retry_after_secs: i64,
+) -> Result<usize> {
+    if item_ids.is_empty() {
+        return Ok(0);
+    }
+    let retry_at = now().saturating_add(retry_after_secs.max(1));
+    let tx = conn.transaction().map_err(map_err("begin quality defer"))?;
+    let mut affected = 0usize;
+    {
+        let mut stmt = tx
+            .prepare(
+                "UPDATE remote_cache_tracks SET quality_retry_at=?3
+                  WHERE source=?1 AND item_id=?2 AND quality_hydrated=0",
+            )
+            .map_err(map_err("prepare quality defer"))?;
+        for item_id in item_ids {
+            affected += stmt
+                .execute(params![source.as_str(), item_id, retry_at])
+                .map_err(map_err("write quality defer"))?;
+        }
+    }
+    tx.commit().map_err(map_err("commit quality defer"))?;
+    Ok(affected)
+}
+
 /// Replace the known libraries for one source.
-pub fn save_libraries(conn: &mut Connection, source: RemoteSource, libs: &[CachedLibrary]) -> Result<()> {
+pub fn save_libraries(
+    conn: &mut Connection,
+    source: RemoteSource,
+    libs: &[CachedLibrary],
+) -> Result<()> {
     let ts = now();
     let tx = conn.transaction().map_err(map_err("begin"))?;
     tx.execute(
@@ -398,8 +830,14 @@ pub fn save_libraries(conn: &mut Connection, source: RemoteSource, libs: &[Cache
             )
             .map_err(map_err("prepare library"))?;
         for l in libs {
-            stmt.execute(params![source.as_str(), l.library_id, l.name, l.server_id, ts])
-                .map_err(map_err("insert library"))?;
+            stmt.execute(params![
+                source.as_str(),
+                l.library_id,
+                l.name,
+                l.server_id,
+                ts
+            ])
+            .map_err(map_err("insert library"))?;
         }
     }
     tx.commit().map_err(map_err("commit"))
@@ -443,7 +881,11 @@ pub fn track_by_id(conn: &Connection, id: i64) -> Result<Option<CachedTrack>> {
 }
 
 /// One track by the SERVER's own id.
-pub fn track_by_item_id(conn: &Connection, source: RemoteSource, item_id: &str) -> Result<Option<CachedTrack>> {
+pub fn track_by_item_id(
+    conn: &Connection,
+    source: RemoteSource,
+    item_id: &str,
+) -> Result<Option<CachedTrack>> {
     conn.query_row(
         &format!("{SELECT} WHERE source = ?1 AND item_id = ?2"),
         params![source.as_str(), item_id],
@@ -458,7 +900,11 @@ pub fn track_by_item_id(conn: &Connection, source: RemoteSource, item_id: &str) 
 /// NULLs sort LAST rather than first: 75 of 4924 measured Jellyfin rows carry no
 /// track number, and letting them lead would put the untagged tracks above
 /// track 1 on every album that has any.
-pub fn album_tracks(conn: &Connection, source: RemoteSource, album_id: &str) -> Result<Vec<CachedTrack>> {
+pub fn album_tracks(
+    conn: &Connection,
+    source: RemoteSource,
+    album_id: &str,
+) -> Result<Vec<CachedTrack>> {
     let mut stmt = conn
         .prepare(&format!(
             "{SELECT} WHERE source = ?1 AND album_id = ?2 \
@@ -480,7 +926,14 @@ pub fn search(
     needle: &str,
     limit: Option<u32>,
 ) -> Result<Vec<CachedTrack>> {
-    search_page(conn, source, needle, 0, limit.unwrap_or(u32::MAX) as u64, "default")
+    search_page(
+        conn,
+        source,
+        needle,
+        0,
+        limit.unwrap_or(u32::MAX) as u64,
+        "default",
+    )
 }
 
 /// One deterministic page of a remote source, in the same allowlisted sort
@@ -587,6 +1040,11 @@ pub fn clear(conn: &mut Connection, source: RemoteSource) -> Result<usize> {
         params![source.as_str()],
     )
     .map_err(map_err("clear libraries"))?;
+    tx.execute(
+        "DELETE FROM remote_cache_source_sync WHERE source = ?1",
+        params![source.as_str()],
+    )
+    .map_err(map_err("clear source sync"))?;
     tx.commit().map_err(map_err("commit"))?;
     Ok(n)
 }
@@ -683,15 +1141,25 @@ mod tests {
     #[test]
     fn a_saved_track_round_trips_by_both_of_its_ids() {
         let mut c = db();
-        save_tracks(&mut c, RemoteSource::Jellyfin, &[track("srv-1", "alb", Some(1), Some(3))]).unwrap();
+        save_tracks(
+            &mut c,
+            RemoteSource::Jellyfin,
+            &[track("srv-1", "alb", Some(1), Some(3))],
+        )
+        .unwrap();
         let by_item = track_by_item_id(&c, RemoteSource::Jellyfin, "srv-1")
             .unwrap()
             .expect("by item id");
         assert_eq!(by_item.title, "t-srv-1");
         assert_eq!(by_item.bit_depth, Some(24));
-        assert_eq!(RemoteSource::of_id(by_item.id), Some(RemoteSource::Jellyfin));
+        assert_eq!(
+            RemoteSource::of_id(by_item.id),
+            Some(RemoteSource::Jellyfin)
+        );
 
-        let by_id = track_by_id(&c, by_item.id).unwrap().expect("by namespaced id");
+        let by_id = track_by_id(&c, by_item.id)
+            .unwrap()
+            .expect("by namespaced id");
         assert_eq!(by_id, by_item);
     }
 
@@ -701,15 +1169,24 @@ mod tests {
     #[test]
     fn a_rescan_updates_a_row_without_changing_its_id() {
         let mut c = db();
-        save_tracks(&mut c, RemoteSource::Jellyfin, &[track("srv-1", "alb", Some(1), Some(3))]).unwrap();
-        let first = track_by_item_id(&c, RemoteSource::Jellyfin, "srv-1").unwrap().unwrap();
+        save_tracks(
+            &mut c,
+            RemoteSource::Jellyfin,
+            &[track("srv-1", "alb", Some(1), Some(3))],
+        )
+        .unwrap();
+        let first = track_by_item_id(&c, RemoteSource::Jellyfin, "srv-1")
+            .unwrap()
+            .unwrap();
 
         let mut renamed = track("srv-1", "alb", Some(1), Some(3));
         renamed.title = "retagged".into();
         renamed.bit_depth = Some(16);
         save_tracks(&mut c, RemoteSource::Jellyfin, &[renamed]).unwrap();
 
-        let second = track_by_item_id(&c, RemoteSource::Jellyfin, "srv-1").unwrap().unwrap();
+        let second = track_by_item_id(&c, RemoteSource::Jellyfin, "srv-1")
+            .unwrap()
+            .unwrap();
         assert_eq!(second.id, first.id, "the row id changed under a re-scan");
         assert_eq!(second.title, "retagged");
         assert_eq!(second.bit_depth, Some(16));
@@ -721,12 +1198,26 @@ mod tests {
     #[test]
     fn the_same_item_id_under_two_sources_is_two_rows() {
         let mut c = db();
-        save_tracks(&mut c, RemoteSource::Jellyfin, &[track("same", "a", None, None)]).unwrap();
-        save_tracks(&mut c, RemoteSource::Subsonic, &[track("same", "a", None, None)]).unwrap();
+        save_tracks(
+            &mut c,
+            RemoteSource::Jellyfin,
+            &[track("same", "a", None, None)],
+        )
+        .unwrap();
+        save_tracks(
+            &mut c,
+            RemoteSource::Subsonic,
+            &[track("same", "a", None, None)],
+        )
+        .unwrap();
         assert_eq!(count(&c, RemoteSource::Jellyfin).unwrap(), 1);
         assert_eq!(count(&c, RemoteSource::Subsonic).unwrap(), 1);
-        let j = track_by_item_id(&c, RemoteSource::Jellyfin, "same").unwrap().unwrap();
-        let s = track_by_item_id(&c, RemoteSource::Subsonic, "same").unwrap().unwrap();
+        let j = track_by_item_id(&c, RemoteSource::Jellyfin, "same")
+            .unwrap()
+            .unwrap();
+        let s = track_by_item_id(&c, RemoteSource::Subsonic, "same")
+            .unwrap()
+            .unwrap();
         assert_ne!(j.id, s.id);
         assert_eq!(RemoteSource::of_id(j.id), Some(RemoteSource::Jellyfin));
         assert_eq!(RemoteSource::of_id(s.id), Some(RemoteSource::Subsonic));
@@ -767,15 +1258,24 @@ mod tests {
 
         for needle in ["So What", "miles", "Kind of", "so wh"] {
             assert_eq!(
-                search(&c, RemoteSource::Subsonic, needle, None).unwrap().len(),
+                search(&c, RemoteSource::Subsonic, needle, None)
+                    .unwrap()
+                    .len(),
                 1,
                 "needle {needle:?} found nothing"
             );
         }
-        assert_eq!(search(&c, RemoteSource::Subsonic, "", None).unwrap().len(), 1);
-        assert!(search(&c, RemoteSource::Subsonic, "zzz", None).unwrap().is_empty());
+        assert_eq!(
+            search(&c, RemoteSource::Subsonic, "", None).unwrap().len(),
+            1
+        );
+        assert!(search(&c, RemoteSource::Subsonic, "zzz", None)
+            .unwrap()
+            .is_empty());
         // A search never leaks another source's rows.
-        assert!(search(&c, RemoteSource::Jellyfin, "", None).unwrap().is_empty());
+        assert!(search(&c, RemoteSource::Jellyfin, "", None)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -846,8 +1346,18 @@ mod tests {
     #[test]
     fn clearing_one_source_leaves_the_other_alone() {
         let mut c = db();
-        save_tracks(&mut c, RemoteSource::Jellyfin, &[track("j", "a", None, None)]).unwrap();
-        save_tracks(&mut c, RemoteSource::Subsonic, &[track("s", "a", None, None)]).unwrap();
+        save_tracks(
+            &mut c,
+            RemoteSource::Jellyfin,
+            &[track("j", "a", None, None)],
+        )
+        .unwrap();
+        save_tracks(
+            &mut c,
+            RemoteSource::Subsonic,
+            &[track("s", "a", None, None)],
+        )
+        .unwrap();
         assert_eq!(clear(&mut c, RemoteSource::Jellyfin).unwrap(), 1);
         assert_eq!(count(&c, RemoteSource::Jellyfin).unwrap(), 0);
         assert_eq!(count(&c, RemoteSource::Subsonic).unwrap(), 1);
@@ -860,7 +1370,10 @@ mod tests {
         save_tracks(
             &mut c,
             RemoteSource::Subsonic,
-            &[track("keep", "a", None, None), track("gone", "a", None, None)],
+            &[
+                track("keep", "a", None, None),
+                track("gone", "a", None, None),
+            ],
         )
         .unwrap();
         // A later sweep re-sees only `keep`. `updated_at` is whole seconds, so
@@ -877,8 +1390,12 @@ mod tests {
         .unwrap();
         assert_eq!(prune_stale(&mut c, RemoteSource::Subsonic, 150).unwrap(), 1);
         assert_eq!(count(&c, RemoteSource::Subsonic).unwrap(), 1);
-        assert!(track_by_item_id(&c, RemoteSource::Subsonic, "keep").unwrap().is_some());
-        assert!(track_by_item_id(&c, RemoteSource::Subsonic, "gone").unwrap().is_none());
+        assert!(track_by_item_id(&c, RemoteSource::Subsonic, "keep")
+            .unwrap()
+            .is_some());
+        assert!(track_by_item_id(&c, RemoteSource::Subsonic, "gone")
+            .unwrap()
+            .is_none());
     }
 
     /// AUTOINCREMENT, not plain rowid: a freed id must never be handed to a
@@ -886,11 +1403,25 @@ mod tests {
     #[test]
     fn a_deleted_rows_id_is_never_reused() {
         let mut c = db();
-        save_tracks(&mut c, RemoteSource::Jellyfin, &[track("first", "a", None, None)]).unwrap();
-        let first = track_by_item_id(&c, RemoteSource::Jellyfin, "first").unwrap().unwrap();
+        save_tracks(
+            &mut c,
+            RemoteSource::Jellyfin,
+            &[track("first", "a", None, None)],
+        )
+        .unwrap();
+        let first = track_by_item_id(&c, RemoteSource::Jellyfin, "first")
+            .unwrap()
+            .unwrap();
         clear(&mut c, RemoteSource::Jellyfin).unwrap();
-        save_tracks(&mut c, RemoteSource::Jellyfin, &[track("second", "a", None, None)]).unwrap();
-        let second = track_by_item_id(&c, RemoteSource::Jellyfin, "second").unwrap().unwrap();
+        save_tracks(
+            &mut c,
+            RemoteSource::Jellyfin,
+            &[track("second", "a", None, None)],
+        )
+        .unwrap();
+        let second = track_by_item_id(&c, RemoteSource::Jellyfin, "second")
+            .unwrap()
+            .unwrap();
         assert_ne!(
             second.id, first.id,
             "the deleted track's id was recycled — a stale queue entry would now play this row"
@@ -925,8 +1456,167 @@ mod tests {
         t.sample_rate_hz = Some(44100);
         t.container = "mp3".into();
         save_tracks(&mut c, RemoteSource::Subsonic, &[t]).unwrap();
-        let got = track_by_item_id(&c, RemoteSource::Subsonic, "mp3").unwrap().unwrap();
+        let got = track_by_item_id(&c, RemoteSource::Subsonic, "mp3")
+            .unwrap()
+            .unwrap();
         assert_eq!(got.bit_depth, None, "NULL came back as something else");
         assert_eq!(got.sample_rate_hz, Some(44100));
+    }
+
+    #[test]
+    fn essential_generation_preserves_quality_and_prunes_only_on_completion() {
+        let mut c = db();
+        let mut keep = track("keep", "album", Some(1), Some(1));
+        keep.title = "Old title".into();
+        keep.container = "flac".into();
+        keep.codec = Some("flac".into());
+        keep.bit_depth = Some(24);
+        keep.sample_rate_hz = Some(96_000);
+        let gone = track("gone", "album", Some(1), Some(2));
+        save_tracks(&mut c, RemoteSource::Jellyfin, &[keep.clone(), gone]).unwrap();
+
+        let first = begin_source_sync(&mut c, RemoteSource::Jellyfin).unwrap();
+        let mut essential = keep.clone();
+        essential.title = "Fresh title".into();
+        essential.codec = None;
+        essential.bit_depth = None;
+        essential.sample_rate_hz = None;
+        save_essential_tracks(
+            &mut c,
+            RemoteSource::Jellyfin,
+            first.generation,
+            &[essential],
+        )
+        .unwrap();
+        assert_eq!(count(&c, RemoteSource::Jellyfin).unwrap(), 2);
+        let visible = track_by_item_id(&c, RemoteSource::Jellyfin, "keep")
+            .unwrap()
+            .unwrap();
+        assert_eq!(visible.title, "Fresh title");
+        assert_eq!(visible.bit_depth, Some(24));
+        assert_eq!(visible.sample_rate_hz, Some(96_000));
+        assert_eq!(
+            quality_candidates(&c, RemoteSource::Jellyfin, 10).unwrap(),
+            vec!["keep".to_string()]
+        );
+
+        interrupt_source_sync(&c, RemoteSource::Jellyfin, first.generation).unwrap();
+        assert_eq!(count(&c, RemoteSource::Jellyfin).unwrap(), 2);
+        let second = begin_source_sync(&mut c, RemoteSource::Jellyfin).unwrap();
+        save_essential_tracks(&mut c, RemoteSource::Jellyfin, second.generation, &[keep]).unwrap();
+        assert_eq!(
+            complete_source_sync(&mut c, RemoteSource::Jellyfin, second.generation, true,).unwrap(),
+            1
+        );
+        assert!(track_by_item_id(&c, RemoteSource::Jellyfin, "gone")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn quality_hydration_is_keyed_by_id_and_clears_stale_lossless_values() {
+        let mut c = db();
+        let mut row = track("changed", "album", Some(1), Some(1));
+        row.container = "flac".into();
+        row.codec = Some("flac".into());
+        row.bit_depth = Some(24);
+        row.sample_rate_hz = Some(192_000);
+        save_tracks(&mut c, RemoteSource::Jellyfin, &[row.clone()]).unwrap();
+        let generation = begin_source_sync(&mut c, RemoteSource::Jellyfin)
+            .unwrap()
+            .generation;
+        save_essential_tracks(&mut c, RemoteSource::Jellyfin, generation, &[row]).unwrap();
+
+        let before_revision: i64 = c
+            .query_row(
+                "SELECT updated_at FROM remote_cache_tracks WHERE item_id='changed'",
+                [],
+                |record| record.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            pending_quality_ids(
+                &c,
+                RemoteSource::Jellyfin,
+                &["missing".into(), "changed".into()],
+            )
+            .unwrap(),
+            vec!["changed".to_string()]
+        );
+        update_track_quality(
+            &mut c,
+            RemoteSource::Jellyfin,
+            &[CachedTrackQuality {
+                item_id: "changed".into(),
+                container: "mp3".into(),
+                codec: Some("mp3".into()),
+                bit_depth: None,
+                sample_rate_hz: Some(44_100),
+                channels: Some(2),
+                bitrate_kbps: Some(320),
+            }],
+        )
+        .unwrap();
+        let hydrated = track_by_item_id(&c, RemoteSource::Jellyfin, "changed")
+            .unwrap()
+            .unwrap();
+        assert_eq!(hydrated.container, "mp3");
+        assert_eq!(hydrated.bit_depth, None);
+        assert_eq!(hydrated.sample_rate_hz, Some(44_100));
+        assert!(quality_candidates(&c, RemoteSource::Jellyfin, 10)
+            .unwrap()
+            .is_empty());
+        let after_revision: i64 = c
+            .query_row(
+                "SELECT updated_at FROM remote_cache_tracks WHERE item_id='changed'",
+                [],
+                |record| record.get(0),
+            )
+            .unwrap();
+        assert!(after_revision > before_revision);
+    }
+
+    #[test]
+    fn completed_delta_generation_keeps_unobserved_rows() {
+        let mut c = db();
+        let keep = track("changed", "album", Some(1), Some(1));
+        let untouched = track("unchanged", "album", Some(1), Some(2));
+        save_tracks(&mut c, RemoteSource::Jellyfin, &[keep.clone(), untouched]).unwrap();
+        let generation = begin_source_sync(&mut c, RemoteSource::Jellyfin)
+            .unwrap()
+            .generation;
+        save_essential_tracks(&mut c, RemoteSource::Jellyfin, generation, &[keep]).unwrap();
+        assert_eq!(
+            complete_source_sync(&mut c, RemoteSource::Jellyfin, generation, false,).unwrap(),
+            0
+        );
+        assert_eq!(count(&c, RemoteSource::Jellyfin).unwrap(), 2);
+        assert!(track_by_item_id(&c, RemoteSource::Jellyfin, "unchanged")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn duplicate_item_across_essential_pages_rolls_back_the_second_page() {
+        let mut c = db();
+        let generation = begin_source_sync(&mut c, RemoteSource::Jellyfin)
+            .unwrap()
+            .generation;
+        let first = track("same", "album", Some(1), Some(1));
+        save_essential_tracks(&mut c, RemoteSource::Jellyfin, generation, &[first.clone()])
+            .unwrap();
+        let mut duplicate = first;
+        duplicate.title = "Wrong duplicate".into();
+        assert!(
+            save_essential_tracks(&mut c, RemoteSource::Jellyfin, generation, &[duplicate],)
+                .is_err()
+        );
+        assert_eq!(
+            track_by_item_id(&c, RemoteSource::Jellyfin, "same")
+                .unwrap()
+                .unwrap()
+                .title,
+            "t-same"
+        );
     }
 }

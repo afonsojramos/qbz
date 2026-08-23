@@ -185,6 +185,18 @@ pub(crate) fn load_albums() -> Vec<RecentAlbum> {
     read_store().albums
 }
 
+/// Namespaced cache ids for recently played Jellyfin tracks, newest first.
+/// The hydration worker resolves them back to opaque server ids through the
+/// cache, so history never needs to persist a credential-bearing URL.
+pub(crate) fn jellyfin_recent_track_ids() -> Vec<i64> {
+    read_store()
+        .tracks
+        .into_iter()
+        .filter(|track| track.source == "jellyfin")
+        .filter_map(|track| track.id.parse::<i64>().ok())
+        .collect()
+}
+
 /// Drop every entry whose `album_id` is in `album_ids`; returns how many
 /// TRACK entries went.
 ///
@@ -326,6 +338,11 @@ pub(crate) fn record_queue_track(track: &qbz_models::QueueTrack) {
             track.id
         );
         return;
+    }
+    if track.source.as_deref() == Some("jellyfin") {
+        if let Some(item_id) = track.source_item_id_hint.as_ref() {
+            crate::media_sync_qt::prioritize_jellyfin_quality(vec![item_id.clone()], true);
+        }
     }
     let tier = crate::home_qt::quality_tier_from_depth(track.bit_depth);
     let detail = crate::home_qt::quality_detail_from_parts(track.bit_depth, track.sample_rate);

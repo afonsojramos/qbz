@@ -584,6 +584,12 @@ fn resolve_remote_records(
         .filter(|record| record.track_ref.source == source_kind)
         .map(|record| record.track_ref.native_id.as_str())
         .collect::<Vec<_>>();
+    if source_kind == SourceKind::Jellyfin && !ids.is_empty() {
+        crate::media_sync_qt::prioritize_jellyfin_quality(
+            ids.iter().map(|item_id| (*item_id).to_string()).collect(),
+            true,
+        );
+    }
     let read = |conn: &rusqlite::Connection| {
         ids.iter()
             .filter_map(|id| {
@@ -882,6 +888,15 @@ fn commit_page(loaded: LoadedPage) {
         );
         return;
     };
+    let jellyfin_ids = loaded
+        .records
+        .iter()
+        .filter(|record| record.track_ref.source == SourceKind::Jellyfin)
+        .map(|record| record.track_ref.native_id.clone())
+        .collect::<Vec<_>>();
+    if !jellyfin_ids.is_empty() {
+        crate::media_sync_qt::prioritize_jellyfin_quality(jellyfin_ids, false);
+    }
     current.pending_pages.remove(&loaded.page);
     for (row, cursor) in &loaded.anchors {
         current.anchors.insert(*row, cursor.clone());

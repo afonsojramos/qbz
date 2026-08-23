@@ -3201,6 +3201,9 @@ fn main() {
         // A Plex page and its checkpoint are one transaction. Cancellation
         // prevents section prune and the next launch resumes at that page.
         local_plex::cancel_sync();
+        // Jellyfin sync/hydration responses carry an epoch; invalidating it
+        // here prevents a late server response from writing after UI teardown.
+        media_sync_qt::cancel_all();
         // The backstop for everything below AND for Qt's own teardown (engine
         // + QGuiApplication destructors, atexit chain): if any of it wedges,
         // the watchdog `_exit(0)`s the process. Idempotent — the quit paths

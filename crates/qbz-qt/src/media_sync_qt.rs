@@ -19,20 +19,24 @@
 //! `Fields=MediaStreams` trims 29 % of the bytes and saves nothing. Subsonic
 //! ships the same facts as ordinary OpenSubsonic song fields, for free.
 //!
-//! So Jellyfin gets a progress report and a delta path; Subsonic needs neither
-//! and is simply run to completion.
+//! Jellyfin therefore publishes a cheap essential-metadata pass first, without
+//! `MediaSources`, and hydrates quality afterwards in bounded batches. Visible,
+//! queued, playing, and recent rows get priority over the catalog-wide fill.
+//! Subsonic ships complete rows in its ordinary paged sweep.
 //!
 //! # Two rules the prune depends on
 //!
-//! 1. **`prune_stale` runs only after a sweep that COMPLETED.** It deletes rows
-//!    the sweep did not touch, which is how a track deleted on the server
-//!    disappears here. A connection dropped halfway would otherwise read as
-//!    "the server deleted everything the sweep never got to".
+//! 1. **A generation prunes only after a sweep that COMPLETED.** It deletes
+//!    rows the sweep did not observe, which is how a track deleted on the
+//!    server disappears here. A connection dropped halfway would otherwise
+//!    read as "the server deleted everything the sweep never got to".
 //! 2. **A delta sweep never prunes**, for the same reason with the sign
 //!    flipped: it deliberately does not see unchanged rows, so every one of
 //!    them looks stale.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 use qbz_app::settings::media_servers::{MediaServerKind, MediaServerSettings};
 use qbz_media_cache::{CachedLibrary, CachedTrack, RemoteSource};
@@ -41,6 +45,79 @@ use qbz_media_cache::{CachedLibrary, CachedTrack, RemoteSource};
 /// cache's write lock and double the server's load to produce the same rows.
 static JELLYFIN_BUSY: AtomicBool = AtomicBool::new(false);
 static SUBSONIC_BUSY: AtomicBool = AtomicBool::new(false);
+static JELLYFIN_CANCEL: AtomicBool = AtomicBool::new(false);
+static JELLYFIN_QUALITY_EPOCH: AtomicU64 = AtomicU64::new(1);
+static JELLYFIN_QUALITY_RUNNING: AtomicBool = AtomicBool::new(false);
+static JELLYFIN_BULK_QUALITY: AtomicBool = AtomicBool::new(false);
+static JELLYFIN_QUALITY_QUEUE: LazyLock<Mutex<QualityQueue>> =
+    LazyLock::new(|| Mutex::new(QualityQueue::default()));
+static JELLYFIN_STATE_GATE: Mutex<()> = Mutex::new(());
+
+const QUALITY_QUEUE_MAX: usize = 2_000;
+const QUALITY_RETRY_SECS: i64 = 60;
+
+#[derive(Default)]
+struct QualityQueue {
+    urgent: VecDeque<String>,
+    visible: VecDeque<String>,
+    present: HashSet<String>,
+}
+
+impl QualityQueue {
+    fn push(&mut self, item_ids: impl IntoIterator<Item = String>, urgent: bool) {
+        for item_id in item_ids {
+            if item_id.is_empty() || self.present.contains(&item_id) {
+                continue;
+            }
+            while self.present.len() >= QUALITY_QUEUE_MAX {
+                let removed = if urgent {
+                    self.visible.pop_back().or_else(|| self.urgent.pop_back())
+                } else {
+                    // A merely visible row never displaces an urgent
+                    // playing/queued row when the bounded queue is full.
+                    self.visible.pop_front()
+                };
+                if let Some(removed) = removed {
+                    self.present.remove(&removed);
+                } else {
+                    break;
+                }
+            }
+            if self.present.len() >= QUALITY_QUEUE_MAX {
+                continue;
+            }
+            if self.present.insert(item_id.clone()) {
+                if urgent {
+                    self.urgent.push_back(item_id);
+                } else {
+                    self.visible.push_back(item_id);
+                }
+            }
+        }
+    }
+
+    fn pop_batch(&mut self, limit: usize) -> Vec<String> {
+        let mut rows = Vec::with_capacity(limit);
+        while rows.len() < limit {
+            let Some(item_id) = self.urgent.pop_front().or_else(|| self.visible.pop_front()) else {
+                break;
+            };
+            self.present.remove(&item_id);
+            rows.push(item_id);
+        }
+        rows
+    }
+
+    fn is_empty(&self) -> bool {
+        self.present.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.urgent.clear();
+        self.visible.clear();
+        self.present.clear();
+    }
+}
 
 fn busy_flag(kind: MediaServerKind) -> &'static AtomicBool {
     match kind {
@@ -52,6 +129,62 @@ fn busy_flag(kind: MediaServerKind) -> &'static AtomicBool {
 /// Is a sweep running for this server right now?
 pub fn is_syncing(kind: MediaServerKind) -> bool {
     busy_flag(kind).load(Ordering::Relaxed)
+}
+
+/// Cancel source work without waiting for an in-flight request. Every cache
+/// write checks the epoch/cancel latch after the await, so a late response is
+/// discarded and can never authorize prune or publish stale quality.
+pub fn cancel(kind: MediaServerKind) {
+    match kind {
+        MediaServerKind::Jellyfin => {
+            JELLYFIN_CANCEL.store(true, Ordering::Release);
+            invalidate_jellyfin_quality();
+        }
+        MediaServerKind::Subsonic => {}
+    }
+}
+
+pub fn cancel_all() {
+    for kind in MediaServerKind::ALL {
+        cancel(kind);
+    }
+}
+
+pub(crate) fn jellyfin_state_guard() -> std::sync::MutexGuard<'static, ()> {
+    JELLYFIN_STATE_GATE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+/// Visible rows enter the secondary quality queue behind playing/queued rows
+/// but ahead of the catalog-wide background fill.
+pub fn prioritize_jellyfin_quality(item_ids: Vec<String>, urgent: bool) {
+    if item_ids.is_empty() {
+        return;
+    }
+    JELLYFIN_QUALITY_QUEUE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push(item_ids, urgent);
+    start_jellyfin_quality_worker();
+}
+
+/// Resume an interrupted catalog-wide hydration after an online session bind.
+/// Pending state lives in the cache, so this does not need an in-memory
+/// checkpoint and exits immediately when every row is already hydrated.
+pub fn resume_jellyfin_quality() {
+    prioritize_recent_jellyfin_quality();
+    JELLYFIN_BULK_QUALITY.store(true, Ordering::Release);
+    start_jellyfin_quality_worker();
+}
+
+fn invalidate_jellyfin_quality() {
+    JELLYFIN_QUALITY_EPOCH.fetch_add(1, Ordering::AcqRel);
+    JELLYFIN_BULK_QUALITY.store(false, Ordering::Release);
+    JELLYFIN_QUALITY_QUEUE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clear();
 }
 
 /// RAII guard so an early return — or a `?` — cannot leave the flag stuck on.
@@ -85,8 +218,7 @@ pub struct SyncReport {
     pub total: u64,
 }
 
-/// Push a progress line to the UI. Cheap enough to call per page; the pages are
-/// seconds apart on Jellyfin and there are 14 of them on Subsonic.
+/// Push a progress line to the UI. Cheap enough to call once per bounded page.
 fn report(kind: MediaServerKind, done: u64, total: u64) {
     log::info!("[qbz-qt] {} sync: {done}/{total}", kind.as_str());
     let text = format!("{done}/{total}");
@@ -119,13 +251,18 @@ fn set_syncing_ui(on: bool) {
 ///
 /// `full` forces a complete pass; otherwise a server that has been swept before
 /// gets a DELTA (`minDateLastSaved`), which Jellyfin honours — verified: a
-/// future-dated delta returns zero rows. That turns a re-sync from 45.8 s into
-/// the cost of whatever actually changed.
+/// future-dated delta returns zero rows. The essential pass deliberately omits
+/// expensive `MediaSources`; quality is retained while a secondary worker
+/// refreshes changed rows after this function publishes the catalog.
 pub async fn sync_jellyfin(full: bool) -> Result<SyncReport, String> {
     let kind = MediaServerKind::Jellyfin;
     let Some(_guard) = BusyGuard::acquire(kind) else {
         return Err("a jellyfin sync is already running".into());
     };
+    // A new authoritative pass supersedes an older hydration response. The
+    // request may still finish, but its epoch can no longer write.
+    invalidate_jellyfin_quality();
+    JELLYFIN_CANCEL.store(false, Ordering::Release);
     let cfg = crate::media_servers_qt::get(kind);
     if !cfg.is_configured(kind) {
         return Err("jellyfin is not configured".into());
@@ -136,10 +273,7 @@ pub async fn sync_jellyfin(full: bool) -> Result<SyncReport, String> {
     out
 }
 
-async fn sync_jellyfin_inner(
-    cfg: MediaServerSettings,
-    full: bool,
-) -> Result<SyncReport, String> {
+async fn sync_jellyfin_inner(cfg: MediaServerSettings, full: bool) -> Result<SyncReport, String> {
     let kind = MediaServerKind::Jellyfin;
 
     let client = qbz_jellyfin::JellyfinClient::new(&cfg.base_url, &cfg.token, &cfg.username)
@@ -151,70 +285,120 @@ async fn sync_jellyfin_inner(
     if libraries.is_empty() {
         return Err("this jellyfin server exposes no music library".into());
     }
-    let wanted: Vec<&qbz_jellyfin::MusicLibrary> = if cfg.selected_libraries.is_empty() {
-        // Never chosen: take them all. Matching the Plex flow, where the first
-        // fetch default-selects everything rather than showing an empty grid
-        // until the user opens settings.
-        libraries.iter().collect()
-    } else {
-        libraries
-            .iter()
-            .filter(|l| cfg.selected_libraries.contains(&l.id))
-            .collect()
-    };
+    let selected: Vec<&qbz_jellyfin::MusicLibrary> = libraries
+        .iter()
+        .filter(|library| cfg.selected_libraries.contains(&library.id))
+        .collect();
+    let wanted: Vec<&qbz_jellyfin::MusicLibrary> =
+        if cfg.selected_libraries.is_empty() || selected.is_empty() {
+            // Never chosen: take them all. Matching the Plex flow, where the first
+            // fetch (and a completely stale selection) defaults to everything
+            // rather than authorizing an accidental empty prune.
+            libraries.iter().collect()
+        } else {
+            selected
+        };
 
     let delta = (!full && cfg.last_sync_at > 0).then(|| iso8601(cfg.last_sync_at));
-    let started = qbz_media_cache::sweep_start();
+    let sync_epoch = JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire);
+    let generation = begin_source_sync(RemoteSource::Jellyfin)?.generation;
+    log::info!(
+        "[media-sync] source=jellyfin phase=essential generation={generation} mode={} libraries={}",
+        if delta.is_some() { "delta" } else { "full" },
+        wanted.len(),
+    );
     let mut saved = 0usize;
-
-    for lib in &wanted {
-        let total = client
-            .track_count(Some(&lib.id))
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut offset = 0u64;
-        loop {
-            let (page, _) = client
-                .tracks_page(Some(&lib.id), offset, delta.as_deref())
-                .await
-                .map_err(|e| e.to_string())?;
-            if page.is_empty() {
-                break;
-            }
-            let rows: Vec<CachedTrack> = page
-                .iter()
-                .map(|t| jellyfin_row(t, &cfg.server_id, &lib.id))
-                .collect();
-            saved += write_rows(RemoteSource::Jellyfin, &rows)?;
-            offset += page.len() as u64;
-            report(kind, offset.min(total), total);
-            if page.len() < qbz_jellyfin::PAGE_SIZE as usize {
-                break;
+    let pass = async {
+        for lib in &wanted {
+            let mut offset = 0u64;
+            let mut declared_total = None;
+            loop {
+                if JELLYFIN_CANCEL.load(Ordering::Acquire) {
+                    return Err("jellyfin sync cancelled".to_string());
+                }
+                let (page, page_total) = client
+                    .essential_tracks_page(Some(&lib.id), offset, delta.as_deref())
+                    .await
+                    .map_err(|error| error.to_string())?;
+                if JELLYFIN_CANCEL.load(Ordering::Acquire) {
+                    return Err("jellyfin sync cancelled".to_string());
+                }
+                if declared_total.is_some_and(|total| total != page_total) {
+                    return Err("jellyfin page total changed during sync".to_string());
+                }
+                declared_total = Some(page_total);
+                if page.is_empty() {
+                    if offset != page_total {
+                        return Err("jellyfin page ended before its declared total".to_string());
+                    }
+                    break;
+                }
+                let rows: Vec<CachedTrack> = page
+                    .iter()
+                    .map(|track| jellyfin_row(track, &cfg.server_id, &lib.id))
+                    .collect();
+                saved += write_essential_rows(
+                    RemoteSource::Jellyfin,
+                    generation,
+                    sync_epoch,
+                    &rows,
+                )?;
+                offset = offset.saturating_add(page.len() as u64);
+                if offset > page_total {
+                    return Err("jellyfin page exceeded its declared total".to_string());
+                }
+                report(kind, offset, page_total);
+                log::info!(
+                    "[media-sync] source=jellyfin phase=essential-page generation={generation} rows={} checkpoint={offset} total={page_total} prune_authorized=false",
+                    page.len(),
+                );
+                if offset == page_total {
+                    break;
+                }
+                if page.len() < qbz_jellyfin::PAGE_SIZE as usize {
+                    return Err("jellyfin short page cannot reach its declared total".to_string());
+                }
             }
         }
+
+        write_libraries_for_epoch(
+            RemoteSource::Jellyfin,
+            sync_epoch,
+            &libraries
+                .iter()
+                .map(|library| CachedLibrary {
+                    source: "jellyfin".into(),
+                    library_id: library.id.clone(),
+                    name: library.name.clone(),
+                    server_id: cfg.server_id.clone(),
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        complete_source_sync(
+            RemoteSource::Jellyfin,
+            generation,
+            sync_epoch,
+            delta.is_none(),
+        )
     }
+    .await;
 
-    write_libraries(
-        RemoteSource::Jellyfin,
-        &libraries
-            .iter()
-            .map(|l| CachedLibrary {
-                source: "jellyfin".into(),
-                library_id: l.id.clone(),
-                name: l.name.clone(),
-                server_id: cfg.server_id.clone(),
-            })
-            .collect::<Vec<_>>(),
-    )?;
-
-    // A DELTA never prunes: it did not ask about unchanged rows, so every one
-    // of them would look stale.
-    let pruned = if delta.is_none() {
-        prune(RemoteSource::Jellyfin, started)?
-    } else {
-        0
+    let pruned = match pass {
+        Ok(pruned) => pruned,
+        Err(error) => {
+            let _ = interrupt_source_sync(RemoteSource::Jellyfin, generation);
+            return Err(error);
+        }
     };
-    finish(kind, cfg, saved, pruned, RemoteSource::Jellyfin)
+    let report = finish_jellyfin(cfg, saved, pruned, sync_epoch)?;
+    log::info!(
+        "[media-sync] source=jellyfin phase=essential-complete generation={generation} rows={saved} pruned={pruned} prune_authorized={}",
+        delta.is_none(),
+    );
+    prioritize_recent_jellyfin_quality();
+    JELLYFIN_BULK_QUALITY.store(true, Ordering::Release);
+    start_jellyfin_quality_worker();
+    Ok(report)
 }
 
 fn jellyfin_row(t: &qbz_jellyfin::JellyfinTrack, server_id: &str, library_id: &str) -> CachedTrack {
@@ -250,6 +434,251 @@ fn jellyfin_row(t: &qbz_jellyfin::JellyfinTrack, server_id: &str, library_id: &s
             .map(|tag| format!("{}/{}", t.album_id, tag)),
         size_bytes: None,
     }
+}
+
+fn jellyfin_quality_row(
+    quality: qbz_jellyfin::JellyfinTrackQuality,
+) -> qbz_media_cache::CachedTrackQuality {
+    qbz_media_cache::CachedTrackQuality {
+        item_id: quality.id,
+        container: quality.container,
+        codec: quality.codec,
+        bit_depth: quality.bit_depth,
+        sample_rate_hz: quality.sample_rate_hz,
+        channels: quality.channels,
+        bitrate_kbps: quality.bitrate_bps.map(|value| value / 1000),
+    }
+}
+
+fn prioritize_recent_jellyfin_quality() {
+    let row_ids = crate::recently_qt::jellyfin_recent_track_ids();
+    if row_ids.is_empty() {
+        return;
+    }
+    let item_ids = handle(RemoteSource::Jellyfin)
+        .with(|cache| {
+            row_ids
+                .iter()
+                .filter_map(|row_id| {
+                    qbz_media_cache::track_by_id(cache, *row_id)
+                        .ok()
+                        .flatten()
+                        .map(|track| track.item_id)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    prioritize_jellyfin_quality(item_ids, true);
+}
+
+fn quality_queue_has_work() -> bool {
+    JELLYFIN_BULK_QUALITY.load(Ordering::Acquire)
+        || !JELLYFIN_QUALITY_QUEUE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_empty()
+}
+
+fn start_jellyfin_quality_worker() {
+    if !crate::media_servers_qt::get(MediaServerKind::Jellyfin)
+        .is_configured(MediaServerKind::Jellyfin)
+    {
+        return;
+    }
+    if JELLYFIN_QUALITY_RUNNING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    let epoch = JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire);
+    crate::spawn(async move {
+        if let Err(error) = jellyfin_quality_worker(epoch).await {
+            log::warn!("[jellyfin-quality] phase=paused reason={error}");
+            if epoch == JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire) {
+                JELLYFIN_BULK_QUALITY.store(false, Ordering::Release);
+                JELLYFIN_QUALITY_QUEUE
+                    .lock()
+                    .unwrap_or_else(|lock_error| lock_error.into_inner())
+                    .clear();
+            }
+        }
+        JELLYFIN_QUALITY_RUNNING.store(false, Ordering::Release);
+        // A new essential sync may have advanced the epoch and queued a fresh
+        // bulk pass while this old request was still in flight. Cancellation
+        // clears all work, so any work present here belongs to the current
+        // epoch and must get a new worker.
+        if quality_queue_has_work() {
+            start_jellyfin_quality_worker();
+        }
+    });
+}
+
+async fn jellyfin_quality_worker(epoch: u64) -> Result<(), String> {
+    let cfg = crate::media_servers_qt::get(MediaServerKind::Jellyfin);
+    if !cfg.is_configured(MediaServerKind::Jellyfin) {
+        return Ok(());
+    }
+    let client = qbz_jellyfin::JellyfinClient::new(&cfg.base_url, &cfg.token, &cfg.username)
+        .map_err(|error| error.to_string())?;
+    let mut hydrated = 0usize;
+    let mut batches = 0usize;
+    let mut priority_published = false;
+    loop {
+        if epoch != JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let priority = JELLYFIN_QUALITY_QUEUE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pop_batch(qbz_jellyfin::QUALITY_BATCH_SIZE);
+        let was_priority = !priority.is_empty();
+        let candidates = if was_priority {
+            pending_quality_async(priority).await?
+        } else if JELLYFIN_BULK_QUALITY.load(Ordering::Acquire) {
+            quality_candidates_async(qbz_jellyfin::QUALITY_BATCH_SIZE).await?
+        } else {
+            Vec::new()
+        };
+        if candidates.is_empty() {
+            if was_priority {
+                continue;
+            }
+            JELLYFIN_BULK_QUALITY.store(false, Ordering::Release);
+            break;
+        }
+
+        let started = std::time::Instant::now();
+        let response = match client.track_quality(&candidates).await {
+            Ok(response) => response,
+            Err(error) => {
+                if epoch != JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                defer_quality_async(candidates, QUALITY_RETRY_SECS, epoch).await?;
+                JELLYFIN_BULK_QUALITY.store(false, Ordering::Release);
+                schedule_jellyfin_quality_retry(epoch);
+                return Err(error.to_string());
+            }
+        };
+        if epoch != JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let returned = response
+            .iter()
+            .map(|quality| quality.id.as_str())
+            .collect::<HashSet<_>>();
+        let missing = candidates
+            .iter()
+            .filter(|item_id| !returned.contains(item_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let updates = response
+            .into_iter()
+            .map(jellyfin_quality_row)
+            .collect::<Vec<_>>();
+        let updated = update_quality_async(updates, epoch).await?;
+        if !missing.is_empty() {
+            defer_quality_async(missing, QUALITY_RETRY_SECS, epoch).await?;
+        }
+        hydrated = hydrated.saturating_add(updated);
+        batches = batches.saturating_add(1);
+        log::info!(
+            "[jellyfin-quality] phase=hydrate batch={} requested={} updated={} missing={} priority={} elapsed={:?}",
+            batches,
+            candidates.len(),
+            updated,
+            candidates.len().saturating_sub(updated),
+            was_priority,
+            started.elapsed(),
+        );
+        if was_priority && updated > 0 && !priority_published {
+            // Coalesced by the catalog worker. This updates a bounded visible
+            // page promptly while the remaining bulk fill stays silent.
+            crate::local_catalog_qt::request_catch_up();
+            priority_published = true;
+        }
+    }
+    if hydrated > 0 {
+        crate::local_catalog_qt::request_catch_up();
+    }
+    log::info!("[jellyfin-quality] phase=complete batches={batches} hydrated={hydrated}");
+    Ok(())
+}
+
+fn schedule_jellyfin_quality_retry(epoch: u64) {
+    crate::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(QUALITY_RETRY_SECS as u64)).await;
+        if epoch == JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire) {
+            JELLYFIN_BULK_QUALITY.store(true, Ordering::Release);
+            start_jellyfin_quality_worker();
+        }
+    });
+}
+
+async fn pending_quality_async(item_ids: Vec<String>) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        handle(RemoteSource::Jellyfin)
+            .with(|cache| {
+                qbz_media_cache::pending_quality_ids(cache, RemoteSource::Jellyfin, &item_ids)
+            })
+            .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
+    })
+    .await
+    .map_err(|error| format!("jellyfin quality cache worker failed: {error}"))?
+}
+
+async fn quality_candidates_async(limit: usize) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        handle(RemoteSource::Jellyfin)
+            .with(|cache| qbz_media_cache::quality_candidates(cache, RemoteSource::Jellyfin, limit))
+            .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
+    })
+    .await
+    .map_err(|error| format!("jellyfin quality candidate worker failed: {error}"))?
+}
+
+async fn update_quality_async(
+    updates: Vec<qbz_media_cache::CachedTrackQuality>,
+    epoch: u64,
+) -> Result<usize, String> {
+    tokio::task::spawn_blocking(move || {
+        handle(RemoteSource::Jellyfin)
+            .with_mut(|cache| {
+                if epoch != JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire) {
+                    return Ok(0);
+                }
+                qbz_media_cache::update_track_quality(cache, RemoteSource::Jellyfin, &updates)
+            })
+            .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
+    })
+    .await
+    .map_err(|error| format!("jellyfin quality write worker failed: {error}"))?
+}
+
+async fn defer_quality_async(
+    item_ids: Vec<String>,
+    retry_secs: i64,
+    epoch: u64,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        handle(RemoteSource::Jellyfin)
+            .with_mut(|cache| {
+                if epoch != JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire) {
+                    return Ok(0);
+                }
+                qbz_media_cache::defer_track_quality(
+                    cache,
+                    RemoteSource::Jellyfin,
+                    &item_ids,
+                    retry_secs,
+                )
+            })
+            .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
+    })
+    .await
+    .map_err(|error| format!("jellyfin quality defer worker failed: {error}"))??;
+    Ok(())
 }
 
 /// Jellyfin wants `minDateLastSaved` as ISO-8601 UTC.
@@ -323,7 +752,10 @@ async fn sync_subsonic_inner(
         qbz_subsonic::SweepMode::Search3 => {
             let mut offset = 0u32;
             loop {
-                let page = client.search_page(offset).await.map_err(|e| e.to_string())?;
+                let page = client
+                    .search_page(offset)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 if page.is_empty() {
                     break;
                 }
@@ -361,7 +793,9 @@ async fn sync_subsonic_inner(
                         let rows: Vec<CachedTrack> = t.iter().map(subsonic_row).collect();
                         saved += write_rows(RemoteSource::Subsonic, &rows)?;
                     }
-                    Err(e) => log::warn!("[qbz-qt] subsonic sync: album {id} failed ({e}) — skipped"),
+                    Err(e) => {
+                        log::warn!("[qbz-qt] subsonic sync: album {id} failed ({e}) — skipped")
+                    }
                 }
                 if i % 25 == 0 {
                     report(kind, i as u64, total);
@@ -430,6 +864,67 @@ fn handle(source: RemoteSource) -> &'static qbz_source::CacheHandle {
     }
 }
 
+fn begin_source_sync(
+    source: RemoteSource,
+) -> Result<qbz_media_cache::SourceSyncGeneration, String> {
+    handle(source)
+        .with_mut(|cache| qbz_media_cache::begin_source_sync(cache, source))
+        .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
+}
+
+fn write_essential_rows(
+    source: RemoteSource,
+    generation: u64,
+    sync_epoch: u64,
+    rows: &[CachedTrack],
+) -> Result<usize, String> {
+    handle(source)
+        .with_mut(|cache| {
+            if sync_epoch != JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire) {
+                return Err("jellyfin sync cancelled".to_string());
+            }
+            qbz_media_cache::save_essential_tracks(cache, source, generation, rows)
+        })
+        .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
+}
+
+fn complete_source_sync(
+    source: RemoteSource,
+    generation: u64,
+    sync_epoch: u64,
+    prune_old: bool,
+) -> Result<usize, String> {
+    handle(source)
+        .with_mut(|cache| {
+            if sync_epoch != JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire) {
+                return Err("jellyfin sync cancelled".to_string());
+            }
+            qbz_media_cache::complete_source_sync(cache, source, generation, prune_old)
+        })
+        .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
+}
+
+fn interrupt_source_sync(source: RemoteSource, generation: u64) -> Result<(), String> {
+    handle(source)
+        .with(|cache| qbz_media_cache::interrupt_source_sync(cache, source, generation))
+        .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
+}
+
+fn write_libraries_for_epoch(
+    source: RemoteSource,
+    sync_epoch: u64,
+    libraries: &[CachedLibrary],
+) -> Result<(), String> {
+    handle(source)
+        .with_mut(|cache| {
+            if sync_epoch != JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire) {
+                return Err("jellyfin sync cancelled".to_string());
+            }
+            qbz_media_cache::save_libraries(cache, source, libraries)
+        })
+        .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
+}
+
 fn write_rows(source: RemoteSource, rows: &[CachedTrack]) -> Result<usize, String> {
     handle(source)
         .with_mut(|c| qbz_media_cache::save_tracks(c, source, rows))
@@ -452,6 +947,27 @@ fn count(source: RemoteSource) -> u64 {
     handle(source)
         .with(|c| qbz_media_cache::count(c, source).unwrap_or(0))
         .unwrap_or(0)
+}
+
+fn finish_jellyfin(
+    cfg: MediaServerSettings,
+    saved: usize,
+    pruned: usize,
+    sync_epoch: u64,
+) -> Result<SyncReport, String> {
+    let _gate = jellyfin_state_guard();
+    if JELLYFIN_CANCEL.load(Ordering::Acquire)
+        || sync_epoch != JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire)
+    {
+        return Err("jellyfin sync cancelled".to_string());
+    }
+    finish(
+        MediaServerKind::Jellyfin,
+        cfg,
+        saved,
+        pruned,
+        RemoteSource::Jellyfin,
+    )
 }
 
 /// Stamp the sweep and report.
@@ -582,5 +1098,51 @@ mod tests {
             server_path: None,
         };
         assert_eq!(jellyfin_row(&jf, "s", "l").bitrate_kbps, Some(3120));
+    }
+
+    #[test]
+    fn quality_queue_deduplicates_and_puts_urgent_rows_first() {
+        let mut queue = QualityQueue::default();
+        queue.push(vec!["visible-a".into(), "same".into()], false);
+        queue.push(vec!["urgent".into(), "same".into()], true);
+        assert_eq!(
+            queue.pop_batch(3),
+            vec![
+                "urgent".to_string(),
+                "visible-a".to_string(),
+                "same".to_string()
+            ]
+        );
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn visible_quality_never_evicts_urgent_rows_at_the_memory_cap() {
+        let mut queue = QualityQueue::default();
+        queue.push(
+            (0..QUALITY_QUEUE_MAX).map(|index| format!("urgent-{index}")),
+            true,
+        );
+        queue.push(vec!["visible".into()], false);
+        assert_eq!(queue.present.len(), QUALITY_QUEUE_MAX);
+        assert!(!queue.present.contains("visible"));
+        assert_eq!(queue.pop_batch(1), vec!["urgent-0".to_string()]);
+    }
+
+    #[test]
+    fn jellyfin_quality_mapping_keeps_lossy_nulls_and_normalises_bitrate() {
+        let mapped = jellyfin_quality_row(qbz_jellyfin::JellyfinTrackQuality {
+            id: "item".into(),
+            container: "mp3".into(),
+            codec: Some("mp3".into()),
+            bit_depth: None,
+            sample_rate_hz: Some(44_100),
+            channels: Some(2),
+            bitrate_bps: Some(320_999),
+        });
+        assert_eq!(mapped.item_id, "item");
+        assert_eq!(mapped.bit_depth, None);
+        assert_eq!(mapped.sample_rate_hz, Some(44_100));
+        assert_eq!(mapped.bitrate_kbps, Some(320));
     }
 }

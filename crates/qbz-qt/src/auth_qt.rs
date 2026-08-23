@@ -181,6 +181,7 @@ where
     }
     crate::offline_fwd::subscription_mark_valid();
     crate::offline_fwd::engine().set_offline_session(false);
+    crate::media_sync_qt::resume_jellyfin_quality();
 
     // Persist the token so the next launch restores the session silently.
     if let Err(e) = qbz_credentials::save_oauth_token(&token) {
@@ -341,6 +342,7 @@ where
             }
             crate::offline_fwd::subscription_mark_valid();
             crate::offline_fwd::engine().set_offline_session(false);
+            crate::media_sync_qt::resume_jellyfin_quality();
             log::info!("[qbz-qt] restored saved session for user {user_id}");
             Ok(Some(SessionInfo {
                 user_id,

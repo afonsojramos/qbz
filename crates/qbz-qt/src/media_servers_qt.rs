@@ -79,6 +79,9 @@ pub fn put(kind: MediaServerKind, s: &MediaServerSettings) {
 }
 
 pub fn disconnect(kind: MediaServerKind) {
+    let _jellyfin_gate =
+        (kind == MediaServerKind::Jellyfin).then(crate::media_sync_qt::jellyfin_state_guard);
+    crate::media_sync_qt::cancel(kind);
     STATE.disconnect(kind);
     invalidate_cache();
 }
@@ -411,6 +414,12 @@ pub fn album_tracks(prefixed_key: &str) -> Option<Vec<qbz_library::LocalTrack>> 
     let rows = handle
         .with(|c| qbz_media_cache::album_tracks(c, source, album_id).unwrap_or_default())
         .unwrap_or_default();
+    if source == qbz_media_cache::RemoteSource::Jellyfin {
+        crate::media_sync_qt::prioritize_jellyfin_quality(
+            rows.iter().map(|row| row.item_id.clone()).collect(),
+            false,
+        );
+    }
     Some(rows.into_iter().map(cached_to_local_track).collect())
 }
 
@@ -492,15 +501,19 @@ pub fn search_tracks_page(
             qbz_source::registry().subsonic().cache(),
         ),
     };
-    handle
+    let rows = handle
         .with(|c| {
             qbz_media_cache::search_page(c, source, query, offset, limit, sort)
                 .unwrap_or_default()
         })
-        .unwrap_or_default()
-        .into_iter()
-        .map(cached_to_local_track)
-        .collect()
+        .unwrap_or_default();
+    if source == qbz_media_cache::RemoteSource::Jellyfin {
+        crate::media_sync_qt::prioritize_jellyfin_quality(
+            rows.iter().map(|row| row.item_id.clone()).collect(),
+            false,
+        );
+    }
+    rows.into_iter().map(cached_to_local_track).collect()
 }
 
 /// Substring search across one remote source, in the `LocalTrack` shape.

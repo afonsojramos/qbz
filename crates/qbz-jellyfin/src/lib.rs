@@ -22,13 +22,14 @@
 //! exists so a regression is caught rather than quietly resampled. QBZ never
 //! asks for a transcode and must never accept one.
 //!
-//! **2. Quality arrives with the listing, but it is not free.** `BitDepth` and
+//! **2. Quality is available with the listing, but it is not free.** `BitDepth` and
 //! `SampleRate` live in `MediaSources[].MediaStreams[]`, which requires
 //! `Fields=MediaSources`. Measured on a 500-item page: 0.25 s without it, 4.56 s
 //! with. Full sweep of 4924 tracks: **45.8 s**. `Fields=MediaStreams` trims 29 %
 //! of the bytes and saves nothing — the cost is server-side media-info
-//! hydration, not transfer. There is no cheaper path, so the scan owns that cost
-//! deliberately rather than discovering it.
+//! hydration, not transfer. Catalog discovery therefore omits `MediaSources`;
+//! a secondary, resumable hydration pass requests it only for bounded id
+//! batches, with visible and queued rows allowed to jump ahead.
 //!
 //! **3. Artwork needs no credentials.** `/Items/{id}/Images/Primary` answers
 //! 200 unauthenticated. Unlike Plex, whose thumb url has to be re-tokenized on
@@ -51,11 +52,15 @@ use serde::Deserialize;
 /// FLAC over a slow link legitimately outlives any probe budget.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Page size for the library sweep. 500 is the measured sweet spot: the
-/// per-request cost is dominated by server-side media-info hydration, so fewer,
-/// larger pages win, and 500 items with `MediaSources` is ~1.5 MB of JSON —
-/// large enough to amortise, small enough not to spike RSS.
-pub const PAGE_SIZE: u32 = 500;
+/// Page size for the cheap essential-metadata sweep. It stays inside the
+/// catalog's initial 100–250 row budget; the expensive quality pass has its
+/// own, smaller batch size.
+pub const PAGE_SIZE: u32 = 250;
+
+/// Maximum ids in one secondary `MediaSources` request. A priority batch must
+/// be small enough that newly visible/queued tracks are not stuck behind
+/// several seconds of unrelated server-side probing.
+pub const QUALITY_BATCH_SIZE: usize = 50;
 
 /// Cover size this client requests, app-wide. One size is deliberate, for the
 /// same reason `artwork_qt::PLEX_THUMB_PX` is: the cache key is the url, so a
@@ -177,6 +182,20 @@ pub struct JellyfinTrack {
     pub server_path: Option<String>,
 }
 
+/// Quality fields hydrated independently from the essential track listing.
+/// The item id is the join key; no list position is trusted because Jellyfin
+/// may omit an item deleted between discovery and hydration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JellyfinTrackQuality {
+    pub id: String,
+    pub container: String,
+    pub codec: Option<String>,
+    pub bit_depth: Option<u32>,
+    pub sample_rate_hz: Option<u32>,
+    pub channels: Option<u32>,
+    pub bitrate_bps: Option<u32>,
+}
+
 impl JellyfinTrack {
     /// Jellyfin counts in 100 ns ticks.
     fn ticks_to_ms(ticks: i64) -> u64 {
@@ -277,6 +296,39 @@ struct MediaStreamDto {
 }
 
 impl AudioDto {
+    fn audio_stream(&self) -> Option<&MediaStreamDto> {
+        self.media_sources.first().and_then(|source| {
+            source
+                .media_streams
+                .iter()
+                .find(|stream| stream.kind == "Audio")
+        })
+    }
+
+    fn into_quality(self) -> JellyfinTrackQuality {
+        let (codec, bit_depth, sample_rate_hz, channels, bitrate_bps) = self
+            .audio_stream()
+            .map(|stream| {
+                (
+                    stream.codec.clone(),
+                    stream.bit_depth,
+                    stream.sample_rate,
+                    stream.channels,
+                    stream.bit_rate,
+                )
+            })
+            .unwrap_or_default();
+        JellyfinTrackQuality {
+            id: self.id,
+            container: self.container.unwrap_or_default(),
+            codec,
+            bit_depth,
+            sample_rate_hz,
+            channels,
+            bitrate_bps,
+        }
+    }
+
     fn into_track(self) -> JellyfinTrack {
         // The FIRST audio stream. A cover embedded as `EmbeddedImage` shows up
         // in the same array, which is why this filters by type rather than
@@ -395,6 +447,24 @@ fn client() -> Result<reqwest::Client> {
         .map_err(|e| JellyfinError::Transport(e.to_string()))
 }
 
+/// Reqwest's Display text contains the request URL for common failures. Server
+/// addresses are private configuration and authenticated stream URLs carry a
+/// token, so protocol errors retain only a coarse, non-sensitive reason.
+fn transport_error(error: &reqwest::Error) -> JellyfinError {
+    let reason = if error.is_timeout() {
+        "request timed out"
+    } else if error.is_connect() {
+        "connection failed"
+    } else if error.is_decode() {
+        "response decoding failed"
+    } else if error.is_body() {
+        "response body failed"
+    } else {
+        "request failed"
+    };
+    JellyfinError::Transport(reason.to_string())
+}
+
 fn check(status: reqwest::StatusCode) -> Result<()> {
     if status.is_success() {
         return Ok(());
@@ -415,7 +485,7 @@ pub async fn probe(base_url: &str) -> Result<ServerInfo> {
         .get(format!("{base}/System/Info/Public"))
         .send()
         .await
-        .map_err(|e| JellyfinError::Transport(e.to_string()))?;
+        .map_err(|e| transport_error(&e))?;
     check(resp.status())?;
     resp.json::<ServerInfo>()
         .await
@@ -436,7 +506,7 @@ pub async fn authenticate(
         .json(&serde_json::json!({ "Username": username, "Pw": password }))
         .send()
         .await
-        .map_err(|e| JellyfinError::Transport(e.to_string()))?;
+        .map_err(|e| transport_error(&e))?;
     check(resp.status())?;
     let dto: AuthDto = resp
         .json()
@@ -472,7 +542,7 @@ impl JellyfinClient {
             .header("X-Emby-Token", &self.token)
             .send()
             .await
-            .map_err(|e| JellyfinError::Transport(e.to_string()))?;
+            .map_err(|e| transport_error(&e))?;
         check(resp.status())?;
         resp.json::<T>()
             .await
@@ -516,7 +586,25 @@ impl JellyfinClient {
         Ok(env.total_record_count)
     }
 
-    /// One page of audio items, WITH quality.
+    /// One page of essential audio metadata, without `MediaSources`.
+    ///
+    /// This is the first useful pass. On the measured server it avoids the
+    /// per-track media-info probe that made the old first sync take 45.8 s.
+    /// The returned quality fields are intentionally absent until
+    /// [`track_quality`] fills them in the secondary pass.
+    pub async fn essential_tracks_page(
+        &self,
+        library_id: Option<&str>,
+        start_index: u64,
+        min_date_last_saved: Option<&str>,
+    ) -> Result<(Vec<JellyfinTrack>, u64)> {
+        self.tracks_page_with_fields(library_id, start_index, min_date_last_saved, false)
+            .await
+    }
+
+    /// Compatibility entry point for callers that explicitly need quality in
+    /// the listing. The Qt catalog sync uses [`essential_tracks_page`] and the
+    /// bounded [`track_quality`] path instead.
     ///
     /// `Fields=MediaSources` is what carries `BitDepth` / `SampleRate`, and it
     /// is the expensive part (§ module docs): ~4.5 s per 500-item page against
@@ -532,20 +620,24 @@ impl JellyfinClient {
         start_index: u64,
         min_date_last_saved: Option<&str>,
     ) -> Result<(Vec<JellyfinTrack>, u64)> {
-        let scope = library_id
-            .map(|id| format!("&parentId={id}"))
-            .unwrap_or_default();
-        let delta = min_date_last_saved
-            .map(|d| format!("&minDateLastSaved={d}"))
-            .unwrap_or_default();
+        self.tracks_page_with_fields(library_id, start_index, min_date_last_saved, true)
+            .await
+    }
+
+    async fn tracks_page_with_fields(
+        &self,
+        library_id: Option<&str>,
+        start_index: u64,
+        min_date_last_saved: Option<&str>,
+        include_quality: bool,
+    ) -> Result<(Vec<JellyfinTrack>, u64)> {
         let env: ItemsEnvelope<AudioDto> = self
-            .get_json(&format!(
-                "/Items?userId={}&IncludeItemTypes=Audio&Recursive=true\
-                 &Limit={PAGE_SIZE}&StartIndex={start_index}\
-                 &Fields=Path,MediaSources,ParentId,ProductionYear,Genres\
-                 &SortBy=Album,ParentIndexNumber,IndexNumber&SortOrder=Ascending\
-                 &EnableImages=true&ImageTypeLimit=1{scope}{delta}",
-                self.user_id
+            .get_json(&tracks_page_path(
+                &self.user_id,
+                library_id,
+                start_index,
+                min_date_last_saved,
+                include_quality,
             ))
             .await?;
         let total = env.total_record_count;
@@ -553,6 +645,31 @@ impl JellyfinClient {
             env.items.into_iter().map(AudioDto::into_track).collect(),
             total,
         ))
+    }
+
+    /// Hydrate quality for a bounded set of opaque item ids.
+    ///
+    /// The response is joined by id, never by position: an item may disappear
+    /// between the essential pass and this request. Missing ids are simply not
+    /// returned so the caller can defer them without corrupting a neighbour.
+    pub async fn track_quality(&self, item_ids: &[String]) -> Result<Vec<JellyfinTrackQuality>> {
+        if item_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if item_ids.len() > QUALITY_BATCH_SIZE {
+            return Err(JellyfinError::Decode(format!(
+                "quality batch exceeds {QUALITY_BATCH_SIZE} ids"
+            )));
+        }
+        let ids = item_ids.join(",");
+        let env: ItemsEnvelope<AudioDto> = self
+            .get_json(&format!(
+                "/Items?userId={}&Ids={ids}&IncludeItemTypes=Audio\
+                 &Limit={QUALITY_BATCH_SIZE}&Fields=MediaSources",
+                self.user_id
+            ))
+            .await?;
+        Ok(env.items.into_iter().map(AudioDto::into_quality).collect())
     }
 
     /// [`stream_url`] for this client's server.
@@ -564,6 +681,35 @@ impl JellyfinClient {
     pub fn image_url(&self, item_id: &str, tag: Option<&str>, px: u32) -> String {
         image_url(&self.base, item_id, tag, px)
     }
+}
+
+fn tracks_page_path(
+    user_id: &str,
+    library_id: Option<&str>,
+    start_index: u64,
+    min_date_last_saved: Option<&str>,
+    include_quality: bool,
+) -> String {
+    let scope = library_id
+        .map(|id| format!("&parentId={id}"))
+        .unwrap_or_default();
+    let delta = min_date_last_saved
+        .map(|date| format!("&minDateLastSaved={date}"))
+        .unwrap_or_default();
+    let fields = if include_quality {
+        "Path,MediaSources,ParentId,ProductionYear,Genres"
+    } else {
+        // A server-side filesystem path is neither useful nor safe catalog
+        // metadata on a client. The compatibility path keeps exposing it, but
+        // the cheap persistent-library pass does not request or store it.
+        "ParentId,ProductionYear,Genres"
+    };
+    format!(
+        "/Items?userId={user_id}&IncludeItemTypes=Audio&Recursive=true\
+         &Limit={PAGE_SIZE}&StartIndex={start_index}&Fields={fields}\
+         &SortBy=Album,ParentIndexNumber,IndexNumber&SortOrder=Ascending\
+         &EnableImages=true&ImageTypeLimit=1{scope}{delta}"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -635,9 +781,15 @@ mod tests {
 
     #[test]
     fn base_urls_are_normalised_the_way_people_type_them() {
-        assert_eq!(normalize_base_url("192.168.0.69:8096"), "http://192.168.0.69:8096");
+        assert_eq!(
+            normalize_base_url("192.168.0.69:8096"),
+            "http://192.168.0.69:8096"
+        );
         assert_eq!(normalize_base_url("http://host:8096/"), "http://host:8096");
-        assert_eq!(normalize_base_url(" https://jf.example.com/ "), "https://jf.example.com");
+        assert_eq!(
+            normalize_base_url(" https://jf.example.com/ "),
+            "https://jf.example.com"
+        );
         assert_eq!(normalize_base_url("  "), "");
     }
 
@@ -687,14 +839,124 @@ mod tests {
                 ]
             }]
         });
-        let t = serde_json::from_value::<AudioDto>(json).unwrap().into_track();
-        assert_eq!(t.bit_depth, Some(24), "read the cover's depth, not the audio's");
+        let t = serde_json::from_value::<AudioDto>(json)
+            .unwrap()
+            .into_track();
+        assert_eq!(
+            t.bit_depth,
+            Some(24),
+            "read the cover's depth, not the audio's"
+        );
         assert_eq!(t.sample_rate_hz, Some(96000));
         assert_eq!(t.codec.as_deref(), Some("flac"));
         // 3 484 800 000 ticks / 10 000 = 348 480 ms = 348.48 s.
         assert_eq!(t.duration_ms, 348_480);
         assert_eq!(t.track_number, Some(6));
         assert_eq!(t.disc_number, Some(1));
+    }
+
+    #[test]
+    fn essential_page_omits_media_sources_but_preserves_delta_and_scope() {
+        let essential = tracks_page_path(
+            "user",
+            Some("library"),
+            250,
+            Some("2026-08-23T00:00:00Z"),
+            false,
+        );
+        assert!(essential.contains("Limit=250&StartIndex=250"));
+        assert!(essential.contains("parentId=library"));
+        assert!(essential.contains("minDateLastSaved=2026-08-23T00:00:00Z"));
+        assert!(!essential.contains("MediaSources"));
+        assert!(!essential.contains("Path"));
+
+        let compatibility = tracks_page_path("user", None, 0, None, true);
+        assert!(compatibility.contains("MediaSources"));
+    }
+
+    #[test]
+    fn secondary_quality_is_keyed_by_item_and_uses_only_the_audio_stream() {
+        let json = serde_json::json!({
+            "Id": "quality-id",
+            "Container": "flac",
+            "MediaSources": [{ "MediaStreams": [
+                { "Type": "EmbeddedImage", "Codec": "mjpeg", "BitDepth": 8 },
+                { "Type": "Audio", "Codec": "flac", "BitDepth": 24,
+                  "SampleRate": 192000, "Channels": 2, "BitRate": 6112000 }
+            ]}]
+        });
+        let quality = serde_json::from_value::<AudioDto>(json)
+            .unwrap()
+            .into_quality();
+        assert_eq!(quality.id, "quality-id");
+        assert_eq!(quality.container, "flac");
+        assert_eq!(quality.codec.as_deref(), Some("flac"));
+        assert_eq!(quality.bit_depth, Some(24));
+        assert_eq!(quality.sample_rate_hz, Some(192_000));
+        assert_eq!(quality.bitrate_bps, Some(6_112_000));
+    }
+
+    #[test]
+    fn essential_first_pass_metric_is_bounded_and_smaller_than_quality_payloads() {
+        const TRACKS: u64 = 4_924;
+        fn page(start: u64, end: u64, quality: bool) -> String {
+            let mut items = Vec::new();
+            for index in start..end {
+                let mut item = serde_json::json!({
+                    "Id": format!("item-{index:05}"),
+                    "Name": format!("Track {index:05}"),
+                    "Album": format!("Album {:04}", index / 10),
+                    "AlbumId": format!("album-{:04}", index / 10),
+                    "AlbumArtist": "Fixture Artist",
+                    "Artists": ["Fixture Artist"],
+                    "IndexNumber": index % 10 + 1,
+                    "ParentIndexNumber": 1,
+                    "RunTimeTicks": 1_800_000_000i64,
+                    "ProductionYear": 2026,
+                    "Genres": ["Fixture"],
+                    "Container": "flac"
+                });
+                if quality {
+                    item["MediaSources"] = serde_json::json!([{
+                        "MediaStreams": [{
+                            "Type": "Audio", "Codec": "flac", "BitDepth": 24,
+                            "SampleRate": 96000, "Channels": 2, "BitRate": 3120000
+                        }]
+                    }]);
+                }
+                items.push(item);
+            }
+            serde_json::json!({ "Items": items, "TotalRecordCount": TRACKS }).to_string()
+        }
+
+        let mut essential_pages = Vec::new();
+        let mut quality_pages = Vec::new();
+        for start in (0..TRACKS).step_by(PAGE_SIZE as usize) {
+            let end = (start + u64::from(PAGE_SIZE)).min(TRACKS);
+            essential_pages.push(page(start, end, false));
+            quality_pages.push(page(start, end, true));
+        }
+        let essential_bytes = essential_pages.iter().map(String::len).max().unwrap_or(0);
+        let quality_bytes = quality_pages.iter().map(String::len).max().unwrap_or(0);
+        let mut parsed = 0usize;
+        let essential_started = std::time::Instant::now();
+        for json in &essential_pages {
+            let envelope: ItemsEnvelope<AudioDto> = serde_json::from_str(json).unwrap();
+            parsed += envelope.items.len();
+        }
+        let essential_elapsed = essential_started.elapsed();
+        let quality_started = std::time::Instant::now();
+        for json in &quality_pages {
+            let _: ItemsEnvelope<AudioDto> = serde_json::from_str(json).unwrap();
+        }
+        let quality_elapsed = quality_started.elapsed();
+        assert_eq!(parsed, TRACKS as usize);
+        assert!(essential_bytes < quality_bytes);
+        println!(
+            "H_JELLYFIN_METRIC tracks={TRACKS} pages=20 essential_max_bytes={essential_bytes} quality_max_bytes={quality_bytes} essential_parse_ms={} quality_parse_ms={}",
+            essential_elapsed.as_millis(),
+            quality_elapsed.as_millis(),
+        );
     }
 
     /// MP3 reports NO bit depth. Defaulting it to 16 would badge every lossy
@@ -707,7 +969,9 @@ mod tests {
                 { "Type": "Audio", "Codec": "mp3", "SampleRate": 44100, "Channels": 2 }
             ]}]
         });
-        let t = serde_json::from_value::<AudioDto>(json).unwrap().into_track();
+        let t = serde_json::from_value::<AudioDto>(json)
+            .unwrap()
+            .into_track();
         assert_eq!(t.bit_depth, None);
         assert_eq!(t.sample_rate_hz, Some(44100));
     }
@@ -717,7 +981,9 @@ mod tests {
     #[test]
     fn a_row_missing_its_tags_still_maps() {
         let json = serde_json::json!({ "Id": "bare", "Name": "Untitled" });
-        let t = serde_json::from_value::<AudioDto>(json).unwrap().into_track();
+        let t = serde_json::from_value::<AudioDto>(json)
+            .unwrap()
+            .into_track();
         assert_eq!(t.id, "bare");
         assert_eq!(t.artist, "");
         assert_eq!(t.track_number, None);
@@ -733,7 +999,9 @@ mod tests {
         let json = serde_json::json!({
             "Id": "a", "Name": "t", "AlbumArtist": "Various Artists", "Artists": []
         });
-        let t = serde_json::from_value::<AudioDto>(json).unwrap().into_track();
+        let t = serde_json::from_value::<AudioDto>(json)
+            .unwrap()
+            .into_track();
         assert_eq!(t.artist, "Various Artists");
         assert_eq!(t.album_artist, "Various Artists");
     }
@@ -741,7 +1009,10 @@ mod tests {
     #[test]
     fn image_urls_carry_no_credentials_and_bust_on_the_tag() {
         let with = image_url("http://h:8096", "alb", Some("deadbeef"), IMAGE_PX);
-        assert!(!with.contains("tok"), "a cover url must not carry the token");
+        assert!(
+            !with.contains("tok"),
+            "a cover url must not carry the token"
+        );
         assert!(with.contains("tag=deadbeef"));
         assert!(with.contains("maxWidth=256"));
         assert_eq!(
@@ -755,8 +1026,14 @@ mod tests {
     #[test]
     fn the_stream_url_asks_for_the_original_bytes_and_nothing_else() {
         let u = stream_url("http://h:8096/", "tok", "item42");
-        assert_eq!(u, "http://h:8096/Audio/item42/stream?static=true&api_key=tok");
-        assert!(!u.contains("audioCodec"), "a codec parameter IS a transcode");
+        assert_eq!(
+            u,
+            "http://h:8096/Audio/item42/stream?static=true&api_key=tok"
+        );
+        assert!(
+            !u.contains("audioCodec"),
+            "a codec parameter IS a transcode"
+        );
         assert!(!u.contains("audioBitRate"));
     }
 
