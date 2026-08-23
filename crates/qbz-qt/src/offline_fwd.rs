@@ -169,6 +169,22 @@ fn now_unix_secs() -> i64 {
         .as_secs() as i64
 }
 
+/// Whether full offline-cache tracks may be served inside the subscription
+/// grace window. Missing state fails open, matching the shared engine and the
+/// reference frontend: only an explicit expired verdict may hide playback.
+pub fn offline_playback_allowed() -> bool {
+    let now = now_unix_secs();
+    SUBSCRIPTION
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .as_ref()
+                .map(|store| store.offline_playback_allowed(now).unwrap_or(true))
+        })
+        .unwrap_or(true)
+}
+
 /// D4 producer: a successful login verdict. Clears any running grace clock.
 pub fn subscription_mark_valid() {
     let now = now_unix_secs();

@@ -5683,3 +5683,15 @@ msgstr "Du nutzt QBZ ohne Qobuz-Konto. Deine lokale Bibliothek und Downloads fun
 
 msgid "Continuous playback"
 msgstr "Kontinuierliche Wiedergabe"
+
+msgid "Open"
+msgstr "Öffnen"
+
+msgid "Folder view"
+msgstr "Ordneransicht"
+
+msgid "Open media"
+msgstr "Medium öffnen"
+
+msgid "Open folder…"
+msgstr "Ordner öffnen…"

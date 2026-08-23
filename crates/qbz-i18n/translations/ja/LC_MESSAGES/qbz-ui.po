@@ -5666,3 +5666,15 @@ msgstr "Qobuz アカウントなしで QBZ を使っています。ローカル�
 
 msgid "Continuous playback"
 msgstr "連続再生"
+
+msgid "Open"
+msgstr "開く"
+
+msgid "Folder view"
+msgstr "フォルダー表示"
+
+msgid "Open media"
+msgstr "メディアを開く"
+
+msgid "Open folder…"
+msgstr "フォルダーを開く…"

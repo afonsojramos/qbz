@@ -5700,3 +5700,15 @@ msgstr "Вы используете QBZ без аккаунта Qobuz. Лока�
 
 msgid "Continuous playback"
 msgstr "Непрерывное воспроизведение"
+
+msgid "Open"
+msgstr "Открыть"
+
+msgid "Folder view"
+msgstr "Просмотр папок"
+
+msgid "Open media"
+msgstr "Открыть медиафайл"
+
+msgid "Open folder…"
+msgstr "Открыть папку…"

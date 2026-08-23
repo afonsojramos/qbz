@@ -122,6 +122,13 @@ fn cached_ids() -> &'static StdMutex<HashSet<u64>> {
     CACHED_IDS.get_or_init(|| StdMutex::new(HashSet::new()))
 }
 
+/// Snapshot of the ready offline-cache ids. Playlist availability intersects
+/// this set with persisted playlist membership without holding the mutex over
+/// a database read.
+pub(crate) fn cached_ids_set() -> HashSet<u64> {
+    cached_ids().lock().map(|ids| ids.clone()).unwrap_or_default()
+}
+
 /// True if `track_id` has a ready offline copy. Used to seed each track row's
 /// cache status at document build time — the rows carry the id as a STRING, so
 /// this is the string-keyed front door onto [`is_cached_id`].

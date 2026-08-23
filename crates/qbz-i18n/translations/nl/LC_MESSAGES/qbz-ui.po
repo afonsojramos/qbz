@@ -5671,3 +5671,15 @@ msgstr "Je gebruikt QBZ zonder Qobuz-account. Je lokale bibliotheek en downloads
 
 msgid "Continuous playback"
 msgstr "Doorlopend afspelen"
+
+msgid "Open"
+msgstr "Openen"
+
+msgid "Folder view"
+msgstr "Mapweergave"
+
+msgid "Open media"
+msgstr "Media openen"
+
+msgid "Open folder…"
+msgstr "Map openen…"

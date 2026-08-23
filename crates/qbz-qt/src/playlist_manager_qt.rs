@@ -573,6 +573,17 @@ async fn load(runtime: &Runtime) -> PmData {
             Vec::new()
         })
     };
+    crate::playlist_snapshot_qt::record_names_detached(
+        remote
+            .iter()
+            .map(|playlist| crate::playlist_snapshot_qt::SnapshotNameEntry {
+                qobuz_playlist_id: playlist.id,
+                name: playlist.name.clone(),
+                owner: Some(playlist.owner.name.clone()).filter(|owner| !owner.is_empty()),
+                track_count: Some(playlist.tracks_count),
+            })
+            .collect(),
+    );
 
     let (folders, settings, play_counts, local_counts, locals, fav_ids) =
         tokio::task::spawn_blocking(|| {

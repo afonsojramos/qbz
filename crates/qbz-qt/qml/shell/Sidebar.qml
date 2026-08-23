@@ -413,7 +413,7 @@ Rectangle {
             hoverEnabled: navRow.isEnabled
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-                navFlyout.openBeside(navRow, navRow.section)
+                navFlyout.openBeside(navRow, navRow.section, root.mini)
                 // Opt-in "click lands on the first tab" — a no-op while the
                 // Appearance toggle is off, which is the default.
                 navFlyout.sectionClicked(navRow.section)
@@ -423,7 +423,7 @@ Rectangle {
                     // Hover-to-open; hovering another row overwrites the open
                     // menu (instant switch, single-open by construction).
                     navFlyout.triggerHovered = true
-                    navFlyout.openBeside(navRow, navRow.section)
+                    navFlyout.openBeside(navRow, navRow.section, root.mini)
                 } else if (navRow.section && navFlyout.openId === navRow.section.id) {
                     // Only the row owning the open menu clears the flag.
                     navFlyout.triggerHovered = false

@@ -181,35 +181,30 @@ pub fn teardown() {
 
 /// Fetch playlists (Qobuz) + folders + membership + hidden set (library.db).
 ///
-/// The Qobuz half is GATED on connectivity and, when refused, KEEPS whatever
-/// the cache already holds. That distinction is load-bearing: this function is
-/// also the body of `crate::reload_sidebar_including_local()`, the refresh verb
-/// every local mutation uses, and it runs offline by design. Attempting the
-/// fetch there would yield `Vec::new()` (the gate answers with an error), so
-/// hiding a local playlist after going offline mid-session would WIPE the
-/// Qobuz playlists out of the tree. The folders + locals reads below are
-/// unconditional — they are the whole sidebar for a user with no Qobuz account.
+/// Offline, the remote half is synthesized from local sidecars plus persisted
+/// playlist membership that intersects the ready download cache. This is what
+/// keeps only playable Qobuz playlists — and therefore only useful folders —
+/// visible across both a connectivity flip and a cold app restart.
 pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     let offline = crate::offline_fwd::engine().status().is_offline();
     let playlists: Vec<SidebarPlaylist> = if offline {
-        // Preserve, never substitute: an empty vector here is a WIPE, not a
-        // refresh. Empty on a cold offline start, which is correct — there is
-        // nothing to preserve yet.
-        let cached = CACHE
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|d| d.playlists.clone())
-            .unwrap_or_default();
-        log::info!(
-            "[qbz-qt] sidebar load: offline — Qobuz fetch skipped, {} cached playlist(s) kept",
-            cached.len()
-        );
-        cached
+        log::info!("[qbz-qt] sidebar load: offline — Qobuz fetch skipped");
+        Vec::new()
     } else {
         log::debug!("[qbz-qt] sidebar load: fetching user playlists");
         match runtime.core().get_user_playlists().await {
             Ok(pls) => {
+                crate::playlist_snapshot_qt::record_names_detached(
+                    pls.iter()
+                        .map(|playlist| crate::playlist_snapshot_qt::SnapshotNameEntry {
+                            qobuz_playlist_id: playlist.id,
+                            name: playlist.name.clone(),
+                            owner: Some(playlist.owner.name.clone())
+                                .filter(|owner| !owner.is_empty()),
+                            track_count: Some(playlist.tracks_count),
+                        })
+                        .collect(),
+                );
                 // Same response, second consumer: the playlist ownership /
                 // follow snapshot every PlaylistCard's tri-state overlay reads
                 // (`playlist_qt::set_user_playlists`). This is the earliest point
@@ -263,9 +258,63 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     };
 
     log::debug!("[qbz-qt] sidebar load: playlists fetch settled, reading folders");
-    let (folders, folder_map, positions, hidden_playlists) = folders_blocking();
+    let (folders, folder_map, positions, hidden_playlists, local_counts) = folders_blocking();
     log::debug!("[qbz-qt] sidebar load: folders read");
     let mut playlists = playlists;
+    if offline {
+        let prior: HashMap<u64, SidebarPlaylist> = CACHE
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|data| {
+                data.playlists
+                    .iter()
+                    .cloned()
+                    .map(|playlist| (playlist.id, playlist))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let headers = crate::playlist_snapshot_qt::headers_blocking();
+        let available = crate::playlist_snapshot_qt::available_offline_blocking();
+        let mut ids: Vec<u64> = local_counts
+            .iter()
+            .filter(|(_, count)| **count > 0)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in available {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids.sort_unstable();
+        for id in ids {
+            let local_count = local_counts.get(&id).copied().unwrap_or(0);
+            if let Some(mut cached) = prior.get(&id).cloned() {
+                if let Some((name, track_count)) = headers.get(&id) {
+                    cached.name = name.clone();
+                    cached.tracks_count = track_count.unwrap_or(local_count);
+                }
+                playlists.push(cached);
+                continue;
+            }
+            let (name, tracks_count) = headers
+                .get(&id)
+                .map(|(name, track_count)| (name.clone(), track_count.unwrap_or(local_count)))
+                .unwrap_or_else(|| {
+                    (
+                        qbz_i18n::t_args("Playlist ({} local)", &[&local_count.to_string()]),
+                        local_count,
+                    )
+                });
+            playlists.push(SidebarPlaylist {
+                id,
+                name,
+                tracks_count,
+                cover_urls: Vec::new(),
+                position: 0,
+            });
+        }
+    }
     for p in &mut playlists {
         // Assign, don't merge: a preserved cached row carries its previous
         // position, and a settings row that has since been deleted must reset
@@ -302,10 +351,16 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 
 /// library.db queries (folders.rs equivalents), run inline — rusqlite is
 /// sync but the three reads are tiny.
-fn folders_blocking() -> (Vec<(String, String)>, HashMap<u64, String>, HashMap<u64, i32>, HashSet<u64>) {
-    let Some(uid) = UserDataPaths::load_last_user_id() else {
-        return Default::default();
-    };
+fn folders_blocking() -> (
+    Vec<(String, String)>,
+    HashMap<u64, String>,
+    HashMap<u64, i32>,
+    HashSet<u64>,
+    HashMap<u64, u32>,
+) {
+    // Guest/offline-only users live in users/0, the same convention as every
+    // other Qt library.db accessor.
+    let uid = UserDataPaths::load_last_user_id().unwrap_or(0);
     let Some(path) = dirs::data_dir().map(|p| {
         p.join("qbz")
             .join("users")
@@ -339,7 +394,8 @@ fn folders_blocking() -> (Vec<(String, String)>, HashMap<u64, String>, HashMap<u
             hidden.insert(s.qobuz_playlist_id);
         }
     }
-    (folders, folder_map, positions, hidden)
+    let local_counts = db.get_all_playlist_local_track_counts().unwrap_or_default();
+    (folders, folder_map, positions, hidden, local_counts)
 }
 
 /// A Qobuz playlist's track count from the session cache (`sidebar.rs:389`).
@@ -388,6 +444,7 @@ pub fn rebuild() -> Vec<SidebarEntry> {
     let expanded = EXPANDED.lock().unwrap().clone();
     let query = SEARCH.lock().unwrap().clone();
     let searching = !query.is_empty();
+    let offline = crate::offline_fwd::engine().status().is_offline();
     let folder_ids: HashSet<&String> = data.folders.iter().map(|f| &f.0).collect();
 
     let sorted = sort_playlists(&data.playlists);
@@ -445,8 +502,10 @@ pub fn rebuild() -> Vec<SidebarEntry> {
                 .filter(|p| local_matches(p))
                 .collect(),
         );
-        // While searching, skip folders with nothing matching in EITHER set.
-        if searching && members.is_empty() && local_members.is_empty() {
+        // Search hides empty result branches. Offline mode additionally hides
+        // folders with no playable member; Playlist Manager still reads every
+        // folder directly from library.db and therefore remains complete.
+        if (searching || offline) && members.is_empty() && local_members.is_empty() {
             continue;
         }
         // When searching, force-expand so matches inside are visible.

@@ -125,8 +125,8 @@ Item {
         // Discover — glyph-less rows (Slint has-glyph: false).
         var discover = [
             { "label": nav.trs("Home"), "icon": "", "view": "home", "tab": "home", "enabled": true },
-            { "label": nav.trs("Editor's Picks"), "icon": "", "view": "home", "tab": "editorPicks", "enabled": true },
-            { "label": nav.trs("For You"), "icon": "", "view": "home", "tab": "forYou", "enabled": true }
+            { "label": nav.trs("For You"), "icon": "", "view": "home", "tab": "forYou", "enabled": true },
+            { "label": nav.trs("Editor's Picks"), "icon": "", "view": "home", "tab": "editorPicks", "enabled": true }
         ]
         if (reco) {
             discover.push({ "label": nav.trs("Recommendations"), "icon": "", "view": "home", "tab": "recommendations", "enabled": true })
@@ -161,19 +161,18 @@ Item {
                 "label": nav.trs("Local Library"),
                 "qobuz": false,
                 "enabled": true,
-                // The `Open` entry is APPENDED, not marked enabled:false —
-                // a disabled row still renders (NavFlyout.qml:329,364), and a
-                // permanently greyed "Open" would advertise a tab that mostly
-                // does not exist. `localEphemeralActive` is the same flag the
-                // tab bar and the pane read.
                 "entries": [
                     { "label": nav.trs("Albums"), "icon": "disc", "view": "local", "tab": "albums", "enabled": true },
                     { "label": nav.trs("Artists"), "icon": "user", "view": "local", "tab": "artists", "enabled": true },
-                    { "label": nav.trs("Folders"), "icon": "folder", "view": "local", "tab": "folders", "enabled": true },
-                    { "label": nav.trs("Tracks"), "icon": "music", "view": "local", "tab": "tracks", "enabled": true }
-                ].concat(QbzLocal.localEphemeralActive
-                    ? [{ "label": QbzLocal.localEphemeralLabel, "icon": "folder-open", "view": "local", "tab": "ephemeral", "enabled": true }]
-                    : [])
+                    { "label": nav.trs("Tracks"), "icon": "music", "view": "local", "tab": "tracks", "enabled": true },
+                    { "label": QbzSession.offline ? nav.trs("Folder view") : nav.trs("Folders"),
+                      "icon": "folder", "view": "local", "tab": "folders", "enabled": true },
+                    { "label": QbzLocal.localEphemeralActive
+                                   ? QbzLocal.localEphemeralLabel
+                                   : (QbzSession.offline ? nav.trs("Open media") : nav.trs("Open")),
+                      "icon": "folder-open", "view": "", "tab": "", "enabled": true,
+                      "submenu": nav.openMediaEntries() }
+                ]
             },
             {
                 "id": "myqbz",
@@ -205,6 +204,32 @@ Item {
                 ]
             }
         ]
+    }
+
+    /// Second-level catalog for Local Library > Open. When a medium already
+    /// exists its own row returns to it and Close is appended; all three open
+    /// verbs remain available so replacing one medium never needs an extra
+    /// navigation round trip.
+    function openMediaEntries() {
+        var entries = []
+        if (QbzLocal.localEphemeralActive) {
+            entries.push({ "label": QbzLocal.localEphemeralLabel,
+                           "icon": "folder-open", "view": "local",
+                           "tab": "ephemeral", "enabled": true })
+        }
+        entries.push(
+            { "label": nav.trs("Open folder…"), "icon": "folder-open",
+              "view": "", "tab": "", "action": "openFolder", "enabled": true },
+            { "label": nav.trs("Open audio CD"), "icon": "disc",
+              "view": "", "tab": "", "action": "openCd", "enabled": true },
+            { "label": nav.trs("Open SACD image…"), "icon": "disc-3",
+              "view": "", "tab": "", "action": "openSacd", "enabled": true })
+        if (QbzLocal.localEphemeralActive) {
+            entries.push({ "label": nav.trs("Close"), "icon": "x",
+                           "view": "", "tab": "", "action": "closeMedia",
+                           "enabled": true })
+        }
+        return entries
     }
 
     // Which section owns the highlight, derived from the LIVE view (both hosts
@@ -252,12 +277,13 @@ Item {
         panel.show(section, withTitle === true, trigger.mapToItem(nav, 0, 0).x, nav.dropdownY)
     }
 
-    // Sidebar form: menu to the RIGHT of the row (+6px), aligned to its top,
-    // always headed by the section name (Sidebar.slint:590).
-    function openBeside(trigger, section) {
+    // Sidebar form: menu to the RIGHT of the row (+6px), aligned to its top.
+    // The expanded row already names the section, while the compact icon does
+    // not; callers pass that visible-text fact explicitly.
+    function openBeside(trigger, section, withTitle) {
         if (!section || section.enabled === false) return
         var p = trigger.mapToItem(nav, trigger.width + 6, 0)
-        panel.show(section, true, p.x, p.y)
+        panel.show(section, withTitle === true, p.x, p.y)
     }
 
     function closeMenu() { panel.close() }
@@ -272,8 +298,26 @@ Item {
     // per route, crates/qbz/src/main.rs:18026-18046). Entries without one
     // (Collections, Mixtapes) are a plain section navigation.
     function activate(entry) {
+        if (entry && entry.submenu) return
         panel.close()
-        if (!entry || entry.enabled === false || entry.view === "") return
+        if (!entry || entry.enabled === false) return
+        if (entry.action === "openFolder") {
+            QbzLocal.ephemeralOpen()
+            return
+        }
+        if (entry.action === "openCd") {
+            QbzLocal.ephemeralOpenCd()
+            return
+        }
+        if (entry.action === "openSacd") {
+            QbzLocal.ephemeralOpenSacd()
+            return
+        }
+        if (entry.action === "closeMedia") {
+            QbzLocal.ephemeralClear()
+            return
+        }
+        if (entry.view === "") return
         if (entry.tab && entry.tab !== "")
             QbzShell.navigateToTab(entry.view, entry.tab)
         else
@@ -356,12 +400,22 @@ Item {
             }
             Text {
                 height: parent.height
-                width: parent.width - (row.entry && row.entry.icon !== "" ? 23 : 0)
+                width: parent.width
+                    - (row.entry && row.entry.icon !== "" ? 23 : 0)
+                    - (row.entry && row.entry.submenu ? 19 : 0)
                 text: row.entry ? row.entry.label : ""
                 color: theme.textSecondary
                 font.pixelSize: 13
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight
+            }
+            QbzIcon {
+                visible: row.entry && row.entry.submenu
+                width: visible ? 11 : 0
+                height: 11
+                anchors.verticalCenter: parent.verticalCenter
+                name: "chevron-right"
+                tintName: "muted"
             }
         }
 
@@ -371,13 +425,27 @@ Item {
             enabled: row.rowEnabled
             hoverEnabled: row.rowEnabled
             cursorShape: Qt.PointingHandCursor
-            onClicked: nav.activate(row.entry)
+            onClicked: {
+                if (row.entry && row.entry.submenu)
+                    panel.openCascade(row, row.entry)
+                else
+                    nav.activate(row.entry)
+            }
             // Per-row hover keeps the idle timer paused while the cursor RESTS
             // on a row (the panel-body tracker below never sees it — the row
             // is on top of it).
             onContainsMouseChanged: {
-                if (containsMouse) panel.hoveredRow = row.rowIndex
-                else if (panel.hoveredRow === row.rowIndex) panel.hoveredRow = -1
+                if (containsMouse) {
+                    panel.hoveredRow = row.rowIndex
+                    if (row.entry && row.entry.submenu)
+                        panel.openCascade(row, row.entry)
+                    else
+                        panel.scheduleCascadeClose()
+                } else {
+                    if (panel.hoveredRow === row.rowIndex) panel.hoveredRow = -1
+                    if (panel.cascadeAnchorRow === row.rowIndex)
+                        panel.scheduleCascadeClose()
+                }
             }
         }
     }
@@ -400,15 +468,38 @@ Item {
         property int hoveredRow: -1
         // True while the pointer rests on the panel BODY (padding/gaps).
         property bool bodyHovered: false
+        // The cascade remains live while the pointer crosses the panel edge.
+        // 280ms is long enough for a diagonal move but short enough that an
+        // abandoned submenu does not become perennial.
+        property int cascadeAnchorRow: -1
+        property bool cascadeGrace: false
         // Pointer anywhere on the menu, or on the trigger that owns it — the
         // idle countdown is paused while this holds.
         readonly property bool menuHovered:
             bodyHovered || hoveredRow >= 0 || nav.triggerHovered
+            || cascade.menuHovered || cascadeGrace
+
+        function openCascade(row, entry) {
+            cascadeClose.stop()
+            panel.cascadeGrace = false
+            panel.cascadeAnchorRow = row.rowIndex
+            cascade.entries = entry.submenu || []
+            cascade.x = panel.width - 2
+            cascade.y = row.mapToItem(panel.contentItem, 0, 0).y
+            if (!cascade.visible) cascade.open()
+        }
+
+        function scheduleCascadeClose() {
+            if (!cascade.visible) return
+            panel.cascadeGrace = true
+            cascadeClose.restart()
+        }
 
         function show(section, withTitle, px, py) {
             // Switching sections: drop stale hover state (the new rows have
             // not reported yet), exactly like the Slint `changed open-index`.
             if (panel.sectionId !== section.id) panel.hoveredRow = -1
+            if (panel.sectionId !== section.id) cascade.close()
             panel.sectionId = section.id
             panel.title = withTitle ? section.label : ""
             panel.entries = section.entries
@@ -421,6 +512,9 @@ Item {
             panel.sectionId = ""
             panel.hoveredRow = -1
             panel.bodyHovered = false
+            panel.cascadeAnchorRow = -1
+            panel.cascadeGrace = false
+            cascade.close()
             nav.triggerHovered = false
         }
 
@@ -476,6 +570,120 @@ Item {
                     required property int index
                     entry: modelData
                     rowIndex: index
+                }
+            }
+        }
+
+        Timer {
+            id: cascadeClose
+            interval: 280
+            repeat: false
+            onTriggered: {
+                panel.cascadeGrace = false
+                if (panel.cascadeAnchorRow !== panel.hoveredRow && !cascade.menuHovered)
+                    cascade.close()
+            }
+        }
+
+        // Child Popup, not a sibling: presses inside it count as part of the
+        // menu family for CloseOnPressOutside, and closing the parent tears it
+        // down automatically. The panels overlap by 2px so there is no dead
+        // seam; the timer above tolerates diagonal pointer travel.
+        Popup {
+            id: cascade
+            width: 224
+            padding: 0
+            topPadding: 6
+            bottomPadding: 6
+            height: 12 + cascade.entries.length * 32
+            closePolicy: Popup.NoAutoClose
+
+            property var entries: []
+            property int hoveredRow: -1
+            property bool bodyHovered: false
+            readonly property bool menuHovered: bodyHovered || hoveredRow >= 0
+
+            onClosed: {
+                cascade.entries = []
+                cascade.hoveredRow = -1
+                cascade.bodyHovered = false
+                panel.cascadeAnchorRow = -1
+            }
+
+            background: Rectangle {
+                color: theme.surfaceMain
+                radius: theme.radiusSm
+                border.width: 1
+                border.color: theme.borderMuted
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onContainsMouseChanged: {
+                        cascade.bodyHovered = containsMouse
+                        if (containsMouse) {
+                            cascadeClose.stop()
+                            panel.cascadeGrace = false
+                        } else {
+                            panel.scheduleCascadeClose()
+                        }
+                    }
+                    onClicked: {}
+                }
+            }
+
+            contentItem: Column {
+                Repeater {
+                    model: cascade.entries
+                    delegate: Rectangle {
+                        id: cascadeRow
+                        required property var modelData
+                        required property int index
+                        width: parent ? parent.width : 0
+                        height: 32
+                        color: cascadeArea.containsMouse ? theme.surfaceHover : "transparent"
+
+                        Row {
+                            anchors.fill: parent
+                            anchors.leftMargin: 14
+                            anchors.rightMargin: 14
+                            spacing: 9
+                            QbzIcon {
+                                width: 14
+                                height: 14
+                                anchors.verticalCenter: parent.verticalCenter
+                                name: cascadeRow.modelData.icon || ""
+                                tintName: "secondary"
+                            }
+                            Text {
+                                width: parent.width - 23
+                                height: parent.height
+                                text: cascadeRow.modelData.label || ""
+                                color: theme.textSecondary
+                                font.pixelSize: 13
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        MouseArea {
+                            id: cascadeArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: nav.activate(cascadeRow.modelData)
+                            onContainsMouseChanged: {
+                                if (containsMouse) {
+                                    cascade.hoveredRow = cascadeRow.index
+                                    cascadeClose.stop()
+                                    panel.cascadeGrace = false
+                                } else {
+                                    if (cascade.hoveredRow === cascadeRow.index)
+                                        cascade.hoveredRow = -1
+                                    panel.scheduleCascadeClose()
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

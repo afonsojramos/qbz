@@ -290,6 +290,7 @@ mod playlist_import_qt;
 // #[cxx_qt::bridge], so they must NOT appear in build.rs's rust_files.
 mod playlist_manager_ops;
 mod playlist_manager_qt;
+mod playlist_snapshot_qt;
 mod playlist_manager_rows;
 // The SHARED playlist editor's controller (rename · description ·
 // offline-only · delete), driven from the manager's three delegates, the

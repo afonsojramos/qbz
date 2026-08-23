@@ -5681,3 +5681,15 @@ msgstr "Você está usando o QBZ sem conta Qobuz. Sua biblioteca local e seus do
 
 msgid "Continuous playback"
 msgstr "Reprodução contínua"
+
+msgid "Open"
+msgstr "Abrir"
+
+msgid "Folder view"
+msgstr "Vista de pastas"
+
+msgid "Open media"
+msgstr "Abrir mídia"
+
+msgid "Open folder…"
+msgstr "Abrir pasta…"

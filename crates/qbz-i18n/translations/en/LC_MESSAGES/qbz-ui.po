@@ -1207,3 +1207,15 @@ msgstr "No track matches that."
 
 msgid "Continuous playback"
 msgstr "Continuous playback"
+
+msgid "Open"
+msgstr "Open"
+
+msgid "Folder view"
+msgstr "Folder view"
+
+msgid "Open media"
+msgstr "Open media"
+
+msgid "Open folder…"
+msgstr "Open folder…"

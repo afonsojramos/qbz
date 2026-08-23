@@ -983,6 +983,12 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
     // `take` (not clone): the header helpers below still need `&pl`, and the
     // track list is the heavy half of the response.
     let tracks = pl.tracks.take().map(|c| c.items).unwrap_or_default();
+    crate::playlist_snapshot_qt::record_detail_detached(
+        playlist_id,
+        pl.name.clone(),
+        pl.owner.name.clone(),
+        tracks.iter().map(|track| track.id).collect(),
+    );
     // Header artwork, two arms — 1:1 with the cards (PlaylistCard.qml):
     // the playlist's OWN graphic, else the member-cover mosaic. `images[0]`
     // (and the first track's sleeve) is a MEMBER-ALBUM cover: binding it
