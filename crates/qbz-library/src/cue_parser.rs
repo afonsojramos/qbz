@@ -67,7 +67,7 @@ pub struct CueParser;
 impl CueParser {
     /// Parse a CUE file
     pub fn parse(cue_path: &Path) -> Result<CueSheet, LibraryError> {
-        log::debug!("Parsing CUE file: {}", cue_path.display());
+        log::debug!("Parsing CUE sheet");
 
         // Try UTF-8 first, then fall back to Latin-1
         let content = fs::read_to_string(cue_path).or_else(|_| {
@@ -180,11 +180,7 @@ impl CueParser {
             ));
         }
 
-        log::info!(
-            "Parsed CUE: {} tracks, audio file: {}",
-            sheet.tracks.len(),
-            sheet.audio_file
-        );
+        log::info!("Parsed CUE: {} tracks", sheet.tracks.len());
 
         Ok(sheet)
     }

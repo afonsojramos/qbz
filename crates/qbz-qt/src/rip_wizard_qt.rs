@@ -362,7 +362,9 @@ pub async fn after_rip(action: &str, destination: &std::path::Path, folder_id: i
             .ok()
             .flatten();
             match added {
-                Some(id) => crate::settings_qt::library::scan(Some(id)),
+                Some(id) => {
+                    crate::settings_qt::library::scan(Some(id));
+                }
                 None => crate::toast_qt::error(qbz_i18n::t("Couldn't add that folder to the library")),
             }
         }

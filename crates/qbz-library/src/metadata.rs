@@ -583,7 +583,7 @@ impl MetadataExtractor {
         file_path: &Path,
         library_roots: &[PathBuf],
     ) -> Result<LocalTrack, LibraryError> {
-        log::debug!("Extracting metadata from: {}", file_path.display());
+        log::debug!("Extracting audio metadata");
 
         // DSD containers aren't lofty-readable: qbz-dsd demuxes them (tech
         // props + embedded ID3v2 for DSF; trailing ID3 for DFF when present).
@@ -897,7 +897,7 @@ impl MetadataExtractor {
             return match generate_thumbnail_from_bytes(&art, &cache_key) {
                 Ok(thumbnail_path) => Some(thumbnail_path.to_string_lossy().to_string()),
                 Err(e) => {
-                    log::warn!("Failed to generate DSD thumbnail for {:?}: {}", file_path, e);
+                    log::warn!("Failed to generate DSD thumbnail: {}", e);
                     None
                 }
             };
@@ -915,7 +915,7 @@ impl MetadataExtractor {
         match generate_thumbnail_from_bytes(picture.data(), &cache_key) {
             Ok(thumbnail_path) => Some(thumbnail_path.to_string_lossy().to_string()),
             Err(e) => {
-                log::warn!("Failed to generate thumbnail for {:?}: {}", file_path, e);
+                log::warn!("Failed to generate embedded-art thumbnail: {}", e);
                 None
             }
         }
@@ -951,7 +951,7 @@ impl MetadataExtractor {
         match generate_thumbnail(artwork_path) {
             Ok(thumbnail_path) => Some(thumbnail_path.to_string_lossy().to_string()),
             Err(e) => {
-                log::warn!("Failed to generate thumbnail for {:?}: {}", artwork_path, e);
+                log::warn!("Failed to generate folder-art thumbnail: {}", e);
                 None
             }
         }

@@ -695,9 +695,9 @@ pub async fn toggle_folder_enabled(id: i64) {
 /// Progress rides the statics; a 2 s ticker republishes the settings document
 /// while the scan runs (the document is the only transport this port has, and
 /// republishing per FILE would rebuild the whole snapshot thousands of times).
-pub fn scan(folder_id: Option<i64>) {
+pub fn scan(folder_id: Option<i64>) -> bool {
     if SCANNING.swap(true, Ordering::SeqCst) {
-        return;
+        return false;
     }
     CANCEL.store(false, Ordering::SeqCst);
     PROCESSED.store(0, Ordering::SeqCst);
@@ -747,6 +747,13 @@ pub fn scan(folder_id: Option<i64>) {
                 // (:744-775).
                 ScanEvent::Finished { status, errors } => {
                     let n = errors.len();
+                    if CLEANING.load(Ordering::SeqCst) {
+                        *CLEANUP_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = match &status {
+                            qbz_library::ScanStatus::Complete => qbz_i18n::t("Scan complete"),
+                            qbz_library::ScanStatus::Cancelled => qbz_i18n::t("Scan cancelled"),
+                            _ => qbz_i18n::t("Cleanup failed."),
+                        };
+                    }
                     match status {
                         qbz_library::ScanStatus::Complete if n > 0 => {
                             log::warn!("[qbz-qt] library scan finished with {n} errors");
@@ -780,17 +787,23 @@ pub fn scan(folder_id: Option<i64>) {
                 &on_event,
             ) {
                 log::error!("[qbz-qt] library scan failed: {e}");
+                if CLEANING.load(Ordering::SeqCst) {
+                    *CLEANUP_STATUS.lock().unwrap_or_else(|e| e.into_inner()) =
+                        qbz_i18n::t("Cleanup failed.");
+                }
                 set_status(qbz_i18n::t("Scan failed."));
             }
         })
         .await;
 
         SCANNING.store(false, Ordering::SeqCst);
+        CLEANING.store(false, Ordering::SeqCst);
         *CURRENT_FILE.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
         crate::local_catalog_qt::request_catch_up();
         refresh_browse();
         super::publish_snapshot().await;
     });
+    true
 }
 
 /// "Stop" — checked at every file boundary by the shared engine.
@@ -811,52 +824,11 @@ pub async fn cleanup_missing() {
     }
     *CLEANUP_STATUS.lock().unwrap_or_else(|e| e.into_inner()) =
         qbz_i18n::t("Scanning track paths...");
-    super::publish_snapshot().await;
-
-    let result = tokio::task::spawn_blocking(|| {
-        let paths = crate::local_state::with_db(|db| db.get_all_track_paths())?;
-        let skip: Vec<String> = crate::local_state::with_db(|db| db.get_folders_with_metadata())
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|f| f.is_network && std::fs::read_dir(&f.path).is_err())
-            .map(|f| {
-                if f.path.ends_with('/') {
-                    f.path
-                } else {
-                    format!("{}/", f.path)
-                }
-            })
-            .collect();
-        let checked = paths.len();
-        let missing: Vec<i64> = paths
-            .into_iter()
-            .filter(|(_, p)| {
-                !skip.iter().any(|pre| p.starts_with(pre.as_str()))
-                    && !std::path::Path::new(p).exists()
-            })
-            .map(|(id, _)| id)
-            .collect();
-        let mut removed = 0usize;
-        for chunk in missing.chunks(500) {
-            removed += crate::local_state::with_db(|db| db.delete_tracks_by_ids(chunk)).unwrap_or(0);
-        }
-        Some((checked, removed))
-    })
-    .await
-    .ok()
-    .flatten();
-
-    *CLEANUP_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = match result {
-        Some((checked, removed)) => qbz_i18n::t("Checked {} tracks, removed {}")
-            .replacen("{}", &checked.to_string(), 1)
-            .replacen("{}", &removed.to_string(), 1),
-        None => qbz_i18n::t("Cleanup failed."),
-    };
-    CLEANING.store(false, Ordering::SeqCst);
-    if result.is_some() {
-        crate::local_catalog_qt::request_catch_up();
+    if !scan(None) {
+        CLEANING.store(false, Ordering::SeqCst);
+        *CLEANUP_STATUS.lock().unwrap_or_else(|e| e.into_inner()) =
+            qbz_i18n::t("Scan failed.");
     }
-    refresh_browse();
     super::publish_snapshot().await;
 }
 

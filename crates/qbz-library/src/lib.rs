@@ -44,6 +44,7 @@ mod scanner;
 mod tag_writer;
 mod tag_sidecar;
 mod thumbnails;
+mod watcher;
 
 // Re-exports
 pub use cue_parser::{cue_to_tracks, CueParser, CueSheet, CueTime, CueTrack};
@@ -61,13 +62,17 @@ pub use tag_writer::{
     compute_track_artist_match, write_album_tags_to_files, write_purchase_tags, AlbumTagWrite,
     PurchaseTagWrite, TrackTagWrite,
 };
-pub use scanner::{LibraryScanner, ScanResult};
+pub use scanner::{
+    LibraryScanner, ScanEntry, ScanFileKind, ScanResult, ScanStream, ScanWalkError,
+    SymlinkPolicy,
+};
 pub use thumbnails::{
     clear_thumbnails, generate_thumbnail, generate_thumbnail_from_bytes, get_cache_size,
     get_or_generate_large_thumbnail, get_or_generate_large_thumbnail_from_bytes,
     get_or_generate_thumbnail, get_thumbnail_path, get_thumbnails_dir, thumbnail_exists,
     LARGE_ART_PX,
 };
+pub use watcher::{LocalRootWatcher, RootWatchEvent};
 
 // Re-export database module for backwards compatibility
 pub mod database_exports {

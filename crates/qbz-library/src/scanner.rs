@@ -6,10 +6,94 @@ use walkdir::WalkDir;
 use crate::LibraryError;
 
 /// Supported audio file extensions
-const SUPPORTED_AUDIO_EXTENSIONS: &[&str] = &["flac", "m4a", "wav", "aiff", "aif", "ape", "mp3", "dsf", "dff"];
+const SUPPORTED_AUDIO_EXTENSIONS: &[&str] = &[
+    "flac", "m4a", "wav", "aiff", "aif", "ape", "mp3", "dsf", "dff",
+];
 
 /// CUE file extension
 const CUE_EXTENSION: &str = "cue";
+
+/// Explicit symlink policy for a root. The compatibility default follows
+/// links, but WalkDir's loop detector remains enabled and every loop/error is
+/// surfaced to the caller; there is no silent `filter_map(Result::ok)` path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymlinkPolicy {
+    Ignore,
+    FollowWithCycleDetection,
+}
+
+impl Default for SymlinkPolicy {
+    fn default() -> Self {
+        Self::FollowWithCycleDetection
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanFileKind {
+    Audio,
+    Cue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanEntry {
+    pub path: PathBuf,
+    pub kind: ScanFileKind,
+}
+
+/// A traversal error tied to the path/subtree WalkDir could not enumerate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanWalkError {
+    pub path: Option<PathBuf>,
+    pub subtree: PathBuf,
+    pub message: String,
+}
+
+pub struct ScanStream {
+    root: PathBuf,
+    inner: walkdir::IntoIter,
+}
+
+impl Iterator for ScanStream {
+    type Item = Result<ScanEntry, ScanWalkError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let entry = match self.inner.next()? {
+                Ok(entry) => entry,
+                Err(error) => {
+                    let path = error.path().map(Path::to_path_buf);
+                    let subtree = error
+                        .loop_ancestor()
+                        .map(Path::to_path_buf)
+                        .or_else(|| path.clone())
+                        .unwrap_or_else(|| self.root.clone());
+                    return Some(Err(ScanWalkError {
+                        path,
+                        subtree,
+                        message: error.to_string(),
+                    }));
+                }
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let Some(ext) = entry.path().extension().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let kind = if LibraryScanner::is_supported_audio_extension(&ext.to_lowercase()) {
+                ScanFileKind::Audio
+            } else if ext.eq_ignore_ascii_case(CUE_EXTENSION) {
+                ScanFileKind::Cue
+            } else {
+                continue;
+            };
+            return Some(Ok(ScanEntry {
+                path: entry.into_path(),
+                kind,
+            }));
+        }
+    }
+}
 
 /// Result of scanning a directory
 #[derive(Debug, Default)]
@@ -29,6 +113,38 @@ impl LibraryScanner {
         Self
     }
 
+    /// Enumerate one root lazily in deterministic depth-first order.
+    pub fn stream_directory(&self, path: &Path) -> Result<ScanStream, LibraryError> {
+        self.stream_directory_with_policy(path, SymlinkPolicy::default())
+    }
+
+    pub fn stream_directory_with_policy(
+        &self,
+        path: &Path,
+        policy: SymlinkPolicy,
+    ) -> Result<ScanStream, LibraryError> {
+        if !path.exists() {
+            return Err(LibraryError::InvalidPath(format!(
+                "Path does not exist: {}",
+                path.display()
+            )));
+        }
+        if !path.is_dir() {
+            return Err(LibraryError::InvalidPath(format!(
+                "Path is not a directory: {}",
+                path.display()
+            )));
+        }
+        let follow = policy == SymlinkPolicy::FollowWithCycleDetection;
+        Ok(ScanStream {
+            root: path.to_path_buf(),
+            inner: WalkDir::new(path)
+                .follow_links(follow)
+                .sort_by_file_name()
+                .into_iter(),
+        })
+    }
+
     /// Scan a directory recursively for audio and CUE files
     pub fn scan_directory(&self, path: &Path) -> Result<ScanResult, LibraryError> {
         if !path.exists() {
@@ -46,32 +162,16 @@ impl LibraryScanner {
         }
 
         let mut result = ScanResult::default();
-
-        for entry in WalkDir::new(path)
-            .follow_links(true)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-
-            if !path.is_file() {
-                continue;
-            }
-
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                let ext_lower = ext.to_lowercase();
-
-                if Self::is_supported_audio_extension(&ext_lower) {
-                    result.audio_files.push(path.to_path_buf());
-                } else if ext_lower == CUE_EXTENSION {
-                    result.cue_files.push(path.to_path_buf());
-                }
+        for entry in self.stream_directory(path)? {
+            let entry = entry.map_err(|error| LibraryError::Other(error.message))?;
+            match entry.kind {
+                ScanFileKind::Audio => result.audio_files.push(entry.path),
+                ScanFileKind::Cue => result.cue_files.push(entry.path),
             }
         }
 
         log::info!(
-            "Scanned {}: found {} audio files, {} CUE files",
-            path.display(),
+            "Filesystem scan complete: {} audio files, {} CUE files",
             result.audio_files.len(),
             result.cue_files.len()
         );

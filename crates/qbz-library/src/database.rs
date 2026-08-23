@@ -2,6 +2,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
+use std::time::Duration;
 
 use crate::{AudioFormat, FolderTreeEntry, LibraryError, LocalAlbum, LocalArtist, LocalTrack};
 
@@ -57,10 +58,12 @@ fn remote_source_filter(sources: &[&str]) -> String {
 impl LibraryDatabase {
     /// Open or create database at path
     pub fn open(db_path: &Path) -> Result<Self, LibraryError> {
-        log::info!("Opening library database at: {}", db_path.display());
+        log::info!("Opening library database");
 
         let conn = Connection::open(db_path)
             .map_err(|e| LibraryError::Database(format!("Failed to open database: {}", e)))?;
+        conn.busy_timeout(Duration::from_millis(2_500))
+            .map_err(|e| LibraryError::Database(format!("Failed to set busy timeout: {}", e)))?;
 
         // Enable WAL mode for better concurrent access
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
@@ -128,6 +131,47 @@ impl LibraryDatabase {
             CREATE INDEX IF NOT EXISTS idx_tracks_title ON local_tracks(title);
             CREATE INDEX IF NOT EXISTS idx_local_tracks_album_lookup
                 ON local_tracks(album, album_artist, artist);
+
+            -- Incremental scanner state. `local_tracks` remains authoritative;
+            -- these tables only remember what each root observed and whether
+            -- a completed generation is allowed to prune stale rows.
+            CREATE TABLE IF NOT EXISTS local_scan_roots (
+                root_id INTEGER PRIMARY KEY,
+                generation INTEGER NOT NULL DEFAULT 0,
+                phase TEXT NOT NULL DEFAULT 'idle',
+                checkpoint_path TEXT NOT NULL DEFAULT '',
+                discovered INTEGER NOT NULL DEFAULT 0,
+                processed INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'idle',
+                prune_authorized INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS local_scan_files (
+                root_id INTEGER NOT NULL,
+                file_path TEXT NOT NULL,
+                file_kind TEXT NOT NULL CHECK (file_kind IN ('audio','cue')),
+                file_id TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL,
+                dependency_fingerprint TEXT NOT NULL DEFAULT '',
+                cue_audio_path TEXT,
+                extraction_ok INTEGER NOT NULL DEFAULT 1,
+                observed_generation INTEGER NOT NULL,
+                PRIMARY KEY (root_id, file_path, file_kind)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_local_scan_files_generation
+                ON local_scan_files(root_id, observed_generation, file_kind, file_path);
+
+            -- CUE references are generation-scoped and disk-backed so a pass
+            -- never needs a HashSet containing every referenced audio path.
+            CREATE TABLE IF NOT EXISTS local_scan_cue_refs (
+                root_id INTEGER NOT NULL,
+                generation INTEGER NOT NULL,
+                audio_path TEXT NOT NULL,
+                PRIMARY KEY (root_id, generation, audio_path)
+            );
 
             -- Playlist folders (local organization for Qobuz playlists)
             CREATE TABLE IF NOT EXISTS playlist_folders (
@@ -916,6 +960,26 @@ impl LibraryDatabase {
 
     /// Remove a folder from the library
     pub fn remove_folder(&self, path: &str) -> Result<(), LibraryError> {
+        let root_id = self
+            .conn
+            .query_row(
+                "SELECT id FROM library_folders WHERE path = ?",
+                params![path],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        if let Some(root_id) = root_id {
+            self.conn
+                .execute("DELETE FROM local_scan_files WHERE root_id = ?", params![root_id])
+                .map_err(|e| LibraryError::Database(e.to_string()))?;
+            self.conn
+                .execute("DELETE FROM local_scan_cue_refs WHERE root_id = ?", params![root_id])
+                .map_err(|e| LibraryError::Database(e.to_string()))?;
+            self.conn
+                .execute("DELETE FROM local_scan_roots WHERE root_id = ?", params![root_id])
+                .map_err(|e| LibraryError::Database(e.to_string()))?;
+        }
         self.conn
             .execute("DELETE FROM library_folders WHERE path = ?", params![path])
             .map_err(|e| LibraryError::Database(e.to_string()))?;
@@ -1086,6 +1150,15 @@ impl LibraryDatabase {
                 params![new_path, id],
             )
             .map_err(|e| LibraryError::Database(e.to_string()))?;
+        self.conn
+            .execute("DELETE FROM local_scan_files WHERE root_id = ?", params![id])
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        self.conn
+            .execute("DELETE FROM local_scan_cue_refs WHERE root_id = ?", params![id])
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        self.conn
+            .execute("DELETE FROM local_scan_roots WHERE root_id = ?", params![id])
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
         Ok(())
     }
 
@@ -1106,6 +1179,25 @@ impl LibraryDatabase {
 
     /// Insert or update a track (skips if file is already a Qobuz cached track)
     pub fn insert_track(&self, track: &LocalTrack) -> Result<i64, LibraryError> {
+        let is_network_mount = crate::mount_info::is_network_path(Path::new(&track.file_path));
+        self.insert_track_with_mount_hint(track, is_network_mount)
+    }
+
+    /// Scanner-only insert path. Mount classification is a property of the
+    /// root and is computed once before enumeration, not once per track.
+    pub(crate) fn insert_scanned_track(
+        &self,
+        track: &LocalTrack,
+        is_network_mount: bool,
+    ) -> Result<i64, LibraryError> {
+        self.insert_track_with_mount_hint(track, is_network_mount)
+    }
+
+    fn insert_track_with_mount_hint(
+        &self,
+        track: &LocalTrack,
+        is_network_mount: bool,
+    ) -> Result<i64, LibraryError> {
         // Don't overwrite Qobuz cached tracks with scanned data
         if self.is_qobuz_cached_track_by_path(&track.file_path)? {
             log::debug!(
@@ -1139,15 +1231,6 @@ impl LibraryDatabase {
         } else {
             "user"
         };
-
-        // Detect whether the audio file sits on a network-backed
-        // filesystem. Done per-insert instead of per-scan-start because
-        // mount topology can change between folder scans; the cost is
-        // negligible (one /proc/mounts read, cached by the kernel
-        // page cache).
-        let is_network_mount = crate::mount_info::is_network_path(
-            std::path::Path::new(&track.file_path),
-        );
 
         // Re-indexing an already-known file must KEEP ITS ROWID.
         //
@@ -1375,9 +1458,14 @@ impl LibraryDatabase {
     /// Clear all LOCAL library tracks (preserves Qobuz downloads)
     pub fn clear_all_tracks(&self) -> Result<(), LibraryError> {
         self.conn
-            .execute(
-                "DELETE FROM local_tracks WHERE source IS NULL OR source != 'qobuz_download'",
-                [],
+            .execute_batch(
+                "BEGIN IMMEDIATE;
+                 DELETE FROM local_tracks WHERE source IS NULL OR source != 'qobuz_download';
+                 DELETE FROM local_scan_files;
+                 DELETE FROM local_scan_cue_refs;
+                 DELETE FROM local_scan_roots;
+                 UPDATE library_folders SET last_scan=NULL;
+                 COMMIT;",
             )
             .map_err(|e| LibraryError::Database(e.to_string()))?;
         Ok(())

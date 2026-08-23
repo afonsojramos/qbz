@@ -214,7 +214,7 @@ impl EphemeralLibraryState {
                     let mut cue_tracks =
                         cue_to_tracks(&cue, properties.duration_secs, format, &properties);
                     if cue_tracks.is_empty() {
-                        log::warn!("[ephemeral] CUE produced no tracks: {}", cue_path.display());
+                        log::warn!("[ephemeral] CUE produced no tracks");
                         skipped_files += 1;
                         continue;
                     }
@@ -259,7 +259,7 @@ impl EphemeralLibraryState {
                     cue_referenced_audio.insert(canonical);
                 }
                 Err(e) => {
-                    log::warn!("[ephemeral] failed to parse CUE {}: {}", cue_path.display(), e);
+                    log::warn!("[ephemeral] failed to parse CUE: {}", e);
                     skipped_files += 1;
                 }
             }

@@ -2910,7 +2910,9 @@ pub async fn settings_string(key: &str, value: String) {
             }
         }
         // "" = every enabled folder; "<id>" = that folder only.
-        "library-scan" => library::scan(value.trim().parse::<i64>().ok()),
+        "library-scan" => {
+            library::scan(value.trim().parse::<i64>().ok());
+        }
         "library-scan-stop" => library::stop_scan(),
         // Panel mount / manual refresh: fall through to the publish below,
         // then probe the network mounts OFF that path (the publish must not

@@ -21,6 +21,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Filesystem
 walkdir = "2"
+notify = "8"
 dirs = "6"
 
 # Audio metadata

@@ -181,6 +181,8 @@ mod local_artist_match;
 mod local_rows;
 mod local_state;
 mod local_catalog_qt;
+// Watcher hints + periodic root reconciliation for the incremental scanner.
+mod local_scan_maintenance_qt;
 // Native bounded Tracks QAbstractListModel + catalog query controller (phase E).
 // Plain Rust module; the QML type itself is hand-written C++ under cxx/.
 mod local_tracks_model_qt;
@@ -564,6 +566,7 @@ pub(crate) fn on_boot() {
     // authoritative caches read-only, yields between 250-row transactions and
     // leaves every current view on its existing reader until E opts Tracks in.
     local_catalog_qt::start();
+    local_scan_maintenance_qt::start();
 
     // Splash -> silent session restore -> shell | login.
     let runtime = app();

@@ -143,8 +143,7 @@ pub fn probe(path: &Path, deadline: Duration) -> Reach {
         Ok(false) => Reach::Missing,
         Err(_) => {
             log::warn!(
-                "[reach] {} did not answer in {:?} — treating the mount as unreachable for {:?}",
-                path.display(),
+                "[reach] mount probe did not answer in {:?} — treating it as unreachable for {:?}",
                 deadline,
                 COOLDOWN
             );
