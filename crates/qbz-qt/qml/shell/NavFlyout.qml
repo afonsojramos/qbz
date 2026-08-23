@@ -171,6 +171,7 @@ Item {
                                    ? QbzLocal.localEphemeralLabel
                                    : (QbzSession.offline ? nav.trs("Open media") : nav.trs("Open")),
                       "icon": "folder-open", "view": "", "tab": "", "enabled": true,
+                      "hasSubmenu": true,
                       "submenu": nav.openMediaEntries() }
                 ]
             },
@@ -378,6 +379,9 @@ Item {
         property var entry: null
         property int rowIndex: -1
         readonly property bool rowEnabled: entry && entry.enabled !== false
+        // QVariantList conversion makes runtime array introspection unreliable.
+        // The catalog explicitly marks the sole cascading entry instead.
+        readonly property bool hasSubmenu: !!(entry && entry.hasSubmenu === true)
 
         width: parent ? parent.width : 0
         height: 32
@@ -402,7 +406,7 @@ Item {
                 height: parent.height
                 width: parent.width
                     - (row.entry && row.entry.icon !== "" ? 23 : 0)
-                    - (row.entry && row.entry.submenu ? 19 : 0)
+                    - (row.hasSubmenu ? 19 : 0)
                 text: row.entry ? row.entry.label : ""
                 color: theme.textSecondary
                 font.pixelSize: 13
@@ -410,7 +414,7 @@ Item {
                 elide: Text.ElideRight
             }
             QbzIcon {
-                visible: row.entry && row.entry.submenu
+                visible: row.hasSubmenu
                 width: visible ? 11 : 0
                 height: 11
                 anchors.verticalCenter: parent.verticalCenter
@@ -426,7 +430,7 @@ Item {
             hoverEnabled: row.rowEnabled
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-                if (row.entry && row.entry.submenu)
+                if (row.hasSubmenu)
                     panel.openCascade(row, row.entry)
                 else
                     nav.activate(row.entry)
@@ -437,7 +441,7 @@ Item {
             onContainsMouseChanged: {
                 if (containsMouse) {
                     panel.hoveredRow = row.rowIndex
-                    if (row.entry && row.entry.submenu)
+                    if (row.hasSubmenu)
                         panel.openCascade(row, row.entry)
                     else
                         panel.scheduleCascadeClose()
