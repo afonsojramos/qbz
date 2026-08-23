@@ -94,6 +94,10 @@ pub struct ProjectedTrack {
     pub track_ref: TrackRef,
     pub local_track_id: Option<i64>,
     pub local_path: Option<String>,
+    /// Stable album id from the same authoritative source when available.
+    /// Text-only caches may leave it empty; bootstrap then records a weak,
+    /// reversible per-source fallback association.
+    pub native_album_id: Option<String>,
     pub source_copy_id: Option<i64>,
     pub title: String,
     pub artist: String,

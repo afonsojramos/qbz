@@ -4,12 +4,23 @@
 //! read projection and query primitives; it has no dependency on Qt, QML,
 //! playback, or any source protocol/API.
 
+mod bootstrap;
 mod catalog;
+mod legacy;
 mod model;
 mod schema;
 
+pub use bootstrap::{
+    ActiveCatalog, BootstrapBatch, BootstrapLayout, BootstrapManifest, BootstrapOutcome,
+    BootstrapProgress, BootstrapSession, FallbackReason, PreflightReport, SourceCheckpoint,
+    SourceProbe, BOOTSTRAP_BATCH_ROWS,
+};
 pub use catalog::{
     normalize_artist_key, normalize_sort_key, Catalog, CatalogStats, IntegrityReport, QueryMetrics,
+};
+pub use legacy::{
+    bootstrap_legacy_caches, bootstrap_legacy_caches_with_progress, discover_legacy_sources,
+    LegacySourceSpec,
 };
 pub use model::{
     ArtistCredit, CreditRole, ProjectedTrack, QueryDescriptor, QuerySurface, SourceKey, SourceKind,
@@ -31,9 +42,32 @@ pub enum CatalogError {
     SearchTooShort,
     #[error("a cursor from a different query descriptor cannot be reused")]
     CursorDescriptorMismatch,
+    #[error("catalog I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("catalog manifest error: {0}")]
+    Manifest(#[from] serde_json::Error),
+    #[error("bootstrap source {0:?} changed since its saved checkpoint")]
+    SourceSnapshotChanged(SourceKey),
+    #[error("bootstrap checkpoint does not match the committed cursor for {0:?}")]
+    CheckpointMismatch(SourceKey),
+    #[error("bootstrap batch has {found} rows; the maximum is {maximum}")]
+    BatchTooLarge { found: usize, maximum: usize },
+    #[error("catalog preflight needs {required_bytes} bytes but only {available_bytes} are free")]
+    InsufficientSpace {
+        required_bytes: u64,
+        available_bytes: u64,
+    },
+    #[error("catalog bootstrap source is invalid: {0}")]
+    InvalidSource(String),
+    #[error("catalog bootstrap is already running")]
+    BootstrapBusy,
+    #[error("catalog activation is not ready: {0}")]
+    ActivationNotReady(String),
 }
 
 pub type Result<T> = std::result::Result<T, CatalogError>;
 
+#[cfg(test)]
+mod bootstrap_tests;
 #[cfg(test)]
 mod tests;

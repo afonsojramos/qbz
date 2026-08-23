@@ -42,6 +42,7 @@ fn projected(index: usize, source: SourceKind) -> ProjectedTrack {
         local_track_id: (source == SourceKind::Local).then_some(index as i64 + 1),
         local_path: (source == SourceKind::Local)
             .then(|| format!("/fixture/artist-{artist_number:05}/track-{index:07}.{format}")),
+        native_album_id: Some(format!("album-{album_number:05}")),
         source_copy_id: None,
         title: format!("Track {index:07} Signal {:03}", index % 997),
         artist: artist.clone(),

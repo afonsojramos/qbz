@@ -6540,7 +6540,9 @@ name = "qbz-local-catalog"
 version = "0.1.0"
 dependencies = [
  "rusqlite",
+ "rustix 1.1.4",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
 ]
@@ -6778,6 +6780,7 @@ dependencies = [
  "qbz-integrations",
  "qbz-jellyfin",
  "qbz-library",
+ "qbz-local-catalog",
  "qbz-log",
  "qbz-lyrics",
  "qbz-media-cache",

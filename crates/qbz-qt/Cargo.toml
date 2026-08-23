@@ -75,6 +75,9 @@ qbz-models = { path = "../qbz-models" }
 qbz-cache = { path = "../qbz-cache" }
 qbz-offline-cache = { path = "../qbz-offline-cache" }
 qbz-library = { path = "../qbz-library" }
+# Derived, rebuildable Local Library read catalog. The Qt app only schedules
+# its background bootstrap here; no Qt type crosses into the catalog crate.
+qbz-local-catalog = { path = "../qbz-local-catalog" }
 # MyQBZ: Mixtapes & Collections backend (schema + migrations, repo, shuffle,
 # enqueue). Headless and frontend-agnostic (ADR-006) — the same crate the
 # Slint app uses (crates/qbz/Cargo.toml:96), so the two frontends share

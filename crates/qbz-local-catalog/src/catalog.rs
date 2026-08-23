@@ -3,8 +3,11 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use rusqlite::types::Value;
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, Statement};
+use rusqlite::{
+    params, params_from_iter, Connection, OpenFlags, OptionalExtension, Row, Statement,
+};
 
+use crate::bootstrap::{BootstrapBatch, SourceCheckpoint, BOOTSTRAP_BATCH_ROWS};
 use crate::model::{
     ProjectedTrack, QueryDescriptor, SourceKey, SourceKind, TrackCursor, TrackGroup, TrackPage,
     TrackRecord, TrackRef, TrackSort,
@@ -60,6 +63,16 @@ impl Catalog {
         Ok(Self { conn, generation })
     }
 
+    pub fn open_read_only(path: &Path, generation: u64) -> Result<Self> {
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        schema::configure_read_only(&conn)?;
+        schema::verify(&conn, generation)?;
+        Ok(Self { conn, generation })
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -97,6 +110,270 @@ impl Catalog {
                 track_ref.native_id
             ],
         )? > 0)
+    }
+
+    pub(crate) fn source_checkpoint(&self, source: &SourceKey) -> Result<Option<SourceCheckpoint>> {
+        self.conn
+            .query_row(
+                "SELECT available, checkpoint_cursor, checkpoint_rows,
+                        checkpoint_version, complete_generation
+                   FROM source_state
+                  WHERE source_kind = ?1 AND source_instance = ?2",
+                params![source.source.as_str(), source.source_instance],
+                |row| {
+                    Ok(SourceCheckpoint {
+                        source: source.clone(),
+                        available: row.get::<_, i64>(0)? != 0,
+                        checkpoint_cursor: row.get(1)?,
+                        checkpoint_rows: row.get::<_, i64>(2)?.max(0) as u64,
+                        checkpoint_version: row.get(3)?,
+                        complete: row.get::<_, i64>(4)? == self.generation as i64,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn restart_projection_source(
+        &mut self,
+        source: &SourceKey,
+        snapshot_version: &str,
+    ) -> Result<()> {
+        if source.source_instance.trim().is_empty() || snapshot_version.trim().is_empty() {
+            return Err(CatalogError::InvalidInput(
+                "source instance and snapshot version must not be empty".to_string(),
+            ));
+        }
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM tracks WHERE source_kind = ?1 AND source_instance = ?2",
+            params![source.source.as_str(), source.source_instance],
+        )?;
+        tx.execute(
+            "DELETE FROM source_copies WHERE source_kind = ?1 AND source_instance = ?2",
+            params![source.source.as_str(), source.source_instance],
+        )?;
+        tx.execute(
+            "DELETE FROM editions
+              WHERE NOT EXISTS (
+                    SELECT 1 FROM source_copies sc WHERE sc.edition_id=editions.edition_id
+              )",
+            [],
+        )?;
+        tx.execute(
+            "DELETE FROM logical_albums
+              WHERE NOT EXISTS (
+                    SELECT 1 FROM editions e
+                     WHERE e.logical_album_id=logical_albums.logical_album_id
+              )",
+            [],
+        )?;
+        tx.execute(
+            "INSERT INTO source_state(
+                 source_kind, source_instance, available, last_observed_at,
+                 watermark, complete_generation, checkpoint_cursor,
+                 checkpoint_rows, checkpoint_version
+             ) VALUES (?1,?2,1,0,'',0,'',0,?3)
+             ON CONFLICT(source_kind, source_instance) DO UPDATE SET
+                 available=1,
+                 last_observed_at=0,
+                 watermark='',
+                 complete_generation=0,
+                 checkpoint_cursor='',
+                 checkpoint_rows=0,
+                 checkpoint_version=excluded.checkpoint_version",
+            params![
+                source.source.as_str(),
+                source.source_instance,
+                snapshot_version
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn apply_bootstrap_batch(
+        &mut self,
+        batch: &BootstrapBatch,
+    ) -> Result<SourceCheckpoint> {
+        if batch.tracks.len() > BOOTSTRAP_BATCH_ROWS {
+            return Err(CatalogError::BatchTooLarge {
+                found: batch.tracks.len(),
+                maximum: BOOTSTRAP_BATCH_ROWS,
+            });
+        }
+        if batch.source.source_instance.trim().is_empty()
+            || batch.snapshot_version.trim().is_empty()
+        {
+            return Err(CatalogError::InvalidInput(
+                "source instance and snapshot version must not be empty".to_string(),
+            ));
+        }
+        for track in &batch.tracks {
+            if track.track_ref.source != batch.source.source
+                || track.track_ref.source_instance != batch.source.source_instance
+            {
+                return Err(CatalogError::InvalidInput(format!(
+                    "batch {:?} contains a row from {:?}/{}",
+                    batch.source, track.track_ref.source, track.track_ref.source_instance
+                )));
+            }
+        }
+
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO source_state(
+                 source_kind, source_instance, checkpoint_version
+             ) VALUES (?1,?2,?3)
+             ON CONFLICT(source_kind, source_instance) DO NOTHING",
+            params![
+                batch.source.source.as_str(),
+                batch.source.source_instance,
+                batch.snapshot_version
+            ],
+        )?;
+        let (committed_cursor, committed_rows, committed_version): (String, i64, String) = tx
+            .query_row(
+                "SELECT checkpoint_cursor, checkpoint_rows, checkpoint_version
+                   FROM source_state
+                  WHERE source_kind = ?1 AND source_instance = ?2",
+                params![batch.source.source.as_str(), batch.source.source_instance],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        if committed_version != batch.snapshot_version {
+            return Err(CatalogError::SourceSnapshotChanged(batch.source.clone()));
+        }
+        if committed_cursor != batch.expected_cursor {
+            return Err(CatalogError::CheckpointMismatch(batch.source.clone()));
+        }
+
+        {
+            let mut upsert = tx.prepare_cached(UPSERT_TRACK_SQL)?;
+            let mut clear_credits =
+                tx.prepare_cached("DELETE FROM artist_credits WHERE catalog_id = ?1")?;
+            let mut insert_credit = tx.prepare_cached(
+                "INSERT OR IGNORE INTO artist_credits(
+                     catalog_id, artist_key, display_name, role, ordinal
+                 ) VALUES (?1,?2,?3,?4,?5)",
+            )?;
+            for track in &batch.tracks {
+                let mut track = track.clone();
+                track.observed_generation = self.generation as i64;
+                track.source_copy_id = Some(ensure_source_copy(&tx, &track, self.generation)?);
+                validate_track(&track)?;
+                upsert_track(&mut upsert, &mut clear_credits, &mut insert_credit, &track)?;
+            }
+        }
+        let next_rows = committed_rows.saturating_add(batch.tracks.len() as i64);
+        tx.execute(
+            "UPDATE source_state
+                SET available=1,
+                    last_observed_at=?3,
+                    complete_generation=?4,
+                    checkpoint_cursor=?5,
+                    checkpoint_rows=?6
+              WHERE source_kind=?1 AND source_instance=?2",
+            params![
+                batch.source.source.as_str(),
+                batch.source.source_instance,
+                now_unix_seconds(),
+                if batch.complete {
+                    self.generation as i64
+                } else {
+                    0
+                },
+                batch.next_cursor,
+                next_rows,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(SourceCheckpoint {
+            source: batch.source.clone(),
+            available: true,
+            checkpoint_cursor: batch.next_cursor.clone(),
+            checkpoint_rows: next_rows.max(0) as u64,
+            checkpoint_version: batch.snapshot_version.clone(),
+            complete: batch.complete,
+        })
+    }
+
+    pub(crate) fn checkpoint_for_activation(&mut self) -> Result<()> {
+        self.conn
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
+
+    pub(crate) fn rebuild_materialized_views(&mut self) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute_batch(
+            "DELETE FROM edition_artists;
+             DELETE FROM albums_materialized;
+             DELETE FROM artists_materialized;
+
+             INSERT INTO edition_artists(edition_id,artist_key,role)
+             SELECT DISTINCT sc.edition_id,ac.artist_key,ac.role
+               FROM artist_credits ac
+               JOIN tracks t ON t.catalog_id=ac.catalog_id
+               JOIN source_copies sc ON sc.source_copy_id=t.source_copy_id;
+
+             INSERT INTO albums_materialized(
+                 edition_id,logical_album_id,title,sort_title,artist,sort_artist,
+                 year,track_count,total_duration_ms,source_count,available,
+                 artwork_source,artwork_token
+             )
+             SELECT e.edition_id,e.logical_album_id,e.display_title,la.sort_title,
+                    e.display_artist,la.sort_artist,e.release_year,COUNT(t.catalog_id),
+                    COALESCE(SUM(t.duration_ms),0),
+                    COUNT(DISTINCT sc.source_kind || char(31) || sc.source_instance),
+                    COALESCE(MAX(t.available),0),
+                    COALESCE((
+                        SELECT t2.source_kind FROM tracks t2
+                         WHERE t2.source_copy_id IN (
+                             SELECT sc2.source_copy_id FROM source_copies sc2
+                              WHERE sc2.edition_id=e.edition_id
+                         ) AND COALESCE(t2.artwork_token,'') != ''
+                         ORDER BY t2.available DESC,t2.catalog_id LIMIT 1
+                    ),''),
+                    COALESCE((
+                        SELECT t2.artwork_token FROM tracks t2
+                         WHERE t2.source_copy_id IN (
+                             SELECT sc2.source_copy_id FROM source_copies sc2
+                              WHERE sc2.edition_id=e.edition_id
+                         ) AND COALESCE(t2.artwork_token,'') != ''
+                         ORDER BY t2.available DESC,t2.catalog_id LIMIT 1
+                    ),'')
+               FROM editions e
+               JOIN logical_albums la ON la.logical_album_id=e.logical_album_id
+               JOIN source_copies sc ON sc.edition_id=e.edition_id
+               JOIN tracks t ON t.source_copy_id=sc.source_copy_id
+              GROUP BY e.edition_id;
+
+             INSERT INTO artists_materialized(
+                 artist_key,display_name,sort_name,album_count,track_count,available
+             )
+             SELECT ac.artist_key,MIN(ac.display_name),ac.artist_key,
+                    COUNT(DISTINCT sc.edition_id),COUNT(DISTINCT ac.catalog_id),
+                    COALESCE(MAX(t.available),0)
+               FROM artist_credits ac
+               JOIN tracks t ON t.catalog_id=ac.catalog_id
+               LEFT JOIN source_copies sc ON sc.source_copy_id=t.source_copy_id
+              GROUP BY ac.artist_key;",
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn materialized_views_valid(&self) -> Result<bool> {
+        let (tracks, album_tracks, unresolved): (i64, i64, i64) = self.conn.query_row(
+            "SELECT
+                 (SELECT COUNT(*) FROM tracks),
+                 (SELECT COALESCE(SUM(track_count),0) FROM albums_materialized),
+                 (SELECT COUNT(*) FROM tracks WHERE source_copy_id IS NULL)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        Ok(tracks == album_tracks && unresolved == 0)
     }
 
     pub fn resolve(&self, track_ref: &TrackRef) -> Result<Option<TrackRecord>> {
@@ -270,6 +547,126 @@ fn validate_track(track: &ProjectedTrack) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn ensure_source_copy(conn: &Connection, track: &ProjectedTrack, generation: u64) -> Result<i64> {
+    let display_artist = if track.album_artist.trim().is_empty() {
+        track.artist.trim()
+    } else {
+        track.album_artist.trim()
+    };
+    let native_album_id = track
+        .native_album_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let fallback_id;
+    let (association, evidence, album_id) = if let Some(native) = native_album_id {
+        ("source_native", native, native)
+    } else {
+        fallback_id = stable_parts(&[
+            &normalize_sort_key(&track.album),
+            &normalize_sort_key(display_artist),
+            &track.year.map(|year| year.to_string()).unwrap_or_default(),
+        ]);
+        ("text_fallback", fallback_id.as_str(), fallback_id.as_str())
+    };
+    let stable_key = stable_parts(&[
+        track.track_ref.source.as_str(),
+        &track.track_ref.source_instance,
+        album_id,
+    ]);
+    let sort_title = normalize_sort_key(&track.album);
+    let sort_artist = normalize_sort_key(display_artist);
+    let logical_album_id: i64 = conn.query_row(
+        "INSERT INTO logical_albums(
+             stable_key,display_title,sort_title,display_artist,sort_artist,
+             association_strength,association_evidence
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7)
+         ON CONFLICT(stable_key) DO UPDATE SET
+             display_title=excluded.display_title,
+             sort_title=excluded.sort_title,
+             display_artist=excluded.display_artist,
+             sort_artist=excluded.sort_artist,
+             association_strength=excluded.association_strength,
+             association_evidence=excluded.association_evidence
+         RETURNING logical_album_id",
+        params![
+            stable_key,
+            track.album,
+            sort_title,
+            display_artist,
+            sort_artist,
+            association,
+            evidence,
+        ],
+        |row| row.get(0),
+    )?;
+    let edition_key = stable_parts(&[&stable_key, "edition"]);
+    let edition_id: i64 = conn.query_row(
+        "INSERT INTO editions(
+             logical_album_id,edition_key,display_title,display_artist,release_year,
+             provider_release_id,evidence_kind,evidence_value
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+         ON CONFLICT(edition_key) DO UPDATE SET
+             display_title=excluded.display_title,
+             display_artist=excluded.display_artist,
+             release_year=excluded.release_year,
+             provider_release_id=excluded.provider_release_id,
+             evidence_kind=excluded.evidence_kind,
+             evidence_value=excluded.evidence_value
+         RETURNING edition_id",
+        params![
+            logical_album_id,
+            edition_key,
+            track.album,
+            display_artist,
+            track.year.map(i64::from),
+            native_album_id,
+            association,
+            evidence,
+        ],
+        |row| row.get(0),
+    )?;
+    let local_directory = track.local_path.as_deref().and_then(|path| {
+        Path::new(path)
+            .parent()
+            .map(|parent| parent.to_string_lossy().into_owned())
+    });
+    let source_copy_id: i64 = conn.query_row(
+        "INSERT INTO source_copies(
+             edition_id,source_kind,source_instance,native_album_id,local_directory,
+             available,last_observed_generation
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7)
+         ON CONFLICT(source_kind,source_instance,native_album_id) DO UPDATE SET
+             edition_id=excluded.edition_id,
+             local_directory=excluded.local_directory,
+             available=excluded.available,
+             last_observed_generation=excluded.last_observed_generation
+         RETURNING source_copy_id",
+        params![
+            edition_id,
+            track.track_ref.source.as_str(),
+            track.track_ref.source_instance,
+            album_id,
+            local_directory,
+            i64::from(track.available),
+            generation as i64,
+        ],
+        |row| row.get(0),
+    )?;
+    Ok(source_copy_id)
+}
+
+fn stable_parts(parts: &[&str]) -> String {
+    let mut key = String::new();
+    for part in parts {
+        key.push_str(&part.len().to_string());
+        key.push(':');
+        key.push_str(part);
+        key.push('|');
+    }
+    key
 }
 
 fn validate_tracks_descriptor(descriptor: &QueryDescriptor) -> Result<()> {
@@ -834,4 +1231,11 @@ fn sort_word(sort: TrackSort) -> &'static str {
         TrackSort::YearDesc => "year-desc",
         TrackSort::AddedDesc => "added-desc",
     }
+}
+
+fn now_unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or(0)
 }

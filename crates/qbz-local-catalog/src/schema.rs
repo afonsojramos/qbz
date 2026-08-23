@@ -19,6 +19,43 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn configure_read_only(conn: &Connection) -> Result<()> {
+    conn.busy_timeout(std::time::Duration::from_millis(2_500))?;
+    conn.execute_batch(
+        "PRAGMA foreign_keys=ON;
+         PRAGMA query_only=ON;
+         PRAGMA temp_store=MEMORY;
+         PRAGMA cache_size=-32768;
+         PRAGMA mmap_size=268435456;",
+    )?;
+    Ok(())
+}
+
+pub(crate) fn verify(conn: &Connection, generation: u64) -> Result<()> {
+    let application_id: i64 = conn.query_row("PRAGMA application_id", [], |row| row.get(0))?;
+    if application_id != APPLICATION_ID {
+        return Err(CatalogError::NotCatalog);
+    }
+    let found: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if found != SCHEMA_VERSION {
+        return Err(CatalogError::UnsupportedSchema {
+            found,
+            expected: SCHEMA_VERSION,
+        });
+    }
+    let stored_generation: String = conn.query_row(
+        "SELECT value FROM catalog_meta WHERE key = 'generation'",
+        [],
+        |row| row.get(0),
+    )?;
+    if stored_generation != generation.to_string() {
+        return Err(CatalogError::InvalidInput(format!(
+            "requested generation {generation}, database contains generation {stored_generation}"
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn init(conn: &mut Connection, generation: u64) -> Result<()> {
     let application_id: i64 = conn.query_row("PRAGMA application_id", [], |row| row.get(0))?;
     if application_id != 0 && application_id != APPLICATION_ID {
@@ -101,7 +138,9 @@ CREATE TABLE IF NOT EXISTS logical_albums (
     display_artist       TEXT NOT NULL,
     sort_artist          TEXT NOT NULL,
     association_strength TEXT NOT NULL DEFAULT 'source_native'
-        CHECK (association_strength IN ('source_native','isrc','musicbrainz','manual')),
+        CHECK (association_strength IN (
+            'source_native','text_fallback','isrc','musicbrainz','manual'
+        )),
     association_evidence TEXT NOT NULL DEFAULT ''
 ) STRICT;
 

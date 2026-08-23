@@ -180,6 +180,7 @@ mod local_library_qt;
 mod local_artist_match;
 mod local_rows;
 mod local_state;
+mod local_catalog_qt;
 mod local_plex;
 // Plex PIN sign-in (the "Authorize" half of the Plex settings) + the
 // Check-connection ping. Over `qbz_plex`'s existing pin/start, pin/check and
@@ -550,6 +551,12 @@ pub(crate) fn on_boot() {
     spawn(async {
         let _ = tokio::task::spawn_blocking(artwork_qt::housekeeping).await;
     });
+
+    // The derived Local Library catalog is deliberately delayed past boot's
+    // useful frame and runs entirely on the blocking pool. It reads the three
+    // authoritative caches read-only, yields between 250-row transactions and
+    // leaves every current view on its existing reader until E opts Tracks in.
+    local_catalog_qt::start();
 
     // Splash -> silent session restore -> shell | login.
     let runtime = app();
@@ -3173,6 +3180,9 @@ fn main() {
         // user cannot do anything but wait, so NOTHING on this path may block
         // without a bound.
         log::info!("[qbz-qt] event loop exited; shutting down");
+        // The catalog worker commits at most its current bounded batch, whose
+        // checkpoint is part of that same transaction. A later launch resumes.
+        local_catalog_qt::cancel();
         // The backstop for everything below AND for Qt's own teardown (engine
         // + QGuiApplication destructors, atexit chain): if any of it wedges,
         // the watchdog `_exit(0)`s the process. Idempotent — the quit paths
