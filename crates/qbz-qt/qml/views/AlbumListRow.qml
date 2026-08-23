@@ -42,6 +42,10 @@ Rectangle {
     /// mode only). Default off, so the two catalog call sites are untouched.
     property bool selectMode: false
     property bool checked: false
+    readonly property bool pulled: root.item.qobuzUnavailable === true
+    readonly property int cacheStatus: root.item.cacheStatus !== undefined
+        ? root.item.cacheStatus : 0
+    readonly property bool pulledDead: root.pulled && root.cacheStatus !== 3
     /// `modifiers` rides straight off the mouse event: Shift is what turns
     /// a click into a range (controls/SelectionModel.qml).
     signal toggleSelect(int modifiers)
@@ -61,7 +65,7 @@ Rectangle {
     width: parent ? parent.width : 0
     height: 64
     radius: theme.radiusSm
-    color: rowHovered ? theme.surfaceHover
+    color: rowHovered && !root.pulledDead ? theme.surfaceHover
          : (rowIndex % 2 === 1 ? theme.alphaTier(4) : "transparent")
 
     MouseArea {
@@ -69,66 +73,78 @@ Rectangle {
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton | Qt.RightButton
-        cursorShape: Qt.PointingHandCursor
+        cursorShape: root.pulledDead && !root.selectMode
+            ? Qt.ArrowCursor : Qt.PointingHandCursor
         onClicked: function (mouse) {
             if (mouse.button === Qt.RightButton) {
                 // In select mode the row is a selection target, not a menu
                 // host (Tauri/Slint parity: a right-click toggles nothing
                 // there either).
                 if (!root.selectMode)
-                    rowMenu.openAtCursor(rowArea, mouse.x, mouse.y)
+                    root.openMenu(rowArea, mouse.x, mouse.y)
                 return
             }
             if (root.selectMode) root.toggleSelect(mouse.modifiers)
-            else QbzAlbum.openAlbum(root.item.id || "")
+            else if (!root.pulledDead) QbzAlbum.openAlbum(root.item.id || "")
         }
     }
 
-    CardMenu {
-        id: rowMenu
-        menuWidth: 196
-        // A JS expression, not a literal: the block row is CONDITIONAL. The
-        // function form also re-evaluates on `trRev`, which the literal
-        // already did through each `tr(…, trRev)` call.
-        entries: {
-            var t = QbzSession.tr
-            var r = QbzSession.trRev
-            var m = [
-                { "label": t("Open album", r), "icon": "library-big", "action": "open" },
-                { "label": t("Play", r), "icon": "play-fill", "action": "play" },
-                { "label": t("Play next", r), "icon": "list-start", "action": "next" },
-                { "label": t("Play later", r), "icon": "list-plus", "action": "later" },
-                { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" },
-            ]
-            // AlbumListRow.slint:434-441 gates the row on a non-local/plex
-            // source. `home_qt::HomeCard` carries NO `source` field, so this
-            // reads "" and the row shows — correct for these two catalog-only
-            // surfaces (Discover Browse, Label Releases). Written defensively
-            // so a producer that starts emitting `source` is honoured without
-            // a second edit here.
-            var src = root.item.source || ""
-            if (src !== "local" && src !== "plex")
-                m.push({ "label": t("Block this album", r), "icon": "blind-eye", "action": "block" })
-            return m
+    function menuEntries() {
+        var t = QbzSession.tr
+        var r = QbzSession.trRev
+        var m = []
+        if (!root.pulledDead) {
+            m.push({ "label": t("Open album", r), "icon": "library-big", "action": "open" })
+            m.push({ "label": t("Play", r), "icon": "play-fill", "action": "play" })
+            m.push({ "label": t("Play next", r), "icon": "list-start", "action": "next" })
+            m.push({ "label": t("Play later", r), "icon": "list-plus", "action": "later" })
+            m.push({ "label": t("Add to queue", r), "icon": "list-end", "action": "queue" })
         }
-        onPicked: function (a) {
-            var id = root.item.id || ""
-            if (id === "") return
-            if (a === "open") QbzAlbum.openAlbum(id)
-            else if (a === "play") QbzPlayer.playAlbum(id)
-            // `artUrl`, never `artPath`: the store keeps a denormalized cover
-            // url and a file:// cache path is dead on any other machine.
-            else if (a === "block") QbzBlacklist.blockAlbum(id, root.item.title || "",
-                root.item.artist || "", root.item.artUrl || "")
-            else QbzPlayer.enqueueAlbum(id, a)
+        var src = root.item.source || ""
+        if (!root.pulledDead && src !== "local" && src !== "plex")
+            m.push({ "label": t("Block this album", r), "icon": "blind-eye", "action": "block" })
+        return m
+    }
+    function menuAction(a) {
+        var id = root.item.id || ""
+        if (id === "") return
+        if (root.pulledDead) return
+        if (a === "open") QbzAlbum.openAlbum(id)
+        else if (a === "play") QbzPlayer.playAlbum(id)
+        // `artUrl`, never `artPath`: the store keeps a denormalized cover url
+        // and a file:// cache path is dead on any other machine.
+        else if (a === "block") QbzBlacklist.blockAlbum(id, root.item.title || "",
+            root.item.artist || "", root.item.artUrl || "")
+        else QbzPlayer.enqueueAlbum(id, a)
+    }
+    Loader {
+        id: rowMenuLoader
+        active: false
+        sourceComponent: CardMenu {
+            menuWidth: 196
+            entries: root.menuEntries()
+            onPicked: function (a) { root.menuAction(a) }
         }
     }
+    function openMenu(anchor, x, y) {
+        if (root.menuEntries().length === 0)
+            return
+        rowMenuLoader.active = true
+        rowMenuLoader.item.openAtCursor(anchor, x, y)
+    }
+    function releaseForReuse() {
+        if (rowMenuLoader.item)
+            rowMenuLoader.item.close()
+        rowMenuLoader.active = false
+    }
+    ListView.onPooled: root.releaseForReuse()
 
     Row {
         anchors.fill: parent
         anchors.leftMargin: 12
         anchors.rightMargin: 12
         spacing: root.colGap
+        opacity: root.pulledDead ? 0.5 : 1.0
 
         // Selection checkbox — takes the leading slot in select mode
         // (MultiSelectBar's companion; the art cell keeps its own width so
@@ -161,6 +177,19 @@ Rectangle {
                     anchors.fill: parent
                     source: root.artSource !== "" ? root.artSource : (root.item.artPath || "")
                     radius: 4
+                }
+                Rectangle {
+                    visible: root.pulledDead
+                    anchors.fill: parent
+                    radius: 4
+                    color: theme.alphaTier(60)
+                    QbzIcon {
+                        name: "circle-alert"
+                        width: 18
+                        height: 18
+                        anchors.centerIn: parent
+                        tintName: "favorite"
+                    }
                 }
             }
         }
@@ -209,9 +238,18 @@ Rectangle {
             width: root.colQuality
             height: parent.height
             QualityBadgeFull {
+                visible: !root.pulledDead
                 anchors.verticalCenter: parent.verticalCenter
                 tier: root.item.qualityTier || ""
                 detail: root.item.qualityDetail || ""
+            }
+            Text {
+                visible: root.pulledDead
+                anchors.verticalCenter: parent.verticalCenter
+                text: QbzSession.tr("Unavailable", QbzSession.trRev)
+                color: theme.textMuted
+                font.pixelSize: theme.fontLegal
+                font.weight: theme.weightSemibold
             }
         }
 
@@ -228,6 +266,7 @@ Rectangle {
         Item {
             width: root.colOverflow
             height: parent.height
+            visible: !root.pulledDead
             Rectangle {
                 width: 32
                 height: 32
@@ -246,7 +285,7 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: function (mouse) { rowMenu.openAtCursor(moreArea, mouse.x, mouse.y) }
+                    onClicked: function (mouse) { root.openMenu(moreArea, mouse.x, mouse.y) }
                 }
             }
         }

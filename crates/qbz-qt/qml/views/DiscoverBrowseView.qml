@@ -7,9 +7,10 @@
 //   :44  fixed 56px header — title LEFT, search / genre / grid-list RIGHT
 //   :139 body padding 32 / 32, top 8, bottom 100
 //   :26  200x266 cards, gap 24; :29 64px list rows, gap 4
-//   :126 infinite scroll: within 600px of the bottom, has-more, not already
-//        loading, and NO active search (the filter is client-side, so paging
-//        under one would bring back unfiltered rows)
+//   :126 used to be infinite scroll. Qt deliberately promotes that trigger to
+//        the shared explicit Load-more control: republishing a larger model
+//        from inside `onContentYChanged` changes the Flickable extent while it
+//        still carries momentum, which is the source of the tail rubber-band.
 //   :205 scrollbar below the header; :233 genre popup anchored y=56
 //
 // NAV BUTTONS: the .slint draws a NavButtons pair at x=32 and starts the
@@ -153,16 +154,6 @@ Rectangle {
                 contentHeight: page.implicitHeight
                 boundsBehavior: Flickable.StopAtBounds
 
-                // Infinite scroll, guarded exactly as the .slint is.
-                onContentYChanged: {
-                    if (contentY + height >= contentHeight - 600
-                        && root.doc.hasMore === true
-                        && !QbzHome.discoverBrowseLoadingMore
-                        && !QbzHome.discoverBrowseLoading
-                        && root.query === "")
-                        QbzHome.discoverBrowseLoadMore()
-                }
-
                 Column {
                     id: page
                     width: parent.width
@@ -189,8 +180,10 @@ Rectangle {
                     }
 
                     AlbumCollection {
+                        id: collection
                         visible: !QbzHome.discoverBrowseLoading
                         width: parent.width - 64
+                        collectionKey: root.doc.endpoint || ""
                         albums: root.items
                         viewMode: root.viewMode
                         cardWidth: 200
@@ -201,11 +194,32 @@ Rectangle {
                         contentOffset: 8
                     }
 
-                    Item { visible: QbzHome.discoverBrowseLoadingMore; width: 1; height: 24 }
-                    QbzSpinner {
-                        visible: QbzHome.discoverBrowseLoadingMore
-                        size: 28
-                        anchors.horizontalCenter: parent.horizontalCenter
+                    Item {
+                        visible: !QbzHome.discoverBrowseLoading
+                            && root.items.length > 0
+                            && root.doc.hasMore === true
+                            && root.query === ""
+                        width: parent.width - 64
+                        height: visible ? loadMore.height : 0
+
+                        QbzLoadMore {
+                            id: loadMore
+                            width: parent.width
+                            buttonHeight: 32
+                            busy: QbzHome.discoverBrowseLoadingMore
+                            skeleton: root.viewMode === "list" ? "rows" : "cards"
+                            // AlbumCollection pitch: 200x266 + 24px gutter.
+                            cellW: 224
+                            cellH: 290
+                            rowH: 64
+                            rowGap: 4
+                            rowCount: 2
+                            rowArtSize: 44
+                            onClicked: {
+                                collection.armTailFade()
+                                QbzHome.discoverBrowseLoadMore()
+                            }
+                        }
                     }
                 }
             }

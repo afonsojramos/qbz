@@ -761,6 +761,23 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         self.player.fetch_for_gapless(client, track_id, quality).await
     }
 
+    /// Queue a cold Qobuz successor from its initial CMAF buffer instead of
+    /// materializing the whole file. Used only by the Streaming-only gapless
+    /// handoff; cached and offline successors keep the byte path above.
+    pub async fn queue_gapless_streaming(
+        &self,
+        track_id: u64,
+        quality: Quality,
+    ) -> Result<(), String> {
+        let guard = self.client.read().await;
+        let client = guard
+            .as_ref()
+            .ok_or_else(|| "No Qobuz client available".to_string())?;
+        self.player
+            .queue_next_streaming(client, track_id, quality)
+            .await
+    }
+
     /// Resolve a fully-materialized audio asset (bytes + MIME + quality) for an
     /// EXTERNAL renderer (Chromecast / DLNA). Tier order mirrors
     /// `fetch_for_gapless_resolved`: L1/L2 player cache -> OFFLINE (local CMAF

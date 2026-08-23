@@ -90,6 +90,7 @@ Item {
                 clip: true
                 spacing: root.rowGap
                 cacheBuffer: 64 * 8
+                reuseItems: true
                 boundsBehavior: Flickable.StopAtBounds
                 model: root.rows
 

@@ -2,8 +2,8 @@
 // "awardalbums".
 //
 // A search box over the LOADED set, the award name as the page title, and an
-// infinite-scroll grid that asks for the next `/award/getAlbums` page as the
-// tail comes into view. Same four exclusive body branches as the landing
+// explicitly paginated grid over `/award/getAlbums`. Same four exclusive body
+// branches as the landing
 // page, in the reference's order: loading · error+retry · no-results (a search
 // that matched nothing) · the grid.
 //
@@ -48,18 +48,6 @@ Rectangle {
         contentHeight: col.implicitHeight
         boundsBehavior: Flickable.StopAtBounds
         clip: true
-
-        // Infinite scroll. Gated on the SAME four conditions the reference
-        // gates on — not loading, not already loading more, there IS more, and
-        // no active query — so a filtered view never pages in behind it.
-        onContentYChanged: {
-            if (contentHeight - (contentY + height) < 600
-                    && root.doc.hasMore === true
-                    && root.doc.loadingMore !== true
-                    && !root.loading
-                    && root.query === "")
-                QbzHome.awardAlbumsLoadMore()
-        }
 
         Column {
             id: col
@@ -194,14 +182,26 @@ Rectangle {
                 contentOffset: collection.y
             }
 
-            // Tail spinner for the next page.
             Item {
-                visible: root.doc.loadingMore === true
+                visible: !root.loading && !root.loadError
+                    && root.albums.length > 0
+                    && root.doc.hasMore === true
+                    && root.query === ""
                 width: parent.width
-                height: visible ? 72 : 0
-                QbzSpinner {
-                    anchors.centerIn: parent
-                    size: 28
+                height: visible ? loadMore.height : 0
+
+                QbzLoadMore {
+                    id: loadMore
+                    width: parent.width
+                    buttonHeight: 32
+                    busy: root.doc.loadingMore === true
+                    skeleton: "cards"
+                    cellW: 224
+                    cellH: 290
+                    onClicked: {
+                        collection.armTailFade()
+                        QbzHome.awardAlbumsLoadMore()
+                    }
                 }
             }
         }

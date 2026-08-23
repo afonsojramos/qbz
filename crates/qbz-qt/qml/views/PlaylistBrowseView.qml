@@ -1,7 +1,7 @@
 // Qobuz Playlists "View all" page — QML port of
 // discover/PlaylistBrowseView.slint: the playlist twin of DiscoverBrowseView
 // (same fixed 56px header with the shared browse tools, genre overlay,
-// infinite scroll and scrollbar), plus a single-select category tag bar
+// explicit pagination and scrollbar), plus a single-select category tag bar
 // under the header.
 //
 // ADR-008: the categories are radio DOTS, never pills (FilterRadio,
@@ -54,6 +54,61 @@ Rectangle {
     readonly property string viewMode: doc.viewMode || "grid"
     readonly property int headerH: tags.length > 0 ? 92 : 56
 
+    // The playlist collection is custom (mixed own-art / collage cards), so
+    // it owns the same append-only fade AlbumCollection provides to album
+    // pages. The ids present when Load more is clicked remain opaque; only
+    // rows from the page that lands ride `_tailReveal`.
+    property var _tailSeen: null
+    property real _tailReveal: 1.0
+    function clearTailFade() {
+        tailFade.stop()
+        root._tailSeen = null
+        root._tailReveal = 1.0
+    }
+    function armTailFade() {
+        var seen = {}
+        for (var i = 0; i < root.items.length; i++) {
+            var id = root.items[i] ? (root.items[i].id || "") : ""
+            if (id !== "") seen[id] = true
+        }
+        root._tailSeen = seen
+        root._tailReveal = 0.0
+    }
+    function tailOpacity(item) {
+        if (!root._tailSeen || !item)
+            return 1.0
+        var id = item.id || ""
+        return id !== "" && root._tailSeen[id] !== true
+            ? root._tailReveal : 1.0
+    }
+    onItemsChanged: {
+        if (!root._tailSeen)
+            return
+        var hasNew = false
+        for (var i = 0; i < root.items.length; i++) {
+            var id = root.items[i] ? (root.items[i].id || "") : ""
+            if (id !== "" && root._tailSeen[id] !== true) {
+                hasNew = true
+                break
+            }
+        }
+        if (hasNew) tailFade.restart()
+        else root.clearTailFade()
+    }
+    onSelectedTagChanged: root.clearTailFade()
+    onQueryChanged: root.clearTailFade()
+
+    NumberAnimation {
+        id: tailFade
+        target: root
+        property: "_tailReveal"
+        from: 0.0
+        to: 1.0
+        duration: 220
+        easing.type: Easing.OutCubic
+        onFinished: root.clearTailFade()
+    }
+
     readonly property string genreSig: {
         try {
             var d = JSON.parse(QbzBridge.genreFilterJson)
@@ -64,8 +119,10 @@ Rectangle {
     }
     property string lastGenreSig: ""
     onGenreSigChanged: {
-        if (root.lastGenreSig !== "" && root.lastGenreSig !== root.genreSig)
+        if (root.lastGenreSig !== "" && root.lastGenreSig !== root.genreSig) {
+            root.clearTailFade()
             QbzHome.playlistBrowseGenreChanged()
+        }
         root.lastGenreSig = root.genreSig
     }
     Component.onCompleted: root.lastGenreSig = root.genreSig
@@ -240,15 +297,6 @@ Rectangle {
                 contentHeight: page.implicitHeight
                 boundsBehavior: Flickable.StopAtBounds
 
-                onContentYChanged: {
-                    if (contentY + height >= contentHeight - 600
-                        && root.doc.hasMore === true
-                        && !QbzHome.playlistBrowseLoadingMore
-                        && !QbzHome.playlistBrowseLoading
-                        && root.query === "")
-                        QbzHome.playlistBrowseLoadMore()
-                }
-
                 Column {
                     id: page
                     width: parent.width
@@ -293,16 +341,19 @@ Rectangle {
                         // solved this for the album pages and this one never
                         // got it.
                         //
-                        // The band is sampled through a one-shot timer fed by
-                        // scroll events rather than bound to `contentY`: this
-                        // avoids O(n) work per frame and wakes nothing at rest.
+                        // Scroll events run a constant-time coverage guard.
+                        // The slice itself changes only after roughly one
+                        // viewport of travel, but it changes synchronously:
+                        // a fast wheel/scrollbar jump can never outrun the old
+                        // slice and paint a completely blank viewport while a
+                        // delayed timer catches up.
                         //
                         // The FULL footprint stays on this one Item, while the
                         // Repeater model is only the sampled slice. This avoids
                         // both the old card cost and one Loader shell per
                         // off-screen result. The list arm uses the same band.
                         property int bandFirst: 0
-                        property int bandLast: 9999
+                        property int bandLast: 0
                         function sampleBand() {
                             if (plGrid.columns <= 0 || !plGrid.visible)
                                 return
@@ -311,18 +362,38 @@ Rectangle {
                                                  : plGrid.cardH + plGrid.gap
                             var top = flick.contentY - plGrid.y
                             var h = flick.height
-                            plGrid.bandFirst = Math.max(0, Math.floor((top - h) / pitch))
-                            plGrid.bandLast = Math.max(0, Math.ceil((top + 2 * h) / pitch))
-                        }
-
-                        function scheduleBandSample() {
-                            if (plGrid.visible && !plBandSampler.running)
-                                plBandSampler.start()
+                            plGrid.bandFirst = Math.max(0, Math.floor((top - 2 * h) / pitch))
+                            plGrid.bandLast = Math.max(0, Math.ceil((top + 3 * h) / pitch))
                         }
 
                         function refreshBand() {
                             plGrid.sampleBand()
                             plGrid.reportArtWindow()
+                        }
+
+                        function ensureBandCoverage() {
+                            if (!plGrid.visible || plGrid.columns <= 0)
+                                return
+                            var listMode = root.viewMode === "list"
+                            var pitch = listMode ? plGrid.listH + plGrid.listGap
+                                                 : plGrid.cardH + plGrid.gap
+                            var top = flick.contentY - plGrid.y
+                            var h = Math.max(1, flick.height)
+                            var totalRows = listMode ? root.items.length
+                                : Math.ceil(root.items.length / plGrid.columns)
+                            if (totalRows <= 0 || top + h <= 0
+                                    || top >= totalRows * pitch)
+                                return
+                            var visibleFirst = Math.max(0, Math.floor(top / pitch))
+                            var visibleLast = Math.max(0, Math.ceil((top + h) / pitch))
+                            var innerRunway = Math.max(1, Math.ceil(h / pitch))
+                            if (visibleFirst < plGrid.bandFirst
+                                    || visibleLast > plGrid.bandLast
+                                    || (visibleFirst > innerRunway
+                                        && visibleFirst - plGrid.bandFirst < innerRunway)
+                                    || (visibleLast < totalRows - innerRunway
+                                        && plGrid.bandLast - visibleLast < innerRunway))
+                                plGrid.refreshBand()
                         }
 
                         // Covers, one key at a time and only near the viewport
@@ -364,16 +435,10 @@ Rectangle {
                             if (pending.length > 0)
                                 QbzShell.sidebarArtworkWindow(JSON.stringify(pending))
                         }
-                        Timer {
-                            id: plBandSampler
-                            interval: 40
-                            repeat: false
-                            onTriggered: plGrid.refreshBand()
-                        }
                         Connections {
                             target: flick
-                            function onContentYChanged() { plGrid.scheduleBandSample() }
-                            function onHeightChanged() { plGrid.scheduleBandSample() }
+                            function onContentYChanged() { plGrid.ensureBandCoverage() }
+                            function onHeightChanged() { plGrid.refreshBand() }
                         }
                         Connections {
                             target: root
@@ -431,6 +496,7 @@ Rectangle {
                                 y: Math.floor(globalIndex / plGrid.columns) * (plGrid.cardH + plGrid.gap)
                                 width: plGrid.cardW
                                 height: plGrid.cardH
+                                opacity: root.tailOpacity(plCell.cardData)
 
                                 onCardDataChanged: {
                                     if (!browseCard)
@@ -473,15 +539,37 @@ Rectangle {
                                 item: rowData
                                 artSource: plGrid.artOf(rowData)
                                 rowIndex: globalIndex
+                                opacity: root.tailOpacity(rowData)
                             }
                         }
                     }
 
-                    Item { visible: QbzHome.playlistBrowseLoadingMore; width: 1; height: 24 }
-                    QbzSpinner {
-                        visible: QbzHome.playlistBrowseLoadingMore
-                        size: 28
-                        anchors.horizontalCenter: parent.horizontalCenter
+                    Item {
+                        visible: !QbzHome.playlistBrowseLoading
+                            && root.items.length > 0
+                            && root.doc.hasMore === true
+                            && root.query === ""
+                        width: parent.width - 64
+                        height: visible ? loadMore.height : 0
+
+                        QbzLoadMore {
+                            id: loadMore
+                            width: parent.width
+                            buttonHeight: 32
+                            busy: QbzHome.playlistBrowseLoadingMore
+                            skeleton: root.viewMode === "list" ? "rows" : "cards"
+                            // Playlist grid pitch: 200x246 + 24px gutter.
+                            cellW: 224
+                            cellH: 270
+                            rowH: 60
+                            rowGap: 2
+                            rowCount: 2
+                            rowArtSize: 44
+                            onClicked: {
+                                root.armTailFade()
+                                QbzHome.playlistBrowseLoadMore()
+                            }
+                        }
                     }
                 }
             }

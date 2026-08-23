@@ -87,9 +87,9 @@ pub struct FeedItem {
     pub sample_rate: Option<f64>,
     #[serde(rename = "isFavorite")]
     pub is_favorite: bool,
-    /// Qobuz PULLED this track (`streamable: false` — contract §5.1). Track
-    /// rows only; meaningless on album / artist / playlist rows and skipped
-    /// when false, so the ~10k-row feed JSON does not grow a key per row.
+    /// Qobuz PULLED this track or album (`streamable: false` — contract §5.1).
+    /// Meaningless on artist / playlist rows and skipped when false, so the
+    /// ~10k-row feed JSON does not grow a key per row.
     ///
     /// BOTH feed -> queue builders read it (`feed_track_to_queue` below and
     /// `playback_qt::feed_queue_track`), for the same reason they both read
@@ -100,6 +100,15 @@ pub struct FeedItem {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub not_streamable: bool,
+    /// Liveable exception to `not_streamable`: a complete offline copy still
+    /// plays after Qobuz withdraws the catalog row. Zero is omitted so the
+    /// high-cardinality feed only pays for tracks that actually carry state.
+    #[serde(
+        default,
+        rename = "cacheStatus",
+        skip_serializing_if = "is_zero_i32"
+    )]
+    pub cache_status: i32,
     pub genre: String,
     pub year: String,
     pub duration: String,
@@ -134,6 +143,10 @@ pub struct FeedItem {
 /// `skip_serializing_if` predicate for the default-false flags above.
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_zero_i32(value: &i32) -> bool {
+    *value == 0
 }
 
 impl FeedItem {
@@ -346,6 +359,12 @@ fn map_track(track: Track) -> FeedItem {
     // is one of the most likely places a user meets this — they hearted it
     // while it was still there.
     let not_streamable = !track.is_streamable();
+    let track_id = track.id.to_string();
+    let cache_status = if crate::offline_qt::is_cached(&track_id) {
+        3
+    } else {
+        0
+    };
     let mut title = track.title;
     if let Some(version) = track.version.as_ref().filter(|v| !v.is_empty()) {
         title = format!("{title} ({version})");
@@ -376,7 +395,7 @@ fn map_track(track: Track) -> FeedItem {
         kind: "track".into(),
         group: "favorites".into(),
         source: "qobuz".into(),
-        id: track.id.to_string(),
+        id: track_id,
         title,
         subtitle: artist.clone(),
         artist,
@@ -398,12 +417,19 @@ fn map_track(track: Track) -> FeedItem {
         image_url: artwork_url,
         is_favorite: true,
         not_streamable,
+        cache_status,
         ..Default::default()
     }
     .keyed()
 }
 
-fn map_album(album: Album) -> FeedItem {
+fn map_album(album: Album, ready_offline_tracks: usize) -> FeedItem {
+    // Same absence contract as Track: only an explicit false is a catalog
+    // withdrawal. A COMPLETE offline copy remains live because playAlbum has
+    // an index-backed fallback when /album/get no longer resolves this id.
+    let not_streamable = !album.is_streamable();
+    let track_count = album.tracks_count.or(album.track_count).unwrap_or(0) as usize;
+    let fully_cached = track_count > 0 && ready_offline_tracks >= track_count;
     let bit_depth = album
         .audio_info
         .as_ref()
@@ -447,6 +473,8 @@ fn map_album(album: Album) -> FeedItem {
         // reverted after the 2026-08-15 owner smoke (contract 04 §3).
         image_url: album.image.best().cloned().unwrap_or_default(),
         is_favorite: true,
+        not_streamable,
+        cache_status: if fully_cached { 3 } else { 0 },
         ..Default::default()
     }
     .keyed()
@@ -587,6 +615,36 @@ fn map_playlist_row(playlist: &Playlist, is_following: bool) -> FeedItem {
     .keyed()
 }
 
+/// Ready offline rows grouped by Qobuz album id.
+///
+/// Library can contain hundreds of favorite albums, so snapshot the index in
+/// one pass rather than issuing a query per card. The count is compared with
+/// the catalog track count in `map_album`; a partial download must not make a
+/// withdrawn album look wholly playable.
+async fn ready_offline_album_track_counts() -> std::collections::HashMap<String, usize> {
+    use qbz_offline_cache::OfflineCacheStatus;
+
+    let Some(offline) = crate::offline_qt::get().await else {
+        return std::collections::HashMap::new();
+    };
+    let tracks = {
+        let db = offline.db.lock().await;
+        db.as_ref()
+            .and_then(|db| db.get_all_tracks().ok())
+            .unwrap_or_default()
+    };
+    let mut counts = std::collections::HashMap::new();
+    for track in tracks {
+        if track.status != OfflineCacheStatus::Ready {
+            continue;
+        }
+        if let Some(album_id) = track.album_id.filter(|id| !id.is_empty()) {
+            *counts.entry(album_id).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
 /// The whole library load: fan out, normalize, merge (library_all.rs
 /// ordering semantics), compute the tab counts.
 pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<usize, String> {
@@ -679,9 +737,11 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
         feed.push(item);
     }
     let albums: Vec<Album> = parse_items(raw_albums, "album");
+    let ready_album_tracks = ready_offline_album_track_counts().await;
     let n = albums.len();
-    for (i, item) in albums.into_iter().map(map_album).enumerate() {
-        let mut item = item;
+    for (i, album) in albums.into_iter().enumerate() {
+        let ready = ready_album_tracks.get(&album.id).copied().unwrap_or(0);
+        let mut item = map_album(album, ready);
         item.added_rank = rank(i, n);
         feed.push(item);
     }

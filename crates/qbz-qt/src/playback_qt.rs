@@ -209,6 +209,19 @@ fn prefetch_quality_tag(quality: Quality) -> qbz_audio::network_throttle::Playba
     }
 }
 
+/// Streaming-only gapless policy. Cached/offline successors stay on the
+/// established byte path; only a cold network successor needs the bounded
+/// initial-buffer handoff. A zero adaptive cap protects a live stream that is
+/// already struggling instead of competing with it for the link.
+fn should_stream_gapless_successor(
+    streaming_only: bool,
+    player_cached: bool,
+    offline_cached: bool,
+    throttle_cap: usize,
+) -> bool {
+    streaming_only && !player_cached && !offline_cached && throttle_cap > 0
+}
+
 /// Warm the next two queue rows in the player's shared L1/L2 cache. This only
 /// performs cheap policy/queue work inline; every full download is spawned in
 /// the background and goes through `Player::prefetch_into_cache`, which owns
@@ -3287,6 +3300,57 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                         let runtime = runtime.clone();
                         let next_id = next.id;
                         tokio::spawn(async move {
+                            let quality = local_playback_quality().0;
+                            let streaming_only =
+                                crate::settings_qt::audio_settings().streaming_only;
+                            let player_cached =
+                                runtime.core().player().is_track_cached(next_id);
+                            let offline_cached = crate::offline_qt::is_cached_id(next_id);
+
+                            if streaming_only && !player_cached && !offline_cached {
+                                // A long successor cannot reliably finish a
+                                // whole-file download inside the fixed 10 s
+                                // handoff window. In Streaming only, prepare
+                                // just its initial CMAF buffer and append that
+                                // incremental source behind the current one.
+                                // The same adaptive throttle that protects
+                                // immediate prefetch keeps a struggling live
+                                // stream from starting this second transfer.
+                                let throttle_cap = qbz_audio::network_throttle::state()
+                                    .current_prefetch_cap(
+                                        qbz_audio::network_throttle::playback_mbps_for_quality(
+                                            prefetch_quality_tag(quality),
+                                        ),
+                                        1,
+                                    );
+                                if !should_stream_gapless_successor(
+                                    streaming_only,
+                                    player_cached,
+                                    offline_cached,
+                                    throttle_cap,
+                                ) {
+                                    log::info!(
+                                        "[qbz-qt] [GAPLESS] streaming successor {next_id} skipped: network throttle cap 0"
+                                    );
+                                    return;
+                                }
+                                match runtime
+                                    .core()
+                                    .queue_gapless_streaming(next_id, quality)
+                                    .await
+                                {
+                                    Ok(()) => {
+                                        log::info!(
+                                            "[qbz-qt] [GAPLESS] queued streaming track {next_id}"
+                                        );
+                                        return;
+                                    }
+                                    Err(error) => log::warn!(
+                                        "[qbz-qt] [GAPLESS] streaming setup for {next_id} failed: {error}; trying byte fallback"
+                                    ),
+                                }
+                            }
+
                             // Shared tier-walk: L1/L2 (player cache) -> OFFLINE
                             // -> network, then hand the bytes to play_next. The
                             // offline handle and the row sink are the same two
@@ -3308,7 +3372,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                                     // higher tier than the funnel would request
                                     // is exactly how a quality-blind cache
                                     // leaks an uncapped stream to the DAC.
-                                    local_playback_quality().0,
+                                    quality,
                                     off.as_deref(),
                                     sink.as_ref(),
                                 )
@@ -3521,7 +3585,8 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
 mod tests {
     use super::{
         filter_queue_with, prefetch_track_ids, quality_badge_from, reconcile_device_cap,
-        stream_error_text, xorshift_shuffle_seeded, PrefetchCandidate, PrefetchTrackEdge,
+        should_stream_gapless_successor, stream_error_text, xorshift_shuffle_seeded,
+        PrefetchCandidate, PrefetchTrackEdge,
     };
     use qbz_models::{Quality, QualityLimit, QueueTrack};
     use qbz_source::QualityHint;
@@ -3656,6 +3721,22 @@ mod tests {
     #[test]
     fn throttle_cap_zero_plans_zero_downloads() {
         assert!(prefetch_track_ids(false, false, 0, &[remote(2), remote(3)]).is_empty());
+    }
+
+    #[test]
+    fn streaming_only_cold_successor_uses_incremental_gapless() {
+        assert!(should_stream_gapless_successor(true, false, false, 1));
+    }
+
+    #[test]
+    fn cached_or_offline_successor_keeps_the_byte_handoff() {
+        assert!(!should_stream_gapless_successor(true, true, false, 1));
+        assert!(!should_stream_gapless_successor(true, false, true, 1));
+    }
+
+    #[test]
+    fn adaptive_cap_zero_blocks_incremental_gapless_download() {
+        assert!(!should_stream_gapless_successor(true, false, false, 0));
     }
 
     // --- #638 fix 3: the request tier reconciles preference against the

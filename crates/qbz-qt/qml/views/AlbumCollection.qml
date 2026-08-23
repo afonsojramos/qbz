@@ -16,14 +16,17 @@
 // a trap the Rust seeding avoids anyway, but there is no reason to reproduce
 // a blank page here.
 //
-// WINDOWING (flat grid/list, opt-in via `flick`): only rows within ~one
-// viewport of the visible band exist. The collection keeps the FULL footprint
+// WINDOWING (flat grid/list, opt-in via `flick`): only rows within a bounded
+// runway around the visible band exist. The collection keeps the FULL footprint
 // as one cheap Item, so its height — and therefore the scroll geometry — never
 // changes, but there is no longer one Loader shell per off-screen result.
-// The band is sampled from scroll events rather than bound to `contentY`: a
-// direct binding re-evaluates every delegate on every frame, while a forever
-// 80ms Timer spends CPU at rest. Grouped sections remain eager — the same call
-// the .slint makes (:265-277).
+// Scroll events only run a constant-time COVERAGE GUARD. It rebuilds the slice
+// synchronously when the viewport consumes its inner runway; that matters
+// because a delayed sampler can leave the viewport outside the mounted slice
+// for one or more completely blank frames during a fast wheel/touchpad jump.
+// The wider outer runway means the slice still changes roughly once per
+// viewport, not once per scroll frame. Grouped sections remain eager — the
+// same call the .slint makes (:265-277).
 //
 // TAIL FADE (opt-in via armTailFade(), see the block below): the arrival half
 // of the Load-more round. OFF unless a host arms it, so the two hosts that do
@@ -67,9 +70,12 @@ Column {
     width: parent ? parent.width : 0
     spacing: 0
 
-    // --- Windowing band (row indices), sampled ---------------------------
+    // --- Windowing band (row indices) ------------------------------------
     property int bandFirst: 0
-    property int bandLast: 9999
+    // Start bounded too: the first model publish may precede
+    // Component.onCompleted, and an eager sentinel would briefly instantiate
+    // the entire result set before the first sample replaces it.
+    property int bandLast: 0
     readonly property bool windowed: flick !== null && !root.isGrouped
 
     function sampleBand() {
@@ -83,40 +89,58 @@ Column {
         var rowsTop = root.contentOffset + (listMode ? 32 : 0)
         var top = root.flick.contentY - rowsTop
         var h = root.flick.height
-        // One viewport of prefetch on each side.
-        root.bandFirst = Math.max(0, Math.floor((top - h) / pitch))
-        root.bandLast = Math.max(0, Math.ceil((top + 2 * h) / pitch))
+        // Two viewports on each side. ensureBandCoverage() refreshes when the
+        // viewport enters the inner half, leaving a full viewport mounted even
+        // after the refresh edge and enough lead for image incubation.
+        root.bandFirst = Math.max(0, Math.floor((top - 2 * h) / pitch))
+        root.bandLast = Math.max(0, Math.ceil((top + 3 * h) / pitch))
     }
 
-    function scheduleBandSample() {
-        if (root.windowed && root.visible && !bandSampler.running)
-            bandSampler.start()
-    }
-
-    Timer {
-        id: bandSampler
-        interval: 40
-        repeat: false
-        onTriggered: {
+    function refreshBand() {
+        if (root.windowed && root.visible) {
             root.sampleBand()
             root.reportArtWindow()
         }
     }
 
+    function ensureBandCoverage() {
+        if (!root.windowed || !root.visible)
+            return
+        var listMode = root.viewMode === "list"
+        var pitch = listMode ? 64 + root.listRowGap
+                             : root.cardHeight + root.cardGap
+        var rowsTop = root.contentOffset + (listMode ? 32 : 0)
+        var top = root.flick.contentY - rowsTop
+        var h = Math.max(1, root.flick.height)
+        var cols = listMode ? 1 : Math.max(1, Math.floor(
+            (root.width + root.cardGap) / (root.cardWidth + root.cardGap)))
+        var totalRows = Math.ceil(root.albums.length / cols)
+        if (totalRows <= 0 || top + h <= 0 || top >= totalRows * pitch)
+            return
+        var visibleFirst = Math.max(0, Math.floor(top / pitch))
+        var visibleLast = Math.max(0, Math.ceil((top + h) / pitch))
+        var innerRunway = Math.max(1, Math.ceil(h / pitch))
+        // A scrollbar seek may jump across the whole slice in one signal;
+        // normal wheel motion reaches an inner edge about once per viewport.
+        if (visibleFirst < root.bandFirst || visibleLast > root.bandLast
+                || (visibleFirst > innerRunway
+                    && visibleFirst - root.bandFirst < innerRunway)
+                || (visibleLast < totalRows - innerRunway
+                    && root.bandLast - visibleLast < innerRunway))
+            root.refreshBand()
+    }
+
     Connections {
         target: root.flick
         ignoreUnknownSignals: true
-        function onContentYChanged() { root.scheduleBandSample() }
-        function onHeightChanged() { root.scheduleBandSample() }
+        function onContentYChanged() { root.ensureBandCoverage() }
+        function onHeightChanged() { root.refreshBand() }
     }
 
-    Component.onCompleted: {
-        root.sampleBand()
-        root.reportArtWindow()
-    }
-    onWidthChanged: root.scheduleBandSample()
-    onViewModeChanged: root.scheduleBandSample()
-    onVisibleChanged: root.scheduleBandSample()
+    Component.onCompleted: root.refreshBand()
+    onWidthChanged: root.refreshBand()
+    onViewModeChanged: root.refreshBand()
+    onVisibleChanged: root.refreshBand()
 
     // --- Windowed artwork -------------------------------------------------
     //
@@ -299,8 +323,7 @@ Column {
         // A new page appended -> recompute the exact mounted slice before
         // asking for its covers. ONE handler per signal: declaring a second
         // `onAlbumsChanged` is a hard qmlcachegen error.
-        root.sampleBand()
-        root.reportArtWindow()
+        root.refreshBand()
     }
     onGroupedChanged: root._maybeStartTailFade()
 

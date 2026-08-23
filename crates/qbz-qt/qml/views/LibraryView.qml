@@ -87,6 +87,31 @@ Rectangle {
     function parseFeed(json) {
         var t = Date.now()
         var f = JSON.parse(json)
+        var totals = { "tracks": 0, "albums": 0, "artists": 0,
+                       "playlists": 0, "labels": 0 }
+        // Normalize the strings once per Rust publish. Library > All can hold
+        // the complete local library, so repeating toLowerCase() in every
+        // search pass and every sort comparison turns one key press into a
+        // large allocation storm. These private fields stay on the parsed JS
+        // rows; they do not enlarge the Rust JSON transport.
+        for (var i = 0; i < f.length; i++) {
+            var it = f[i]
+            it._titleLc = String(it.title || "").toLowerCase()
+            it._artistLc = String(it.artist || "").toLowerCase()
+            it._albumLc = String(it.album || "").toLowerCase()
+            it._genreLc = String(it.genre || "").toLowerCase()
+            if (it.kind === "track") {
+                if (it.group === "favorites") totals.tracks++
+            } else if (it.kind === "album") {
+                if (it.group === "favorites") totals.albums++
+            } else if (it.kind === "artist") totals.artists++
+            else if (it.kind === "playlist") totals.playlists++
+            else if (it.kind === "label") totals.labels++
+        }
+        // The toolbar emptiness gate used to make a second full pass over the
+        // same feed. Carry the result on the Array itself (outside `length`),
+        // so all consumers keep the exact same row array and model identity.
+        f._tabTotals = totals
         // Was a bare console.log, i.e. printed on every publish for every user
         // forever. It belongs to the same investigation as the derive timing
         // right below it, so it now rides the same category and is silent
@@ -99,6 +124,25 @@ Rectangle {
 
     // Decoded-cover map {artKey: file://path}, fed by the signal.
     property var artMap: ({})
+    // Artwork completions commonly arrive in a burst. Rebinding artMap for
+    // every file made every mounted card re-evaluate once per neighbour — an
+    // O(window²) cold paint on Library > All. Flush one merged map per frame,
+    // and ignore global library-art signals that are not in this body's keep
+    // band (the sidepanel has its own URL-keyed inbox).
+    property var _artInbox: ({})
+    property var _artKeep: ({})
+    property var _artRequested: ({})
+    Timer {
+        id: artFlush
+        interval: 16
+        repeat: false
+        onTriggered: {
+            if (Object.keys(root._artInbox).length === 0)
+                return
+            root.artMap = Object.assign({}, root.artMap, root._artInbox)
+            root._artInbox = ({})
+        }
+    }
 
     // --- skeleton pulse ---------------------------------------------------
     // ONE 900ms Timer drives EVERY placeholder in this view (the loading
@@ -290,16 +334,8 @@ Rectangle {
     // following the reference gate wants (counts.playlists is favorites
     // only, library_qt.rs:479).
     readonly property var tabTotals: {
-        var c = { "tracks": 0, "albums": 0, "artists": 0, "playlists": 0, "labels": 0 }
-        for (var i = 0; i < feed.length; i++) {
-            var it = feed[i]
-            if (it.kind === "track") { if (it.group === "favorites") c.tracks++ }
-            else if (it.kind === "album") { if (it.group === "favorites") c.albums++ }
-            else if (it.kind === "artist") c.artists++
-            else if (it.kind === "label") c.labels++
-            else if (it.kind === "playlist") c.playlists++
-        }
-        return c
+        return feed._tabTotals || { "tracks": 0, "albums": 0, "artists": 0,
+                                    "playlists": 0, "labels": 0 }
     }
     readonly property bool tabHasItems:
         activeTab === "all" || (tabTotals[activeTab] || 0) > 0
@@ -422,6 +458,13 @@ Rectangle {
             // otherwise the item's genre must contain one of the selected
             // names, so genre-less kinds are excluded.
             var genres = root.genreNames
+            // The dominant path: All really means all, newest first. Rust has
+            // already merged every source in that order, so do not copy and
+            // rescan a potentially 10k-row array merely to return it intact.
+            if (needle === "" && genres.length === 0
+                && showPurchases && showFavorites && showFollowing && showLocal
+                && sortBy === "date" && !sortAsc)
+                return feed
             for (i = 0; i < feed.length; i++) {
                 var it = feed[i]
                 var isLocal = it.source === "local" || it.source === "plex"
@@ -435,10 +478,10 @@ Rectangle {
                     if (!ok) continue
                 }
                 if (needle !== ""
-                    && it.title.toLowerCase().indexOf(needle) < 0
-                    && it.artist.toLowerCase().indexOf(needle) < 0) continue
+                    && it._titleLc.indexOf(needle) < 0
+                    && it._artistLc.indexOf(needle) < 0) continue
                 if (genres.length > 0) {
-                    var itemGenre = (it.genre || "").toLowerCase()
+                    var itemGenre = it._genreLc
                     if (itemGenre === "") continue
                     var genreHit = false
                     for (var gi = 0; gi < genres.length; gi++) {
@@ -452,10 +495,10 @@ Rectangle {
             // other direction; "date" keeps model order (newest-first),
             // reversed for oldest (library_all.rs derive).
             if (sortBy === "title") {
-                items.sort(function (a, b) { return a.title.toLowerCase() < b.title.toLowerCase() ? -1 : 1 })
+                items.sort(function (a, b) { return a._titleLc < b._titleLc ? -1 : 1 })
                 if (!sortAsc) items.reverse()
             } else if (sortBy === "artist") {
-                items.sort(function (a, b) { return a.artist.toLowerCase() < b.artist.toLowerCase() ? -1 : 1 })
+                items.sort(function (a, b) { return a._artistLc < b._artistLc ? -1 : 1 })
                 if (!sortAsc) items.reverse()
             } else if (sortAsc) {
                 items = items.slice().reverse()
@@ -465,8 +508,8 @@ Rectangle {
         var tabNeedle = tabSearch.toLowerCase()
         function hit(it) {
             return tabNeedle === ""
-                || it.title.toLowerCase().indexOf(tabNeedle) >= 0
-                || it.artist.toLowerCase().indexOf(tabNeedle) >= 0
+                || it._titleLc.indexOf(tabNeedle) >= 0
+                || it._artistLc.indexOf(tabNeedle) >= 0
         }
         var tabGenres = (activeTab === "tracks" || activeTab === "albums")
             ? root.genreNames : []
@@ -480,7 +523,7 @@ Rectangle {
             else if (activeTab === "playlists") keep = x.kind === "playlist"
                 && (playlistsSubTab === "following" ? x.group === "following" : x.group === "favorites")
             if (keep && tabGenres.length > 0) {
-                var tg = (x.genre || "").toLowerCase()
+                var tg = x._genreLc
                 keep = false
                 for (var tgi = 0; tgi < tabGenres.length; tgi++) {
                     if (tg !== "" && tg.indexOf(tabGenres[tgi]) >= 0) { keep = true; break }
@@ -491,8 +534,8 @@ Rectangle {
         if (activeTab === "albums" && albumsSort !== "default") {
             var field = albumsSort.indexOf("artist") === 0 ? "artist" : "title"
             items.sort(function (a, b) {
-                var av = field === "artist" ? a.artist.toLowerCase() : a.title.toLowerCase()
-                var bv = field === "artist" ? b.artist.toLowerCase() : b.title.toLowerCase()
+                var av = field === "artist" ? a._artistLc : a._titleLc
+                var bv = field === "artist" ? b._artistLc : b._titleLc
                 return av < bv ? -1 : 1
             })
             if (albumsSort.slice(-4) === "desc") items.reverse()
@@ -504,11 +547,16 @@ Rectangle {
         // room for a full-width header, which is exactly why the reference
         // scrolls those two PROPORTIONALLY from the A-Z strip instead of
         // landing on a separator (FavoritesView.slint:1996, :2008).
-        var lc = function (s) { return (s || "").toLowerCase() }
+        var cachedKey = function (item, key) {
+            if (key === "title") return item._titleLc
+            if (key === "artist") return item._artistLc
+            if (key === "album") return item._albumLc
+            return String(item[key] || "").toLowerCase()
+        }
         var by = function (keys) {
             items.sort(function (a, b) {
                 for (var k = 0; k < keys.length; k++) {
-                    var av = lc(a[keys[k]]), bv = lc(b[keys[k]])
+                    var av = cachedKey(a, keys[k]), bv = cachedKey(b, keys[k])
                     if (av !== bv) return av < bv ? -1 : 1
                 }
                 return 0
@@ -692,11 +740,20 @@ Rectangle {
     // --------------------- windowed artwork -----------------------------
     // Report the mounted window as artKeys; prune far-away covers.
     function reportWindow(visibleArray, first, last) {
-        if (visibleArray.length === 0) return
+        if (visibleArray.length === 0) {
+            root._artKeep = ({})
+            root._artRequested = ({})
+            root._artInbox = ({})
+            root.artPending = 0
+            if (Object.keys(root.artMap).length > 0)
+                root.artMap = ({})
+            return
+        }
         last = Math.min(last, visibleArray.length - 1)
         if (first > last) return
         var keys = []
         var keep = {}
+        var requested = {}
         var span = last - first + 1
         var keepLo = Math.max(0, first - span)
         var keepHi = Math.min(visibleArray.length - 1, last + span)
@@ -705,21 +762,31 @@ Rectangle {
         for (var i = keepLo; i <= keepHi; i++)
             if (visibleArray[i].kind !== "group-header") keep[visibleArray[i].artKey] = true
         var m = artMap
+        var inbox = root._artInbox
         var pending = 0
         for (i = first; i <= last; i++) {
             if (visibleArray[i].kind === "group-header") continue
             var k = visibleArray[i].artKey
             if (visibleArray[i].imageUrl !== "") {
                 keys.push(k)
-                if (!m[k]) pending++
+                requested[k] = true
+                if (!m[k] && !inbox[k]) pending++
             }
         }
+        root._artKeep = keep
+        root._artRequested = requested
         // Drives the skeleton Timer + the per-item cap (see the pulse block).
         artWindowFirst = first
         artPending = pending
         var changed = false
         for (var key in m) {
             if (!keep[key]) { delete m[key]; changed = true }
+        }
+        // A late completion for the previous window may already be queued but
+        // not published. Drop it here so the frame flush cannot resurrect a
+        // cover that this report just evicted.
+        for (key in inbox) {
+            if (!keep[key]) delete inbox[key]
         }
         if (changed) artMap = Object.assign({}, m)
         QbzLibrary.libraryArtworkWindow(JSON.stringify(keys))
@@ -728,14 +795,20 @@ Rectangle {
     Connections {
         target: QbzLibrary
         function onLibraryArtworkReady(key, path) {
-            var m = root.artMap
-            // One fewer shimmering tile — when the count hits 0 the pulse
-            // Timer stops on its own.
-            if (!m[key] && root.artPending > 0) root.artPending--
-            m[key] = path
-            // Rebind requires a NEW object reference (same-ref assignment
-            // is not a change in QML).
-            root.artMap = Object.assign({}, m)
+            // This is a global signal. The selected-artist pane, Home and
+            // several detail routes publish URL keys through it too; accepting
+            // those here wakes the whole Library grid for an image it cannot
+            // display. Only the current keep band belongs in this map.
+            if (root._artKeep[key] !== true)
+                return
+            var known = root.artMap[key] || root._artInbox[key] || ""
+            if (known === path)
+                return
+            if (known === "" && root._artRequested[key] === true
+                && root.artPending > 0)
+                root.artPending--
+            root._artInbox[key] = path
+            if (!artFlush.running) artFlush.start()
         }
         // Favourite state settled in the store. Patched IN PLACE, and
         // `feedChanged()` is deliberately NOT called — that is the WHOLE fix
@@ -849,23 +922,28 @@ Rectangle {
     // `favorite` is passed in rather than read off `item`: the row owns the
     // live state (see FeedListRow.favorite), `item.isFavorite` is only its
     // seed.
-    function trackMenuModel(item, favorite) {
-        var m = [
-            { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-            { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-            { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
-            { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-        ]
+    function trackMenuModel(item, favorite, pulledDead) {
+        var m = []
+        if (!pulledDead) {
+            m.push({ "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" })
+            m.push({ "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" })
+            m.push({ "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" })
+            m.push({ "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" })
+        }
         if (item.artistId !== "") m.push({ "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" })
         if (item.albumId !== "") m.push({ "label": QbzSession.tr("Go to album", QbzSession.trRev), "icon": "disc", "action": "go-album" })
-        m.push({ "label": favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
-                 "icon": favorite ? "heart-filled" : "heart", "action": "favorite" })
+        if (!pulledDead)
+            m.push({ "label": favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
+                     "icon": favorite ? "heart-filled" : "heart", "action": "favorite" })
         return m
     }
     // Takes the ROW, not the item — "favorite" has to go through the row's
     // own property (a write to `item.isFavorite` notifies nothing).
     function trackAction(row, a) {
         var item = row.item
+        if ((a === "play" || a === "next" || a === "later" || a === "queue")
+                && row.pulledDead)
+            return
         if (a === "play") root.playTrackInContext(item.id)
         else if (a === "next") QbzPlayer.enqueueTrack(item.id, "next")
         else if (a === "later") QbzPlayer.enqueueTrack(item.id, "later")
@@ -1073,6 +1151,10 @@ Rectangle {
                 cellWidth: 220
                 cellHeight: 266
                 cacheBuffer: 266 * 2
+                // Mixed cards are expensive to construct. FeedGridCell resets
+                // optimistic heart/pin bindings and closes transient popups at
+                // the reuse edge, so native pooling is safe here.
+                reuseItems: true
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 model: root.visibleRows
@@ -1128,7 +1210,9 @@ Rectangle {
                 anchors.topMargin: 10 + content.barInset
                 height: list.visible ? parent.height - (10 + content.barInset) : 0
                 visible: content.showList
-                cacheBuffer: 44 * 10
+                spacing: root.activeTab === "all" ? 2 : 0
+                cacheBuffer: 50 * 10
+                reuseItems: true
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 model: root.visibleRows
@@ -1146,7 +1230,7 @@ Rectangle {
                     width: list.width
                     height: modelData && modelData.kind === "group-header"
                         ? 34
-                        : (root.activeTab === "tracks" ? 50 : 44)
+                        : 50
                     Component {
                         id: listHeaderComp
                         Item {
@@ -1209,11 +1293,27 @@ Rectangle {
                             view: root
                             item: modelData
                             rowIndex: Math.max(0, index - root.artWindowFirst)
+                            displayIndex: index
                         }
                     }
                     sourceComponent: (modelData && modelData.kind === "group-header")
                         ? listHeaderComp
                         : (root.activeTab === "tracks" ? trackRowComp : feedRowComp)
+                    function releaseLoadedRow() {
+                        if (!item)
+                            return
+                        if (item.recycleActive !== undefined)
+                            item.recycleActive = false
+                        if (typeof item.releaseForReuse === "function")
+                            item.releaseForReuse()
+                    }
+                    function activateLoadedRow() {
+                        if (item && item.recycleActive !== undefined)
+                            item.recycleActive = true
+                    }
+                    onLoaded: activateLoadedRow()
+                    ListView.onPooled: releaseLoadedRow()
+                    ListView.onReused: activateLoadedRow()
                 }
             }
 
@@ -1242,6 +1342,7 @@ Rectangle {
                 clip: true
                 spacing: 2
                 cacheBuffer: 60 * 8
+                reuseItems: true
                 boundsBehavior: Flickable.StopAtBounds
                 model: content.showPlaylistsList ? root.visibleRows : []
 
@@ -1398,8 +1499,17 @@ Rectangle {
     }
     function listWindowReport() {
         if (!list.visible) return
-        var first = Math.max(0, Math.floor(list.contentY / 44) - 4)
-        var last = Math.ceil((list.contentY + list.height) / 44) + 4
+        // Variable-height group headers and the All tab's 2px zebra gutter
+        // make arithmetic row pitches approximate. Ask the native ListView
+        // for the real visible indices and keep a four-row artwork runway.
+        var first = list.indexAt(4, list.contentY + 1)
+        var last = list.indexAt(4, list.contentY + Math.max(1, list.height) - 1)
+        if (first < 0)
+            first = Math.max(0, Math.floor(list.contentY / 50))
+        if (last < 0)
+            last = Math.ceil((list.contentY + list.height) / 50)
+        first = Math.max(0, first - 4)
+        last += 4
         queueWindowReport(first, Math.min(root.visibleRows.length - 1, last))
     }
 

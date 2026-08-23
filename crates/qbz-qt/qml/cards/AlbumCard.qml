@@ -55,6 +55,12 @@ Rectangle {
     property string artworkUrl: ""
     property bool isFavorite: false
     property bool isPinned: false
+    // Explicit catalog withdrawal. Absence/false means the producer made no
+    // unavailability claim. A complete offline copy keeps the album live.
+    property bool qobuzUnavailable: false
+    property int cacheStatus: 0
+    readonly property bool pulled: root.qobuzUnavailable
+    readonly property bool pulledDead: root.pulled && root.cacheStatus !== 3
     // The row's SOURCE word — "local" | "offline" | "plex" | "jellyfin" |
     // a Subsonic brand spelling (the Local Library badge set,
     // src/local_rows.rs `badge_source`) or "qobuz" (the Library
@@ -195,8 +201,17 @@ Rectangle {
 
     /// Build the context popup on first use, then open it.
     function openAlbumMenu(anchor, x, y) {
+        if (root.menuModel().length === 0)
+            return
         albumMenuLoader.active = true
         albumMenuLoader.item.openAtCursor(anchor, x, y)
+    }
+    /// A GridView recycling host must close window-overlay children before
+    /// this card is rebound to another album.
+    function releaseForReuse() {
+        if (albumMenuLoader.item)
+            albumMenuLoader.item.close()
+        albumMenuLoader.active = false
     }
 
     width: 200
@@ -254,16 +269,18 @@ Rectangle {
     function menuModel() {
         var t = QbzSession.tr
         var r = QbzSession.trRev
-        var m = [
-            { "label": root.openLabel !== "" ? root.openLabel : t("Open album", r),
-              "icon": "library-big", "action": "open" },
-            { "label": t("Play", r), "icon": "play-fill", "action": "play" },
-            { "label": t("Play next", r), "icon": "list-start", "action": "next" },
+        var m = []
+        if (!root.pulledDead) {
+            m.push({ "label": root.openLabel !== "" ? root.openLabel : t("Open album", r),
+                     "icon": "library-big", "action": "open" })
+            m.push({ "label": t("Play", r), "icon": "play-fill", "action": "play" })
+            m.push({ "label": t("Play next", r), "icon": "list-start", "action": "next" })
             // #442 "Play later" — end of the manual block.
-            { "label": t("Play later", r), "icon": "list-plus", "action": "later" },
-            { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" },
-        ]
+            m.push({ "label": t("Play later", r), "icon": "list-plus", "action": "later" })
+            m.push({ "label": t("Add to queue", r), "icon": "list-end", "action": "queue" })
+        }
         if (root.catalogAffordances) {
+            // Keep removal reachable even after Qobuz withdraws the old id.
             m.push({ "label": root.isFavorite ? t("Remove from Library", r) : t("Add to Library", r),
                      "icon": root.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
             // .slint gates this on a non-local/plex source as well — and the
@@ -304,6 +321,8 @@ Rectangle {
                 root.artworkUrl)
             return
         }
+        if (root.pulledDead)
+            return
         if (root.localMode) {
             if (a === "open") root.openRequested()
             else if (a === "play") root.playRequested()
@@ -355,7 +374,7 @@ Rectangle {
                 anchors.fill: parent
                 radius: theme.radiusSm
                 color: "#000000"
-                opacity: root.overlayOn ? 0.6 : 0.0
+                opacity: root.overlayOn && !root.pulledDead ? 0.6 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 150 } }
             }
 
@@ -398,7 +417,7 @@ Rectangle {
                 id: artArea
                 anchors.fill: parent
                 hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
+                cursorShape: root.pulledDead ? Qt.ArrowCursor : Qt.PointingHandCursor
                 // Right press opens the SAME menu as the ⋯ button.
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                 // Phase 8: the card opens the album view (the overlay play
@@ -413,6 +432,8 @@ Rectangle {
                         root.selectToggled()
                         return
                     }
+                    if (root.pulledDead)
+                        return
                     if (root.localMode)
                         root.openRequested()
                     else
@@ -463,7 +484,7 @@ Rectangle {
                 // …and hidden in select mode too (.slint:207 — the checkbox
                 // owns this corner). Pinning writes `album:{albumId}` into the
                 // pinned store, so it needs a catalog id, not a routing mode.
-                visible: root.catalogAffordances && !root.selectMode
+                visible: root.catalogAffordances && !root.selectMode && !root.pulledDead
                 x: parent.width - width - 8
                 y: 8
                 width: 26
@@ -498,7 +519,7 @@ Rectangle {
                 visible: !root.selectMode
                 y: 120
                 width: parent.width
-                shown: root.overlayOn
+                shown: root.overlayOn && !root.pulledDead
 
                 CardOverlayButton {
                     id: favBtn
@@ -635,6 +656,25 @@ Rectangle {
                     y: Math.round((parent.height - height) / 2)
                 }
             }
+
+            // A catalog-withdrawn album is explicit content, not a failed
+            // image load. Keep it above every hover affordance and label it.
+            Rectangle {
+                visible: root.pulledDead
+                anchors.fill: parent
+                radius: theme.radiusSm
+                color: theme.alphaTier(60)
+                Text {
+                    anchors.centerIn: parent
+                    width: parent.width - 20
+                    text: QbzSession.tr("Unavailable", QbzSession.trRev)
+                    color: theme.textPrimary
+                    font.pixelSize: theme.fontLegal
+                    font.weight: theme.weightSemibold
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideRight
+                }
+            }
         }
         Item { width: 1; height: 6 }
 
@@ -643,6 +683,7 @@ Rectangle {
             width: 200
             height: 40 + (root.plays > 0 ? 20 : 0)
             spacing: theme.spacingSm
+            opacity: root.pulledDead ? 0.5 : 1.0
             Column {
                 width: parent.width - (qBadge.visible ? qBadge.width + theme.spacingSm : 0)
                 anchors.verticalCenter: parent.verticalCenter
@@ -651,7 +692,8 @@ Rectangle {
                     width: parent.width
                     height: 20
                     text: root.title
-                    color: titleArea.containsMouse ? theme.accent : theme.textPrimary
+                    color: titleArea.containsMouse && !root.pulledDead
+                        ? theme.accent : theme.textPrimary
                     font.pixelSize: theme.fontBody - 2
                     font.weight: theme.weightMedium
                     verticalAlignment: Text.AlignVCenter
@@ -660,7 +702,7 @@ Rectangle {
                         id: titleArea
                         anchors.fill: parent
                         hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
+                        cursorShape: root.pulledDead ? Qt.ArrowCursor : Qt.PointingHandCursor
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                         onClicked: function (mouse) {
                             if (mouse.button === Qt.RightButton) {
@@ -673,6 +715,8 @@ Rectangle {
                                 root.selectToggled()
                                 return
                             }
+                            if (root.pulledDead)
+                                return
                             if (root.localMode)
                                 root.openRequested()
                             else

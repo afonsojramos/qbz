@@ -109,6 +109,19 @@ enum AudioCommand {
         track_id: u64,
         sample_rate: u32,
         channels: u16,
+        bit_depth: u32,
+    },
+    /// Append an incrementally-fed successor to the current engine. Used by
+    /// Streaming only: the handoff depends on the initial buffer, not on
+    /// downloading a potentially very long track in full inside the 10 s
+    /// gapless window.
+    PlayNextStreaming {
+        source: Arc<BufferedMediaSource>,
+        track_id: u64,
+        sample_rate: u32,
+        channels: u16,
+        bit_depth: u32,
+        duration_secs: u64,
     },
     /// Play a local DSD file via DoP (DSD over PCM) on ALSA direct (DSD plan
     /// Phase 2). The audio thread opens the demuxer + an S32 stream at the
@@ -124,11 +137,21 @@ enum AudioCommand {
 }
 
 /// Pending gapless track data (queued for seamless transition)
+enum GaplessMedia {
+    Buffered(Vec<u8>),
+    Streaming(Arc<BufferedMediaSource>),
+    Direct,
+}
+
 struct GaplessPending {
     track_id: u64,
     duration_secs: u64,
-    data: Vec<u8>,
+    media: GaplessMedia,
+    sample_rate: u32,
+    channels: u16,
+    bit_depth: u32,
     normalization_gain: Option<f32>,
+    gain_atomic: Option<Arc<AtomicU32>>,
 }
 
 struct CursorMediaSource {
@@ -1024,6 +1047,11 @@ pub struct SharedState {
     /// buffer can be sealed once the new source is in place
     /// (`seal_stream_feeder`).
     stream_feeder: Arc<std::sync::Mutex<Option<StreamFeederSlot>>>,
+    /// Feeder for an incrementally-buffered gapless successor. It remains
+    /// separate from `stream_feeder` because both downloads can coexist for
+    /// the current track's final seconds. A normal play/stop cancels both;
+    /// the actual handoff promotes this slot to current ownership.
+    gapless_stream_feeder: Arc<std::sync::Mutex<Option<StreamFeederSlot>>>,
 }
 
 /// A registered live segment feeder: which track it feeds, how to cancel
@@ -1064,6 +1092,7 @@ impl SharedState {
             bit_perfect_mode: Arc::new(AtomicU8::new(0)),
             play_generation: Arc::new(AtomicU64::new(0)),
             stream_feeder: Arc::new(std::sync::Mutex::new(None)),
+            gapless_stream_feeder: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -1154,16 +1183,18 @@ impl SharedState {
     /// source, which is exactly the hand-off the pre-cancel code had. The
     /// buffer is sealed by `seal_stream_feeder` once the new source is in.
     pub(crate) fn cancel_stream_feeder(&self) {
-        let slot = self.stream_feeder.lock().ok().and_then(|s| {
-            s.as_ref()
-                .map(|slot| (slot.track_id, slot.cancel_tx.clone()))
-        });
-        if let Some((track_id, cancel_tx)) = slot {
-            log::info!(
-                "[CMAF-STREAM] Cancelling feeder for superseded track {}",
-                track_id
-            );
-            let _ = cancel_tx.send(true);
+        for slot in [&self.stream_feeder, &self.gapless_stream_feeder] {
+            let feeder = slot.lock().ok().and_then(|s| {
+                s.as_ref()
+                    .map(|slot| (slot.track_id, slot.cancel_tx.clone()))
+            });
+            if let Some((track_id, cancel_tx)) = feeder {
+                log::info!(
+                    "[CMAF-STREAM] Cancelling feeder for superseded track {}",
+                    track_id
+                );
+                let _ = cancel_tx.send(true);
+            }
         }
     }
 
@@ -1175,9 +1206,11 @@ impl SharedState {
     /// working through the buffered remainder this is a no-op — the engine
     /// has already been swapped by the command just sent.
     pub(crate) fn seal_stream_feeder(&self) {
-        let slot = self.stream_feeder.lock().ok().and_then(|mut s| s.take());
-        if let Some(slot) = slot {
-            let _ = slot.writer.complete();
+        for feeder in [&self.stream_feeder, &self.gapless_stream_feeder] {
+            let slot = feeder.lock().ok().and_then(|mut s| s.take());
+            if let Some(slot) = slot {
+                let _ = slot.writer.complete();
+            }
         }
     }
 
@@ -1203,6 +1236,71 @@ impl SharedState {
                 cancel_tx,
                 writer,
             });
+        }
+    }
+
+    fn register_gapless_stream_feeder(
+        &self,
+        track_id: u64,
+        cancel_tx: tokio::sync::watch::Sender<bool>,
+        writer: BufferWriter,
+        gen: u64,
+    ) -> bool {
+        let Ok(mut slot) = self.gapless_stream_feeder.lock() else {
+            let _ = cancel_tx.send(true);
+            return false;
+        };
+        if !self.is_current_play(gen) {
+            drop(slot);
+            let _ = cancel_tx.send(true);
+            return false;
+        }
+        if let Some(previous) = slot.replace(StreamFeederSlot {
+            track_id,
+            cancel_tx,
+            writer,
+        }) {
+            let _ = previous.cancel_tx.send(true);
+            let _ = previous.writer.complete();
+        }
+        true
+    }
+
+    fn cancel_gapless_stream_feeder(&self, track_id: u64) {
+        let slot = self
+            .gapless_stream_feeder
+            .lock()
+            .ok()
+            .and_then(|mut slot| {
+                if slot.as_ref().map(|s| s.track_id) == Some(track_id) {
+                    slot.take()
+                } else {
+                    None
+                }
+            });
+        if let Some(slot) = slot {
+            let _ = slot.cancel_tx.send(true);
+            let _ = slot.writer.complete();
+        }
+    }
+
+    fn promote_gapless_stream_feeder(&self, track_id: u64) {
+        let pending = self
+            .gapless_stream_feeder
+            .lock()
+            .ok()
+            .and_then(|mut slot| {
+                if slot.as_ref().map(|s| s.track_id) == Some(track_id) {
+                    slot.take()
+                } else {
+                    None
+                }
+            });
+        let Some(pending) = pending else {
+            return;
+        };
+        if let Ok(mut current) = self.stream_feeder.lock() {
+            *current = Some(pending);
         }
     }
 
@@ -3142,8 +3240,12 @@ impl Player {
                                         *gapless_pending = Some(GaplessPending {
                                             track_id,
                                             duration_secs: duration,
-                                            data: Vec::new(),
+                                            media: GaplessMedia::Direct,
+                                            sample_rate: rate,
+                                            channels: 2,
+                                            bit_depth: 1,
                                             normalization_gain: None,
+                                            gain_atomic: None,
                                         });
                                         thread_state.set_gapless_next_track_id(track_id);
                                         thread_state.set_gapless_ready(false);
@@ -3703,6 +3805,7 @@ impl Player {
                             track_id,
                             sample_rate,
                             channels,
+                            bit_depth,
                         } => {
                             // Gapless: append next track to existing Rodio Sink
                             let engine = match current_engine.as_mut() {
@@ -3729,13 +3832,6 @@ impl Player {
                                     thread_state.set_gapless_ready(false);
                                     return;
                                 }
-                            }
-
-                            // Don't queue if already streaming
-                            if current_streaming_source.is_some() {
-                                log::info!("Gapless: streaming source active, ignoring PlayNext for track {}", track_id);
-                                thread_state.set_gapless_ready(false);
-                                return;
                             }
 
                             // Decode the next track's audio
@@ -3785,6 +3881,7 @@ impl Player {
                                 };
 
                             // Wrap source with normalization/visualizer pipeline
+                            let pending_gain_atomic = gain_atomic.clone();
                             let source = wrap_source(
                                 source,
                                 normalization,
@@ -3831,8 +3928,12 @@ impl Player {
                             *gapless_pending = Some(GaplessPending {
                                 track_id,
                                 duration_secs: actual_duration,
-                                data,
+                                media: GaplessMedia::Buffered(data),
+                                sample_rate,
+                                channels,
+                                bit_depth,
                                 normalization_gain: normalization,
+                                gain_atomic: pending_gain_atomic,
                             });
                             thread_state.set_gapless_next_track_id(track_id);
                             thread_state.set_gapless_ready(false); // Request fulfilled
@@ -3841,6 +3942,140 @@ impl Player {
                                 "Gapless: queued track {} (duration: {}s) for seamless transition",
                                 track_id,
                                 actual_duration
+                            );
+                        }
+                        AudioCommand::PlayNextStreaming {
+                            source,
+                            track_id,
+                            sample_rate,
+                            channels,
+                            bit_depth,
+                            duration_secs,
+                        } => {
+                            let engine = match current_engine.as_mut() {
+                                Some(engine) => engine,
+                                None => {
+                                    log::warn!(
+                                        "Gapless stream: no engine for successor {}",
+                                        track_id
+                                    );
+                                    thread_state.cancel_gapless_stream_feeder(track_id);
+                                    thread_state.set_gapless_ready(false);
+                                    return;
+                                }
+                            };
+                            if let (Some(cur_sr), Some(cur_ch)) =
+                                (*current_track_sample_rate, *current_track_channels)
+                            {
+                                if sample_rate != cur_sr || channels != cur_ch {
+                                    log::info!(
+                                        "Gapless stream: format mismatch (current {}Hz/{}ch vs next {}Hz/{}ch), ignoring track {}",
+                                        cur_sr,
+                                        cur_ch,
+                                        sample_rate,
+                                        channels,
+                                        track_id
+                                    );
+                                    thread_state.cancel_gapless_stream_feeder(track_id);
+                                    thread_state.set_gapless_ready(false);
+                                    return;
+                                }
+                            }
+                            if !source.has_min_buffer() {
+                                log::warn!(
+                                    "Gapless stream: initial buffer not ready for track {}",
+                                    track_id
+                                );
+                                thread_state.cancel_gapless_stream_feeder(track_id);
+                                thread_state.set_gapless_ready(false);
+                                return;
+                            }
+
+                            let incremental = match IncrementalStreamingSource::new(source.clone()) {
+                                Ok(source) => source,
+                                Err(error) => {
+                                    log::warn!(
+                                        "Gapless stream: decoder setup failed for track {}: {}",
+                                        track_id,
+                                        error
+                                    );
+                                    thread_state.cancel_gapless_stream_feeder(track_id);
+                                    thread_state.set_gapless_ready(false);
+                                    return;
+                                }
+                            };
+                            let norm_settings = thread_settings
+                                .lock()
+                                .ok()
+                                .filter(|settings| settings.normalization_enabled)
+                                .map(|settings| settings.normalization_target_lufs);
+                            let (normalization, gain_atomic) = if let Some(target_lufs) = norm_settings
+                            {
+                                let replay_gain = source.get_buffered_data().and_then(|data| {
+                                    extract_replaygain(&data)
+                                        .map(|gain| calculate_gain_factor(&gain, target_lufs))
+                                });
+                                let atomic = Arc::new(AtomicU32::new(
+                                    replay_gain.unwrap_or(1.0).to_bits(),
+                                ));
+                                if let Some(cached) = loudness_cache.get(track_id) {
+                                    atomic.store(
+                                        db_to_linear(cached.gain_db.min(6.0)).to_bits(),
+                                        Ordering::Relaxed,
+                                    );
+                                }
+                                let _ = analyzer_tx.try_send(AnalyzerMessage::NewTrack {
+                                    track_id,
+                                    sample_rate,
+                                    channels,
+                                    target_lufs,
+                                    gain_atomic: atomic.clone(),
+                                });
+                                (replay_gain, Some(atomic))
+                            } else {
+                                (None, None)
+                            };
+                            let pending_gain_atomic = gain_atomic.clone();
+                            let source_to_play = wrap_source(
+                                Box::new(incremental),
+                                normalization,
+                                gain_atomic,
+                                &analyzer_tx,
+                                &analyzer_enabled,
+                            );
+                            let engine_was_empty = engine.empty();
+                            if let Err(error) = engine.append(source_to_play) {
+                                log::warn!(
+                                    "Gapless stream: append failed for track {}: {}",
+                                    track_id,
+                                    error
+                                );
+                                thread_state.cancel_gapless_stream_feeder(track_id);
+                                thread_state.set_gapless_ready(false);
+                                return;
+                            }
+                            if engine_was_empty
+                                && !thread_state.is_playing.load(Ordering::SeqCst)
+                            {
+                                thread_state.is_playing.store(true, Ordering::SeqCst);
+                            }
+
+                            log::info!("[gapless-trace] set (stream) track {track_id}");
+                            *gapless_pending = Some(GaplessPending {
+                                track_id,
+                                duration_secs,
+                                media: GaplessMedia::Streaming(source),
+                                sample_rate,
+                                channels,
+                                bit_depth,
+                                normalization_gain: normalization,
+                                gain_atomic: pending_gain_atomic,
+                            });
+                            thread_state.set_gapless_next_track_id(track_id);
+                            thread_state.set_gapless_ready(false);
+                            log::info!(
+                                "Gapless stream: queued track {} after its initial buffer",
+                                track_id
                             );
                         }
                     }
@@ -3981,7 +4216,21 @@ impl Player {
                                 // (clean gapless transition), but never the inconsistent
                                 // mid-swap mix.
                                 if let Some(ref pending) = gapless_pending {
-                                    if dur > 0 && pos >= dur {
+                                    // A streaming reader can only hand off
+                                    // after its feeder has sealed the source.
+                                    // The wall-clock timer may reach catalog
+                                    // duration while a stalled feeder is still
+                                    // alive; promoting then would drop its last
+                                    // cancel sender and truncate the outgoing
+                                    // tail. Cached sources have no such gate.
+                                    let outgoing_stream_sealed = current_streaming_source
+                                        .as_ref()
+                                        .map(|source| {
+                                            source.is_complete()
+                                                || source.download_error().is_some()
+                                        })
+                                        .unwrap_or(true);
+                                    if dur > 0 && pos >= dur && outgoing_stream_sealed {
                                         log::info!(
                                             "Gapless transition: track {} -> {} (pos {}s >= dur {}s)",
                                             thread_state.current_track_id.load(Ordering::SeqCst),
@@ -4000,8 +4249,29 @@ impl Player {
                                             .duration
                                             .store(pending.duration_secs, Ordering::SeqCst);
                                         thread_state.start_playback_timer(0);
-                                        current_audio_data = Some(pending.data.clone());
+                                        match &pending.media {
+                                            GaplessMedia::Buffered(data) => {
+                                                current_audio_data = Some(data.clone());
+                                                current_streaming_source = None;
+                                            }
+                                            GaplessMedia::Streaming(source) => {
+                                                current_audio_data = None;
+                                                current_streaming_source = Some(source.clone());
+                                                thread_state
+                                                    .promote_gapless_stream_feeder(pending.track_id);
+                                            }
+                                            GaplessMedia::Direct => {
+                                                current_audio_data = None;
+                                                current_streaming_source = None;
+                                            }
+                                        }
+                                        current_track_sample_rate = Some(pending.sample_rate);
+                                        current_track_channels = Some(pending.channels);
+                                        thread_state
+                                            .set_stream_quality(pending.sample_rate, pending.bit_depth);
+                                        thread_state.set_buffer_progress(0.0);
                                         current_normalization_gain = pending.normalization_gain;
+                                        current_gain_atomic = pending.gain_atomic.clone();
                                         thread_state
                                             .set_normalization_gain(pending.normalization_gain);
                                         // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
@@ -4036,8 +4306,32 @@ impl Player {
                                                 .duration
                                                 .store(pending.duration_secs, Ordering::SeqCst);
                                             thread_state.start_playback_timer(0);
-                                            current_audio_data = Some(pending.data.clone());
+                                            match &pending.media {
+                                                GaplessMedia::Buffered(data) => {
+                                                    current_audio_data = Some(data.clone());
+                                                    current_streaming_source = None;
+                                                }
+                                                GaplessMedia::Streaming(source) => {
+                                                    current_audio_data = None;
+                                                    current_streaming_source = Some(source.clone());
+                                                    thread_state.promote_gapless_stream_feeder(
+                                                        pending.track_id,
+                                                    );
+                                                }
+                                                GaplessMedia::Direct => {
+                                                    current_audio_data = None;
+                                                    current_streaming_source = None;
+                                                }
+                                            }
+                                            current_track_sample_rate = Some(pending.sample_rate);
+                                            current_track_channels = Some(pending.channels);
+                                            thread_state.set_stream_quality(
+                                                pending.sample_rate,
+                                                pending.bit_depth,
+                                            );
+                                            thread_state.set_buffer_progress(0.0);
                                             current_normalization_gain = pending.normalization_gain;
+                                            current_gain_atomic = pending.gain_atomic.clone();
                                             thread_state
                                                 .set_normalization_gain(pending.normalization_gain);
                                             // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
@@ -4084,7 +4378,6 @@ impl Player {
                                     && !gapless_request_armed
                                     && !thread_state.is_gapless_ready()
                                     && thread_state.get_gapless_next_track_id() == 0
-                                    && current_streaming_source.is_none()
                                 {
                                     log::info!("Gapless: approaching end of track ({}s/{}s), requesting next", pos, dur);
                                     thread_state.set_gapless_ready(true);
@@ -4511,15 +4804,148 @@ impl Player {
         r
     }
 
+    /// Queue a cold Qobuz successor as an incremental source. This is the
+    /// Streaming-only counterpart to [`Self::fetch_for_gapless`]: only the
+    /// initial buffer must win the final 10-second race, so track length no
+    /// longer determines whether the transition is seamless.
+    pub async fn queue_next_streaming(
+        &self,
+        client: &QobuzClient,
+        track_id: u64,
+        quality: Quality,
+    ) -> Result<(), String> {
+        let gen = self.state.current_play_generation();
+        let cmaf_info = qbz_qobuz::cmaf::setup_streaming(client, track_id, quality).await?;
+        if !self.is_current_play(gen) {
+            return Err("current track changed during gapless stream setup".to_string());
+        }
+
+        let sample_rate = cmaf_info.sampling_rate.unwrap_or(44_100);
+        let channels = 2u16;
+        let bit_depth = cmaf_info.bit_depth.unwrap_or(16);
+        let total_flac_size = cmaf_info.flac_header.len() as u64
+            + cmaf_info
+                .segment_table
+                .iter()
+                .map(|segment| segment.byte_len as u64)
+                .sum::<u64>();
+        let total_samples: u64 = cmaf_info
+            .segment_table
+            .iter()
+            .map(|segment| segment.sample_count as u64)
+            .sum();
+        let duration_secs = total_samples / sample_rate.max(1) as u64;
+        let speed_mbps = if cmaf_info.init_fetch_ms > 0 {
+            let init_bytes = cmaf_info.flac_header.len() as f64 + 4096.0;
+            (init_bytes / (cmaf_info.init_fetch_ms as f64 / 1000.0)) / (1024.0 * 1024.0)
+        } else {
+            10.0
+        };
+
+        let mut config = StreamingConfig::from_speed_mbps(speed_mbps);
+        let user_secs = self
+            .audio_settings
+            .lock()
+            .map(|settings| settings.stream_buffer_seconds)
+            .unwrap_or(2);
+        let bytes_per_second = total_flac_size / duration_secs.max(1);
+        let user_floor = (user_secs as u64).saturating_mul(bytes_per_second) as usize;
+        config.initial_buffer_bytes = config
+            .initial_buffer_bytes
+            .max(user_floor)
+            .clamp(256 * 1024, 8 * 1024 * 1024);
+
+        let (source, writer) = BufferedMediaSource::new(config, Some(total_flac_size));
+        let source = Arc::new(source);
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        if !self.state.register_gapless_stream_feeder(
+            track_id,
+            cancel_tx,
+            writer.clone(),
+            gen,
+        ) {
+            return Err("gapless stream was superseded before download".to_string());
+        }
+
+        let url_template = cmaf_info.url_template;
+        let content_key = cmaf_info.content_key;
+        let flac_header = cmaf_info.flac_header;
+        let n_segments = cmaf_info.n_segments;
+        let cache = self.audio_cache.clone();
+        tokio::spawn(async move {
+            match Self::cmaf_stream_segments(
+                &url_template,
+                n_segments,
+                content_key,
+                flac_header,
+                writer,
+                track_id,
+                cache,
+                true,
+                total_flac_size,
+                cancel_rx,
+            )
+            .await
+            {
+                Ok(true) => log::info!("[GAPLESS-STREAM] Track {track_id} fully buffered"),
+                Ok(false) => {}
+                Err(error) => {
+                    log::warn!("[GAPLESS-STREAM] Track {track_id} feeder failed: {error}")
+                }
+            }
+        });
+
+        let wait_started = Instant::now();
+        const INITIAL_BUFFER_TIMEOUT: Duration = Duration::from_secs(8);
+        while !source.has_min_buffer()
+            && source.download_error().is_none()
+            && wait_started.elapsed() < INITIAL_BUFFER_TIMEOUT
+            && self.is_current_play(gen)
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        if !self.is_current_play(gen) {
+            self.state.cancel_gapless_stream_feeder(track_id);
+            return Err("gapless stream superseded during initial buffering".to_string());
+        }
+        if let Some(error) = source.download_error() {
+            self.state.cancel_gapless_stream_feeder(track_id);
+            return Err(error);
+        }
+        if !source.has_min_buffer() {
+            self.state.cancel_gapless_stream_feeder(track_id);
+            return Err("gapless stream initial buffer timed out".to_string());
+        }
+
+        self.tx
+            .send(AudioCommand::PlayNextStreaming {
+                source,
+                track_id,
+                sample_rate,
+                channels,
+                bit_depth,
+                duration_secs,
+            })
+            .map_err(|error| {
+                self.state.cancel_gapless_stream_feeder(track_id);
+                format!("failed to queue gapless stream: {error}")
+            })?;
+        log::info!(
+            "[GAPLESS-STREAM] Track {} initial buffer ready in {}ms",
+            track_id,
+            wait_started.elapsed().as_millis()
+        );
+        Ok(())
+    }
+
     /// Download a track fully into the L1/L2 cache **without** starting
     /// playback.
     ///
-    /// Gapless playback requires upcoming tracks to be cache hits so they
-    /// play via `play_data` (fully in-memory) rather than the streaming
-    /// path — the audio engine's `PlayNext` handler ignores gapless
-    /// requests while a streaming source is active. This method is the
-    /// prefetch primitive the controller drives for the next 1-2 queue
-    /// tracks.
+    /// Normal cached gapless playback benefits from upcoming tracks being
+    /// cache hits so they can be appended fully in-memory. Streaming only
+    /// uses [`Self::queue_next_streaming`] instead, which queues a cold
+    /// successor after its initial buffer. This method remains the prefetch
+    /// primitive the controller drives for the next 1-2 queue tracks.
     ///
     /// Mirrors the Tauri V2 prefetch download: CMAF `download_full` first
     /// (Akamai CDN), legacy `/track/getFileUrl` full download as fallback.
@@ -5117,6 +5543,7 @@ impl Player {
                 track_id,
                 sample_rate: meta.sample_rate,
                 channels: meta.channels,
+                bit_depth: meta.bit_depth.unwrap_or(16),
             })
             .map_err(|e| {
                 log::error!("Player: Failed to send PlayNext to audio thread: {}", e);
@@ -5770,7 +6197,7 @@ pub fn external_content_type(mime: &str, format_id: u32) -> String {
 mod tests {
     use super::compute_needs_new_stream;
     use super::external_content_type;
-    use super::{DsdErrorReport, SharedState};
+    use super::{BufferedMediaSource, DsdErrorReport, SharedState, StreamingConfig};
 
     struct FakeDsdSource {
         words: std::vec::IntoIter<i32>,
@@ -5822,6 +6249,57 @@ mod tests {
         assert_eq!(wrapped.next(), None);
         assert!(!state.has_stream_error());
         assert_eq!(state.take_stream_error_message(), None);
+    }
+
+    #[test]
+    fn superseding_play_cancels_current_and_gapless_stream_feeders() {
+        let state = SharedState::new();
+        let (_, current_writer) =
+            BufferedMediaSource::new(StreamingConfig::fast_start(), Some(1024));
+        let (_, next_writer) =
+            BufferedMediaSource::new(StreamingConfig::fast_start(), Some(1024));
+        let (current_tx, current_rx) = tokio::sync::watch::channel(false);
+        let (next_tx, next_rx) = tokio::sync::watch::channel(false);
+        let generation = state.current_play_generation();
+        state.register_stream_feeder(1, current_tx, current_writer, generation);
+        assert!(state.register_gapless_stream_feeder(
+            2,
+            next_tx,
+            next_writer,
+            generation
+        ));
+
+        state.cancel_stream_feeder();
+
+        assert!(*current_rx.borrow());
+        assert!(*next_rx.borrow());
+    }
+
+    #[test]
+    fn gapless_handoff_promotes_the_successor_feeder() {
+        let state = SharedState::new();
+        let (_, writer) = BufferedMediaSource::new(StreamingConfig::fast_start(), Some(1024));
+        let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
+        let generation = state.current_play_generation();
+        assert!(state.register_gapless_stream_feeder(
+            42,
+            cancel_tx,
+            writer,
+            generation
+        ));
+
+        state.promote_gapless_stream_feeder(42);
+
+        assert_eq!(
+            state
+                .stream_feeder
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|slot| slot.track_id),
+            Some(42)
+        );
+        assert!(state.gapless_stream_feeder.lock().unwrap().is_none());
     }
 
     #[test]

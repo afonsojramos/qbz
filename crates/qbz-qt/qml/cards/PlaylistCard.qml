@@ -136,6 +136,11 @@ Rectangle {
         plMenuLoader.active = true
         plMenuLoader.item.openAtCursor(anchor, x, y)
     }
+    function releaseForReuse() {
+        if (plMenuLoader.item)
+            plMenuLoader.item.close()
+        plMenuLoader.active = false
+    }
 
     Connections {
         target: QbzLibrary

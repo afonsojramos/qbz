@@ -118,6 +118,11 @@ Rectangle {
         agMenuLoader.active = true
         agMenuLoader.item.openAtCursor(anchor, x, y)
     }
+    function releaseForReuse() {
+        if (agMenuLoader.item)
+            agMenuLoader.item.close()
+        agMenuLoader.active = false
+    }
 
     Connections {
         target: QbzLibrary

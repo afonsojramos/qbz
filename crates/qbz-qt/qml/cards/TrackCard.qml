@@ -35,6 +35,13 @@ Rectangle {
 
     readonly property bool overlayOn: tcArtArea.containsMouse || favBtn.hovered
         || playBtn.hovered || moreBtn.hovered
+    // Same pulled-track contract as rows/TrackRow.qml. A catalog withdrawal
+    // is inert, except when the user already owns a complete offline copy.
+    // `cacheStatus` is a live scalar because `item` is a plain JS snapshot.
+    readonly property bool pulled: root.item.qobuzUnavailable === true
+    property int cacheStatus: root.item.cacheStatus !== undefined
+        ? root.item.cacheStatus : 0
+    readonly property bool pulledDead: root.pulled && root.cacheStatus !== 3
 
     implicitWidth: 200
     implicitHeight: 246
@@ -46,9 +53,15 @@ Rectangle {
     // re-established on every new row object so the document stays
     // authoritative.
     property bool favorite: root.item.isFavorite === true
-    onItemChanged: root.favorite = Qt.binding(function () {
-        return root.item.isFavorite === true
-    })
+    onItemChanged: {
+        root.favorite = Qt.binding(function () {
+            return root.item.isFavorite === true
+        })
+        root.cacheStatus = Qt.binding(function () {
+            return root.item.cacheStatus !== undefined
+                ? root.item.cacheStatus : 0
+        })
+    }
 
     function toggleFavorite() {
         root.favorite = !root.favorite
@@ -56,8 +69,19 @@ Rectangle {
     }
 
     function openMenu(anchor, x, y) {
+        if (root.menuModel().length === 0)
+            return
         trackMenuLoader.active = true
         trackMenuLoader.item.openAtCursor(anchor, x, y)
+    }
+    function playNow() {
+        if (!root.pulledDead)
+            QbzPlayer.playTrack(root.item.id)
+    }
+    function releaseForReuse() {
+        if (trackMenuLoader.item)
+            trackMenuLoader.item.close()
+        trackMenuLoader.active = false
     }
 
     // Fan-out + rollback (the shape cards/AlbumCard.qml uses for pin).
@@ -67,6 +91,13 @@ Rectangle {
             var tid = (root.item && root.item.id !== undefined) ? root.item.id : ""
             if (tid !== "" && key === "track:" + tid)
                 root.favorite = value
+        }
+    }
+    Connections {
+        target: QbzShell
+        function onTrackCacheStatusChanged(trackId, status, progress) {
+            if (trackId === (root.item.id || ""))
+                root.cacheStatus = status
         }
     }
 
@@ -89,7 +120,7 @@ Rectangle {
                 anchors.fill: parent
                 radius: theme.radiusSm
                 color: "#000000"
-                opacity: root.overlayOn ? 0.6 : 0.0
+                opacity: root.overlayOn && !root.pulledDead ? 0.6 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 150 } }
             }
             // Body click PLAYS the track (TrackCard hover); right press opens
@@ -98,13 +129,13 @@ Rectangle {
                 id: tcArtArea
                 anchors.fill: parent
                 hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
+                cursorShape: root.pulledDead ? Qt.ArrowCursor : Qt.PointingHandCursor
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                 onClicked: function (mouse) {
                     if (mouse.button === Qt.RightButton)
                         root.openMenu(tcArtArea, mouse.x, mouse.y)
                     else
-                        QbzPlayer.playTrack(root.item.id)
+                        root.playNow()
                 }
             }
             // Hover overlay — favorite / play / more (y=120, h=44,
@@ -112,7 +143,7 @@ Rectangle {
             CardOverlayRow {
                 y: 120
                 width: parent.width
-                shown: root.overlayOn
+                shown: root.overlayOn && !root.pulledDead
                 CardOverlayButton {
                     id: favBtn
                     name: root.favorite ? "heart-filled" : "heart"
@@ -125,7 +156,7 @@ Rectangle {
                     name: "play-fill"
                     primary: true
                     anchors.verticalCenter: parent.verticalCenter
-                    onClicked: QbzPlayer.playTrack(root.item.id)
+                    onClicked: root.playNow()
                 }
                 CardOverlayButton {
                     id: moreBtn
@@ -171,6 +202,25 @@ Rectangle {
                     y: Math.round((parent.height - height) / 2)
                 }
             }
+            // Honest dead-card state. The scrim sits above the hover controls
+            // (which are not mounted visually in this state) and carries a
+            // translated label instead of relying on a barely perceptible dim.
+            Rectangle {
+                visible: root.pulledDead
+                anchors.fill: parent
+                radius: theme.radiusSm
+                color: theme.alphaTier(60)
+                Text {
+                    anchors.centerIn: parent
+                    width: parent.width - 20
+                    text: QbzSession.tr("Unavailable", QbzSession.trRev)
+                    color: theme.textPrimary
+                    font.pixelSize: theme.fontLegal
+                    font.weight: theme.weightSemibold
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideRight
+                }
+            }
             Loader {
                 id: trackMenuLoader
                 active: false
@@ -187,6 +237,7 @@ Rectangle {
             width: 200
             height: 40
             spacing: theme.spacingSm
+            opacity: root.pulledDead ? 0.5 : 1.0
             Column {
                 width: parent.width - (tcQ.visible ? tcQ.width + theme.spacingSm : 0)
                 anchors.verticalCenter: parent.verticalCenter
@@ -195,7 +246,8 @@ Rectangle {
                     width: parent.width
                     height: 20
                     text: root.item.title || ""
-                    color: tcTitleArea.containsMouse ? theme.accent : theme.textPrimary
+                    color: tcTitleArea.containsMouse && !root.pulledDead
+                        ? theme.accent : theme.textPrimary
                     font.pixelSize: theme.fontBody - 2
                     font.weight: theme.weightMedium
                     verticalAlignment: Text.AlignVCenter
@@ -204,13 +256,13 @@ Rectangle {
                         id: tcTitleArea
                         anchors.fill: parent
                         hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
+                        cursorShape: root.pulledDead ? Qt.ArrowCursor : Qt.PointingHandCursor
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                         onClicked: function (mouse) {
                             if (mouse.button === Qt.RightButton)
                                 root.openMenu(tcTitleArea, mouse.x, mouse.y)
                             else
-                                QbzPlayer.playTrack(root.item.id)
+                                root.playNow()
                         }
                     }
                 }
@@ -245,19 +297,24 @@ Rectangle {
     function menuModel() {
         var t = QbzSession.tr
         var r = QbzSession.trRev
-        var m = [
-            { "label": t("Play", r), "icon": "play-fill", "action": "play" },
-            { "label": t("Play next", r), "icon": "list-start", "action": "next" },
-            { "label": t("Play later", r), "icon": "list-plus", "action": "later" },
-            { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" },
-        ]
+        var m = []
+        if (!root.pulledDead) {
+            m.push({ "label": t("Play", r), "icon": "play-fill", "action": "play" })
+            m.push({ "label": t("Play next", r), "icon": "list-start", "action": "next" })
+            m.push({ "label": t("Play later", r), "icon": "list-plus", "action": "later" })
+            m.push({ "label": t("Add to queue", r), "icon": "list-end", "action": "queue" })
+        }
         if (root.item.artistId) m.push({ "label": t("Go to artist", r), "icon": "user", "action": "go-artist" })
         if (root.item.albumId) m.push({ "label": t("Go to album", r), "icon": "disc", "action": "go-album" })
-        m.push({ "label": root.favorite ? t("Remove from Library", r) : t("Add to Library", r),
-                 "icon": root.favorite ? "heart-filled" : "heart", "action": "favorite" })
+        if (!root.pulledDead)
+            m.push({ "label": root.favorite ? t("Remove from Library", r) : t("Add to Library", r),
+                     "icon": root.favorite ? "heart-filled" : "heart", "action": "favorite" })
         return m
     }
     function trackAction(a) {
+        if ((a === "play" || a === "next" || a === "later" || a === "queue")
+                && root.pulledDead)
+            return
         if (a === "play") QbzPlayer.playTrack(root.item.id)
         else if (a === "next") QbzPlayer.enqueueTrack(root.item.id, "next")
         else if (a === "later") QbzPlayer.enqueueTrack(root.item.id, "later")

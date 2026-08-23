@@ -58,28 +58,41 @@ Rectangle {
         cursorShape: Qt.PointingHandCursor
         onClicked: function (mouse) {
             if (mouse.button === Qt.RightButton)
-                rowMenu.openAtCursor(rowArea, mouse.x, mouse.y)
+                root.openMenu(rowArea, mouse.x, mouse.y)
             else
                 QbzBridge.openPlaylist(root.item.id || "")
         }
     }
 
-    CardMenu {
-        id: rowMenu
-        menuWidth: 196
-        entries: [
-            { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-            { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-            { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
-            { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-        ]
-        onPicked: function (a) {
-            var id = root.item.id || ""
-            if (id === "") return
-            if (a === "play") QbzPlayer.playPlaylistById(id)
-            else QbzPlayer.enqueuePlaylistById(id, a)
+    Loader {
+        id: rowMenuLoader
+        active: false
+        sourceComponent: CardMenu {
+            menuWidth: 196
+            entries: [
+                { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
+                { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
+                { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
+                { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+            ]
+            onPicked: function (a) {
+                var id = root.item.id || ""
+                if (id === "") return
+                if (a === "play") QbzPlayer.playPlaylistById(id)
+                else QbzPlayer.enqueuePlaylistById(id, a)
+            }
         }
     }
+    function openMenu(anchor, x, y) {
+        rowMenuLoader.active = true
+        rowMenuLoader.item.openAtCursor(anchor, x, y)
+    }
+    function releaseForReuse() {
+        if (rowMenuLoader.item)
+            rowMenuLoader.item.close()
+        rowMenuLoader.active = false
+    }
+    ListView.onPooled: root.releaseForReuse()
 
     Row {
         anchors.fill: parent

@@ -661,6 +661,15 @@ pub struct Album {
     pub composer: Option<Artist>,
 }
 
+impl Album {
+    /// Interpret the catalog's optional availability bit without turning an
+    /// omitted field into a withdrawal. Only an explicit `false` means the
+    /// album is unavailable.
+    pub fn is_streamable(&self) -> bool {
+        self.streamable.unwrap_or(true)
+    }
+}
+
 /// Album artist contributor entry (main artist + featured artists).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlbumArtist {
@@ -1955,6 +1964,23 @@ mod purchase_deserializer_tests {
             !t.is_streamable(),
             "Some(false) is the ONLY shape that marks a track unavailable"
         );
+    }
+
+    #[test]
+    fn catalog_album_streamable_absent_reads_available() {
+        let album: Album = serde_json::from_str(r#"{"id":"a","title":"A"}"#).unwrap();
+        assert_eq!(album.streamable, None);
+        assert!(album.is_streamable());
+    }
+
+    #[test]
+    fn catalog_album_streamable_false_is_honoured() {
+        let album: Album = serde_json::from_str(
+            r#"{"id":"a","title":"A","streamable":false}"#,
+        )
+        .unwrap();
+        assert_eq!(album.streamable, Some(false));
+        assert!(!album.is_streamable());
     }
 
     /// `downloadable` drives three list behaviours (the hide-unavailable filter,

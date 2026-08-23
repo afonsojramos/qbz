@@ -56,7 +56,53 @@ Rectangle {
     readonly property int atmoReach: 1 + 8 + 26
 
     // The view's album + url-keyed cover map (artwork pipeline).
-    readonly property var album: JSON.parse(QbzAlbum.albumJson)
+    //
+    // Applied imperatively so a SAME-ALBUM deferred rail publish can preserve
+    // the ListView offset. Binding `model` to a freshly parsed JS array makes
+    // QQuickItemView reset contentY whenever Similar albums / Suggestions / More
+    // from this artist lands — the forced jump the owner caught while reading.
+    property var album: ({})
+    property string documentAlbumId: ""
+    property int albumDocumentEpoch: 0
+    property real albumRestoreY: 0
+
+    function parseAlbumDocument() {
+        try {
+            return JSON.parse(QbzAlbum.albumJson)
+        } catch (e) {
+            return ({})
+        }
+    }
+
+    function applyAlbumDocument() {
+        var next = root.parseAlbumDocument()
+        var nextHeader = next.header || ({})
+        var nextId = nextHeader.id !== undefined && nextHeader.id !== null
+            ? String(nextHeader.id) : ""
+        var sameAlbum = nextId !== "" && nextId === root.documentAlbumId
+        var savedY = sameAlbum ? pageFlick.contentY : 0
+        root.albumDocumentEpoch += 1
+        var epoch = root.albumDocumentEpoch
+        root.album = next
+        if (nextId !== "")
+            root.documentAlbumId = nextId
+        if (!sameAlbum || savedY <= pageFlick.originY)
+            return
+        root.albumRestoreY = savedY
+        // The model reset and its content-height polish happen after the
+        // document assignment. One deferred restore coalesces a publish burst
+        // and clamps if the replacement document is genuinely shorter.
+        Qt.callLater(function () {
+            if (epoch !== root.albumDocumentEpoch
+                    || nextId !== root.documentAlbumId)
+                return
+            pageFlick.forceLayout()
+            var minY = pageFlick.originY
+            var maxY = minY + Math.max(0, pageFlick.contentHeight - pageFlick.height)
+            pageFlick.contentY = Math.max(minY, Math.min(root.albumRestoreY, maxY))
+        })
+    }
+
     readonly property var albumHeader: album.header || ({})
     readonly property var tracks: album.tracks || []
     // `header.awards`, NOT `album.awards`. It is a field of AlbumHeader
@@ -252,7 +298,15 @@ Rectangle {
                 root.setToggleState("blocked", value)
         }
     }
-    Component.onCompleted: { syncAlbumState(); dispatchCovers() }
+    Component.onCompleted: {
+        root.applyAlbumDocument()
+        syncAlbumState()
+        dispatchCovers()
+    }
+    Connections {
+        target: QbzAlbum
+        function onAlbumJsonChanged() { root.applyAlbumDocument() }
+    }
     onAlbumChanged: { syncAlbumState(); dispatchCovers() }
     // The derived binding settles AFTER onAlbumChanged fires (stale race) —
     // redispatch when the header itself updates.

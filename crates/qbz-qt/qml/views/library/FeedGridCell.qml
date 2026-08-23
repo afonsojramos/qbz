@@ -27,6 +27,47 @@ Item {
     /// animation cap counts from the viewport, never from a 10k-row model.
     property int cellIndex: 0
 
+    readonly property string identity: (cell.item.kind || "") + ":" + (cell.item.id || "")
+    function releaseLoadedCard() {
+        if (cardLoader.item
+            && typeof cardLoader.item.releaseForReuse === "function")
+            cardLoader.item.releaseForReuse()
+    }
+    function restoreMutableBindings() {
+        var loaded = cardLoader.item
+        if (!loaded)
+            return
+        if (cell.item.kind === "album") {
+            loaded.isFavorite = Qt.binding(function () {
+                return cell.item.isFavorite === true
+            })
+            loaded.isPinned = Qt.binding(function () {
+                return cell.item.isPinned === true
+            })
+        } else if (cell.item.kind === "artist"
+                   || cell.item.kind === "playlist") {
+            loaded.isPinned = Qt.binding(function () {
+                return cell.item.isPinned === true
+            })
+        }
+    }
+    function scheduleMutableRestore() {
+        var expected = cell.identity
+        Qt.callLater(function () {
+            if (cell.identity === expected)
+                cell.restoreMutableBindings()
+        })
+    }
+    onItemChanged: {
+        // A popup is a window-overlay child; close it while the old loaded
+        // card still exists, then restore optimistic scalar bindings after
+        // Loader has selected the new kind.
+        cell.releaseLoadedCard()
+        cell.scheduleMutableRestore()
+    }
+    GridView.onPooled: cell.releaseLoadedCard()
+    GridView.onReused: cell.scheduleMutableRestore()
+
     width: 200
     height: 246
 
@@ -43,6 +84,9 @@ Item {
             artSource: cell.view.artMap[cell.item.artKey] || ""
             isFavorite: cell.item.isFavorite
             isPinned: cell.item.isPinned
+            qobuzUnavailable: cell.item.qobuzUnavailable === true
+            cacheStatus: cell.item.cacheStatus !== undefined
+                ? cell.item.cacheStatus : 0
             // The pin payload's display snapshot: the REMOTE url, never
             // `artMap` (a local file:// cache path that means nothing after a
             // cache wipe). Without it every album pinned from the Library grid
@@ -122,6 +166,7 @@ Item {
         }
     }
     Loader {
+        id: cardLoader
         anchors.fill: parent
         sourceComponent: cell.item.kind === "group-header" ? groupHeaderComp
             : cell.item.kind === "album" ? albumCardComp
@@ -129,6 +174,7 @@ Item {
             : cell.item.kind === "artist" ? artistCardComp
             : cell.item.kind === "playlist" ? playlistCardComp
             : labelCardComp
+        onLoaded: cell.restoreMutableBindings()
     }
     // THE fix for "many grey squares that fill in unevenly": each pending
     // cover shimmers on its own and stops the moment ITS file:// path lands in
@@ -146,6 +192,10 @@ Item {
                   || cell.item.kind === "playlist")
             && cell.item.imageUrl !== ""
             && (cell.view.artMap[cell.item.artKey] || "") === ""
+            // TrackCard's unavailable scrim is semantic content. A pending
+            // artwork skeleton must never paint over it and turn the honest
+            // state back into an ambiguous grey tile.
+            && !(cardLoader.item && cardLoader.item.pulledDead === true)
         phase: cell.view.skelPhase
         cellIndex: cell.cellIndex
     }

@@ -207,6 +207,7 @@ Item {
             anchors.rightMargin: 22
             clip: true
             cacheBuffer: 56 * 8
+            reuseItems: true
             boundsBehavior: Flickable.StopAtBounds
             model: root.entries
 

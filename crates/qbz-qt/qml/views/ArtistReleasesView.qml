@@ -11,18 +11,19 @@
 //   :36-103  fixed 56px header — artist kicker + bucket title LEFT, the sort
 //            select RIGHT, both vertically centred on y=25
 //   :131-138 body Column padding 32 / 32, top 8, bottom 100, spacing 0
-//   :121-129 infinite scroll: within 600px of the bottom, has-more, and
-//            neither a first page nor a tail page already in flight
+//   :121-129 originally used infinite scroll. Qt uses the shared explicit
+//            Load-more control so a tail publish never changes the Flickable
+//            extent from inside its momentum handler.
 //   :140-203 THREE mutually exclusive body states — loading, error+Retry,
 //            empty — then the grid, then the tail spinner
 //   :205-231 200x266 cards, gap 24, view-mode hard-wired "grid"
 //   :242-256 scrollbar below the header
 //
 // WHAT THIS PAGE DELIBERATELY DOES NOT HAVE (checked against the .slint, not
-// against its cousins): no search field, no group-by, no Hi-Res filter, no
-// grid/list toggle, and no "Load more" button. LabelReleasesView has all five;
-// this is a sibling of DiscoverBrowseView, not of that page. One sort select is
-// the entire toolbar.
+// against its cousins): no search field, no group-by, no Hi-Res filter and no
+// grid/list toggle. The explicit Load-more affordance is a Qt performance
+// policy shared by every paginated View-all; one sort select remains the
+// entire toolbar.
 //
 // NAV BUTTONS: the .slint draws a NavButtons pair at x=32 and starts its text
 // stack 16px after it. In this port back/forward live in the shell header
@@ -205,22 +206,6 @@ Rectangle {
                 contentHeight: page.implicitHeight
                 boundsBehavior: Flickable.StopAtBounds
 
-                // Infinite scroll, guarded exactly as the .slint is (:123-126).
-                // There is NO "Load more" button on this page.
-                onContentYChanged: {
-                    if (contentY + height >= contentHeight - 600
-                        && root.doc.hasMore === true
-                        && root.doc.loadMoreLoading !== true
-                        && root.doc.loading !== true) {
-                        // Snapshot the ids already on screen so ONLY the page
-                        // that lands fades in. BEFORE the bridge call, which
-                        // may republish synchronously
-                        // (LabelReleasesView.qml:327's rule).
-                        collection.armTailFade()
-                        QbzArtist.releasesLoadMore()
-                    }
-                }
-
                 Column {
                     id: page
                     width: parent.width
@@ -328,12 +313,26 @@ Rectangle {
                         contentOffset: 8
                     }
 
-                    // --- Tail spinner (.slint:233-237) ---------------------
-                    Item { visible: root.doc.loadMoreLoading === true; width: 1; height: 24 }
-                    QbzSpinner {
-                        visible: root.doc.loadMoreLoading === true
-                        size: 28
-                        anchors.horizontalCenter: parent.horizontalCenter
+                    Item {
+                        visible: root.albums.length > 0 && root.doc.hasMore === true
+                        width: parent.width - 64
+                        height: visible ? loadMore.height : 0
+
+                        QbzLoadMore {
+                            id: loadMore
+                            width: parent.width
+                            buttonHeight: 32
+                            busy: root.doc.loadMoreLoading === true
+                            skeleton: "cards"
+                            cellW: 224
+                            cellH: 290
+                            onClicked: {
+                                // Arm before the bridge call: a cached page
+                                // may republish synchronously.
+                                collection.armTailFade()
+                                QbzArtist.releasesLoadMore()
+                            }
+                        }
                     }
                 }
             }

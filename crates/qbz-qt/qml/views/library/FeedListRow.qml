@@ -23,12 +23,26 @@ Rectangle {
     property var item: ({})
     /// Viewport-relative position, for the skeleton's animated cap.
     property int rowIndex: 0
+    /// Absolute model position, for the stable zebra independent of pooling.
+    property int displayIndex: 0
 
     QbzTheme { id: theme }
 
-    height: 44
+    height: 50
     radius: 6
-    color: rowArea.containsMouse ? theme.surfaceHover : "transparent"
+    color: rowArea.containsMouse && !feedRow.pulledDead
+        ? theme.surfaceHover
+        : (feedRow.displayIndex % 2 === 1 ? theme.alphaTier(4) : "transparent")
+
+    // Catalog-withdrawal contract shared with TrackRow/TrackCard. A complete
+    // offline copy keeps the row live; the bridge signal updates that answer
+    // without waiting for a full Library document republish.
+    readonly property bool pulled: (feedRow.item.kind === "track"
+        || feedRow.item.kind === "album")
+        && feedRow.item.qobuzUnavailable === true
+    property int cacheStatus: feedRow.item.cacheStatus !== undefined
+        ? feedRow.item.cacheStatus : 0
+    readonly property bool pulledDead: feedRow.pulled && feedRow.cacheStatus !== 3
 
     // Live heart, as a real property — `item.isFavorite = !…` notified
     // nothing (plain JS object; see rows/TrackRow.qml for the measurement)
@@ -36,12 +50,40 @@ Rectangle {
     // binding is re-established on every new row object, so a republished
     // feed still wins.
     property bool favorite: feedRow.item.isFavorite === true
-    onItemChanged: feedRow.favorite = Qt.binding(function () {
-        return feedRow.item.isFavorite === true
-    })
+    onItemChanged: {
+        feedRow.favorite = Qt.binding(function () {
+            return feedRow.item.isFavorite === true
+        })
+        feedRow.cacheStatus = Qt.binding(function () {
+            return feedRow.item.cacheStatus !== undefined
+                ? feedRow.item.cacheStatus : 0
+        })
+        feedRow.releaseForReuse()
+    }
     function toggleFavorite() {
         feedRow.favorite = !feedRow.favorite
         QbzLibrary.libraryToggleFavorite(feedRow.item.kind, feedRow.item.id)
+    }
+    function albumMenuModel() {
+        var t = QbzSession.tr
+        var r = QbzSession.trRev
+        var m = []
+        if (!feedRow.pulledDead) {
+            m.push({ "label": t("Open album", r), "icon": "library-big", "action": "open" })
+            m.push({ "label": t("Play", r), "icon": "play-fill", "action": "play" })
+        }
+        // The old id may be dead, but the user must still be able to remove
+        // its favorite entry instead of being left with a permanent tombstone.
+        m.push({ "label": feedRow.favorite ? t("Remove from Library", r) : t("Add to Library", r),
+                 "icon": feedRow.favorite ? "heart-filled" : "heart", "action": "favorite" })
+        return m
+    }
+    function albumAction(action) {
+        if ((action === "open" || action === "play") && feedRow.pulledDead)
+            return
+        if (action === "open") QbzAlbum.openAlbum(feedRow.item.id)
+        else if (action === "play") QbzPlayer.playAlbum(feedRow.item.id)
+        else if (action === "favorite") feedRow.toggleFavorite()
     }
     // Settle + rollback + cross-surface walk. `artKey` IS
     // `library_qt::feed_key(kind, id)`, the very key the signal carries —
@@ -54,6 +96,16 @@ Rectangle {
                 feedRow.favorite = value
         }
     }
+    Connections {
+        target: QbzShell
+        function onTrackCacheStatusChanged(trackId, status, progress) {
+            // Numeric Qobuz ids overlap across entity types. This signal is
+            // track-scoped and must not revive an album with the same number.
+            if (feedRow.item.kind === "track"
+                    && trackId === (feedRow.item.id || ""))
+                feedRow.cacheStatus = status
+        }
+    }
 
     // Row body — click plays/opens by kind. Declared BEFORE the cells so
     // the ⋯ button and art-play win their clicks.
@@ -61,10 +113,16 @@ Rectangle {
         id: rowArea
         anchors.fill: parent
         hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
+        cursorShape: feedRow.pulledDead ? Qt.ArrowCursor : Qt.PointingHandCursor
         onClicked: {
-            if (feedRow.item.kind === "track") feedRow.view.playTrackInContext(feedRow.item.id)
-            else if (feedRow.item.kind === "album") QbzAlbum.openAlbum(feedRow.item.id)
+            if (feedRow.item.kind === "track") {
+                if (!feedRow.pulledDead)
+                    feedRow.view.playTrackInContext(feedRow.item.id)
+            }
+            else if (feedRow.item.kind === "album") {
+                if (!feedRow.pulledDead)
+                    QbzAlbum.openAlbum(feedRow.item.id)
+            }
             else if (feedRow.item.kind === "artist") QbzArtist.openArtist(feedRow.item.id)
             else if (feedRow.item.kind === "playlist") QbzBridge.openPlaylist(feedRow.item.id)
             else if (feedRow.item.kind === "label") QbzHome.openLabel(feedRow.item.id)
@@ -76,19 +134,20 @@ Rectangle {
         anchors.leftMargin: 12
         anchors.rightMargin: 12
         spacing: 12
+        opacity: feedRow.pulledDead ? 0.5 : 1.0
         // Col — artwork (round for artists) + hover play.
         Rectangle {
-            width: 44
-            height: 44
+            width: 36
+            height: 36
             anchors.verticalCenter: parent.verticalCenter
-            radius: feedRow.item.kind === "artist" ? 22 : 6
+            radius: feedRow.item.kind === "artist" ? 18 : 5
             color: theme.surfaceElevated
             clip: true
             RoundedImage {
                 anchors.fill: parent
                 visible: !lrCollage.visible
                 source: feedRow.view.artMap[feedRow.item.artKey] || ""
-                radius: feedRow.item.kind === "artist" ? 22 : 6
+                radius: feedRow.item.kind === "artist" ? 18 : 5
                 // A label logo is contain-fitted (cropping cuts the
                 // wordmark) on a FLAT surface — those are transparent
                 // PNGs whose edges carry no colour to derive from.
@@ -124,14 +183,16 @@ Rectangle {
                 visible: (feedRow.item.kind === "track" || feedRow.item.kind === "album")
                     && feedRow.item.imageUrl !== ""
                     && (feedRow.view.artMap[feedRow.item.artKey] || "") === ""
+                    && !feedRow.pulledDead
                 phase: feedRow.view.skelPhase
                 cellIndex: feedRow.rowIndex
             }
             Rectangle {
-                visible: feedRow.item.kind === "track" || feedRow.item.kind === "album"
-                    || feedRow.item.kind === "playlist"
+                visible: (feedRow.item.kind === "track" || feedRow.item.kind === "album"
+                          || feedRow.item.kind === "playlist")
+                    && !feedRow.pulledDead
                 anchors.fill: parent
-                radius: feedRow.item.kind === "artist" ? 22 : 6
+                radius: feedRow.item.kind === "artist" ? 18 : 5
                 color: "#a6000000"
                 opacity: lrPlayArea.containsMouse ? 1.0 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 150 } }
@@ -143,8 +204,14 @@ Rectangle {
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                        if (feedRow.item.kind === "track") feedRow.view.playTrackInContext(feedRow.item.id)
-                        else if (feedRow.item.kind === "album") QbzPlayer.playAlbum(feedRow.item.id)
+                        if (feedRow.item.kind === "track") {
+                            if (!feedRow.pulledDead)
+                                feedRow.view.playTrackInContext(feedRow.item.id)
+                        }
+                        else if (feedRow.item.kind === "album") {
+                            if (!feedRow.pulledDead)
+                                QbzPlayer.playAlbum(feedRow.item.id)
+                        }
                         // `playPlaylistById`, NOT `playPlaylist` — the latter
                         // plays the OPEN playlist page and takes no id
                         // (player_bridge.rs:189 is the by-id entry).
@@ -152,10 +219,21 @@ Rectangle {
                     }
                 }
             }
+            // On a 36px thumbnail a text badge would be illegible. The alert
+            // glyph is the same semantic mark TrackRow uses in its number
+            // cell; the explicit translated label lives in the quality slot.
+            QbzIcon {
+                visible: feedRow.pulledDead
+                name: "circle-alert"
+                width: 16
+                height: 16
+                anchors.centerIn: parent
+                tintName: "favorite"
+            }
         }
         // Col — title + subtitle (artist link for track/album).
         Column {
-            width: parent.width - 44 - 116 - (srcCol.visible ? 44 : 0)
+            width: parent.width - 36 - 116 - (srcCol.visible ? 44 : 0)
                 - 150 - 18 - 30 - 6 * 12
             anchors.verticalCenter: parent.verticalCenter
             spacing: 2
@@ -163,7 +241,8 @@ Rectangle {
                 width: parent.width
                 height: 18
                 text: feedRow.item.title
-                color: lrTitleArea.containsMouse ? theme.accent : theme.textPrimary
+                color: lrTitleArea.containsMouse && !feedRow.pulledDead
+                    ? theme.accent : theme.textPrimary
                 font.pixelSize: 14
                 font.weight: theme.weightMedium
                 verticalAlignment: Text.AlignVCenter
@@ -172,10 +251,16 @@ Rectangle {
                     id: lrTitleArea
                     anchors.fill: parent
                     hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
+                    cursorShape: feedRow.pulledDead ? Qt.ArrowCursor : Qt.PointingHandCursor
                     onClicked: {
-                        if (feedRow.item.kind === "track") feedRow.view.playTrackInContext(feedRow.item.id)
-                        else if (feedRow.item.kind === "album") QbzAlbum.openAlbum(feedRow.item.id)
+                        if (feedRow.item.kind === "track") {
+                            if (!feedRow.pulledDead)
+                                feedRow.view.playTrackInContext(feedRow.item.id)
+                        }
+                        else if (feedRow.item.kind === "album") {
+                            if (!feedRow.pulledDead)
+                                QbzAlbum.openAlbum(feedRow.item.id)
+                        }
                         else if (feedRow.item.kind === "artist") QbzArtist.openArtist(feedRow.item.id)
                         else if (feedRow.item.kind === "playlist") QbzBridge.openPlaylist(feedRow.item.id)
                         else if (feedRow.item.kind === "label") QbzHome.openLabel(feedRow.item.id)
@@ -278,9 +363,22 @@ Rectangle {
             color: "transparent"
             QualityMini {
                 visible: (feedRow.item.kind === "album" || feedRow.item.kind === "track")
-                    && feedRow.item.qualityTier !== ""
+                    && feedRow.item.qualityTier !== "" && !feedRow.pulledDead
                 tier: feedRow.item.qualityTier
+                // The CD/MP3 chip is 30px wide while the Hi-Res mark is 42px.
+                // Left-aligning both shifts Hi-Res' visual centre 6px right.
+                // Keep one 30px mark axis without centring the whole 150px
+                // quality column (whose content is intentionally leading).
+                x: Math.round((30 - width) / 2)
                 anchors.verticalCenter: parent.verticalCenter
+            }
+            Text {
+                visible: feedRow.pulledDead
+                anchors.verticalCenter: parent.verticalCenter
+                text: QbzSession.tr("Unavailable", QbzSession.trRev)
+                color: theme.textMuted
+                font.pixelSize: theme.fontLegal
+                font.weight: theme.weightSemibold
             }
         }
         // Col — favorite / follow indicator.
@@ -321,13 +419,9 @@ Rectangle {
         sourceComponent: CardMenu {
             menuWidth: 196
             entries: feedRow.item.kind === "track"
-                ? feedRow.view.trackMenuModel(feedRow.item, feedRow.favorite)
-                : feedRow.item.kind === "album" ? [
-                    { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
-                    { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                    { "label": feedRow.favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
-                      "icon": feedRow.favorite ? "heart-filled" : "heart", "action": "favorite" },
-                ]
+                ? feedRow.view.trackMenuModel(feedRow.item, feedRow.favorite,
+                                              feedRow.pulledDead)
+                : feedRow.item.kind === "album" ? feedRow.albumMenuModel()
                 : feedRow.item.kind === "artist" ? [
                     { "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" },
                 ]
@@ -338,12 +432,10 @@ Rectangle {
                 ]
             onPicked: function (a) {
                 if (feedRow.item.kind === "track") { feedRow.view.trackAction(feedRow, a); return }
+                if (feedRow.item.kind === "album") { feedRow.albumAction(a); return }
                 if (a === "open") {
-                    if (feedRow.item.kind === "album") QbzAlbum.openAlbum(feedRow.item.id)
-                    else if (feedRow.item.kind === "playlist") QbzBridge.openPlaylist(feedRow.item.id)
+                    if (feedRow.item.kind === "playlist") QbzBridge.openPlaylist(feedRow.item.id)
                     else if (feedRow.item.kind === "label") QbzHome.openLabel(feedRow.item.id)
-                } else if (a === "play") {
-                    if (feedRow.item.kind === "album") QbzPlayer.playAlbum(feedRow.item.id)
                 } else if (a === "go-artist") {
                     QbzArtist.openArtist(feedRow.item.id)
                 } else if (a === "favorite") {
@@ -354,7 +446,18 @@ Rectangle {
     }
     /// Build the popup on first use, then open it.
     function openLrMenu(anchor, x, y) {
+        var entries = feedRow.item.kind === "track"
+            ? feedRow.view.trackMenuModel(feedRow.item, feedRow.favorite,
+                                          feedRow.pulledDead)
+            : feedRow.item.kind === "album" ? feedRow.albumMenuModel() : [1]
+        if (entries.length === 0)
+            return
         lrMenuLoader.active = true
         lrMenuLoader.item.openAtCursor(anchor, x, y)
+    }
+    function releaseForReuse() {
+        if (lrMenuLoader.item)
+            lrMenuLoader.item.close()
+        lrMenuLoader.active = false
     }
 }
