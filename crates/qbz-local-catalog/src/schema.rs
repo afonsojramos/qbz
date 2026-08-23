@@ -2,7 +2,7 @@ use rusqlite::{params, Connection};
 
 use crate::{CatalogError, Result};
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 pub const APPLICATION_ID: i64 = 0x5142_5A43; // "QBZC"
 
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -314,12 +314,28 @@ CREATE TABLE IF NOT EXISTS artists_materialized (
     album_count       INTEGER NOT NULL DEFAULT 0,
     track_count       INTEGER NOT NULL DEFAULT 0,
     available         INTEGER NOT NULL DEFAULT 1 CHECK (available IN (0,1)),
+    source_kind       TEXT NOT NULL DEFAULT 'local',
     artwork_source    TEXT NOT NULL DEFAULT '',
     artwork_token     TEXT NOT NULL DEFAULT ''
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_artists_materialized_name
     ON artists_materialized(available, sort_name, artist_key);
+
+CREATE TABLE IF NOT EXISTS artist_source_stats (
+    artist_key      TEXT NOT NULL REFERENCES artists_materialized(artist_key) ON DELETE CASCADE,
+    source_kind     TEXT NOT NULL CHECK (
+        source_kind IN ('local','offline','plex','jellyfin','subsonic')
+    ),
+    source_instance TEXT NOT NULL,
+    album_count     INTEGER NOT NULL DEFAULT 0,
+    track_count     INTEGER NOT NULL DEFAULT 0,
+    available       INTEGER NOT NULL DEFAULT 1 CHECK (available IN (0,1)),
+    PRIMARY KEY (artist_key, source_kind, source_instance)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_artist_source_stats_source
+    ON artist_source_stats(source_kind, source_instance, available, artist_key);
 
 CREATE TABLE IF NOT EXISTS edition_artists (
     edition_id  INTEGER NOT NULL REFERENCES editions(edition_id) ON DELETE CASCADE,
@@ -383,4 +399,10 @@ CREATE TRIGGER IF NOT EXISTS albums_fts_update AFTER UPDATE ON albums_materializ
     INSERT INTO albums_fts(rowid, title, artist, all_artists)
     VALUES (new.edition_id, new.title, new.artist, new.all_artists);
 END;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS artists_fts USING fts5(
+    artist_key UNINDEXED,
+    display_name,
+    tokenize='trigram case_sensitive 0'
+);
 "#;

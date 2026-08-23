@@ -13,6 +13,7 @@
 
 namespace {
 QPointer<LocalAlbumsModel> g_model;
+QPointer<LocalAlbumsModel> g_artist_model;
 
 void registerLocalAlbumsModel()
 {
@@ -21,6 +22,10 @@ void registerLocalAlbumsModel()
     g_model = model;
     qmlRegisterSingletonInstance<LocalAlbumsModel>(
         "com.blitzfc.qbz", 1, 0, "QbzLocalAlbums", model);
+    auto *artistModel = new LocalAlbumsModel(application);
+    g_artist_model = artistModel;
+    qmlRegisterSingletonInstance<LocalAlbumsModel>(
+        "com.blitzfc.qbz", 1, 0, "QbzLocalArtistAlbums", artistModel);
 }
 
 Q_COREAPP_STARTUP_FUNCTION(registerLocalAlbumsModel)
@@ -302,4 +307,18 @@ extern "C" void qbz_local_albums_set_selection(
     if (g_model)
         g_model->setSelection(
             generation, QByteArray(json ? json : "{}"), selectedCount);
+}
+
+extern "C" void qbz_local_artist_albums_reset(
+    int generation, qint64 totalCount, qint64 albumTotal)
+{
+    if (g_artist_model)
+        g_artist_model->resetQuery(generation, totalCount, albumTotal);
+}
+
+extern "C" bool qbz_local_artist_albums_apply_page(
+    int generation, int page, const char *json)
+{
+    return g_artist_model && g_artist_model->applyPage(
+        generation, page, QByteArray(json ? json : "[]"));
 }

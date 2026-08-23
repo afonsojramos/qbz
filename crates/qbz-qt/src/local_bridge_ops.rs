@@ -302,6 +302,20 @@ pub(crate) fn invalidate_artists() {
 
 pub(crate) fn load_artists() {
     ui(|mut b| b.as_mut().set_local_artists_loading(true));
+    if crate::local_artists_model_qt::requested()
+        && crate::local_library_qt::album_mode() == "folder"
+    {
+        crate::local_artists_model_qt::retry_last();
+        return;
+    }
+    load_artists_legacy();
+    if lib::state(|state| state.albums.is_empty()) {
+        load_albums_legacy();
+    }
+}
+
+pub(crate) fn load_artists_legacy() {
+    ui(|mut b| b.as_mut().set_local_artists_loading(true));
     crate::spawn(async move {
         let rows = tokio::task::spawn_blocking(lib::load_artists_blocking)
             .await

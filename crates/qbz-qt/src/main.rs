@@ -186,6 +186,8 @@ mod local_catalog_qt;
 mod local_tracks_model_qt;
 // Native bounded Albums entry model (phase F1); grid/list geometry stays QML.
 mod local_albums_model_qt;
+// Native paged Artists rail + indexed artist-album pane (phase F2).
+mod local_artists_model_qt;
 mod local_plex;
 // Plex PIN sign-in (the "Authorize" half of the Plex settings) + the
 // Check-connection ping. Over `qbz_plex`'s existing pin/start, pin/check and
@@ -3040,6 +3042,7 @@ fn main() {
     // registration itself runs at QCoreApplication startup.
     local_tracks_model_qt::register_qml_model();
     local_albums_model_qt::register_qml_model();
+    local_artists_model_qt::register_qml_model();
     // BEFORE any restore reads a pref: read + increment the crash chain, so a
     // boot that dies from a restored view or queue degrades the NEXT boot
     // instead of trapping the user in a loop it cannot escape from inside the

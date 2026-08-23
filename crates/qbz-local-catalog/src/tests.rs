@@ -117,6 +117,26 @@ fn collect_all_albums(
     rows
 }
 
+fn collect_all_artists(
+    catalog: &Catalog,
+    descriptor: &QueryDescriptor,
+    page_size: usize,
+) -> Vec<ArtistRecord> {
+    let mut cursor = None;
+    let mut rows = Vec::new();
+    loop {
+        let page = catalog
+            .query_artists(descriptor, cursor.as_ref(), page_size)
+            .unwrap();
+        rows.extend(page.rows);
+        if !page.has_more {
+            break;
+        }
+        cursor = page.next_cursor;
+    }
+    rows
+}
+
 fn insert_album_fixture(catalog: &mut Catalog, count: usize) {
     let mut by_source = std::collections::BTreeMap::<SourceKey, Vec<ProjectedTrack>>::new();
     for index in 0..count {
@@ -185,12 +205,234 @@ fn schema_is_versioned_frontend_agnostic_and_fts5_enabled() {
         "artist_credits",
         "albums_materialized",
         "artists_materialized",
+        "artist_source_stats",
         "edition_artists",
         "tracks_fts",
         "albums_fts",
+        "artists_fts",
     ] {
         assert!(tables.contains(required), "missing {required}");
     }
+}
+
+#[test]
+fn artist_keyset_search_and_source_scope_cover_every_remote_only_artist_once() {
+    let mut catalog = Catalog::open_in_memory(1).unwrap();
+    insert_album_fixture(&mut catalog, 1_231);
+
+    let all = QueryDescriptor::artists();
+    let rows = collect_all_artists(&catalog, &all, 17);
+    let keys = rows
+        .iter()
+        .map(|row| row.artist_key.clone())
+        .collect::<HashSet<_>>();
+    let expected_available = (0..1_231).filter(|index| index % 97 != 0).count();
+    assert_eq!(rows.len(), expected_available);
+    assert_eq!(keys.len(), rows.len());
+    assert_eq!(catalog.count_artists(&all).unwrap(), rows.len() as u64);
+    assert_eq!(
+        catalog.count_artist_entries(&all).unwrap(),
+        rows.len() as u64 + 1
+    );
+
+    let jellyfin_source = SourceKey {
+        source: SourceKind::Jellyfin,
+        source_instance: source_instance(SourceKind::Jellyfin).to_string(),
+    };
+    let jellyfin = QueryDescriptor::artists().with_sources(vec![jellyfin_source.clone()]);
+    let remote = collect_all_artists(&catalog, &jellyfin, 11);
+    assert!(!remote.is_empty());
+    assert!(remote.iter().all(|row| row.source == "jellyfin"));
+    assert_eq!(
+        catalog.count_artists(&jellyfin).unwrap(),
+        remote.len() as u64
+    );
+    assert!(remote
+        .iter()
+        .all(|row| row.album_count == 1 && row.track_count == 1));
+
+    let needle = remote[0]
+        .display_name
+        .chars()
+        .skip(7)
+        .take(3)
+        .collect::<String>();
+    let searched = collect_all_artists(
+        &catalog,
+        &QueryDescriptor::artists()
+            .with_sources(vec![jellyfin_source])
+            .with_search(needle),
+        7,
+    );
+    assert!(!searched.is_empty());
+    assert!(searched
+        .iter()
+        .all(|row| row.source == "jellyfin" && keys.contains(&row.artist_key)));
+    let searched_descriptor = QueryDescriptor::artists()
+        .with_sources(vec![SourceKey {
+            source: SourceKind::Jellyfin,
+            source_instance: source_instance(SourceKind::Jellyfin).to_string(),
+        }])
+        .with_search(
+            remote[0]
+                .display_name
+                .chars()
+                .skip(7)
+                .take(3)
+                .collect::<String>(),
+        );
+    assert_eq!(
+        catalog.count_artists(&searched_descriptor).unwrap(),
+        searched.len() as u64
+    );
+    assert_eq!(
+        catalog.count_artist_entries(&searched_descriptor).unwrap(),
+        searched.len() as u64 + 1
+    );
+}
+
+#[test]
+fn artist_credit_counts_and_album_relationship_span_every_source() {
+    let mut catalog = Catalog::open_in_memory(1).unwrap();
+    let mut local = projected(10, SourceKind::Local);
+    local.native_album_id = Some("local-edition".to_string());
+    local.credits.push(ArtistCredit {
+        display_name: "Beyoncé".to_string(),
+        role: CreditRole::Featured,
+        ordinal: 1,
+    });
+    let mut remote = projected(80, SourceKind::Jellyfin);
+    remote.native_album_id = Some("remote-edition".to_string());
+    remote.credits.push(ArtistCredit {
+        display_name: "Beyonce".to_string(),
+        role: CreditRole::Performer,
+        ordinal: 1,
+    });
+    for track in [local, remote] {
+        let source = SourceKey {
+            source: track.track_ref.source,
+            source_instance: track.track_ref.source_instance.clone(),
+        };
+        catalog
+            .apply_bootstrap_batch(&BootstrapBatch {
+                source,
+                snapshot_version: "artist-credit-v1".to_string(),
+                expected_cursor: String::new(),
+                next_cursor: "1".to_string(),
+                tracks: vec![track],
+                complete: true,
+            })
+            .unwrap();
+    }
+    catalog.rebuild_materialized_views().unwrap();
+
+    let key = normalize_artist_key("Beyoncé");
+    let row = collect_all_artists(&catalog, &QueryDescriptor::artists(), 5)
+        .into_iter()
+        .find(|row| row.artist_key == key)
+        .expect("credit-only artist is materialized");
+    assert_eq!(row.album_count, 2);
+    assert_eq!(row.track_count, 2);
+    assert_eq!(row.source, "mixed");
+
+    let sources = vec![
+        SourceKey {
+            source: SourceKind::Local,
+            source_instance: source_instance(SourceKind::Local).to_string(),
+        },
+        SourceKey {
+            source: SourceKind::Jellyfin,
+            source_instance: source_instance(SourceKind::Jellyfin).to_string(),
+        },
+    ];
+    assert_eq!(catalog.count_artist_albums(&key, &sources).unwrap(), 2);
+    let page = catalog
+        .query_artist_albums(&key, &sources, None, 1)
+        .unwrap();
+    assert_eq!(page.rows.len(), 1);
+    assert!(page.has_more);
+    let second = catalog
+        .query_artist_albums(&key, &sources, page.next_cursor.as_ref(), 1)
+        .unwrap();
+    assert_eq!(second.rows.len(), 1);
+    assert!(!second.has_more);
+    assert_ne!(page.rows[0].edition_id, second.rows[0].edition_id);
+
+    let jellyfin = &sources[1..];
+    assert_eq!(catalog.count_artist_albums(&key, jellyfin).unwrap(), 1);
+    let remote_row = collect_all_artists(
+        &catalog,
+        &QueryDescriptor::artists().with_sources(jellyfin.to_vec()),
+        5,
+    )
+    .into_iter()
+    .find(|row| row.artist_key == key)
+    .unwrap();
+    assert_eq!((remote_row.album_count, remote_row.track_count), (1, 1));
+    assert_eq!(remote_row.source, "jellyfin");
+}
+
+#[test]
+fn artist_album_keysets_cross_pages_without_omissions_or_duplicates() {
+    const ALBUMS: usize = 731;
+    let mut catalog = Catalog::open_in_memory(1).unwrap();
+    let source = SourceKey {
+        source: SourceKind::Jellyfin,
+        source_instance: source_instance(SourceKind::Jellyfin).to_string(),
+    };
+    let mut rows = (0..ALBUMS)
+        .map(|index| {
+            let mut track = projected(80_000 + index, SourceKind::Jellyfin);
+            track.native_album_id = Some(format!("guest-album-{index:04}"));
+            track.album = format!("Guest Album {index:04}");
+            track.credits.push(ArtistCredit {
+                display_name: "Remote Guest".to_string(),
+                role: CreditRole::Featured,
+                ordinal: 1,
+            });
+            track
+        })
+        .collect::<Vec<_>>();
+    let expected_available = rows.iter().filter(|track| track.available).count();
+    let mut cursor = String::new();
+    for (batch_index, batch) in rows.chunks_mut(BOOTSTRAP_BATCH_ROWS).enumerate() {
+        let committed = (batch_index * BOOTSTRAP_BATCH_ROWS + batch.len()).min(ALBUMS);
+        let saved = catalog
+            .apply_bootstrap_batch(&BootstrapBatch {
+                source: source.clone(),
+                snapshot_version: "artist-albums-731".to_string(),
+                expected_cursor: cursor,
+                next_cursor: committed.to_string(),
+                tracks: batch.to_vec(),
+                complete: committed == ALBUMS,
+            })
+            .unwrap();
+        cursor = saved.checkpoint_cursor;
+    }
+    catalog.rebuild_materialized_views().unwrap();
+
+    let key = normalize_artist_key("Remote Guest");
+    assert_eq!(
+        catalog.count_artist_albums(&key, &[source.clone()]).unwrap(),
+        expected_available as u64
+    );
+    let mut cursor = None;
+    let mut ids = Vec::new();
+    loop {
+        let page = catalog
+            .query_artist_albums(&key, std::slice::from_ref(&source), cursor.as_ref(), 37)
+            .unwrap();
+        ids.extend(page.rows.into_iter().map(|row| row.edition_id));
+        if !page.has_more {
+            break;
+        }
+        cursor = page.next_cursor;
+    }
+    assert_eq!(ids.len(), expected_available);
+    assert_eq!(
+        ids.iter().copied().collect::<HashSet<_>>().len(),
+        expected_available
+    );
 }
 
 #[test]
@@ -347,6 +589,81 @@ fn album_query_and_broad_search_metric_uses_a_mixed_deterministic_fixture() {
     assert_eq!(broad_page.rows.len(), 100);
     println!(
         "F1_ALBUMS_QUERY total={ALBUMS} first_albums={} count_ms={:.3} query_ms={:.3} broad_count_ms={:.3} broad_query_ms={:.3} source_counts={counts}",
+        page.rows.len(),
+        count_time.as_secs_f64() * 1_000.0,
+        query.sql_time.as_secs_f64() * 1_000.0,
+        broad_count_time.as_secs_f64() * 1_000.0,
+        broad_query.sql_time.as_secs_f64() * 1_000.0,
+    );
+}
+
+#[test]
+fn artist_query_and_broad_search_metric_uses_a_mixed_deterministic_fixture() {
+    const ARTISTS: usize = 20_000;
+    let mut catalog = Catalog::open_in_memory(10).unwrap();
+    insert_album_fixture(&mut catalog, ARTISTS);
+
+    let descriptor = QueryDescriptor::artists();
+    let expected = (0..ARTISTS).filter(|index| index % 97 != 0).count() as u64;
+    let count_started = Instant::now();
+    let count = catalog.count_artists(&descriptor).unwrap();
+    let count_time = count_started.elapsed();
+    let (page, query) = catalog.query_artists_timed(&descriptor, None, 100).unwrap();
+    let broad = descriptor.clone().with_search("Artist");
+    let broad_count_started = Instant::now();
+    let broad_count = catalog.count_artists(&broad).unwrap();
+    let broad_count_time = broad_count_started.elapsed();
+    let (broad_page, broad_query) = catalog.query_artists_timed(&broad, None, 100).unwrap();
+    let source_counts = [
+        SourceKind::Local,
+        SourceKind::Offline,
+        SourceKind::Plex,
+        SourceKind::Jellyfin,
+        SourceKind::Subsonic,
+    ]
+    .into_iter()
+    .map(|source| {
+        let scoped = QueryDescriptor::artists().with_sources(vec![SourceKey {
+            source,
+            source_instance: source_instance(source).to_string(),
+        }]);
+        format!(
+            "{}={}",
+            source.as_str(),
+            catalog.count_artists(&scoped).unwrap()
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(",");
+
+    assert_eq!(count, expected);
+    assert_eq!(page.rows.len(), 100);
+    assert!(page.has_more);
+    assert_eq!(broad_count, expected);
+    assert_eq!(broad_page.rows.len(), 100);
+    assert_eq!(
+        catalog.count_artist_entries(&descriptor).unwrap(),
+        expected + 1
+    );
+
+    let plan = catalog
+        .connection()
+        .prepare(
+            "EXPLAIN QUERY PLAN SELECT artist_key FROM artists_materialized
+              WHERE available=1 ORDER BY sort_name,artist_key LIMIT 101",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        plan.iter().all(|step| !step.contains("TEMP B-TREE")),
+        "{plan:?}"
+    );
+
+    println!(
+        "F2_ARTISTS_QUERY total={count} first_artists={} count_ms={:.3} query_ms={:.3} broad_count_ms={:.3} broad_query_ms={:.3} source_counts={source_counts}",
         page.rows.len(),
         count_time.as_secs_f64() * 1_000.0,
         query.sql_time.as_secs_f64() * 1_000.0,

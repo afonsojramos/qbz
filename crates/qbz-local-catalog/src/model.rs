@@ -412,3 +412,30 @@ pub struct AlbumPage {
     pub next_cursor: Option<AlbumCursor>,
     pub has_more: bool,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtistRecord {
+    pub artist_key: String,
+    pub display_name: String,
+    pub album_count: u32,
+    pub track_count: u32,
+    pub artwork_source: String,
+    pub artwork_token: String,
+    /// `local`, a remote source word, or `mixed` when several source kinds
+    /// contribute to the aggregate visible under the query descriptor.
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtistCursor {
+    pub(crate) descriptor_key: String,
+    pub(crate) sort_name: String,
+    pub(crate) artist_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtistPage {
+    pub rows: Vec<ArtistRecord>,
+    pub next_cursor: Option<ArtistCursor>,
+    pub has_more: bool,
+}

@@ -304,6 +304,7 @@ fn build_rhi_items() {
         "tunnelflow_item",
         "local_tracks_model",
         "local_albums_model",
+        "local_artists_model",
     ] {
         let header = format!("cxx/{item}.h");
         let source = format!("cxx/{item}.cpp");

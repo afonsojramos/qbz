@@ -20,6 +20,11 @@ Item {
 
     readonly property int headerH: 22
     readonly property int rowH: 62
+    readonly property bool nativeActive: QbzLocal.localArtistsNativeActive
+    readonly property var nativeModel: QbzLocalArtists
+    readonly property var nativeAlbumModel: QbzLocalArtistAlbums
+    readonly property int artistTotal: nativeActive
+        ? QbzLocal.localArtistsNativeTotal : (view ? view.artists.length : 0)
 
     // --------------------------- entry model ------------------------------
     property var entries: []
@@ -32,7 +37,19 @@ Item {
     property var flat: []
     /// entry index -> index into `flat`, -1 for a letter header.
     property var flatIndex: []
+    function parseNativeJumps() {
+        try { return JSON.parse(QbzLocal.localArtistsNativeJumpsJson || "[]") }
+        catch (e) { return [] }
+    }
     function rebuild() {
+        if (nativeActive) {
+            entries = []
+            alphaJumps = parseNativeJumps()
+            flat = []
+            flatIndex = []
+            report()
+            return
+        }
         var groups = view ? view.artistsGrouped : []
         var out = []
         var jumps = []
@@ -56,12 +73,50 @@ Item {
         flatIndex = idx
         report()
     }
-    Component.onCompleted: { rebuild(); reportSoon() }
+    Component.onCompleted: {
+        rebuild()
+        reportSoon()
+        nativeQueryCoalescer.restart()
+        detailQueryCoalescer.restart()
+    }
     Component.onDestruction: if (view) view.releaseWindow("artists-rail")
     Connections {
         target: root.view
         function onArtistsGroupedChanged() { root.rebuild() }
+        function onArtistsSearchChanged() { root.nativeQueryCoalescer.restart() }
+        function onSelectedArtistChanged() { root.detailQueryCoalescer.restart() }
         function onArtworkRefresh() { root.reportSoon() }
+    }
+    Connections {
+        target: QbzLocal
+        function onLocalArtistsNativeActiveChanged() {
+            root.rebuild()
+            if (root.nativeActive) root.detailQueryCoalescer.restart()
+        }
+        function onLocalArtistsNativeJumpsJsonChanged() {
+            if (root.nativeActive) root.alphaJumps = root.parseNativeJumps()
+        }
+        function onLocalArtistsLoadingChanged() {
+            if (!QbzLocal.localArtistsLoading) {
+                root.reportSoon()
+                root.detailQueryCoalescer.restart()
+            }
+        }
+    }
+    Timer {
+        id: nativeQueryCoalescer
+        interval: 0
+        onTriggered: if (root.view)
+            QbzLocal.artistsNativeReset(root.view.artistsSearch)
+    }
+    Timer {
+        id: detailQueryCoalescer
+        interval: 0
+        onTriggered: root.resetNativeDetail()
+    }
+    function resetNativeDetail() {
+        if (!nativeActive || !view || !artistCollection || artistCollection.cols <= 0) return
+        QbzLocal.artistsNativeSelect(view.selectedArtist, artistCollection.cols)
     }
 
     // Loading = the shape of the master/detail pair that is coming: 60px
@@ -97,7 +152,8 @@ Item {
     }
     // Empty library — icon + line (Slint :2222).
     Column {
-        visible: !QbzLocal.localArtistsLoading && root.view.artists.length === 0
+        visible: !QbzLocal.localArtistsLoading && root.artistTotal === 0
+            && (!root.view || root.view.artistsSearch === "")
         anchors.centerIn: parent
         spacing: 10
         QbzIcon {
@@ -117,7 +173,8 @@ Item {
 
     Row {
         anchors.fill: parent
-        visible: !QbzLocal.localArtistsLoading && root.view.artists.length > 0
+        visible: !QbzLocal.localArtistsLoading
+            && (root.artistTotal > 0 || (root.view && root.view.artistsSearch !== ""))
         spacing: 0
 
         // ---------------------- master rail ------------------------------
@@ -133,20 +190,23 @@ Item {
                 spacing: 8
 
                 Text {
-                    text: root.view.artistsVisibleCount + " "
+                    text: (root.nativeActive ? QbzLocal.localArtistsNativeTotal
+                                             : root.view.artistsVisibleCount) + " "
                         + QbzSession.tr("artists", QbzSession.trRev)
                     color: theme.textMuted
                     font.pixelSize: theme.fontLegal
                     font.weight: theme.weightSemibold
                 }
                 Text {
-                    visible: root.view.artistsVisibleCount === 0
+                    visible: (root.nativeActive ? QbzLocal.localArtistsNativeTotal
+                                                : root.view.artistsVisibleCount) === 0
                     text: QbzSession.tr("No artists match your search.", QbzSession.trRev)
                     color: theme.textMuted
                     font.pixelSize: theme.fontLegal
                 }
                 Item {
-                    visible: root.view.artistsVisibleCount > 0
+                    visible: (root.nativeActive ? QbzLocal.localArtistsNativeTotal
+                                                : root.view.artistsVisibleCount) > 0
                     width: parent.width
                     height: parent.height - 30
 
@@ -159,7 +219,7 @@ Item {
                         clip: true
                         cacheBuffer: 62 * 8
                         boundsBehavior: Flickable.StopAtBounds
-                        model: root.entries
+                        model: root.nativeActive ? root.nativeModel : root.entries
                         onContentYChanged: root.report()
                         onModelChanged: root.report()
                         onHeightChanged: root.report()
@@ -172,7 +232,21 @@ Item {
                             required property var modelData
                             width: rail.width
                             height: modelData.t === 0 ? root.headerH : root.rowH
-                            sourceComponent: modelData.t === 0 ? letterComp : artistComp
+                            sourceComponent: modelData.loading ? loadingComp
+                                : modelData.t === 0 ? letterComp : artistComp
+                            onModelDataChanged: root.reportSoon()
+
+                            Component {
+                                id: loadingComp
+                                QbzSkeleton {
+                                    variant: "rowList"
+                                    rowH: 60
+                                    rowGap: 2
+                                    rowArtSize: 48
+                                    rowArtRound: true
+                                    phase: root.view ? root.view.skelPhase : false
+                                }
+                            }
 
                             Component {
                                 id: letterComp
@@ -192,7 +266,8 @@ Item {
                                     width: rail.width
                                     view: root.view
                                     item: modelData.item
-                                    artSource: root.view.artMap[modelData.item.artKey] || ""
+                                    artSource: modelData.item.artPath
+                                        || root.view.artMap[modelData.item.artKey] || ""
                                     selected: root.view.selectedArtist === modelData.item.name
                                     onPicked: function (name) { root.view.selectArtist(name) }
                                 }
@@ -264,14 +339,19 @@ Item {
                         elide: Text.ElideRight
                     }
                     Text {
-                        text: root.view.artistAlbums.length + " "
+                        text: (root.nativeActive
+                               ? QbzLocal.localArtistAlbumsNativeTotal
+                               : root.view.artistAlbums.length) + " "
                             + QbzSession.tr("albums", QbzSession.trRev)
                         color: theme.textMuted
                         font.pixelSize: theme.fontLegal
                     }
                 }
                 Text {
-                    visible: root.view.artistAlbums.length === 0
+                    visible: !QbzLocal.localArtistAlbumsLoading
+                        && (root.nativeActive
+                            ? QbzLocal.localArtistAlbumsNativeTotal === 0
+                            : root.view.artistAlbums.length === 0)
                     width: parent.width
                     topPadding: 24
                     text: QbzSession.tr("No albums found", QbzSession.trRev)
@@ -279,16 +359,33 @@ Item {
                     font.pixelSize: theme.fontBody
                     horizontalAlignment: Text.AlignHCenter
                 }
+                QbzSkeleton {
+                    visible: root.nativeActive && QbzLocal.localArtistAlbumsLoading
+                    width: parent.width
+                    height: parent.height - 60
+                    variant: "cardGrid"
+                    cellW: 220
+                    cellH: 266
+                    phase: root.view.skelPhase
+                }
                 LocalAlbumCollection {
-                    visible: root.view.artistAlbums.length > 0
+                    id: artistCollection
+                    visible: !QbzLocal.localArtistAlbumsLoading
+                        && (root.nativeActive
+                            ? QbzLocal.localArtistAlbumsNativeTotal > 0
+                            : root.view.artistAlbums.length > 0)
                     width: parent.width
                     height: parent.height - 60
                     view: root.view
                     surface: "artist-albums"
-                    rows: root.view.artistAlbums
+                    rows: root.nativeActive ? [] : root.view.artistAlbums
                     grouped: false
                     viewMode: "grid"
                     showSource: true
+                    nativeActive: root.nativeActive
+                    nativeModel: root.nativeAlbumModel
+                    nativeJumpsJson: "[]"
+                    onColsChanged: root.detailQueryCoalescer.restart()
                     onOpenRequested: function (id) { root.view.openAlbum(id) }
                     onPlayRequested: function (id) { QbzLocal.playAlbum(id, false) }
                     onEnqueueRequested: function (id, m) { QbzLocal.enqueue("album", id, m) }
@@ -308,14 +405,28 @@ Item {
     // when the viewport resizes.
     function report() {
         if (!view || !rail) return
-        if (!rail.visible || root.entries.length === 0) {
+        var count = root.nativeActive ? root.nativeModel.totalCount : root.entries.length
+        if (!rail.visible || count === 0) {
             view.releaseWindow("artists-rail")
             return
         }
         var first = rail.indexAt(4, rail.contentY + 1)
         var last = rail.indexAt(4, rail.contentY + Math.max(1, rail.height) - 1)
         if (first < 0) first = 0
-        if (last < 0) last = Math.min(root.entries.length - 1, first + 12)
+        if (last < 0) last = Math.min(count - 1, first + 12)
+        if (root.nativeActive) {
+            var resident = []
+            for (var entryIndex = first; entryIndex <= last; entryIndex++) {
+                var entry = root.nativeModel.rowAt(entryIndex)
+                if (!entry || entry.loading || entry.t !== 1 || !entry.item) continue
+                resident.push(entry.item)
+            }
+            if (resident.length > 0)
+                view.queueWindowReport(resident, 0, resident.length - 1, "artists-rail")
+            else
+                view.releaseWindow("artists-rail")
+            return
+        }
         // Entry band -> rail-row band (letter headers do not carry a cover).
         var lo = -1
         var hi = -1

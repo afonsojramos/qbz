@@ -63,6 +63,8 @@ Rectangle {
     // the composition root also gives every Tracks delegate one stable model.
     readonly property var nativeTracksModel: QbzLocalTracks
     readonly property var nativeAlbumsModel: QbzLocalAlbums
+    readonly property var nativeArtistsModel: QbzLocalArtists
+    readonly property var nativeArtistAlbumsModel: QbzLocalArtistAlbums
 
     // ============================ state ==================================
     // Slint defaults, verbatim (state.slint LocalLibraryState).
@@ -335,6 +337,8 @@ Rectangle {
         function onLocalArtworkReady(key, path) {
             root.nativeTracksModel.setArtwork(key, path)
             root.nativeAlbumsModel.setArtwork(key, path)
+            root.nativeArtistsModel.setArtwork(key, path)
+            root.nativeArtistAlbumsModel.setArtwork(key, path)
             root._artInbox[key] = path
             if (!artFlush.running) artFlush.start()
             // An arrival is live evidence that the pass is still running, so
@@ -355,6 +359,18 @@ Rectangle {
         target: root.nativeAlbumsModel
         function onPageMiss(page, generation) {
             QbzLocal.albumsNativePageMiss(page, generation)
+        }
+    }
+    Connections {
+        target: root.nativeArtistsModel
+        function onPageMiss(page, generation) {
+            QbzLocal.artistsNativePageMiss(page, generation)
+        }
+    }
+    Connections {
+        target: root.nativeArtistAlbumsModel
+        function onPageMiss(page, generation) {
+            QbzLocal.artistAlbumsNativePageMiss(page, generation)
         }
     }
 
@@ -409,10 +425,6 @@ Rectangle {
     }
     onActiveTabChanged: {
         QbzLocal.loadTab(activeTab)
-        // The Artists detail derives from the album set (the DB aggregates
-        // the contributor list per album), so make sure it is loaded.
-        if (activeTab === "artists" && albums.length === 0)
-            QbzLocal.loadTab("albums-legacy")
         // The tab that just appeared has covers to ask for and the one that
         // left has covers to let go of. Each surface answers for itself.
         artworkRefresh()
@@ -615,6 +627,7 @@ Rectangle {
     }
 
     readonly property var artistsVisible: {
+        if (QbzLocal.localArtistsNativeActive && activeTab === "artists") return []
         var q = artistsSearch.trim().toLowerCase()
         if (q === "") return artists
         var out = []
@@ -625,6 +638,7 @@ Rectangle {
     }
     readonly property int artistsVisibleCount: artistsVisible.length
     readonly property var artistsGrouped: {
+        if (QbzLocal.localArtistsNativeActive && activeTab === "artists") return []
         var rows = artistsVisible
         var buckets = {}
         var order = []
@@ -661,6 +675,7 @@ Rectangle {
     // objects this view already parsed, in the published order.
     readonly property var artistAlbums: {
         if (selectedArtist === "") return []
+        if (QbzLocal.localArtistsNativeActive) return []
         var rows = albums   // binding dependency: re-derive on every republish
         var ids = {}
         try {

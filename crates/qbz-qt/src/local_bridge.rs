@@ -68,6 +68,13 @@ pub mod qbz_local {
         // --- Artists tab --------------------------------------------------
         #[qproperty(bool, local_artists_loading)]
         #[qproperty(QString, local_artists_json)]
+        /// Phase-F2 surface switch. False keeps the legacy JSON rail/pane.
+        #[qproperty(bool, local_artists_native_active)]
+        #[qproperty(i64, local_artists_native_total)]
+        #[qproperty(i64, local_artist_albums_native_total)]
+        #[qproperty(bool, local_artist_albums_loading)]
+        #[qproperty(QString, local_artists_native_jumps_json)]
+        #[qproperty(QString, local_artists_native_error)]
 
         // --- Folders tab, FLAT mode ---------------------------------------
         #[qproperty(bool, local_folders_loading)]
@@ -282,6 +289,28 @@ pub mod qbz_local {
         fn albums_native_clear_selection(self: Pin<&mut QbzLocal>);
         #[qinvokable]
         fn albums_native_bulk_action(self: Pin<&mut QbzLocal>, action: QString);
+
+        // --- Artists tab (native paged models) ---------------------------
+        #[qinvokable]
+        fn artists_native_reset(self: Pin<&mut QbzLocal>, search: QString);
+        #[qinvokable]
+        fn artists_native_page_miss(
+            self: Pin<&mut QbzLocal>,
+            page: i32,
+            generation: i32,
+        );
+        #[qinvokable]
+        fn artists_native_select(
+            self: Pin<&mut QbzLocal>,
+            artist: QString,
+            columns: i32,
+        );
+        #[qinvokable]
+        fn artist_albums_native_page_miss(
+            self: Pin<&mut QbzLocal>,
+            page: i32,
+            generation: i32,
+        );
 
         // --- Tracks tab ----------------------------------------------------
         /// Toolbar search (server-side; resets to page 1).
@@ -609,6 +638,12 @@ pub struct QbzLocalRust {
     local_albums_native_error: QString,
     local_artists_loading: bool,
     local_artists_json: QString,
+    local_artists_native_active: bool,
+    local_artists_native_total: i64,
+    local_artist_albums_native_total: i64,
+    local_artist_albums_loading: bool,
+    local_artists_native_jumps_json: QString,
+    local_artists_native_error: QString,
     local_folders_loading: bool,
     local_folders_json: QString,
     local_tree_loading: bool,
@@ -676,6 +711,12 @@ impl Default for QbzLocalRust {
             local_albums_native_error: QString::default(),
             local_artists_loading: false,
             local_artists_json: QString::from("[]"),
+            local_artists_native_active: false,
+            local_artists_native_total: 0,
+            local_artist_albums_native_total: 0,
+            local_artist_albums_loading: false,
+            local_artists_native_jumps_json: QString::from("[]"),
+            local_artists_native_error: QString::default(),
             local_folders_loading: false,
             local_folders_json: QString::from("[]"),
             local_tree_loading: false,
@@ -848,6 +889,34 @@ impl qbz_local::QbzLocal {
 
     pub fn albums_native_bulk_action(self: Pin<&mut Self>, action: QString) {
         crate::local_albums_model_qt::bulk_action(action.to_string());
+    }
+
+    pub fn artists_native_reset(self: Pin<&mut Self>, search: QString) {
+        crate::local_artists_model_qt::reset(search.to_string());
+    }
+
+    pub fn artists_native_page_miss(
+        self: Pin<&mut Self>,
+        page: i32,
+        generation: i32,
+    ) {
+        crate::local_artists_model_qt::request_page(page, generation);
+    }
+
+    pub fn artists_native_select(
+        self: Pin<&mut Self>,
+        artist: QString,
+        columns: i32,
+    ) {
+        crate::local_artists_model_qt::select_artist(artist.to_string(), columns);
+    }
+
+    pub fn artist_albums_native_page_miss(
+        self: Pin<&mut Self>,
+        page: i32,
+        generation: i32,
+    ) {
+        crate::local_artists_model_qt::request_detail_page(page, generation);
     }
 
     pub fn tracks_search(self: Pin<&mut Self>, query: QString) {

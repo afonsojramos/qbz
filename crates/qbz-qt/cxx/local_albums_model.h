@@ -83,6 +83,8 @@ void qbz_local_albums_register_qml_type();
 void qbz_local_albums_reset(int generation, qint64 totalCount, qint64 albumTotal);
 bool qbz_local_albums_apply_page(int generation, int page, const char *json);
 void qbz_local_albums_set_selection(int generation, const char *json, qint64 selectedCount);
+void qbz_local_artist_albums_reset(int generation, qint64 totalCount, qint64 albumTotal);
+bool qbz_local_artist_albums_apply_page(int generation, int page, const char *json);
 }
 
 #endif // QBZ_LOCAL_ALBUMS_MODEL_H

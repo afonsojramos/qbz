@@ -10,8 +10,9 @@ use rusqlite::{
 
 use crate::bootstrap::{BootstrapBatch, SourceCheckpoint, BOOTSTRAP_BATCH_ROWS};
 use crate::model::{
-    AlbumCursor, AlbumPage, AlbumRecord, ProjectedTrack, QueryDescriptor, QuerySurface, SourceKey,
-    SourceKind, TrackCursor, TrackGroup, TrackPage, TrackRecord, TrackRef, TrackSort,
+    AlbumCursor, AlbumPage, AlbumRecord, ArtistCursor, ArtistPage, ArtistRecord, ProjectedTrack,
+    QueryDescriptor, QuerySurface, SourceKey, SourceKind, TrackCursor, TrackGroup, TrackPage,
+    TrackRecord, TrackRef, TrackSort,
 };
 use crate::projection::ReconciliationBatch;
 use crate::schema;
@@ -540,7 +541,9 @@ impl Catalog {
     pub(crate) fn rebuild_materialized_views(&mut self) -> Result<()> {
         let tx = self.conn.transaction()?;
         tx.execute_batch(
-            "DELETE FROM edition_artists;
+            "DELETE FROM artists_fts;
+             DELETE FROM artist_source_stats;
+             DELETE FROM edition_artists;
              DELETE FROM albums_materialized;
              DELETE FROM artists_materialized;
 
@@ -644,30 +647,95 @@ impl Catalog {
               GROUP BY e.edition_id;
 
              INSERT INTO artists_materialized(
-                 artist_key,display_name,sort_name,album_count,track_count,available
+                 artist_key,display_name,sort_name,album_count,track_count,available,
+                 source_kind,artwork_source,artwork_token
              )
              SELECT ac.artist_key,MIN(ac.display_name),ac.artist_key,
-                    COUNT(DISTINCT sc.edition_id),COUNT(DISTINCT ac.catalog_id),
+                    COUNT(DISTINCT CASE WHEN t.available=1 THEN sc.edition_id END),
+                    COUNT(DISTINCT CASE WHEN t.available=1 THEN ac.catalog_id END),
+                    COALESCE(MAX(t.available),0),
+                    CASE WHEN COUNT(DISTINCT t.source_kind)>1 THEN 'mixed'
+                         ELSE MIN(t.source_kind) END,
+                    COALESCE((
+                        SELECT t2.source_kind
+                          FROM artist_credits ac2
+                          JOIN tracks t2 ON t2.catalog_id=ac2.catalog_id
+                         WHERE ac2.artist_key=ac.artist_key
+                           AND t2.available=1
+                           AND COALESCE(t2.artwork_token,'') != ''
+                         ORDER BY CASE ac2.role
+                                      WHEN 'track_artist' THEN 0
+                                      WHEN 'album_artist' THEN 1
+                                      WHEN 'featured' THEN 2
+                                      WHEN 'performer' THEN 3 ELSE 4 END,
+                                  t2.catalog_id LIMIT 1
+                    ),''),
+                    COALESCE((
+                        SELECT t2.artwork_token
+                          FROM artist_credits ac2
+                          JOIN tracks t2 ON t2.catalog_id=ac2.catalog_id
+                         WHERE ac2.artist_key=ac.artist_key
+                           AND t2.available=1
+                           AND COALESCE(t2.artwork_token,'') != ''
+                         ORDER BY CASE ac2.role
+                                      WHEN 'track_artist' THEN 0
+                                      WHEN 'album_artist' THEN 1
+                                      WHEN 'featured' THEN 2
+                                      WHEN 'performer' THEN 3 ELSE 4 END,
+                                  t2.catalog_id LIMIT 1
+                    ),'')
+               FROM artist_credits ac
+               JOIN tracks t ON t.catalog_id=ac.catalog_id
+               LEFT JOIN source_copies sc ON sc.source_copy_id=t.source_copy_id
+              GROUP BY ac.artist_key;
+
+             INSERT INTO artist_source_stats(
+                 artist_key,source_kind,source_instance,album_count,track_count,available
+             )
+             SELECT ac.artist_key,t.source_kind,t.source_instance,
+                    COUNT(DISTINCT CASE WHEN t.available=1 THEN sc.edition_id END),
+                    COUNT(DISTINCT CASE WHEN t.available=1 THEN ac.catalog_id END),
                     COALESCE(MAX(t.available),0)
                FROM artist_credits ac
                JOIN tracks t ON t.catalog_id=ac.catalog_id
                LEFT JOIN source_copies sc ON sc.source_copy_id=t.source_copy_id
-              GROUP BY ac.artist_key;",
+              GROUP BY ac.artist_key,t.source_kind,t.source_instance;
+
+             INSERT INTO artists_fts(artist_key,display_name)
+             SELECT artist_key,display_name FROM artists_materialized;",
         )?;
         tx.commit()?;
         Ok(())
     }
 
     pub(crate) fn materialized_views_valid(&self) -> Result<bool> {
-        let (tracks, album_tracks, unresolved): (i64, i64, i64) = self.conn.query_row(
+        let (tracks, album_tracks, unresolved, credit_artists, materialized_artists, missing_stats):
+            (i64, i64, i64, i64, i64, i64) = self.conn.query_row(
             "SELECT
                  (SELECT COUNT(*) FROM tracks),
                  (SELECT COALESCE(SUM(track_count),0) FROM albums_materialized),
-                 (SELECT COUNT(*) FROM tracks WHERE source_copy_id IS NULL)",
+                 (SELECT COUNT(*) FROM tracks WHERE source_copy_id IS NULL),
+                 (SELECT COUNT(DISTINCT artist_key) FROM artist_credits),
+                 (SELECT COUNT(*) FROM artists_materialized),
+                 (SELECT COUNT(*) FROM artists_materialized am
+                   WHERE NOT EXISTS (SELECT 1 FROM artist_source_stats ast
+                                      WHERE ast.artist_key=am.artist_key))",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
         )?;
-        Ok(tracks == album_tracks && unresolved == 0)
+        Ok(tracks == album_tracks
+            && unresolved == 0
+            && credit_artists == materialized_artists
+            && missing_stats == 0)
     }
 
     pub fn resolve(&self, track_ref: &TrackRef) -> Result<Option<TrackRecord>> {
@@ -861,6 +929,186 @@ impl Catalog {
         ))
     }
 
+    pub fn count_artists(&self, descriptor: &QueryDescriptor) -> Result<u64> {
+        validate_artists_descriptor(descriptor)?;
+        let parts = artist_filter_parts(descriptor, None)?;
+        let sql = format!(
+            "SELECT COUNT(*) {} WHERE {}",
+            parts.from_sql, parts.where_sql
+        );
+        let count: i64 = self
+            .conn
+            .query_row(&sql, params_from_iter(parts.params), |row| row.get(0))?;
+        Ok(count.max(0) as u64)
+    }
+
+    /// Exact visual length of the Artists rail: one row per artist plus one
+    /// header for every non-empty A-Z/# bucket under the immutable query.
+    pub fn count_artist_entries(&self, descriptor: &QueryDescriptor) -> Result<u64> {
+        validate_artists_descriptor(descriptor)?;
+        let parts = artist_filter_parts(descriptor, None)?;
+        let sql = format!(
+            "SELECT COUNT(*) + COUNT(DISTINCT {}) {} WHERE {}",
+            artist_initial_expression("ar"),
+            parts.from_sql,
+            parts.where_sql
+        );
+        let count: i64 = self
+            .conn
+            .query_row(&sql, params_from_iter(parts.params), |row| row.get(0))?;
+        Ok(count.max(0) as u64)
+    }
+
+    pub fn query_artists(
+        &self,
+        descriptor: &QueryDescriptor,
+        cursor: Option<&ArtistCursor>,
+        page_size: usize,
+    ) -> Result<ArtistPage> {
+        self.query_artists_timed(descriptor, cursor, page_size)
+            .map(|(page, _)| page)
+    }
+
+    pub fn query_artists_timed(
+        &self,
+        descriptor: &QueryDescriptor,
+        cursor: Option<&ArtistCursor>,
+        page_size: usize,
+    ) -> Result<(ArtistPage, QueryMetrics)> {
+        validate_artists_descriptor(descriptor)?;
+        let limit = page_size.clamp(1, MAX_PAGE_SIZE);
+        let parts = artist_filter_parts(descriptor, cursor)?;
+        let descending = artist_descending(descriptor);
+        let order = if descending { "DESC" } else { "ASC" };
+        let sql = format!(
+            "SELECT ar.artist_key,ar.display_name,{},{},ar.artwork_source,
+                    ar.artwork_token,{},ar.sort_name
+               {} WHERE {}
+              ORDER BY ar.sort_name {order},ar.artist_key {order} LIMIT {}",
+            parts.album_count_sql,
+            parts.track_count_sql,
+            parts.source_sql,
+            parts.from_sql,
+            parts.where_sql,
+            limit + 1
+        );
+        let key = descriptor_key(descriptor);
+        let started = Instant::now();
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let mapped = stmt.query_map(params_from_iter(parts.params), |row| {
+            Ok((
+                ArtistRecord {
+                    artist_key: row.get(0)?,
+                    display_name: row.get(1)?,
+                    album_count: row.get::<_, i64>(2)?.max(0) as u32,
+                    track_count: row.get::<_, i64>(3)?.max(0) as u32,
+                    artwork_source: row.get(4)?,
+                    artwork_token: row.get(5)?,
+                    source: row.get(6)?,
+                },
+                row.get::<_, String>(7)?,
+            ))
+        })?;
+        let mut values = mapped.collect::<rusqlite::Result<Vec<_>>>()?;
+        let sql_time = started.elapsed();
+        let has_more = values.len() > limit;
+        values.truncate(limit);
+        let next_cursor = has_more.then(|| {
+            let (record, sort_name) = values.last().expect("non-empty page");
+            ArtistCursor {
+                descriptor_key: key,
+                sort_name: sort_name.clone(),
+                artist_key: record.artist_key.clone(),
+            }
+        });
+        let rows = values
+            .into_iter()
+            .map(|(record, _)| record)
+            .collect::<Vec<_>>();
+        let metrics = QueryMetrics {
+            sql_time,
+            rows: rows.len(),
+        };
+        Ok((
+            ArtistPage {
+                rows,
+                next_cursor,
+                has_more,
+            },
+            metrics,
+        ))
+    }
+
+    /// Count the selected artist's albums through the normalized,
+    /// source-aware `edition_artists` relationship. No album collection is
+    /// materialized in the frontend to answer this question.
+    pub fn count_artist_albums(&self, artist_key: &str, sources: &[SourceKey]) -> Result<u64> {
+        validate_artist_key(artist_key)?;
+        let (where_sql, values) = artist_album_filter(artist_key, sources, None)?;
+        let sql = format!("SELECT COUNT(*) FROM albums_materialized am WHERE {where_sql}");
+        let count: i64 = self
+            .conn
+            .query_row(&sql, params_from_iter(values), |row| row.get(0))?;
+        Ok(count.max(0) as u64)
+    }
+
+    pub fn query_artist_albums(
+        &self,
+        artist_key: &str,
+        sources: &[SourceKey],
+        cursor: Option<&AlbumCursor>,
+        page_size: usize,
+    ) -> Result<AlbumPage> {
+        self.query_artist_albums_timed(artist_key, sources, cursor, page_size)
+            .map(|(page, _)| page)
+    }
+
+    pub fn query_artist_albums_timed(
+        &self,
+        artist_key: &str,
+        sources: &[SourceKey],
+        cursor: Option<&AlbumCursor>,
+        page_size: usize,
+    ) -> Result<(AlbumPage, QueryMetrics)> {
+        validate_artist_key(artist_key)?;
+        let limit = page_size.clamp(1, MAX_PAGE_SIZE);
+        let (where_sql, values) = artist_album_filter(artist_key, sources, cursor)?;
+        let sql = format!(
+            "SELECT {ALBUM_COLUMNS} FROM albums_materialized am
+              WHERE {where_sql}
+              ORDER BY am.sort_title,am.edition_id LIMIT {}",
+            limit + 1
+        );
+        let key = artist_relation_key(artist_key, sources);
+        let started = Instant::now();
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let mapped = stmt.query_map(params_from_iter(values), map_album_row)?;
+        let mut values = mapped.collect::<rusqlite::Result<Vec<_>>>()?;
+        for value in &mut values {
+            value.cursor.descriptor_key = key.clone();
+        }
+        let sql_time = started.elapsed();
+        let has_more = values.len() > limit;
+        values.truncate(limit);
+        let next_cursor = has_more.then(|| values.last().expect("non-empty page").cursor.clone());
+        let rows = values
+            .into_iter()
+            .map(|value| value.record)
+            .collect::<Vec<_>>();
+        let metrics = QueryMetrics {
+            sql_time,
+            rows: rows.len(),
+        };
+        Ok((
+            AlbumPage {
+                rows,
+                next_cursor,
+                has_more,
+            },
+            metrics,
+        ))
+    }
+
     pub fn stats(&self) -> Result<CatalogStats> {
         let track_count: i64 = self
             .conn
@@ -921,10 +1169,17 @@ impl Catalog {
                 [],
             )
             .is_ok();
+        let artists_fts_ok = self
+            .conn
+            .execute(
+                "INSERT INTO artists_fts(artists_fts) VALUES ('integrity-check')",
+                [],
+            )
+            .is_ok();
         Ok(IntegrityReport {
             sqlite_ok: result == "ok",
             foreign_key_violations: foreign_key_violations as u64,
-            fts_ok: tracks_fts_ok && albums_fts_ok,
+            fts_ok: tracks_fts_ok && albums_fts_ok && artists_fts_ok,
         })
     }
 
@@ -1871,6 +2126,219 @@ const ALBUM_COLUMNS: &str = "
     am.artwork_source,am.artwork_token,am.directory_path,am.folder_count,am.added_at,
     am.sort_title,am.sort_artist,
     CASE WHEN am.year IS NULL THEN 1 ELSE 0 END,COALESCE(am.year,0)";
+
+struct ArtistQueryParts {
+    from_sql: String,
+    where_sql: String,
+    params: Vec<Value>,
+    album_count_sql: String,
+    track_count_sql: String,
+    source_sql: String,
+}
+
+fn validate_artists_descriptor(descriptor: &QueryDescriptor) -> Result<()> {
+    if descriptor.surface() != QuerySurface::Artists {
+        return Err(CatalogError::InvalidInput(
+            "a non-Artists descriptor was passed to an Artists query".to_string(),
+        ));
+    }
+    if !descriptor.formats().is_empty()
+        || descriptor.other_formats()
+        || !descriptor.quality_tiers().is_empty()
+        || !descriptor.source_buckets().is_empty()
+        || descriptor.group() != TrackGroup::Off
+    {
+        return Err(CatalogError::InvalidInput(
+            "Artists supports source instances and name search only".to_string(),
+        ));
+    }
+    match descriptor.sort() {
+        TrackSort::Default | TrackSort::ArtistAsc | TrackSort::ArtistDesc => Ok(()),
+        _ => Err(CatalogError::InvalidInput(
+            "Artists supports name ordering only".to_string(),
+        )),
+    }
+}
+
+fn artist_descending(descriptor: &QueryDescriptor) -> bool {
+    descriptor.sort() == TrackSort::ArtistDesc
+}
+
+fn artist_initial_expression(alias: &str) -> String {
+    format!(
+        "CASE WHEN UPPER(SUBSTR({alias}.sort_name,1,1)) BETWEEN 'A' AND 'Z' \
+              THEN UPPER(SUBSTR({alias}.sort_name,1,1)) ELSE '#' END"
+    )
+}
+
+fn artist_filter_parts(
+    descriptor: &QueryDescriptor,
+    cursor: Option<&ArtistCursor>,
+) -> Result<ArtistQueryParts> {
+    if let Some(cursor) = cursor {
+        if cursor.descriptor_key != descriptor_key(descriptor) {
+            return Err(CatalogError::CursorDescriptorMismatch);
+        }
+    }
+    let mut params = Vec::new();
+    let (source_join, album_count_sql, track_count_sql, source_sql, source_filter) =
+        if descriptor.sources().is_empty() {
+            (
+                "".to_string(),
+                "ar.album_count".to_string(),
+                "ar.track_count".to_string(),
+                "ar.source_kind".to_string(),
+                None,
+            )
+        } else {
+            let mut source = Vec::new();
+            for key in descriptor.sources() {
+                if key.source_instance.trim().is_empty() {
+                    return Err(CatalogError::InvalidInput(
+                        "source filter instance must not be empty".to_string(),
+                    ));
+                }
+                let first = params.len() + 1;
+                source.push(format!(
+                    "(ass.source_kind=?{first} AND ass.source_instance=?{})",
+                    first + 1
+                ));
+                params.push(Value::Text(key.source.as_str().to_string()));
+                params.push(Value::Text(key.source_instance.clone()));
+            }
+            let clause = source.join(" OR ");
+            (
+                "".to_string(),
+                format!(
+                    "(SELECT COALESCE(SUM(ass.album_count),0) FROM artist_source_stats ass \
+                      WHERE ass.artist_key=ar.artist_key AND ass.available=1 AND ({clause}))"
+                ),
+                format!(
+                    "(SELECT COALESCE(SUM(ass.track_count),0) FROM artist_source_stats ass \
+                      WHERE ass.artist_key=ar.artist_key AND ass.available=1 AND ({clause}))"
+                ),
+                format!(
+                    "(SELECT CASE WHEN COUNT(DISTINCT ass.source_kind)>1 THEN 'mixed' \
+                                  ELSE MIN(ass.source_kind) END FROM artist_source_stats ass \
+                      WHERE ass.artist_key=ar.artist_key AND ass.available=1 AND ({clause}))"
+                ),
+                Some(clause),
+            )
+        };
+
+    let mut predicates = Vec::new();
+    let mut search_join = String::new();
+    if !descriptor.search().is_empty() {
+        let search_parameter = params.len() + 1;
+        if descriptor.search().chars().count() < 3 {
+            predicates.push(format!("INSTR(ar.sort_name,?{search_parameter})>0"));
+            params.push(Value::Text(normalize_artist_key(descriptor.search())));
+        } else {
+            search_join = "JOIN artists_fts ON artists_fts.artist_key=ar.artist_key".to_string();
+            predicates.push(format!("artists_fts MATCH ?{search_parameter}"));
+            params.push(fts_match_value(descriptor.search())?);
+        }
+    }
+    if descriptor.available_only() {
+        predicates.push("ar.available=1".to_string());
+    }
+    if let Some(source) = source_filter {
+        predicates.push(format!(
+            "EXISTS (SELECT 1 FROM artist_source_stats ass \
+                     WHERE ass.artist_key=ar.artist_key AND ass.available=1 AND ({source}))"
+        ));
+    }
+    if let Some(cursor) = cursor {
+        let comparison = if artist_descending(descriptor) {
+            "<"
+        } else {
+            ">"
+        };
+        predicates.push(format!(
+            "(ar.sort_name{comparison}? OR (ar.sort_name=? AND ar.artist_key{comparison}?))"
+        ));
+        params.push(Value::Text(cursor.sort_name.clone()));
+        params.push(Value::Text(cursor.sort_name.clone()));
+        params.push(Value::Text(cursor.artist_key.clone()));
+    }
+    if predicates.is_empty() {
+        predicates.push("1".to_string());
+    }
+    Ok(ArtistQueryParts {
+        from_sql: format!("FROM artists_materialized ar {source_join} {search_join}"),
+        where_sql: predicates.join(" AND "),
+        params,
+        album_count_sql,
+        track_count_sql,
+        source_sql,
+    })
+}
+
+fn validate_artist_key(artist_key: &str) -> Result<()> {
+    if artist_key.trim().is_empty() || normalize_artist_key(artist_key) != artist_key {
+        return Err(CatalogError::InvalidInput(
+            "artist relationship requires a normalized artist key".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn artist_relation_key(artist_key: &str, sources: &[SourceKey]) -> String {
+    let mut sources = sources.to_vec();
+    sources.sort();
+    sources.dedup();
+    let mut key = String::from("artist-albums|");
+    push_key_part(&mut key, artist_key);
+    for source in sources {
+        push_key_part(&mut key, source.source.as_str());
+        push_key_part(&mut key, &source.source_instance);
+    }
+    key
+}
+
+fn artist_album_filter(
+    artist_key: &str,
+    sources: &[SourceKey],
+    cursor: Option<&AlbumCursor>,
+) -> Result<(String, Vec<Value>)> {
+    let relation_key = artist_relation_key(artist_key, sources);
+    if let Some(cursor) = cursor {
+        if cursor.descriptor_key != relation_key {
+            return Err(CatalogError::CursorDescriptorMismatch);
+        }
+    }
+    let mut predicates = vec![
+        "am.available=1".to_string(),
+        "EXISTS (SELECT 1 FROM edition_artists ea \
+                 WHERE ea.edition_id=am.edition_id AND ea.artist_key=?)"
+            .to_string(),
+    ];
+    let mut values = vec![Value::Text(artist_key.to_string())];
+    if !sources.is_empty() {
+        let mut source = Vec::new();
+        for key in sources {
+            if key.source_instance.trim().is_empty() {
+                return Err(CatalogError::InvalidInput(
+                    "source filter instance must not be empty".to_string(),
+                ));
+            }
+            source.push("(scf.source_kind=? AND scf.source_instance=?)");
+            values.push(Value::Text(key.source.as_str().to_string()));
+            values.push(Value::Text(key.source_instance.clone()));
+        }
+        predicates.push(format!(
+            "EXISTS (SELECT 1 FROM source_copies scf WHERE scf.edition_id=am.edition_id AND ({}))",
+            source.join(" OR ")
+        ));
+    }
+    if let Some(cursor) = cursor {
+        predicates.push("(am.sort_title>? OR (am.sort_title=? AND am.edition_id>?))".to_string());
+        values.push(Value::Text(cursor.sort_title.clone()));
+        values.push(Value::Text(cursor.sort_title.clone()));
+        values.push(Value::Integer(cursor.edition_id));
+    }
+    Ok((predicates.join(" AND "), values))
+}
 
 /// Unicode-aware display sort key shared by ingest and query indices.
 pub fn normalize_sort_key(value: &str) -> String {

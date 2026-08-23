@@ -355,9 +355,22 @@ Row {
     // ============================ ARTISTS ================================
     LocalSearchBox {
         visible: root.view && root.view.activeTab === "artists"
-            && root.view.artists.length > 0
+            && ((QbzLocal.localArtistsNativeActive
+                    ? QbzLocal.localArtistsNativeTotal > 0
+                    : root.view.artists.length > 0)
+                || root.view.artistsSearch !== ""
+                || QbzLocal.localArtistsLoading)
         anchors.verticalCenter: parent.verticalCenter
         placeholder: QbzSession.tr("Search artists", QbzSession.trRev)
-        onEdited: function (v) { root.view.artistsSearch = v }
+        property string pending: ""
+        onEdited: function (v) {
+            pending = v
+            artistsSearchDebounce.restart()
+        }
+        Timer {
+            id: artistsSearchDebounce
+            interval: 200
+            onTriggered: root.view.artistsSearch = parent.pending
+        }
     }
 }
