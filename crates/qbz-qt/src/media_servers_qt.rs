@@ -414,6 +414,95 @@ pub fn album_tracks(prefixed_key: &str) -> Option<Vec<qbz_library::LocalTrack>> 
     Some(rows.into_iter().map(cached_to_local_track).collect())
 }
 
+/// Exact cached counts for enabled sources, in Jellyfin/Subsonic order.
+pub fn cached_track_counts() -> (i64, i64) {
+    let count = |kind: MediaServerKind| -> i64 {
+        if !get(kind).is_configured(kind) {
+            return 0;
+        }
+        let (source, handle) = match kind {
+            MediaServerKind::Jellyfin => (
+                qbz_media_cache::RemoteSource::Jellyfin,
+                qbz_source::registry().jellyfin().cache(),
+            ),
+            MediaServerKind::Subsonic => (
+                qbz_media_cache::RemoteSource::Subsonic,
+                qbz_source::registry().subsonic().cache(),
+            ),
+        };
+        handle
+            .with(|c| qbz_media_cache::count(c, source).unwrap_or(0) as i64)
+            .unwrap_or(0)
+    };
+    (count(MediaServerKind::Jellyfin), count(MediaServerKind::Subsonic))
+}
+
+pub fn cached_track_count() -> i64 {
+    let (jellyfin, subsonic) = cached_track_counts();
+    jellyfin + subsonic
+}
+
+/// Remote artist aggregates without materialising every cached track.
+pub fn cached_artists() -> Vec<(&'static str, qbz_media_cache::CachedArtist)> {
+    let mut out = Vec::new();
+    for kind in MediaServerKind::ALL {
+        if !get(kind).is_configured(kind) {
+            continue;
+        }
+        let (source, handle) = match kind {
+            MediaServerKind::Jellyfin => (
+                qbz_media_cache::RemoteSource::Jellyfin,
+                qbz_source::registry().jellyfin().cache(),
+            ),
+            MediaServerKind::Subsonic => (
+                qbz_media_cache::RemoteSource::Subsonic,
+                qbz_source::registry().subsonic().cache(),
+            ),
+        };
+        if let Some(rows) =
+            handle.with(|c| qbz_media_cache::artists(c, source).unwrap_or_default())
+        {
+            out.extend(rows.into_iter().map(|row| (kind.as_str(), row)));
+        }
+    }
+    out
+}
+
+/// One source-local candidate page for the global Tracks merge.
+pub fn search_tracks_page(
+    source_word: &str,
+    query: &str,
+    offset: u64,
+    limit: u64,
+    sort: &str,
+) -> Vec<qbz_library::LocalTrack> {
+    let Some(kind) = MediaServerKind::from_word(source_word) else {
+        return Vec::new();
+    };
+    if !get(kind).is_configured(kind) {
+        return Vec::new();
+    }
+    let (source, handle) = match kind {
+        MediaServerKind::Jellyfin => (
+            qbz_media_cache::RemoteSource::Jellyfin,
+            qbz_source::registry().jellyfin().cache(),
+        ),
+        MediaServerKind::Subsonic => (
+            qbz_media_cache::RemoteSource::Subsonic,
+            qbz_source::registry().subsonic().cache(),
+        ),
+    };
+    handle
+        .with(|c| {
+            qbz_media_cache::search_page(c, source, query, offset, limit, sort)
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(cached_to_local_track)
+        .collect()
+}
+
 /// Substring search across one remote source, in the `LocalTrack` shape.
 pub fn search_tracks(query: &str, limit: Option<u32>) -> Vec<qbz_library::LocalTrack> {
     let mut out = Vec::new();

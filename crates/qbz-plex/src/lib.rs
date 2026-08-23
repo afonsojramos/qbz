@@ -132,6 +132,7 @@ pub struct PlexCachedTrack {
     pub album_key: String,
     pub track_number: Option<u32>,
     pub disc_number: Option<u32>,
+    pub year: Option<u32>,
     /// The Plex album (`parentRatingKey`) this track belongs to — used to split
     /// distinct same-title albums into separate versions in the album view.
     pub parent_rating_key: Option<String>,
@@ -1494,6 +1495,7 @@ pub fn plex_cache_get_album_tracks(album_key: String) -> Result<Vec<PlexCachedTr
             album_key: album_key.clone(),
             track_number: track_number_opt.map(|v| v as u32),
             disc_number: disc_number_opt.map(|v| v as u32),
+            year: None,
             parent_rating_key,
         });
     }
@@ -1504,25 +1506,77 @@ pub fn plex_cache_search_tracks(
     query: String,
     limit: Option<u32>,
 ) -> Result<Vec<PlexCachedTrack>, String> {
+    plex_cache_search_tracks_page(query, 0, limit.unwrap_or(u32::MAX) as u64, "default")
+}
+
+/// One deterministic Plex candidate page for a cross-source Tracks merge.
+/// `None` on the compatibility helper now means unbounded instead of silently
+/// hiding every track after row 5,000.
+pub fn plex_cache_search_tracks_page(
+    query: String,
+    offset: u64,
+    limit: u64,
+    sort: &str,
+) -> Result<Vec<PlexCachedTrack>, String> {
     let conn = open_plex_cache_db()?;
-    let max = limit.unwrap_or(5000) as i64;
+    plex_cache_search_tracks_page_in(&conn, &query, offset, limit, sort)
+}
+
+fn plex_cache_search_tracks_page_in(
+    conn: &Connection,
+    query: &str,
+    offset: u64,
+    limit: u64,
+    sort: &str,
+) -> Result<Vec<PlexCachedTrack>, String> {
+    let order = match sort {
+        "title-asc" => "sort_title COLLATE NOCASE, sort_artist COLLATE NOCASE, rating_key",
+        "title-desc" => "sort_title COLLATE NOCASE DESC, sort_artist COLLATE NOCASE, rating_key",
+        "artist-asc" => "sort_artist COLLATE NOCASE, sort_album COLLATE NOCASE, disc_number, track_number, rating_key",
+        "artist-desc" => "sort_artist COLLATE NOCASE DESC, sort_album COLLATE NOCASE, disc_number, track_number, rating_key",
+        "year-desc" => "year IS NULL, year DESC, sort_album COLLATE NOCASE, disc_number, track_number, rating_key",
+        "year-asc" => "year IS NULL, year ASC, sort_album COLLATE NOCASE, disc_number, track_number, rating_key",
+        "added-desc" => "sort_album COLLATE NOCASE, disc_number, track_number, rating_key",
+        _ => "sort_album COLLATE NOCASE, sort_artist COLLATE NOCASE, disc_number, track_number, sort_title COLLATE NOCASE, rating_key",
+    };
     let needle = format!("%{}%", query.to_lowercase());
     let mut stmt = conn
-        .prepare(
+        .prepare(&format!(
             "SELECT rating_key, title, artist, album, duration_ms, container, bit_depth,
-                    sampling_rate_hz, artwork_path, track_number, disc_number
+                    sampling_rate_hz, artwork_path, track_number, disc_number, year,
+                    TRIM(title) AS sort_title,
+                    COALESCE(NULLIF(TRIM(artist), ''), 'Unknown Artist') AS sort_artist,
+                    CASE
+                      WHEN TRIM(COALESCE(artist, '')) != ''
+                       AND SUBSTR(TRIM(COALESCE(album, '')), 1, LENGTH(TRIM(artist)) + 3)
+                           = TRIM(artist) || ' - '
+                        THEN TRIM(SUBSTR(TRIM(album), LENGTH(TRIM(artist)) + 4))
+                      WHEN TRIM(COALESCE(artist, '')) != ''
+                       AND SUBSTR(TRIM(COALESCE(album, '')), 1, LENGTH(TRIM(artist)) + 3)
+                           = TRIM(artist) || ' — '
+                        THEN TRIM(SUBSTR(TRIM(album), LENGTH(TRIM(artist)) + 4))
+                      WHEN TRIM(COALESCE(artist, '')) != ''
+                       AND SUBSTR(TRIM(COALESCE(album, '')), 1, LENGTH(TRIM(artist)) + 3)
+                           = TRIM(artist) || ' – '
+                        THEN TRIM(SUBSTR(TRIM(album), LENGTH(TRIM(artist)) + 4))
+                      WHEN TRIM(COALESCE(artist, '')) != ''
+                       AND SUBSTR(TRIM(COALESCE(album, '')), 1, LENGTH(TRIM(artist)) + 2)
+                           = TRIM(artist) || ': '
+                        THEN TRIM(SUBSTR(TRIM(album), LENGTH(TRIM(artist)) + 3))
+                      ELSE COALESCE(NULLIF(TRIM(album), ''), 'Unknown Album')
+                    END AS sort_album
              FROM plex_cache_tracks
              WHERE ?1 = '' OR
                    lower(title) LIKE ?2 OR
                    lower(COALESCE(artist, '')) LIKE ?2 OR
                    lower(COALESCE(album, '')) LIKE ?2
-             ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number, title COLLATE NOCASE
-             LIMIT ?3",
-        )
+             ORDER BY {order}
+             LIMIT ?3 OFFSET ?4"
+        ))
         .map_err(|e| format!("Failed to prepare Plex cache search query: {}", e))?;
 
     let rows = stmt
-        .query_map(params![query.trim(), needle, max], |row| {
+        .query_map(params![query.trim(), needle, limit as i64, offset as i64], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -1535,6 +1589,7 @@ pub fn plex_cache_search_tracks(
                 row.get::<_, Option<String>>(8)?,
                 row.get::<_, Option<i64>>(9)?,
                 row.get::<_, Option<i64>>(10)?,
+                row.get::<_, Option<i64>>(11)?,
             ))
         })
         .map_err(|e| format!("Failed to query Plex cache search tracks: {}", e))?;
@@ -1553,6 +1608,7 @@ pub fn plex_cache_search_tracks(
             artwork_path,
             track_number_opt,
             disc_number_opt,
+            year_opt,
         ) = row.map_err(|e| format!("Failed to read Plex cache search row: {}", e))?;
         let artist = artist_opt
             .map(|v| decode_xml_entities(v.trim()))
@@ -1578,6 +1634,7 @@ pub fn plex_cache_search_tracks(
             album_key: plex_album_key(&artist, &album),
             track_number: track_number_opt.map(|v| v as u32),
             disc_number: disc_number_opt.map(|v| v as u32),
+            year: year_opt.map(|v| v as u32),
             // Flat search list — version grouping doesn't apply here.
             parent_rating_key: None,
         });
@@ -1671,6 +1728,7 @@ pub fn plex_cache_get_cached_tracks_by_keys(
             album_key: plex_album_key(&artist, &album),
             track_number: track_number_opt.map(|v| v as u32),
             disc_number: disc_number_opt.map(|v| v as u32),
+            year: None,
             parent_rating_key,
         });
     }
@@ -2032,6 +2090,42 @@ pub async fn plex_resolve_part_url(
 mod tests {
     use super::*;
 
+    fn search_db(track_count: u32) -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE plex_cache_tracks (
+                rating_key TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT,
+                album TEXT, duration_ms INTEGER, container TEXT, bit_depth INTEGER,
+                sampling_rate_hz INTEGER, artwork_path TEXT, track_number INTEGER,
+                disc_number INTEGER, year INTEGER
+            );",
+        )
+        .unwrap();
+        let tx = conn.transaction().unwrap();
+        {
+            let mut insert = tx
+                .prepare(
+                    "INSERT INTO plex_cache_tracks
+                   (rating_key,title,artist,album,duration_ms,container,bit_depth,
+                    sampling_rate_hz,track_number,disc_number,year)
+                 VALUES (?1,?2,'Plex Artist',?3,1000,'flac',24,96000,?4,1,2026)",
+                )
+                .unwrap();
+            for i in 0..track_count {
+                insert
+                    .execute(params![
+                        (i + 1).to_string(),
+                        format!("Track {i:05}"),
+                        format!("Album {:04}", i / 10),
+                        (i % 10 + 1) as i64,
+                    ])
+                    .unwrap();
+            }
+        }
+        tx.commit().unwrap();
+        conn
+    }
+
     #[test]
     fn parses_music_sections() {
         let xml = r#"<MediaContainer>
@@ -2077,5 +2171,57 @@ mod tests {
     #[test]
     fn playback_track_id_prefers_numeric_rating_key() {
         assert_eq!(playback_track_id("48012"), 48012);
+    }
+
+    #[test]
+    fn plex_search_pages_past_five_thousand_without_omissions() {
+        let conn = search_db(5_137);
+        let mut offset = 0;
+        let mut ids = std::collections::HashSet::new();
+        loop {
+            let page =
+                plex_cache_search_tracks_page_in(&conn, "Track", offset, 500, "title-asc")
+                    .unwrap();
+            if page.is_empty() {
+                break;
+            }
+            for track in &page {
+                assert!(ids.insert(track.id), "duplicate Plex id {}", track.id);
+            }
+            offset += page.len() as u64;
+        }
+        assert_eq!(offset, 5_137);
+        assert_eq!(ids.len(), 5_137);
+    }
+
+    #[test]
+    fn plex_page_order_uses_the_published_album_and_year_values() {
+        let conn = search_db(2);
+        conn.execute(
+            "UPDATE plex_cache_tracks
+                SET title = 'Zulu', album = 'Plex Artist - Alpha', year = 2020
+              WHERE rating_key = '1'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE plex_cache_tracks
+                SET title = 'Alpha', album = 'Beta', year = NULL
+              WHERE rating_key = '2'",
+            [],
+        )
+        .unwrap();
+
+        let default = plex_cache_search_tracks_page_in(&conn, "", 0, 10, "default").unwrap();
+        assert_eq!(default[0].rating_key, "1");
+        assert_eq!(default[0].album, "Alpha");
+
+        let title = plex_cache_search_tracks_page_in(&conn, "", 0, 10, "title-asc").unwrap();
+        assert_eq!(title[0].rating_key, "2");
+
+        let year = plex_cache_search_tracks_page_in(&conn, "", 0, 10, "year-desc").unwrap();
+        assert_eq!(year[0].rating_key, "1");
+        assert_eq!(year[0].year, Some(2020));
+        assert_eq!(year[1].year, None);
     }
 }

@@ -167,6 +167,10 @@ pub struct LocalCounts {
     /// header can show "N of them from Plex" without a second query.
     #[serde(rename = "plexTracks")]
     pub plex_tracks: i64,
+    #[serde(rename = "jellyfinTracks")]
+    pub jellyfin_tracks: i64,
+    #[serde(rename = "subsonicTracks")]
+    pub subsonic_tracks: i64,
 }
 
 // ---------------------------------------------------------------------------

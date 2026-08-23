@@ -168,7 +168,7 @@ pub struct ArtistInput {
     pub name: String,
     pub album_count: u32,
     pub track_count: u32,
-    /// "local" | "plex" — the provenance hint the rail badge reads back.
+    /// "local" | "plex" | "jellyfin" | "subsonic".
     pub source: &'static str,
 }
 
@@ -188,8 +188,7 @@ pub struct MergedArtist {
     /// ONE of the three chain tiers, and the artwork index needs to know which
     /// — "mixed" is not a source a token can be interpreted by.
     pub image_source: String,
-    /// "local" | "plex" | "mixed" — the artist's LIBRARY provenance, which the
-    /// Artists rail renders as a hint.
+    /// One source word, or "mixed" when more than one source contributes.
     pub source: String,
 }
 
@@ -251,15 +250,25 @@ pub fn merge_artists(
             continue;
         };
         let album_set_len = album_ids.get(&n).map(|s| s.len()).unwrap_or(0) as u32;
-        let has_local = variants.iter().any(|v| v.source == "local");
-        let has_plex = variants.iter().any(|v| v.source == "plex");
-        let source = if has_local && has_plex {
-            "mixed"
-        } else if has_plex {
-            "plex"
-        } else {
-            "local"
-        };
+        let mut sources: Vec<&str> = Vec::new();
+        for variant in &variants {
+            if !sources.contains(&variant.source) {
+                sources.push(variant.source);
+            }
+        }
+        let source = if sources.len() == 1 { sources[0] } else { "mixed" };
+        // If no album-credit document is available (notably a server-only
+        // profile without library.db), counts from distinct sources are
+        // disjoint because their album ids are namespaced. Within one source,
+        // spelling variants can overlap, so retain only that source's maximum.
+        let mut fallback_albums_by_source: HashMap<&str, u32> = HashMap::new();
+        for variant in &variants {
+            fallback_albums_by_source
+                .entry(variant.source)
+                .and_modify(|count| *count = (*count).max(variant.album_count))
+                .or_insert(variant.album_count);
+        }
+        let fallback_album_count = fallback_albums_by_source.values().sum();
         let (canonical, album_count, track_count) = if variants.len() == 1 {
             let v = &variants[0];
             let ac = if album_set_len > 0 {
@@ -282,7 +291,7 @@ pub fn merge_artists(
             let ac = if album_set_len > 0 {
                 album_set_len
             } else {
-                canon.album_count
+                fallback_album_count
             };
             (canon.name.clone(), ac, total_tracks)
         };
@@ -530,6 +539,40 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].source, "mixed");
         assert_eq!(merged[0].track_count, 30);
+    }
+
+    #[test]
+    fn exclusively_remote_artist_keeps_its_counts_and_source() {
+        let merged = merge_artists(
+            vec![input("Remote Only", 7, 83, "jellyfin")],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            false,
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].name, "Remote Only");
+        assert_eq!(merged[0].album_count, 7);
+        assert_eq!(merged[0].track_count, 83);
+        assert_eq!(merged[0].source, "jellyfin");
+    }
+
+    #[test]
+    fn remote_only_artist_counts_add_across_distinct_servers() {
+        let merged = merge_artists(
+            vec![
+                input("Remote Only", 7, 83, "jellyfin"),
+                input("remote only", 4, 19, "subsonic"),
+            ],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            false,
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].album_count, 11);
+        assert_eq!(merged[0].track_count, 102);
+        assert_eq!(merged[0].source, "mixed");
     }
 
     #[test]

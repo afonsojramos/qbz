@@ -166,6 +166,19 @@ pub struct CachedTrack {
     pub size_bytes: Option<u64>,
 }
 
+/// One source-local artist aggregate for the Local Library rail.
+///
+/// A row is emitted for both a track artist and a distinct album artist. The
+/// Qt-side normalizer then folds spelling variants and merges these aggregates
+/// with local/Plex rows. Keeping this aggregation in SQLite avoids loading a
+/// whole remote track cache merely to answer artist counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedArtist {
+    pub name: String,
+    pub album_count: u32,
+    pub track_count: u32,
+}
+
 /// One cached library / music folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedLibrary {
@@ -461,21 +474,93 @@ pub fn album_tracks(conn: &Connection, source: RemoteSource, album_id: &str) -> 
 
 /// Substring search across title / artist / album. An empty needle matches
 /// everything, which is what the Local Library's unfiltered listing wants.
-pub fn search(conn: &Connection, source: RemoteSource, needle: &str, limit: Option<u32>) -> Result<Vec<CachedTrack>> {
+pub fn search(
+    conn: &Connection,
+    source: RemoteSource,
+    needle: &str,
+    limit: Option<u32>,
+) -> Result<Vec<CachedTrack>> {
+    search_page(conn, source, needle, 0, limit.unwrap_or(u32::MAX) as u64, "default")
+}
+
+/// One deterministic page of a remote source, in the same allowlisted sort
+/// orders used by the local Tracks query. `offset` belongs to this source only.
+pub fn search_page(
+    conn: &Connection,
+    source: RemoteSource,
+    needle: &str,
+    offset: u64,
+    limit: u64,
+    sort: &str,
+) -> Result<Vec<CachedTrack>> {
     let like = format!("%{}%", needle.trim());
-    let lim = limit.unwrap_or(u32::MAX) as i64;
+    let order = match sort {
+        "title-asc" => "title COLLATE NOCASE, artist COLLATE NOCASE, id",
+        "title-desc" => "title COLLATE NOCASE DESC, artist COLLATE NOCASE, id",
+        "artist-asc" => "COALESCE(NULLIF(album_artist, ''), artist) COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number, id",
+        "artist-desc" => "COALESCE(NULLIF(album_artist, ''), artist) COLLATE NOCASE DESC, album COLLATE NOCASE, disc_number, track_number, id",
+        "year-desc" => "year IS NULL, year DESC, album COLLATE NOCASE, disc_number, track_number, id",
+        "year-asc" => "year IS NULL, year ASC, album COLLATE NOCASE, disc_number, track_number, id",
+        // These rows currently map to LocalTrack with indexed_at=0.
+        "added-desc" => "album COLLATE NOCASE, disc_number, track_number, id",
+        _ => "album COLLATE NOCASE, COALESCE(NULLIF(album_artist, ''), artist) COLLATE NOCASE, disc_number, track_number, title COLLATE NOCASE, id",
+    };
     let mut stmt = conn
         .prepare(&format!(
             "{SELECT} WHERE source = ?1 AND (?2 = '' OR title LIKE ?3 OR artist LIKE ?3 \
              OR album LIKE ?3 OR album_artist LIKE ?3) \
-             ORDER BY album_artist, album, disc_number, track_number LIMIT ?4"
+             ORDER BY {order} LIMIT ?4 OFFSET ?5"
         ))
         .map_err(map_err("prepare search"))?;
     let rows = stmt
-        .query_map(params![source.as_str(), needle.trim(), like, lim], row_to_track)
+        .query_map(
+            params![
+                source.as_str(),
+                needle.trim(),
+                like,
+                limit as i64,
+                offset as i64
+            ],
+            row_to_track,
+        )
         .map_err(map_err("query search"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(map_err("read search"))
+}
+
+/// Artist aggregates for one remote source, including track credits and
+/// distinct album artists.
+pub fn artists(conn: &Connection, source: RemoteSource) -> Result<Vec<CachedArtist>> {
+    let mut stmt = conn
+        .prepare(
+            "WITH credits AS (
+                 SELECT id, TRIM(artist) AS name,
+                        COALESCE(NULLIF(album_id, ''), album) AS album_key
+                   FROM remote_cache_tracks
+                  WHERE source = ?1 AND TRIM(artist) != ''
+                 UNION
+                 SELECT id, TRIM(album_artist) AS name,
+                        COALESCE(NULLIF(album_id, ''), album) AS album_key
+                   FROM remote_cache_tracks
+                  WHERE source = ?1 AND TRIM(album_artist) != ''
+             )
+             SELECT name, COUNT(DISTINCT album_key), COUNT(DISTINCT id)
+               FROM credits
+              GROUP BY name COLLATE NOCASE
+              ORDER BY name COLLATE NOCASE",
+        )
+        .map_err(map_err("prepare artists"))?;
+    let rows = stmt
+        .query_map(params![source.as_str()], |row| {
+            Ok(CachedArtist {
+                name: row.get(0)?,
+                album_count: row.get::<_, i64>(1)? as u32,
+                track_count: row.get::<_, i64>(2)? as u32,
+            })
+        })
+        .map_err(map_err("query artists"))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(map_err("read artists"))
 }
 
 pub fn count(conn: &Connection, source: RemoteSource) -> Result<u64> {
@@ -691,6 +776,71 @@ mod tests {
         assert!(search(&c, RemoteSource::Subsonic, "zzz", None).unwrap().is_empty());
         // A search never leaks another source's rows.
         assert!(search(&c, RemoteSource::Jellyfin, "", None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn remote_search_pages_cross_the_window_without_duplicates() {
+        let mut c = db();
+        let rows: Vec<CachedTrack> = (0..1_201)
+            .map(|i| {
+                let mut t = track(
+                    &format!("remote-{i:04}"),
+                    &format!("Album {:03}", i / 12),
+                    Some(1),
+                    Some((i % 12 + 1) as u32),
+                );
+                t.title = format!("Track {i:04}");
+                t
+            })
+            .collect();
+        save_tracks(&mut c, RemoteSource::Jellyfin, &rows).unwrap();
+
+        let mut offset = 0;
+        let mut ids = std::collections::HashSet::new();
+        loop {
+            let page = search_page(
+                &c,
+                RemoteSource::Jellyfin,
+                "Track",
+                offset,
+                500,
+                "title-asc",
+            )
+            .unwrap();
+            if page.is_empty() {
+                break;
+            }
+            for row in &page {
+                assert!(ids.insert(row.id), "duplicate id {}", row.id);
+            }
+            offset += page.len() as u64;
+        }
+        assert_eq!(ids.len(), 1_201);
+        assert_eq!(offset, 1_201);
+    }
+
+    #[test]
+    fn remote_only_artist_has_exact_album_and_track_counts() {
+        let mut c = db();
+        let mut rows = Vec::new();
+        for (id, album) in [("one", "a"), ("two", "a"), ("three", "b")] {
+            let mut t = track(id, album, Some(1), Some(1));
+            t.artist = "Remote Only".into();
+            t.album_artist = "Remote Only".into();
+            rows.push(t);
+        }
+        save_tracks(&mut c, RemoteSource::Subsonic, &rows).unwrap();
+
+        let got = artists(&c, RemoteSource::Subsonic).unwrap();
+        assert_eq!(
+            got,
+            vec![CachedArtist {
+                name: "Remote Only".into(),
+                album_count: 2,
+                track_count: 3,
+            }]
+        );
+        assert!(artists(&c, RemoteSource::Jellyfin).unwrap().is_empty());
     }
 
     #[test]

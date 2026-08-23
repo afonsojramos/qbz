@@ -29,8 +29,8 @@
 //!   ATTACHes `<data_dir>/qbz/plex_cache.db` when the master toggle is ON, so
 //!   the grid is the local+Plex UNION. Toggle OFF -> `None` -> local-only,
 //!   byte-for-byte the pre-Plex behaviour.
-//! - Tracks: the full Plex search set merges ONCE on page 1; later pages stay
-//!   pure local so the LIMIT/OFFSET path and `has_more` are untouched.
+//! - Tracks: local, Plex, Jellyfin and Subsonic each keep an independent
+//!   offset; bounded candidate pages are merged into one stable global page.
 //! - Artists: the aggregated Plex artists fold into the rail by name.
 //! - Artwork: `/library/...` thumbs resolve through the shared image cache
 //!   with a tokenized transcode URL; no token ever reaches QML.
@@ -59,8 +59,9 @@ pub use crate::local_rows::{
 
 // --- state / prefs ---------------------------------------------------------
 pub use crate::local_state::{
-    album_mode, counts, has_library, set_album_mode, set_tracks_group, set_tracks_query,
-    set_tracks_sort, state, tracks_group, tracks_has_more, tracks_sort, with_db,
+    album_mode, begin_tracks_load, commit_tracks_page, counts, has_library, set_album_mode,
+    set_tracks_group, set_tracks_query, set_tracks_sort, state, tracks_generation, tracks_group,
+    tracks_has_more, tracks_sort, with_db, TrackSourceOffsets, TracksLoadRequest,
 };
 
 // --- queries ---------------------------------------------------------------

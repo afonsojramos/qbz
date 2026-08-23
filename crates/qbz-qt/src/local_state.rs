@@ -20,6 +20,32 @@ use crate::local_rows::{AlbumRow, ArtistRow, LocalCounts, TrackRow, TreeNode};
 /// it stays server-paginated; the other tabs are bounded and full-load.
 pub const TRACKS_PAGE: u64 = 500;
 
+/// Independent Phase-A offsets. Phase E replaces them with catalog keysets.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TrackSourceOffsets {
+    pub local: u64,
+    pub plex: u64,
+    pub jellyfin: u64,
+    pub subsonic: u64,
+}
+
+impl TrackSourceOffsets {
+    pub fn add_assign(&mut self, consumed: Self) {
+        self.local += consumed.local;
+        self.plex += consumed.plex;
+        self.jellyfin += consumed.jellyfin;
+        self.subsonic += consumed.subsonic;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TracksLoadRequest {
+    pub generation: u64,
+    pub offsets: TrackSourceOffsets,
+    pub query: String,
+    pub sort: String,
+}
+
 // ---------------------------------------------------------------------------
 // Database access (library_db.rs `with_db` 1:1 — a fresh connection per op on
 // the calling BLOCKING thread; `LibraryDatabase` holds a non-Send rusqlite
@@ -86,7 +112,9 @@ pub struct LocalState {
     /// rationale as `tracks_raw`: a context-menu enqueue on a Plex detail row
     /// has no `local_tracks` id to re-query with.
     pub detail_raw: Vec<LocalTrack>,
-    pub tracks_offset: u64,
+    pub tracks_offsets: TrackSourceOffsets,
+    /// Search/sort generation. An older worker may not mutate or publish.
+    pub tracks_generation: u64,
     pub tracks_query: String,
     pub tracks_sort: String,
     /// Tracks-tab grouping ("off" | "album" | "artist" | "name") — persisted
@@ -325,6 +353,60 @@ pub fn set_tracks_query(q: &str) {
     state(|s| s.tracks_query = q.to_string());
 }
 
+pub fn begin_tracks_load(reset: bool) -> TracksLoadRequest {
+    state(|s| {
+        if reset {
+            s.tracks.clear();
+            s.tracks_raw.clear();
+            s.tracks_offsets = TrackSourceOffsets::default();
+            s.tracks_has_more = false;
+            s.tracks_generation = s.tracks_generation.wrapping_add(1);
+            if s.tracks_generation == 0 {
+                s.tracks_generation = 1;
+            }
+        }
+        TracksLoadRequest {
+            generation: s.tracks_generation,
+            offsets: s.tracks_offsets,
+            query: s.tracks_query.clone(),
+            sort: s.tracks_sort.clone(),
+        }
+    })
+}
+
+pub fn tracks_generation() -> u64 {
+    state(|s| s.tracks_generation)
+}
+
+pub(crate) fn tracks_request_is_current(
+    current_generation: u64,
+    current_offsets: TrackSourceOffsets,
+    request: &TracksLoadRequest,
+) -> bool {
+    current_generation == request.generation && current_offsets == request.offsets
+}
+
+pub fn commit_tracks_page(
+    request: &TracksLoadRequest,
+    rows: Vec<TrackRow>,
+    raw: Vec<LocalTrack>,
+    art: HashMap<String, (SourceId, String)>,
+    consumed: TrackSourceOffsets,
+    has_more: bool,
+) -> Option<Vec<TrackRow>> {
+    state(|s| {
+        if !tracks_request_is_current(s.tracks_generation, s.tracks_offsets, request) {
+            return None;
+        }
+        s.tracks_offsets.add_assign(consumed);
+        s.art_index.extend(art);
+        s.tracks.extend(rows);
+        s.tracks_raw.extend(raw);
+        s.tracks_has_more = has_more;
+        Some(s.tracks.clone())
+    })
+}
+
 pub fn tracks_has_more() -> bool {
     state(|s| s.tracks_has_more)
 }
@@ -335,11 +417,85 @@ pub fn counts() -> LocalCounts {
 
 /// Whether the local library is usable at all (a per-user db with at least
 /// one registered folder). Drives the "nothing indexed yet" empty state.
-/// A Plex-only setup is ALSO usable — the browse union has content even with
-/// no registered on-disk folder.
+/// A server-only setup is ALSO usable — the browse union has content even
+/// with no registered on-disk folder.
 pub fn has_library() -> bool {
-    if with_db(|db| db.get_folders()).map(|f| !f.is_empty()).unwrap_or(false) {
-        return true;
+    let has_folders = with_db(|db| db.get_folders())
+        .map(|f| !f.is_empty())
+        .unwrap_or(false);
+    library_sources_available(
+        has_folders,
+        crate::local_plex::is_enabled(),
+        crate::local_plex::cached_track_count(),
+        crate::media_servers_qt::cached_track_count(),
+    )
+}
+
+fn library_sources_available(
+    has_folders: bool,
+    plex_enabled: bool,
+    plex_tracks: i64,
+    remote_tracks: i64,
+) -> bool {
+    has_folders || (plex_enabled && plex_tracks > 0) || remote_tracks > 0
+}
+
+#[cfg(test)]
+mod phase_a_tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{mpsc, Arc};
+
+    use super::{
+        library_sources_available, tracks_request_is_current, TrackSourceOffsets,
+        TracksLoadRequest,
+    };
+
+    #[test]
+    fn remote_only_installation_has_a_library() {
+        assert!(library_sources_available(true, false, 0, 0));
+        assert!(library_sources_available(false, true, 5_137, 0));
+        assert!(library_sources_available(false, false, 0, 4_924));
+        assert!(library_sources_available(false, false, 0, 6_678));
+        assert!(!library_sources_available(false, false, 0, 0));
     }
-    crate::local_plex::is_enabled() && crate::local_plex::cached_track_count() > 0
+
+    #[test]
+    fn an_older_query_finishing_after_a_new_one_is_rejected() {
+        let generation = Arc::new(AtomicU64::new(1));
+        let (old_started_tx, old_started_rx) = mpsc::channel();
+        let (allow_old_finish_tx, allow_old_finish_rx) = mpsc::channel();
+        let old_generation = Arc::clone(&generation);
+        let old_request = TracksLoadRequest {
+            generation: 1,
+            offsets: TrackSourceOffsets::default(),
+            query: "old".to_string(),
+            sort: "title-asc".to_string(),
+        };
+        let old = std::thread::spawn(move || {
+            old_started_tx.send(()).unwrap();
+            allow_old_finish_rx.recv().unwrap();
+            tracks_request_is_current(
+                old_generation.load(Ordering::SeqCst),
+                TrackSourceOffsets::default(),
+                &old_request,
+            )
+        });
+
+        old_started_rx.recv().unwrap();
+        generation.store(2, Ordering::SeqCst);
+        let new_request = TracksLoadRequest {
+            generation: 2,
+            offsets: TrackSourceOffsets::default(),
+            query: "new".to_string(),
+            sort: "artist-asc".to_string(),
+        };
+        allow_old_finish_tx.send(()).unwrap();
+
+        assert!(!old.join().unwrap());
+        assert!(tracks_request_is_current(
+            generation.load(Ordering::SeqCst),
+            TrackSourceOffsets::default(),
+            &new_request,
+        ));
+    }
 }

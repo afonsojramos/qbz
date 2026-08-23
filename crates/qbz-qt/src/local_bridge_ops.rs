@@ -321,6 +321,11 @@ pub(crate) fn load_folders() {
 }
 
 pub(crate) fn load_tracks(reset: bool) {
+    // Snapshot the query/sort and mint the generation before the worker is
+    // scheduled. A superseded worker may finish, but cannot mutate state or
+    // publish over the newer request.
+    let request = lib::begin_tracks_load(reset);
+    let generation = request.generation;
     ui(move |mut b| {
         if reset {
             b.as_mut().set_local_tracks_loading(true);
@@ -329,14 +334,41 @@ pub(crate) fn load_tracks(reset: bool) {
         }
     });
     crate::spawn(async move {
-        let result = tokio::task::spawn_blocking(move || lib::load_tracks_page_blocking(reset))
+        let result = tokio::task::spawn_blocking(move || lib::load_tracks_page_blocking(request))
             .await
             .unwrap_or_else(|e| Err(e.to_string()));
         let _ = tokio::task::spawn_blocking(lib::load_counts_blocking).await;
         match result {
-            Ok((rows, has_more)) => {
-                let json = lib::to_json(&rows);
+            Ok(Some(load)) => {
+                let serialize_started = std::time::Instant::now();
+                let json = lib::to_json(&load.rows);
+                let serialize_time = serialize_started.elapsed();
+                log::info!(
+                    "[qbz-qt][perf] tracks generation={} page_rows={} accumulated_rows={} json_bytes={} query={:?} merge={:?} map={:?} serialize={:?} candidates=local:{} plex:{} jellyfin:{} subsonic:{} selected=local:{} plex:{} jellyfin:{} subsonic:{} has_more={}",
+                    load.generation,
+                    load.page_rows,
+                    load.rows.len(),
+                    json.len(),
+                    load.query_time,
+                    load.merge_time,
+                    load.map_time,
+                    serialize_time,
+                    load.candidates.local,
+                    load.candidates.plex,
+                    load.candidates.jellyfin,
+                    load.candidates.subsonic,
+                    load.published.local,
+                    load.published.plex,
+                    load.published.jellyfin,
+                    load.published.subsonic,
+                    load.has_more,
+                );
+                let publish_generation = load.generation;
+                let has_more = load.has_more;
                 ui(move |mut b| {
+                    if lib::tracks_generation() != publish_generation {
+                        return;
+                    }
                     b.as_mut()
                         .set_local_tracks_json(QString::from(json.as_str()));
                     b.as_mut().set_local_tracks_has_more(has_more);
@@ -344,9 +376,15 @@ pub(crate) fn load_tracks(reset: bool) {
                     b.as_mut().set_local_tracks_loading_more(false);
                 });
             }
+            Ok(None) => {
+                log::debug!("[qbz-qt] discarded stale tracks generation {generation}");
+            }
             Err(e) => {
                 log::warn!("[qbz-qt] local tracks load failed: {e}");
-                ui(|mut b| {
+                ui(move |mut b| {
+                    if lib::tracks_generation() != generation {
+                        return;
+                    }
                     b.as_mut().set_local_tracks_loading(false);
                     b.as_mut().set_local_tracks_loading_more(false);
                 });

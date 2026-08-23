@@ -3179,7 +3179,8 @@ impl LibraryDatabase {
                   COALESCE(album_artist, artist) COLLATE NOCASE, \
                   disc_number, \
                   track_number, \
-                  title COLLATE NOCASE",
+                  title COLLATE NOCASE, \
+                  id",
         };
         let sql = format!(
             "SELECT {} FROM local_tracks \

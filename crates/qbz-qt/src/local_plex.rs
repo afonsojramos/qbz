@@ -345,6 +345,7 @@ pub fn map_cached_to_local_track(t: qbz_plex::PlexCachedTrack) -> LocalTrack {
         album_group_title: t.album.clone(),
         track_number: t.track_number,
         disc_number: t.disc_number,
+        year: t.year,
         duration_secs: t.duration_secs,
         format: parse_audio_format(&t.format),
         bit_depth: t.bit_depth,
@@ -355,10 +356,23 @@ pub fn map_cached_to_local_track(t: qbz_plex::PlexCachedTrack) -> LocalTrack {
     }
 }
 
-/// The FULL Plex track set matching `query` (cap 5000 — the Plex cache is a
-/// bounded set, not 16K-row scale), in the `LocalTrack` shape.
+/// The full Plex track set matching `query`, in the `LocalTrack` shape.
+/// Tracks uses [`search_tracks_page`] so its candidate set stays bounded.
 pub fn search_tracks(query: &str) -> Vec<LocalTrack> {
     qbz_plex::plex_cache_search_tracks(query.trim().to_string(), None)
+        .unwrap_or_default()
+        .into_iter()
+        .map(map_cached_to_local_track)
+        .collect()
+}
+
+pub fn search_tracks_page(
+    query: &str,
+    offset: u64,
+    limit: u64,
+    sort: &str,
+) -> Vec<LocalTrack> {
+    qbz_plex::plex_cache_search_tracks_page(query.trim().to_string(), offset, limit, sort)
         .unwrap_or_default()
         .into_iter()
         .map(map_cached_to_local_track)
