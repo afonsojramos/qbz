@@ -118,6 +118,11 @@ Rectangle {
     /// It is also the gate for `preventStealing` on the row-body drag — see
     /// the DRAG vs. DRAG-TO-SCROLL block at the bottom of this file.
     property bool showReorder: false
+    /// Use the row body's vertical reorder gesture without drawing the
+    /// playlist-specific chevron gutter. QueueView owns its insertion line
+    /// and consumes the shared drag coordinates; all existing rows inherit
+    /// `showReorder` and therefore keep their current gesture policy.
+    property bool reorderDrag: root.showReorder
     /// Ends of the list: the reference dims nothing, but a chevron that
     /// renders and no-ops is the defect class this round is fixing, so the
     /// first row's ↑ and the last row's ↓ are drawn disabled instead.
@@ -129,6 +134,23 @@ Rectangle {
     // `playlist add-tracks` as a QOBUZ catalog id — a local row dropped on a
     // playlist would silently add an unrelated catalog track.
     property bool draggable: true
+    /// A live transport guard separate from catalogue availability. The full
+    /// queue uses it when QConnect is active: incompatible rows stay visible
+    /// and keep their non-transport menu actions, but cannot play or drag.
+    property bool playBlocked: false
+    /// Full queue only: give the now-playing row a persistent themed fill in
+    /// addition to TrackRow's existing pill/equalizer indicator.
+    property bool activeBackground: false
+    /// QueueView can distinguish duplicate ids across history/current/upcoming
+    /// and nominate the one structural current row as active.
+    property bool overrideActiveMatch: false
+    property bool activeMatch: false
+    /// Optional queue-state marker that replaces the idle number cell.
+    property string leadingMarkerIcon: ""
+    /// QueueView needs queue-operation entries rather than the catalog-wide
+    /// TrackContextMenu inventory. Null preserves the standard model.
+    property var menuEntriesOverride: null
+    signal menuActionRequested(string action)
     /// Multi-select arm (primitives/TrackRow.slint:58 `multi-select-mode`):
     /// the leading play/number cell becomes a selection checkbox, the WHOLE
     /// row body is a selection target, and the row's own gestures (play,
@@ -409,6 +431,8 @@ Rectangle {
     /// as-is to avoid a visible dark-theme stripe shift").
     readonly property color rowHoverBg: theme.alphaTiers.length > 0
         ? theme.alphaTier(8) : (theme.isDark ? "#14ffffff" : "#14000000")
+    readonly property color rowActiveBg: theme.alphaTiers.length > 0
+        ? theme.alphaTier(10) : (theme.isDark ? "#1affffff" : "#1a000000")
 
     width: parent ? parent.width : 0
     height: 50
@@ -417,7 +441,9 @@ Rectangle {
     // does the same on its unavailable rows): a row that lights up under the
     // pointer reads as clickable, and this one is not. The zebra stripe stays
     // — it is structure, not affordance.
-    color: (hovered && !root.pulledDead)
+    color: (root.activeBackground && root.isActive)
+        ? rowActiveBg
+        : (hovered && !root.pulledDead && !root.playBlocked)
         ? rowHoverBg
         : (zebra && number % 2 === 0 ? "#07ffffff" : "transparent")
 
@@ -443,10 +469,12 @@ Rectangle {
     // the second test is inert for every other source and cannot light a row
     // by colliding with an id from another space. Mirrors the reference's
     // TrackRow.slint:116-118 / TrackPlayCell.slint:85-87.
-    readonly property bool isActive: (item.id || "") !== ""
-        && (QbzPlayer.npTrackId === (item.id || "")
-            || (QbzPlayer.npLocalTrackId !== ""
-                && QbzPlayer.npLocalTrackId === (item.id || "")))
+    readonly property bool isActive: root.overrideActiveMatch
+        ? root.activeMatch
+        : ((item.id || "") !== ""
+            && (QbzPlayer.npTrackId === (item.id || "")
+                || (QbzPlayer.npLocalTrackId !== ""
+                    && QbzPlayer.npLocalTrackId === (item.id || ""))))
 
     // The animated now-playing indicator pref (AppearanceState
     // .play-indicator-animation; the toggle lives in AppearanceSettings).
@@ -556,7 +584,7 @@ Rectangle {
         // should fade. 0.5 is views/purchases/PurchaseListRow.qml's value —
         // the only precedent for this state in the tree, so the two screens
         // agree.
-        opacity: root.pulledDead ? 0.5 : 1.0
+        opacity: (root.pulledDead || root.playBlocked) ? 0.5 : 1.0
 
         // --- Reorder gutter (primitives/TrackRow.slint:270-311) ----------
         // The LEADING cell on a reorderable list: a 22px column with an
@@ -637,7 +665,7 @@ Rectangle {
             // A dead row never offers the play disc: the affordance IS the
             // claim that clicking does something.
             readonly property bool showOverlay: (root.hovered || root.isActive)
-                && !root.pulledDead
+                && !root.pulledDead && !root.playBlocked
             // `accent-ring` (:108): the playing row's static form — only with
             // the animation pref OFF; with it ON the eq bars carry the state.
             readonly property bool accentRing: !root.playIndicatorAnim
@@ -685,6 +713,7 @@ Rectangle {
             }
             Text {
                 visible: !playCell.showOverlay && !root.selectMode && !root.pulledDead
+                    && root.leadingMarkerIcon === ""
                 anchors.centerIn: parent
                 text: root.number
                 color: theme.textMuted
@@ -778,7 +807,7 @@ Rectangle {
                 // :234-243), so disabling the row body is not enough: without
                 // the `pulledDead` term, clicking the alert glyph would start
                 // a play that cannot succeed.
-                enabled: !root.selectMode && !root.pulledDead
+                enabled: !root.selectMode && !root.pulledDead && !root.playBlocked
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
@@ -828,7 +857,8 @@ Rectangle {
                     // Muted, not just dimmed: the Row's 0.5 opacity fades the
                     // whole cell uniformly, and the TITLE is the part that has
                     // to stop reading as live content.
-                    color: root.pulledDead ? theme.textMuted : theme.textPrimary
+                    color: (root.pulledDead || root.playBlocked)
+                        ? theme.textMuted : theme.textPrimary
                     font.pixelSize: 14
                     font.weight: theme.weightMedium
                     elide: Text.ElideRight
@@ -944,8 +974,17 @@ Rectangle {
             text: root.item.duration || ""
             color: theme.textMuted
             font.pixelSize: 12
-            horizontalAlignment: Text.AlignHCenter
-        }
+                horizontalAlignment: Text.AlignHCenter
+            }
+            QbzIcon {
+                visible: !playCell.showOverlay && !root.selectMode
+                    && root.leadingMarkerIcon !== ""
+                anchors.centerIn: parent
+                name: root.leadingMarkerIcon
+                width: 13
+                height: 13
+                tintName: "accent"
+            }
         // Quality (92px) — the BARE badge, 1:1 with primitives/TrackRow.slint
         // 578-592: a 92px cell, `alignment: center` on both axes, holding a
         // QualityBadgeFull with `show-icon: false` + `bare: true`. That is the
@@ -1147,6 +1186,8 @@ Rectangle {
     }
 
     function menuModel() {
+        if (root.menuEntriesOverride !== null)
+            return root.menuEntriesOverride
         var t = QbzSession.tr
         var r = QbzSession.trRev
         var m = []
@@ -1231,6 +1272,15 @@ Rectangle {
     }
 
     function menuAction(a) {
+        if (root.menuEntriesOverride !== null) {
+            for (var i = 0; i < root.menuEntriesOverride.length; i++) {
+                var entry = root.menuEntriesOverride[i]
+                if (entry.action === a && entry.external === true) {
+                    root.menuActionRequested(a)
+                    return
+                }
+            }
+        }
         if (a === "play") root.playRequested()
         else if (a === "next") root.enqueueRequested("next")
         else if (a === "later") root.enqueueRequested("later")
@@ -1394,7 +1444,8 @@ Rectangle {
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         // An Arrow over a dead row, whatever the surface's click policy — the
         // pointer must not promise a play that is blocked below.
-        cursorShape: (!root.pulledDead && (root.clickPlays || root.selectMode))
+        cursorShape: (!root.pulledDead && !root.playBlocked
+                      && (root.clickPlays || root.selectMode))
             ? Qt.PointingHandCursor : Qt.ArrowCursor
         // Keep the grab so the enclosing Flickable cannot turn our drag into a
         // scroll — see the block above.
@@ -1416,7 +1467,7 @@ Rectangle {
         // later, `onCanceled` fired, and the drag died at roughly the row
         // boundary — never reaching the sidebar. Arming at 6px and claiming
         // the grab there wins the race by construction, because 6 < 10.
-        preventStealing: (root.showReorder && root.draggable && !root.selectMode)
+        preventStealing: (root.reorderDrag && root.draggable && !root.selectMode)
                          || root.dragging
         onPressed: function (mouse) {
             if (mouse.button === Qt.RightButton) {
@@ -1437,7 +1488,7 @@ Rectangle {
             // playlist would add a track that cannot play, which is precisely
             // the state this treatment exists to stop spreading.
             if (!pressed || !(pressedButtons & Qt.LeftButton) || !root.draggable
-                || root.selectMode || root.pulledDead) return
+                || root.selectMode || root.pulledDead || root.playBlocked) return
             const g = mapToItem(null, mouse.x, mouse.y)
             const dx = mouse.x - root.downPos.x
             const dy = mouse.y - root.downPos.y
@@ -1458,7 +1509,7 @@ Rectangle {
             // rejects it FOR REORDER, where it "separates nothing". Here it
             // separates everything, which is why this arm exists and that one
             // does not.
-            const armed = root.showReorder
+            const armed = root.reorderDrag
                 ? (Math.abs(dx) > 6 || Math.abs(dy) > 6)
                 : (Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy))
             if (!root.dragging && armed) {
@@ -1493,7 +1544,7 @@ Rectangle {
             // leading cell, and the bulk bar's "Select all" reaches it
             // regardless. A row the user cannot tick by clicking but CAN tick
             // by hitting the 14px disc is the worse of the two states.
-            if (root.pulledDead) {
+            if (root.pulledDead || root.playBlocked) {
                 mouse.accepted = true
                 return
             }

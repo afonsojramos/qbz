@@ -38,6 +38,10 @@ pub mod qbz_queue {
         // + pagination + #442 section markers). Supersedes `queueModel`.
         #[qproperty(QString, queue_json)]
 
+        // Full chronological queue projection used only by QueueView. It is
+        // opt-in so ordinary sidebar publishes stay paged and cheap.
+        #[qproperty(QString, extended_queue_json)]
+
         // --- Immersive coverflow (2026-08-02 immersive-port contract §4.4) --
         // `{"index":i32,"tracks":[{id,title,artist,artUrl}]}` over the FULL
         // flat queue ([history oldest-first, NOW, upcoming]); `index` = flat
@@ -94,6 +98,29 @@ pub mod qbz_queue {
         #[qinvokable]
         fn queue_play_upcoming_flat(self: Pin<&mut QbzQueue>, index: i32);
         #[qinvokable]
+        fn queue_extended_opened(self: Pin<&mut QbzQueue>);
+        #[qinvokable]
+        fn queue_extended_closed(self: Pin<&mut QbzQueue>);
+        #[qinvokable]
+        fn queue_extended_play(
+            self: Pin<&mut QbzQueue>,
+            phase: QString,
+            index: i32,
+            expected_id: QString,
+        );
+        #[qinvokable]
+        fn queue_extended_drop(
+            self: Pin<&mut QbzQueue>,
+            phase: QString,
+            index: i32,
+            expected_id: QString,
+            slot: i32,
+        );
+        #[qinvokable]
+        fn queue_remove_upcoming_flat(self: Pin<&mut QbzQueue>, index: i32);
+        #[qinvokable]
+        fn queue_remove_all_after_flat(self: Pin<&mut QbzQueue>, index: i32);
+        #[qinvokable]
         fn queue_remove_upcoming(self: Pin<&mut QbzQueue>, index: i32);
         #[qinvokable]
         fn queue_remove_all_after(self: Pin<&mut QbzQueue>, index: i32);
@@ -143,6 +170,7 @@ type QListQVariant = QList<QVariant>;
 pub struct QbzQueueRust {
     queue_model: QListQVariant,
     queue_json: QString,
+    extended_queue_json: QString,
     coverflow_json: QString,
     drop_play_prompt: bool,
     sleep_active: bool,
@@ -154,6 +182,9 @@ impl Default for QbzQueueRust {
         Self {
             queue_model: QListQVariant::default(),
             queue_json: QString::from("{}"),
+            extended_queue_json: QString::from(
+                r#"{"rows":[],"currentIndex":-1,"historyCount":0,"upcomingCount":0,"stopAfterId":"","infinitePlay":false,"searchQuery":""}"#,
+            ),
             // Full-shape default (trap 15): QML reads `.tracks.length` in the
             // pre-publish frame.
             coverflow_json: QString::from(r#"{"index":0,"tracks":[]}"#),
@@ -203,6 +234,46 @@ impl qbz_queue::QbzQueue {
 
     pub fn queue_play_upcoming_flat(self: Pin<&mut Self>, index: i32) {
         crate::queue_play_upcoming_flat(index);
+    }
+
+    pub fn queue_extended_opened(self: Pin<&mut Self>) {
+        crate::queue_extended_opened();
+    }
+
+    pub fn queue_extended_closed(self: Pin<&mut Self>) {
+        crate::queue_qt::extended_closed();
+    }
+
+    pub fn queue_extended_play(
+        self: Pin<&mut Self>,
+        phase: QString,
+        index: i32,
+        expected_id: QString,
+    ) {
+        crate::queue_extended_play(phase.to_string(), index, expected_id.to_string());
+    }
+
+    pub fn queue_extended_drop(
+        self: Pin<&mut Self>,
+        phase: QString,
+        index: i32,
+        expected_id: QString,
+        slot: i32,
+    ) {
+        crate::queue_extended_drop(
+            phase.to_string(),
+            index,
+            expected_id.to_string(),
+            slot,
+        );
+    }
+
+    pub fn queue_remove_upcoming_flat(self: Pin<&mut Self>, index: i32) {
+        crate::queue_remove_upcoming_flat(index);
+    }
+
+    pub fn queue_remove_all_after_flat(self: Pin<&mut Self>, index: i32) {
+        crate::queue_remove_all_after_flat(index);
     }
 
     pub fn queue_remove_upcoming(self: Pin<&mut Self>, index: i32) {

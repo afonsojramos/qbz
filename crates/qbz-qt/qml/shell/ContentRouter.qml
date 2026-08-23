@@ -181,6 +181,7 @@ Item {
             : v === "settings" ? "../settings/SettingsView.qml"
             : v === "search"
                 ? (root.kiosk ? "../kiosk/KioskSearch.qml" : "../views/SearchView.qml")
+            : v === "queue-view" ? "../views/QueueView.qml"
             : v === "playlist" ? "../views/PlaylistView.qml"
             : v === "discoverbrowse" ? "../views/DiscoverBrowseView.qml"
             : v === "playlistbrowse" ? "../views/PlaylistBrowseView.qml"

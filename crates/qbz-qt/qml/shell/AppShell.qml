@@ -231,6 +231,13 @@ Rectangle {
         // Animated 3-state width lives inside the component.
     }
 
+    // QueueView temporarily takes the queue drawer's visual slot without
+    // rewriting the user's logical toggle. Leaving the view therefore
+    // restores the exact sidebar state that was active before entering it;
+    // Lyrics remains independent and may stay open beside the full view.
+    readonly property bool queueSidebarVisible: QbzShell.queueOpen
+        && QbzShell.currentView !== "queue-view"
+
     // Right-side panel column — Queue and/or Lyrics, stacked vertically in
     // a shared 300px column (Feishin-style, AppShell.slint:684-707). Each
     // is toggled from its bar button and closed from its own X; the column
@@ -240,7 +247,8 @@ Rectangle {
         anchors.right: parent.right
         anchors.top: header.bottom
         anchors.bottom: npb.top
-        width: (QbzShell.queueOpen || QbzShell.lyricsOpen) ? theme.queuePanelWidth : 0
+        width: (root.queueSidebarVisible || QbzShell.lyricsOpen)
+            ? theme.queuePanelWidth : 0
         clip: true
         color: root.ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
 
@@ -257,17 +265,17 @@ Rectangle {
             anchors.right: parent.right
             anchors.top: parent.top
             height: QbzShell.lyricsOpen
-                ? (QbzShell.queueOpen ? parent.height / 2 : 0)
+                ? (root.queueSidebarVisible ? parent.height / 2 : 0)
                 : parent.height
-            active: QbzShell.queueOpen
+            active: root.queueSidebarVisible
             visible: active
             sourceComponent: QueuePanel { }
         }
         Rectangle {
-            visible: QbzShell.queueOpen && QbzShell.lyricsOpen
+            visible: root.queueSidebarVisible && QbzShell.lyricsOpen
             anchors.left: parent.left
             anchors.right: parent.right
-            y: QbzShell.lyricsOpen && QbzShell.queueOpen ? parent.height / 2 : 0
+            y: QbzShell.lyricsOpen && root.queueSidebarVisible ? parent.height / 2 : 0
             height: 1
             color: theme.borderSubtle
         }
@@ -276,7 +284,7 @@ Rectangle {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             height: QbzShell.lyricsOpen
-                ? (QbzShell.queueOpen ? parent.height / 2 - 1 : parent.height)
+                ? (root.queueSidebarVisible ? parent.height / 2 - 1 : parent.height)
                 : 0
             visible: QbzShell.lyricsOpen
         }

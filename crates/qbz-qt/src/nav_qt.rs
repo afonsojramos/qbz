@@ -23,7 +23,7 @@
 //! `playlistbrowse`, `recentalbums`, `mostplayedalbums`, `label`,
 //! `labelreleases`, `mix`, `mixtapes`, `collections`, `mixtapedetail`,
 //! `discobuilder`, `blacklist`, `playlistmanager`, `nowplaying`, `scene`,
-//! `musician`, `purchases`, `purchase-album`.
+//! `musician`, `purchases`, `purchase-album`, `queue-view`.
 //!
 //! `scene` (the "artists from the same place" discovery view) and `musician`
 //! both carry a required context that only their opener has, so neither is in

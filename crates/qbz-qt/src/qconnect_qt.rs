@@ -96,7 +96,7 @@ type Runtime = Arc<AppRuntime<LoggingAdapter>>;
 /// QConnect's cloud queue accepts Qobuz catalog ids only. An offline Qobuz
 /// download is still the same catalog id and is eligible; every server/file
 /// source is not, even when its numeric id happens to look like a Qobuz id.
-fn is_qconnect_queue_track(track: &qbz_models::QueueTrack) -> bool {
+pub(crate) fn is_qconnect_queue_track(track: &qbz_models::QueueTrack) -> bool {
     if track.id == 0 {
         return false;
     }
@@ -132,6 +132,17 @@ fn is_qconnect_queue_track(track: &qbz_models::QueueTrack) -> bool {
 // ---------------------------------------------------------------------------
 pub(crate) mod publish {
     use cxx_qt_lib::QString;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Rust-side mirror of the bridge bit. Queue projections are assembled off
+    /// the Qt thread, so they cannot read `QbzQConnect.qconnectConnected`
+    /// directly. Keeping the mirror at the one publish funnel makes the QML
+    /// greyout and the Rust action guards agree on the same session edge.
+    static CONNECTED: AtomicBool = AtomicBool::new(false);
+
+    pub(crate) fn is_connected() -> bool {
+        CONNECTED.load(Ordering::SeqCst)
+    }
 
     /// One device-picker row (the Slint `QconnectDevice` struct), serialized
     /// onto `QbzQConnect.devices_json` by [`devices`] (same JSON precedent as
@@ -150,6 +161,7 @@ pub(crate) mod publish {
     /// `NowPlayingState.qconnect-connected` -> `QbzQConnect.qconnect_connected`
     /// (the golden ConnectButton badge).
     pub(crate) fn connected(connected: bool) {
+        CONNECTED.store(connected, Ordering::SeqCst);
         crate::qconnect_bridge::ui(move |mut b| {
             b.as_mut().set_qconnect_connected(connected);
         });

@@ -769,6 +769,12 @@ Rectangle {
                 height: 28
                 spacing: 14
 
+                QbzIconButton {
+                    btnSize: 28
+                    iconSize: 15
+                    name: "maximize-2"
+                    onClicked: QbzShell.navigateTo("queue-view")
+                }
                 QueueTab {
                     text: QbzSession.tr("Queue", QbzSession.trRev)
                     active: root.tab === 0
@@ -1400,6 +1406,7 @@ Rectangle {
                     searchMode: true
                     expandable: true
                     sm: true
+                    text: doc.searchQuery || ""
                     // Bound to the PANEL, never wider: it opens leftward over
                     // the four action buttons, exactly like the Slint
                     // ExpandableSearch does over its neighbours.

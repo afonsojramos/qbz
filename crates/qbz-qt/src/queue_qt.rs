@@ -39,6 +39,8 @@ pub struct QueueRow {
     #[serde(rename = "artistId")]
     pub artist_id: String,
     pub album: String,
+    #[serde(rename = "albumId")]
+    pub album_id: String,
     pub duration: String,
     #[serde(rename = "qualityTier")]
     pub quality_tier: String,
@@ -54,6 +56,14 @@ pub struct QueueRow {
     /// library.db row id, not a Qobuz catalog id.
     #[serde(rename = "isLocal")]
     pub is_local: bool,
+    /// Origin word carried by the queue track. TrackRow uses this to keep
+    /// catalog and local id spaces apart in its shared context-menu logic.
+    pub source: String,
+    /// Qobuz Connect accepts catalog-backed ids only. The extended queue keeps
+    /// incompatible rows visible as history/sequence context, but greys and
+    /// skips them while Connect is active.
+    #[serde(rename = "qconnectCompatible")]
+    pub qconnect_compatible: bool,
     /// #442 section header drawn ABOVE this row: "" | "next-in-queue" |
     /// "next-up" (only on the unfiltered list).
     pub section: String,
@@ -123,6 +133,35 @@ pub struct QueueDoc {
 struct ViewState {
     search: String,
     page: usize,
+}
+
+/// One row in the full queue projection. `phase_index` is deliberately in the
+/// core's own coordinate space: history is most-recent-first there even though
+/// this view renders it oldest-first, while upcoming is already play order.
+#[derive(Clone, Serialize)]
+struct ExtendedQueueRow {
+    #[serde(flatten)]
+    row: QueueRow,
+    phase: &'static str,
+    #[serde(rename = "phaseIndex")]
+    phase_index: usize,
+}
+
+#[derive(Default, Serialize)]
+struct ExtendedQueueDoc {
+    rows: Vec<ExtendedQueueRow>,
+    #[serde(rename = "currentIndex")]
+    current_index: i32,
+    #[serde(rename = "historyCount")]
+    history_count: usize,
+    #[serde(rename = "upcomingCount")]
+    upcoming_count: usize,
+    #[serde(rename = "stopAfterId")]
+    stop_after_id: String,
+    #[serde(rename = "infinitePlay")]
+    infinite_play: bool,
+    #[serde(rename = "searchQuery")]
+    search_query: String,
 }
 
 static VIEW: Mutex<ViewState> = Mutex::new(ViewState {
@@ -205,6 +244,7 @@ fn row_from(track: &QueueTrack, favorites: &HashSet<u64>) -> QueueRow {
         artist: track.artist.clone(),
         artist_id: track.artist_id.map(|id| id.to_string()).unwrap_or_default(),
         album: track.album.clone(),
+        album_id: track.album_id.clone().unwrap_or_default(),
         duration: fmt_duration(track.duration_secs),
         quality_tier: tier,
         quality_detail: crate::home_qt::quality_detail_from_parts(
@@ -215,6 +255,11 @@ fn row_from(track: &QueueTrack, favorites: &HashSet<u64>) -> QueueRow {
         art_url: track.artwork_url.clone().unwrap_or_default(),
         is_favorite,
         is_local: track.is_local,
+        source: track
+            .source
+            .clone()
+            .unwrap_or_else(|| if track.is_local { "local" } else { "qobuz" }.to_string()),
+        qconnect_compatible: crate::qconnect_qt::is_qconnect_queue_track(track),
         section: String::new(),
         // Both halves of the reference's test (`queue.rs:148`): the queue
         // track's own source tag, and the id-range check for a row that
@@ -368,6 +413,104 @@ fn publish_coverflow(state: &qbz_models::QueueState) {
 /// build per real queue change, not per frame. If `publish` ever becomes
 /// unconditional, this is the function that needs the cache.
 static LAST_MINI_QUEUE_JSON: Mutex<String> = Mutex::new(String::new());
+
+/// The full projection is intentionally built only while its view exists. A
+/// restored queue may contain thousands of tracks; the sidebar document stays
+/// paged at 40 and should not pay to serialize the full sequence in the normal
+/// shell path.
+static EXTENDED_OPEN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static LAST_EXTENDED_JSON: Mutex<String> = Mutex::new(String::new());
+
+fn extended_rows(
+    state: &qbz_models::QueueState,
+    favorites: &HashSet<u64>,
+    query: &str,
+) -> (Vec<ExtendedQueueRow>, i32) {
+    let mut rows = Vec::with_capacity(
+        state.history.len() + usize::from(state.current_track.is_some()) + state.upcoming.len(),
+    );
+    let mut current_index = -1;
+    let mut push = |track: &QueueTrack, phase, phase_index, section: &'static str| {
+        if query.is_empty() || matches_query(track, query) {
+            if phase == "current" {
+                current_index = rows.len() as i32;
+            }
+            let mut row = row_from(track, favorites);
+            row.section = section.to_string();
+            rows.push(ExtendedQueueRow {
+                row,
+                phase,
+                phase_index,
+            });
+        }
+    };
+
+    // Core history is newest-first; the view reads as one chronological
+    // sequence, so the oldest played track is first.
+    for (index, track) in state.history.iter().enumerate().rev() {
+        push(track, "history", index, "");
+    }
+    if let Some(track) = state.current_track.as_ref() {
+        push(track, "current", 0, "");
+    }
+    for (index, track) in state.upcoming.iter().enumerate() {
+        let section = if query.is_empty() && state.manual_next_count > 0 && index == 0 {
+            "next-in-queue"
+        } else if query.is_empty() && index == state.manual_next_count {
+            "next-up"
+        } else {
+            ""
+        };
+        push(track, "upcoming", index, section);
+    }
+    (rows, current_index)
+}
+
+fn publish_extended(
+    state: &qbz_models::QueueState,
+    favorites: &HashSet<u64>,
+    stop_after_id: &str,
+    search: &str,
+) {
+    use std::sync::atomic::Ordering;
+
+    if !EXTENDED_OPEN.load(Ordering::SeqCst) {
+        return;
+    }
+    let query = search.trim().to_lowercase();
+    let (rows, current_index) = extended_rows(state, favorites, &query);
+    let doc = ExtendedQueueDoc {
+        rows,
+        current_index,
+        history_count: state.history.len(),
+        upcoming_count: state.upcoming.len(),
+        stop_after_id: stop_after_id.to_string(),
+        infinite_play: is_infinite_play(),
+        search_query: search.to_string(),
+    };
+    let json = serde_json::to_string(&doc).unwrap_or_else(|_| {
+        r#"{"rows":[],"currentIndex":-1,"historyCount":0,"upcomingCount":0,"stopAfterId":"","infinitePlay":false,"searchQuery":""}"#.into()
+    });
+    let mut last = LAST_EXTENDED_JSON.lock().unwrap();
+    if *last == json {
+        return;
+    }
+    last.clear();
+    last.push_str(&json);
+    crate::queue_bridge::ui(move |mut b| {
+        b.as_mut()
+            .set_extended_queue_json(QString::from(json.as_str()));
+    });
+}
+
+pub fn extended_opened() {
+    EXTENDED_OPEN.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn extended_closed() {
+    EXTENDED_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
+}
 
 /// Build + publish the miniplayer's navigable queue document
 /// (`{"currentId":"…","rows":[…]}` — `mini_qt::mini_queue_doc`).
@@ -536,6 +679,7 @@ pub async fn publish(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         .await
         .map(|id| id.to_string())
         .unwrap_or_default();
+    publish_extended(&state, &favorites, &stop_after_id, &search);
 
     let doc = QueueDoc {
         has_current: current.is_some(),
@@ -641,11 +785,105 @@ pub async fn play_upcoming_flat(runtime: &Arc<AppRuntime<LoggingAdapter>>, upcom
     }
 }
 
+async fn play_extended_upcoming(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    upcoming_index: usize,
+    expected_id: u64,
+) {
+    let state = runtime.core().get_queue_state_full().await;
+    let Some(track) = state.upcoming.get(upcoming_index) else {
+        return;
+    };
+    if track.id != expected_id {
+        log::warn!("[qbz-qt] queue: upcoming changed during extended activation");
+        return;
+    }
+    if crate::qconnect_qt::publish::is_connected()
+        && !crate::qconnect_qt::is_qconnect_queue_track(track)
+    {
+        log::info!(
+            "[qbz-qt] queue: skipped QConnect-incompatible upcoming row {}",
+            track.id
+        );
+        return;
+    }
+    if let Some(service) = crate::qconnect_qt::service() {
+        match service.play_remote_renderer_track_if_active(track.id).await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(error) => {
+                log::warn!("[qbz-qt] queue: extended remote play failed: {error}");
+                return;
+            }
+        }
+    }
+    play_upcoming_flat(runtime, upcoming_index).await;
+}
+
+/// Activate a row from the chronological projection. Upcoming keeps its queue-
+/// wide index. A played row is cloned back into slot zero, then activated, so
+/// the remaining upcoming sequence survives instead of being replaced by the
+/// History tab's single-track queue.
+pub async fn play_extended(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    phase: &str,
+    phase_index: usize,
+    expected_id: u64,
+) {
+    match phase {
+        "upcoming" => {
+            play_extended_upcoming(runtime, phase_index, expected_id).await;
+        }
+        "history" => {
+            let state = runtime.core().get_queue_state_full().await;
+            let Some(track) = state.history.get(phase_index).cloned() else {
+                return;
+            };
+            if track.id != expected_id {
+                log::warn!("[qbz-qt] queue: history changed during activation");
+                return;
+            }
+            if crate::qconnect_qt::publish::is_connected()
+                && !crate::qconnect_qt::is_qconnect_queue_track(&track)
+            {
+                log::info!("[qbz-qt] queue: skipped QConnect-incompatible history row {}", track.id);
+                return;
+            }
+            match insert_queue_track_at(runtime, track.clone(), 0).await {
+                Ok(InsertOutcome::Remote) => {
+                    if let Some(service) = crate::qconnect_qt::service() {
+                        if let Err(error) = service.play_remote_renderer_track_if_active(track.id).await {
+                            log::warn!("[qbz-qt] queue: requeued remote history play failed: {error}");
+                        }
+                    }
+                }
+                Ok(InsertOutcome::Local) => {
+                    play_extended_upcoming(runtime, 0, track.id).await;
+                }
+                Err(error) => log::warn!("[qbz-qt] queue: requeue history failed: {error}"),
+            }
+        }
+        _ => {}
+    }
+}
+
 pub async fn remove_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index: usize) {
     let Some(&upcoming_index) = current_page_indices(runtime).await.get(page_index) else {
         log::warn!("[qbz-qt] queue: remove_upcoming {page_index} out of range");
         return;
     };
+    runtime.core().remove_upcoming_track(upcoming_index).await;
+    publish(runtime).await;
+}
+
+pub async fn remove_upcoming_flat(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    upcoming_index: usize,
+) {
+    let state = runtime.core().get_queue_state_full().await;
+    if upcoming_index >= state.upcoming.len() {
+        return;
+    }
     runtime.core().remove_upcoming_track(upcoming_index).await;
     publish(runtime).await;
 }
@@ -694,6 +932,18 @@ pub async fn remove_all_after(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_in
         log::warn!("[qbz-qt] queue: remove_all_after {page_index} out of range");
         return;
     };
+    runtime.core().remove_upcoming_after(upcoming_index).await;
+    publish(runtime).await;
+}
+
+pub async fn remove_all_after_flat(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    upcoming_index: usize,
+) {
+    let state = runtime.core().get_queue_state_full().await;
+    if upcoming_index >= state.upcoming.len() {
+        return;
+    }
     runtime.core().remove_upcoming_after(upcoming_index).await;
     publish(runtime).await;
 }
@@ -753,6 +1003,111 @@ pub async fn move_track(
     }
     runtime.core().move_track(from_q, to_q).await;
     publish(runtime).await;
+}
+
+/// Full-view reorder: both coordinates are queue-wide upcoming positions, so
+/// no sidebar page/search state participates.
+pub async fn move_track_flat(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    from: usize,
+    to_slot: usize,
+) {
+    let state = runtime.core().get_queue_state_full().await;
+    if from >= state.upcoming.len() || to_slot > state.upcoming.len() {
+        return;
+    }
+    if from == to_slot || from + 1 == to_slot {
+        return;
+    }
+    if let Some(service) = crate::qconnect_qt::service() {
+        match service.reorder_upcoming_if_remote(from, to_slot).await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(error) => {
+                log::warn!("[qbz-qt] queue: extended reorder handoff failed: {error}");
+                return;
+            }
+        }
+    }
+    runtime.core().move_track(from, to_slot).await;
+    publish(runtime).await;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InsertOutcome {
+    Local,
+    Remote,
+}
+
+async fn insert_queue_track_at(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track: QueueTrack,
+    to_slot: usize,
+) -> Result<InsertOutcome, String> {
+    if let Some(service) = crate::qconnect_qt::service() {
+        if service
+            .insert_at_slot_on_peer_if_active(track.id, track.source.as_deref(), to_slot)
+            .await
+        {
+            return Ok(InsertOutcome::Remote);
+        }
+    }
+
+    let added_castable =
+        crate::playback_qt::batch_all_qconnect_castable(std::slice::from_ref(&track));
+    runtime.core().add_track(track).await;
+    let upcoming_len = runtime.core().get_queue_state_full().await.upcoming.len();
+    if upcoming_len > 0 {
+        let from = upcoming_len - 1;
+        let slot = to_slot.min(from);
+        if from != slot {
+            runtime.core().move_track(from, slot).await;
+        }
+    }
+    crate::playback_qt::sync_qconnect_after_add(added_castable).await;
+    publish(runtime).await;
+    Ok(InsertOutcome::Local)
+}
+
+/// Commit a drag from the chronological view. Upcoming rows move; history rows
+/// are reinserted (not removed from history) at the dropped upcoming slot.
+pub async fn drop_extended(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    phase: &str,
+    phase_index: usize,
+    expected_id: u64,
+    to_slot: usize,
+) {
+    match phase {
+        "upcoming" => {
+            let state = runtime.core().get_queue_state_full().await;
+            if state.upcoming.get(phase_index).map(|track| track.id) != Some(expected_id) {
+                log::warn!("[qbz-qt] queue: upcoming changed during extended drag");
+                return;
+            }
+            move_track_flat(runtime, phase_index, to_slot).await;
+        }
+        "history" => {
+            let state = runtime.core().get_queue_state_full().await;
+            let Some(track) = state.history.get(phase_index).cloned() else {
+                return;
+            };
+            if track.id != expected_id {
+                log::warn!("[qbz-qt] queue: history changed during extended drag");
+                return;
+            }
+            if crate::qconnect_qt::publish::is_connected()
+                && !crate::qconnect_qt::is_qconnect_queue_track(&track)
+            {
+                log::info!("[qbz-qt] queue: skipped QConnect-incompatible history drag {}", track.id);
+                return;
+            }
+            if let Err(error) = insert_queue_track_at(runtime, track, to_slot).await {
+                log::warn!("[qbz-qt] queue: extended history drop failed: {error}");
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Ask the panel whether to start playing after an empty-queue drop, or clear
@@ -817,21 +1172,6 @@ pub async fn insert_dragged_track(
         return Ok(());
     };
 
-    // QConnect CONTROLLER mode (contract §7): the peer owns the queue, so the
-    // insert is routed there — AT THE DROPPED POSITION. `CtrlSrvrQueueInsertTracks`
-    // carries `insert_after`, the same field play-next and play-later steer
-    // with, so the slot survives the routing instead of collapsing to an
-    // append. `slot` is already in the visible-upcoming space the peer
-    // projection uses, so it crosses unchanged.
-    if let Some(svc) = crate::qconnect_qt::service() {
-        if svc
-            .insert_at_slot_on_peer_if_active(track_id, qt.source.as_deref(), to_slot)
-            .await
-        {
-            return Ok(());
-        }
-    }
-
     // Resolve the drop slot BEFORE the add, while the page still describes the
     // queue the user was looking at. Past the last visible row means "after
     // everything on this page".
@@ -844,23 +1184,7 @@ pub async fn insert_dragged_track(
         },
     };
 
-    let added_castable = crate::playback_qt::batch_all_qconnect_castable(std::slice::from_ref(&qt));
-    runtime.core().add_track(qt).await;
-
-    // The appended row is the last of upcoming; re-read rather than assume,
-    // because `add_track` lands relative to `tracks` and the upcoming window
-    // depends on `current_index`.
-    let upcoming_len = runtime.core().get_queue_state_full().await.upcoming.len();
-    if upcoming_len == 0 {
-        return Ok(());
-    }
-    let from_upcoming = upcoming_len - 1;
-    if from_upcoming != to_upcoming {
-        runtime.core().move_track(from_upcoming, to_upcoming).await;
-    }
-
-    crate::playback_qt::sync_qconnect_after_add(added_castable).await;
-    publish(runtime).await;
+    let _ = insert_queue_track_at(runtime, qt, to_upcoming).await?;
     Ok(())
 }
 
@@ -1179,5 +1503,53 @@ mod tests {
         let up_swap = vec![track(5, "e"), track(4, "d")];
         let (flat4, _) = coverflow_flat(&h1, Some(&cur), &up_swap);
         assert_ne!(coverflow_seq_hash(&flat4), coverflow_seq_hash(&flat3));
+    }
+
+    #[test]
+    fn extended_projection_is_chronological_and_keeps_core_indices() {
+        let state = qbz_models::QueueState {
+            current_track: Some(track(4, "now")),
+            current_index: Some(3),
+            upcoming: vec![track(5, "manual"), track(6, "source")],
+            history: vec![track(3, "h-new"), track(2, "h-mid"), track(1, "h-old")],
+            shuffle: false,
+            repeat: qbz_models::RepeatMode::Off,
+            total_tracks: 6,
+            stop_after_track_id: None,
+            manual_next_count: 1,
+        };
+        let (rows, current_index) = extended_rows(&state, &HashSet::new(), "");
+
+        let ids: Vec<&str> = rows.iter().map(|row| row.row.id.as_str()).collect();
+        assert_eq!(ids, ["1", "2", "3", "4", "5", "6"]);
+        assert_eq!(current_index, 3);
+        assert_eq!(rows[0].phase, "history");
+        assert_eq!(rows[0].phase_index, 2);
+        assert_eq!(rows[2].phase_index, 0);
+        assert_eq!(rows[4].row.section, "next-in-queue");
+        assert_eq!(rows[5].row.section, "next-up");
+    }
+
+    #[test]
+    fn extended_search_filters_all_phases_without_reindexing_actions() {
+        let state = qbz_models::QueueState {
+            current_track: Some(track(2, "current miss")),
+            current_index: Some(1),
+            upcoming: vec![track(3, "needle upcoming")],
+            history: vec![track(1, "needle history")],
+            shuffle: false,
+            repeat: qbz_models::RepeatMode::Off,
+            total_tracks: 3,
+            stop_after_track_id: None,
+            manual_next_count: 0,
+        };
+        let (rows, current_index) =
+            extended_rows(&state, &HashSet::new(), "needle");
+
+        assert_eq!(current_index, -1);
+        assert_eq!(rows.len(), 2);
+        assert_eq!((rows[0].phase, rows[0].phase_index), ("history", 0));
+        assert_eq!((rows[1].phase, rows[1].phase_index), ("upcoming", 0));
+        assert!(rows.iter().all(|row| row.row.section.is_empty()));
     }
 }

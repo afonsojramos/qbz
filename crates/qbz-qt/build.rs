@@ -602,6 +602,7 @@ fn main() {
                 "qml/views/LocalLibraryView.qml",
                 "qml/views/PlaylistRail.qml",
                 "qml/views/PlaylistView.qml",
+                "qml/views/QueueView.qml",
                 "qml/views/SearchView.qml",
                 "qml/views/SectionRail.qml",
                 "qml/shell/CastPicker.qml",

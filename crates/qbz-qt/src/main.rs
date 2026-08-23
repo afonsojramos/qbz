@@ -1339,6 +1339,54 @@ pub(crate) fn queue_play_upcoming_flat(index: i32) {
     spawn(async move { queue_qt::play_upcoming_flat(&runtime, index.max(0) as usize).await });
 }
 
+pub(crate) fn queue_extended_opened() {
+    queue_qt::extended_opened();
+    let runtime = app();
+    spawn(async move { queue_qt::publish(&runtime).await });
+}
+
+pub(crate) fn queue_extended_play(phase: String, index: i32, expected_id: String) {
+    let Ok(track_id) = expected_id.parse::<u64>() else {
+        return;
+    };
+    let runtime = app();
+    spawn(async move {
+        queue_qt::play_extended(&runtime, &phase, index.max(0) as usize, track_id).await
+    });
+}
+
+pub(crate) fn queue_extended_drop(
+    phase: String,
+    index: i32,
+    expected_id: String,
+    slot: i32,
+) {
+    let Ok(track_id) = expected_id.parse::<u64>() else {
+        return;
+    };
+    let runtime = app();
+    spawn(async move {
+        queue_qt::drop_extended(
+            &runtime,
+            &phase,
+            index.max(0) as usize,
+            track_id,
+            slot.max(0) as usize,
+        )
+        .await
+    });
+}
+
+pub(crate) fn queue_remove_upcoming_flat(index: i32) {
+    let runtime = app();
+    spawn(async move { queue_qt::remove_upcoming_flat(&runtime, index.max(0) as usize).await });
+}
+
+pub(crate) fn queue_remove_all_after_flat(index: i32) {
+    let runtime = app();
+    spawn(async move { queue_qt::remove_all_after_flat(&runtime, index.max(0) as usize).await });
+}
+
 pub(crate) fn queue_remove_upcoming(index: i32) {
     let runtime = app();
     spawn(async move { queue_qt::remove_upcoming(&runtime, index.max(0) as usize).await });
