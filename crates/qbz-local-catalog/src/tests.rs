@@ -97,6 +97,61 @@ fn collect_all(catalog: &Catalog, descriptor: &QueryDescriptor) -> Vec<TrackReco
     rows
 }
 
+fn collect_all_albums(
+    catalog: &Catalog,
+    descriptor: &QueryDescriptor,
+    page_size: usize,
+) -> Vec<AlbumRecord> {
+    let mut cursor = None;
+    let mut rows = Vec::new();
+    loop {
+        let page = catalog
+            .query_albums(descriptor, cursor.as_ref(), page_size)
+            .unwrap();
+        rows.extend(page.rows);
+        if !page.has_more {
+            break;
+        }
+        cursor = page.next_cursor;
+    }
+    rows
+}
+
+fn insert_album_fixture(catalog: &mut Catalog, count: usize) {
+    let mut by_source = std::collections::BTreeMap::<SourceKey, Vec<ProjectedTrack>>::new();
+    for index in 0..count {
+        let source = source_for(index);
+        let track = projected(index, source);
+        by_source
+            .entry(SourceKey {
+                source: track.track_ref.source,
+                source_instance: track.track_ref.source_instance.clone(),
+            })
+            .or_default()
+            .push(track);
+    }
+    for (source, rows) in by_source {
+        let version = format!("fixture-{}", source.source.as_str());
+        let mut cursor = String::new();
+        let total = rows.len();
+        for (batch_index, batch) in rows.chunks(BOOTSTRAP_BATCH_ROWS).enumerate() {
+            let committed = (batch_index * BOOTSTRAP_BATCH_ROWS + batch.len()).min(total);
+            let saved = catalog
+                .apply_bootstrap_batch(&BootstrapBatch {
+                    source: source.clone(),
+                    snapshot_version: version.clone(),
+                    expected_cursor: cursor,
+                    next_cursor: committed.to_string(),
+                    tracks: batch.to_vec(),
+                    complete: committed == total,
+                })
+                .unwrap();
+            cursor = saved.checkpoint_cursor;
+        }
+    }
+    catalog.rebuild_materialized_views().unwrap();
+}
+
 #[test]
 fn schema_is_versioned_frontend_agnostic_and_fts5_enabled() {
     let catalog = Catalog::open_in_memory(7).unwrap();
@@ -132,9 +187,172 @@ fn schema_is_versioned_frontend_agnostic_and_fts5_enabled() {
         "artists_materialized",
         "edition_artists",
         "tracks_fts",
+        "albums_fts",
     ] {
         assert!(tables.contains(required), "missing {required}");
     }
+}
+
+#[test]
+fn album_keyset_pages_cover_every_id_once_for_all_orders_and_groups() {
+    let mut catalog = Catalog::open_in_memory(1).unwrap();
+    insert_album_fixture(&mut catalog, 731);
+
+    for group in [TrackGroup::Off, TrackGroup::Name, TrackGroup::Artist] {
+        for sort in [
+            TrackSort::ArtistAsc,
+            TrackSort::ArtistDesc,
+            TrackSort::TitleAsc,
+            TrackSort::TitleDesc,
+            TrackSort::YearAsc,
+            TrackSort::YearDesc,
+            TrackSort::AddedDesc,
+        ] {
+            let descriptor = QueryDescriptor::albums().with_group(group).with_sort(sort);
+            let expected = catalog.count_albums(&descriptor).unwrap();
+            let rows = collect_all_albums(&catalog, &descriptor, 17);
+            let ids = rows
+                .iter()
+                .map(|row| row.edition_id)
+                .collect::<HashSet<_>>();
+            assert_eq!(rows.len() as u64, expected, "{group:?} {sort:?}");
+            assert_eq!(ids.len(), rows.len(), "{group:?} {sort:?}");
+        }
+    }
+}
+
+#[test]
+fn album_entry_counts_include_global_headers_and_never_cross_groups() {
+    let mut catalog = Catalog::open_in_memory(1).unwrap();
+    insert_album_fixture(&mut catalog, 257);
+
+    for group in [TrackGroup::Off, TrackGroup::Name, TrackGroup::Artist] {
+        let descriptor = QueryDescriptor::albums()
+            .with_group(group)
+            .with_sort(TrackSort::TitleAsc);
+        let rows = collect_all_albums(&catalog, &descriptor, 19);
+        for columns in [1, 3, 7] {
+            let expected = if group == TrackGroup::Off {
+                rows.len().div_ceil(columns)
+            } else {
+                let mut counts = std::collections::BTreeMap::<String, usize>::new();
+                for row in &rows {
+                    let key = if group == TrackGroup::Artist {
+                        normalize_sort_key(&row.artist)
+                    } else {
+                        normalize_sort_key(&row.title)
+                            .chars()
+                            .next()
+                            .unwrap_or('#')
+                            .to_string()
+                    };
+                    *counts.entry(key).or_default() += 1;
+                }
+                counts
+                    .values()
+                    .map(|count| 1 + count.div_ceil(columns))
+                    .sum()
+            };
+            assert_eq!(
+                catalog.count_album_entries(&descriptor, columns).unwrap(),
+                expected as u64,
+                "{group:?} columns={columns}"
+            );
+        }
+    }
+}
+
+#[test]
+fn album_fts_filters_and_descriptor_bound_cursors_are_exact() {
+    let mut catalog = Catalog::open_in_memory(1).unwrap();
+    insert_album_fixture(&mut catalog, 1_200);
+
+    let broad = QueryDescriptor::albums().with_search("Album");
+    let broad_rows = collect_all_albums(&catalog, &broad, 23);
+    assert!(broad_rows.len() > 100);
+    assert_eq!(
+        broad_rows.len() as u64,
+        catalog.count_albums(&broad).unwrap()
+    );
+
+    let filter_cases: [(QueryDescriptor, fn(&AlbumRecord) -> bool); 4] = [
+        (
+            QueryDescriptor::albums().with_source_buckets(vec!["plex".to_string()]),
+            |row: &AlbumRecord| row.source == SourceKind::Plex,
+        ),
+        (
+            QueryDescriptor::albums().with_formats(vec!["flac".to_string()]),
+            |row: &AlbumRecord| row.format == "flac",
+        ),
+        (
+            QueryDescriptor::albums().including_other_formats(true),
+            |row: &AlbumRecord| {
+                !["flac", "alac", "ape", "wav", "wave", "mp3", "aac"].contains(&row.format.as_str())
+            },
+        ),
+        (
+            QueryDescriptor::albums().with_quality_tiers(vec!["hires".to_string()]),
+            |row: &AlbumRecord| matches!(row.quality_tier.as_str(), "hires" | "max"),
+        ),
+    ];
+    for (descriptor, predicate) in filter_cases {
+        let rows = collect_all_albums(&catalog, &descriptor, 29);
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(predicate));
+        assert_eq!(
+            rows.len() as u64,
+            catalog.count_albums(&descriptor).unwrap()
+        );
+    }
+
+    let title = QueryDescriptor::albums().with_sort(TrackSort::TitleAsc);
+    let first = catalog.query_albums(&title, None, 5).unwrap();
+    let cursor = first.next_cursor.expect("fixture spans multiple pages");
+    let different = QueryDescriptor::albums().with_sort(TrackSort::YearDesc);
+    assert!(matches!(
+        catalog.query_albums(&different, Some(&cursor), 5),
+        Err(CatalogError::CursorDescriptorMismatch)
+    ));
+}
+
+#[test]
+fn album_query_and_broad_search_metric_uses_a_mixed_deterministic_fixture() {
+    const ALBUMS: usize = 20_000;
+    let mut catalog = Catalog::open_in_memory(9).unwrap();
+    insert_album_fixture(&mut catalog, ALBUMS);
+
+    let descriptor = QueryDescriptor::albums().including_unavailable();
+    let count_started = Instant::now();
+    let count = catalog.count_albums(&descriptor).unwrap();
+    let count_time = count_started.elapsed();
+    let (page, query) = catalog.query_albums_timed(&descriptor, None, 100).unwrap();
+    let broad = descriptor.with_search("Album");
+    let broad_count_started = Instant::now();
+    let broad_count = catalog.count_albums(&broad).unwrap();
+    let broad_count_time = broad_count_started.elapsed();
+    let (broad_page, broad_query) = catalog.query_albums_timed(&broad, None, 100).unwrap();
+    let counts = catalog
+        .stats()
+        .unwrap()
+        .source_counts
+        .into_iter()
+        .map(|(source, rows)| format!("{}={rows}", source.source.as_str()))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    assert_eq!(count, ALBUMS as u64);
+    assert_eq!(page.rows.len(), 100);
+    assert!(page.has_more);
+    assert_eq!(broad_count, ALBUMS as u64);
+    assert_eq!(broad_page.rows.len(), 100);
+    println!(
+        "F1_ALBUMS_QUERY total={ALBUMS} first_albums={} count_ms={:.3} query_ms={:.3} broad_count_ms={:.3} broad_query_ms={:.3} source_counts={counts}",
+        page.rows.len(),
+        count_time.as_secs_f64() * 1_000.0,
+        query.sql_time.as_secs_f64() * 1_000.0,
+        broad_count_time.as_secs_f64() * 1_000.0,
+        broad_query.sql_time.as_secs_f64() * 1_000.0,
+    );
 }
 
 #[test]
@@ -461,6 +679,57 @@ fn sort_indices_match_the_actual_order_by_without_temp_sort() {
         .join(" | ");
     assert!(fts_plan.contains("VIRTUAL TABLE INDEX"), "{fts_plan}");
     assert!(fts_plan.contains("INTEGER PRIMARY KEY"), "{fts_plan}");
+}
+
+#[test]
+fn album_sort_indices_match_the_paged_order_by_without_temp_sort() {
+    let catalog = Catalog::open_in_memory(1).unwrap();
+    for (index, order) in [
+        (
+            "idx_albums_materialized_artist",
+            "sort_artist,sort_title,edition_id",
+        ),
+        (
+            "idx_albums_materialized_artist_desc",
+            "sort_artist DESC,sort_title,edition_id",
+        ),
+        (
+            "idx_albums_materialized_title",
+            "sort_title,sort_artist,edition_id",
+        ),
+        (
+            "idx_albums_materialized_title_desc",
+            "sort_title DESC,sort_artist,edition_id",
+        ),
+        (
+            "idx_albums_materialized_year",
+            "year_missing,year_value,sort_title,edition_id",
+        ),
+        (
+            "idx_albums_materialized_year_desc",
+            "year_missing,year_value DESC,sort_title,edition_id",
+        ),
+        (
+            "idx_albums_materialized_added",
+            "added_at DESC,sort_title,edition_id",
+        ),
+    ] {
+        let sql = format!(
+            "EXPLAIN QUERY PLAN SELECT edition_id FROM albums_materialized
+              WHERE available=1 ORDER BY {order} LIMIT 100"
+        );
+        let details = catalog
+            .connection()
+            .prepare(&sql)
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join(" | ");
+        assert!(details.contains(index), "{details}");
+        assert!(!details.contains("TEMP B-TREE"), "{details}");
+    }
 }
 
 /// The contract's reproducible scale gate. It is ignored in ordinary unit

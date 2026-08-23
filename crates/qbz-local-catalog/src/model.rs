@@ -162,7 +162,10 @@ pub struct QueryDescriptor {
     surface: QuerySurface,
     search: String,
     sources: Vec<SourceKey>,
+    source_buckets: Vec<String>,
     formats: Vec<String>,
+    other_formats: bool,
+    quality_tiers: Vec<String>,
     sort: TrackSort,
     group: TrackGroup,
     available_only: bool,
@@ -186,7 +189,10 @@ impl QueryDescriptor {
             surface,
             search: String::new(),
             sources: Vec::new(),
+            source_buckets: Vec::new(),
             formats: Vec::new(),
+            other_formats: false,
+            quality_tiers: Vec::new(),
             sort: TrackSort::Default,
             group: TrackGroup::Off,
             available_only: true,
@@ -213,6 +219,33 @@ impl QueryDescriptor {
             .collect();
         self.formats.sort();
         self.formats.dedup();
+        self
+    }
+
+    pub fn including_other_formats(mut self, include: bool) -> Self {
+        self.other_formats = include;
+        self
+    }
+
+    pub fn with_source_buckets(mut self, buckets: Vec<String>) -> Self {
+        self.source_buckets = buckets
+            .into_iter()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty())
+            .collect();
+        self.source_buckets.sort();
+        self.source_buckets.dedup();
+        self
+    }
+
+    pub fn with_quality_tiers(mut self, tiers: Vec<String>) -> Self {
+        self.quality_tiers = tiers
+            .into_iter()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty())
+            .collect();
+        self.quality_tiers.sort();
+        self.quality_tiers.dedup();
         self
     }
 
@@ -243,8 +276,20 @@ impl QueryDescriptor {
         &self.sources
     }
 
+    pub fn source_buckets(&self) -> &[String] {
+        &self.source_buckets
+    }
+
     pub fn formats(&self) -> &[String] {
         &self.formats
+    }
+
+    pub fn other_formats(&self) -> bool {
+        self.other_formats
+    }
+
+    pub fn quality_tiers(&self) -> &[String] {
+        &self.quality_tiers
     }
 
     pub fn sort(&self) -> TrackSort {
@@ -324,5 +369,46 @@ impl TrackCursor {
 pub struct TrackPage {
     pub rows: Vec<TrackRecord>,
     pub next_cursor: Option<TrackCursor>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlbumRecord {
+    pub edition_id: i64,
+    pub source: SourceKind,
+    pub native_album_id: String,
+    pub source_raw: String,
+    pub title: String,
+    pub artist: String,
+    pub all_artists: String,
+    pub year: Option<u32>,
+    pub track_count: u32,
+    pub total_duration_ms: u64,
+    pub quality_tier: String,
+    pub format: String,
+    pub bit_depth: Option<u32>,
+    pub sample_rate_hz: Option<u32>,
+    pub artwork_source: String,
+    pub artwork_token: String,
+    pub directory_path: String,
+    pub folder_count: u32,
+    pub added_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlbumCursor {
+    pub(crate) descriptor_key: String,
+    pub(crate) sort_title: String,
+    pub(crate) sort_artist: String,
+    pub(crate) year_missing: i64,
+    pub(crate) year_value: i64,
+    pub(crate) added_at: i64,
+    pub(crate) edition_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlbumPage {
+    pub rows: Vec<AlbumRecord>,
+    pub next_cursor: Option<AlbumCursor>,
     pub has_more: bool,
 }

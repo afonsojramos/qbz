@@ -26,8 +26,9 @@ pub use legacy::{
     reconcile_legacy_caches_with_progress, LegacyLocations, LegacySourceSpec,
 };
 pub use model::{
-    ArtistCredit, CreditRole, ProjectedTrack, QueryDescriptor, QuerySurface, SourceKey, SourceKind,
-    TrackCursor, TrackGroup, TrackPage, TrackRecord, TrackRef, TrackSort,
+    AlbumCursor, AlbumPage, AlbumRecord, ArtistCredit, CreditRole, ProjectedTrack, QueryDescriptor,
+    QuerySurface, SourceKey, SourceKind, TrackCursor, TrackGroup, TrackPage, TrackRecord, TrackRef,
+    TrackSort,
 };
 pub use projection::{
     ProjectionOutcome, ProjectionProgress, ProjectionSession, ReconciliationBatch,

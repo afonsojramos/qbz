@@ -207,6 +207,9 @@ pub(crate) fn emit_artwork(pairs: Vec<(String, String)>) {
 pub(crate) fn load_tab_impl(tab: String) {
     match tab.as_str() {
         "albums" => load_albums(),
+        // Artists remains on the bounded legacy reader until its own F2
+        // commit, and it still derives album credits from that document.
+        "albums-legacy" => load_albums_legacy(),
         "artists" => load_artists(),
         "folders" => load_folders(),
         "tracks" => load_tracks(true),
@@ -221,6 +224,23 @@ pub(crate) fn load_tab_impl(tab: String) {
 }
 
 pub(crate) fn load_albums() {
+    ui(|mut b| {
+        b.as_mut().set_local_albums_loading(true);
+        b.as_mut().set_local_albums_error(QString::from(""));
+    });
+    if crate::local_albums_model_qt::requested()
+        && crate::local_library_qt::album_mode() == "folder"
+    {
+        // Once QML has supplied its width-dependent descriptor this is also
+        // the retry path used by tab remounts and album-mode changes. On the
+        // first mount LocalAlbumCollection supplies it immediately.
+        crate::local_albums_model_qt::retry_last();
+        return;
+    }
+    load_albums_legacy();
+}
+
+pub(crate) fn load_albums_legacy() {
     ui(|mut b| {
         b.as_mut().set_local_albums_loading(true);
         b.as_mut().set_local_albums_error(QString::from(""));

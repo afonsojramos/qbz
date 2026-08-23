@@ -10,8 +10,8 @@ use rusqlite::{
 
 use crate::bootstrap::{BootstrapBatch, SourceCheckpoint, BOOTSTRAP_BATCH_ROWS};
 use crate::model::{
-    ProjectedTrack, QueryDescriptor, SourceKey, SourceKind, TrackCursor, TrackGroup, TrackPage,
-    TrackRecord, TrackRef, TrackSort,
+    AlbumCursor, AlbumPage, AlbumRecord, ProjectedTrack, QueryDescriptor, QuerySurface, SourceKey,
+    SourceKind, TrackCursor, TrackGroup, TrackPage, TrackRecord, TrackRef, TrackSort,
 };
 use crate::projection::ReconciliationBatch;
 use crate::schema;
@@ -552,14 +552,75 @@ impl Catalog {
 
              INSERT INTO albums_materialized(
                  edition_id,logical_album_id,title,sort_title,artist,sort_artist,
-                 year,track_count,total_duration_ms,source_count,available,
+                 year,year_missing,year_value,track_count,total_duration_ms,
+                 source_count,available,
+                 source_kind,native_album_id,source_raw,all_artists,format,
+                 bit_depth,sample_rate_hz,quality_tier,directory_path,folder_count,
+                 added_at,
                  artwork_source,artwork_token
              )
              SELECT e.edition_id,e.logical_album_id,e.display_title,la.sort_title,
-                    e.display_artist,la.sort_artist,e.release_year,COUNT(t.catalog_id),
+                    e.display_artist,la.sort_artist,e.release_year,
+                    CASE WHEN e.release_year IS NULL THEN 1 ELSE 0 END,
+                    COALESCE(e.release_year,0),COUNT(t.catalog_id),
                     COALESCE(SUM(t.duration_ms),0),
                     COUNT(DISTINCT sc.source_kind || char(31) || sc.source_instance),
                     COALESCE(MAX(t.available),0),
+                    COALESCE((
+                        SELECT scp.source_kind FROM source_copies scp
+                         WHERE scp.edition_id=e.edition_id
+                         ORDER BY scp.available DESC,
+                                  CASE scp.source_kind
+                                      WHEN 'local' THEN 0 WHEN 'offline' THEN 1
+                                      WHEN 'plex' THEN 2 WHEN 'jellyfin' THEN 3 ELSE 4 END,
+                                  scp.source_copy_id
+                         LIMIT 1
+                    ),'local'),
+                    COALESCE((
+                        SELECT scp.native_album_id FROM source_copies scp
+                         WHERE scp.edition_id=e.edition_id
+                         ORDER BY scp.available DESC,
+                                  CASE scp.source_kind
+                                      WHEN 'local' THEN 0 WHEN 'offline' THEN 1
+                                      WHEN 'plex' THEN 2 WHEN 'jellyfin' THEN 3 ELSE 4 END,
+                                  scp.source_copy_id
+                         LIMIT 1
+                    ),''),
+                    COALESCE((
+                        SELECT t2.source_raw FROM tracks t2
+                         JOIN source_copies sc2 ON sc2.source_copy_id=t2.source_copy_id
+                         WHERE sc2.edition_id=e.edition_id
+                         ORDER BY t2.available DESC,t2.catalog_id LIMIT 1
+                    ),''),
+                    COALESCE((
+                        SELECT group_concat(DISTINCT ac.display_name)
+                          FROM artist_credits ac
+                          JOIN tracks ta ON ta.catalog_id=ac.catalog_id
+                          JOIN source_copies sca ON sca.source_copy_id=ta.source_copy_id
+                         WHERE sca.edition_id=e.edition_id
+                    ),''),
+                    COALESCE((
+                        SELECT LOWER(t2.format) FROM tracks t2
+                         JOIN source_copies sc2 ON sc2.source_copy_id=t2.source_copy_id
+                         WHERE sc2.edition_id=e.edition_id
+                         ORDER BY COALESCE(t2.bit_depth,0) DESC,
+                                  COALESCE(t2.sample_rate_hz,0) DESC,t2.catalog_id
+                         LIMIT 1
+                    ),''),
+                    MAX(t.bit_depth),MAX(t.sample_rate_hz),
+                    CASE
+                        WHEN MAX(CASE WHEN LOWER(t.format)='mp3' THEN 0 ELSE 1 END)=0
+                            THEN 'mp3'
+                        WHEN MAX(CASE WHEN LOWER(t.format) IN ('dsd','dsf','dff') THEN 1 ELSE 0 END)=1
+                            THEN 'hires'
+                        WHEN MAX(t.bit_depth)>=24 AND MAX(t.sample_rate_hz)>96000 THEN 'max'
+                        WHEN MAX(t.bit_depth)>=24 THEN 'hires'
+                        WHEN MAX(t.bit_depth) IS NOT NULL THEN 'cd'
+                        WHEN MAX(t.sample_rate_hz)>=44100 THEN 'cd'
+                        ELSE ''
+                    END,
+                    COALESCE(MIN(NULLIF(sc.local_directory,'')),''),
+                    COUNT(DISTINCT NULLIF(sc.local_directory,'')),MAX(t.added_at),
                     COALESCE((
                         SELECT t2.source_kind FROM tracks t2
                          WHERE t2.source_copy_id IN (
@@ -692,6 +753,114 @@ impl Catalog {
         ))
     }
 
+    pub fn count_albums(&self, descriptor: &QueryDescriptor) -> Result<u64> {
+        validate_albums_descriptor(descriptor)?;
+        let parts = album_filter_parts(descriptor, None)?;
+        let sql = format!(
+            "SELECT COUNT(*) {} WHERE {}",
+            parts.from_sql, parts.where_sql
+        );
+        let count: i64 = self
+            .conn
+            .query_row(&sql, params_from_iter(parts.params), |row| row.get(0))?;
+        Ok(count.max(0) as u64)
+    }
+
+    /// Exact number of visual rows for the current grid/list layout. Group
+    /// headers count as one row and album chunks never cross a global group.
+    pub fn count_album_entries(&self, descriptor: &QueryDescriptor, columns: usize) -> Result<u64> {
+        validate_albums_descriptor(descriptor)?;
+        let columns = columns.clamp(1, 32) as i64;
+        let parts = album_filter_parts(descriptor, None)?;
+        let sql = if descriptor.group() == TrackGroup::Off {
+            format!(
+                "SELECT (COUNT(*) + ? - 1) / ? {} WHERE {}",
+                parts.from_sql, parts.where_sql
+            )
+        } else {
+            let group = album_group_expression(descriptor.group());
+            format!(
+                "SELECT COALESCE(SUM(1 + (n + ? - 1) / ?),0)
+                   FROM (SELECT {group} AS group_key,COUNT(*) AS n
+                           {} WHERE {} GROUP BY group_key)",
+                parts.from_sql, parts.where_sql
+            )
+        };
+        let mut params = vec![Value::Integer(columns), Value::Integer(columns)];
+        params.extend(parts.params);
+        let count: i64 = self
+            .conn
+            .query_row(&sql, params_from_iter(params), |row| row.get(0))?;
+        Ok(count.max(0) as u64)
+    }
+
+    pub fn query_albums(
+        &self,
+        descriptor: &QueryDescriptor,
+        cursor: Option<&AlbumCursor>,
+        page_size: usize,
+    ) -> Result<AlbumPage> {
+        self.query_albums_timed(descriptor, cursor, page_size)
+            .map(|(page, _)| page)
+    }
+
+    pub fn query_albums_timed(
+        &self,
+        descriptor: &QueryDescriptor,
+        cursor: Option<&AlbumCursor>,
+        page_size: usize,
+    ) -> Result<(AlbumPage, QueryMetrics)> {
+        validate_albums_descriptor(descriptor)?;
+        let limit = page_size.clamp(1, MAX_PAGE_SIZE);
+        let parts = album_filter_parts(descriptor, cursor)?;
+        let order = album_order_fields(descriptor, "am")
+            .into_iter()
+            .map(|field| {
+                format!(
+                    "{} {}",
+                    field.expression,
+                    if field.descending { "DESC" } else { "ASC" }
+                )
+            })
+            .chain(std::iter::once("am.edition_id ASC".to_string()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT {ALBUM_COLUMNS} {} WHERE {} ORDER BY {order} LIMIT {}",
+            parts.from_sql,
+            parts.where_sql,
+            limit + 1
+        );
+        let key = descriptor_key(descriptor);
+        let started = Instant::now();
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let mapped = stmt.query_map(params_from_iter(parts.params), map_album_row)?;
+        let mut values = mapped.collect::<rusqlite::Result<Vec<_>>>()?;
+        for value in &mut values {
+            value.cursor.descriptor_key = key.clone();
+        }
+        let sql_time = started.elapsed();
+        let has_more = values.len() > limit;
+        values.truncate(limit);
+        let next_cursor = has_more.then(|| values.last().expect("non-empty page").cursor.clone());
+        let rows = values
+            .into_iter()
+            .map(|value| value.record)
+            .collect::<Vec<_>>();
+        let metrics = QueryMetrics {
+            sql_time,
+            rows: rows.len(),
+        };
+        Ok((
+            AlbumPage {
+                rows,
+                next_cursor,
+                has_more,
+            },
+            metrics,
+        ))
+    }
+
     pub fn stats(&self) -> Result<CatalogStats> {
         let track_count: i64 = self
             .conn
@@ -738,17 +907,24 @@ impl Catalog {
                 .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
                     row.get(0)
                 })?;
-        let fts_ok = self
+        let tracks_fts_ok = self
             .conn
             .execute(
                 "INSERT INTO tracks_fts(tracks_fts) VALUES ('integrity-check')",
                 [],
             )
             .is_ok();
+        let albums_fts_ok = self
+            .conn
+            .execute(
+                "INSERT INTO albums_fts(albums_fts) VALUES ('integrity-check')",
+                [],
+            )
+            .is_ok();
         Ok(IntegrityReport {
             sqlite_ok: result == "ok",
             foreign_key_violations: foreign_key_violations as u64,
-            fts_ok,
+            fts_ok: tracks_fts_ok && albums_fts_ok,
         })
     }
 
@@ -1394,6 +1570,308 @@ const TRACK_COLUMNS: &str = "
     t.sort_title, t.sort_artist, t.sort_track_artist, t.sort_album, t.year_missing,
     t.year_value, t.disc_sort, t.track_sort, t.added_at, t.catalog_id";
 
+struct AlbumRowWithCursor {
+    record: AlbumRecord,
+    cursor: AlbumCursor,
+}
+
+struct AlbumQueryParts {
+    from_sql: String,
+    where_sql: String,
+    params: Vec<Value>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AlbumOrderKind {
+    TitleInitial,
+    SortTitle,
+    SortArtist,
+    YearMissing,
+    YearValue,
+    AddedAt,
+}
+
+struct AlbumOrderField {
+    kind: AlbumOrderKind,
+    expression: String,
+    descending: bool,
+}
+
+impl AlbumOrderField {
+    fn cursor_value(&self, cursor: &AlbumCursor) -> Value {
+        match self.kind {
+            AlbumOrderKind::TitleInitial => {
+                Value::Text(cursor.sort_title.chars().next().unwrap_or('#').to_string())
+            }
+            AlbumOrderKind::SortTitle => Value::Text(cursor.sort_title.clone()),
+            AlbumOrderKind::SortArtist => Value::Text(cursor.sort_artist.clone()),
+            AlbumOrderKind::YearMissing => Value::Integer(cursor.year_missing),
+            AlbumOrderKind::YearValue => Value::Integer(cursor.year_value),
+            AlbumOrderKind::AddedAt => Value::Integer(cursor.added_at),
+        }
+    }
+}
+
+fn validate_albums_descriptor(descriptor: &QueryDescriptor) -> Result<()> {
+    if descriptor.surface() != QuerySurface::Albums {
+        return Err(CatalogError::InvalidInput(
+            "a non-Albums descriptor was passed to an Albums query".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn album_filter_parts(
+    descriptor: &QueryDescriptor,
+    cursor: Option<&AlbumCursor>,
+) -> Result<AlbumQueryParts> {
+    if let Some(cursor) = cursor {
+        if cursor.descriptor_key != descriptor_key(descriptor) {
+            return Err(CatalogError::CursorDescriptorMismatch);
+        }
+    }
+    let mut predicates = Vec::new();
+    let mut params = Vec::new();
+    let from_sql = if descriptor.search().is_empty() {
+        "FROM albums_materialized am".to_string()
+    } else {
+        params.push(fts_match_value(descriptor.search())?);
+        predicates.push("albums_fts MATCH ?".to_string());
+        predicates.push("am.edition_id=albums_fts.rowid".to_string());
+        "FROM albums_fts CROSS JOIN albums_materialized am NOT INDEXED".to_string()
+    };
+    if descriptor.available_only() {
+        predicates.push("am.available=1".to_string());
+    }
+    if !descriptor.sources().is_empty() {
+        let mut source = Vec::new();
+        for key in descriptor.sources() {
+            if key.source_instance.trim().is_empty() {
+                return Err(CatalogError::InvalidInput(
+                    "source filter instance must not be empty".to_string(),
+                ));
+            }
+            source.push("(scf.source_kind=? AND scf.source_instance=?)");
+            params.push(Value::Text(key.source.as_str().to_string()));
+            params.push(Value::Text(key.source_instance.clone()));
+        }
+        predicates.push(format!(
+            "EXISTS (SELECT 1 FROM source_copies scf WHERE scf.edition_id=am.edition_id AND ({}))",
+            source.join(" OR ")
+        ));
+    }
+    if !descriptor.formats().is_empty() || descriptor.other_formats() {
+        let mut format_arms = Vec::new();
+        if !descriptor.formats().is_empty() {
+            format_arms.push(format!(
+                "am.format IN ({})",
+                std::iter::repeat("?")
+                    .take(descriptor.formats().len())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
+        if descriptor.other_formats() {
+            format_arms.push(
+                "am.format NOT IN ('flac','alac','ape','wav','wave','mp3','aac')".to_string(),
+            );
+        }
+        predicates.push(format!("({})", format_arms.join(" OR ")));
+        params.extend(descriptor.formats().iter().cloned().map(Value::Text));
+    }
+    if !descriptor.source_buckets().is_empty() {
+        let mut source_arms = Vec::new();
+        for bucket in descriptor.source_buckets() {
+            source_arms.push(match bucket.as_str() {
+                "local" => "(am.source_kind='local' AND am.source_raw NOT IN ('qobuz_download','qobuz_purchase'))",
+                "offline" => "(am.source_kind='offline' OR am.source_raw IN ('qobuz_download','qobuz_purchase'))",
+                "plex" => "am.source_kind='plex'",
+                "jellyfin" => "am.source_kind='jellyfin'",
+                "subsonic" => "am.source_kind='subsonic'",
+                _ => {
+                    return Err(CatalogError::InvalidInput(format!(
+                        "unknown album source bucket {bucket}"
+                    )))
+                }
+            });
+        }
+        predicates.push(format!("({})", source_arms.join(" OR ")));
+    }
+    if !descriptor.quality_tiers().is_empty() {
+        let mut quality = Vec::new();
+        for tier in descriptor.quality_tiers() {
+            match tier.as_str() {
+                "hires" => quality.push("am.quality_tier IN ('hires','max')"),
+                "cd" => quality.push("am.quality_tier='cd'"),
+                "lossy" => quality.push("am.quality_tier IN ('mp3','lossy')"),
+                _ => {
+                    return Err(CatalogError::InvalidInput(format!(
+                        "unknown album quality tier {tier}"
+                    )))
+                }
+            }
+        }
+        predicates.push(format!("({})", quality.join(" OR ")));
+    }
+    if let Some(cursor) = cursor {
+        let (predicate, values) = album_cursor_predicate(descriptor, cursor);
+        predicates.push(predicate);
+        params.extend(values);
+    }
+    if predicates.is_empty() {
+        predicates.push("1".to_string());
+    }
+    Ok(AlbumQueryParts {
+        from_sql,
+        where_sql: predicates.join(" AND "),
+        params,
+    })
+}
+
+fn album_group_expression(group: TrackGroup) -> &'static str {
+    match group {
+        TrackGroup::Artist => "am.sort_artist",
+        TrackGroup::Name | TrackGroup::Album => "substr(am.sort_title,1,1)",
+        TrackGroup::Off => "''",
+    }
+}
+
+fn album_order_fields(descriptor: &QueryDescriptor, alias: &str) -> Vec<AlbumOrderField> {
+    let expression = |name: &str| format!("{alias}.{name}");
+    let mut fields = Vec::new();
+    match descriptor.group() {
+        TrackGroup::Artist => fields.push(AlbumOrderField {
+            kind: AlbumOrderKind::SortArtist,
+            expression: expression("sort_artist"),
+            descending: false,
+        }),
+        TrackGroup::Name | TrackGroup::Album => fields.push(AlbumOrderField {
+            kind: AlbumOrderKind::TitleInitial,
+            expression: format!("substr({alias}.sort_title,1,1)"),
+            descending: false,
+        }),
+        TrackGroup::Off => {}
+    }
+    let mut push = |kind: AlbumOrderKind, name: &str, descending: bool| {
+        if fields.iter().any(|field| field.kind == kind) {
+            return;
+        }
+        fields.push(AlbumOrderField {
+            kind,
+            expression: expression(name),
+            descending,
+        });
+    };
+    match descriptor.sort() {
+        TrackSort::Default | TrackSort::ArtistAsc => {
+            push(AlbumOrderKind::SortArtist, "sort_artist", false);
+            push(AlbumOrderKind::SortTitle, "sort_title", false);
+        }
+        TrackSort::ArtistDesc => {
+            push(AlbumOrderKind::SortArtist, "sort_artist", true);
+            push(AlbumOrderKind::SortTitle, "sort_title", false);
+        }
+        TrackSort::TitleAsc => {
+            push(AlbumOrderKind::SortTitle, "sort_title", false);
+            push(AlbumOrderKind::SortArtist, "sort_artist", false);
+        }
+        TrackSort::TitleDesc => {
+            push(AlbumOrderKind::SortTitle, "sort_title", true);
+            push(AlbumOrderKind::SortArtist, "sort_artist", false);
+        }
+        TrackSort::YearAsc => {
+            push(AlbumOrderKind::YearMissing, "year_missing", false);
+            push(AlbumOrderKind::YearValue, "year_value", false);
+            push(AlbumOrderKind::SortTitle, "sort_title", false);
+        }
+        TrackSort::YearDesc => {
+            push(AlbumOrderKind::YearMissing, "year_missing", false);
+            push(AlbumOrderKind::YearValue, "year_value", true);
+            push(AlbumOrderKind::SortTitle, "sort_title", false);
+        }
+        TrackSort::AddedDesc => {
+            push(AlbumOrderKind::AddedAt, "added_at", true);
+            push(AlbumOrderKind::SortTitle, "sort_title", false);
+        }
+    }
+    fields
+}
+
+fn album_cursor_predicate(
+    descriptor: &QueryDescriptor,
+    cursor: &AlbumCursor,
+) -> (String, Vec<Value>) {
+    fn build(
+        fields: &[AlbumOrderField],
+        cursor: &AlbumCursor,
+        index: usize,
+        params: &mut Vec<Value>,
+    ) -> String {
+        if index == fields.len() {
+            params.push(Value::Integer(cursor.edition_id));
+            return "am.edition_id>?".to_string();
+        }
+        let field = &fields[index];
+        let comparison = if field.descending { "<" } else { ">" };
+        params.push(field.cursor_value(cursor));
+        params.push(field.cursor_value(cursor));
+        let rest = build(fields, cursor, index + 1, params);
+        format!(
+            "({expr}{comparison}? OR ({expr}=? AND {rest}))",
+            expr = field.expression
+        )
+    }
+    let fields = album_order_fields(descriptor, "am");
+    let mut params = Vec::new();
+    let predicate = build(&fields, cursor, 0, &mut params);
+    (predicate, params)
+}
+
+fn map_album_row(row: &Row<'_>) -> rusqlite::Result<AlbumRowWithCursor> {
+    let source_word: String = row.get(1)?;
+    let source = SourceKind::from_str(&source_word).expect("schema source CHECK");
+    Ok(AlbumRowWithCursor {
+        record: AlbumRecord {
+            edition_id: row.get(0)?,
+            source,
+            native_album_id: row.get(2)?,
+            source_raw: row.get(3)?,
+            title: row.get(4)?,
+            artist: row.get(5)?,
+            all_artists: row.get(6)?,
+            year: row.get::<_, Option<i64>>(7)?.map(|value| value as u32),
+            track_count: row.get::<_, i64>(8)?.max(0) as u32,
+            total_duration_ms: row.get::<_, i64>(9)?.max(0) as u64,
+            quality_tier: row.get(10)?,
+            format: row.get(11)?,
+            bit_depth: row.get::<_, Option<i64>>(12)?.map(|value| value as u32),
+            sample_rate_hz: row.get::<_, Option<i64>>(13)?.map(|value| value as u32),
+            artwork_source: row.get(14)?,
+            artwork_token: row.get(15)?,
+            directory_path: row.get(16)?,
+            folder_count: row.get::<_, i64>(17)?.max(0) as u32,
+            added_at: row.get(18)?,
+        },
+        cursor: AlbumCursor {
+            descriptor_key: String::new(),
+            sort_title: row.get(19)?,
+            sort_artist: row.get(20)?,
+            year_missing: row.get(21)?,
+            year_value: row.get(22)?,
+            added_at: row.get(18)?,
+            edition_id: row.get(0)?,
+        },
+    })
+}
+
+const ALBUM_COLUMNS: &str = "
+    am.edition_id,am.source_kind,am.native_album_id,am.source_raw,
+    am.title,am.artist,am.all_artists,am.year,am.track_count,am.total_duration_ms,
+    am.quality_tier,am.format,am.bit_depth,am.sample_rate_hz,
+    am.artwork_source,am.artwork_token,am.directory_path,am.folder_count,am.added_at,
+    am.sort_title,am.sort_artist,
+    CASE WHEN am.year IS NULL THEN 1 ELSE 0 END,COALESCE(am.year,0)";
+
 /// Unicode-aware display sort key shared by ingest and query indices.
 pub fn normalize_sort_key(value: &str) -> String {
     value
@@ -1471,8 +1949,15 @@ pub(crate) fn descriptor_key(descriptor: &QueryDescriptor) -> String {
         push_key_part(&mut key, source.source.as_str());
         push_key_part(&mut key, &source.source_instance);
     }
+    for bucket in descriptor.source_buckets() {
+        push_key_part(&mut key, bucket);
+    }
     for format in descriptor.formats() {
         push_key_part(&mut key, format);
+    }
+    push_key_part(&mut key, if descriptor.other_formats() { "other" } else { "" });
+    for tier in descriptor.quality_tiers() {
+        push_key_part(&mut key, tier);
     }
     key
 }

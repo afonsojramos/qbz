@@ -175,6 +175,12 @@ fn resolve_blocking(scope: &str, ids: &[String]) -> Vec<LocalTrack> {
         .collect()
 }
 
+pub(crate) fn resolve_album_ids_blocking(ids: &[String]) -> Vec<LocalTrack> {
+    ids.iter()
+        .flat_map(|key| fetch_album_tracks_blocking(key))
+        .collect()
+}
+
 /// Run one action over already-resolved rows. Returns whether the caller
 /// should DROP its selection afterwards — the Slint clears after an enqueue
 /// and keeps it while a picker is still open.

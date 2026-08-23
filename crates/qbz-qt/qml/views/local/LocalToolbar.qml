@@ -76,7 +76,9 @@ Row {
     // ============================ ALBUMS =================================
     Row {
         visible: root.view && root.view.activeTab === "albums"
-            && (root.view.albums.length > 0 || root.view.albumsSearch !== "")
+            && (root.view.albums.length > 0 || root.view.albumsSearch !== ""
+                || QbzLocal.localAlbumsLoading
+                || QbzLocal.localAlbumsNativeActive)
         spacing: 8
         height: parent.height
 

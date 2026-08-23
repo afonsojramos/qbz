@@ -1426,18 +1426,34 @@ pub fn plex_cache_get_artists() -> Result<Vec<PlexCachedArtist>, String> {
 
 pub fn plex_cache_get_album_tracks(album_key: String) -> Result<Vec<PlexCachedTrack>, String> {
     let conn = open_plex_cache_db()?;
+    plex_cache_get_album_tracks_in(&conn, &album_key)
+}
+
+fn plex_cache_get_album_tracks_in(
+    conn: &Connection,
+    album_key: &str,
+) -> Result<Vec<PlexCachedTrack>, String> {
+    // The derived catalog carries Plex's source-native parentRatingKey so an
+    // edition can resolve directly. Legacy cards keep using the content hash.
+    // Supporting both here preserves the old reader while avoiding a scan of
+    // every cached album for the native F1 detail route.
+    let (column, key) = album_key
+        .strip_prefix("plex:album:")
+        .map(|key| ("parent_rating_key", key))
+        .unwrap_or(("album_key", album_key));
+    let sql = format!(
+        "SELECT rating_key, title, artist, album, duration_ms, container, bit_depth,
+                sampling_rate_hz, artwork_path, track_number, disc_number, parent_rating_key
+           FROM plex_cache_tracks
+          WHERE {column} = ?1
+          ORDER BY disc_number, track_number, title COLLATE NOCASE"
+    );
     let mut stmt = conn
-        .prepare(
-            "SELECT rating_key, title, artist, album, duration_ms, container, bit_depth,
-                    sampling_rate_hz, artwork_path, track_number, disc_number, parent_rating_key
-             FROM plex_cache_tracks
-             WHERE album_key = ?1
-             ORDER BY disc_number, track_number, title COLLATE NOCASE",
-        )
+        .prepare(&sql)
         .map_err(|e| format!("Failed to prepare Plex cache album tracks query: {}", e))?;
 
     let rows = stmt
-        .query_map(params![album_key], |row| {
+        .query_map(params![key], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -1492,7 +1508,7 @@ pub fn plex_cache_get_album_tracks(album_key: String) -> Result<Vec<PlexCachedTr
             sample_rate: sampling_rate_opt.map(|v| v as u32).unwrap_or(44100),
             artwork_path,
             source: "plex".to_string(),
-            album_key: album_key.clone(),
+            album_key: album_key.to_string(),
             track_number: track_number_opt.map(|v| v as u32),
             disc_number: disc_number_opt.map(|v| v as u32),
             year: None,
@@ -2223,5 +2239,40 @@ mod tests {
         assert_eq!(year[0].rating_key, "1");
         assert_eq!(year[0].year, Some(2020));
         assert_eq!(year[1].year, None);
+    }
+
+    #[test]
+    fn album_detail_resolves_content_hash_and_native_parent_key() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE plex_cache_tracks (
+                rating_key TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT,
+                album TEXT, duration_ms INTEGER, container TEXT, bit_depth INTEGER,
+                sampling_rate_hz INTEGER, artwork_path TEXT, track_number INTEGER,
+                disc_number INTEGER, album_key TEXT, parent_rating_key TEXT
+            );
+            INSERT INTO plex_cache_tracks
+                (rating_key,title,artist,album,duration_ms,container,bit_depth,
+                 sampling_rate_hz,track_number,disc_number,album_key,parent_rating_key)
+            VALUES
+                ('1','First','Artist','Album',180000,'flac',24,96000,1,1,'plex:hash','parent-a'),
+                ('2','Second','Artist','Album',180000,'flac',24,96000,2,1,'plex:hash','parent-a'),
+                ('3','Other edition','Artist','Album',180000,'flac',16,44100,1,1,'plex:hash','parent-b');",
+        )
+        .unwrap();
+
+        let legacy = plex_cache_get_album_tracks_in(&conn, "plex:hash").unwrap();
+        assert_eq!(legacy.len(), 3);
+        let native = plex_cache_get_album_tracks_in(&conn, "plex:album:parent-a").unwrap();
+        assert_eq!(
+            native
+                .iter()
+                .map(|track| track.rating_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1", "2"]
+        );
+        assert!(native
+            .iter()
+            .all(|track| track.album_key == "plex:album:parent-a"));
     }
 }

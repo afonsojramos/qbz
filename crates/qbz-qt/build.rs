@@ -303,6 +303,7 @@ fn build_rhi_items() {
         "ribbon_item",
         "tunnelflow_item",
         "local_tracks_model",
+        "local_albums_model",
     ] {
         let header = format!("cxx/{item}.h");
         let source = format!("cxx/{item}.cpp");

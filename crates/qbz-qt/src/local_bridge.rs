@@ -56,6 +56,14 @@ pub mod qbz_local {
         #[qproperty(bool, local_albums_loading)]
         #[qproperty(QString, local_albums_error)]
         #[qproperty(QString, local_albums_json)]
+        /// Phase-F1 surface switch. False keeps the legacy JSON collection;
+        /// true binds LocalAlbumsTab to the paged QAbstractListModel.
+        #[qproperty(bool, local_albums_native_active)]
+        #[qproperty(i64, local_albums_native_total)]
+        #[qproperty(i64, local_albums_native_selected_count)]
+        /// Bounded A-Z jump metadata (`[{letter,index}]`), never album rows.
+        #[qproperty(QString, local_albums_native_jumps_json)]
+        #[qproperty(QString, local_albums_native_error)]
 
         // --- Artists tab --------------------------------------------------
         #[qproperty(bool, local_artists_loading)]
@@ -244,6 +252,36 @@ pub mod qbz_local {
         /// the album set (the grouping IS the query).
         #[qinvokable]
         fn set_album_mode(self: Pin<&mut QbzLocal>, mode: QString);
+
+        // --- Albums tab (native paged model) ------------------------------
+        /// Reset the immutable SQL descriptor and publish its first page.
+        #[qinvokable]
+        fn albums_native_reset(
+            self: Pin<&mut QbzLocal>,
+            search: QString,
+            sort: QString,
+            group: QString,
+            filter_json: QString,
+            columns: i32,
+        );
+        #[qinvokable]
+        fn albums_native_page_miss(
+            self: Pin<&mut QbzLocal>,
+            page: i32,
+            generation: i32,
+        );
+        #[qinvokable]
+        fn albums_native_toggle_select(
+            self: Pin<&mut QbzLocal>,
+            index: i64,
+            shift: bool,
+        );
+        #[qinvokable]
+        fn albums_native_select_all(self: Pin<&mut QbzLocal>);
+        #[qinvokable]
+        fn albums_native_clear_selection(self: Pin<&mut QbzLocal>);
+        #[qinvokable]
+        fn albums_native_bulk_action(self: Pin<&mut QbzLocal>, action: QString);
 
         // --- Tracks tab ----------------------------------------------------
         /// Toolbar search (server-side; resets to page 1).
@@ -564,6 +602,11 @@ pub struct QbzLocalRust {
     local_albums_loading: bool,
     local_albums_error: QString,
     local_albums_json: QString,
+    local_albums_native_active: bool,
+    local_albums_native_total: i64,
+    local_albums_native_selected_count: i64,
+    local_albums_native_jumps_json: QString,
+    local_albums_native_error: QString,
     local_artists_loading: bool,
     local_artists_json: QString,
     local_folders_loading: bool,
@@ -626,6 +669,11 @@ impl Default for QbzLocalRust {
             local_albums_loading: false,
             local_albums_error: QString::default(),
             local_albums_json: QString::from("[]"),
+            local_albums_native_active: false,
+            local_albums_native_total: 0,
+            local_albums_native_selected_count: 0,
+            local_albums_native_jumps_json: QString::from("[]"),
+            local_albums_native_error: QString::default(),
             local_artists_loading: false,
             local_artists_json: QString::from("[]"),
             local_folders_loading: false,
@@ -755,6 +803,51 @@ impl qbz_local::QbzLocal {
         // reachable from Settings, so the user can flip it while STANDING on
         // the Artists tab.
         invalidate_artists();
+    }
+
+    pub fn albums_native_reset(
+        self: Pin<&mut Self>,
+        search: QString,
+        sort: QString,
+        group: QString,
+        filter_json: QString,
+        columns: i32,
+    ) {
+        crate::local_albums_model_qt::reset(
+            search.to_string(),
+            sort.to_string(),
+            group.to_string(),
+            filter_json.to_string(),
+            columns,
+        );
+    }
+
+    pub fn albums_native_page_miss(
+        self: Pin<&mut Self>,
+        page: i32,
+        generation: i32,
+    ) {
+        crate::local_albums_model_qt::request_page(page, generation);
+    }
+
+    pub fn albums_native_toggle_select(
+        self: Pin<&mut Self>,
+        index: i64,
+        shift: bool,
+    ) {
+        crate::local_albums_model_qt::toggle_selection(index, shift);
+    }
+
+    pub fn albums_native_select_all(self: Pin<&mut Self>) {
+        crate::local_albums_model_qt::select_all();
+    }
+
+    pub fn albums_native_clear_selection(self: Pin<&mut Self>) {
+        crate::local_albums_model_qt::clear_selection();
+    }
+
+    pub fn albums_native_bulk_action(self: Pin<&mut Self>, action: QString) {
+        crate::local_albums_model_qt::bulk_action(action.to_string());
     }
 
     pub fn tracks_search(self: Pin<&mut Self>, query: QString) {

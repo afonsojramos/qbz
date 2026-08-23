@@ -44,6 +44,12 @@ Item {
     property bool selectMode: false
     /// { albumId: true } — the host owns the selection set.
     property var selected: ({})
+    /// Only the Albums tab opts into the phase-F1 native stream. The other
+    /// two collection users keep their existing bounded arrays.
+    property bool nativeSurface: false
+    property bool nativeActive: false
+    property var nativeModel: null
+    property string nativeJumpsJson: "[]"
 
     /// The scrollbar belongs on the WINDOW's right edge, but hosts inset
     /// their content (LocalAlbumsTab pads 32, plus 20 more to clear the A-Z
@@ -62,6 +68,7 @@ Item {
     /// `modifiers` rides through from the card's mouse event — Shift is
     /// what turns a click into a range (controls/SelectionModel.qml).
     signal toggleSelect(string id, int modifiers)
+    signal nativeToggleSelect(int index, int modifiers)
 
     QbzTheme { id: theme }
 
@@ -120,12 +127,24 @@ Item {
     }
     property int rebuildCount: 0
 
+    function parseNativeJumps() {
+        try { return JSON.parse(nativeJumpsJson || "[]") }
+        catch (e) { return [] }
+    }
+
     function rebuild() {
         // No width yet: build NOTHING rather than something guaranteed wrong.
         // One empty frame beats a full-length one-column grid that has to be
         // discarded — and in the common case the width IS known here, so this
         // never fires and the synchronous first build is unchanged.
         if (cols <= 0) return
+        if (nativeActive) {
+            flat = []
+            entries = []
+            alphaJumps = parseNativeJumps()
+            report()
+            return
+        }
         var _t0 = Date.now()
         var out = []
         var flatOut = []
@@ -191,11 +210,43 @@ Item {
     onRowsChanged: scheduleRebuild()
     onGroupsChanged: scheduleRebuild()
     onGroupedChanged: scheduleRebuild()
-    onViewModeChanged: scheduleRebuild()
-    onColsChanged: scheduleRebuild()
+    onViewModeChanged: { scheduleRebuild(); scheduleNativeReset() }
+    onColsChanged: { scheduleRebuild(); scheduleNativeReset() }
+    onNativeActiveChanged: { scheduleRebuild(); reportSoon() }
+    onNativeJumpsJsonChanged: if (nativeActive) alphaJumps = parseNativeJumps()
+
+    Timer {
+        id: nativeQueryCoalescer
+        interval: 0
+        repeat: false
+        onTriggered: root.resetNativeQuery()
+    }
+    function scheduleNativeReset() {
+        if (nativeSurface && cols > 0) nativeQueryCoalescer.restart()
+    }
+    function resetNativeQuery() {
+        if (!nativeSurface || !view || cols <= 0) return
+        QbzLocal.albumsNativeReset(
+            view.albumsSearch,
+            view.albumsSort,
+            view.albumsGroup,
+            JSON.stringify(view.filter || ({})),
+            cols)
+    }
+    Connections {
+        target: root.nativeSurface ? root.view : null
+        function onAlbumsSearchChanged() { root.scheduleNativeReset() }
+        function onAlbumsSortChanged() { root.scheduleNativeReset() }
+        function onAlbumsGroupChanged() { root.scheduleNativeReset() }
+        function onFilterChanged() { root.scheduleNativeReset() }
+    }
+    Connections {
+        target: root.nativeSurface ? QbzLocal : null
+        function onLocalAlbumModeChanged() { root.scheduleNativeReset() }
+    }
     // The first build stays synchronous — deferring it would show one frame of
     // empty grid on every mount.
-    Component.onCompleted: { rebuild(); reportSoon() }
+    Component.onCompleted: { rebuild(); reportSoon(); scheduleNativeReset() }
     Component.onDestruction: if (view) view.releaseWindow(root.surface)
 
     // ---------------------------------------------------------------------
@@ -211,14 +262,29 @@ Item {
     // a viewport resize, and the scroll.
     function report() {
         if (!view || !list) return
-        if (!list.visible || entries.length === 0 || width <= 0) {
+        var count = nativeActive && nativeModel ? nativeModel.totalCount : entries.length
+        if (!list.visible || count === 0 || width <= 0) {
             view.releaseWindow(root.surface)
             return
         }
         var first = list.indexAt(4, list.contentY + 1)
         var last = list.indexAt(4, list.contentY + Math.max(1, list.height) - 1)
         if (first < 0) first = 0
-        if (last < 0) last = Math.min(entries.length - 1, first + 8)
+        if (last < 0) last = Math.min(count - 1, first + 8)
+        if (nativeActive && nativeModel) {
+            var resident = []
+            for (var entryIndex = first; entryIndex <= last; entryIndex++) {
+                var entry = nativeModel.rowAt(entryIndex)
+                if (!entry || entry.loading || !entry.items) continue
+                for (var itemIndex = 0; itemIndex < entry.items.length; itemIndex++)
+                    resident.push(entry.items[itemIndex])
+            }
+            if (resident.length > 0)
+                view.queueWindowReport(resident, 0, resident.length - 1, root.surface)
+            else
+                view.releaseWindow(root.surface)
+            return
+        }
         var lo = entries[first]
         var hi = entries[last]
         // Both entry kinds now carry `base`, so a header at either edge of
@@ -273,7 +339,7 @@ Item {
         // pooled delegate its own Popup — so the menus above had to become
         // lazy FIRST. In the other order this would install that bug.
         reuseItems: true
-        model: root.entries
+        model: root.nativeActive && root.nativeModel ? root.nativeModel : root.entries
         onContentYChanged: root.report()
         onModelChanged: root.report()
         onHeightChanged: root.report()
@@ -284,8 +350,23 @@ Item {
             width: list.width
             height: modelData.t === 0 ? root.headerH
                  : root.viewMode === "grid" ? root.cellH : root.listRowH
-            sourceComponent: modelData.t === 0 ? headerComp
+            sourceComponent: modelData.loading ? loadingComp
+                : modelData.t === 0 ? headerComp
                 : root.viewMode === "grid" ? cardRowComp : listRowComp
+            onModelDataChanged: root.reportSoon()
+
+            Component {
+                id: loadingComp
+                QbzSkeleton {
+                    variant: root.viewMode === "grid" ? "cardGrid" : "rowList"
+                    cellW: root.cellW
+                    cellH: root.cellH
+                    rowH: root.listRowH
+                    rowGap: 0
+                    rowArtSize: 40
+                    phase: root.view ? root.view.skelPhase : false
+                }
+            }
 
             Component {
                 id: headerComp
@@ -397,8 +478,8 @@ Item {
                                 genre: ""
                                 year: cardCell.slot.year
                                 qualityTier: cardCell.slot.qualityTier
-                                artSource: root.view
-                                    ? (root.view.artMap[cardCell.slot.artKey] || "") : ""
+                                artSource: cardCell.slot.artPath || (root.view
+                                    ? (root.view.artMap[cardCell.slot.artKey] || "") : "")
                                 // LocalLibraryView.slint:1267 `show-source-badge`
                                 // — the card takes the raw source word and the
                                 // BADGE is what the flag switches (blanking
@@ -432,8 +513,15 @@ Item {
                                 // which is exactly what a host overlay cannot
                                 // do. Do not re-add one.
                                 selectMode: root.selectMode
-                                selected: root.selected[cardCell.slot.id] === true
-                                onSelectToggled: root.toggleSelect(cardCell.slot.id)
+                                selected: root.nativeActive
+                                    ? cardCell.slot.selected === true
+                                    : root.selected[cardCell.slot.id] === true
+                                onSelectToggled: {
+                                    if (root.nativeActive)
+                                        root.nativeToggleSelect(cardCell.slot.nativeIndex, Qt.NoModifier)
+                                    else
+                                        root.toggleSelect(cardCell.slot.id, Qt.NoModifier)
+                                }
                                 // Non-select mode only — the card routes a
                                 // select-mode click to `selectToggled` and never
                                 // emits this while ticking.
@@ -494,17 +582,23 @@ Item {
                     view: root.view
                     item: modelData.items[0]
                     artSource: root.view
-                        ? (root.view.artMap[modelData.items[0].artKey] || "") : ""
+                        ? (modelData.items[0].artPath
+                           || root.view.artMap[modelData.items[0].artKey] || "") : ""
                     showSource: root.showSource
                     selectMode: root.selectMode
-                    checked: root.selected[modelData.items[0].id] === true
+                    checked: root.nativeActive
+                        ? modelData.items[0].selected === true
+                        : root.selected[modelData.items[0].id] === true
                     onOpened: root.openRequested(modelData.items[0].id)
                     onPlayRequested: root.playRequested(modelData.items[0].id)
                     onEnqueueRequested: function (m) {
                         root.enqueueRequested(modelData.items[0].id, m)
                     }
                     onToggleSelect: function (mods) {
-                        root.toggleSelect(modelData.items[0].id, mods)
+                        if (root.nativeActive)
+                            root.nativeToggleSelect(modelData.items[0].nativeIndex, mods)
+                        else
+                            root.toggleSelect(modelData.items[0].id, mods)
                     }
                 }
             }

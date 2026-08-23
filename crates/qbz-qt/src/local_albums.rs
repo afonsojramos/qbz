@@ -520,8 +520,9 @@ pub fn load_counts_blocking() -> LocalCounts {
     })
 }
 
-/// An album's tracks by group key: the Plex cache for a `plex:` key, else
-/// the ACTIVE identity mode's query against `library.db`.
+/// An album's tracks by group key: the Plex cache for a legacy content hash
+/// or native edition key, else the ACTIVE identity mode's query against
+/// `library.db`.
 pub fn fetch_album_tracks_blocking(id: &str) -> Vec<LocalTrack> {
     if id.starts_with("plex:") {
         return crate::local_plex::album_tracks(id);
@@ -550,7 +551,7 @@ pub fn fetch_album_tracks_blocking(id: &str) -> Vec<LocalTrack> {
 }
 
 /// The local album-detail document (header + versions + track list). `id` is
-/// the group key of the ACTIVE identity mode, or a Plex `plex:<hash>` key.
+/// the group key of the ACTIVE identity mode, or a Plex legacy/native key.
 ///
 /// The tracks are split into VERSIONS by source directory before the header is
 /// built — two physical copies of the same album must not merge into one

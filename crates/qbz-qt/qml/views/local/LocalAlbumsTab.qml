@@ -19,6 +19,9 @@ Item {
     id: root
 
     property var view: null
+    readonly property bool nativeActive: QbzLocal.localAlbumsNativeActive
+    readonly property int albumTotal: nativeActive
+        ? QbzLocal.localAlbumsNativeTotal : root.view.albums.length
 
     QbzTheme { id: theme }
 
@@ -71,12 +74,15 @@ Item {
 
     LocalNote {
         visible: !QbzLocal.localAlbumsLoading && QbzLocal.localAlbumsError === ""
-            && root.view.albums.length === 0 && root.view.albumsSearch === ""
+            && root.albumTotal === 0 && root.view.albumsSearch === ""
         text: QbzSession.tr("No albums in your local library yet.", QbzSession.trRev)
     }
     LocalNote {
         visible: !QbzLocal.localAlbumsLoading && QbzLocal.localAlbumsError === ""
-            && root.view.albums.length > 0 && root.view.albumsVisible.length === 0
+            && ((root.nativeActive && root.albumTotal === 0
+                 && root.view.albumsSearch !== "")
+                || (!root.nativeActive && root.view.albums.length > 0
+                    && root.view.albumsVisible.length === 0))
         text: QbzSession.tr("No albums match your search.", QbzSession.trRev)
     }
 
@@ -87,7 +93,8 @@ Item {
         anchors.topMargin: 16
         spacing: 8
         visible: !QbzLocal.localAlbumsLoading && QbzLocal.localAlbumsError === ""
-            && root.view.albumsVisible.length > 0
+            && (root.nativeActive ? root.albumTotal > 0
+                                  : root.view.albumsVisible.length > 0)
 
         QbzMultiSelectBar {
             visible: root.view.albumsMultiSelect
@@ -118,6 +125,10 @@ Item {
                 scrollBarInset: root.view.albumsGroup === "alpha" ? 34 : 4
                 view: root.view
                 surface: "albums"
+                nativeSurface: true
+                nativeActive: root.nativeActive
+                nativeModel: root.view.nativeAlbumsModel
+                nativeJumpsJson: QbzLocal.localAlbumsNativeJumpsJson
                 scrollScope: "local:albums"
                 rows: root.view.albumsVisible
                 groups: root.view.albumsGrouped
@@ -130,6 +141,9 @@ Item {
                 onPlayRequested: function (id) { QbzLocal.playAlbum(id, false) }
                 onEnqueueRequested: function (id, m) { QbzLocal.enqueue("album", id, m) }
                 onToggleSelect: function (id, mods) { root.view.toggleAlbumSelected(id, mods) }
+                onNativeToggleSelect: function (index, mods) {
+                    root.view.toggleNativeAlbumSelected(index, mods)
+                }
             }
             QbzAlphaStrip {
                 visible: root.view.albumsGroup === "alpha"

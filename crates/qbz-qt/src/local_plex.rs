@@ -379,7 +379,8 @@ pub fn search_tracks_page(
         .collect()
 }
 
-/// One Plex album's tracks, by the content-hash key (`plex:<hash>`).
+/// One Plex album's tracks, by the legacy content hash (`plex:<hash>`) or the
+/// source-native edition key (`plex:album:<parentRatingKey>`).
 pub fn album_tracks(album_key: &str) -> Vec<LocalTrack> {
     qbz_plex::plex_cache_get_album_tracks(album_key.to_string())
         .unwrap_or_default()

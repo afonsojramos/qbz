@@ -144,6 +144,9 @@ pub(crate) fn start() {
                 if ready && crate::local_tracks_model_qt::requested() {
                     crate::local_bridge_ops::load_tracks(true);
                 }
+                if ready && crate::local_albums_model_qt::requested() {
+                    crate::local_albums_model_qt::retry_last();
+                }
             }
             Ok(Err(CatalogError::InsufficientSpace {
                 required_bytes,
@@ -251,6 +254,9 @@ pub(crate) fn request_catch_up() {
                 };
                 if ready && crate::local_tracks_model_qt::requested() {
                     crate::local_bridge_ops::load_tracks(true);
+                }
+                if ready && crate::local_albums_model_qt::requested() {
+                    crate::local_albums_model_qt::retry_last();
                 }
             }
             Ok(Err(CatalogError::InsufficientSpace {

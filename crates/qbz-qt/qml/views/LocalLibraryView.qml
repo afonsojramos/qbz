@@ -62,6 +62,7 @@ Rectangle {
     // hand-written singleton owns the resident LRU; keeping this reference at
     // the composition root also gives every Tracks delegate one stable model.
     readonly property var nativeTracksModel: QbzLocalTracks
+    readonly property var nativeAlbumsModel: QbzLocalAlbums
 
     // ============================ state ==================================
     // Slint defaults, verbatim (state.slint LocalLibraryState).
@@ -74,7 +75,9 @@ Rectangle {
     property string albumsView: "grid"      // grid | list
     property bool albumsMultiSelect: false
     property var albumsSelected: ({})
-    readonly property int albumsSelectedCount: Object.keys(albumsSelected).length
+    readonly property int albumsSelectedCount: QbzLocal.localAlbumsNativeActive
+        ? QbzLocal.localAlbumsNativeSelectedCount
+        : Object.keys(albumsSelected).length
 
     // Folders tab.
     property string foldersMode: "tree"     // flat | tree
@@ -331,6 +334,7 @@ Rectangle {
         target: QbzLocal
         function onLocalArtworkReady(key, path) {
             root.nativeTracksModel.setArtwork(key, path)
+            root.nativeAlbumsModel.setArtwork(key, path)
             root._artInbox[key] = path
             if (!artFlush.running) artFlush.start()
             // An arrival is live evidence that the pass is still running, so
@@ -345,6 +349,12 @@ Rectangle {
         target: root.nativeTracksModel
         function onPageMiss(page, generation) {
             QbzLocal.tracksNativePageMiss(page, generation)
+        }
+    }
+    Connections {
+        target: root.nativeAlbumsModel
+        function onPageMiss(page, generation) {
+            QbzLocal.albumsNativePageMiss(page, generation)
         }
     }
 
@@ -393,11 +403,16 @@ Rectangle {
         consumePendingArtist()
         consumePendingRoute()
     }
+    Component.onDestruction: {
+        if (QbzLocal.localAlbumsNativeActive) QbzLocal.albumsNativeClearSelection()
+        if (QbzLocal.localTracksNativeActive) QbzLocal.tracksNativeClearSelection()
+    }
     onActiveTabChanged: {
         QbzLocal.loadTab(activeTab)
         // The Artists detail derives from the album set (the DB aggregates
         // the contributor list per album), so make sure it is loaded.
-        if (activeTab === "artists" && albums.length === 0) QbzLocal.loadTab("albums")
+        if (activeTab === "artists" && albums.length === 0)
+            QbzLocal.loadTab("albums-legacy")
         // The tab that just appeared has covers to ask for and the one that
         // left has covers to let go of. Each surface answers for itself.
         artworkRefresh()
@@ -551,8 +566,12 @@ Rectangle {
         return out
     }
 
-    readonly property var albumsVisible:
-        applyFilter(sortRows(filterRows(albums, albumsSearch), albumsSort))
+    // Once F1 owns the Albums tab, never run the legacy O(n) JS pipeline in
+    // parallel. The old document may still be resident because Artists uses
+    // it until F2; it is evaluated only while that legacy surface is active.
+    readonly property var albumsVisible: QbzLocal.localAlbumsNativeActive
+        && activeTab === "albums" ? []
+        : applyFilter(sortRows(filterRows(albums, albumsSearch), albumsSort))
     readonly property var albumsGrouped: groupRows(albumsVisible, albumsGroup)
 
     readonly property var foldersVisible:
@@ -905,7 +924,10 @@ Rectangle {
 
     function toggleAlbumsMultiSelect() {
         albumsMultiSelect = !albumsMultiSelect
-        if (!albumsMultiSelect) { albumsSelected = ({}); albumSel.anchorId = "" }
+        if (!albumsMultiSelect) {
+            albumsSelected = ({}); albumSel.anchorId = ""
+            if (QbzLocal.localAlbumsNativeActive) QbzLocal.albumsNativeClearSelection()
+        }
     }
     /// Excel-style selection — controls/SelectionModel.qml holds the anchor
     /// and the Shift-range rule; this view keeps owning its maps. Ranges run
@@ -916,7 +938,17 @@ Rectangle {
         albumsSelected = albumSel.next(albumsSelected, id, albumsVisible,
                                        mods === undefined ? Qt.NoModifier : mods)
     }
+    function toggleNativeAlbumSelected(index, mods) {
+        QbzLocal.albumsNativeToggleSelect(
+            index, (mods & Qt.ShiftModifier) !== 0)
+    }
     function albumsBulkAction(action) {
+        if (QbzLocal.localAlbumsNativeActive) {
+            if (action === "clear") QbzLocal.albumsNativeClearSelection()
+            else if (action === "select-all") QbzLocal.albumsNativeSelectAll()
+            else QbzLocal.albumsNativeBulkAction(action)
+            return
+        }
         if (action === "clear") { albumsSelected = ({}); albumSel.anchorId = ""; return }
         if (action === "select-all") {
             var s = {}
@@ -974,7 +1006,11 @@ Rectangle {
     function exitMultiSelectMode() {
         // Same "leaving drops the selection" contract the toggle buttons
         // carry (toggleAlbumsMultiSelect / toggleTracksMultiSelect).
-        if (root.albumsMultiSelect) { root.albumsMultiSelect = false; root.albumsSelected = ({}) }
+        if (root.albumsMultiSelect) {
+            root.albumsMultiSelect = false
+            root.albumsSelected = ({})
+            if (QbzLocal.localAlbumsNativeActive) QbzLocal.albumsNativeClearSelection()
+        }
         if (root.tracksMultiSelect) {
             root.tracksMultiSelect = false
             root.tracksSelected = ({})

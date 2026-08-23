@@ -2,7 +2,7 @@ use rusqlite::{params, Connection};
 
 use crate::{CatalogError, Result};
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 pub const APPLICATION_ID: i64 = 0x5142_5A43; // "QBZC"
 
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -271,18 +271,41 @@ CREATE TABLE IF NOT EXISTS albums_materialized (
     artist             TEXT NOT NULL,
     sort_artist        TEXT NOT NULL,
     year               INTEGER,
+    year_missing       INTEGER NOT NULL DEFAULT 1 CHECK (year_missing IN (0,1)),
+    year_value         INTEGER NOT NULL DEFAULT 0,
     track_count        INTEGER NOT NULL DEFAULT 0,
     total_duration_ms  INTEGER NOT NULL DEFAULT 0,
     source_count       INTEGER NOT NULL DEFAULT 0,
     available          INTEGER NOT NULL DEFAULT 1 CHECK (available IN (0,1)),
+    source_kind        TEXT NOT NULL DEFAULT 'local',
+    native_album_id    TEXT NOT NULL DEFAULT '',
+    source_raw         TEXT NOT NULL DEFAULT '',
+    all_artists        TEXT NOT NULL DEFAULT '',
+    format             TEXT NOT NULL DEFAULT '',
+    bit_depth          INTEGER,
+    sample_rate_hz     INTEGER,
+    quality_tier       TEXT NOT NULL DEFAULT '',
+    directory_path     TEXT NOT NULL DEFAULT '',
+    folder_count       INTEGER NOT NULL DEFAULT 0,
+    added_at           INTEGER NOT NULL DEFAULT 0,
     artwork_source     TEXT NOT NULL DEFAULT '',
     artwork_token      TEXT NOT NULL DEFAULT ''
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_albums_materialized_artist
-    ON albums_materialized(available, sort_artist, year, sort_title, edition_id);
+    ON albums_materialized(available, sort_artist, sort_title, edition_id);
+CREATE INDEX IF NOT EXISTS idx_albums_materialized_artist_desc
+    ON albums_materialized(available, sort_artist DESC, sort_title, edition_id);
 CREATE INDEX IF NOT EXISTS idx_albums_materialized_title
     ON albums_materialized(available, sort_title, sort_artist, edition_id);
+CREATE INDEX IF NOT EXISTS idx_albums_materialized_title_desc
+    ON albums_materialized(available, sort_title DESC, sort_artist, edition_id);
+CREATE INDEX IF NOT EXISTS idx_albums_materialized_year
+    ON albums_materialized(available, year_missing, year_value, sort_title, edition_id);
+CREATE INDEX IF NOT EXISTS idx_albums_materialized_year_desc
+    ON albums_materialized(available, year_missing, year_value DESC, sort_title, edition_id);
+CREATE INDEX IF NOT EXISTS idx_albums_materialized_added
+    ON albums_materialized(available, added_at DESC, sort_title, edition_id);
 
 CREATE TABLE IF NOT EXISTS artists_materialized (
     artist_key        TEXT PRIMARY KEY,
@@ -333,5 +356,31 @@ CREATE TRIGGER IF NOT EXISTS tracks_fts_update AFTER UPDATE ON tracks BEGIN
     VALUES ('delete', old.catalog_id, old.title, old.album, old.artist, old.credits);
     INSERT INTO tracks_fts(rowid, title, album, artist, credits)
     VALUES (new.catalog_id, new.title, new.album, new.artist, new.credits);
+END;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS albums_fts USING fts5(
+    title,
+    artist,
+    all_artists,
+    content='albums_materialized',
+    content_rowid='edition_id',
+    tokenize='trigram case_sensitive 0'
+);
+
+CREATE TRIGGER IF NOT EXISTS albums_fts_insert AFTER INSERT ON albums_materialized BEGIN
+    INSERT INTO albums_fts(rowid, title, artist, all_artists)
+    VALUES (new.edition_id, new.title, new.artist, new.all_artists);
+END;
+
+CREATE TRIGGER IF NOT EXISTS albums_fts_delete AFTER DELETE ON albums_materialized BEGIN
+    INSERT INTO albums_fts(albums_fts, rowid, title, artist, all_artists)
+    VALUES ('delete', old.edition_id, old.title, old.artist, old.all_artists);
+END;
+
+CREATE TRIGGER IF NOT EXISTS albums_fts_update AFTER UPDATE ON albums_materialized BEGIN
+    INSERT INTO albums_fts(albums_fts, rowid, title, artist, all_artists)
+    VALUES ('delete', old.edition_id, old.title, old.artist, old.all_artists);
+    INSERT INTO albums_fts(rowid, title, artist, all_artists)
+    VALUES (new.edition_id, new.title, new.artist, new.all_artists);
 END;
 "#;
