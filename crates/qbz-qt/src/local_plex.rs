@@ -125,6 +125,7 @@ pub fn init_for_user(base_dir: &std::path::Path) {
 
 /// Forget the binding (logout) so the next read re-binds to the new user.
 pub fn reset() {
+    cancel_sync();
     invalidate_cache();
     *BOUND.lock().unwrap() = None;
     let _ = STATE.teardown();
@@ -509,6 +510,7 @@ pub fn set_selected_sections(keys: &[String]) {
 /// `client_id`, `metadata_write_enabled`) and purge the shared cache DB so
 /// no Plex rows survive in the browse union.
 pub fn disconnect() {
+    cancel_sync();
     invalidate_cache();
     ensure_bound();
     if let Err(e) = STATE.disconnect() {
@@ -524,16 +526,23 @@ pub fn disconnect() {
 // ---------------------------------------------------------------------------
 
 static SYNCING: AtomicBool = AtomicBool::new(false);
+static SYNC_CANCEL: AtomicBool = AtomicBool::new(false);
+const SYNC_PAGE_SIZE: u64 = 250;
 
 pub fn is_syncing() -> bool {
     SYNCING.load(Ordering::SeqCst)
 }
 
+pub fn cancel_sync() {
+    SYNC_CANCEL.store(true, Ordering::Release);
+}
+
 /// `sync_now` + `syncSelectedPlexLibraries`: fetch the music sections, save
 /// them, default-select ALL when nothing is persisted, PRUNE the de-selected
-/// sections (never a full wipe — that would drop hydrated quality rows), then
-/// per selected section fetch the tracks and save them into the cache DB.
-/// Returns the total track count written.
+/// sections, then fetch each selected section in bounded pages. Page rows and
+/// their resume checkpoint commit together; an old generation is pruned only
+/// after the section reaches its declared total. Returns the exact completed
+/// track count, including rows written before a resumed checkpoint.
 ///
 /// Re-entrancy: a second call while a sync is in flight returns `Err` instead
 /// of racing the cache writes.
@@ -541,9 +550,21 @@ pub async fn sync_now() -> Result<usize, String> {
     if SYNCING.swap(true, Ordering::SeqCst) {
         return Err("Plex sync already running".to_string());
     }
+    SYNC_CANCEL.store(false, Ordering::Release);
     let result = sync_inner().await;
     SYNCING.store(false, Ordering::SeqCst);
     result
+}
+
+async fn interrupt_section(section_key: String, generation: u64, restart: bool) {
+    let _ = tokio::task::spawn_blocking(move || {
+        if restart {
+            qbz_plex::plex_cache_restart_section_sync(section_key, generation)
+        } else {
+            qbz_plex::plex_cache_interrupt_section_sync(section_key, generation)
+        }
+    })
+    .await;
 }
 
 async fn sync_inner() -> Result<usize, String> {
@@ -564,10 +585,11 @@ async fn sync_inner() -> Result<usize, String> {
     {
         let sections = sections.clone();
         let server_id = server_id.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             qbz_plex::plex_cache_save_sections(server_id, sections)
         })
-        .await;
+        .await
+        .map_err(|e| format!("Plex sections cache worker failed: {e}"))??;
     }
 
     // Default-select ALL when the persisted selection is empty / stale.
@@ -585,36 +607,117 @@ async fn sync_inner() -> Result<usize, String> {
     };
     set_selected_sections(&selected);
 
-    // Prune ONLY the de-selected sections: a full clear would delete the
-    // hydrated rows BEFORE save_tracks can carry their quality over.
+    // Selection changes are authoritative, but selected sections retain their
+    // current and incomplete generations (including hydrated quality).
     {
         let keep = selected.clone();
-        let _ = tokio::task::spawn_blocking(move || qbz_plex::plex_cache_prune_sections(&keep)).await;
+        tokio::task::spawn_blocking(move || qbz_plex::plex_cache_prune_sections(&keep))
+            .await
+            .map_err(|e| format!("Plex section prune worker failed: {e}"))??;
     }
 
     let mut total = 0usize;
     for key in &selected {
-        let tracks = match qbz_plex::plex_get_section_tracks(
-            base.trim().to_string(),
-            token.trim().to_string(),
-            key.clone(),
-            None,
-        )
+        if SYNC_CANCEL.load(Ordering::Acquire) {
+            return Err("Plex sync cancelled".to_string());
+        }
+        let begin_server = server_id.clone();
+        let begin_key = key.clone();
+        let mut state = tokio::task::spawn_blocking(move || {
+            qbz_plex::plex_cache_begin_section_sync(begin_server, begin_key)
+        })
         .await
-        {
-            Ok(t) => t,
-            Err(e) => {
-                log::warn!("[qbz-qt] plex get_section_tracks({key}) failed: {e}");
+        .map_err(|e| format!("Plex section start worker failed: {e}"))??;
+        log::info!(
+            "[plex-sync] section={} generation={} resumed={} checkpoint={}",
+            key,
+            state.generation,
+            state.resumed,
+            state.next_start,
+        );
+
+        loop {
+            if SYNC_CANCEL.load(Ordering::Acquire) {
+                interrupt_section(key.clone(), state.generation, false).await;
+                return Err("Plex sync cancelled".to_string());
+            }
+            let page = match qbz_plex::plex_get_section_tracks_page(
+                base.trim().to_string(),
+                token.trim().to_string(),
+                key.clone(),
+                state.next_start,
+                SYNC_PAGE_SIZE,
+            )
+            .await
+            {
+                Ok(page) => page,
+                Err(error) => {
+                    interrupt_section(key.clone(), state.generation, false).await;
+                    return Err(error);
+                }
+            };
+            if state
+                .total_size
+                .is_some_and(|total_size| total_size != page.total_size)
+            {
+                interrupt_section(key.clone(), state.generation, true).await;
+                return Err("Plex section totalSize changed during sync".to_string());
+            }
+            let has_more = page.has_more();
+            let page_rows = page.tracks.len();
+            let apply_key = key.clone();
+            let generation = state.generation;
+            state = match tokio::task::spawn_blocking(move || {
+                qbz_plex::plex_cache_apply_section_page(apply_key, generation, page)
+            })
+            .await
+            {
+                Ok(Ok(state)) => state,
+                Ok(Err(error)) => {
+                    interrupt_section(key.clone(), generation, true).await;
+                    return Err(error);
+                }
+                Err(error) => {
+                    interrupt_section(key.clone(), generation, false).await;
+                    return Err(format!("Plex page cache worker failed: {error}"));
+                }
+            };
+            log::info!(
+                "[plex-sync] section={} generation={} page_rows={} observed={} total={} checkpoint={} complete={}",
+                key,
+                state.generation,
+                page_rows,
+                state.observed_rows,
+                state.total_size.unwrap_or(0),
+                state.next_start,
+                !has_more,
+            );
+            if SYNC_CANCEL.load(Ordering::Acquire) {
+                interrupt_section(key.clone(), state.generation, false).await;
+                return Err("Plex sync cancelled".to_string());
+            }
+            if has_more {
                 continue;
             }
-        };
-        total += tracks.len();
-        let server_id = server_id.clone();
-        let key = key.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            qbz_plex::plex_cache_save_tracks(server_id, key, tracks)
-        })
-        .await;
+            let finish_key = key.clone();
+            let generation = state.generation;
+            let pruned = tokio::task::spawn_blocking(move || {
+                qbz_plex::plex_cache_finish_section_sync(finish_key, generation)
+            })
+            .await
+            .map_err(|e| format!("Plex section finish worker failed: {e}"))??;
+            total =
+                total.saturating_add(usize::try_from(state.observed_rows).unwrap_or(usize::MAX));
+            log::info!(
+                "[plex-sync] section={} generation={} rows={} pruned={} prune_authorized=true",
+                key,
+                state.generation,
+                state.observed_rows,
+                pruned,
+            );
+            crate::local_catalog_qt::request_catch_up();
+            break;
+        }
     }
     log::info!("[qbz-qt] plex sync: {total} tracks across {} sections", selected.len());
     Ok(total)

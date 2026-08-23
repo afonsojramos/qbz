@@ -3198,6 +3198,9 @@ fn main() {
         // The catalog worker commits at most its current bounded batch, whose
         // checkpoint is part of that same transaction. A later launch resumes.
         local_catalog_qt::cancel();
+        // A Plex page and its checkpoint are one transaction. Cancellation
+        // prevents section prune and the next launch resumes at that page.
+        local_plex::cancel_sync();
         // The backstop for everything below AND for Qt's own teardown (engine
         // + QGuiApplication destructors, atexit chain): if any of it wedges,
         // the watchdog `_exit(0)`s the process. Idempotent — the quit paths
