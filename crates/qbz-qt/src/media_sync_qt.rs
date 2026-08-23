@@ -47,11 +47,13 @@ static JELLYFIN_BUSY: AtomicBool = AtomicBool::new(false);
 static SUBSONIC_BUSY: AtomicBool = AtomicBool::new(false);
 static JELLYFIN_CANCEL: AtomicBool = AtomicBool::new(false);
 static JELLYFIN_QUALITY_EPOCH: AtomicU64 = AtomicU64::new(1);
+static SUBSONIC_EPOCH: AtomicU64 = AtomicU64::new(1);
 static JELLYFIN_QUALITY_RUNNING: AtomicBool = AtomicBool::new(false);
 static JELLYFIN_BULK_QUALITY: AtomicBool = AtomicBool::new(false);
 static JELLYFIN_QUALITY_QUEUE: LazyLock<Mutex<QualityQueue>> =
     LazyLock::new(|| Mutex::new(QualityQueue::default()));
 static JELLYFIN_STATE_GATE: Mutex<()> = Mutex::new(());
+static SUBSONIC_STATE_GATE: Mutex<()> = Mutex::new(());
 
 const QUALITY_QUEUE_MAX: usize = 2_000;
 const QUALITY_RETRY_SECS: i64 = 60;
@@ -140,7 +142,9 @@ pub fn cancel(kind: MediaServerKind) {
             JELLYFIN_CANCEL.store(true, Ordering::Release);
             invalidate_jellyfin_quality();
         }
-        MediaServerKind::Subsonic => {}
+        MediaServerKind::Subsonic => {
+            SUBSONIC_EPOCH.fetch_add(1, Ordering::AcqRel);
+        }
     }
 }
 
@@ -150,10 +154,14 @@ pub fn cancel_all() {
     }
 }
 
-pub(crate) fn jellyfin_state_guard() -> std::sync::MutexGuard<'static, ()> {
-    JELLYFIN_STATE_GATE
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
+pub(crate) fn media_server_state_guard(
+    kind: MediaServerKind,
+) -> std::sync::MutexGuard<'static, ()> {
+    let gate = match kind {
+        MediaServerKind::Jellyfin => &JELLYFIN_STATE_GATE,
+        MediaServerKind::Subsonic => &SUBSONIC_STATE_GATE,
+    };
+    gate.lock().unwrap_or_else(|error| error.into_inner())
 }
 
 /// Visible rows enter the secondary quality queue behind playing/queued rows
@@ -386,7 +394,7 @@ async fn sync_jellyfin_inner(cfg: MediaServerSettings, full: bool) -> Result<Syn
     let pruned = match pass {
         Ok(pruned) => pruned,
         Err(error) => {
-            let _ = interrupt_source_sync(RemoteSource::Jellyfin, generation);
+            let _ = interrupt_source_sync(RemoteSource::Jellyfin, generation, sync_epoch);
             return Err(error);
         }
     };
@@ -728,8 +736,9 @@ pub async fn sync_subsonic(_full: bool) -> Result<SyncReport, String> {
     let Some((base, creds)) = crate::media_servers_qt::subsonic_credentials() else {
         return Err("subsonic is not configured".into());
     };
+    let sync_epoch = SUBSONIC_EPOCH.fetch_add(1, Ordering::AcqRel) + 1;
     set_syncing_ui(true);
-    let out = sync_subsonic_inner(cfg, base, creds).await;
+    let out = sync_subsonic_inner(cfg, base, creds, sync_epoch).await;
     set_syncing_ui(false);
     out
 }
@@ -738,87 +747,157 @@ async fn sync_subsonic_inner(
     cfg: MediaServerSettings,
     base: String,
     creds: qbz_subsonic::Credentials,
+    sync_epoch: u64,
 ) -> Result<SyncReport, String> {
     let kind = MediaServerKind::Subsonic;
     let client = qbz_subsonic::SubsonicClient::new(&base, creds).map_err(|e| e.to_string())?;
 
-    let folders = client.music_folders().await.unwrap_or_default();
-    let started = qbz_media_cache::sweep_start();
-    let mode = client.detect_sweep_mode().await;
-    log::info!("[qbz-qt] subsonic sync: {mode:?}");
+    let folders = client.music_folders().await.map_err(|e| e.to_string())?;
+    if !source_epoch_is_current(RemoteSource::Subsonic, sync_epoch) {
+        return Err("subsonic sync cancelled".to_string());
+    }
+    // Keep the successful probe page: refetching offset zero both wastes one
+    // request and opens a window where a transient empty response could turn a
+    // proven non-empty Search3 library into an empty authoritative generation.
+    let (mode, mut first_search_page) = match client.search_page(0).await {
+        Ok(page) if !page.is_empty() => (qbz_subsonic::SweepMode::Search3, Some(page)),
+        _ => (qbz_subsonic::SweepMode::PerAlbum, None),
+    };
+    if !source_epoch_is_current(RemoteSource::Subsonic, sync_epoch) {
+        return Err("subsonic sync cancelled".to_string());
+    }
+    let generation = begin_source_sync(RemoteSource::Subsonic)?.generation;
+    log::info!(
+        "[media-sync] source=subsonic phase=enumerate generation={generation} mode={mode:?} prune_authorized=false"
+    );
     let mut saved = 0usize;
 
-    match mode {
-        qbz_subsonic::SweepMode::Search3 => {
-            let mut offset = 0u32;
-            loop {
-                let page = client
-                    .search_page(offset)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                if page.is_empty() {
-                    break;
+    let pass = async {
+        match mode {
+            qbz_subsonic::SweepMode::Search3 => {
+                let mut offset = 0u32;
+                let mut page_number = 0u64;
+                loop {
+                    if !source_epoch_is_current(RemoteSource::Subsonic, sync_epoch) {
+                        return Err("subsonic sync cancelled".to_string());
+                    }
+                    let page = if offset == 0 {
+                        first_search_page
+                            .take()
+                            .ok_or_else(|| "subsonic search probe page is missing".to_string())?
+                    } else {
+                        client
+                            .search_page(offset)
+                            .await
+                            .map_err(|e| e.to_string())?
+                    };
+                    if page.is_empty() {
+                        break;
+                    }
+                    let page_len = u32::try_from(page.len())
+                        .map_err(|_| "subsonic page length overflow".to_string())?;
+                    let rows: Vec<CachedTrack> = page.iter().map(subsonic_row).collect();
+                    saved += write_generation_rows(
+                        RemoteSource::Subsonic,
+                        generation,
+                        sync_epoch,
+                        &rows,
+                    )?;
+                    offset = offset
+                        .checked_add(page_len)
+                        .ok_or_else(|| "subsonic search offset overflow".to_string())?;
+                    page_number = page_number.saturating_add(1);
+                    report(kind, offset as u64, offset as u64);
+                    log::info!(
+                        "[media-sync] source=subsonic phase=search-page generation={generation} page={page_number} rows={page_len} checkpoint={offset} prune_authorized=false"
+                    );
+                    if page_len < qbz_subsonic::PAGE_SIZE {
+                        break;
+                    }
                 }
-                let rows: Vec<CachedTrack> = page.iter().map(subsonic_row).collect();
-                saved += write_rows(RemoteSource::Subsonic, &rows)?;
-                offset += page.len() as u32;
-                report(kind, offset as u64, offset as u64);
-                if (page.len() as u32) < qbz_subsonic::PAGE_SIZE {
-                    break;
+            }
+            qbz_subsonic::SweepMode::PerAlbum => {
+                let mut album_offset = 0u32;
+                let mut albums_seen = 0u64;
+                let mut page_number = 0u64;
+                loop {
+                    if !source_epoch_is_current(RemoteSource::Subsonic, sync_epoch) {
+                        return Err("subsonic sync cancelled".to_string());
+                    }
+                    let album_page = client
+                        .album_ids(album_offset)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    if album_page.is_empty() {
+                        break;
+                    }
+                    let page_len = u32::try_from(album_page.len())
+                        .map_err(|_| "subsonic album page length overflow".to_string())?;
+                    for album_id in album_page {
+                        if !source_epoch_is_current(RemoteSource::Subsonic, sync_epoch) {
+                            return Err("subsonic sync cancelled".to_string());
+                        }
+                        // Any failed album makes this generation incomplete.
+                        // Skipping it and pruning would reinterpret a server
+                        // outage as deletion of every track in that album.
+                        let tracks = client
+                            .album_tracks(&album_id)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let rows: Vec<CachedTrack> = tracks.iter().map(subsonic_row).collect();
+                        saved += write_generation_rows(
+                            RemoteSource::Subsonic,
+                            generation,
+                            sync_epoch,
+                            &rows,
+                        )?;
+                        albums_seen = albums_seen.saturating_add(1);
+                        if albums_seen % 25 == 0 {
+                            report(kind, albums_seen, albums_seen);
+                        }
+                    }
+                    album_offset = album_offset
+                        .checked_add(page_len)
+                        .ok_or_else(|| "subsonic album offset overflow".to_string())?;
+                    page_number = page_number.saturating_add(1);
+                    log::info!(
+                        "[media-sync] source=subsonic phase=album-page generation={generation} page={page_number} albums={page_len} checkpoint={album_offset} tracks={saved} prune_authorized=false"
+                    );
+                    if page_len < qbz_subsonic::PAGE_SIZE {
+                        break;
+                    }
                 }
             }
         }
-        qbz_subsonic::SweepMode::PerAlbum => {
-            let mut offset = 0u32;
-            let mut albums: Vec<String> = Vec::new();
-            loop {
-                let page = client.album_ids(offset).await.map_err(|e| e.to_string())?;
-                if page.is_empty() {
-                    break;
-                }
-                offset += page.len() as u32;
-                let done = page.len() as u32;
-                albums.extend(page);
-                if done < qbz_subsonic::PAGE_SIZE {
-                    break;
-                }
-            }
-            let total = albums.len() as u64;
-            for (i, id) in albums.iter().enumerate() {
-                // One dead album must not abort a 675-request sweep. Logged and
-                // skipped, exactly as `resolve_collection_tracks` treats a
-                // failed item: partial beats total failure.
-                match client.album_tracks(id).await {
-                    Ok(t) => {
-                        let rows: Vec<CachedTrack> = t.iter().map(subsonic_row).collect();
-                        saved += write_rows(RemoteSource::Subsonic, &rows)?;
-                    }
-                    Err(e) => {
-                        log::warn!("[qbz-qt] subsonic sync: album {id} failed ({e}) — skipped")
-                    }
-                }
-                if i % 25 == 0 {
-                    report(kind, i as u64, total);
-                }
-            }
-        }
+
+        write_libraries_for_epoch(
+            RemoteSource::Subsonic,
+            sync_epoch,
+            &folders
+                .iter()
+                .map(|folder| CachedLibrary {
+                    source: "subsonic".into(),
+                    library_id: folder.id.clone(),
+                    name: folder.name.clone(),
+                    server_id: String::new(),
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        complete_source_sync(RemoteSource::Subsonic, generation, sync_epoch, true)
     }
+    .await;
 
-    write_libraries(
-        RemoteSource::Subsonic,
-        &folders
-            .iter()
-            .map(|f| CachedLibrary {
-                source: "subsonic".into(),
-                library_id: f.id.clone(),
-                name: f.name.clone(),
-                server_id: String::new(),
-            })
-            .collect::<Vec<_>>(),
-    )?;
-
-    let pruned = prune(RemoteSource::Subsonic, started)?;
-    finish(kind, cfg, saved, pruned, RemoteSource::Subsonic)
+    let pruned = match pass {
+        Ok(pruned) => pruned,
+        Err(error) => {
+            let _ = interrupt_source_sync(RemoteSource::Subsonic, generation, sync_epoch);
+            return Err(error);
+        }
+    };
+    log::info!(
+        "[media-sync] source=subsonic phase=complete generation={generation} rows={saved} pruned={pruned} prune_authorized=true"
+    );
+    finish_subsonic(cfg, saved, pruned, sync_epoch)
 }
 
 fn subsonic_row(t: &qbz_subsonic::SubsonicTrack) -> CachedTrack {
@@ -872,6 +951,14 @@ fn begin_source_sync(
         .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
 }
 
+fn source_epoch_is_current(source: RemoteSource, sync_epoch: u64) -> bool {
+    let current = match source {
+        RemoteSource::Jellyfin => JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire),
+        RemoteSource::Subsonic => SUBSONIC_EPOCH.load(Ordering::Acquire),
+    };
+    sync_epoch == current
+}
+
 fn write_essential_rows(
     source: RemoteSource,
     generation: u64,
@@ -880,10 +967,26 @@ fn write_essential_rows(
 ) -> Result<usize, String> {
     handle(source)
         .with_mut(|cache| {
-            if sync_epoch != JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire) {
-                return Err("jellyfin sync cancelled".to_string());
+            if !source_epoch_is_current(source, sync_epoch) {
+                return Err(format!("{} sync cancelled", source.as_str()));
             }
             qbz_media_cache::save_essential_tracks(cache, source, generation, rows)
+        })
+        .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
+}
+
+fn write_generation_rows(
+    source: RemoteSource,
+    generation: u64,
+    sync_epoch: u64,
+    rows: &[CachedTrack],
+) -> Result<usize, String> {
+    handle(source)
+        .with_mut(|cache| {
+            if !source_epoch_is_current(source, sync_epoch) {
+                return Err(format!("{} sync cancelled", source.as_str()));
+            }
+            qbz_media_cache::save_generation_tracks(cache, source, generation, rows)
         })
         .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
 }
@@ -896,17 +999,26 @@ fn complete_source_sync(
 ) -> Result<usize, String> {
     handle(source)
         .with_mut(|cache| {
-            if sync_epoch != JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire) {
-                return Err("jellyfin sync cancelled".to_string());
+            if !source_epoch_is_current(source, sync_epoch) {
+                return Err(format!("{} sync cancelled", source.as_str()));
             }
             qbz_media_cache::complete_source_sync(cache, source, generation, prune_old)
         })
         .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
 }
 
-fn interrupt_source_sync(source: RemoteSource, generation: u64) -> Result<(), String> {
+fn interrupt_source_sync(
+    source: RemoteSource,
+    generation: u64,
+    sync_epoch: u64,
+) -> Result<(), String> {
     handle(source)
-        .with(|cache| qbz_media_cache::interrupt_source_sync(cache, source, generation))
+        .with(|cache| {
+            if !source_epoch_is_current(source, sync_epoch) {
+                return Ok(());
+            }
+            qbz_media_cache::interrupt_source_sync(cache, source, generation)
+        })
         .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
 }
 
@@ -917,29 +1029,11 @@ fn write_libraries_for_epoch(
 ) -> Result<(), String> {
     handle(source)
         .with_mut(|cache| {
-            if sync_epoch != JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire) {
-                return Err("jellyfin sync cancelled".to_string());
+            if !source_epoch_is_current(source, sync_epoch) {
+                return Err(format!("{} sync cancelled", source.as_str()));
             }
             qbz_media_cache::save_libraries(cache, source, libraries)
         })
-        .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
-}
-
-fn write_rows(source: RemoteSource, rows: &[CachedTrack]) -> Result<usize, String> {
-    handle(source)
-        .with_mut(|c| qbz_media_cache::save_tracks(c, source, rows))
-        .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
-}
-
-fn write_libraries(source: RemoteSource, libs: &[CachedLibrary]) -> Result<(), String> {
-    handle(source)
-        .with_mut(|c| qbz_media_cache::save_libraries(c, source, libs))
-        .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
-}
-
-fn prune(source: RemoteSource, started: i64) -> Result<usize, String> {
-    handle(source)
-        .with_mut(|c| qbz_media_cache::prune_stale(c, source, started))
         .ok_or_else(|| "the remote cache is not bound to a user".to_string())?
 }
 
@@ -955,7 +1049,7 @@ fn finish_jellyfin(
     pruned: usize,
     sync_epoch: u64,
 ) -> Result<SyncReport, String> {
-    let _gate = jellyfin_state_guard();
+    let _gate = media_server_state_guard(MediaServerKind::Jellyfin);
     if JELLYFIN_CANCEL.load(Ordering::Acquire)
         || sync_epoch != JELLYFIN_QUALITY_EPOCH.load(Ordering::Acquire)
     {
@@ -967,6 +1061,25 @@ fn finish_jellyfin(
         saved,
         pruned,
         RemoteSource::Jellyfin,
+    )
+}
+
+fn finish_subsonic(
+    cfg: MediaServerSettings,
+    saved: usize,
+    pruned: usize,
+    sync_epoch: u64,
+) -> Result<SyncReport, String> {
+    let _gate = media_server_state_guard(MediaServerKind::Subsonic);
+    if !source_epoch_is_current(RemoteSource::Subsonic, sync_epoch) {
+        return Err("subsonic sync cancelled".to_string());
+    }
+    finish(
+        MediaServerKind::Subsonic,
+        cfg,
+        saved,
+        pruned,
+        RemoteSource::Subsonic,
     )
 }
 
@@ -1034,6 +1147,14 @@ mod tests {
         assert!(!is_syncing(kind), "the flag stuck after the guard dropped");
         // ...and the other source was never blocked by it.
         assert!(!is_syncing(MediaServerKind::Subsonic));
+    }
+
+    #[test]
+    fn subsonic_cancellation_invalidates_late_page_writes() {
+        let epoch = SUBSONIC_EPOCH.load(Ordering::Acquire);
+        assert!(source_epoch_is_current(RemoteSource::Subsonic, epoch));
+        cancel(MediaServerKind::Subsonic);
+        assert!(!source_epoch_is_current(RemoteSource::Subsonic, epoch));
     }
 
     /// A Jellyfin art token is only useful with the item it hangs off, so a row

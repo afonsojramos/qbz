@@ -157,23 +157,31 @@ pub fn parse_envelope(body: &[u8]) -> Result<serde_json::Value> {
         ));
     }
 
-    let root: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| SubsonicError::Decode(format!("{e} (body starts: {:.80})", text)))?;
+    let root: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| SubsonicError::Decode(e.to_string()))?;
     let resp = root
         .get("subsonic-response")
         .ok_or_else(|| SubsonicError::Decode("no subsonic-response member".into()))?;
 
-    if resp.get("status").and_then(|s| s.as_str()) == Some("failed") {
-        let e = resp.get("error");
-        let code = e.and_then(|e| e.get("code")).and_then(|c| c.as_i64()).unwrap_or(-1);
-        let message = e
-            .and_then(|e| e.get("message"))
-            .and_then(|m| m.as_str())
-            .unwrap_or("unspecified")
-            .to_string();
-        return Err(api_error(code, message));
+    match resp.get("status").and_then(|status| status.as_str()) {
+        Some("ok") => Ok(resp.clone()),
+        Some("failed") => {
+            let error = resp.get("error");
+            let code = error
+                .and_then(|error| error.get("code"))
+                .and_then(|code| code.as_i64())
+                .unwrap_or(-1);
+            let message = error
+                .and_then(|error| error.get("message"))
+                .and_then(|message| message.as_str())
+                .unwrap_or("unspecified")
+                .to_string();
+            Err(api_error(code, message))
+        }
+        _ => Err(SubsonicError::Decode(
+            "response has no valid status".to_string(),
+        )),
     }
-    Ok(resp.clone())
 }
 
 /// Map a protocol error code onto the variant a caller can act on.
@@ -482,7 +490,25 @@ fn client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .build()
-        .map_err(|e| SubsonicError::Transport(e.to_string()))
+        .map_err(|e| transport_error(&e))
+}
+
+/// Reqwest includes the full request URL in common error strings. Every
+/// Subsonic URL carries the auth token, username, and salt in its query, so a
+/// transport failure must retain only a coarse non-sensitive reason.
+fn transport_error(error: &reqwest::Error) -> SubsonicError {
+    let reason = if error.is_timeout() {
+        "request timed out"
+    } else if error.is_connect() {
+        "connection failed"
+    } else if error.is_decode() {
+        "response decoding failed"
+    } else if error.is_body() {
+        "response body failed"
+    } else {
+        "request failed"
+    };
+    SubsonicError::Transport(reason.to_string())
 }
 
 impl SubsonicClient {
@@ -511,15 +537,13 @@ impl SubsonicClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| SubsonicError::Transport(e.to_string()))?;
+            .map_err(|e| transport_error(&e))?;
         // Checked, but NOT trusted: a 200 here says nothing about success.
         let status = resp.status();
-        let body = resp
-            .bytes()
-            .await
-            .map_err(|e| SubsonicError::Transport(e.to_string()))?;
+        let body = resp.bytes().await.map_err(|e| transport_error(&e))?;
         match parse_envelope(&body) {
-            Ok(v) => Ok(v),
+            Ok(v) if status.is_success() => Ok(v),
+            Ok(_) => Err(SubsonicError::Status(status.as_u16())),
             // A genuine non-2xx with an unparseable body is worth reporting as
             // the status it was, rather than as "not understood".
             Err(SubsonicError::Decode(d)) if !status.is_success() => {
@@ -564,20 +588,21 @@ impl SubsonicClient {
             .and_then(|f| f.as_array())
             .cloned()
             .unwrap_or_default();
-        Ok(arr
-            .into_iter()
-            .filter_map(|v| {
+        arr.into_iter()
+            .map(|v| {
                 // `id` is an INTEGER here and a STRING elsewhere in the same
                 // protocol. Accept both rather than pick a side.
-                let id = v.get("id").map(json_id)?;
+                let id = v.get("id").map(json_id).ok_or_else(|| {
+                    SubsonicError::Decode("music folder row has no id".to_string())
+                })?;
                 let name = v
                     .get("name")
                     .and_then(|n| n.as_str())
                     .unwrap_or_default()
                     .to_string();
-                Some(MusicFolder { id, name })
+                Ok(MusicFolder { id, name })
             })
-            .collect())
+            .collect()
     }
 
     /// One page of the FAST sweep: `search3` with an empty query.
@@ -596,7 +621,7 @@ impl SubsonicClient {
                 ),
             )
             .await?;
-        Ok(songs_of(r.get("searchResult3")))
+        songs_of(r.get("searchResult3"))
     }
 
     /// One page of album ids, for the PORTABLE sweep.
@@ -610,11 +635,22 @@ impl SubsonicClient {
                 &format!("&type=alphabeticalByName&size={PAGE_SIZE}&offset={offset}"),
             )
             .await?;
-        Ok(r.get("albumList2")
+        let Some(albums) = r
+            .get("albumList2")
             .and_then(|a| a.get("album"))
             .and_then(|a| a.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.get("id").map(json_id)).collect())
-            .unwrap_or_default())
+        else {
+            return Ok(Vec::new());
+        };
+        albums
+            .iter()
+            .map(|album| {
+                album
+                    .get("id")
+                    .map(json_id)
+                    .ok_or_else(|| SubsonicError::Decode("album row has no id".to_string()))
+            })
+            .collect()
     }
 
     /// The tracks of one album (`getAlbum.view`).
@@ -622,7 +658,7 @@ impl SubsonicClient {
         let r = self
             .get("getAlbum.view", &format!("&id={}", urlencode(album_id)))
             .await?;
-        Ok(songs_of(r.get("album")))
+        songs_of(r.get("album"))
     }
 
     /// Which sweep this server supports, decided by ASKING rather than by
@@ -698,17 +734,21 @@ fn json_id(v: &serde_json::Value) -> String {
 }
 
 /// Pull a `song` array out of whichever container holds it.
-fn songs_of(container: Option<&serde_json::Value>) -> Vec<SubsonicTrack> {
-    container
+fn songs_of(container: Option<&serde_json::Value>) -> Result<Vec<SubsonicTrack>> {
+    let Some(songs) = container
         .and_then(|c| c.get("song"))
         .and_then(|s| s.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| serde_json::from_value::<SongDto>(v.clone()).ok())
+    else {
+        return Ok(Vec::new());
+    };
+    songs
+        .iter()
+        .map(|song| {
+            serde_json::from_value::<SongDto>(song.clone())
                 .map(SubsonicTrack::from)
-                .collect()
+                .map_err(|error| SubsonicError::Decode(error.to_string()))
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 #[cfg(test)]
@@ -793,6 +833,15 @@ mod tests {
         assert_eq!(v["musicFolders"]["musicFolder"][0]["name"], "Music Library");
     }
 
+    #[test]
+    fn an_envelope_without_a_valid_status_cannot_authorize_empty_results() {
+        let body = br#"{"subsonic-response":{"searchResult3":{}}}"#;
+        assert!(matches!(
+            parse_envelope(body),
+            Err(SubsonicError::Decode(_))
+        ));
+    }
+
     /// A refused stream is ~200 bytes of JSON served as the audio body. This is
     /// the guard that keeps it out of the decoder.
     #[test]
@@ -856,6 +905,66 @@ mod tests {
         assert_eq!(t.duration_ms, 0);
         assert_eq!(t.cover_art, None);
         assert_eq!(t.track_number, None);
+    }
+
+    #[test]
+    fn one_malformed_song_rejects_the_whole_authoritative_page() {
+        let page = serde_json::json!({
+            "song": [
+                { "id": "valid", "title": "Valid" },
+                { "title": "Missing identity" }
+            ]
+        });
+        assert!(matches!(
+            songs_of(Some(&page)),
+            Err(SubsonicError::Decode(_))
+        ));
+    }
+
+    #[test]
+    fn paged_sweep_metric_covers_every_id_once() {
+        const TRACKS: u32 = 6_678;
+        let mut pages = Vec::new();
+        for start in (0..TRACKS).step_by(PAGE_SIZE as usize) {
+            let end = start.saturating_add(PAGE_SIZE).min(TRACKS);
+            let songs = (start..end)
+                .map(|index| {
+                    serde_json::json!({
+                        "id": format!("song-{index:05}"),
+                        "title": format!("Track {index:05}"),
+                        "artist": "Fixture Artist",
+                        "album": format!("Album {:04}", index / 10),
+                        "albumId": format!("album-{:04}", index / 10),
+                        "duration": 180,
+                        "suffix": "flac",
+                        "contentType": "audio/flac",
+                        "bitDepth": 24,
+                        "samplingRate": 96000,
+                        "channelCount": 2,
+                        "bitRate": 3120
+                    })
+                })
+                .collect::<Vec<_>>();
+            pages.push(serde_json::json!({ "song": songs }).to_string());
+        }
+
+        let max_bytes = pages.iter().map(String::len).max().unwrap_or(0);
+        let started = std::time::Instant::now();
+        let mut ids = std::collections::HashSet::new();
+        for json in &pages {
+            let page: serde_json::Value = serde_json::from_str(json).unwrap();
+            for track in songs_of(Some(&page)).unwrap() {
+                assert!(ids.insert(track.id), "fixture emitted a duplicate id");
+            }
+        }
+        let elapsed = started.elapsed();
+        assert_eq!(pages.len(), 14);
+        assert_eq!(ids.len(), TRACKS as usize);
+        println!(
+            "H_SUBSONIC_METRIC tracks={TRACKS} pages={} max_bytes={max_bytes} parse_ms={}",
+            pages.len(),
+            elapsed.as_millis(),
+        );
     }
 
     /// `id` is an integer in `getMusicFolders` and a string elsewhere. Picking

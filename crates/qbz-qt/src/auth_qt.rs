@@ -209,6 +209,16 @@ where
 /// logs on failure, never blocks shell entry) — one entry point, so the caller
 /// cannot bind the uid and forget the schema.
 async fn bind_per_user_stores(dir: &std::path::Path, user_id: u64) {
+    // Invalidate any late media-server response before the registry moves to a
+    // different profile. Epoch checks inside every page transaction then keep
+    // the previous user's catalog out of this user's cache.
+    crate::media_sync_qt::cancel_all();
+    let jellyfin_gate = crate::media_sync_qt::media_server_state_guard(
+        qbz_app::settings::media_servers::MediaServerKind::Jellyfin,
+    );
+    let subsonic_gate = crate::media_sync_qt::media_server_state_guard(
+        qbz_app::settings::media_servers::MediaServerKind::Subsonic,
+    );
     // THE SOURCE REGISTRY FIRST, before any other store. `myqbz_qt::
     // init_for_user` below runs the mixtape migrations through
     // `library_db_qt::with_db(true, …)`, and against an unbound pool a fresh
@@ -221,6 +231,8 @@ async fn bind_per_user_stores(dir: &std::path::Path, user_id: u64) {
     // Bound after, that probe would report "none" on every login.
     crate::media_servers_qt::init_for_user(dir);
     crate::source_wiring::bind_user(dir, user_id);
+    drop(subsonic_gate);
+    drop(jellyfin_gate);
     // The filter chips are gated on "is this server configured", and the
     // answer is known now — without this the chips are absent until the first
     // browse reload, which for a user who never touches settings is never.
@@ -459,6 +471,7 @@ pub async fn logout<A>(runtime: &Arc<AppRuntime<A>>) -> Result<(), String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
+    crate::media_sync_qt::cancel_all();
     let _ = qbz_credentials::clear_oauth_token();
     let _ = runtime.core().logout().await;
     crate::fav_cache_qt::teardown();
@@ -485,8 +498,16 @@ where
     // handles, the Plex art memo, the ephemeral session store. Without this
     // the next account inherits the previous one's handles out of a `'static`
     // registry.
+    let jellyfin_gate = crate::media_sync_qt::media_server_state_guard(
+        qbz_app::settings::media_servers::MediaServerKind::Jellyfin,
+    );
+    let subsonic_gate = crate::media_sync_qt::media_server_state_guard(
+        qbz_app::settings::media_servers::MediaServerKind::Subsonic,
+    );
     crate::media_servers_qt::reset();
     crate::source_wiring::teardown();
+    drop(subsonic_gate);
+    drop(jellyfin_gate);
     crate::offline_fwd::teardown();
     // The offline download cache (index.db/library connections + the cached
     // id set) — torn down so the next account never reads this one's rows.

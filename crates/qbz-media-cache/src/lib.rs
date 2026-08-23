@@ -506,6 +506,28 @@ pub fn save_essential_tracks(
     generation: u64,
     tracks: &[CachedTrack],
 ) -> Result<usize> {
+    save_source_generation_page(conn, source, generation, tracks, false)
+}
+
+/// Upsert one complete-quality page in an authoritative source generation.
+/// Subsonic carries its quality fields in the ordinary song row, so discovery
+/// and hydration are one atomic page transaction for that protocol.
+pub fn save_generation_tracks(
+    conn: &mut Connection,
+    source: RemoteSource,
+    generation: u64,
+    tracks: &[CachedTrack],
+) -> Result<usize> {
+    save_source_generation_page(conn, source, generation, tracks, true)
+}
+
+fn save_source_generation_page(
+    conn: &mut Connection,
+    source: RemoteSource,
+    generation: u64,
+    tracks: &[CachedTrack],
+    complete_quality: bool,
+) -> Result<usize> {
     if tracks.is_empty() {
         return Ok(0);
     }
@@ -538,7 +560,7 @@ pub fn save_essential_tracks(
                     codec,bit_depth,sample_rate_hz,channels,bitrate_kbps,artwork_token,
                     size_bytes,observed_generation,quality_hydrated,quality_retry_at,updated_at)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,
-                         ?16,?17,?18,?19,?20,?21,?22,?23,0,0,?24)
+                         ?16,?17,?18,?19,?20,?21,?22,?23,?24,0,?25)
                  ON CONFLICT(source,item_id) DO UPDATE SET
                     server_id=excluded.server_id,library_id=excluded.library_id,
                     title=excluded.title,artist=excluded.artist,
@@ -546,9 +568,23 @@ pub fn save_essential_tracks(
                     album_id=excluded.album_id,track_number=excluded.track_number,
                     disc_number=excluded.disc_number,duration_ms=excluded.duration_ms,
                     year=excluded.year,genre=excluded.genre,
-                    container=COALESCE(NULLIF(excluded.container,''),remote_cache_tracks.container),
+                    container=CASE WHEN excluded.quality_hydrated=1
+                        THEN excluded.container
+                        ELSE COALESCE(NULLIF(excluded.container,''),remote_cache_tracks.container)
+                    END,
+                    codec=CASE WHEN excluded.quality_hydrated=1
+                        THEN excluded.codec ELSE remote_cache_tracks.codec END,
+                    bit_depth=CASE WHEN excluded.quality_hydrated=1
+                        THEN excluded.bit_depth ELSE remote_cache_tracks.bit_depth END,
+                    sample_rate_hz=CASE WHEN excluded.quality_hydrated=1
+                        THEN excluded.sample_rate_hz ELSE remote_cache_tracks.sample_rate_hz END,
+                    channels=CASE WHEN excluded.quality_hydrated=1
+                        THEN excluded.channels ELSE remote_cache_tracks.channels END,
+                    bitrate_kbps=CASE WHEN excluded.quality_hydrated=1
+                        THEN excluded.bitrate_kbps ELSE remote_cache_tracks.bitrate_kbps END,
                     artwork_token=excluded.artwork_token,size_bytes=excluded.size_bytes,
-                    observed_generation=excluded.observed_generation,quality_hydrated=0,
+                    observed_generation=excluded.observed_generation,
+                    quality_hydrated=excluded.quality_hydrated,
                     quality_retry_at=0,updated_at=excluded.updated_at",
             )
             .map_err(map_err("prepare essential page"))?;
@@ -579,6 +615,7 @@ pub fn save_essential_tracks(
                     .size_bytes
                     .map(|value| value.min(i64::MAX as u64) as i64),
                 generation,
+                i64::from(complete_quality),
                 revision,
             ])
             .map_err(map_err("write essential track"))?;
@@ -1618,5 +1655,50 @@ mod tests {
                 .title,
             "t-same"
         );
+    }
+
+    #[test]
+    fn complete_quality_generation_is_atomic_and_prunes_only_after_completion() {
+        let mut c = db();
+        let mut keep = track("keep", "album", Some(1), Some(1));
+        keep.container = "flac".into();
+        keep.codec = Some("flac".into());
+        keep.bit_depth = Some(24);
+        keep.sample_rate_hz = Some(96_000);
+        let gone = track("gone", "album", Some(1), Some(2));
+        save_tracks(&mut c, RemoteSource::Subsonic, &[keep.clone(), gone]).unwrap();
+
+        let first = begin_source_sync(&mut c, RemoteSource::Subsonic).unwrap();
+        keep.container = "mp3".into();
+        keep.codec = Some("audio/mpeg".into());
+        keep.bit_depth = None;
+        keep.sample_rate_hz = Some(44_100);
+        save_generation_tracks(
+            &mut c,
+            RemoteSource::Subsonic,
+            first.generation,
+            &[keep.clone()],
+        )
+        .unwrap();
+        let visible = track_by_item_id(&c, RemoteSource::Subsonic, "keep")
+            .unwrap()
+            .unwrap();
+        assert_eq!(visible.container, "mp3");
+        assert_eq!(visible.bit_depth, None, "lossy quality stayed stale");
+        assert!(quality_candidates(&c, RemoteSource::Subsonic, 10)
+            .unwrap()
+            .is_empty());
+        interrupt_source_sync(&c, RemoteSource::Subsonic, first.generation).unwrap();
+        assert_eq!(count(&c, RemoteSource::Subsonic).unwrap(), 2);
+
+        let second = begin_source_sync(&mut c, RemoteSource::Subsonic).unwrap();
+        save_generation_tracks(&mut c, RemoteSource::Subsonic, second.generation, &[keep]).unwrap();
+        assert_eq!(
+            complete_source_sync(&mut c, RemoteSource::Subsonic, second.generation, true).unwrap(),
+            1
+        );
+        assert!(track_by_item_id(&c, RemoteSource::Subsonic, "gone")
+            .unwrap()
+            .is_none());
     }
 }

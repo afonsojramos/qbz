@@ -79,8 +79,7 @@ pub fn put(kind: MediaServerKind, s: &MediaServerSettings) {
 }
 
 pub fn disconnect(kind: MediaServerKind) {
-    let _jellyfin_gate =
-        (kind == MediaServerKind::Jellyfin).then(crate::media_sync_qt::jellyfin_state_guard);
+    let _sync_gate = crate::media_sync_qt::media_server_state_guard(kind);
     crate::media_sync_qt::cancel(kind);
     STATE.disconnect(kind);
     invalidate_cache();
