@@ -1,5 +1,9 @@
-//! Ephemeral folders — open a folder OUTSIDE the indexed library, browse it
-//! and play it without a single row landing in `library.db`.
+//! Ephemeral folders and live disc sessions.
+//!
+//! A folder opened outside the indexed library and a physical CD never land a
+//! row in `library.db`. A parsed SACD is the deliberate exception: `sacd_qt`
+//! adopts its virtual tracks into the persistent catalogue first, then uses
+//! this same in-memory pane for the immediate open experience.
 //!
 //! Qt/QML port of the shipping Slint pair (`crates/qbz/src/ephemeral.rs` +
 //! the `EphemeralPane` arm of `crates/qbz/src/local_library.rs`). ADR-006:
@@ -518,19 +522,18 @@ pub fn open_path(path: String) {
     });
 }
 
-/// Publish a session built from a track list rather than a directory scan —
-/// a CD today, a disc image next.
+/// Publish a session built from a track list rather than a directory scan — a
+/// physical CD or an already catalogue-adopted SACD image.
 ///
 /// It goes through the SAME `publish_doc` as a folder, so the pane, the tab,
 /// the label and the open sequence all behave identically: a disc is not a
 /// second kind of session, it is the same session with a different source of
 /// tracks.
 ///
-/// The path is NOT persisted. A folder is still there tomorrow; a disc is a
-/// piece of plastic that gets taken out, and re-opening a drive at boot to
-/// find a different album (or none) is worse than starting clean. Restoring a
-/// medium needs the TOC fingerprint check the contract specifies, and that is
-/// not built yet — so this deliberately does nothing rather than half of it.
+/// This SESSION is not rehydrated. Re-opening a physical drive at boot could
+/// find a different CD (or none), so it deliberately starts clean. SACD
+/// catalogue persistence is separate and keyed by its TOC fingerprint; the
+/// user still explicitly opens an image to create this live pane.
 pub fn adopt_tracks(label: &str, tracks: Vec<LocalTrack>) {
     let label = label.to_string();
     // Taken HERE, on the reader's own thread, so it overlaps the reader's

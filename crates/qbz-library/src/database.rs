@@ -132,6 +132,29 @@ impl LibraryDatabase {
             CREATE INDEX IF NOT EXISTS idx_local_tracks_album_lookup
                 ON local_tracks(album, album_artist, artist);
 
+            -- A SACD image is one physical file but exposes several virtual
+            -- `sacd:/path/image.iso#N` local tracks. Keep that relationship
+            -- outside `local_tracks`: the latter remains the authoritative
+            -- playback row, while the disc fingerprint lets a successful
+            -- re-import update those rows in place after the image moves.
+            CREATE TABLE IF NOT EXISTS local_sacd_images (
+                fingerprint TEXT PRIMARY KEY,
+                image_path TEXT NOT NULL UNIQUE,
+                image_size_bytes INTEGER NOT NULL,
+                image_modified_ns INTEGER NOT NULL,
+                observed_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS local_sacd_tracks (
+                fingerprint TEXT NOT NULL,
+                track_number INTEGER NOT NULL CHECK(track_number BETWEEN 1 AND 255),
+                local_track_id INTEGER NOT NULL UNIQUE,
+                PRIMARY KEY(fingerprint, track_number)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_local_sacd_tracks_local_id
+                ON local_sacd_tracks(local_track_id);
+
             -- Incremental scanner state. `local_tracks` remains authoritative;
             -- these tables only remember what each root observed and whether
             -- a completed generation is allowed to prune stale rows.
@@ -1461,6 +1484,8 @@ impl LibraryDatabase {
             .execute_batch(
                 "BEGIN IMMEDIATE;
                  DELETE FROM local_tracks WHERE source IS NULL OR source != 'qobuz_download';
+                 DELETE FROM local_sacd_tracks;
+                 DELETE FROM local_sacd_images;
                  DELETE FROM local_scan_files;
                  DELETE FROM local_scan_cue_refs;
                  DELETE FROM local_scan_roots;

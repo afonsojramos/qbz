@@ -394,3 +394,57 @@ fn create_local(path: &std::path::Path) {
     )
     .unwrap();
 }
+
+#[test]
+fn sacd_virtual_tracks_project_as_stable_local_rows() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("library.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE local_tracks (
+             id INTEGER PRIMARY KEY,file_path TEXT NOT NULL,title TEXT NOT NULL,
+             artist TEXT NOT NULL,album_artist TEXT,album TEXT NOT NULL,
+             duration_secs INTEGER,year INTEGER,disc_number INTEGER,
+             track_number INTEGER,format TEXT,bit_depth INTEGER,sample_rate REAL,
+             artwork_path TEXT,indexed_at INTEGER,album_group_key TEXT,source TEXT
+         );
+         INSERT INTO local_tracks VALUES
+             (41,'sacd:/nas/disc.iso#1','Movement I','Composer','Orchestra',
+              'Symphony',720,NULL,1,1,'DSD',1,2822400,'/art/sacd',100,
+              'sacd|||sacd-fingerprint','user'),
+             (42,'sacd:/nas/disc.iso#2','Movement II','Composer','Orchestra',
+              'Symphony',680,NULL,1,2,'DSD',1,2822400,'/art/sacd',100,
+              'sacd|||sacd-fingerprint','user');",
+    )
+    .unwrap();
+    drop(conn);
+
+    assert!(matches!(
+        bootstrap_legacy_caches(temp.path(), &AtomicBool::new(false)).unwrap(),
+        BootstrapOutcome::Activated { track_count: 2, .. }
+    ));
+    let ActiveCatalog::Ready { catalog, .. } = BootstrapLayout::new(temp.path()).open_active()
+    else {
+        panic!("SACD fixture did not activate")
+    };
+    let projected = catalog
+        .resolve(&TrackRef {
+            source: SourceKind::Local,
+            source_instance: "library".to_string(),
+            native_id: "41".to_string(),
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(projected.local_track_id, Some(41));
+    assert_eq!(
+        projected.local_path.as_deref(),
+        Some("sacd:/nas/disc.iso#1")
+    );
+    assert_eq!(
+        projected.native_album_id.as_deref(),
+        Some("sacd|||sacd-fingerprint")
+    );
+    assert_eq!(projected.source_raw, "user");
+    assert_eq!(projected.format, "dsd");
+    assert_eq!(projected.sample_rate_hz, Some(2_822_400));
+}

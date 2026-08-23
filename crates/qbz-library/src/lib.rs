@@ -41,6 +41,7 @@ mod mount_info;
 pub mod reachability;
 mod scan;
 mod scanner;
+mod sacd;
 mod tag_writer;
 mod tag_sidecar;
 mod thumbnails;
@@ -58,6 +59,7 @@ pub use models::*;
 pub use mount_info::{is_network_path, network_fs_label};
 pub use reachability::{probe, probe_default, Reach, DEFAULT_PROBE};
 pub use scan::{scan_with_progress, ScanEvent};
+pub use sacd::{SacdImageImport, SacdImportResult};
 pub use tag_writer::{
     compute_track_artist_match, write_album_tags_to_files, write_purchase_tags, AlbumTagWrite,
     PurchaseTagWrite, TrackTagWrite,

@@ -385,6 +385,9 @@ pub fn apply() {
         edited: true,
     };
     qbz_disc::store::put_user(&identity.fingerprint, identity.disc_id.as_deref(), &memory);
+    if identity.kind == crate::disc_identity::DiscKind::Sacd {
+        crate::sacd_qt::persist_current_session(&identity.fingerprint);
+    }
     log::info!(
         "[qbz-qt] disc meta: applied {:?} by {:?} from {}",
         meta.title,
@@ -404,6 +407,9 @@ pub fn apply() {
             if let Some(art) = crate::cdda_qt::fetch_cover_for(&release, None).await {
                 qbz_disc::store::set_cover(&fingerprint, &art);
                 crate::local_ephemeral::set_session_artwork(&art);
+                if identity.kind == crate::disc_identity::DiscKind::Sacd {
+                    crate::sacd_qt::persist_current_session(&fingerprint);
+                }
             }
         });
     }
