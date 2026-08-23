@@ -528,7 +528,12 @@ mod phase_a_tests {
         let qml = include_str!("../qml/views/local/LocalTracksTab.qml");
         assert!(qml.contains("function capturePageAnchor()"));
         assert!(qml.contains("String(root.entries[i].row.id)"));
-        assert!(qml.contains("cell.mapToItem(list, 0, 0).y"));
+        assert!(qml.contains("cell.y - list.contentY"));
+        assert!(!qml.contains("cell.mapToItem(list"));
+        assert!(qml.contains("|| root.restoringPageAnchor"));
+        assert!(qml.contains(
+            "var wanted = list.contentY + currentScreenY - anchor.screenY"
+        ));
         assert!(qml.contains("function restorePageAnchor(anchor, nextEntries, epoch)"));
         assert!(qml.contains("Qt.callLater(function ()"));
         assert!(qml.contains("list.positionViewAtIndex(target, ListView.Beginning)"));

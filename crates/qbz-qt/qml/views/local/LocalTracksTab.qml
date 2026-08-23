@@ -33,6 +33,9 @@ Item {
     // contentY change before that property turns true. All of those changes
     // describe the same page miss and must collapse into one bridge call.
     property bool pageRequestPending: false
+    // Programmatic viewport restoration emits the same Flickable signals as
+    // user input. Keep those signals from recursively requesting another page.
+    property bool restoringPageAnchor: false
     // Invalidates a deferred viewport restore when another document/model
     // replacement wins before Qt's next event-loop turn.
     property int entriesEpoch: 0
@@ -40,6 +43,7 @@ Item {
     function requestNextPage(force) {
         if (root.nativeModelActive
             || root.pageRequestPending
+            || root.restoringPageAnchor
             || !QbzLocal.localTracksHasMore
             || QbzLocal.localTracksLoadingMore
             || QbzLocal.localTracksLoading)
@@ -88,8 +92,12 @@ Item {
         return {
             "id": String(root.entries[i].row.id),
             // Position inside the viewport, including a partially clipped
-            // first row or a group header immediately above it.
-            "screenY": cell ? cell.mapToItem(list, 0, 0).y : 0
+            // first row or a group header immediately above it. A ListView
+            // delegate's y is in contentItem coordinates, so subtracting the
+            // viewport's contentY is the visual coordinate. mapToItem(list)
+            // preserves the content coordinate here and would add thousands
+            // of rows back into the restore calculation.
+            "screenY": cell ? cell.y - list.contentY : 0
         }
     }
 
@@ -115,15 +123,17 @@ Item {
         Qt.callLater(function () {
             if (epoch !== root.entriesEpoch || root.nativeModelActive)
                 return
+            root.restoringPageAnchor = true
             list.forceLayout()
             list.positionViewAtIndex(target, ListView.Beginning)
             list.forceLayout()
             var cell = list.itemAtIndex(target)
-            var currentScreenY = cell ? cell.mapToItem(list, 0, 0).y : 0
+            var currentScreenY = cell ? cell.y - list.contentY : 0
             var wanted = list.contentY + currentScreenY - anchor.screenY
             var minY = list.originY
             var maxY = minY + Math.max(0, list.contentHeight - list.height)
             list.contentY = Math.max(minY, Math.min(wanted, maxY))
+            root.restoringPageAnchor = false
             root.reportSoon()
         })
     }
