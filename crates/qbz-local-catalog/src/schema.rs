@@ -2,7 +2,10 @@ use rusqlite::{params, Connection};
 
 use crate::{CatalogError, Result};
 
-pub const SCHEMA_VERSION: u32 = 4;
+// Version 5 changes the derived artist-identity projection. Existing v4
+// catalogs are rebuilt side-by-side from their authoritative caches; no user
+// library database is migrated in place.
+pub const SCHEMA_VERSION: u32 = 5;
 pub const APPLICATION_ID: i64 = 0x5142_5A43; // "QBZC"
 
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -262,6 +265,23 @@ CREATE TABLE IF NOT EXISTS artist_credits (
 
 CREATE INDEX IF NOT EXISTS idx_artist_credits_artist
     ON artist_credits(artist_key, role, catalog_id);
+
+-- Canonical identities are rebuilt from the source-faithful credit relation
+-- before every materialization. Keeping both relations lets later projection
+-- generations re-evaluate corpus-level aliases instead of losing evidence.
+CREATE TABLE IF NOT EXISTS artist_identity_credits (
+    catalog_id    INTEGER NOT NULL REFERENCES tracks(catalog_id) ON DELETE CASCADE,
+    artist_key    TEXT NOT NULL,
+    display_name  TEXT NOT NULL,
+    role          TEXT NOT NULL CHECK (
+        role IN ('track_artist','album_artist','composer','performer','featured')
+    ),
+    ordinal       INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (catalog_id, role, ordinal, artist_key)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_artist_identity_credits_artist
+    ON artist_identity_credits(artist_key, role, catalog_id);
 
 CREATE TABLE IF NOT EXISTS albums_materialized (
     edition_id         INTEGER PRIMARY KEY REFERENCES editions(edition_id) ON DELETE CASCADE,

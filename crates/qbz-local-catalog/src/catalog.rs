@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -19,6 +19,13 @@ use crate::schema;
 use crate::{CatalogError, Result, SCHEMA_VERSION};
 
 const MAX_PAGE_SIZE: usize = 500;
+const ALBUM_ARTIST_FAMILY_SEPARATOR: &str = " • ";
+
+#[derive(Default)]
+struct AlbumArtistFamilyEvidence {
+    display_counts: HashMap<String, u64>,
+    suffixes: HashSet<String>,
+}
 
 pub struct Catalog {
     conn: Connection,
@@ -540,6 +547,7 @@ impl Catalog {
 
     pub(crate) fn rebuild_materialized_views(&mut self) -> Result<()> {
         let tx = self.conn.transaction()?;
+        rebuild_artist_identities(&tx)?;
         tx.execute_batch(
             "DELETE FROM artists_fts;
              DELETE FROM artist_source_stats;
@@ -549,7 +557,7 @@ impl Catalog {
 
              INSERT INTO edition_artists(edition_id,artist_key,role)
              SELECT DISTINCT sc.edition_id,ac.artist_key,ac.role
-               FROM artist_credits ac
+               FROM artist_identity_credits ac
                JOIN tracks t ON t.catalog_id=ac.catalog_id
                JOIN source_copies sc ON sc.source_copy_id=t.source_copy_id;
 
@@ -597,7 +605,7 @@ impl Catalog {
                     ),''),
                     COALESCE((
                         SELECT group_concat(DISTINCT ac.display_name)
-                          FROM artist_credits ac
+                          FROM artist_identity_credits ac
                           JOIN tracks ta ON ta.catalog_id=ac.catalog_id
                           JOIN source_copies sca ON sca.source_copy_id=ta.source_copy_id
                          WHERE sca.edition_id=e.edition_id
@@ -658,7 +666,7 @@ impl Catalog {
                          ELSE MIN(t.source_kind) END,
                     COALESCE((
                         SELECT t2.source_kind
-                          FROM artist_credits ac2
+                          FROM artist_identity_credits ac2
                           JOIN tracks t2 ON t2.catalog_id=ac2.catalog_id
                          WHERE ac2.artist_key=ac.artist_key
                            AND t2.available=1
@@ -672,7 +680,7 @@ impl Catalog {
                     ),''),
                     COALESCE((
                         SELECT t2.artwork_token
-                          FROM artist_credits ac2
+                          FROM artist_identity_credits ac2
                           JOIN tracks t2 ON t2.catalog_id=ac2.catalog_id
                          WHERE ac2.artist_key=ac.artist_key
                            AND t2.available=1
@@ -684,7 +692,7 @@ impl Catalog {
                                       WHEN 'performer' THEN 3 ELSE 4 END,
                                   t2.catalog_id LIMIT 1
                     ),'')
-               FROM artist_credits ac
+               FROM artist_identity_credits ac
                JOIN tracks t ON t.catalog_id=ac.catalog_id
                LEFT JOIN source_copies sc ON sc.source_copy_id=t.source_copy_id
               GROUP BY ac.artist_key;
@@ -696,7 +704,7 @@ impl Catalog {
                     COUNT(DISTINCT CASE WHEN t.available=1 THEN sc.edition_id END),
                     COUNT(DISTINCT CASE WHEN t.available=1 THEN ac.catalog_id END),
                     COALESCE(MAX(t.available),0)
-               FROM artist_credits ac
+               FROM artist_identity_credits ac
                JOIN tracks t ON t.catalog_id=ac.catalog_id
                LEFT JOIN source_copies sc ON sc.source_copy_id=t.source_copy_id
               GROUP BY ac.artist_key,t.source_kind,t.source_instance;
@@ -715,7 +723,7 @@ impl Catalog {
                  (SELECT COUNT(*) FROM tracks),
                  (SELECT COALESCE(SUM(track_count),0) FROM albums_materialized),
                  (SELECT COUNT(*) FROM tracks WHERE source_copy_id IS NULL),
-                 (SELECT COUNT(DISTINCT artist_key) FROM artist_credits),
+                 (SELECT COUNT(DISTINCT artist_key) FROM artist_identity_credits),
                  (SELECT COUNT(*) FROM artists_materialized),
                  (SELECT COUNT(*) FROM artists_materialized am
                    WHERE NOT EXISTS (SELECT 1 FROM artist_source_stats ast
@@ -1187,6 +1195,119 @@ impl Catalog {
     pub(crate) fn connection(&self) -> &Connection {
         &self.conn
     }
+}
+
+/// Collapse a repeated `collection • contributor` album-artist family into
+/// one collection identity while retaining every track/contributor credit.
+///
+/// A single bullet-bearing name is left intact because it can be a deliberate
+/// collaboration or stage name. Two distinct suffixes sharing a normalized
+/// prefix provide corpus-level evidence that the source encoded a family of
+/// album credits rather than separate root artists. Only the derived credit
+/// relation is rebuilt; raw credits plus track and album presentation metadata
+/// remain byte-for-byte source-authored for the next incremental generation.
+fn rebuild_artist_identities(tx: &rusqlite::Transaction<'_>) -> Result<usize> {
+    let mut families = HashMap::<String, AlbumArtistFamilyEvidence>::new();
+    {
+        let mut statement = tx.prepare(
+            "SELECT display_name,COUNT(*)
+               FROM artist_credits
+              WHERE role='album_artist' AND instr(display_name,?1)>0
+              GROUP BY display_name
+              ORDER BY display_name",
+        )?;
+        let rows = statement.query_map(params![ALBUM_ARTIST_FAMILY_SEPARATOR], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?.max(0) as u64,
+            ))
+        })?;
+        for row in rows {
+            let (display_name, count) = row?;
+            let Some((prefix, suffix)) = split_album_artist_family(&display_name) else {
+                continue;
+            };
+            let family_key = normalize_artist_key(prefix);
+            let suffix_key = normalize_artist_key(suffix);
+            if family_key.is_empty() || suffix_key.is_empty() {
+                continue;
+            }
+            let evidence = families.entry(family_key).or_default();
+            evidence.suffixes.insert(suffix_key);
+            *evidence
+                .display_counts
+                .entry(prefix.to_string())
+                .or_default() += count;
+        }
+    }
+
+    let mut aliases = Vec::new();
+    for (family_key, evidence) in &families {
+        if evidence.suffixes.len() < 2 {
+            continue;
+        }
+        let canonical_display = {
+            let mut displays = evidence.display_counts.iter().collect::<Vec<_>>();
+            displays.sort_by(|(left_name, left_count), (right_name, right_count)| {
+                right_count
+                    .cmp(left_count)
+                    .then_with(|| left_name.cmp(right_name))
+            });
+            displays
+                .into_iter()
+                .next()
+                .map(|(display_name, _)| (*display_name).clone())
+                .unwrap_or_default()
+        };
+        for prefix in evidence.display_counts.keys() {
+            aliases.push((
+                prefix.clone(),
+                family_key.clone(),
+                canonical_display.clone(),
+            ));
+        }
+    }
+    aliases.sort();
+
+    tx.execute("DELETE FROM artist_identity_credits", [])?;
+    tx.execute(
+        "INSERT OR IGNORE INTO artist_identity_credits(
+             catalog_id,artist_key,display_name,role,ordinal
+         ) SELECT catalog_id,artist_key,display_name,role,ordinal
+             FROM artist_credits",
+        [],
+    )?;
+    let mut rewritten = 0;
+    for (prefix, family_key, canonical_display) in aliases {
+        rewritten += tx.execute(
+            "DELETE FROM artist_identity_credits
+              WHERE role='album_artist' AND instr(display_name,?1)>0
+                AND trim(substr(display_name,1,instr(display_name,?1)-1))=?2",
+            params![ALBUM_ARTIST_FAMILY_SEPARATOR, prefix],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO artist_identity_credits(
+                 catalog_id,artist_key,display_name,role,ordinal
+             ) SELECT catalog_id,?1,?2,role,ordinal
+                 FROM artist_credits
+                WHERE role='album_artist' AND instr(display_name,?3)>0
+                  AND trim(substr(display_name,1,instr(display_name,?3)-1))=?4",
+            params![
+                family_key,
+                canonical_display,
+                ALBUM_ARTIST_FAMILY_SEPARATOR,
+                prefix
+            ],
+        )?;
+    }
+    Ok(rewritten)
+}
+
+fn split_album_artist_family(display_name: &str) -> Option<(&str, &str)> {
+    let (prefix, suffix) = display_name.split_once(ALBUM_ARTIST_FAMILY_SEPARATOR)?;
+    let prefix = prefix.trim();
+    let suffix = suffix.trim();
+    (!prefix.is_empty() && !suffix.is_empty()).then_some((prefix, suffix))
 }
 
 fn validate_ref(track_ref: &TrackRef) -> Result<()> {
@@ -2423,7 +2544,14 @@ pub(crate) fn descriptor_key(descriptor: &QueryDescriptor) -> String {
     for format in descriptor.formats() {
         push_key_part(&mut key, format);
     }
-    push_key_part(&mut key, if descriptor.other_formats() { "other" } else { "" });
+    push_key_part(
+        &mut key,
+        if descriptor.other_formats() {
+            "other"
+        } else {
+            ""
+        },
+    );
     for tier in descriptor.quality_tiers() {
         push_key_part(&mut key, tier);
     }

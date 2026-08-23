@@ -203,6 +203,7 @@ fn schema_is_versioned_frontend_agnostic_and_fts5_enabled() {
         "source_copies",
         "tracks",
         "artist_credits",
+        "artist_identity_credits",
         "albums_materialized",
         "artists_materialized",
         "artist_source_stats",
@@ -373,6 +374,103 @@ fn artist_credit_counts_and_album_relationship_span_every_source() {
 }
 
 #[test]
+fn repeated_album_artist_families_collapse_without_losing_contributors() {
+    let mut catalog = Catalog::open_in_memory(1).unwrap();
+    let family = "新世紀エヴァンゲリオン";
+    let contributors = [
+        ("鷺巣詩郎", "Shiro Sagisu"),
+        ("林原めぐみ", "Megumi Hayashibara"),
+        ("高橋洋子", "Yoko Takahashi"),
+    ];
+    let mut tracks = contributors
+        .iter()
+        .enumerate()
+        .map(|(index, (artist, romanized))| {
+            let mut track = projected(20_000 + index, SourceKind::Subsonic);
+            track.native_album_id = Some(format!("eva-{index}"));
+            track.artist = (*artist).to_string();
+            track.album_artist = format!("{family} • {romanized}");
+            track.credits = vec![
+                ArtistCredit {
+                    display_name: (*artist).to_string(),
+                    role: CreditRole::TrackArtist,
+                    ordinal: 0,
+                },
+                ArtistCredit {
+                    display_name: track.album_artist.clone(),
+                    role: CreditRole::AlbumArtist,
+                    ordinal: 0,
+                },
+            ];
+            track
+        })
+        .collect::<Vec<_>>();
+
+    let mut collaboration = projected(20_010, SourceKind::Subsonic);
+    collaboration.native_album_id = Some("one-off-collaboration".to_string());
+    collaboration.artist = "Alice".to_string();
+    collaboration.album_artist = "Alice • Bob".to_string();
+    collaboration.credits = vec![
+        ArtistCredit {
+            display_name: "Alice".to_string(),
+            role: CreditRole::TrackArtist,
+            ordinal: 0,
+        },
+        ArtistCredit {
+            display_name: collaboration.album_artist.clone(),
+            role: CreditRole::AlbumArtist,
+            ordinal: 0,
+        },
+    ];
+    tracks.push(collaboration);
+
+    let source = SourceKey {
+        source: SourceKind::Subsonic,
+        source_instance: source_instance(SourceKind::Subsonic).to_string(),
+    };
+    catalog
+        .apply_bootstrap_batch(&BootstrapBatch {
+            source,
+            snapshot_version: "album-artist-families-v1".to_string(),
+            expected_cursor: String::new(),
+            next_cursor: tracks.len().to_string(),
+            tracks,
+            complete: true,
+        })
+        .unwrap();
+    catalog.rebuild_materialized_views().unwrap();
+
+    let raw_family_variants: i64 = catalog
+        .connection()
+        .query_row(
+            "SELECT COUNT(DISTINCT display_name) FROM artist_credits
+              WHERE role='album_artist' AND display_name LIKE ?1",
+            [format!("{family} • %")],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(raw_family_variants, contributors.len() as i64);
+    catalog.rebuild_materialized_views().unwrap();
+
+    let artists = collect_all_artists(&catalog, &QueryDescriptor::artists(), 2);
+    let keys = artists
+        .iter()
+        .map(|row| row.artist_key.as_str())
+        .collect::<HashSet<_>>();
+    let family_key = normalize_artist_key(family);
+    let family_row = artists
+        .iter()
+        .find(|row| row.artist_key == family_key)
+        .expect("the repeated album-artist family is one root artist");
+    assert_eq!((family_row.album_count, family_row.track_count), (3, 3));
+    for (artist, romanized) in contributors {
+        assert!(keys.contains(normalize_artist_key(artist).as_str()));
+        assert!(!keys.contains(normalize_artist_key(&format!("{family} • {romanized}")).as_str()));
+    }
+    assert!(keys.contains(normalize_artist_key("Alice • Bob").as_str()));
+}
+
+#[test]
 fn artist_album_keysets_cross_pages_without_omissions_or_duplicates() {
     const ALBUMS: usize = 731;
     let mut catalog = Catalog::open_in_memory(1).unwrap();
@@ -413,7 +511,9 @@ fn artist_album_keysets_cross_pages_without_omissions_or_duplicates() {
 
     let key = normalize_artist_key("Remote Guest");
     assert_eq!(
-        catalog.count_artist_albums(&key, &[source.clone()]).unwrap(),
+        catalog
+            .count_artist_albums(&key, &[source.clone()])
+            .unwrap(),
         expected_available as u64
     );
     let mut cursor = None;

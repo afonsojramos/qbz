@@ -8,9 +8,9 @@ use tempfile::tempdir;
 
 use crate::{
     bootstrap_legacy_caches, bootstrap_legacy_caches_at_with_progress, ActiveCatalog,
-    BootstrapBatch, BootstrapLayout, BootstrapOutcome, Catalog, CatalogError, FallbackReason,
-    LegacyLocations, PreflightReport, ProjectedTrack, QueryDescriptor, SourceKey, SourceKind,
-    SourceProbe, TrackRef, BOOTSTRAP_BATCH_ROWS,
+    BootstrapBatch, BootstrapLayout, BootstrapManifest, BootstrapOutcome, Catalog, CatalogError,
+    FallbackReason, LegacyLocations, PreflightReport, ProjectedTrack, QueryDescriptor, SourceKey,
+    SourceKind, SourceProbe, TrackRef, BOOTSTRAP_BATCH_ROWS, SCHEMA_VERSION,
 };
 
 fn source(kind: SourceKind, instance: &str) -> SourceKey {
@@ -355,6 +355,44 @@ fn legacy_fixture_bootstraps_all_sources_read_only_and_is_idempotent() {
         }
     ));
     assert!(!BootstrapLayout::new(temp.path()).building_path(2).exists());
+}
+
+#[test]
+fn obsolete_catalog_schema_rebuilds_side_by_side_without_touching_sources() {
+    let temp = tempdir().unwrap();
+    let source_path = temp.path().join("library.db");
+    create_local_fixture(&source_path);
+    let source_bytes = fs::metadata(&source_path).unwrap().len();
+    let layout = BootstrapLayout::new(temp.path());
+    let obsolete_generation = 4;
+    let obsolete_bytes = b"obsolete derived catalog";
+    fs::write(layout.generation_path(obsolete_generation), obsolete_bytes).unwrap();
+    layout
+        .write_manifest(&BootstrapManifest {
+            manifest_version: 1,
+            schema_version: SCHEMA_VERSION - 1,
+            active_generation: obsolete_generation,
+            previous_generation: None,
+            activated_at_unix_ms: 1,
+        })
+        .unwrap();
+
+    let outcome = bootstrap_legacy_caches(temp.path(), &AtomicBool::new(false)).unwrap();
+    assert!(matches!(
+        outcome,
+        BootstrapOutcome::Activated {
+            generation: 5,
+            track_count: 2,
+            ..
+        }
+    ));
+    assert_eq!(fs::read(layout.generation_path(4)).unwrap(), obsolete_bytes);
+    assert_eq!(fs::metadata(source_path).unwrap().len(), source_bytes);
+    let ActiveCatalog::Ready { catalog, manifest } = layout.open_active() else {
+        panic!("rebuilt catalog did not activate")
+    };
+    assert_eq!(manifest.schema_version, SCHEMA_VERSION);
+    assert_eq!(catalog.stats().unwrap().track_count, 2);
 }
 
 #[test]
