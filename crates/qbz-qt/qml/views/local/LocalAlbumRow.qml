@@ -167,31 +167,34 @@ Rectangle {
         }
         Item {
             visible: root.showSource
-            width: visible ? 34 : 0
+            readonly property var sourceValues: root.item.sources
+                && root.item.sources.length > 0
+                ? root.item.sources
+                : ((root.item.sourceRaw || root.item.source || "") !== ""
+                   ? [root.item.sourceRaw || root.item.source] : [])
+            width: visible ? Math.max(34, sourceIcons.implicitWidth) : 0
             height: parent.height
             // AlbumListRow.slint:308-322 — through controls/SourceIcon.qml,
             // never QbzIcon: the Plex and Qobuz marks are MULTI-COLOUR and a
             // tint flattens them to a silhouette. This row used to draw an
             // accent-tinted `hard-drive` for Plex (a blue hard drive) and
             // `cloud-download` for an offline copy.
-            SourceIcon {
-                visible: (root.item.source || "") !== ""
-                // `sourceRaw` FIRST (contract §D.1): it carries
-                // `qobuz_purchase`, which `source` folds into "offline" for the
-                // benefit of the source chips. Without this the LIST mode of
-                // the very same album loses the gold mark the GRID shows.
-                kind: root.item.sourceRaw || root.item.source || ""
-                // A dense ROW: the media marks draw monochrome and tinted, like the
-                // hard-drive beside them. Colour logos are for cards — a list of
-                // them fights the text it labels.
-                mono: true
-                // .slint:319 — local 15, the marks 16; muted local tint.
-                glyphSize: 15
-                plexSize: 16
-                qobuzSize: 16
-                localTint: "muted"
-                x: 0                                    // .slint:321
+            Row {
+                id: sourceIcons
+                spacing: 3
                 anchors.verticalCenter: parent.verticalCenter
+                Repeater {
+                    model: sourceIcons.parent.sourceValues
+                    delegate: SourceIcon {
+                        required property string modelData
+                        kind: modelData
+                        mono: true
+                        glyphSize: 15
+                        plexSize: 16
+                        qobuzSize: 16
+                        localTint: "muted"
+                    }
+                }
             }
         }
         // Trailing ⋯ overflow (AlbumListRow.slint:360).

@@ -143,6 +143,10 @@ pub struct LocalState {
     /// Album identity ("folder" | "metadata") — persisted (locallibrary_ui).
     pub album_mode: String,
     pub counts: LocalCounts,
+    /// Synthetic logical album id -> strongly-associated authoritative album
+    /// ids. Rebuilt with each Albums query; never persisted and therefore
+    /// reversible when source evidence changes.
+    pub album_version_ids: HashMap<String, Vec<String>>,
     /// The OPEN local album's group key ("" when nothing is open).
     pub album_id: String,
     /// The OPEN album's VERSIONS — (source-directory key, its tracks). A

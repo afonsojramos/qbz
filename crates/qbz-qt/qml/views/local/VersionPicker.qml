@@ -15,7 +15,7 @@ import "../../theme"
 Rectangle {
     id: root
 
-    /// [{ label, source }]
+    /// [{ version, trackCount, quality, source }]
     property var versions: []
     property int current: 0
     signal picked(int index)
@@ -23,6 +23,17 @@ Rectangle {
     QbzTheme { id: theme }
 
     readonly property var currentVersion: versions[current] || ({})
+
+    function optionText(version) {
+        var parts = []
+        if ((version.version || "") !== "")
+            parts.push(version.version)
+        parts.push((version.trackCount || 0) + " "
+                   + QbzSession.tr("tracks", QbzSession.trRev))
+        if ((version.quality || "") !== "")
+            parts.push(version.quality)
+        return parts.join(" · ")
+    }
 
     height: 30
     width: row.width
@@ -48,7 +59,7 @@ Rectangle {
         }
         Text {
             anchors.verticalCenter: parent.verticalCenter
-            text: root.currentVersion.label || ""
+            text: root.optionText(root.currentVersion)
             color: theme.textSecondary
             font.pixelSize: theme.fontLegal
         }
@@ -70,7 +81,7 @@ Rectangle {
 
     QbzContextMenu {
         id: menu
-        menuWidth: 280
+        menuWidth: 380
         Repeater {
             model: root.versions
             delegate: Rectangle {
@@ -95,7 +106,7 @@ Rectangle {
                     Text {
                         width: parent.width - 22 - (opt.index === root.current ? 20 : 0)
                         height: parent.height
-                        text: opt.modelData.label || ""
+                        text: root.optionText(opt.modelData)
                         color: theme.textPrimary
                         font.pixelSize: theme.fontLegal
                         verticalAlignment: Text.AlignVCenter

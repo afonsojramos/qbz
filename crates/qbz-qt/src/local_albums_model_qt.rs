@@ -1041,6 +1041,7 @@ fn map_album(record: &AlbumRecord, index: usize) -> NativeAlbum {
             format: record.format.to_ascii_uppercase(),
             art_key,
             source: badge_source(Some(record.source_raw_or_kind())),
+            sources: vec![badge_source(Some(record.source_raw_or_kind()))],
             source_raw: badge_source_raw(Some(record.source_raw_or_kind())),
             directory_path: record.directory_path.clone(),
             folder_count: record.folder_count,

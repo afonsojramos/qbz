@@ -30,7 +30,7 @@ use std::sync::Arc;
 use cxx_qt_lib::QString;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
-use qbz_library::LocalTrack;
+use qbz_library::{AudioFormat, LocalTrack};
 use qbz_models::QueueTrack;
 use serde::Serialize;
 
@@ -50,11 +50,15 @@ type Runtime = Arc<AppRuntime<LoggingAdapter>>;
 
 /// One selectable physical copy — the Slint's `LocalAlbumVersion`
 /// (album/LocalAlbumView.slint:42), consumed by
-/// `qml/views/local/VersionPicker.qml` as `{ label, source }`.
+/// `qml/views/local/VersionPicker.qml`.
 #[derive(Clone, Default, Serialize)]
 pub struct AlbumVersion {
+    /// "Remastered", "Deluxe Edition", … when metadata makes it inferable.
+    pub version: String,
+    #[serde(rename = "trackCount")]
+    pub track_count: u32,
     /// "24-bit / 96 kHz · FLAC" (quality + container).
-    pub label: String,
+    pub quality: String,
     /// RAW `local_tracks.source` ("" | "qobuz_download" | "qobuz_purchase" |
     /// "plex") — `SourceIcon.qml` keys its glyph/tint off exactly these.
     pub source: String,
@@ -116,8 +120,30 @@ pub struct AlbumDetailDoc {
 // ---------------------------------------------------------------------------
 
 /// Quality rank for ordering versions (hi-res first).
-fn version_rank(t: &LocalTrack) -> (u32, u64) {
-    (t.bit_depth.unwrap_or(0), t.sample_rate as u64)
+fn version_rank(t: &LocalTrack) -> (u8, u32, u64) {
+    let lossless = matches!(
+        t.format,
+        AudioFormat::Flac
+            | AudioFormat::Alac
+            | AudioFormat::Wav
+            | AudioFormat::Aiff
+            | AudioFormat::Ape
+            | AudioFormat::Dsd
+    );
+    let sample_rate = t.sample_rate.max(0.0) as u64;
+    let depth = t.bit_depth.unwrap_or(0);
+    let tier = if t.format == AudioFormat::Dsd
+        || (lossless && (depth > 16 || sample_rate > 48_000))
+    {
+        3
+    } else if lossless {
+        2
+    } else if t.format != AudioFormat::Unknown {
+        1
+    } else {
+        0
+    };
+    (tier, depth, sample_rate)
 }
 
 /// Group the album's tracks by SOURCE DIRECTORY, sort each copy by
@@ -143,26 +169,36 @@ pub fn split_versions(tracks: Vec<LocalTrack>) -> Vec<(String, Vec<LocalTrack>)>
         })
         .collect();
     versions.sort_by(|a, b| {
-        let qa = a.1.iter().map(version_rank).max().unwrap_or((0, 0));
-        let qb = b.1.iter().map(version_rank).max().unwrap_or((0, 0));
+        let qa = a.1.iter().map(version_rank).max().unwrap_or((0, 0, 0));
+        let qb = b.1.iter().map(version_rank).max().unwrap_or((0, 0, 0));
         qb.cmp(&qa)
+            .then_with(|| b.1.len().cmp(&a.1.len()))
+            .then_with(|| a.0.cmp(&b.0))
     });
     versions
 }
 
 /// A version's picker entry (`version_label` + `version_source` 1:1).
 fn version_info(tracks: &[LocalTrack]) -> AlbumVersion {
-    match tracks.first() {
+    match tracks.iter().max_by_key(|track| version_rank(track)) {
         Some(t) => {
-            let detail = crate::home_qt::quality_detail_from_parts(t.bit_depth, Some(t.sample_rate));
+            let detail =
+                crate::home_qt::quality_detail_from_parts(t.bit_depth, Some(t.sample_rate));
             let fmt = t.format.to_string();
+            let raw_source = badge_source_raw(t.source.as_deref());
             AlbumVersion {
-                label: if detail.is_empty() {
+                version: crate::local_albums::edition_descriptor(&t.album_group_title),
+                track_count: tracks.len() as u32,
+                quality: if detail.is_empty() {
                     fmt
                 } else {
                     format!("{detail} · {fmt}")
                 },
-                source: t.source.clone().unwrap_or_default(),
+                source: if raw_source.is_empty() {
+                    badge_source(t.source.as_deref())
+                } else {
+                    raw_source
+                },
             }
         }
         None => AlbumVersion::default(),
@@ -333,6 +369,26 @@ fn album_header(id: &str, tracks: &[LocalTrack]) -> AlbumRow {
         format: best.format.to_string(),
         art_key: album_key(id),
         source: badge_source(first.source.as_deref()),
+        sources: card.as_ref().map(|c| c.sources.clone()).unwrap_or_else(|| {
+            let mut values = Vec::new();
+            for track in state(|s| {
+                s.album_versions
+                    .iter()
+                    .filter_map(|(_, tracks)| tracks.first().cloned())
+                    .collect::<Vec<_>>()
+            }) {
+                let raw = badge_source_raw(track.source.as_deref());
+                let source = if raw.is_empty() {
+                    badge_source(track.source.as_deref())
+                } else {
+                    raw
+                };
+                if !values.contains(&source) {
+                    values.push(source);
+                }
+            }
+            values
+        }),
         source_raw: badge_source_raw(first.source.as_deref()),
         directory_path: card.as_ref().map(|c| c.directory_path.clone()).unwrap_or_default(),
         folder_count: card.map(|c| c.folder_count).unwrap_or(0),
@@ -615,4 +671,61 @@ async fn enqueue_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, mode: &str) {
         _ => runtime.core().add_tracks(queue).await,
     }
     crate::playback_qt::publish_queue(runtime).await;
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    fn copy(key: &str, source: &str, title: &str, count: usize, depth: u32) -> Vec<LocalTrack> {
+        (0..count)
+            .map(|index| LocalTrack {
+                id: index as i64 + 1,
+                file_path: format!("{key}/{index}.flac"),
+                title: format!("Track {index}"),
+                artist: "Artist".to_string(),
+                album: title.to_string(),
+                album_artist: Some("Artist".to_string()),
+                album_group_key: key.to_string(),
+                album_group_title: title.to_string(),
+                track_number: Some(index as u32 + 1),
+                disc_number: Some(1),
+                format: AudioFormat::Flac,
+                bit_depth: Some(depth),
+                sample_rate: if depth > 16 { 96_000.0 } else { 44_100.0 },
+                source: Some(source.to_string()),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn versions_sort_by_quality_then_track_count_and_stay_distinct() {
+        let mut tracks = copy("cd-short", "plex", "Album", 10, 16);
+        tracks.extend(copy(
+            "hires-short",
+            "jellyfin",
+            "Album (2012 Remaster)",
+            9,
+            24,
+        ));
+        tracks.extend(copy(
+            "hires-deluxe",
+            "subsonic",
+            "Album - Deluxe Edition",
+            12,
+            24,
+        ));
+        let versions = split_versions(tracks);
+        assert_eq!(versions.len(), 3);
+        assert_eq!(versions[0].0, "hires-deluxe");
+        assert_eq!(versions[1].0, "hires-short");
+        assert_eq!(versions[2].0, "cd-short");
+
+        let info = version_info(&versions[0].1);
+        assert_eq!(info.version, "Deluxe Edition");
+        assert_eq!(info.track_count, 12);
+        assert_eq!(info.source, "subsonic");
+        assert!(info.quality.contains("FLAC"));
+    }
 }

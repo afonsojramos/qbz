@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use qbz_library::album_grouping::AlbumGroupMode;
-use qbz_library::LocalTrack;
+use qbz_library::{AlbumTrackEvidence, AudioFormat, LocalAlbum, LocalTrack};
 
 use crate::local_album_actions::AlbumDetailDoc;
 use crate::local_artist_match::{
@@ -67,8 +67,11 @@ pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
     })
     .ok_or_else(|| "local library not available".to_string())?;
     let t_sql = t0.elapsed();
-    let total = page.total;
-    let albums = page.albums;
+    let identity_started = std::time::Instant::now();
+    let source_album_count = page.albums.len();
+    let (albums, version_ids) = coalesce_album_versions(page.albums);
+    let t_identity = identity_started.elapsed();
+    let total = albums.len() as u64;
     let n = albums.len();
     let t1 = std::time::Instant::now();
     let rows = with_art(|art| {
@@ -78,7 +81,7 @@ pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
             .collect::<Vec<AlbumRow>>()
     });
     log::info!(
-        "[qbz-qt][perf] albums load: {n} rows — sql {t_sql:?}, map {:?} (plex={} remote={:?})",
+        "[qbz-qt][perf] albums load: {source_album_count} source rows -> {n} logical rows — sql {t_sql:?}, identity {t_identity:?}, map {:?} (plex={} remote={:?})",
         t1.elapsed(),
         plex_path.is_some(),
         remote_words,
@@ -86,8 +89,265 @@ pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
     state(|s| {
         s.counts.albums = total as i64;
         s.albums = rows.clone();
+        s.album_version_ids = version_ids;
     });
     Ok(rows)
+}
+
+/// Fold source copies into one visible album only when their content strongly
+/// agrees. Title/artist merely form a candidate bucket; the actual authority
+/// is an at-least-80% one-to-one track-title + duration overlap (or the one
+/// track itself for a single). The map is ephemeral and rebuilt from the
+/// authoritative caches, so a later correction can split an association.
+fn coalesce_album_versions(
+    mut albums: Vec<LocalAlbum>,
+) -> (Vec<LocalAlbum>, HashMap<String, Vec<String>>) {
+    albums.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut buckets = std::collections::BTreeMap::<String, Vec<LocalAlbum>>::new();
+    let mut singles = Vec::new();
+    for mut album in albums {
+        album.sources.sort_by(|left, right| {
+            source_order(left)
+                .cmp(&source_order(right))
+                .then_with(|| left.cmp(right))
+        });
+        album.sources.dedup();
+        let title = logical_title(&album.title);
+        let artist = normalize_artist(&album.artist);
+        if title.is_empty()
+            || artist.is_empty()
+            || title == "unknown album"
+            || artist == "unknown artist"
+            || album.identity_tracks.is_empty()
+        {
+            singles.push(album);
+        } else {
+            buckets
+                .entry(format!("{artist}\u{1f}{title}"))
+                .or_default()
+                .push(album);
+        }
+    }
+
+    let mut groups = Vec::<Vec<LocalAlbum>>::new();
+    for bucket in buckets.into_values() {
+        let mut bucket_groups = Vec::<Vec<LocalAlbum>>::new();
+        for album in bucket {
+            if let Some(group) = bucket_groups
+                .iter_mut()
+                .find(|group| group.iter().all(|other| copies_match(other, &album)))
+            {
+                group.push(album);
+            } else {
+                bucket_groups.push(vec![album]);
+            }
+        }
+        groups.extend(bucket_groups);
+    }
+    groups.extend(singles.into_iter().map(|album| vec![album]));
+
+    let mut version_ids = HashMap::new();
+    let mut merged = groups
+        .into_iter()
+        .map(|mut group| {
+            group.sort_by(|left, right| {
+                album_quality_rank(right)
+                    .cmp(&album_quality_rank(left))
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+            let ids = group
+                .iter()
+                .map(|album| album.id.clone())
+                .collect::<Vec<_>>();
+            let mut representative = group.remove(0);
+            if !group.is_empty() {
+                let logical_id = logical_album_id(&ids);
+                let mut source_words = std::iter::once(&representative)
+                    .chain(group.iter())
+                    .flat_map(|album| {
+                        if album.sources.is_empty() {
+                            vec![album.source.clone()]
+                        } else {
+                            album.sources.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                source_words.sort_by(|left, right| {
+                    source_order(left)
+                        .cmp(&source_order(right))
+                        .then_with(|| left.cmp(right))
+                });
+                source_words.dedup();
+                representative.sources = source_words;
+                if let Some(plain_title) = std::iter::once(&representative)
+                    .chain(group.iter())
+                    .filter(|album| edition_descriptor(&album.title).is_empty())
+                    .map(|album| album.title.clone())
+                    .min_by_key(String::len)
+                {
+                    representative.title = plain_title;
+                }
+                representative.id = logical_id.clone();
+                version_ids.insert(logical_id, ids);
+            } else if representative.sources.is_empty() {
+                representative.sources.push(representative.source.clone());
+            }
+            representative
+        })
+        .collect::<Vec<_>>();
+    merged.sort_by(|left, right| {
+        normalize_artist(&left.artist)
+            .cmp(&normalize_artist(&right.artist))
+            .then_with(|| logical_title(&left.title).cmp(&logical_title(&right.title)))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    (merged, version_ids)
+}
+
+fn album_quality_rank(album: &LocalAlbum) -> (u8, u32, u64, u32) {
+    let lossless = matches!(
+        album.format,
+        AudioFormat::Flac
+            | AudioFormat::Alac
+            | AudioFormat::Wav
+            | AudioFormat::Aiff
+            | AudioFormat::Ape
+            | AudioFormat::Dsd
+    );
+    let sample_rate = album.sample_rate.max(0.0) as u64;
+    let depth = album.bit_depth.unwrap_or(0);
+    let tier =
+        if album.format == AudioFormat::Dsd || (lossless && (depth > 16 || sample_rate > 48_000)) {
+            3
+        } else if lossless {
+            2
+        } else if album.format != AudioFormat::Unknown {
+            1
+        } else {
+            0
+        };
+    (tier, depth, sample_rate, album.track_count)
+}
+
+fn source_order(source: &str) -> u8 {
+    match source {
+        "user" | "local" => 0,
+        "qobuz_purchase" | "qobuz_download" | "offline" => 1,
+        "plex" => 2,
+        "jellyfin" => 3,
+        "subsonic" | "navidrome" | "gonic" | "airsonic" | "astiga" => 4,
+        _ => 5,
+    }
+}
+
+fn logical_album_id(ids: &[String]) -> String {
+    // Deterministic FNV-1a over length-delimited source-native ids. The full
+    // id vector remains in LocalState and is what resolves the click.
+    let mut hash = 0xcbf29ce484222325_u64;
+    let mut sorted = ids.to_vec();
+    sorted.sort();
+    for id in sorted {
+        for byte in (id.len() as u64)
+            .to_le_bytes()
+            .into_iter()
+            .chain(id.bytes())
+        {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("logical:{hash:016x}")
+}
+
+fn copies_match(left: &LocalAlbum, right: &LocalAlbum) -> bool {
+    let smaller = left.identity_tracks.len().min(right.identity_tracks.len());
+    if smaller == 0 {
+        return false;
+    }
+    let matched = track_overlap(&left.identity_tracks, &right.identity_tracks);
+    let required = if smaller == 1 {
+        1
+    } else {
+        3.min(smaller).max((smaller * 4 + 4) / 5)
+    };
+    matched >= required
+}
+
+fn track_overlap(left: &[AlbumTrackEvidence], right: &[AlbumTrackEvidence]) -> usize {
+    let mut used = vec![false; right.len()];
+    let mut matched = 0;
+    for candidate in left {
+        let title = logical_title(&candidate.title);
+        if title.is_empty() {
+            continue;
+        }
+        if let Some((index, _)) = right.iter().enumerate().find(|(index, other)| {
+            !used[*index]
+                && logical_title(&other.title) == title
+                && candidate.duration_secs.abs_diff(other.duration_secs) <= 5
+        }) {
+            used[index] = true;
+            matched += 1;
+        }
+    }
+    matched
+}
+
+fn logical_title(value: &str) -> String {
+    normalize_artist(strip_edition_suffix(value))
+}
+
+pub(crate) fn edition_descriptor(value: &str) -> String {
+    let trimmed = value.trim();
+    let stripped = strip_edition_suffix(trimmed).trim();
+    if stripped.len() == trimmed.len() {
+        String::new()
+    } else {
+        trimmed[stripped.len()..]
+            .trim_matches(|ch: char| ch.is_whitespace() || "-–—()[]{}".contains(ch))
+            .trim()
+            .to_string()
+    }
+}
+
+fn strip_edition_suffix(value: &str) -> &str {
+    const MARKERS: [&str; 15] = [
+        "remaster",
+        "deluxe",
+        "expanded",
+        "anniversary",
+        "edition",
+        "reissue",
+        "re-release",
+        "mix",
+        "version",
+        "mono",
+        "stereo",
+        "sacd",
+        "bonus",
+        "legacy",
+        "collector",
+    ];
+    let marked = |tail: &str| MARKERS.iter().any(|marker| tail.contains(marker));
+    if let Some(start) = value
+        .char_indices()
+        .rev()
+        .find(|(index, ch)| {
+            matches!(*ch, '(' | '[' | '{')
+                && marked(&value[*index + ch.len_utf8()..].to_lowercase())
+        })
+        .map(|(index, _)| index)
+    {
+        return value[..start].trim_end();
+    }
+    for separator in [" - ", " – ", " — "] {
+        if let Some(index) = value.rfind(separator) {
+            if marked(&value[index + separator.len()..].to_lowercase()) {
+                return value[..index].trim_end();
+            }
+        }
+    }
+    value.trim()
 }
 
 /// Folders tab, FLAT mode: the album grid grouped by DIRECTORY. Local-only
@@ -551,6 +811,17 @@ pub fn load_counts_blocking() -> LocalCounts {
 /// or native edition key, else the ACTIVE identity mode's query against
 /// `library.db`.
 pub fn fetch_album_tracks_blocking(id: &str) -> Vec<LocalTrack> {
+    let version_ids = state(|s| s.album_version_ids.get(id).cloned());
+    if let Some(version_ids) = version_ids {
+        return version_ids
+            .into_iter()
+            .flat_map(|version_id| fetch_source_album_tracks_blocking(&version_id))
+            .collect();
+    }
+    fetch_source_album_tracks_blocking(id)
+}
+
+fn fetch_source_album_tracks_blocking(id: &str) -> Vec<LocalTrack> {
     if id.starts_with("plex:") {
         return crate::local_plex::album_tracks(id);
     }
@@ -1007,5 +1278,135 @@ mod phase_a_tests {
             after.published.jellyfin,
             after.published.subsonic,
         );
+    }
+
+    fn album_copy(
+        id: &str,
+        source: &str,
+        title: &str,
+        tracks: &[(&str, u64)],
+        bit_depth: u32,
+        sample_rate: f64,
+    ) -> LocalAlbum {
+        LocalAlbum {
+            id: id.to_string(),
+            title: title.to_string(),
+            artist: "Talk Talk".to_string(),
+            all_artists: "Talk Talk".to_string(),
+            year: Some(1988),
+            catalog_number: None,
+            artwork_path: None,
+            track_count: tracks.len() as u32,
+            total_duration_secs: tracks.iter().map(|(_, duration)| duration).sum(),
+            format: AudioFormat::Flac,
+            bit_depth: Some(bit_depth),
+            sample_rate,
+            directory_path: String::new(),
+            source_folders: None,
+            source: source.to_string(),
+            sources: vec![source.to_string()],
+            identity_tracks: tracks
+                .iter()
+                .map(|(title, duration_secs)| AlbumTrackEvidence {
+                    title: (*title).to_string(),
+                    duration_secs: *duration_secs,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn album_copies_require_content_evidence_and_keep_every_source() {
+        let tracks = [
+            ("The Rainbow", 568),
+            ("Eden", 421),
+            ("Desire", 439),
+            ("Inheritance", 341),
+        ];
+        let local = album_copy(
+            "eden|talk talk",
+            "user",
+            "Spirit of Eden",
+            &tracks,
+            16,
+            44_100.0,
+        );
+        let plex = album_copy(
+            "plex:eden",
+            "plex",
+            "Spirit of Eden (2012 Remaster)",
+            &tracks,
+            24,
+            96_000.0,
+        );
+        let (rows, ids) = coalesce_album_versions(vec![local, plex]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source, "plex");
+        assert_eq!(rows[0].sources, vec!["user", "plex"]);
+        assert_eq!(ids.get(&rows[0].id).map(Vec::len), Some(2));
+
+        let unrelated = album_copy(
+            "subsonic:other",
+            "subsonic",
+            "Spirit of Eden",
+            &[("Completely Different", 568), ("Still Different", 421)],
+            24,
+            96_000.0,
+        );
+        let (rows, _) = coalesce_album_versions(vec![rows[0].clone(), unrelated]);
+        assert_eq!(rows.len(), 2, "title and artist alone must never merge");
+    }
+
+    #[test]
+    fn album_copy_matching_allows_bonus_tracks_but_not_one_shared_compilation_track() {
+        let base = [
+            ("One", 201),
+            ("Two", 202),
+            ("Three", 203),
+            ("Four", 204),
+            ("Five", 205),
+        ];
+        let mut deluxe = base.to_vec();
+        deluxe.push(("Bonus A", 180));
+        deluxe.push(("Bonus B", 181));
+        assert!(copies_match(
+            &album_copy("a", "user", "Album", &base, 16, 44_100.0),
+            &album_copy(
+                "b",
+                "jellyfin",
+                "Album (Deluxe Edition)",
+                &deluxe,
+                16,
+                44_100.0
+            )
+        ));
+        assert!(!copies_match(
+            &album_copy("a", "user", "Album", &base, 16, 44_100.0),
+            &album_copy(
+                "c",
+                "subsonic",
+                "Album",
+                &[("One", 201), ("Else", 202), ("Other", 203), ("Nope", 204)],
+                16,
+                44_100.0,
+            )
+        ));
+    }
+
+    #[test]
+    fn edition_suffix_inference_is_deliberately_narrow() {
+        assert_eq!(
+            logical_title("Spirit of Eden (2012 Remaster)"),
+            "spirit of eden"
+        );
+        assert_eq!(
+            edition_descriptor("Spirit of Eden (2012 Remaster)"),
+            "2012 Remaster"
+        );
+        assert_eq!(
+            edition_descriptor("Album - Deluxe Edition"),
+            "Deluxe Edition"
+        );
+        assert_eq!(edition_descriptor("Album (Live at Montreux)"), "");
     }
 }

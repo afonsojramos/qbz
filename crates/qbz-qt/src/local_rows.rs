@@ -53,6 +53,10 @@ pub struct AlbumRow {
     pub art_key: String,
     /// "local" | "offline" | "plex" (the source badge).
     pub source: String,
+    /// Every physical source represented by this logical album. Values stay
+    /// in the raw badge vocabulary so a Qobuz purchase keeps its gold mark.
+    #[serde(default)]
+    pub sources: Vec<String>,
     /// `"qobuz_purchase"`, or empty (omitted from the JSON). See the module
     /// header: the badge prefers this, every filter keeps reading `source`.
     #[serde(rename = "sourceRaw", skip_serializing_if = "String::is_empty")]
@@ -411,6 +415,28 @@ pub fn map_album(a: LocalAlbum, art: &mut HashMap<String, (SourceId, String)>) -
         .as_deref()
         .map(|s| s.split(',').filter(|x| !x.trim().is_empty()).count() as u32)
         .unwrap_or(0);
+    let source = badge_source(Some(a.source.as_str()));
+    let source_raw = badge_source_raw(Some(a.source.as_str()));
+    let mut sources = if a.sources.is_empty() {
+        vec![if source_raw.is_empty() {
+            source.clone()
+        } else {
+            source_raw.clone()
+        }]
+    } else {
+        a.sources
+            .iter()
+            .map(|value| {
+                let raw = badge_source_raw(Some(value));
+                if raw.is_empty() {
+                    badge_source(Some(value))
+                } else {
+                    raw
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    sources.dedup();
     AlbumRow {
         quality_tier: tier_of(&a.format, a.bit_depth, a.sample_rate).into(),
         quality_detail: detail_of(&a.format, a.bit_depth, a.sample_rate),
@@ -419,8 +445,9 @@ pub fn map_album(a: LocalAlbum, art: &mut HashMap<String, (SourceId, String)>) -
         duration: total_duration(a.total_duration_secs),
         track_count: a.track_count,
         art_key: key,
-        source: badge_source(Some(a.source.as_str())),
-        source_raw: badge_source_raw(Some(a.source.as_str())),
+        source,
+        sources,
+        source_raw,
         directory_path: a.directory_path,
         all_artists: a.all_artists,
         folder_count,

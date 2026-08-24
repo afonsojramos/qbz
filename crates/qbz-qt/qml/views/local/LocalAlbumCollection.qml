@@ -103,7 +103,8 @@ Item {
     /// churn the constant cell count removed.
     readonly property var emptySlot: ({
         "id": "", "title": "", "artist": "", "year": "",
-        "qualityTier": "", "artKey": "", "source": "", "sourceRaw": ""
+        "qualityTier": "", "artKey": "", "source": "", "sourceRaw": "",
+        "sources": []
     })
 
     // ---------------------------------------------------------------------
@@ -496,6 +497,7 @@ Item {
                                 // about the same album.
                                 source: cardCell.slot.sourceRaw
                                     || cardCell.slot.source
+                                sources: cardCell.slot.sources || []
                                 showSourceBadge: root.showSource
                                 // SELECT MODE IS THE CARD'S (AlbumCard's
                                 // `selectMode`/`selected`/`selectToggled`, the

@@ -72,6 +72,11 @@ Rectangle {
     // (AlbumCard.slint:434 keeps the entry off local/plex rows). Hosts that
     // want the badge hidden set `showSourceBadge`, never `source: ""`.
     property string source: ""
+    // Local Library logical albums can have one physical copy on several
+    // sources. Other hosts leave this empty and retain the scalar badge.
+    property var sources: []
+    readonly property var badgeSources: root.sources && root.sources.length > 0
+        ? root.sources : (root.source !== "" ? [root.source] : [])
     /// Source words that mean "this album does not live in the Qobuz catalog".
     /// Same fold as `SourceIcon.isSubsonic`: a row stamped with a Subsonic
     /// BRAND is still a server row, so it must not be offered a catalog-only
@@ -620,40 +625,39 @@ Rectangle {
             // `hard-drive` for Plex — a blue hard drive where the design calls
             // for the Plex mark.
             Rectangle {
-                visible: root.showSourceBadge && root.source !== ""
+                visible: root.showSourceBadge && root.badgeSources.length > 0
                 x: parent.width - width - 6
                 y: parent.height - height - 6
-                width: 24
+                width: sourceBadgeRow.implicitWidth
                 height: 24
-                radius: 4
-                // .slint:335-338. Slint literals are #RRGGBBAA, Qt's are
-                // #AARRGGBB: #1e1400d9 -> #d91e1400, #000000b3 -> #b3000000,
-                // #eab30880 -> #80eab308.
-                //   qobuz_purchase -> §8.7 gold chip (dark-amber translucent
-                //                     fill + 1px gold border)
-                //   qobuz_download -> no chip at all (the wordmark stands
-                //                     alone at 22px)
-                //   everything else -> the near-black chip.
-                color: root.source === "qobuz_purchase" ? "#d91e1400"
-                     : (root.source === "offline" ? "transparent" : "#b3000000")
-                border.width: root.source === "qobuz_purchase" ? 1 : 0
-                border.color: "#80eab308"
-                SourceIcon {
-                    kind: root.source
-                    // .slint:347-349 — one size per arm: plex 16, download 22,
-                    // qobuz/purchase 18, local 14. "offline" IS the Qt word for
-                    // `qobuz_download` (local_rows.rs `badge_source`).
-                    glyphSize: 14
-                    plexSize: 16
-                    qobuzSize: root.source === "offline" ? 22 : 18
-                    // .slint:345-346 — the monochrome glyph is #ffffff here (the
-                    // chip is dark under every theme), not the rows' muted.
-                    localTint: "white"
-                    // The .slint centres with explicit pixel rounding
-                    // (:351-352); anchors.centerIn would leave a half pixel on
-                    // the odd sizes and blur the mark.
-                    x: Math.round((parent.width - width) / 2)
-                    y: Math.round((parent.height - height) / 2)
+                color: "transparent"
+                Row {
+                    id: sourceBadgeRow
+                    height: 24
+                    spacing: 3
+                    Repeater {
+                        model: root.badgeSources
+                        delegate: Rectangle {
+                            id: sourceBadge
+                            required property string modelData
+                            width: 24
+                            height: 24
+                            radius: 4
+                            color: modelData === "qobuz_purchase" ? "#d91e1400"
+                                 : (modelData === "offline" ? "transparent" : "#b3000000")
+                            border.width: modelData === "qobuz_purchase" ? 1 : 0
+                            border.color: "#80eab308"
+                            SourceIcon {
+                                kind: sourceBadge.modelData
+                                glyphSize: 14
+                                plexSize: 16
+                                qobuzSize: sourceBadge.modelData === "offline" ? 22 : 18
+                                localTint: "white"
+                                x: Math.round((parent.width - width) / 2)
+                                y: Math.round((parent.height - height) / 2)
+                            }
+                        }
+                    }
                 }
             }
 

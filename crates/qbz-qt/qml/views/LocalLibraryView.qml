@@ -501,6 +501,16 @@ Rectangle {
 
     // Quality / format / source chips. Each SECTION is an OR within itself
     // and an AND across sections — an empty section means "any".
+    function sourceBucket(word) {
+        var source = (word || "local").toLowerCase()
+        if (source === "qobuz_purchase" || source === "qobuz_download")
+            return "offline"
+        if (source === "navidrome" || source === "gonic"
+            || source === "airsonic" || source === "astiga")
+            return "subsonic"
+        return source
+    }
+
     function applyFilter(rows) {
         if (filterCount === 0) return rows
         var qAny = filter.hires || filter.cd || filter.lossy
@@ -536,16 +546,16 @@ Rectangle {
                 // closed: Tauri's three arms never mention `qobuz_purchase`,
                 // so a raw word reaching here matches no chip and ticking ANY
                 // source filter hides every purchased album, silently.
-                var src = (r.source || "local").toLowerCase()
-                if (src === "qobuz_purchase" || src === "qobuz_download") src = "offline"
-                // Every brand spelling of a Subsonic server is ONE chip, the
-                // same fold `SourceId::from_word` applies. A row stamped
-                // "navidrome" that matched no chip would VANISH the moment any
-                // source filter was ticked — the §10-H shape above, in a new
-                // source.
-                if (src === "navidrome" || src === "gonic" || src === "airsonic"
-                    || src === "astiga") src = "subsonic"
-                if (!filter[src]) continue
+                var sources = r.sources && r.sources.length > 0
+                    ? r.sources : [r.source || "local"]
+                var sourceMatches = false
+                for (var si = 0; si < sources.length; si++) {
+                    if (filter[sourceBucket(sources[si])] === true) {
+                        sourceMatches = true
+                        break
+                    }
+                }
+                if (!sourceMatches) continue
             }
             out.push(r)
         }

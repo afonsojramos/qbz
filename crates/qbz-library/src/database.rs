@@ -1711,6 +1711,8 @@ impl LibraryDatabase {
                     source: row
                         .get::<_, Option<String>>(13)?
                         .unwrap_or_else(|| "user".to_string()),
+                    sources: Vec::new(),
+                    identity_tracks: Vec::new(),
                 })
             })
             .map_err(|e| LibraryError::Database(e.to_string()))?;
@@ -2196,6 +2198,8 @@ impl LibraryDatabase {
                     source: row
                         .get::<_, Option<String>>(13)?
                         .unwrap_or_else(|| "user".to_string()),
+                    sources: Vec::new(),
+                    identity_tracks: Vec::new(),
                 })
             })
             .map_err(|e| LibraryError::Database(e.to_string()))?;
@@ -2471,6 +2475,11 @@ impl LibraryDatabase {
                         END
                     ) AS bit_depth,
                     CAST(MAX(sampling_rate_hz) AS REAL) AS sample_rate,
+                    json_group_array(json_array(
+                        COALESCE(title, ''),
+                        CAST(COALESCE(duration_ms, 0) / 1000 AS INTEGER)
+                    )) AS identity_tracks,
+                    json_array('plex') AS source_words,
                     CAST(NULL AS TEXT) AS source_folders,
                     'plex' AS source
                 FROM plex_cache.plex_cache_tracks
@@ -2514,6 +2523,11 @@ impl LibraryDatabase {
                     COALESCE(MAX(container), MAX(codec)) AS format,
                     MAX(bit_depth) AS bit_depth,
                     CAST(MAX(sample_rate_hz) AS REAL) AS sample_rate,
+                    json_group_array(json_array(
+                        COALESCE(title, ''),
+                        CAST(COALESCE(duration_ms, 0) / 1000 AS INTEGER)
+                    )) AS identity_tracks,
+                    json_group_array(DISTINCT source) AS source_words,
                     CAST(NULL AS TEXT) AS source_folders,
                     source AS source
                 FROM remote_cache.remote_cache_tracks
@@ -2561,7 +2575,8 @@ impl LibraryDatabase {
                     sample_rate,
                     album_group_key AS source_folder,
                     COALESCE(source, 'user') AS source,
-                    artist AS track_artist
+                    artist AS track_artist,
+                    COALESCE(title, '') AS track_title
                 FROM local_tracks
                 WHERE 1=1 {source_filter} {network_filter}
             ),
@@ -2572,7 +2587,7 @@ impl LibraryDatabase {
                          THEN 'Unknown Album'
                          ELSE MIN(title)
                     END AS title,
-                    CASE WHEN COUNT(DISTINCT track_artist) > 1
+                    CASE WHEN COUNT(DISTINCT artist) > 1
                          THEN 'Various Artists'
                          ELSE MIN(artist)
                     END AS artist,
@@ -2585,6 +2600,11 @@ impl LibraryDatabase {
                     MAX(format) AS format,
                     MAX(bit_depth) AS bit_depth,
                     MAX(sample_rate) AS sample_rate,
+                    json_group_array(json_array(
+                        track_title,
+                        CAST(COALESCE(duration_secs, 0) AS INTEGER)
+                    )) AS identity_tracks,
+                    json_group_array(DISTINCT source) AS source_words,
                     GROUP_CONCAT(DISTINCT source_folder) AS source_folders,
                     MAX(source) AS source
                 FROM grouped
@@ -2597,7 +2617,7 @@ impl LibraryDatabase {
             SELECT
                 group_key, title, artist, all_artists, year, catalog_number,
                 artwork, track_count, total_duration, format, bit_depth,
-                sample_rate, source_folders, source,
+                sample_rate, identity_tracks, source_words, source_folders, source,
                 COUNT(*) OVER () AS total
             FROM filtered
             ORDER BY {order_clause}
@@ -2626,8 +2646,29 @@ impl LibraryDatabase {
                     let all_artists: String =
                         row.get::<_, Option<String>>(3)?.unwrap_or_default();
                     let artwork_path: Option<String> = row.get(6)?;
-                    let source_folders: Option<String> = row.get(12)?;
-                    let total: u64 = row.get::<_, i64>(14)? as u64;
+                    let identity_json = row
+                        .get::<_, Option<String>>(12)?
+                        .unwrap_or_else(|| "[]".to_string());
+                    let identity_tracks = serde_json::from_str::<Vec<(String, u64)>>(
+                        &identity_json,
+                    )
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(title, duration_secs)| crate::models::AlbumTrackEvidence {
+                        title,
+                        duration_secs,
+                    })
+                    .collect();
+                    let sources = serde_json::from_str::<Vec<String>>(
+                        &row.get::<_, Option<String>>(13)?
+                            .unwrap_or_else(|| "[]".to_string()),
+                    )
+                    .unwrap_or_default();
+                    let source_folders: Option<String> = row.get(14)?;
+                    let source = row
+                        .get::<_, Option<String>>(15)?
+                        .unwrap_or_else(|| "user".to_string());
+                    let total: u64 = row.get::<_, i64>(16)? as u64;
 
                     Ok((
                         LocalAlbum {
@@ -2647,9 +2688,13 @@ impl LibraryDatabase {
                             sample_rate: row.get::<_, Option<f64>>(11)?.unwrap_or(44100.0),
                             directory_path: String::new(),
                             source_folders,
-                            source: row
-                                .get::<_, Option<String>>(13)?
-                                .unwrap_or_else(|| "user".to_string()),
+                            sources: if sources.is_empty() {
+                                vec![source.clone()]
+                            } else {
+                                sources
+                            },
+                            source,
+                            identity_tracks,
                         },
                         total,
                     ))
@@ -2790,7 +2835,7 @@ impl LibraryDatabase {
                          THEN 'Unknown Album'
                          ELSE MIN(title)
                     END AS title,
-                    CASE WHEN COUNT(DISTINCT track_artist) > 1
+                    CASE WHEN COUNT(DISTINCT artist) > 1
                          THEN 'Various Artists'
                          ELSE MIN(artist)
                     END AS artist
@@ -7541,6 +7586,12 @@ mod remote_union_tests {
         assert_eq!(jf.bit_depth, Some(24));
         assert_eq!(jf.sample_rate, 96000.0);
         assert_eq!(jf.source, "jellyfin", "the row lost its source word");
+        assert_eq!(jf.sources, vec!["jellyfin"]);
+        assert_eq!(
+            jf.identity_tracks.len(),
+            2,
+            "cross-source association evidence was not published"
+        );
         // The group key is PREFIXED, which is what lets the source claim the
         // card when it comes back with no source word attached.
         assert_eq!(jf.id, "jellyfin:jf-alb");

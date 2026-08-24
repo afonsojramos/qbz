@@ -171,6 +171,23 @@ pub struct LocalAlbum {
     /// Source of the album: "user" for local files, "qobuz_download" for offline cached
     #[serde(default = "default_source")]
     pub source: String,
+    /// Distinct authoritative sources contributing physical copies to this
+    /// logical row. A legacy row has one entry; the Qt aggregation may fold
+    /// several strongly-associated copies into one card without losing their
+    /// provenance.
+    #[serde(default)]
+    pub sources: Vec<String>,
+    /// Content evidence used to associate copies conservatively across
+    /// sources. This is derived from authoritative rows on every read and is
+    /// never persisted as product identity.
+    #[serde(default)]
+    pub identity_tracks: Vec<AlbumTrackEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AlbumTrackEvidence {
+    pub title: String,
+    pub duration_secs: u64,
 }
 
 fn default_source() -> String {
