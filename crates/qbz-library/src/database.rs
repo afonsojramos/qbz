@@ -3284,6 +3284,9 @@ impl LibraryDatabase {
             "title-desc" => "title COLLATE NOCASE DESC, artist COLLATE NOCASE, id",
             "artist-asc" => "COALESCE(album_artist, artist) COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number, id",
             "artist-desc" => "COALESCE(album_artist, artist) COLLATE NOCASE DESC, album COLLATE NOCASE, disc_number, track_number, id",
+            // Internal Tracks grouping order. Group headers display the
+            // performing artist, so album_artist must not lead this query.
+            "group-artist" => "artist COLLATE NOCASE, album COLLATE NOCASE, title COLLATE NOCASE, id",
             "year-desc" => "year IS NULL, year DESC, album COLLATE NOCASE, disc_number, track_number, id",
             "year-asc" => "year IS NULL, year ASC, album COLLATE NOCASE, disc_number, track_number, id",
             "added-desc" => "indexed_at DESC, album COLLATE NOCASE, disc_number, track_number, id",
@@ -6156,6 +6159,44 @@ impl LibraryDatabase {
 
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| LibraryError::Database(format!("Failed to collect formats: {}", e)))
+    }
+}
+
+#[cfg(test)]
+mod track_page_order_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn artist_group_orders_by_the_track_artist_not_album_artist() {
+        let tmp = TempDir::new().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
+        for (path, title, artist, album_artist, album) in [
+            ("/music/zed.flac", "First", "Zed Performer", "Alpha Album Artist", "A Album"),
+            ("/music/alpha.flac", "Second", "Alpha Performer", "Zed Album Artist", "Z Album"),
+        ] {
+            let track = LocalTrack {
+                file_path: path.to_string(),
+                title: title.to_string(),
+                artist: artist.to_string(),
+                album_artist: Some(album_artist.to_string()),
+                album: album.to_string(),
+                album_group_key: path.to_string(),
+                album_group_title: album.to_string(),
+                ..Default::default()
+            };
+            db.insert_track(&track).unwrap();
+        }
+
+        let grouped = db
+            .search_with_filter_page("", 0, 10, true, false, "group-artist")
+            .unwrap();
+        assert_eq!(grouped[0].artist, "Alpha Performer");
+
+        let album_artist_sorted = db
+            .search_with_filter_page("", 0, 10, true, false, "artist-asc")
+            .unwrap();
+        assert_eq!(album_artist_sorted[0].artist, "Zed Performer");
     }
 }
 

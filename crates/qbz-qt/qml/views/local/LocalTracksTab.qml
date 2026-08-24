@@ -77,8 +77,8 @@ Item {
     function publishLegacyEntries(nextEntries, anchor, epoch) {
         var previousCount = root.entries.length
         if (root.canAppendLegacyEntries(nextEntries)) {
-            // The normal ungrouped paging path has an immutable prefix. Append
-            // only the new tail, preserving the viewport by construction.
+            // Every paged query, grouped or not, has an immutable prefix.
+            // Append only the new tail, preserving the viewport by construction.
             // Hold the request guard through the rowsInserted polish so a
             // kinetic-scroll signal cannot request a second page recursively.
             if (root.pageRequestPending)
@@ -91,7 +91,7 @@ Item {
             return
         }
 
-        // Search/sort and grouped compatibility modes can reorder the prefix.
+        // A fresh search/sort/group query can replace the whole document.
         // Rebuild rows inside the SAME ListModel object and then restore the
         // semantic anchor. This avoids QQuickItemView::setModel() even when a
         // full reconciliation is necessary.
@@ -179,10 +179,9 @@ Item {
         if (target < 0)
             return
 
-        // A grouped update can clear and refill the stable ListModel because
-        // newly fetched rows belong before the current viewport. Let those
-        // remove/insert notifications settle, then retain the exact semantic
-        // track and partial-row offset on the next event-loop turn.
+        // A non-page document replacement can still clear/refill the stable
+        // model. Let those notifications settle, then retain the exact
+        // semantic track and partial-row offset on the next event-loop turn.
         Qt.callLater(function () {
             if (epoch !== root.entriesEpoch || root.nativeModelActive)
                 return
@@ -319,12 +318,10 @@ Item {
     }
 
     // --------------------------- row play ---------------------------------
-    // PARITY-DEBT #14. Rust used to queue `state.tracks_raw` — the raw SQL
-    // page order — and find the clicked row in it, so with a group mode on
-    // (a CLIENT-side reorder, see LocalLibraryView.tracksVisible) the user
-    // heard a different order than the one on screen. The visible order only
-    // exists QML-side, so it goes down as a JSON id array and the raw rows
-    // play the part of the authoritative cache
+    // PARITY-DEBT #14. Rust used to queue `state.tracks_raw` and find the
+    // clicked row in it while QML could present another order. The visible id
+    // array still goes down explicitly, and the raw rows play the part of the
+    // authoritative cache
     // (local_playback::order_by_visible, the local twin of
     // library_qt::order_by_visible).
     //

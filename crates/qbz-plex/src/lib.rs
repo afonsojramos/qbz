@@ -1746,6 +1746,7 @@ fn plex_cache_search_tracks_page_in(
         "title-desc" => "sort_title COLLATE NOCASE DESC, sort_artist COLLATE NOCASE, rating_key",
         "artist-asc" => "sort_artist COLLATE NOCASE, sort_album COLLATE NOCASE, disc_number, track_number, rating_key",
         "artist-desc" => "sort_artist COLLATE NOCASE DESC, sort_album COLLATE NOCASE, disc_number, track_number, rating_key",
+        "group-artist" => "sort_artist COLLATE NOCASE, sort_album COLLATE NOCASE, sort_title COLLATE NOCASE, rating_key",
         "year-desc" => "year IS NULL, year DESC, sort_album COLLATE NOCASE, disc_number, track_number, rating_key",
         "year-asc" => "year IS NULL, year ASC, sort_album COLLATE NOCASE, disc_number, track_number, rating_key",
         "added-desc" => "sort_album COLLATE NOCASE, disc_number, track_number, rating_key",
@@ -3109,6 +3110,26 @@ mod tests {
         assert_eq!(year[0].rating_key, "1");
         assert_eq!(year[0].year, Some(2020));
         assert_eq!(year[1].year, None);
+    }
+
+    #[test]
+    fn plex_artist_group_orders_by_the_performing_artist() {
+        let conn = search_db(2);
+        conn.execute(
+            "UPDATE plex_cache_tracks SET artist = 'Zed Performer', album = 'A Album', title = 'First' WHERE rating_key = '1'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE plex_cache_tracks SET artist = 'Alpha Performer', album = 'Z Album', title = 'Second' WHERE rating_key = '2'",
+            [],
+        )
+        .unwrap();
+
+        let grouped =
+            plex_cache_search_tracks_page_in(&conn, "", 0, 10, "group-artist").unwrap();
+        assert_eq!(grouped[0].artist, "Alpha Performer");
+        assert_eq!(grouped[1].artist, "Zed Performer");
     }
 
     #[test]

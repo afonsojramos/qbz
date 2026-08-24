@@ -590,41 +590,11 @@ Rectangle {
         sortRows(filterRows(folders, foldersSearch), foldersSort)
     readonly property var foldersGrouped: groupRows(foldersVisible, foldersGroup)
 
-    // Legacy Tracks: search + sort are server-side and grouping remains its
-    // client-side compatibility reorder. Phase E does not evaluate this array:
-    // its immutable SQL descriptor owns search/sort/group globally and the
-    // QAbstractListModel pages only the visible window.
-    //
-    // The GROUP modes are the exception: they are a CLIENT-side visual
-    // reorder layered on top of that order (`derive_tracks`,
-    // local_library.rs:1196-1247, sorts the rows by the group key before the
-    // headers go in; commit e379aa65 calls it out as "group modes keep their
-    // client-side visual reorder on top"). Doing it here rather than inside
-    // LocalTracksTab keeps ONE definition of "the visible order" — the tab's
-    // entry model, the artwork window, select-all and the play seam all read
-    // this same array, which is what makes the queue match the screen
-    // (PARITY-DEBT #14).
-    function cmpStr(a, b) { return a < b ? -1 : a > b ? 1 : 0 }
-    readonly property var tracksVisible: {
-        var rows = tracks
-        if (tracksGroup === "off" || rows.length === 0) return rows
-        var lc = function (v) { return (v || "").toString().toLowerCase() }
-        var out = rows.slice()
-        if (tracksGroup === "album") {
-            out.sort(function (a, b) {
-                return cmpStr(lc(a.album), lc(b.album)) || cmpStr(lc(a.title), lc(b.title))
-            })
-        } else if (tracksGroup === "artist") {
-            out.sort(function (a, b) {
-                return cmpStr(lc(a.artist), lc(b.artist))
-                    || cmpStr(lc(a.album), lc(b.album))
-                    || cmpStr(lc(a.title), lc(b.title))
-            })
-        } else if (tracksGroup === "name") {
-            out.sort(function (a, b) { return cmpStr(lc(a.title), lc(b.title)) })
-        }
-        return out
-    }
+    // Legacy and native readers both publish rows in the final global group
+    // order. Keeping this as a direct alias makes every 500-row legacy page an
+    // immutable append; re-sorting the accumulated JSON here moved the current
+    // track hundreds of indices whenever a later page belonged ahead of it.
+    readonly property var tracksVisible: tracks
 
     readonly property var artistsVisible: {
         if (QbzLocal.localArtistsNativeActive && activeTab === "artists") return []

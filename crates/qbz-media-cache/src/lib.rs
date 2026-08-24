@@ -989,6 +989,7 @@ pub fn search_page(
         "title-desc" => "title COLLATE NOCASE DESC, artist COLLATE NOCASE, id",
         "artist-asc" => "COALESCE(NULLIF(album_artist, ''), artist) COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number, id",
         "artist-desc" => "COALESCE(NULLIF(album_artist, ''), artist) COLLATE NOCASE DESC, album COLLATE NOCASE, disc_number, track_number, id",
+        "group-artist" => "artist COLLATE NOCASE, album COLLATE NOCASE, title COLLATE NOCASE, id",
         "year-desc" => "year IS NULL, year DESC, album COLLATE NOCASE, disc_number, track_number, id",
         "year-asc" => "year IS NULL, year ASC, album COLLATE NOCASE, disc_number, track_number, id",
         // These rows currently map to LocalTrack with indexed_at=0.
@@ -1354,6 +1355,33 @@ mod tests {
         }
         assert_eq!(ids.len(), 1_201);
         assert_eq!(offset, 1_201);
+    }
+
+    #[test]
+    fn remote_artist_group_uses_the_performing_artist() {
+        let mut c = db();
+        let mut zed = track("zed", "A Album", Some(1), Some(1));
+        zed.artist = "Zed Performer".into();
+        zed.album_artist = "Alpha Album Artist".into();
+        let mut alpha = track("alpha", "Z Album", Some(1), Some(1));
+        alpha.artist = "Alpha Performer".into();
+        alpha.album_artist = "Zed Album Artist".into();
+        save_tracks(&mut c, RemoteSource::Jellyfin, &[zed, alpha]).unwrap();
+
+        let grouped = search_page(
+            &c,
+            RemoteSource::Jellyfin,
+            "",
+            0,
+            10,
+            "group-artist",
+        )
+        .unwrap();
+        assert_eq!(grouped[0].artist, "Alpha Performer");
+
+        let album_artist_sorted =
+            search_page(&c, RemoteSource::Jellyfin, "", 0, 10, "artist-asc").unwrap();
+        assert_eq!(album_artist_sorted[0].artist, "Zed Performer");
     }
 
     #[test]

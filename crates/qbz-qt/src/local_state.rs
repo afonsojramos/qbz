@@ -44,6 +44,7 @@ pub struct TracksLoadRequest {
     pub offsets: TrackSourceOffsets,
     pub query: String,
     pub sort: String,
+    pub group: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -118,8 +119,8 @@ pub struct LocalState {
     pub tracks_query: String,
     pub tracks_sort: String,
     /// Tracks-tab grouping ("off" | "album" | "artist" | "name") — persisted
-    /// (locallibrary_ui `tracks_group`). Client-side only: the group modes
-    /// reorder the loaded pages, they never touch the SQL ORDER BY.
+    /// (locallibrary_ui `tracks_group`). It is part of the immutable paged
+    /// query: otherwise a later page can sort ahead of the visible prefix.
     pub tracks_group: String,
     pub tracks_has_more: bool,
     /// The FULL flattened tree (visible derivation applies the rail search).
@@ -374,6 +375,7 @@ pub fn begin_tracks_load(reset: bool) -> TracksLoadRequest {
             offsets: s.tracks_offsets,
             query: s.tracks_query.clone(),
             sort: s.tracks_sort.clone(),
+            group: s.tracks_group.clone(),
         }
     })
 }
@@ -474,6 +476,7 @@ mod phase_a_tests {
             offsets: TrackSourceOffsets::default(),
             query: "old".to_string(),
             sort: "title-asc".to_string(),
+            group: "off".to_string(),
         };
         let old = std::thread::spawn(move || {
             old_started_tx.send(()).unwrap();
@@ -492,6 +495,7 @@ mod phase_a_tests {
             offsets: TrackSourceOffsets::default(),
             query: "new".to_string(),
             sort: "artist-asc".to_string(),
+            group: "off".to_string(),
         };
         allow_old_finish_tx.send(()).unwrap();
 
@@ -523,9 +527,10 @@ mod phase_a_tests {
     fn tracks_page_republish_keeps_the_visible_track_anchor() {
         // A legacy page append republishes the accumulated rows as JSON. Keep
         // one ListModel mounted and append an immutable prefix in-place so
-        // QQuickItemView never receives setModel(). Grouped reorder fallback
-        // must still follow track identity and retain the clipped-row offset.
+        // QQuickItemView never receives setModel(). Full-query replacement
+        // still follows track identity and retains the clipped-row offset.
         let qml = include_str!("../qml/views/local/LocalTracksTab.qml");
+        let view_qml = include_str!("../qml/views/LocalLibraryView.qml");
         assert!(qml.contains("id: legacyEntriesModel"));
         assert!(!qml.contains("dynamicRoles: true"));
         assert!(qml.contains("function canAppendLegacyEntries(nextEntries)"));
@@ -548,5 +553,7 @@ mod phase_a_tests {
         assert!(qml.contains("list.positionViewAtIndex(target, ListView.Beginning)"));
         assert!(qml.contains("root.publishLegacyEntries(out, anchor, epoch)"));
         assert!(qml.contains("root.restorePageAnchor(anchor, nextEntries, epoch)"));
+        assert!(view_qml.contains("readonly property var tracksVisible: tracks"));
+        assert!(!view_qml.contains("readonly property var tracksVisible: {"));
     }
 }

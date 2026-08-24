@@ -941,11 +941,11 @@ impl qbz_local::QbzLocal {
             b.as_mut()
                 .set_local_tracks_group(QString::from(mode.as_str()));
         });
-        // The legacy reader keeps its QML reorder. Phase E makes grouping
-        // part of the immutable SQL descriptor, so only that arm resets.
-        if crate::local_tracks_model_qt::requested() {
-            load_tracks(true);
-        }
+        // Grouping changes the global page order in both readers. Reset the
+        // query so page one is already the immutable prefix of the final
+        // grouped result; sorting accumulated pages in QML makes the viewport
+        // jump whenever new rows belong ahead of it.
+        load_tracks(true);
     }
 
     pub fn tracks_load_more(self: Pin<&mut Self>) {

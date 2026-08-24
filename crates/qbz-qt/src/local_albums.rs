@@ -374,6 +374,7 @@ pub fn load_tracks_page_blocking(
     request: TracksLoadRequest,
 ) -> Result<Option<TracksPageLoad>, String> {
     let candidate_limit = TRACKS_PAGE + 1;
+    let effective_sort = effective_tracks_sort(&request.sort, &request.group);
     let query_started = std::time::Instant::now();
     // No library.db is valid for a remote-only installation.
     let local = with_db(|db| {
@@ -383,7 +384,7 @@ pub fn load_tracks_page_blocking(
             candidate_limit,
             true,
             false,
-            &request.sort,
+            effective_sort,
         )
     })
     .unwrap_or_default();
@@ -395,7 +396,7 @@ pub fn load_tracks_page_blocking(
             &request.query,
             request.offsets.plex,
             candidate_limit,
-            &request.sort,
+            effective_sort,
         )
     } else {
         Vec::new()
@@ -408,7 +409,7 @@ pub fn load_tracks_page_blocking(
         &request.query,
         request.offsets.jellyfin,
         candidate_limit,
-        &request.sort,
+        effective_sort,
     );
     if tracks_generation() != request.generation {
         return Ok(None);
@@ -418,7 +419,7 @@ pub fn load_tracks_page_blocking(
         &request.query,
         request.offsets.subsonic,
         candidate_limit,
-        &request.sort,
+        effective_sort,
     );
     let query_time = query_started.elapsed();
     let candidates = TrackSourceCounts {
@@ -439,7 +440,7 @@ pub fn load_tracks_page_blocking(
             CandidatePage { source: TrackSourcePage::Jellyfin, rows: jellyfin },
             CandidatePage { source: TrackSourcePage::Subsonic, rows: subsonic },
         ],
-        &request.sort,
+        effective_sort,
         TRACKS_PAGE as usize,
     );
     let merge_time = merge_started.elapsed();
@@ -478,6 +479,20 @@ pub fn load_tracks_page_blocking(
         merge_time,
         map_time,
     }))
+}
+
+/// Group headers require their key to be globally contiguous. Grouping thus
+/// owns the query order (matching the native catalog descriptor) while the
+/// toolbar sort remains persisted for when grouping is switched off.
+fn effective_tracks_sort<'a>(sort: &'a str, group: &str) -> &'a str {
+    match group {
+        "album" => "default",
+        // Unlike artist-asc, grouping is by the performing track artist, not
+        // album_artist. This is also the key printed in the group header.
+        "artist" => "group-artist",
+        "name" => "title-asc",
+        _ => sort,
+    }
 }
 
 fn merge_track_pages(pages: Vec<CandidatePage>, sort: &str, limit: usize) -> MergedTrackPage {
@@ -620,6 +635,10 @@ fn compare_tracks(a: &LocalTrack, b: &LocalTrack, sort: &str) -> std::cmp::Order
             .then(lc(&a.artist).cmp(&lc(&b.artist))),
         "artist-asc" => artist_key(a).cmp(&artist_key(b)).then(album_tail(a, b)),
         "artist-desc" => artist_key(b).cmp(&artist_key(a)).then(album_tail(a, b)),
+        "group-artist" => lc(&a.artist)
+            .cmp(&lc(&b.artist))
+            .then(lc(&a.album).cmp(&lc(&b.album)))
+            .then(lc(&a.title).cmp(&lc(&b.title))),
         "year-desc" => year_cmp(a, b, true).then(album_tail(a, b)),
         "year-asc" => year_cmp(a, b, false).then(album_tail(a, b)),
         "added-desc" => b.indexed_at.cmp(&a.indexed_at).then(album_tail(a, b)),
@@ -814,6 +833,7 @@ mod phase_a_tests {
             "title-desc",
             "artist-asc",
             "artist-desc",
+            "group-artist",
             "year-asc",
             "year-desc",
             "added-desc",
@@ -829,6 +849,32 @@ mod phase_a_tests {
                 "sort {sort}"
             );
         }
+    }
+
+    #[test]
+    fn grouped_pages_keep_the_first_page_as_an_immutable_prefix() {
+        let effective = effective_tracks_sort("added-desc", "artist");
+        assert_eq!(effective, "group-artist");
+        let input = fixture(624, 1_337, 701, 650, effective);
+        let first = page(&input, TrackSourceOffsets::default(), effective);
+        assert_eq!(first.rows.len(), TRACKS_PAGE as usize);
+        assert!(first.has_more);
+
+        let all = collect_union(&input, effective);
+        let first_ids = first.rows.iter().map(|row| row.id).collect::<Vec<_>>();
+        let all_prefix = all
+            .iter()
+            .take(first_ids.len())
+            .map(|row| row.id)
+            .collect::<Vec<_>>();
+        assert_eq!(all_prefix, first_ids);
+        assert!(all
+            .windows(2)
+            .all(|pair| global_cmp(&pair[0], &pair[1], effective).is_le()));
+
+        assert_eq!(effective_tracks_sort("year-desc", "album"), "default");
+        assert_eq!(effective_tracks_sort("year-desc", "name"), "title-asc");
+        assert_eq!(effective_tracks_sort("year-desc", "off"), "year-desc");
     }
 
     #[test]
