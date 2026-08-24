@@ -4,9 +4,212 @@
 //! reported through an `on_progress` closure (no Tauri event bus); the caller
 //! orchestrates the DB update + sidecar removal.
 
+use std::collections::{BTreeMap, HashSet};
+use std::fs::OpenOptions;
 use std::path::Path;
 
 use crate::{LibraryError, LocalTrack};
+
+/// ID3 generation used when the container's canonical tag is ID3v2.
+///
+/// v2.4 is the standards-current default. v2.3 is an explicit compatibility
+/// option for older hardware and software; it is never selected merely
+/// because a file happened to arrive with a legacy tag.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Id3v2WriteVersion {
+    #[default]
+    V24,
+    V23,
+}
+
+/// Direct-write policy. The default updates only the container's canonical
+/// tag and preserves every secondary tag byte-for-byte as far as Lofty permits.
+/// `synchronize_secondary_tags` is opt-in because a secondary tag may be there
+/// specifically for an old player with stricter text/length limits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DirectTagWriteOptions {
+    pub id3v2_version: Id3v2WriteVersion,
+    pub synchronize_secondary_tags: bool,
+}
+
+/// One tag layer observed across the selected physical album version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagLayerInspection {
+    pub name: String,
+    pub file_count: usize,
+    pub canonical_file_count: usize,
+    pub writable_file_count: usize,
+}
+
+/// Bounded preflight information for the editor. No audio or artwork bytes
+/// escape this API; only format/tag names and aggregate counts do.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AlbumTagInspection {
+    pub file_count: usize,
+    pub canonical_layers: Vec<TagLayerInspection>,
+    pub present_layers: Vec<TagLayerInspection>,
+    /// Files where two non-empty tag layers disagree on at least one field the
+    /// editor owns. The canonical layer still wins deterministically.
+    pub conflicting_files: usize,
+    /// Files whose canonical tag can be written by this Lofty build.
+    pub writable_files: usize,
+}
+
+impl AlbumTagInspection {
+    pub fn direct_write_supported(&self) -> bool {
+        self.file_count > 0 && self.file_count == self.writable_files
+    }
+}
+
+fn tag_type_name(tag_type: lofty::tag::TagType) -> &'static str {
+    use lofty::tag::TagType;
+    match tag_type {
+        TagType::Ape => "APEv2",
+        TagType::Id3v1 => "ID3v1",
+        TagType::Id3v2 => "ID3v2",
+        TagType::Mp4Ilst => "MP4 ilst",
+        TagType::VorbisComments => "Vorbis comments",
+        TagType::RiffInfo => "RIFF INFO",
+        TagType::AiffText => "AIFF text",
+        _ => "Other",
+    }
+}
+
+fn tag_has_editor_conflict(tagged_file: &lofty::file::TaggedFile) -> bool {
+    use lofty::prelude::*;
+    use lofty::tag::ItemKey;
+
+    fn distinct_text(
+        tagged_file: &lofty::file::TaggedFile,
+        key: ItemKey,
+    ) -> bool {
+        let mut values = Vec::<String>::new();
+        for tag in tagged_file.tags() {
+            if let Some(value) = tag
+                .get_string(key.clone())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                if !values.iter().any(|seen| seen.eq_ignore_ascii_case(value)) {
+                    values.push(value.to_string());
+                }
+            }
+        }
+        values.len() > 1
+    }
+
+    let text_conflict = [
+        ItemKey::TrackTitle,
+        ItemKey::TrackArtist,
+        ItemKey::AlbumTitle,
+        ItemKey::AlbumArtist,
+        ItemKey::Genre,
+        ItemKey::RecordingDate,
+        ItemKey::Year,
+        ItemKey::CatalogNumber,
+    ]
+    .into_iter()
+    .any(|key| distinct_text(tagged_file, key));
+    if text_conflict {
+        return true;
+    }
+
+    let mut tracks = HashSet::new();
+    let mut discs = HashSet::new();
+    for tag in tagged_file.tags() {
+        if let Some(value) = tag.track() {
+            tracks.insert(value);
+        }
+        if let Some(value) = tag.disk() {
+            discs.insert(value);
+        }
+    }
+    tracks.len() > 1 || discs.len() > 1
+}
+
+/// Inspect every distinct file before the editor offers direct write.
+///
+/// All files are opened read-only. A malformed/unsupported member fails the
+/// inspection rather than silently producing a reassuring partial summary.
+pub fn inspect_album_tag_layers(paths: &[String]) -> Result<AlbumTagInspection, LibraryError> {
+    use lofty::prelude::*;
+
+    #[derive(Default)]
+    struct Counts {
+        present: usize,
+        canonical: usize,
+        writable: usize,
+    }
+
+    let mut seen = HashSet::new();
+    let unique: Vec<&String> = paths
+        .iter()
+        .filter(|path| seen.insert((*path).clone()))
+        .collect();
+    if unique.is_empty() {
+        return Err(LibraryError::Metadata(
+            "No audio files were provided for tag inspection.".to_string(),
+        ));
+    }
+
+    let mut layers = BTreeMap::<String, Counts>::new();
+    let mut canonical = BTreeMap::<String, Counts>::new();
+    let mut conflicting_files = 0usize;
+    let mut writable_files = 0usize;
+
+    for path in &unique {
+        let file_path = Path::new(path);
+        if !file_path.is_file() {
+            return Err(LibraryError::Metadata(format!(
+                "Audio file not found: {}",
+                file_path.display()
+            )));
+        }
+        let tagged_file = lofty::read_from_path(file_path).map_err(|error| {
+            LibraryError::Metadata(format!(
+                "Failed to inspect tags in {}: {error}",
+                file_path.display()
+            ))
+        })?;
+        let primary = tagged_file.primary_tag_type();
+        let primary_name = tag_type_name(primary).to_string();
+        let support = tagged_file.tag_support(primary);
+        let counts = canonical.entry(primary_name).or_default();
+        counts.canonical += 1;
+        counts.present += usize::from(tagged_file.primary_tag().is_some());
+        counts.writable += usize::from(support.is_writable());
+        writable_files += usize::from(support.is_writable());
+
+        for tag in tagged_file.tags() {
+            let counts = layers
+                .entry(tag_type_name(tag.tag_type()).to_string())
+                .or_default();
+            counts.present += 1;
+            counts.canonical += usize::from(tag.tag_type() == primary);
+            counts.writable += usize::from(tagged_file.tag_support(tag.tag_type()).is_writable());
+        }
+        conflicting_files += usize::from(tag_has_editor_conflict(&tagged_file));
+    }
+
+    let map_layers = |map: BTreeMap<String, Counts>| {
+        map.into_iter()
+            .map(|(name, counts)| TagLayerInspection {
+                name,
+                file_count: counts.present,
+                canonical_file_count: counts.canonical,
+                writable_file_count: counts.writable,
+            })
+            .collect()
+    };
+
+    Ok(AlbumTagInspection {
+        file_count: unique.len(),
+        canonical_layers: map_layers(canonical),
+        present_layers: map_layers(layers),
+        conflicting_files,
+        writable_files,
+    })
+}
 
 /// Album-level fields written into every file's embedded tags. A `None`
 /// (or blank) field REMOVES that tag (direct write is destructive, unlike the
@@ -79,152 +282,305 @@ fn uniform_file_artist(paths: &[&str]) -> Option<String> {
     shared
 }
 
-/// Write embedded tags to each file. Dedups by `file_path` keeping the FIRST
-/// occurrence (order preserved). `on_progress(current, total)` is called
-/// BEFORE each file write (1-based; total = deduped count). Partial-failure
-/// unsafe by design: returns `Err` on the first failing file with prior files
-/// already modified. Does NOT touch the DB or the sidecar.
-pub fn write_album_tags_to_files(
+fn apply_editor_fields(
+    tag: &mut lofty::tag::Tag,
+    album: &AlbumTagWrite,
+    track: &TrackTagWrite,
+    previous_artist: Option<&str>,
+) {
+    use lofty::prelude::*;
+    use lofty::tag::ItemKey;
+
+    tag.set_title(track.title.trim().to_string());
+    tag.set_album(album.album_title.trim().to_string());
+
+    // ARTIST is track scope — see `should_rename_artist`.
+    let current_artist = tag.artist().map(|artist| artist.into_owned());
+    if should_rename_artist(
+        current_artist.as_deref(),
+        previous_artist,
+        &album.album_artist,
+    ) {
+        tag.set_artist(album.album_artist.trim().to_string());
+    }
+
+    match track.track_number {
+        Some(number) => tag.set_track(number),
+        None => tag.remove_track(),
+    }
+    match track.disc_number {
+        Some(number) => tag.set_disk(number),
+        None => tag.remove_disk(),
+    }
+
+    if album.album_artist.trim().is_empty() {
+        tag.remove_key(ItemKey::AlbumArtist);
+    } else {
+        tag.insert_text(ItemKey::AlbumArtist, album.album_artist.trim().to_string());
+    }
+
+    if let Some(year) = album.year {
+        tag.set_date(lofty::tag::items::Timestamp {
+            year: year as u16,
+            ..Default::default()
+        });
+    } else {
+        tag.remove_date();
+    }
+
+    if let Some(genre) = album
+        .genre
+        .as_deref()
+        .map(str::trim)
+        .filter(|genre| !genre.is_empty())
+    {
+        tag.set_genre(genre.to_string());
+    } else {
+        tag.remove_genre();
+    }
+
+    if let Some(catalog) = album
+        .catalog_number
+        .as_deref()
+        .map(str::trim)
+        .filter(|catalog| !catalog.is_empty())
+    {
+        tag.insert_text(ItemKey::CatalogNumber, catalog.to_string());
+    } else {
+        tag.remove_key(ItemKey::CatalogNumber);
+    }
+}
+
+fn normalized_tag_text(tag: &lofty::tag::Tag, key: lofty::tag::ItemKey) -> Option<String> {
+    tag.get_string(key)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn verify_editor_write(
+    path: &Path,
+    album: &AlbumTagWrite,
+    track: &TrackTagWrite,
+    expected_artist: Option<&str>,
+) -> Result<(), LibraryError> {
+    use lofty::prelude::*;
+    use lofty::tag::ItemKey;
+
+    let tagged_file = lofty::read_from_path(path).map_err(|error| {
+        LibraryError::Metadata(format!(
+            "Tags were written but could not be verified in {}: {error}",
+            path.display()
+        ))
+    })?;
+    let tag = tagged_file.primary_tag().ok_or_else(|| {
+        LibraryError::Metadata(format!(
+            "The canonical tag was missing after writing {}.",
+            path.display()
+        ))
+    })?;
+
+    let actual_year = tag.date().map(|date| date.year as u32);
+    let expected_genre = album
+        .genre
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let expected_catalog = album
+        .catalog_number
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let expected_album_artist = (!album.album_artist.trim().is_empty())
+        .then(|| album.album_artist.trim().to_string());
+
+    let matches = tag.title().as_deref().map(str::trim) == Some(track.title.trim())
+        && tag.album().as_deref().map(str::trim) == Some(album.album_title.trim())
+        && tag.track() == track.track_number
+        && tag.disk() == track.disc_number
+        && actual_year == album.year
+        && tag.genre().as_deref().map(str::trim).map(str::to_string) == expected_genre
+        && normalized_tag_text(tag, ItemKey::AlbumArtist) == expected_album_artist
+        && normalized_tag_text(tag, ItemKey::CatalogNumber) == expected_catalog
+        && expected_artist.map_or(true, |artist| {
+            tag.artist().as_deref().map(str::trim) == Some(artist)
+        });
+    if matches {
+        Ok(())
+    } else {
+        Err(LibraryError::Metadata(format!(
+            "Tag verification failed for {}. The library index was not updated.",
+            path.display()
+        )))
+    }
+}
+
+/// Standards-aware direct embedded-tag writer.
+///
+/// The operation deduplicates by path, preflights **every** member for
+/// existence, read/write access, parseability and a writable canonical tag
+/// before touching the first file, then verifies the canonical values after
+/// every save. An I/O failure can still leave earlier files changed — no audio
+/// format offers a cross-file transaction — but predictable permission,
+/// format and missing-mount failures are caught before that point.
+///
+/// Existing secondary layers are preserved. With
+/// `synchronize_secondary_tags`, existing writable modern layers are updated
+/// too; ID3v1 stays untouched because its 30-byte/Latin-1 limits would silently
+/// truncate or corrupt values that are valid in the canonical tag.
+pub fn write_album_tags_to_files_with_options(
     album: &AlbumTagWrite,
     tracks: &[TrackTagWrite],
+    options: DirectTagWriteOptions,
     mut on_progress: impl FnMut(usize, usize),
 ) -> Result<(), LibraryError> {
     use lofty::config::WriteOptions;
     use lofty::prelude::*;
-    use lofty::tag::{ItemKey, Tag};
+    use lofty::tag::{Tag, TagType};
 
-    // Dedup by file_path, first wins, original order preserved.
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     let unique: Vec<&TrackTagWrite> = tracks
         .iter()
-        .filter(|t| seen.insert(t.file_path.clone()))
+        .filter(|track| seen.insert(track.file_path.clone()))
         .collect();
-    let total = unique.len();
+    if unique.is_empty() {
+        return Err(LibraryError::Metadata(
+            "No audio files were provided for direct tag writing.".to_string(),
+        ));
+    }
 
-    // Read the prior per-track artist BEFORE the first write, so the rename
-    // rule sees the album as it was rather than as the loop has left it.
-    // Skipped entirely when there is no album artist to rename anything to.
+    // Read the prior per-track artist BEFORE any edit, so the rename rule sees
+    // one coherent album rather than the progressively modified loop state.
     let previous_artist = if album.album_artist.trim().is_empty() {
         None
     } else {
-        let paths: Vec<&str> = unique.iter().map(|t| t.file_path.as_str()).collect();
+        let paths: Vec<&str> = unique
+            .iter()
+            .map(|track| track.file_path.as_str())
+            .collect();
         uniform_file_artist(&paths)
     };
 
-    for (i, track) in unique.iter().enumerate() {
-        on_progress(i + 1, total);
-
+    // Full preflight + in-memory mutation. The write loop below therefore has
+    // no expected missing-file, permission, parse or unsupported-tag failure.
+    let mut prepared = Vec::with_capacity(unique.len());
+    for track in unique {
         let path = Path::new(&track.file_path);
         if !path.is_file() {
-            return Err(LibraryError::Metadata(
-                "One or more audio files were not found on disk.".to_string(),
-            ));
+            return Err(LibraryError::Metadata(format!(
+                "Audio file not found: {}",
+                path.display()
+            )));
+        }
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|error| {
+                LibraryError::Metadata(format!(
+                    "Audio file is not writable ({}): {error}",
+                    path.display()
+                ))
+            })?;
+
+        let mut tagged_file = lofty::read_from_path(path).map_err(|error| {
+            LibraryError::Metadata(format!(
+                "Failed to read audio tags in {}: {error}",
+                path.display()
+            ))
+        })?;
+        let primary_type = tagged_file.primary_tag_type();
+        if !tagged_file.tag_support(primary_type).is_writable() {
+            return Err(LibraryError::Metadata(format!(
+                "{} does not have a writable canonical tag for this format.",
+                path.display()
+            )));
         }
 
-        let mut tagged_file = lofty::read_from_path(path)
-            .map_err(|_| LibraryError::Metadata("Failed to read audio file tags.".to_string()))?;
+        let expected_artist = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag())
+            .and_then(|tag| tag.artist())
+            .map(|artist| artist.into_owned())
+            .filter(|artist| {
+                should_rename_artist(
+                    Some(artist.as_str()),
+                    previous_artist.as_deref(),
+                    &album.album_artist,
+                )
+            })
+            .map(|_| album.album_artist.trim().to_string());
 
-        // ALWAYS the format's PRIMARY tag type. There used to be a "primary, or
-        // else the first tag I can find" fallback here, and it silently threw
-        // away the user's edit:
-        //
-        // lofty will not WRITE a tag type a container only supports READING, and
-        // it refuses silently — the save loop skips non-writable tags with
-        // `continue` rather than erroring, because callers are not expected to
-        // know which ones are read-only. A FLAC that carries an ID3v2 tag (an
-        // ordinary shape; plenty of tooling stamps one on) has NO Vorbis
-        // comments, so `primary_tag_mut()` was `None` and the fallback handed
-        // back that ID3v2 tag. Every edited field went into it, `save_to_path`
-        // dropped the lot, and this function returned `Ok(())`. The user pressed
-        // Save, saw a success toast, and nothing changed on disk.
-        //
-        // Reading through `first_tag()` is still fine and still happens in
-        // `uniform_file_artist` — read-only tags are, after all, readable. It is
-        // only the WRITE target that must be the primary type.
-        let primary_type = tagged_file.primary_tag_type();
-        if tagged_file.primary_tag_mut().is_none() {
+        if tagged_file.primary_tag().is_none() {
             tagged_file.insert_tag(Tag::new(primary_type));
         }
 
-        {
-            let tag = tagged_file.primary_tag_mut().ok_or_else(|| {
-                LibraryError::Metadata("Failed to access audio file tags.".to_string())
-            })?;
-
-            tag.set_title(track.title.trim().to_string());
-            tag.set_album(album.album_title.trim().to_string());
-
-            // ARTIST is track scope — see `should_rename_artist`.
-            let current_artist = tag.artist().map(|a| a.into_owned());
-            if should_rename_artist(
-                current_artist.as_deref(),
-                previous_artist.as_deref(),
-                &album.album_artist,
-            ) {
-                tag.set_artist(album.album_artist.trim().to_string());
-            }
-
-            if let Some(no) = track.track_number {
-                tag.set_track(no);
-            }
-            if let Some(disc) = track.disc_number {
-                tag.set_disk(disc);
-            }
-
-            // Album artist (not part of the Accessor trait).
-            if album.album_artist.trim().is_empty() {
-                tag.remove_key(ItemKey::AlbumArtist);
-            } else {
-                tag.insert_text(ItemKey::AlbumArtist, album.album_artist.trim().to_string());
-            }
-
-            // Year.
-            if let Some(year) = album.year {
-                tag.set_date(lofty::tag::items::Timestamp {
-                    year: year as u16,
-                    ..Default::default()
-                });
-            } else {
-                tag.remove_date();
-            }
-
-            // Genre.
-            if let Some(g) = album
-                .genre
-                .as_ref()
-                .map(|g| g.trim())
-                .filter(|g| !g.is_empty())
-            {
-                tag.set_genre(g.to_string());
-            } else {
-                tag.remove_genre();
-            }
-
-            // Catalog number.
-            if let Some(c) = album
-                .catalog_number
-                .as_ref()
-                .map(|c| c.trim())
-                .filter(|c| !c.is_empty())
-            {
-                tag.insert_text(ItemKey::CatalogNumber, c.to_string());
-            } else {
-                tag.remove_key(ItemKey::CatalogNumber);
+        let mut targets = vec![primary_type];
+        if options.synchronize_secondary_tags {
+            for tag in tagged_file.tags() {
+                let tag_type = tag.tag_type();
+                if tag_type != primary_type
+                    && tag_type != TagType::Id3v1
+                    && tagged_file.tag_support(tag_type).is_writable()
+                    && !targets.contains(&tag_type)
+                {
+                    targets.push(tag_type);
+                }
             }
         }
-
-        tagged_file
-            .save_to_path(path, WriteOptions::default())
-            .map_err(|_| {
-                LibraryError::Metadata(
-                    "Failed to write tags to audio files. Check that the album folder is mounted \
-                     read-write and you have permissions."
-                        .to_string(),
-                )
+        for tag_type in targets {
+            let tag = tagged_file.tag_mut(tag_type).ok_or_else(|| {
+                LibraryError::Metadata(format!(
+                    "Failed to access {} in {}.",
+                    tag_type_name(tag_type),
+                    path.display()
+                ))
             })?;
+            apply_editor_fields(tag, album, track, previous_artist.as_deref());
+        }
+
+        prepared.push((track, tagged_file, expected_artist));
+    }
+
+    let total = prepared.len();
+    let mut write_options = WriteOptions::new();
+    write_options.use_id3v23(options.id3v2_version == Id3v2WriteVersion::V23);
+    // Never turn a valid Unicode tag into '?' merely because a secondary
+    // layer cannot represent it. The canonical formats all support Unicode.
+    write_options.lossy_text_encoding(false);
+
+    for (index, (track, tagged_file, expected_artist)) in prepared.into_iter().enumerate() {
+        let path = Path::new(&track.file_path);
+        tagged_file
+            .save_to_path(path, write_options)
+            .map_err(|error| {
+                LibraryError::Metadata(format!(
+                    "Failed to write tags to {}: {error}",
+                    path.display()
+                ))
+            })?;
+        verify_editor_write(path, album, track, expected_artist.as_deref())?;
+        on_progress(index + 1, total);
     }
 
     Ok(())
+}
+
+/// Backwards-compatible default used by the frozen Slint frontend: canonical
+/// tag, ID3v2.4, secondary layers preserved.
+pub fn write_album_tags_to_files(
+    album: &AlbumTagWrite,
+    tracks: &[TrackTagWrite],
+    on_progress: impl FnMut(usize, usize),
+) -> Result<(), LibraryError> {
+    write_album_tags_to_files_with_options(
+        album,
+        tracks,
+        DirectTagWriteOptions::default(),
+        on_progress,
+    )
 }
 
 /// Returns `Some(v)` iff every non-blank track shares one
@@ -516,6 +872,105 @@ mod editor_write_target_tests {
         assert_eq!(vorbis.track(), Some(4));
         assert_eq!(vorbis.disk(), Some(2));
         assert_eq!(vorbis.genre().as_deref(), Some("Jazz"));
+    }
+
+    #[test]
+    fn inspection_exposes_canonical_and_secondary_layers_without_writing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("legacy.flac");
+        std::fs::write(&file, flac_with_leading_id3v2()).unwrap();
+
+        let inspection = inspect_album_tag_layers(&[file.to_string_lossy().to_string()]).unwrap();
+        assert_eq!(inspection.file_count, 1);
+        assert_eq!(inspection.writable_files, 1);
+        assert!(inspection.direct_write_supported());
+        assert_eq!(inspection.canonical_layers.len(), 1);
+        assert_eq!(inspection.canonical_layers[0].name, "Vorbis comments");
+        assert_eq!(inspection.canonical_layers[0].file_count, 0);
+        assert_eq!(inspection.canonical_layers[0].writable_file_count, 1);
+        assert_eq!(inspection.present_layers.len(), 1);
+        assert_eq!(inspection.present_layers[0].name, "ID3v2");
+        assert_eq!(inspection.present_layers[0].writable_file_count, 0);
+    }
+
+    #[test]
+    fn canonical_write_preserves_secondary_layer_and_reports_its_conflict() {
+        use lofty::prelude::*;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("legacy.flac");
+        std::fs::write(&file, flac_with_leading_id3v2()).unwrap();
+        let album = AlbumTagWrite {
+            album_title: "Edited Album".to_string(),
+            album_artist: "Edited Artist".to_string(),
+            year: Some(1999),
+            genre: None,
+            catalog_number: None,
+        };
+        let tracks = vec![TrackTagWrite {
+            file_path: file.to_string_lossy().to_string(),
+            title: "Edited Title".to_string(),
+            track_number: Some(1),
+            disc_number: Some(1),
+        }];
+
+        write_album_tags_to_files(&album, &tracks, |_, _| {}).unwrap();
+        let after = lofty::read_from_path(&file).unwrap();
+        assert_eq!(
+            after
+                .tag(lofty::tag::TagType::Id3v2)
+                .and_then(|tag| tag.title())
+                .as_deref(),
+            Some("OldTitle")
+        );
+        assert_eq!(
+            after
+                .tag(lofty::tag::TagType::VorbisComments)
+                .and_then(|tag| tag.title())
+                .as_deref(),
+            Some("Edited Title")
+        );
+
+        let inspection = inspect_album_tag_layers(&[file.to_string_lossy().to_string()]).unwrap();
+        assert_eq!(inspection.conflicting_files, 1);
+        assert_eq!(inspection.present_layers.len(), 2);
+    }
+
+    #[test]
+    fn clearing_track_and_disc_numbers_is_persisted_and_verified() {
+        use lofty::prelude::*;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("legacy.flac");
+        std::fs::write(&file, flac_with_leading_id3v2()).unwrap();
+        let album = AlbumTagWrite {
+            album_title: "Edited Album".to_string(),
+            album_artist: String::new(),
+            year: None,
+            genre: None,
+            catalog_number: None,
+        };
+        let mut tracks = vec![TrackTagWrite {
+            file_path: file.to_string_lossy().to_string(),
+            title: "Edited Title".to_string(),
+            track_number: Some(9),
+            disc_number: Some(3),
+        }];
+        write_album_tags_to_files(&album, &tracks, |_, _| {}).unwrap();
+
+        tracks[0].track_number = None;
+        tracks[0].disc_number = None;
+        let mut progress = Vec::new();
+        write_album_tags_to_files(&album, &tracks, |current, total| {
+            progress.push((current, total));
+        })
+        .unwrap();
+
+        let after = lofty::read_from_path(&file).unwrap();
+        let tag = after.primary_tag().unwrap();
+        assert_eq!(tag.track(), None);
+        assert_eq!(tag.disk(), None);
+        assert_eq!(progress, vec![(1, 1)]);
     }
 }
 

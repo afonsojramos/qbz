@@ -61,8 +61,10 @@ pub use reachability::{probe, probe_default, Reach, DEFAULT_PROBE};
 pub use scan::{scan_with_progress, ScanEvent};
 pub use sacd::{SacdImageImport, SacdImportResult};
 pub use tag_writer::{
-    compute_track_artist_match, write_album_tags_to_files, write_purchase_tags, AlbumTagWrite,
-    PurchaseTagWrite, TrackTagWrite,
+    compute_track_artist_match, inspect_album_tag_layers, write_album_tags_to_files,
+    write_album_tags_to_files_with_options, write_purchase_tags, AlbumTagInspection,
+    AlbumTagWrite, DirectTagWriteOptions, Id3v2WriteVersion, PurchaseTagWrite,
+    TagLayerInspection, TrackTagWrite,
 };
 pub use scanner::{
     LibraryScanner, ScanEntry, ScanFileKind, ScanResult, ScanStream, ScanWalkError,

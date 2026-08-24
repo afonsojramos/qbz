@@ -109,30 +109,20 @@ pub fn apply_sidecar_to_track(track: &mut LocalTrack, sidecar: &AlbumTagSidecar)
         track.album_group_title = title.clone();
     }
 
-    if let Some(album_artist) = sidecar
-        .album
-        .album_artist
-        .as_ref()
-        .and_then(|s| normalize(s))
-    {
-        track.album_artist = Some(album_artist.clone());
+    if let Some(album_artist) = sidecar.album.album_artist.as_ref() {
+        track.album_artist = normalize(album_artist);
     }
 
     if let Some(year) = sidecar.album.year {
-        track.year = Some(year);
+        track.year = (year != 0).then_some(year);
     }
 
-    if let Some(genre) = sidecar.album.genre.as_ref().and_then(|s| normalize(s)) {
-        track.genre = Some(genre.clone());
+    if let Some(genre) = sidecar.album.genre.as_ref() {
+        track.genre = normalize(genre);
     }
 
-    if let Some(cat) = sidecar
-        .album
-        .catalog_number
-        .as_ref()
-        .and_then(|s| normalize(s))
-    {
-        track.catalog_number = Some(cat.clone());
+    if let Some(catalog_number) = sidecar.album.catalog_number.as_ref() {
+        track.catalog_number = normalize(catalog_number);
     }
 
     if let Some(entry) = sidecar.tracks.iter().find(|t| {
@@ -147,10 +137,10 @@ pub fn apply_sidecar_to_track(track: &mut LocalTrack, sidecar: &AlbumTagSidecar)
             track.title = title.clone();
         }
         if let Some(disc) = entry.disc_number {
-            track.disc_number = Some(disc);
+            track.disc_number = (disc != 0).then_some(disc);
         }
         if let Some(no) = entry.track_number {
-            track.track_number = Some(no);
+            track.track_number = (no != 0).then_some(no);
         }
     }
 }
@@ -161,5 +151,83 @@ fn normalize(value: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track() -> LocalTrack {
+        LocalTrack {
+            id: 42,
+            file_path: "/music/album/01.flac".to_string(),
+            title: "Old title".to_string(),
+            album: "Old album".to_string(),
+            album_group_title: "Old album".to_string(),
+            album_artist: Some("Old artist".to_string()),
+            year: Some(1999),
+            genre: Some("Old genre".to_string()),
+            catalog_number: Some("OLD-1".to_string()),
+            track_number: Some(1),
+            disc_number: Some(2),
+            ..LocalTrack::default()
+        }
+    }
+
+    #[test]
+    fn explicit_empty_and_zero_sentinels_clear_metadata() {
+        let mut track = track();
+        let sidecar = AlbumTagSidecar::new(
+            AlbumMetadataOverride {
+                album_title: Some("New album".to_string()),
+                album_artist: Some("  ".to_string()),
+                year: Some(0),
+                genre: Some(String::new()),
+                catalog_number: Some(String::new()),
+            },
+            vec![TrackMetadataOverride {
+                file_path: track.file_path.clone(),
+                cue_start_secs: None,
+                title: Some("New title".to_string()),
+                disc_number: Some(0),
+                track_number: Some(0),
+            }],
+        );
+
+        apply_sidecar_to_track(&mut track, &sidecar);
+
+        assert_eq!(track.album, "New album");
+        assert_eq!(track.title, "New title");
+        assert_eq!(track.album_artist, None);
+        assert_eq!(track.year, None);
+        assert_eq!(track.genre, None);
+        assert_eq!(track.catalog_number, None);
+        assert_eq!(track.disc_number, None);
+        assert_eq!(track.track_number, None);
+    }
+
+    #[test]
+    fn absent_fields_keep_scanned_metadata_for_v1_compatibility() {
+        let mut track = track();
+        let sidecar = AlbumTagSidecar::new(
+            AlbumMetadataOverride::default(),
+            vec![TrackMetadataOverride {
+                file_path: track.file_path.clone(),
+                cue_start_secs: None,
+                title: None,
+                disc_number: None,
+                track_number: None,
+            }],
+        );
+
+        apply_sidecar_to_track(&mut track, &sidecar);
+
+        assert_eq!(track.album_artist.as_deref(), Some("Old artist"));
+        assert_eq!(track.year, Some(1999));
+        assert_eq!(track.genre.as_deref(), Some("Old genre"));
+        assert_eq!(track.catalog_number.as_deref(), Some("OLD-1"));
+        assert_eq!(track.disc_number, Some(2));
+        assert_eq!(track.track_number, Some(1));
     }
 }
