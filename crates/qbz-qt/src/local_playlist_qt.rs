@@ -17,16 +17,15 @@
 //!
 //! # Scope of this file
 //!
-//! The repo layer + the write paths + the sidebar's cover resolution. The
-//! detail view / playback / reorder half of the reference module is the next
-//! step and lands beside this one.
+//! The repo layer, write paths, detail/playback/reorder flows, offline Qobuz
+//! subsets and the sidebar's cover resolution.
 //!
 //! OWED PORTS (recorded, not silently dropped):
 //! - `resolve_cover_urls`'s OFFLINE-CACHE arm: the reference fills leftover
-//!   collage slots from downloaded Qobuz covers. There is no offline cache in
-//!   this port (PARITY-DEBT #20), so a Qobuz-only local playlist resolves no
-//!   cover here and falls back to the glyph — same as the reference does when
-//!   nothing is downloaded.
+//!   collage slots from downloaded Qobuz covers. Qt now resolves that metadata
+//!   for detail rows, but this synchronous sidebar helper still does not enter
+//!   the async cache lock; a Qobuz-only local playlist can therefore fall back
+//!   to the glyph in the sidebar.
 //! - `add_drag_tracks_blocking`: the sidebar drop payload. The drag seam
 //!   exists in this port; wiring it is part of the sidebar step.
 
@@ -281,9 +280,9 @@ pub fn clear_custom_artwork_blocking(id: &str) {
 /// track's cached thumb. Returns file paths and Plex thumb paths; the art
 /// loader routes by shape.
 ///
-/// Blocking — call it from `spawn_blocking`. (The reference is async only
-/// because its leftover-slot fill reaches into the offline cache behind an
-/// async lock; with no offline cache here there is nothing to await.)
+/// Blocking — call it from `spawn_blocking`. The reference is async because
+/// its leftover-slot fill enters the offline cache; this synchronous helper
+/// deliberately does not, while the detail loader below does.
 pub fn resolve_cover_urls_blocking(id: &str, limit: usize) -> Vec<String> {
     let mut covers: Vec<String> = Vec::new();
     for t in get_tracks_blocking(id) {
@@ -316,8 +315,8 @@ pub fn resolve_cover_urls_blocking(id: &str, limit: usize) -> Vec<String> {
                     }
                 }
             }
-            // Qobuz rows would fill their slot from the offline cache in the
-            // reference; this port has none (see the module header).
+            // Qobuz rows would fill their slot from the async offline cache in
+            // the reference; this blocking sidebar helper cannot enter it.
             repo::LocalPlaylistTrackSource::Qobuz => {}
         }
     }
@@ -329,14 +328,22 @@ pub fn resolve_cover_urls_blocking(id: &str, limit: usize) -> Vec<String> {
 
 /// One resolved, renderable row.
 ///
-/// The reference has a sixth variant, `Cached` — Qobuz metadata read out of
-/// the offline cache so a downloaded row still renders with no network. This
-/// port has no offline cache (PARITY-DEBT #20), so that variant could only
-/// ever be dead code; a Qobuz row that the batch does not return is hidden,
-/// which is what the reference does too once its cache has nothing either.
+#[derive(Clone)]
 pub enum RowItem {
     /// Full catalog track (online fetch).
     Qobuz(Box<qbz_models::Track>),
+    /// Qobuz metadata from the persistent offline-cache index. Only Ready
+    /// rows become this variant; uncached snapshot members stay hidden.
+    Cached {
+        track_id: u64,
+        title: String,
+        artist: String,
+        album: String,
+        duration_secs: u64,
+        bit_depth: Option<u32>,
+        sample_rate: Option<f64>,
+        artwork_path: Option<String>,
+    },
     /// Local file resolved from library.db by path.
     Local(Box<qbz_library::LocalTrack>),
     /// A local file whose metadata lookup missed but whose file EXISTS on
@@ -362,9 +369,51 @@ pub enum RowItem {
     },
 }
 
+#[derive(Clone)]
 pub struct LoadedRow {
     pub position: i32,
     pub item: RowItem,
+}
+
+async fn ready_cached_rows(track_ids: &[u64]) -> HashMap<u64, RowItem> {
+    if track_ids.is_empty() {
+        return HashMap::new();
+    }
+    let Some(offline) = crate::offline_qt::get().await else {
+        return HashMap::new();
+    };
+    let cache_path = offline.get_cache_path();
+    let guard = offline.db.lock().await;
+    let Some(db) = guard.as_ref() else {
+        return HashMap::new();
+    };
+    let mut cached = HashMap::new();
+    for track_id in track_ids {
+        let Ok(Some(info)) = db.get_track(*track_id) else {
+            continue;
+        };
+        if !matches!(
+            info.status,
+            qbz_offline_cache::OfflineCacheStatus::Ready
+        ) {
+            continue;
+        }
+        let artwork_path = info.resolve_cover_path(&cache_path);
+        cached.insert(
+            *track_id,
+            RowItem::Cached {
+                track_id: info.track_id,
+                title: info.title,
+                artist: info.artist,
+                album: info.album.unwrap_or_default(),
+                duration_secs: info.duration_secs,
+                bit_depth: info.bit_depth,
+                sample_rate: info.sample_rate,
+                artwork_path,
+            },
+        );
+    }
+    cached
 }
 
 /// The open local detail's playable queue snapshot, aligned with the row ids,
@@ -605,6 +654,7 @@ pub(crate) fn total_duration_label(rows: &[LoadedRow]) -> String {
         .iter()
         .map(|r| match &r.item {
             RowItem::Qobuz(t) => t.duration as u64,
+            RowItem::Cached { duration_secs, .. } => *duration_secs,
             RowItem::Local(t) | RowItem::Plex(t) => t.duration_secs,
             RowItem::LocalFile { .. } | RowItem::Unresolved { .. } => 0,
         })
@@ -626,6 +676,71 @@ pub(crate) fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueT
         RowItem::Qobuz(track) => {
             let row = crate::playlist_qt::map_track(track);
             let queue = crate::playlist_qt::row_to_queue_public(&row);
+            (row, Some(queue))
+        }
+        RowItem::Cached {
+            track_id,
+            title,
+            artist,
+            album,
+            duration_secs,
+            bit_depth,
+            sample_rate,
+            artwork_path,
+        } => {
+            let art = artwork_path.clone().unwrap_or_default();
+            let row = PlaylistTrackRow {
+                id: track_id.to_string(),
+                playlist_track_id: *track_id,
+                title: title.clone(),
+                artist: artist.clone(),
+                album: album.clone(),
+                duration: crate::playlist_qt::mmss(
+                    (*duration_secs).min(u32::MAX as u64) as u32,
+                ),
+                duration_secs: *duration_secs,
+                quality_tier: crate::playlist_qt::tier(*bit_depth).to_string(),
+                quality_detail: crate::home_qt::quality_detail_from_parts(
+                    *bit_depth,
+                    *sample_rate,
+                ),
+                quality_label: crate::playlist_qt::quality_label(*bit_depth, *sample_rate),
+                bit_depth: *bit_depth,
+                sample_rate: *sample_rate,
+                art_url: art.clone(),
+                art_path: crate::artwork_qt::cached_path(&art),
+                is_favorite: crate::fav_cache_qt::contains_track(*track_id),
+                cache_status: 3,
+                ..Default::default()
+            };
+            let queue = QueueTrack {
+                id: *track_id,
+                title: title.clone(),
+                version: None,
+                artist: artist.clone(),
+                album: album.clone(),
+                album_version: None,
+                duration_secs: *duration_secs,
+                artwork_url: artwork_path.clone().map(|path| {
+                    if path.starts_with("file://") {
+                        path
+                    } else {
+                        format!("file://{path}")
+                    }
+                }),
+                hires: bit_depth.map(|depth| depth >= 24).unwrap_or(false),
+                bit_depth: *bit_depth,
+                sample_rate: *sample_rate,
+                is_local: false,
+                album_id: None,
+                artist_id: None,
+                streamable: true,
+                source: Some("qobuz".to_string()),
+                parental_warning: false,
+                source_item_id_hint: None,
+                context_kind: None,
+                context_id: None,
+            };
             (row, Some(queue))
         }
         RowItem::Local(t) | RowItem::Plex(t) => {
@@ -716,9 +831,75 @@ pub(crate) fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueT
     }
 }
 
+fn build_row_models(
+    rows: &[LoadedRow],
+) -> (
+    Vec<QueueTrack>,
+    Vec<PlaylistTrackRow>,
+    HashMap<String, i32>,
+) {
+    let mut display = Vec::with_capacity(rows.len());
+    let mut queue = Vec::new();
+    let mut positions = HashMap::new();
+    for row in rows {
+        let (item, track) = row_to_display(&row.item);
+        positions.insert(item.id.clone(), row.position);
+        if let Some(track) = track {
+            queue.push(track);
+        }
+        display.push(item);
+    }
+    (queue, display, positions)
+}
+
+fn merge_offline_rows(
+    playable_ids: &[u64],
+    cached: &HashMap<u64, RowItem>,
+    mut sidecars: Vec<LoadedRow>,
+) -> Vec<LoadedRow> {
+    let mut rows: Vec<LoadedRow> = playable_ids
+        .iter()
+        .enumerate()
+        .filter_map(|(position, track_id)| {
+            cached.get(track_id).cloned().map(|item| LoadedRow {
+                position: position as i32,
+                item,
+            })
+        })
+        .collect();
+    // Snapshot positions and sidecar positions are different coordinate
+    // systems after filtering: keep each block's stable order rather than
+    // interleaving absolute sidecar slots through a cached-only subset.
+    sidecars.sort_by_key(|row| row.position);
+    rows.extend(sidecars);
+    rows
+}
+
+fn offline_cover_urls(rows: &[LoadedRow]) -> Vec<String> {
+    let mut covers = Vec::new();
+    for row in rows {
+        let artwork = match &row.item {
+            RowItem::Cached { artwork_path, .. } => artwork_path.as_deref(),
+            RowItem::Local(track) | RowItem::Plex(track) => track.artwork_path.as_deref(),
+            RowItem::Qobuz(_) | RowItem::LocalFile { .. } | RowItem::Unresolved { .. } => None,
+        };
+        let Some(artwork) = artwork.filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        if !covers.iter().any(|cover| cover == artwork) {
+            covers.push(artwork.to_string());
+        }
+        if covers.len() == 4 {
+            break;
+        }
+    }
+    covers
+}
+
 /// Load + resolve a local playlist and publish it through the SHARED playlist
-/// view. Qobuz rows resolve in one batch fetch; local rows from library.db by
-/// path; Plex rows from the Plex cache in one bulk lookup.
+/// view. Qobuz rows resolve in one batch fetch with a Ready offline-cache
+/// fallback; local rows come from library.db by path and Plex rows from the
+/// Plex cache in one bulk lookup.
 ///
 /// Runs off the Qt thread. Returns false when the playlist does not exist.
 pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
@@ -736,9 +917,9 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
         return false;
     };
 
-    // Qobuz rows: ONE batch fetch. Offline the fetch is skipped entirely —
-    // without an offline cache there is no other metadata source, so those
-    // rows hide (and a local-only playlist is unaffected, which is the point).
+    // Qobuz rows: ONE batch fetch online, then the persistent Ready-cache
+    // metadata for misses (or for the whole set offline). Rows absent from
+    // both sources hide; a local-only playlist remains unaffected.
     let offline = crate::offline_fwd::engine().is_offline();
     let qobuz_ids: Vec<u64> = tracks.iter().filter_map(|t| t.qobuz_track_id).collect();
     let mut fetched: HashMap<u64, qbz_models::Track> = HashMap::new();
@@ -752,6 +933,12 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
             Err(e) => log::warn!("[qbz-qt] local playlist {id}: qobuz batch failed: {e}"),
         }
     }
+    let missing_qobuz_ids: Vec<u64> = qobuz_ids
+        .iter()
+        .copied()
+        .filter(|track_id| !fetched.contains_key(track_id))
+        .collect();
+    let cached = ready_cached_rows(&missing_qobuz_ids).await;
 
     // Plex rows: ONE bulk cache lookup by rating key.
     let plex_keys: Vec<String> = tracks
@@ -832,6 +1019,8 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
                     }
                 } else if let Some(track) = fetched.remove(&tid) {
                     RowItem::Qobuz(Box::new(track))
+                } else if let Some(track) = cached.get(&tid).cloned() {
+                    track
                 } else {
                     hidden += 1;
                     continue;
@@ -892,17 +1081,7 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
 
     // Build the display rows + the playable snapshot in ONE pass, so a row's
     // display id and its queue entry can never disagree.
-    let mut display: Vec<PlaylistTrackRow> = Vec::with_capacity(rows.len());
-    let mut queue: Vec<QueueTrack> = Vec::new();
-    let mut positions: HashMap<String, i32> = HashMap::new();
-    for row in &rows {
-        let (item, track) = row_to_display(&row.item);
-        positions.insert(item.id.clone(), row.position);
-        if let Some(t) = track {
-            queue.push(t);
-        }
-        display.push(item);
-    }
+    let (queue, display, positions) = build_row_models(&rows);
 
     let covers = tokio::task::spawn_blocking({
         let id = id.clone();
@@ -979,6 +1158,80 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
             track_count: doc.track_count.max(0) as u32,
             source: "local",
         },
+    );
+    crate::playlist_qt::adopt_doc(doc);
+    true
+}
+
+/// Open a numeric Qobuz playlist without touching the network.
+///
+/// The Qobuz block is the persisted membership intersected with Ready
+/// downloads. Local sidecars always remain visible; Plex sidecars remain only
+/// while raw connectivity is Up (manual offline or a logged-out session with
+/// a reachable LAN). Uncached Qobuz members are hidden, which keeps every
+/// published row playable or honestly marked unavailable.
+pub async fn load_qobuz_offline(playlist_id: u64) -> bool {
+    let plex_allowed = crate::offline_fwd::engine().status().connectivity
+        == qbz_app::offline_mode::Connectivity::Up;
+    let loaded = tokio::task::spawn_blocking(move || {
+        let headers = crate::playlist_snapshot_qt::headers_blocking();
+        let qobuz_count = crate::sidebar_qt::playlist_track_count(playlist_id)
+            .or_else(|| headers.get(&playlist_id).and_then(|(_, count)| *count))
+            .unwrap_or(0);
+        let sidecars = read_sidecar_rows_blocking(playlist_id, qobuz_count, plex_allowed);
+        let playable_ids = crate::playlist_snapshot_qt::playable_track_ids_blocking(playlist_id);
+        let name = crate::sidebar_qt::playlist_name(playlist_id)
+            .or_else(|| headers.get(&playlist_id).map(|(name, _)| name.clone()))
+            .or_else(|| crate::playlist_snapshot_qt::name_blocking(playlist_id))
+            .unwrap_or_else(|| qbz_i18n::t("Playlist"));
+        (sidecars, playable_ids, name)
+    })
+    .await;
+    let Ok((sidecars, playable_ids, name)) = loaded else {
+        return false;
+    };
+
+    let cached = ready_cached_rows(&playable_ids).await;
+    let rows = merge_offline_rows(&playable_ids, &cached, sidecars);
+    let hidden_snapshot_rows = playable_ids.len().saturating_sub(
+        rows.iter()
+            .filter(|row| matches!(&row.item, RowItem::Cached { .. }))
+            .count(),
+    );
+    let covers = offline_cover_urls(&rows);
+    let (queue, display, positions) = build_row_models(&rows);
+    let custom_cover = crate::cover_artwork_qt::playlist_cover(&playlist_id.to_string())
+        .filter(|path| std::path::Path::new(path).is_file());
+    let doc = PlaylistDoc {
+        id: playlist_id.to_string(),
+        name,
+        owner: qbz_i18n::t("Available tracks only — offline"),
+        cover_url: custom_cover.clone().unwrap_or_default(),
+        cover_path: custom_cover.clone().unwrap_or_default(),
+        has_custom_cover: custom_cover.is_some(),
+        covers,
+        track_count: display.len() as i32,
+        total_duration: total_duration_label(&rows),
+        tracks: display,
+        // The page is intentionally read-only while offline. It still uses
+        // the mixed/source-aware queue even when there are no sidecar rows.
+        is_owner: false,
+        is_mixed: true,
+        ..Default::default()
+    };
+
+    set_open_mixed_snapshot(&doc.id, queue, positions);
+    crate::playlist_qt::mark_mixed();
+    log::info!(
+        "[qbz-qt] offline mixed playlist {}: {} cached Qobuz, {} sidecar, {} stale cache entries hidden",
+        playlist_id,
+        rows.iter()
+            .filter(|row| matches!(&row.item, RowItem::Cached { .. }))
+            .count(),
+        rows.iter()
+            .filter(|row| !matches!(&row.item, RowItem::Cached { .. }))
+            .count(),
+        hidden_snapshot_rows,
     );
     crate::playlist_qt::adopt_doc(doc);
     true
@@ -1198,4 +1451,94 @@ pub async fn reorder_row(runtime: &Runtime, from_row: usize, to_slot: usize) {
         return;
     };
     reorder(runtime, from, to).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cached(track_id: u64) -> RowItem {
+        cached_with_art(track_id, None)
+    }
+
+    fn cached_with_art(track_id: u64, artwork_path: Option<&str>) -> RowItem {
+        RowItem::Cached {
+            track_id,
+            title: format!("Track {track_id}"),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            duration_secs: 181,
+            bit_depth: Some(24),
+            sample_rate: Some(96.0),
+            artwork_path: artwork_path.map(str::to_string),
+        }
+    }
+
+    fn row_key(row: &LoadedRow) -> String {
+        match &row.item {
+            RowItem::Cached { track_id, .. } => format!("cached:{track_id}"),
+            RowItem::LocalFile { path } => format!("local:{path}"),
+            RowItem::Unresolved { kind, reference } => format!("{kind}:{reference}"),
+            _ => "other".into(),
+        }
+    }
+
+    #[test]
+    fn offline_merge_keeps_snapshot_duplicates_then_sorted_sidecars() {
+        let cached_rows = HashMap::from([(7, cached(7)), (9, cached(9))]);
+        let sidecars = vec![
+            LoadedRow {
+                position: 40,
+                item: RowItem::Unresolved {
+                    kind: "plex",
+                    reference: "later".into(),
+                },
+            },
+            LoadedRow {
+                position: 20,
+                item: RowItem::LocalFile {
+                    path: "/music/first.flac".into(),
+                },
+            },
+        ];
+
+        let rows = merge_offline_rows(&[7, 3, 9, 7], &cached_rows, sidecars);
+        assert_eq!(
+            rows.iter().map(row_key).collect::<Vec<_>>(),
+            vec![
+                "cached:7",
+                "cached:9",
+                "cached:7",
+                "local:/music/first.flac",
+                "plex:later",
+            ]
+        );
+    }
+
+    #[test]
+    fn cached_row_is_catalog_typed_but_ready_offline() {
+        let (row, queue) = row_to_display(&cached(77));
+        let queue = queue.expect("ready cache row must be playable");
+        assert_eq!(row.id, "77");
+        assert!(row.source.is_empty());
+        assert_eq!(row.cache_status, 3);
+        assert_eq!(row.quality_tier, "hires");
+        assert_eq!(queue.id, 77);
+        assert_eq!(queue.source.as_deref(), Some("qobuz"));
+        assert!(!queue.is_local);
+        assert!(queue.streamable);
+    }
+
+    #[test]
+    fn offline_cover_list_is_stable_deduplicated_and_capped() {
+        let rows: Vec<LoadedRow> = ["a", "b", "a", "c", "d", "e"]
+            .into_iter()
+            .enumerate()
+            .map(|(position, cover)| LoadedRow {
+                position: position as i32,
+                item: cached_with_art(position as u64, Some(cover)),
+            })
+            .collect();
+        assert_eq!(offline_cover_urls(&rows), vec!["a", "b", "c", "d"]);
+    }
 }

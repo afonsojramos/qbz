@@ -243,8 +243,9 @@ pub struct PlaylistDoc {
 // Mixed ("carretes paralelos") playlists
 // ---------------------------------------------------------------------------
 
-/// True while the open ONLINE Qobuz detail carries sidecar (local/Plex) rows.
-/// Set at the end of every [`load`], cleared by [`reset`] — the same lifetime
+/// True while the open Qobuz detail carries a source-aware queue snapshot.
+/// That includes an online mixed detail and the offline playable subset.
+/// Set by the corresponding loaders, cleared by [`reset`] — the same lifetime
 /// the reference gives it (`qbz/src/playlist.rs:32`).
 ///
 /// It exists because the DOC is not readable from the two write paths that need
@@ -268,6 +269,14 @@ pub fn is_mixed() -> bool {
 /// shape. `load` sets it authoritatively at the end; this only closes the gap.
 pub fn clear_mixed() {
     MIXED.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Stamp a Qobuz detail that is being served by the source-aware local
+/// playlist snapshot. Offline details always take this path even when their
+/// only visible rows happen to be downloaded Qobuz tracks: playback must use
+/// the filtered queue and must never rebuild the full online membership.
+pub(crate) fn mark_mixed() {
+    MIXED.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Remove ONE sidecar row (a local file or a Plex track) from the open MIXED

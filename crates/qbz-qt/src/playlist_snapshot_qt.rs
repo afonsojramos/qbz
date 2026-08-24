@@ -69,6 +69,25 @@ pub fn headers_blocking() -> HashMap<u64, (String, Option<u32>)> {
         .unwrap_or_default()
 }
 
+/// Persisted name for one playlist. This is the cold-start fallback for an
+/// offline detail: the sidebar session cache may not have existed yet, while
+/// the snapshot lives in the per-user library database.
+pub fn name_blocking(playlist_id: u64) -> Option<String> {
+    crate::library_db_qt::with_db(false, |db| {
+        Ok(db.with_connection(|conn| repo::get_header(conn, playlist_id)))
+    })
+    .and_then(Result::ok)
+    .flatten()
+    .map(|header| header.name)
+}
+
+fn playable_membership(track_ids: Vec<u64>, cached: &HashSet<u64>) -> Vec<u64> {
+    track_ids
+        .into_iter()
+        .filter(|track_id| cached.contains(track_id))
+        .collect()
+}
+
 /// Playlists whose persisted membership contains at least one playable cache
 /// entry. An expired subscription grace window makes the whole set empty.
 pub fn available_offline_blocking() -> HashSet<u64> {
@@ -89,4 +108,43 @@ pub fn available_offline_blocking() -> HashSet<u64> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// One playlist's playable snapshot membership in its persisted position
+/// order. Non-downloaded Qobuz rows are intentionally hidden offline; local
+/// and reachable-Plex sidecars are merged by `local_playlist_qt`.
+pub fn playable_track_ids_blocking(playlist_id: u64) -> Vec<u64> {
+    if !crate::offline_fwd::offline_playback_allowed() {
+        return Vec::new();
+    }
+    let cached = crate::offline_qt::cached_ids_set();
+    if cached.is_empty() {
+        return Vec::new();
+    }
+    crate::library_db_qt::with_db(false, |db| {
+        Ok(db.with_connection(|conn| repo::track_ids(conn, playlist_id)))
+    })
+    .and_then(Result::ok)
+    .map(|track_ids| playable_membership(track_ids, &cached))
+    .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playable_membership_preserves_snapshot_order_and_repetitions() {
+        let cached = HashSet::from([3, 7]);
+        assert_eq!(
+            playable_membership(vec![9, 7, 3, 7, 4], &cached),
+            vec![7, 3, 7]
+        );
+    }
+
+    #[test]
+    fn playable_membership_hides_every_uncached_row() {
+        let cached = HashSet::from([42]);
+        assert!(playable_membership(vec![1, 2, 3], &cached).is_empty());
+    }
 }

@@ -1595,9 +1595,6 @@ pub(crate) fn open_playlist(playlist_id: String) {
         });
         return;
     }
-    if offline_fwd::engine().status().is_offline() {
-        return;
-    }
     let Some(pid) = playlist_id.parse::<u64>().ok() else {
         log::warn!("[qbz-qt] open_playlist: invalid id {playlist_id}");
         return;
@@ -1609,6 +1606,14 @@ pub(crate) fn open_playlist(playlist_id: String) {
     // A Qobuz detail must not inherit the previous LOCAL detail's snapshot, or
     // its rows would resolve against the wrong playlist's queue.
     local_playlist_qt::clear_open_snapshot();
+    if offline_fwd::engine().status().is_offline() {
+        spawn(async move {
+            if !local_playlist_qt::load_qobuz_offline(pid).await {
+                log::warn!("[qbz-qt] offline playlist {pid} load failed");
+            }
+        });
+        return;
+    }
     let runtime = app();
     spawn(async move {
         if let Err(e) = playlist_qt::load(&runtime, pid).await {
