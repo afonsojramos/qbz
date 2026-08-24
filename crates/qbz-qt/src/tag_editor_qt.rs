@@ -18,12 +18,19 @@ use qbz_library::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
+enum EditorTarget {
+    Library,
+    Ephemeral { session_path: String },
+}
+
+#[derive(Clone)]
 struct EditorSession {
     generation: u64,
     album_id: String,
     group_key: String,
     directory: String,
     tracks: Vec<LocalTrack>,
+    target: EditorTarget,
 }
 
 static SESSION: OnceLock<Mutex<Option<EditorSession>>> = OnceLock::new();
@@ -236,17 +243,21 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
     }
 }
 
-pub fn open(album_id: String) {
+fn open_session(
+    album_id: String,
+    group_key: String,
+    directory: String,
+    tracks: Vec<LocalTrack>,
+    target: EditorTarget,
+) {
     if SAVE_ACTIVE.load(Ordering::Acquire) {
         return;
     }
-    let tracks = crate::local_album_actions::current_version_tracks();
-    let group_key = crate::local_album_actions::current_version_dir();
-    if tracks.is_empty() || group_key.trim().is_empty() {
+    if tracks.is_empty() || directory.trim().is_empty() {
         crate::toast_qt::error(qbz_i18n::t("No local album version is selected."));
         return;
     }
-    if !Path::new(&group_key).is_dir() {
+    if !Path::new(&directory).is_dir() {
         crate::toast_qt::info(qbz_i18n::t(
             "Metadata editing is available for local file versions only.",
         ));
@@ -257,9 +268,10 @@ pub fn open(album_id: String) {
     let open = EditorSession {
         generation,
         album_id,
-        group_key: group_key.clone(),
-        directory: group_key,
+        group_key,
+        directory,
         tracks,
+        target,
     };
     *session().lock().expect("tag editor session lock") = Some(open.clone());
     crate::tag_editor_bridge::ui(|mut bridge| {
@@ -275,12 +287,19 @@ pub fn open(album_id: String) {
     });
 
     crate::spawn(async move {
+        let started = std::time::Instant::now();
+        let row_count = open.tracks.len();
         let seed = tokio::task::spawn_blocking(move || build_seed(&open)).await;
         if OPEN_GEN.load(Ordering::SeqCst) != generation {
             return;
         }
         match seed {
             Ok(seed) => {
+                log::info!(
+                    "[qbz-qt][perf] tag editor preflight: {} rows in {:?}",
+                    row_count,
+                    started.elapsed()
+                );
                 let json = serde_json::to_string(&seed).unwrap_or_else(|_| "{}".to_string());
                 crate::tag_editor_bridge::ui(move |mut bridge| {
                     bridge
@@ -299,6 +318,36 @@ pub fn open(album_id: String) {
             }
         }
     });
+}
+
+pub fn open(album_id: String) {
+    let tracks = crate::local_album_actions::current_version_tracks();
+    let group_key = crate::local_album_actions::current_version_dir();
+    open_session(
+        album_id,
+        group_key.clone(),
+        group_key,
+        tracks,
+        EditorTarget::Library,
+    );
+}
+
+pub fn open_ephemeral(group_key: String) {
+    let Some((session_path, directory, tracks)) =
+        crate::local_ephemeral::editor_snapshot(&group_key)
+    else {
+        crate::toast_qt::info(qbz_i18n::t(
+            "Metadata editing is available for local file versions only.",
+        ));
+        return;
+    };
+    open_session(
+        format!("ephemeral:{group_key}"),
+        directory.clone(),
+        directory,
+        tracks,
+        EditorTarget::Ephemeral { session_path },
+    );
 }
 
 pub fn close() {
@@ -487,7 +536,9 @@ fn validate_draft(draft: SaveDraft, open: EditorSession) -> Result<SavePayload, 
     })
 }
 
-fn apply_database_update(payload: &SavePayload) -> Result<Vec<LocalTrack>, qbz_library::LibraryError> {
+fn apply_database_update(
+    payload: &SavePayload,
+) -> Result<Vec<LocalTrack>, qbz_library::LibraryError> {
     let path = crate::local_state::db_path()
         .ok_or_else(|| qbz_library::LibraryError::Database("library path unavailable".to_string()))?;
     let mut db = qbz_library::LibraryDatabase::open(&path)?;
@@ -502,6 +553,50 @@ fn apply_database_update(payload: &SavePayload) -> Result<Vec<LocalTrack>, qbz_l
         &payload.db_updates,
     )?;
     db.get_album_tracks(&payload.session.group_key)
+}
+
+fn updated_ephemeral_tracks(payload: &SavePayload) -> Vec<LocalTrack> {
+    let updates = payload
+        .db_updates
+        .iter()
+        .map(|update| (update.id, update))
+        .collect::<HashMap<_, _>>();
+    payload
+        .session
+        .tracks
+        .iter()
+        .cloned()
+        .map(|mut track| {
+            let update = updates
+                .get(&track.id)
+                .expect("validated ephemeral metadata row set");
+            track.title = update.title.clone();
+            track.track_number = update.track_number;
+            track.disc_number = update.disc_number;
+            track.album = payload.album.album_title.clone();
+            track.album_group_title = payload.album.album_title.clone();
+            track.album_artist = (!payload.album.album_artist.trim().is_empty())
+                .then(|| payload.album.album_artist.clone());
+            if payload.prior_artist.as_deref() == Some(track.artist.as_str())
+                && !payload.album.album_artist.trim().is_empty()
+            {
+                track.artist = payload.album.album_artist.clone();
+            }
+            track.year = payload.album.year;
+            track.genre = payload.album.genre.clone();
+            track.genres = payload.album.genre.iter().cloned().collect();
+            track.catalog_number = payload.album.catalog_number.clone();
+            track
+        })
+        .collect()
+}
+
+enum SaveOutcome {
+    Library {
+        album_id: String,
+        tracks: Vec<LocalTrack>,
+    },
+    Ephemeral,
 }
 
 pub fn save(draft_json: &str) {
@@ -563,8 +658,18 @@ pub fn save(draft_json: &str) {
                     &payload.sidecar,
                 )?;
             }
-            let tracks = apply_database_update(&payload)?;
-            Ok::<_, qbz_library::LibraryError>((payload.session.album_id, tracks))
+            let outcome = match &payload.session.target {
+                EditorTarget::Library => SaveOutcome::Library {
+                    album_id: payload.session.album_id.clone(),
+                    tracks: apply_database_update(&payload)?,
+                },
+                EditorTarget::Ephemeral { session_path } => {
+                    let tracks = updated_ephemeral_tracks(&payload);
+                    crate::local_ephemeral::apply_editor_update(session_path, &tracks)?;
+                    SaveOutcome::Ephemeral
+                }
+            };
+            Ok::<_, qbz_library::LibraryError>(outcome)
         })
         .await
         .unwrap_or_else(|error| {
@@ -583,7 +688,7 @@ pub fn save(draft_json: &str) {
             bridge.as_mut().set_editor_progress_total(0);
         });
         match result {
-            Ok((album_id, tracks)) => {
+            Ok(SaveOutcome::Library { album_id, tracks }) => {
                 // Publish from the authoritative DB rows directly. In metadata
                 // grouping the logical id may change as part of this edit, so
                 // re-querying by the old id would close a successful save.
@@ -597,6 +702,12 @@ pub fn save(draft_json: &str) {
                     });
                 }
                 crate::local_bridge_ops::reload_browse();
+                if OPEN_GEN.load(Ordering::SeqCst) == open_generation {
+                    close();
+                }
+                crate::toast_qt::success(qbz_i18n::t("Album metadata saved."));
+            }
+            Ok(SaveOutcome::Ephemeral) => {
                 if OPEN_GEN.load(Ordering::SeqCst) == open_generation {
                     close();
                 }
@@ -750,6 +861,7 @@ mod tests {
             album_id: "album:test".to_string(),
             group_key: "/library/album".to_string(),
             directory: "/library/album".to_string(),
+            target: EditorTarget::Library,
             tracks: vec![
                 LocalTrack {
                     id: 10,
@@ -821,6 +933,27 @@ mod tests {
     }
 
     #[test]
+    fn ephemeral_rows_receive_album_and_track_edits_without_changing_paths() {
+        let draft: SaveDraft = serde_json::from_str(&draft_json(
+            r#"[
+                {"id":"10","title":"First","trackNumber":"3","discNumber":"2"},
+                {"id":"20","title":"Second","trackNumber":"4","discNumber":"2"}
+            ]"#,
+        ))
+        .unwrap();
+        let payload = validate_draft(draft, session_fixture()).unwrap();
+        let tracks = updated_ephemeral_tracks(&payload);
+
+        assert_eq!(tracks[0].file_path, "/library/album/01.flac");
+        assert_eq!(tracks[0].album, "Album");
+        assert_eq!(tracks[0].album_artist.as_deref(), Some("Artist"));
+        assert_eq!(tracks[0].title, "First");
+        assert_eq!(tracks[0].track_number, Some(3));
+        assert_eq!(tracks[0].disc_number, Some(2));
+        assert_eq!(tracks[0].genre.as_deref(), Some("Rock"));
+    }
+
+    #[test]
     fn injected_rows_or_paths_are_rejected() {
         let injected_id: SaveDraft = serde_json::from_str(&draft_json(
             r#"[
@@ -838,5 +971,13 @@ mod tests {
             ]"#,
         );
         assert!(serde_json::from_str::<SaveDraft>(&injected_path).is_err());
+    }
+
+    #[test]
+    fn modal_consumes_seed_when_loading_finishes_after_json_publish() {
+        let qml = include_str!("../qml/controls/TagEditorModal.qml");
+        assert!(qml.contains("function onEditorJsonChanged()"));
+        assert!(qml.contains("function onEditorLoadingChanged()"));
+        assert!(qml.contains("!QbzTagEditor.editorLoading"));
     }
 }

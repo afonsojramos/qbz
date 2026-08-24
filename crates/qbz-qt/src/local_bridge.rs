@@ -481,6 +481,10 @@ pub mod qbz_local {
         /// Per-album Play (multi-album sessions only).
         #[qinvokable]
         fn ephemeral_play_album(self: Pin<&mut QbzLocal>, group_key: QString);
+        /// Open the app-wide metadata editor for one physical album directory
+        /// in the current ephemeral session.
+        #[qinvokable]
+        fn ephemeral_edit_tags(self: Pin<&mut QbzLocal>, group_key: QString);
         /// Track row click: the track's album block becomes the queue.
         #[qinvokable]
         fn ephemeral_play_track(self: Pin<&mut QbzLocal>, id: QString);
@@ -1501,6 +1505,10 @@ impl qbz_local::QbzLocal {
         crate::spawn(async move {
             crate::local_ephemeral::play_album(&runtime, key).await;
         });
+    }
+
+    pub fn ephemeral_edit_tags(self: Pin<&mut Self>, group_key: QString) {
+        crate::tag_editor_qt::open_ephemeral(group_key.to_string());
     }
 
     pub fn ephemeral_play_track(self: Pin<&mut Self>, id: QString) {

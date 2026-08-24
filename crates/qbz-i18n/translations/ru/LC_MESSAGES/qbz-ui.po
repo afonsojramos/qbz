@@ -5832,3 +5832,6 @@ msgstr "Открыть медиафайл"
 
 msgid "Open folder…"
 msgstr "Открыть папку…"
+
+msgid "The ephemeral session changed; reopen the metadata editor."
+msgstr "Эфемерный сеанс изменился; снова откройте редактор метаданных."

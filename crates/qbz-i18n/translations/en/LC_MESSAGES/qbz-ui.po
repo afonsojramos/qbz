@@ -1390,3 +1390,6 @@ msgstr "tracks"
 
 msgid "{} must be a positive number."
 msgstr "{} must be a positive number."
+
+msgid "The ephemeral session changed; reopen the metadata editor."
+msgstr "The ephemeral session changed; reopen the metadata editor."

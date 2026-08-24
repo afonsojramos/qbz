@@ -165,6 +165,14 @@ Item {
             if (root.visible && !QbzTagEditor.editorLoading)
                 root.seed(root.parse(QbzTagEditor.editorJson))
         }
+        // Rust publishes the immutable document before it clears loading so
+        // the UI can never observe a ready flag with stale data. Consume the
+        // document on that second signal as well; otherwise the JSON change is
+        // deliberately ignored while loading and the modal spins forever.
+        function onEditorLoadingChanged() {
+            if (root.visible && !QbzTagEditor.editorLoading)
+                root.seed(root.parse(QbzTagEditor.editorJson))
+        }
         function onRemoteSeqChanged() {
             var event = root.parse(QbzTagEditor.remoteJson)
             if (event.kind === "results") {

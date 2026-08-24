@@ -5815,3 +5815,6 @@ msgstr "Medium öffnen"
 
 msgid "Open folder…"
 msgstr "Ordner öffnen…"
+
+msgid "The ephemeral session changed; reopen the metadata editor."
+msgstr "Die temporäre Sitzung wurde geändert; öffne den Metadaten-Editor erneut."

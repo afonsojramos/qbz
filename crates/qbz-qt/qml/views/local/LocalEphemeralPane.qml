@@ -241,6 +241,21 @@ Item {
                                     QbzSession.tr("Play it in a shuffled order", QbzSession.trRev))
                             }
                         }
+                        QbzCircleAction {
+                            id: editFolderAlbumBtn
+                            visible: !QbzLocal.localSessionIsDisc
+                                && root.allAlbums.length === 1
+                                && !QbzLocal.localEphemeralLoading
+                            name: "pen-line"
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzLocal.ephemeralEditTags(
+                                root.allAlbums[0].groupKey)
+                            HoverHandler {
+                                onHoveredChanged: tips.hover(hovered, editFolderAlbumBtn,
+                                    "eph-edit-album",
+                                    QbzSession.tr("Edit metadata", QbzSession.trRev))
+                            }
+                        }
                         // Fix the names. Offered for both DISC media — a
                         // CD-DA carries no titles at all, and a SACD's Master
                         // TOC can carry the wrong ones ("names itself" and
@@ -462,8 +477,7 @@ Item {
                                 }
                             }
                             Column {
-                                width: parent.width - 56 - 12
-                                    - (root.eph && root.eph.multiAlbum ? 46 : 0)
+                                width: parent.width - 56 - blockActions.width - 24
                                 anchors.verticalCenter: parent.verticalCenter
                                 spacing: 2
                                 Row {
@@ -512,11 +526,27 @@ Item {
                                     elide: Text.ElideRight
                                 }
                             }
-                            QbzCircleAction {
-                                visible: root.eph && root.eph.multiAlbum === true
+                            Row {
+                                id: blockActions
                                 anchors.verticalCenter: parent.verticalCenter
-                                name: "play-fill"
-                                onClicked: QbzLocal.ephemeralPlayAlbum(block.modelData.groupKey)
+                                spacing: 8
+                                QbzCircleAction {
+                                    id: editBlockBtn
+                                    visible: !QbzLocal.localSessionIsDisc
+                                    name: "pen-line"
+                                    onClicked: QbzLocal.ephemeralEditTags(
+                                        block.modelData.groupKey)
+                                    HoverHandler {
+                                        onHoveredChanged: tips.hover(hovered, editBlockBtn,
+                                            "eph-edit-block",
+                                            QbzSession.tr("Edit metadata", QbzSession.trRev))
+                                    }
+                                }
+                                QbzCircleAction {
+                                    name: "play-fill"
+                                    onClicked: QbzLocal.ephemeralPlayAlbum(
+                                        block.modelData.groupKey)
+                                }
                             }
                         }
 

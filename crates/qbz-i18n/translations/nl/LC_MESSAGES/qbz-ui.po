@@ -5802,3 +5802,6 @@ msgstr "Het jaar moet een geldig getal zijn."
 
 msgid "{} must be a positive number."
 msgstr "{} moet een positief getal zijn."
+
+msgid "The ephemeral session changed; reopen the metadata editor."
+msgstr "De tijdelijke sessie is gewijzigd; open de metadata-editor opnieuw."

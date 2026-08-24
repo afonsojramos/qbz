@@ -5813,3 +5813,6 @@ msgstr "Abrir mídia"
 
 msgid "Open folder…"
 msgstr "Abrir pasta…"
+
+msgid "The ephemeral session changed; reopen the metadata editor."
+msgstr "A sessão efêmera mudou; reabra o editor de metadados."

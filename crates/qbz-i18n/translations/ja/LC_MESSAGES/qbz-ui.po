@@ -5798,3 +5798,6 @@ msgstr "メディアを開く"
 
 msgid "Open folder…"
 msgstr "フォルダーを開く…"
+
+msgid "The ephemeral session changed; reopen the metadata editor."
+msgstr "一時セッションが変更されました。メタデータエディターを開き直してください。"

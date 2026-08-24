@@ -172,6 +172,58 @@ pub(crate) fn album_tracks_for(group_key: &str) -> Vec<LocalTrack> {
     album_tracks(group_key)
 }
 
+/// Snapshot one physical directory for the app-wide metadata editor.
+///
+/// The pane splits a multidisc directory into visual blocks, but metadata and
+/// its `.qbz.json` sidecar are directory-scoped. Expanding the clicked block
+/// back to every row in that directory avoids overwriting a sibling disc's
+/// sidecar entries or deleting them after a verified direct write.
+pub(crate) fn editor_snapshot(group_key: &str) -> Option<(String, String, Vec<LocalTrack>)> {
+    let selected = album_tracks(group_key);
+    let first = selected.first()?;
+    let directory = Path::new(&first.file_path).parent()?.to_path_buf();
+    if !directory.is_dir() {
+        return None;
+    }
+    let tracks = STATE
+        .tracks_snapshot()
+        .into_iter()
+        .filter(|track| Path::new(&track.file_path).parent() == Some(directory.as_path()))
+        .collect::<Vec<_>>();
+    if tracks.is_empty() {
+        return None;
+    }
+    Some((
+        STATE.current_folder_path()?,
+        directory.to_string_lossy().into_owned(),
+        tracks,
+    ))
+}
+
+/// Publish metadata edits into the live ephemeral session without renumbering
+/// rows already referenced by the queue. The library state performs the
+/// session and exact id/path checks atomically before replacing anything.
+pub(crate) fn apply_editor_update(
+    expected_session: &str,
+    edited: &[LocalTrack],
+) -> Result<(), qbz_library::LibraryError> {
+    let tracks = STATE
+        .replace_tracks_for_session(expected_session, edited)
+        .map_err(|error| qbz_library::LibraryError::Metadata(error.to_string()))?
+        .ok_or_else(|| {
+            qbz_library::LibraryError::Metadata(
+                qbz_i18n::t("The ephemeral session changed; reopen the metadata editor."),
+            )
+        })?;
+    let name = if Path::new(expected_session).is_dir() {
+        folder_display_name(expected_session)
+    } else {
+        expected_session.to_string()
+    };
+    publish_doc(&build_doc(&name, expected_session, &tracks), false);
+    Ok(())
+}
+
 fn album_tracks(group_key: &str) -> Vec<LocalTrack> {
     STATE
         .tracks_snapshot()

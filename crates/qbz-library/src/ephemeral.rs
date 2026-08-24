@@ -32,8 +32,30 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::{cue_to_tracks, CueParser, LibraryError, LibraryScanner, LocalTrack, MetadataExtractor};
+use crate::{
+    cue_to_tracks, AlbumTagSidecar, CueParser, LibraryError, LibraryScanner, LocalTrack,
+    MetadataExtractor,
+};
 use serde::Serialize;
+
+fn apply_sidecar_override(
+    track: &mut LocalTrack,
+    cache: &mut HashMap<PathBuf, Option<AlbumTagSidecar>>,
+) {
+    let own_directory = Path::new(&track.file_path).parent().map(Path::to_path_buf);
+    let grouped_directory = (!track.album_group_key.trim().is_empty())
+        .then(|| PathBuf::from(&track.album_group_key))
+        .filter(|path| path.is_dir());
+    for directory in grouped_directory.into_iter().chain(own_directory) {
+        let sidecar = cache
+            .entry(directory.clone())
+            .or_insert_with(|| crate::read_album_sidecar(&directory).unwrap_or(None));
+        if let Some(sidecar) = sidecar.as_ref() {
+            crate::apply_sidecar_to_track(track, sidecar);
+            return;
+        }
+    }
+}
 
 /// Floor for synthetic ephemeral track ids. Any id at or above this
 /// value is an ephemeral track; below it is a DB row id. Set high
@@ -145,6 +167,7 @@ impl EphemeralLibraryState {
         // share the same parent directory.
         let mut album_artwork_cache: HashMap<String, Option<String>> = HashMap::new();
         let mut folder_artwork_cache: HashMap<PathBuf, Option<String>> = HashMap::new();
+        let mut sidecar_cache: HashMap<PathBuf, Option<AlbumTagSidecar>> = HashMap::new();
 
         // Audio files referenced by CUE sheets. We index those audio files
         // through the CUE path (one logical "album" file gets exploded
@@ -249,6 +272,7 @@ impl EphemeralLibraryState {
                     };
 
                     for mut track in cue_tracks.drain(..) {
+                        apply_sidecar_override(&mut track, &mut sidecar_cache);
                         track.id = inner.next_id;
                         inner.next_id += 1;
                         track.source = Some("ephemeral".to_string());
@@ -353,6 +377,7 @@ impl EphemeralLibraryState {
             }
             match extracted {
                 Ok(mut track) => {
+                    apply_sidecar_override(&mut track, &mut sidecar_cache);
                     track.id = inner.next_id;
                     inner.next_id += 1;
                     track.source = Some("ephemeral".to_string());
@@ -519,6 +544,36 @@ impl EphemeralLibraryState {
         Ok(())
     }
 
+    /// Replace a bounded subset only while the same folder/disc session is
+    /// still open. The exact id/path check prevents a draft from a dismissed
+    /// editor from mutating a later session that reused the synthetic ids.
+    pub fn replace_tracks_for_session(
+        &self,
+        expected_folder_path: &str,
+        tracks: &[LocalTrack],
+    ) -> Result<Option<Vec<LocalTrack>>, EphemeralError> {
+        let mut inner = self.inner.lock().map_err(|_| EphemeralError::Lock)?;
+        if inner.current_folder_path.as_deref() != Some(expected_folder_path) {
+            return Ok(None);
+        }
+        for track in tracks {
+            let Some(current) = inner.tracks.get(&track.id) else {
+                return Ok(None);
+            };
+            if current.file_path != track.file_path
+                || current.cue_start_secs != track.cue_start_secs
+            {
+                return Ok(None);
+            }
+        }
+        for track in tracks {
+            inner.tracks.insert(track.id, track.clone());
+        }
+        let mut snapshot = inner.tracks.values().cloned().collect::<Vec<_>>();
+        snapshot.sort_by_key(|track| track.id);
+        Ok(Some(snapshot))
+    }
+
     pub fn clear(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.reset();
@@ -554,5 +609,73 @@ impl EphemeralLibraryState {
 impl Default for EphemeralLibraryState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod editor_tests {
+    use super::*;
+
+    fn track_at(path: &Path) -> LocalTrack {
+        LocalTrack {
+            file_path: path.to_string_lossy().into_owned(),
+            title: "Before".to_string(),
+            album: "Before album".to_string(),
+            album_group_title: "Before album".to_string(),
+            artist: "Artist".to_string(),
+            ..LocalTrack::default()
+        }
+    }
+
+    #[test]
+    fn sidecar_overrides_are_visible_to_ephemeral_scans() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("01.flac");
+        let sidecar = crate::AlbumTagSidecar::new(
+            crate::AlbumMetadataOverride {
+                album_title: Some("After album".to_string()),
+                album_artist: Some("After artist".to_string()),
+                ..crate::AlbumMetadataOverride::default()
+            },
+            vec![crate::TrackMetadataOverride {
+                file_path: file.to_string_lossy().into_owned(),
+                cue_start_secs: None,
+                title: Some("After".to_string()),
+                disc_number: Some(1),
+                track_number: Some(1),
+            }],
+        );
+        crate::write_album_sidecar(temp.path(), &sidecar).unwrap();
+
+        let mut track = track_at(&file);
+        let mut cache = HashMap::new();
+        apply_sidecar_override(&mut track, &mut cache);
+
+        assert_eq!(track.album, "After album");
+        assert_eq!(track.album_artist.as_deref(), Some("After artist"));
+        assert_eq!(track.title, "After");
+    }
+
+    #[test]
+    fn stale_editor_snapshot_cannot_retarget_a_new_ephemeral_session() {
+        let state = EphemeralLibraryState::new();
+        let first = state
+            .open_tracks("first", vec![track_at(Path::new("/music/first.flac"))])
+            .unwrap();
+        let mut edited = first.tracks;
+        edited[0].title = "Edited".to_string();
+        assert!(state
+            .replace_tracks_for_session("first", &edited)
+            .unwrap()
+            .is_some());
+
+        state
+            .open_tracks("second", vec![track_at(Path::new("/music/second.flac"))])
+            .unwrap();
+        assert!(state
+            .replace_tracks_for_session("first", &edited)
+            .unwrap()
+            .is_none());
+        assert_eq!(state.tracks_snapshot()[0].title, "Before");
     }
 }
