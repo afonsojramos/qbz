@@ -1661,6 +1661,59 @@ mod tests {
             .is_some());
     }
 
+    /// Jellyfin can remint every item id after a library rebuild while the
+    /// audio and album metadata remain identical. A full user-requested
+    /// reconciliation must treat the newly observed identity set as
+    /// authoritative; otherwise every physical track appears twice forever.
+    #[test]
+    fn full_reconciliation_replaces_a_completely_remapped_identity_set() {
+        let mut c = db();
+        let mut old_one = track("old-one", "same album", Some(1), Some(1));
+        old_one.title = "First".into();
+        let mut old_two = track("old-two", "same album", Some(1), Some(2));
+        old_two.title = "Second".into();
+        save_tracks(
+            &mut c,
+            RemoteSource::Jellyfin,
+            &[old_one.clone(), old_two.clone()],
+        )
+        .unwrap();
+
+        let generation = begin_source_sync(&mut c, RemoteSource::Jellyfin)
+            .unwrap()
+            .generation;
+        let mut new_one = old_one;
+        new_one.item_id = "new-one".into();
+        let mut new_two = old_two;
+        new_two.item_id = "new-two".into();
+        save_essential_tracks(
+            &mut c,
+            RemoteSource::Jellyfin,
+            generation,
+            &[new_one, new_two],
+        )
+        .unwrap();
+
+        assert_eq!(count(&c, RemoteSource::Jellyfin).unwrap(), 4);
+        assert_eq!(
+            complete_source_sync(&mut c, RemoteSource::Jellyfin, generation, true).unwrap(),
+            2
+        );
+        assert_eq!(count(&c, RemoteSource::Jellyfin).unwrap(), 2);
+        assert!(track_by_item_id(&c, RemoteSource::Jellyfin, "old-one")
+            .unwrap()
+            .is_none());
+        assert!(track_by_item_id(&c, RemoteSource::Jellyfin, "old-two")
+            .unwrap()
+            .is_none());
+        assert!(track_by_item_id(&c, RemoteSource::Jellyfin, "new-one")
+            .unwrap()
+            .is_some());
+        assert!(track_by_item_id(&c, RemoteSource::Jellyfin, "new-two")
+            .unwrap()
+            .is_some());
+    }
+
     #[test]
     fn duplicate_item_across_essential_pages_rolls_back_the_second_page() {
         let mut c = db();

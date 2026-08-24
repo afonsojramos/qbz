@@ -560,4 +560,16 @@ mod phase_a_tests {
         assert!(view_qml.contains("readonly property var tracksVisible: tracks"));
         assert!(!view_qml.contains("readonly property var tracksVisible: {"));
     }
+
+    #[test]
+    fn explicit_remote_resync_is_authoritative() {
+        // Jellyfin deltas cannot enumerate deleted/reminted provider ids. The
+        // Local Library menu says "Resync", so both its direct rows and the
+        // aggregate action must request a full observation before pruning.
+        let chrome = include_str!("../qml/views/local/LocalChrome.qml");
+        assert!(chrome.contains("QbzLocal.mediaSync(\"jellyfin\", true)"));
+        assert!(chrome.contains("QbzLocal.mediaSync(\"subsonic\", true)"));
+        assert!(!chrome.contains("QbzLocal.mediaSync(\"jellyfin\", false)"));
+        assert!(!chrome.contains("QbzLocal.mediaSync(\"subsonic\", false)"));
+    }
 }

@@ -296,10 +296,17 @@ Item {
                 QbzBridge.settingsString("library-scan", "")
             if ((action === "plex" || action === "all") && QbzLocal.plexAvailable)
                 QbzLocal.syncPlex()
+            // A button labelled Resync is an authoritative reconciliation,
+            // not a delta. Jellyfin's DateLastSaved delta cannot report rows
+            // whose provider ids disappeared (for example after a library
+            // rebuild), so using it here retained the old ids beside the new
+            // ones and rendered one physical copy as two versions. Automatic
+            // background catch-up may still use deltas; an explicit repair
+            // must observe the complete source before it authorizes pruning.
             if ((action === "jellyfin" || action === "all") && QbzLocal.mediaHasJellyfin)
-                QbzLocal.mediaSync("jellyfin", false)
+                QbzLocal.mediaSync("jellyfin", true)
             if ((action === "subsonic" || action === "all") && QbzLocal.mediaHasSubsonic)
-                QbzLocal.mediaSync("subsonic", false)
+                QbzLocal.mediaSync("subsonic", true)
         }
     }
 
