@@ -521,11 +521,17 @@ mod phase_a_tests {
 
     #[test]
     fn tracks_page_republish_keeps_the_visible_track_anchor() {
-        // A legacy page append republishes the accumulated rows as a fresh JS
-        // array, which makes QQuickItemView reset to the top. The restoration
-        // must follow track identity (grouping can move its index), retain a
-        // partially clipped row's pixel offset and run after the relayout.
+        // A legacy page append republishes the accumulated rows as JSON. Keep
+        // one ListModel mounted and append an immutable prefix in-place so
+        // QQuickItemView never receives setModel(). Grouped reorder fallback
+        // must still follow track identity and retain the clipped-row offset.
         let qml = include_str!("../qml/views/local/LocalTracksTab.qml");
+        assert!(qml.contains("id: legacyEntriesModel"));
+        assert!(!qml.contains("dynamicRoles: true"));
+        assert!(qml.contains("function canAppendLegacyEntries(nextEntries)"));
+        assert!(qml.contains("legacyEntriesModel.append({\"modelData\": nextEntries[i]})"));
+        assert!(qml.contains("? root.view.nativeTracksModel : legacyEntriesModel"));
+        assert!(!qml.contains("? root.view.nativeTracksModel : root.entries"));
         assert!(qml.contains("function capturePageAnchor()"));
         assert!(qml.contains("String(root.entries[i].row.id)"));
         assert!(qml.contains("cell.y - list.contentY"));
@@ -540,6 +546,7 @@ mod phase_a_tests {
         assert!(qml.contains("function restorePageAnchor(anchor, nextEntries, epoch)"));
         assert!(qml.contains("Qt.callLater(function ()"));
         assert!(qml.contains("list.positionViewAtIndex(target, ListView.Beginning)"));
-        assert!(qml.contains("root.restorePageAnchor(anchor, out, epoch)"));
+        assert!(qml.contains("root.publishLegacyEntries(out, anchor, epoch)"));
+        assert!(qml.contains("root.restorePageAnchor(anchor, nextEntries, epoch)"));
     }
 }

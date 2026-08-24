@@ -9,6 +9,7 @@
 // heights instead of a Repeater per group.
 
 import QtQuick
+import QtQml.Models
 import com.blitzfc.qbz
 import "../../controls"
 import "../../theme"
@@ -44,6 +45,62 @@ Item {
     // Invalidates a deferred viewport restore when another document/model
     // replacement wins before Qt's next event-loop turn.
     property int entriesEpoch: 0
+
+    // Keep one QAbstractItemModel object mounted for the entire compatibility
+    // session. Binding a fresh JS array to ListView.model for every accumulated
+    // 500-row document invokes setModel() and resets the view before any anchor
+    // repair can run. A ListModel append is a real rowsInserted notification:
+    // Qt keeps contentY and the visible delegate untouched.
+    ListModel {
+        id: legacyEntriesModel
+    }
+
+    function sameEntryIdentity(a, b) {
+        if (!a || !b || a.t !== b.t)
+            return false
+        if (a.t === 0)
+            return String(a.label) === String(b.label)
+        return a.row && b.row && String(a.row.id) === String(b.row.id)
+    }
+
+    function canAppendLegacyEntries(nextEntries) {
+        if (legacyEntriesModel.count !== root.entries.length
+            || nextEntries.length < root.entries.length)
+            return false
+        for (var i = 0; i < root.entries.length; i++) {
+            if (!root.sameEntryIdentity(root.entries[i], nextEntries[i]))
+                return false
+        }
+        return true
+    }
+
+    function publishLegacyEntries(nextEntries, anchor, epoch) {
+        var previousCount = root.entries.length
+        if (root.canAppendLegacyEntries(nextEntries)) {
+            // The normal ungrouped paging path has an immutable prefix. Append
+            // only the new tail, preserving the viewport by construction.
+            // Hold the request guard through the rowsInserted polish so a
+            // kinetic-scroll signal cannot request a second page recursively.
+            if (root.pageRequestPending)
+                root.restoringPageAnchor = true
+            for (var i = previousCount; i < nextEntries.length; i++)
+                legacyEntriesModel.append({"modelData": nextEntries[i]})
+            root.entries = nextEntries
+            if (root.pageRequestPending)
+                pageAnchorSettle.restart()
+            return
+        }
+
+        // Search/sort and grouped compatibility modes can reorder the prefix.
+        // Rebuild rows inside the SAME ListModel object and then restore the
+        // semantic anchor. This avoids QQuickItemView::setModel() even when a
+        // full reconciliation is necessary.
+        legacyEntriesModel.clear()
+        for (var j = 0; j < nextEntries.length; j++)
+            legacyEntriesModel.append({"modelData": nextEntries[j]})
+        root.entries = nextEntries
+        root.restorePageAnchor(anchor, nextEntries, epoch)
+    }
 
     function requestNextPage(force) {
         if (root.nativeModelActive
@@ -122,10 +179,10 @@ Item {
         if (target < 0)
             return
 
-        // Assigning a fresh JS array invokes QQuickItemView::setModel(); the
-        // reset and its content-height polish finish after `entries = out`.
-        // Restore on the next turn, then use the delegate's viewport position
-        // to retain the exact partial-row offset.
+        // A grouped update can clear and refill the stable ListModel because
+        // newly fetched rows belong before the current viewport. Let those
+        // remove/insert notifications settle, then retain the exact semantic
+        // track and partial-row offset on the next event-loop turn.
         Qt.callLater(function () {
             if (epoch !== root.entriesEpoch || root.nativeModelActive)
                 return
@@ -162,6 +219,7 @@ Item {
         root.entriesEpoch += 1
         var epoch = root.entriesEpoch
         if (root.nativeModelActive) {
+            legacyEntriesModel.clear()
             entries = []
             rowIndex = []
             try {
@@ -193,11 +251,10 @@ Item {
             out.push({ "t": 1, "row": t, "n": i + 1 })
             idx.push(i)
         }
-        entries = out
         alphaJumps = jumps
         rowIndex = idx
+        root.publishLegacyEntries(out, anchor, epoch)
         report()
-        root.restorePageAnchor(anchor, out, epoch)
     }
     Component.onCompleted: { rebuild(); reportSoon() }
     Component.onDestruction: if (view) view.releaseWindow("tracks")
@@ -357,7 +414,8 @@ Item {
                 clip: true
                 cacheBuffer: 50 * 12
                 boundsBehavior: Flickable.StopAtBounds
-                model: root.nativeModelActive ? root.view.nativeTracksModel : root.entries
+                model: root.nativeModelActive
+                    ? root.view.nativeTracksModel : legacyEntriesModel
 
                 onContentYChanged: {
                     root.report()
