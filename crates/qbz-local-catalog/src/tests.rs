@@ -1045,12 +1045,32 @@ fn sort_indices_match_the_actual_order_by_without_temp_sort() {
             "sort_album,sort_artist,disc_sort,track_sort,sort_title,catalog_id",
         ),
         (
+            "idx_tracks_title_asc",
+            "sort_title,sort_artist,catalog_id",
+        ),
+        (
             "idx_tracks_title_desc",
             "sort_title DESC,sort_artist,catalog_id",
         ),
         (
+            "idx_tracks_artist_asc",
+            "sort_artist,sort_album,disc_sort,track_sort,catalog_id",
+        ),
+        (
+            "idx_tracks_artist_desc",
+            "sort_artist DESC,sort_album,disc_sort,track_sort,catalog_id",
+        ),
+        (
+            "idx_tracks_year_asc",
+            "year_missing,year_value,sort_album,disc_sort,track_sort,catalog_id",
+        ),
+        (
             "idx_tracks_year_desc",
             "year_missing,year_value DESC,sort_album,disc_sort,track_sort,catalog_id",
+        ),
+        (
+            "idx_tracks_added_desc",
+            "added_at DESC,sort_album,disc_sort,track_sort,catalog_id",
         ),
         (
             "idx_tracks_group_artist",
