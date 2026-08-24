@@ -312,15 +312,16 @@ Rectangle {
                     // shell's ArtPreviewOverlay was simply never armed in
                     // Small). Rule 5 — reuse, don't fork.
                     //
-                    // Width = the column minus the Sep + time column, so the
-                    // title and the meta budget elide at exactly the free
-                    // space. Height = the 39px controls row: BOTH must be
+                    // The live runway is the column minus Sep + time; the
+                    // shared 80% cap keeps this mode consistent with the three
+                    // full bars. Height = the 39px controls row: BOTH must be
                     // explicit, because SongCard's own defaults are 200x74 and
                     // a 74px card would push the 37px cover off-centre.
                     SongCard {
                         height: parent.height
-                        width: Math.max(0,
+                        readonly property real availableWidth: Math.max(0,
                             parent.width - (QbzPlayer.npHasTrack ? 59 : 0))
+                        width: availableWidth * theme.npbSongCardMaxFraction
                         artSize: 37
                         artBorderWidth: 3
                         artBorderColor: theme.surfaceCard

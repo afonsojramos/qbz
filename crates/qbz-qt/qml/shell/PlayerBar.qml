@@ -426,8 +426,9 @@ Rectangle {
                 SongCard {
                     visible: !root.isClassic
                     x: root.largeActive ? root.dockWidth + 8 : 0
-                    width: Math.max(0,
+                    readonly property real availableWidth: Math.max(0,
                         controlsLayout.transportLeft - 10 - leftZone.x - x)
+                    width: availableWidth * theme.npbSongCardMaxFraction
                     anchors.verticalCenter: parent.verticalCenter
                     showArt: !root.largeActive
                     showBadges: !root.largeActive
@@ -653,8 +654,8 @@ Rectangle {
             }
 
             // Classic lives between the REAL left transport and right action
-            // cluster. It may use at most 85% of that live gap, centred: the
-            // remaining 7.5% on each side keeps both the cover edge and the
+            // cluster. It may use at most 80% of that live gap, centred: the
+            // remaining 10% on each side keeps both the cover edge and the
             // in-card AudioStamp visibly detached from their neighbour controls.
             // Unlike the old fixed 560px cap this still scales with volume
             // steppers, remote state and the actual window width.
@@ -664,7 +665,7 @@ Rectangle {
                 readonly property real availableWidth: Math.max(0,
                     controlsLayout.rightControlsLeft
                         - controlsLayout.classicTransportRight)
-                width: availableWidth * 0.85
+                width: availableWidth * theme.npbSongCardMaxFraction
                 x: controlsLayout.classicTransportRight
                     + (availableWidth - width) / 2
                 anchors.verticalCenter: parent.verticalCenter

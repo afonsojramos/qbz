@@ -422,6 +422,10 @@ QtObject {
     // window width entirely, so folding it in would misrepresent the rule.
     readonly property int npbBreakMid: 1366
     readonly property int npbBreakWide: 1920
+    // Owner visual ruling (2026-08-23): the metadata card may consume at most
+    // 80% of its live runway in every NPB mode. One token keeps New, Classic,
+    // Large and Small from drifting back to four different proportions.
+    readonly property real npbSongCardMaxFraction: 0.80
     // `w` is the BAR's width, which is the window's width: both bars are
     // anchored left-to-right on the shell root (AppShell.qml:72-80), NOT
     // inset by the sidebar or the queue column (those anchor to npb.top).
