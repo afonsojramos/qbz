@@ -199,13 +199,9 @@ pub struct AlbumCredit<'a> {
 /// Does this album credit the artist whose normalized name is `nsel` — as
 /// primary, inside `all_artists`, or as one part of a multi-artist credit?
 ///
-/// EXACT comparison of NORMALIZED PARTS, never a substring test: "Air" must
+/// Exact comparison of normalized parts, never a substring test: "Air" must
 /// not match "Airbourne" or "Blair", and an album credited "A & B" must
-/// appear under "B".
-pub fn album_matches_artist(artist: &str, all_artists: &str, nsel: &str) -> bool {
-    album_matches_artist_with_aliases(artist, all_artists, nsel, &ArtistFamilyAliases::default())
-}
-
+/// appear under "B". Repeated family aliases are resolved before comparison.
 pub fn album_matches_artist_with_aliases(
     artist: &str,
     all_artists: &str,
@@ -439,6 +435,15 @@ pub fn merge_artists(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn album_matches_artist(artist: &str, all_artists: &str, nsel: &str) -> bool {
+        album_matches_artist_with_aliases(
+            artist,
+            all_artists,
+            nsel,
+            &ArtistFamilyAliases::default(),
+        )
+    }
 
     fn credit<'a>(id: &'a str, artist: &'a str, all: &'a str, art: &'a str) -> AlbumCredit<'a> {
         credit_from("local", id, artist, all, art)
