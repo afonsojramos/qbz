@@ -3716,6 +3716,126 @@ msgstr "{} треков"
 msgid "Choose folder"
 msgstr "Выберите папку"
 
+
+msgid "Album metadata saved."
+msgstr "Метаданные альбома сохранены."
+
+msgid "Album title is required."
+msgstr "Необходимо указать название альбома."
+
+msgid "Apply to form"
+msgstr "Применить к форме"
+
+msgid "CUE-based albums can only be edited with a sidecar."
+msgstr "Альбомы на основе CUE можно редактировать только через сопроводительный файл."
+
+msgid "CUE-based albums use sidecar metadata."
+msgstr "Альбомы на основе CUE используют метаданные в сопроводительном файле."
+
+msgid "Canonical"
+msgstr "Канонический слой"
+
+msgid "Close without saving"
+msgstr "Закрыть без сохранения"
+
+msgid "Couldn't inspect album metadata."
+msgstr "Не удалось проверить метаданные альбома."
+
+msgid "Couldn't load that metadata result."
+msgstr "Не удалось загрузить выбранный результат метаданных."
+
+msgid "Couldn't open the metadata source."
+msgstr "Не удалось открыть источник метаданных."
+
+msgid "Detected"
+msgstr "Обнаружены"
+
+msgid "Disc number"
+msgstr "Номер диска"
+
+msgid "Editing the selected physical version"
+msgstr "Редактирование выбранной физической версии"
+
+msgid "Enter an album title or artist to search."
+msgstr "Введите название альбома или имя исполнителя для поиска."
+
+msgid "Every track needs a title."
+msgstr "У каждого трека должно быть название."
+
+msgid "File names are shown for reference and cannot be changed here."
+msgstr "Имена файлов показаны для справки и не могут быть изменены здесь."
+
+msgid "Find metadata"
+msgstr "Найти метаданные"
+
+msgid "ID3 writing"
+msgstr "Запись ID3"
+
+msgid "Metadata editing is available for local file versions only."
+msgstr "Редактирование метаданных доступно только для локальных файловых версий."
+
+msgid "Metadata search failed."
+msgstr "Поиск метаданных завершился ошибкой."
+
+msgid "No local album version is selected."
+msgstr "Локальная версия альбома не выбрана."
+
+msgid "None"
+msgstr "Нет"
+
+msgid "One or more audio files are unavailable."
+msgstr "Один или несколько аудиофайлов недоступны."
+
+msgid "Open source"
+msgstr "Открыть источник"
+
+msgid "QBZ will preflight every file, update its canonical tag layer, then read it back to verify the change. Keep a backup if these files cannot be replaced."
+msgstr "QBZ предварительно проверит каждый файл, обновит его канонический слой тегов и повторно прочитает его для проверки. Сохраните резервную копию, если эти файлы нельзя заменить."
+
+msgid "Save changes to"
+msgstr "Сохранить изменения в"
+
+msgid "Some files contain conflicting tag layers. The canonical layer wins unless synchronization is enabled."
+msgstr "Некоторые файлы содержат конфликтующие слои тегов. Канонический слой имеет приоритет, если синхронизация не включена."
+
+msgid "Synchronize compatible tag layers"
+msgstr "Синхронизировать совместимые слои тегов"
+
+msgid "Tag layers"
+msgstr "Слои тегов"
+
+msgid "The canonical tag is not writable for every file."
+msgstr "Канонический тег доступен для записи не во всех файлах."
+
+msgid "The metadata editor is no longer open."
+msgstr "Редактор метаданных уже закрыт."
+
+msgid "The metadata form could not be read."
+msgstr "Не удалось прочитать форму метаданных."
+
+msgid "The track list changed; reopen the editor."
+msgstr "Список треков изменился; откройте редактор заново."
+
+msgid "The track list contains a duplicate row."
+msgstr "Список треков содержит повторяющуюся строку."
+
+msgid "Track number"
+msgstr "Номер трека"
+
+msgid "Unknown metadata persistence mode."
+msgstr "Неизвестный режим хранения метаданных."
+
+msgid "Write and verify"
+msgstr "Записать и проверить"
+
+msgid "Write metadata into audio files?"
+msgstr "Записать метаданные в аудиофайлы?"
+
+msgid "Year must be a valid number."
+msgstr "Год должен быть допустимым числом."
+
+msgid "{} must be a positive number."
+msgstr "{} должно быть положительным числом."
 msgid "Couldn't add to library"
 msgstr "Не удалось добавить в библиотеку"
 

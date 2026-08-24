@@ -5683,3 +5683,122 @@ msgstr "Media openen"
 
 msgid "Open folder…"
 msgstr "Map openen…"
+msgid "Album metadata saved."
+msgstr "Albummetadata opgeslagen."
+
+msgid "Album title is required."
+msgstr "Een albumtitel is verplicht."
+
+msgid "Apply to form"
+msgstr "Toepassen op formulier"
+
+msgid "CUE-based albums can only be edited with a sidecar."
+msgstr "Albums op basis van CUE kunnen alleen met een sidecarbestand worden bewerkt."
+
+msgid "CUE-based albums use sidecar metadata."
+msgstr "Albums op basis van CUE gebruiken sidecarmetadata."
+
+msgid "Canonical"
+msgstr "Canoniek"
+
+msgid "Close without saving"
+msgstr "Sluiten zonder opslaan"
+
+msgid "Couldn't inspect album metadata."
+msgstr "De albummetadata kon niet worden onderzocht."
+
+msgid "Couldn't load that metadata result."
+msgstr "Dat metadataresultaat kon niet worden geladen."
+
+msgid "Couldn't open the metadata source."
+msgstr "De metadatabron kon niet worden geopend."
+
+msgid "Detected"
+msgstr "Gedetecteerd"
+
+msgid "Disc number"
+msgstr "Schijfnummer"
+
+msgid "Editing the selected physical version"
+msgstr "De geselecteerde fysieke versie wordt bewerkt"
+
+msgid "Enter an album title or artist to search."
+msgstr "Voer een albumtitel of artiest in om te zoeken."
+
+msgid "Every track needs a title."
+msgstr "Elke track heeft een titel nodig."
+
+msgid "File names are shown for reference and cannot be changed here."
+msgstr "Bestandsnamen worden ter referentie getoond en kunnen hier niet worden gewijzigd."
+
+msgid "Find metadata"
+msgstr "Metadata zoeken"
+
+msgid "ID3 writing"
+msgstr "ID3 schrijven"
+
+msgid "Metadata editing is available for local file versions only."
+msgstr "Metadata kan alleen voor lokale bestandsversies worden bewerkt."
+
+msgid "Metadata search failed."
+msgstr "Het zoeken naar metadata is mislukt."
+
+msgid "No local album version is selected."
+msgstr "Er is geen lokale albumversie geselecteerd."
+
+msgid "None"
+msgstr "Geen"
+
+msgid "One or more audio files are unavailable."
+msgstr "Een of meer audiobestanden zijn niet beschikbaar."
+
+msgid "Open source"
+msgstr "Bron openen"
+
+msgid "QBZ will preflight every file, update its canonical tag layer, then read it back to verify the change. Keep a backup if these files cannot be replaced."
+msgstr "QBZ controleert elk bestand vooraf, werkt de canonieke taglaag bij en leest deze opnieuw om de wijziging te verifiëren. Bewaar een back-up als deze bestanden niet kunnen worden vervangen."
+
+msgid "Save changes to"
+msgstr "Wijzigingen opslaan in"
+
+msgid "Some files contain conflicting tag layers. The canonical layer wins unless synchronization is enabled."
+msgstr "Sommige bestanden bevatten conflicterende taglagen. De canonieke laag heeft voorrang, tenzij synchronisatie is ingeschakeld."
+
+msgid "Synchronize compatible tag layers"
+msgstr "Compatibele taglagen synchroniseren"
+
+msgid "Tag layers"
+msgstr "Taglagen"
+
+msgid "The canonical tag is not writable for every file."
+msgstr "De canonieke tag kan niet in elk bestand worden geschreven."
+
+msgid "The metadata editor is no longer open."
+msgstr "De metadata-editor is niet meer geopend."
+
+msgid "The metadata form could not be read."
+msgstr "Het metadataformulier kon niet worden gelezen."
+
+msgid "The track list changed; reopen the editor."
+msgstr "De tracklijst is gewijzigd; open de editor opnieuw."
+
+msgid "The track list contains a duplicate row."
+msgstr "De tracklijst bevat een dubbele rij."
+
+msgid "Track number"
+msgstr "Tracknummer"
+
+msgid "Unknown metadata persistence mode."
+msgstr "Onbekende opslagmodus voor metadata."
+
+msgid "Write and verify"
+msgstr "Schrijven en verifiëren"
+
+msgid "Write metadata into audio files?"
+msgstr "Metadata naar audiobestanden schrijven?"
+
+msgid "Year must be a valid number."
+msgstr "Het jaar moet een geldig getal zijn."
+
+msgid "{} must be a positive number."
+msgstr "{} moet een positief getal zijn."

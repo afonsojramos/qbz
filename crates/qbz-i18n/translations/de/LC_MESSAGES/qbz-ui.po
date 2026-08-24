@@ -4482,6 +4482,126 @@ msgstr "Alle Titel zufällig abspielen"
 msgid "Select multiple tracks"
 msgstr "Mehrere Titel auswählen"
 
+
+msgid "Album metadata saved."
+msgstr "Album-Metadaten gespeichert."
+
+msgid "Album title is required."
+msgstr "Ein Albumtitel ist erforderlich."
+
+msgid "Apply to form"
+msgstr "Auf Formular anwenden"
+
+msgid "CUE-based albums can only be edited with a sidecar."
+msgstr "CUE-basierte Alben können nur mit einer Sidecar-Datei bearbeitet werden."
+
+msgid "CUE-based albums use sidecar metadata."
+msgstr "CUE-basierte Alben verwenden Sidecar-Metadaten."
+
+msgid "Canonical"
+msgstr "Kanonisch"
+
+msgid "Close without saving"
+msgstr "Ohne Speichern schließen"
+
+msgid "Couldn't inspect album metadata."
+msgstr "Die Album-Metadaten konnten nicht geprüft werden."
+
+msgid "Couldn't load that metadata result."
+msgstr "Dieses Metadatenergebnis konnte nicht geladen werden."
+
+msgid "Couldn't open the metadata source."
+msgstr "Die Metadatenquelle konnte nicht geöffnet werden."
+
+msgid "Detected"
+msgstr "Erkannt"
+
+msgid "Disc number"
+msgstr "Disc-Nummer"
+
+msgid "Editing the selected physical version"
+msgstr "Die ausgewählte physische Version wird bearbeitet"
+
+msgid "Enter an album title or artist to search."
+msgstr "Gib einen Albumtitel oder Künstler für die Suche ein."
+
+msgid "Every track needs a title."
+msgstr "Jeder Track benötigt einen Titel."
+
+msgid "File names are shown for reference and cannot be changed here."
+msgstr "Dateinamen werden zur Orientierung angezeigt und können hier nicht geändert werden."
+
+msgid "Find metadata"
+msgstr "Metadaten suchen"
+
+msgid "ID3 writing"
+msgstr "ID3-Schreibformat"
+
+msgid "Metadata editing is available for local file versions only."
+msgstr "Metadaten können nur für lokale Dateiversionen bearbeitet werden."
+
+msgid "Metadata search failed."
+msgstr "Die Metadatensuche ist fehlgeschlagen."
+
+msgid "No local album version is selected."
+msgstr "Es ist keine lokale Albumversion ausgewählt."
+
+msgid "None"
+msgstr "Keine"
+
+msgid "One or more audio files are unavailable."
+msgstr "Eine oder mehrere Audiodateien sind nicht verfügbar."
+
+msgid "Open source"
+msgstr "Quelle öffnen"
+
+msgid "QBZ will preflight every file, update its canonical tag layer, then read it back to verify the change. Keep a backup if these files cannot be replaced."
+msgstr "QBZ prüft jede Datei vorab, aktualisiert ihre kanonische Tag-Ebene und liest sie anschließend zur Kontrolle erneut. Bewahre eine Sicherung auf, wenn diese Dateien nicht ersetzt werden können."
+
+msgid "Save changes to"
+msgstr "Änderungen speichern in"
+
+msgid "Some files contain conflicting tag layers. The canonical layer wins unless synchronization is enabled."
+msgstr "Einige Dateien enthalten widersprüchliche Tag-Ebenen. Die kanonische Ebene hat Vorrang, sofern die Synchronisierung nicht aktiviert ist."
+
+msgid "Synchronize compatible tag layers"
+msgstr "Kompatible Tag-Ebenen synchronisieren"
+
+msgid "Tag layers"
+msgstr "Tag-Ebenen"
+
+msgid "The canonical tag is not writable for every file."
+msgstr "Das kanonische Tag kann nicht in jede Datei geschrieben werden."
+
+msgid "The metadata editor is no longer open."
+msgstr "Der Metadateneditor ist nicht mehr geöffnet."
+
+msgid "The metadata form could not be read."
+msgstr "Das Metadatenformular konnte nicht gelesen werden."
+
+msgid "The track list changed; reopen the editor."
+msgstr "Die Trackliste wurde geändert; öffne den Editor erneut."
+
+msgid "The track list contains a duplicate row."
+msgstr "Die Trackliste enthält eine doppelte Zeile."
+
+msgid "Track number"
+msgstr "Tracknummer"
+
+msgid "Unknown metadata persistence mode."
+msgstr "Unbekannter Speichermodus für Metadaten."
+
+msgid "Write and verify"
+msgstr "Schreiben und prüfen"
+
+msgid "Write metadata into audio files?"
+msgstr "Metadaten in die Audiodateien schreiben?"
+
+msgid "Year must be a valid number."
+msgstr "Das Jahr muss eine gültige Zahl sein."
+
+msgid "{} must be a positive number."
+msgstr "{} muss eine positive Zahl sein."
 msgid "Play a random album"
 msgstr "Zufälliges Album abspielen"
 

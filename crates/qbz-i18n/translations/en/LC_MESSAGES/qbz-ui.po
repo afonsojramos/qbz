@@ -1219,3 +1219,174 @@ msgstr "Open media"
 
 msgid "Open folder…"
 msgstr "Open folder…"
+
+msgid "Album"
+msgstr "Album"
+
+msgid "Album metadata saved."
+msgstr "Album metadata saved."
+
+msgid "Album title"
+msgstr "Album title"
+
+msgid "Album title is required."
+msgstr "Album title is required."
+
+msgid "Apply to form"
+msgstr "Apply to form"
+
+msgid "CUE-based albums can only be edited with a sidecar."
+msgstr "CUE-based albums can only be edited with a sidecar."
+
+msgid "CUE-based albums use sidecar metadata."
+msgstr "CUE-based albums use sidecar metadata."
+
+msgid "Cancel"
+msgstr "Cancel"
+
+msgid "Canonical"
+msgstr "Canonical"
+
+msgid "Catalog number"
+msgstr "Catalog number"
+
+msgid "Close without saving"
+msgstr "Close without saving"
+
+msgid "Couldn't inspect album metadata."
+msgstr "Couldn't inspect album metadata."
+
+msgid "Couldn't load that metadata result."
+msgstr "Couldn't load that metadata result."
+
+msgid "Couldn't open the metadata source."
+msgstr "Couldn't open the metadata source."
+
+msgid "Couldn't save metadata: {}"
+msgstr "Couldn't save metadata: {}"
+
+msgid "Detected"
+msgstr "Detected"
+
+msgid "Disc"
+msgstr "Disc"
+
+msgid "Disc number"
+msgstr "Disc number"
+
+msgid "Editing the selected physical version"
+msgstr "Editing the selected physical version"
+
+msgid "Enter an album title or artist to search."
+msgstr "Enter an album title or artist to search."
+
+msgid "Every track needs a title."
+msgstr "Every track needs a title."
+
+msgid "File names are shown for reference and cannot be changed here."
+msgstr "File names are shown for reference and cannot be changed here."
+
+msgid "Find metadata"
+msgstr "Find metadata"
+
+msgid "Genre"
+msgstr "Genre"
+
+msgid "ID3 writing"
+msgstr "ID3 writing"
+
+msgid "Metadata editing is available for local file versions only."
+msgstr "Metadata editing is available for local file versions only."
+
+msgid "Metadata search failed."
+msgstr "Metadata search failed."
+
+msgid "No local album version is selected."
+msgstr "No local album version is selected."
+
+msgid "None"
+msgstr "None"
+
+msgid "One or more audio files are unavailable."
+msgstr "One or more audio files are unavailable."
+
+msgid "Open source"
+msgstr "Open source"
+
+msgid "QBZ will preflight every file, update its canonical tag layer, then read it back to verify the change. Keep a backup if these files cannot be replaced."
+msgstr "QBZ will preflight every file, update its canonical tag layer, then read it back to verify the change. Keep a backup if these files cannot be replaced."
+
+msgid "Save"
+msgstr "Save"
+
+msgid "Save changes to"
+msgstr "Save changes to"
+
+msgid "Saving…"
+msgstr "Saving…"
+
+msgid "Search"
+msgstr "Search"
+
+msgid "Searching…"
+msgstr "Searching…"
+
+msgid "Sidecar file (recommended)"
+msgstr "Sidecar file (recommended)"
+
+msgid "Some files contain conflicting tag layers. The canonical layer wins unless synchronization is enabled."
+msgstr "Some files contain conflicting tag layers. The canonical layer wins unless synchronization is enabled."
+
+msgid "Synchronize compatible tag layers"
+msgstr "Synchronize compatible tag layers"
+
+msgid "Tag layers"
+msgstr "Tag layers"
+
+msgid "The canonical tag is not writable for every file."
+msgstr "The canonical tag is not writable for every file."
+
+msgid "The metadata editor is no longer open."
+msgstr "The metadata editor is no longer open."
+
+msgid "The metadata form could not be read."
+msgstr "The metadata form could not be read."
+
+msgid "The track list changed; reopen the editor."
+msgstr "The track list changed; reopen the editor."
+
+msgid "The track list contains a duplicate row."
+msgstr "The track list contains a duplicate row."
+
+msgid "Track number"
+msgstr "Track number"
+
+msgid "Tracks"
+msgstr "Tracks"
+
+msgid "Unknown metadata persistence mode."
+msgstr "Unknown metadata persistence mode."
+
+msgid "Write and verify"
+msgstr "Write and verify"
+
+msgid "Write metadata into audio files?"
+msgstr "Write metadata into audio files?"
+
+msgid "Write to audio files"
+msgstr "Write to audio files"
+
+msgid "Writing"
+msgstr "Writing"
+
+msgid "Year"
+msgstr "Year"
+
+msgid "Year must be a valid number."
+msgstr "Year must be a valid number."
+
+msgid "tracks"
+msgstr "tracks"
+
+msgid "{} must be a positive number."
+msgstr "{} must be a positive number."

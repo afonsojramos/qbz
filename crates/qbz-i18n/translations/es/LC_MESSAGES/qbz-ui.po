@@ -4500,6 +4500,126 @@ msgstr "Error de salida de audio"
 msgid "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
 msgstr "El acceso directo a dispositivos ALSA está bloqueado dentro de Flatpak/Snap — cambia el backend de audio a PipeWire o al predeterminado del sistema"
 
+msgid "Album metadata saved."
+msgstr "Metadatos del álbum guardados."
+
+msgid "Album title is required."
+msgstr "El título del álbum es obligatorio."
+
+msgid "Apply to form"
+msgstr "Aplicar al formulario"
+
+msgid "CUE-based albums can only be edited with a sidecar."
+msgstr "Los álbumes basados en CUE solo se pueden editar con un sidecar."
+
+msgid "CUE-based albums use sidecar metadata."
+msgstr "Los álbumes basados en CUE usan metadatos sidecar."
+
+msgid "Canonical"
+msgstr "Canónica"
+
+msgid "Close without saving"
+msgstr "Cerrar sin guardar"
+
+msgid "Couldn't inspect album metadata."
+msgstr "No se pudieron inspeccionar los metadatos del álbum."
+
+msgid "Couldn't load that metadata result."
+msgstr "No se pudo cargar ese resultado de metadatos."
+
+msgid "Couldn't open the metadata source."
+msgstr "No se pudo abrir la fuente de metadatos."
+
+msgid "Detected"
+msgstr "Detectadas"
+
+msgid "Disc number"
+msgstr "Número de disco"
+
+msgid "Editing the selected physical version"
+msgstr "Editando la versión física seleccionada"
+
+msgid "Enter an album title or artist to search."
+msgstr "Ingresa un título de álbum o artista para buscar."
+
+msgid "Every track needs a title."
+msgstr "Cada pista necesita un título."
+
+msgid "File names are shown for reference and cannot be changed here."
+msgstr "Los nombres de archivo se muestran como referencia y no se pueden cambiar aquí."
+
+msgid "Find metadata"
+msgstr "Buscar metadatos"
+
+msgid "ID3 writing"
+msgstr "Escritura ID3"
+
+msgid "Metadata editing is available for local file versions only."
+msgstr "La edición de metadatos solo está disponible para versiones de archivos locales."
+
+msgid "Metadata search failed."
+msgstr "Falló la búsqueda de metadatos."
+
+msgid "No local album version is selected."
+msgstr "No hay una versión local del álbum seleccionada."
+
+msgid "None"
+msgstr "Ninguna"
+
+msgid "One or more audio files are unavailable."
+msgstr "Uno o más archivos de audio no están disponibles."
+
+msgid "Open source"
+msgstr "Abrir fuente"
+
+msgid "QBZ will preflight every file, update its canonical tag layer, then read it back to verify the change. Keep a backup if these files cannot be replaced."
+msgstr "QBZ comprobará cada archivo, actualizará su capa de etiquetas canónica y volverá a leerla para verificar el cambio. Conserva una copia de seguridad si estos archivos no se pueden reemplazar."
+
+msgid "Save changes to"
+msgstr "Guardar cambios en"
+
+msgid "Some files contain conflicting tag layers. The canonical layer wins unless synchronization is enabled."
+msgstr "Algunos archivos contienen capas de etiquetas en conflicto. La capa canónica prevalece salvo que se active la sincronización."
+
+msgid "Synchronize compatible tag layers"
+msgstr "Sincronizar capas de etiquetas compatibles"
+
+msgid "Tag layers"
+msgstr "Capas de etiquetas"
+
+msgid "The canonical tag is not writable for every file."
+msgstr "La etiqueta canónica no se puede escribir en todos los archivos."
+
+msgid "The metadata editor is no longer open."
+msgstr "El editor de metadatos ya no está abierto."
+
+msgid "The metadata form could not be read."
+msgstr "No se pudo leer el formulario de metadatos."
+
+msgid "The track list changed; reopen the editor."
+msgstr "La lista de pistas cambió; vuelve a abrir el editor."
+
+msgid "The track list contains a duplicate row."
+msgstr "La lista de pistas contiene una fila duplicada."
+
+msgid "Track number"
+msgstr "Número de pista"
+
+msgid "Unknown metadata persistence mode."
+msgstr "Modo de persistencia de metadatos desconocido."
+
+msgid "Write and verify"
+msgstr "Escribir y verificar"
+
+msgid "Write metadata into audio files?"
+msgstr "¿Escribir los metadatos en los archivos de audio?"
+
+msgid "Year must be a valid number."
+msgstr "El año debe ser un número válido."
+
+msgid "{} must be a positive number."
+msgstr "{} debe ser un número positivo."
+
 msgid "Auto theme generation failed"
 msgstr "Error al generar el tema automático"
 

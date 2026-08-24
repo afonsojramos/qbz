@@ -2,8 +2,7 @@
 //! (`qml/views/LocalAlbumView.qml` + `qml/views/local/LocalAlbumHeader.qml`)
 //! drives that is not a plain query: the VERSION picker, the per-disc "Disc N"
 //! menu, the artist-NAME route into the Local Library Artists tab, the
-//! per-row-artwork appearance mirror, and the three album-level actions whose
-//! surfaces the Qt port has not grown yet.
+//! per-row-artwork appearance mirror, and the album-level actions.
 //!
 //! Ported 1:1 from `album/LocalAlbumView.slint` (617 lines) plus its Rust glue
 //! (`crates/qbz/src/local_library.rs`: `open_local_album`,
@@ -18,11 +17,10 @@
 //! that. The split is cached in `LocalState` so the picker switches with NO DB
 //! round-trip (the Slint's `ALBUM_VERSIONS` static, 1:1).
 //!
-//! NOT WIRED (deliberate, reported): `album_edit_tags` is a LOGGED SEAM — the
-//! Qt port has no tag-editor modal, and a menu item must never write tags to
-//! disk with no UI in front of it. `album_add_to_mixtape` is LIVE since the
-//! MyQBZ domain landed, and `album_add_to_playlist` since QbzPlaylistPicker
-//! did: it opens the picker in LOCAL MODE over the selected version's tracks.
+//! Metadata editing is version-scoped and opens an app-wide modal. The Rust
+//! controller owns the physical paths and verifies direct writes before it
+//! republishes the album. Playlist and MyQBZ actions likewise operate on the
+//! selected version rather than the logical collection.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -522,20 +520,12 @@ pub fn publish_track_artwork() {
     ui(move |mut b| b.as_mut().set_local_track_artwork(on));
 }
 
-// --- Not wired yet (LOGGED SEAMS — see the module header) ------------------
-
-/// Album header ✏️: the Slint opens `LocalLibraryTagEditorModal` on the
-/// selected version's directory (`tag_writer.rs` / `tag_sidecar.rs` do the
-/// write). The Qt port has NO tag-editor modal, so this stays a seam: it
-/// resolves and logs the directory a future modal would receive and writes
-/// NOTHING. Writing tags from a menu item with no UI in front of it is not a
-/// port, it is data loss.
+/// Album header: open the app-wide editor for the selected physical
+/// version. The controller snapshots its database rows, and QML receives row
+/// ids rather than file paths so a stale or modified draft cannot retarget a
+/// write.
 pub fn edit_tags(id: String) {
-    let dir = current_version_dir();
-    log::info!(
-        "[qbz-qt] local album edit-tags: no tag-editor modal in the Qt port yet \
-         (album '{id}', version dir '{dir}') — seam only, no tags were written"
-    );
+    crate::tag_editor_qt::open(id);
 }
 
 /// Album header ＋: the picker over the SELECTED version's tracks, in LOCAL

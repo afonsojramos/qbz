@@ -4231,6 +4231,126 @@ msgstr "極小"
 msgid "Sign in with your browser"
 msgstr "ブラウザでサインイン"
 
+msgid "Album metadata saved."
+msgstr "アルバムのメタデータを保存しました。"
+
+msgid "Album title is required."
+msgstr "アルバムタイトルは必須です。"
+
+msgid "Apply to form"
+msgstr "フォームに適用"
+
+msgid "CUE-based albums can only be edited with a sidecar."
+msgstr "CUE ベースのアルバムはサイドカーファイルでのみ編集できます。"
+
+msgid "CUE-based albums use sidecar metadata."
+msgstr "CUE ベースのアルバムはサイドカーメタデータを使用します。"
+
+msgid "Canonical"
+msgstr "正規"
+
+msgid "Close without saving"
+msgstr "保存せずに閉じる"
+
+msgid "Couldn't inspect album metadata."
+msgstr "アルバムのメタデータを検査できませんでした。"
+
+msgid "Couldn't load that metadata result."
+msgstr "そのメタデータ結果を読み込めませんでした。"
+
+msgid "Couldn't open the metadata source."
+msgstr "メタデータの情報源を開けませんでした。"
+
+msgid "Detected"
+msgstr "検出済み"
+
+msgid "Disc number"
+msgstr "ディスク番号"
+
+msgid "Editing the selected physical version"
+msgstr "選択した物理バージョンを編集中"
+
+msgid "Enter an album title or artist to search."
+msgstr "検索するアルバムタイトルまたはアーティストを入力してください。"
+
+msgid "Every track needs a title."
+msgstr "すべてのトラックにタイトルが必要です。"
+
+msgid "File names are shown for reference and cannot be changed here."
+msgstr "ファイル名は参照用に表示され、ここでは変更できません。"
+
+msgid "Find metadata"
+msgstr "メタデータを検索"
+
+msgid "ID3 writing"
+msgstr "ID3 書き込み"
+
+msgid "Metadata editing is available for local file versions only."
+msgstr "メタデータを編集できるのはローカルファイル版のみです。"
+
+msgid "Metadata search failed."
+msgstr "メタデータの検索に失敗しました。"
+
+msgid "No local album version is selected."
+msgstr "ローカルのアルバムバージョンが選択されていません。"
+
+msgid "None"
+msgstr "なし"
+
+msgid "One or more audio files are unavailable."
+msgstr "1 つ以上のオーディオファイルを利用できません。"
+
+msgid "Open source"
+msgstr "情報源を開く"
+
+msgid "QBZ will preflight every file, update its canonical tag layer, then read it back to verify the change. Keep a backup if these files cannot be replaced."
+msgstr "QBZ はすべてのファイルを事前確認し、正規タグレイヤーを更新してから再読込して変更を検証します。置き換えられないファイルの場合はバックアップを保管してください。"
+
+msgid "Save changes to"
+msgstr "変更の保存先"
+
+msgid "Some files contain conflicting tag layers. The canonical layer wins unless synchronization is enabled."
+msgstr "一部のファイルには競合するタグレイヤーがあります。同期を有効にしない限り、正規レイヤーが優先されます。"
+
+msgid "Synchronize compatible tag layers"
+msgstr "互換性のあるタグレイヤーを同期"
+
+msgid "Tag layers"
+msgstr "タグレイヤー"
+
+msgid "The canonical tag is not writable for every file."
+msgstr "すべてのファイルで正規タグを書き込めるわけではありません。"
+
+msgid "The metadata editor is no longer open."
+msgstr "メタデータエディターはすでに閉じています。"
+
+msgid "The metadata form could not be read."
+msgstr "メタデータフォームを読み取れませんでした。"
+
+msgid "The track list changed; reopen the editor."
+msgstr "トラックリストが変更されました。エディターを開き直してください。"
+
+msgid "The track list contains a duplicate row."
+msgstr "トラックリストに重複した行があります。"
+
+msgid "Track number"
+msgstr "トラック番号"
+
+msgid "Unknown metadata persistence mode."
+msgstr "不明なメタデータ保存モードです。"
+
+msgid "Write and verify"
+msgstr "書き込んで検証"
+
+msgid "Write metadata into audio files?"
+msgstr "メタデータをオーディオファイルに書き込みますか？"
+
+msgid "Year must be a valid number."
+msgstr "年には有効な数値を指定してください。"
+
+msgid "{} must be a positive number."
+msgstr "{} は正の数である必要があります。"
+
 msgid "Continue in your web browser — QBZ is waiting for you to finish signing in."
 msgstr "ウェブブラウザで続行してください — QBZ はサインインの完了を待っています。"
 

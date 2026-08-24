@@ -254,6 +254,8 @@ mod sacd_qt;
 mod disc_identity;
 mod disc_meta_bridge;
 mod disc_meta_qt;
+mod tag_editor_bridge;
+mod tag_editor_qt;
 mod rip_qt;
 mod rip_wizard_qt;
 mod label_qt;
