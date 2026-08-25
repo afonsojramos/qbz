@@ -223,6 +223,10 @@ pub(crate) fn load_tab_impl(tab: String) {
     }
 }
 
+fn log_surface_route(surface: &str, path: &str, reason: &str) {
+    log::info!("[local-catalog] phase=surface-route surface={surface} path={path} reason={reason}");
+}
+
 pub(crate) fn load_albums() {
     ui(|mut b| {
         b.as_mut().set_local_albums_loading(true);
@@ -231,12 +235,19 @@ pub(crate) fn load_albums() {
     if crate::local_albums_model_qt::requested()
         && crate::local_library_qt::album_mode() == "folder"
     {
+        log_surface_route("albums", "catalog", "feature-enabled");
         // Once QML has supplied its width-dependent descriptor this is also
         // the retry path used by tab remounts and album-mode changes. On the
         // first mount LocalAlbumCollection supplies it immediately.
         crate::local_albums_model_qt::retry_last();
         return;
     }
+    let reason = if crate::local_albums_model_qt::requested() {
+        "metadata-mode"
+    } else {
+        "feature-disabled-or-session-failed"
+    };
+    log_surface_route("albums", "legacy", reason);
     load_albums_legacy();
 }
 
@@ -305,9 +316,16 @@ pub(crate) fn load_artists() {
     if crate::local_artists_model_qt::requested()
         && crate::local_library_qt::album_mode() == "folder"
     {
+        log_surface_route("artists", "catalog", "feature-enabled");
         crate::local_artists_model_qt::retry_last();
         return;
     }
+    let reason = if crate::local_artists_model_qt::requested() {
+        "metadata-mode"
+    } else {
+        "feature-disabled-or-session-failed"
+    };
+    log_surface_route("artists", "legacy", reason);
     load_artists_legacy();
     if lib::state(|state| state.albums.is_empty()) {
         load_albums_legacy();
@@ -363,8 +381,18 @@ pub(crate) fn load_tracks(reset: bool) {
             b.as_mut().set_local_tracks_loading_more(true);
         }
     });
-    if reset && crate::local_tracks_model_qt::reset() {
-        return;
+    if reset {
+        if crate::local_tracks_model_qt::reset() {
+            log_surface_route("tracks", "catalog", "feature-enabled");
+            return;
+        }
+        log_surface_route(
+            "tracks",
+            "legacy",
+            "feature-disabled-or-session-failed",
+        );
+    } else {
+        log_surface_route("tracks", "legacy", "legacy-pagination");
     }
     load_tracks_legacy_body(reset);
 }

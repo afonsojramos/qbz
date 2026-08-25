@@ -206,6 +206,7 @@ struct Gathered {
     pb: qbz_player::PlaybackState,
     track: Option<qbz_models::QueueTrack>,
     qc: crate::qconnect_qt::QconnectDiagSnapshot,
+    catalog: CatalogDiagnostics,
 }
 
 /// The blocking half: settings stores, `/proc`, `/sys`, `pactl` and the CPAL
@@ -220,6 +221,20 @@ struct Blocking {
     renderer_runtime: String,
     gpu_adapters: String,
     gpu_tier: bool,
+    catalog: CatalogDiagnostics,
+}
+
+#[derive(Clone, Serialize)]
+struct CatalogDiagnostics {
+    state: String,
+    reason: String,
+    generation: Option<u64>,
+    tracks: Option<u64>,
+    bytes: Option<u64>,
+    runtime_check: String,
+    runtime_ok: bool,
+    fts_activation_verified: bool,
+    routes: String,
 }
 
 fn gather_blocking() -> Blocking {
@@ -270,6 +285,124 @@ fn gather_blocking() -> Blocking {
         renderer_runtime,
         gpu_adapters,
         gpu_tier: crate::renderer_qt::gpu_tier(),
+        catalog: gather_catalog_diagnostics(),
+    }
+}
+
+fn gather_catalog_diagnostics() -> CatalogDiagnostics {
+    let album_mode = crate::local_library_qt::album_mode();
+    let route = |requested: bool, unavailable: &str, needs_folder: bool| {
+        if requested && (!needs_folder || album_mode == "folder") {
+            "catalog".to_string()
+        } else if requested {
+            "legacy(metadata-mode)".to_string()
+        } else {
+            format!("legacy({unavailable})")
+        }
+    };
+    let routes = format!(
+        "tracks={}, albums={}, artists={}, genres=legacy(native-surface-not-migrated)",
+        route(
+            crate::local_tracks_model_qt::requested(),
+            "feature-disabled-or-session-failed",
+            false,
+        ),
+        route(
+            crate::local_albums_model_qt::requested(),
+            "feature-disabled-or-session-failed",
+            true,
+        ),
+        route(
+            crate::local_artists_model_qt::requested(),
+            "feature-disabled-or-session-failed",
+            true,
+        ),
+    );
+    let Some(locations) = crate::local_catalog_qt::locations() else {
+        return CatalogDiagnostics {
+            state: "unavailable".to_string(),
+            reason: "missing-data-directory".to_string(),
+            generation: None,
+            tracks: None,
+            bytes: None,
+            runtime_check: "not available".to_string(),
+            runtime_ok: false,
+            fts_activation_verified: false,
+            routes,
+        };
+    };
+    match qbz_local_catalog::BootstrapLayout::new(&locations.catalog_dir).open_active() {
+        qbz_local_catalog::ActiveCatalog::Fallback(reason) => CatalogDiagnostics {
+            state: "fallback".to_string(),
+            reason: match reason {
+                qbz_local_catalog::FallbackReason::NoManifest => "no-manifest",
+                qbz_local_catalog::FallbackReason::InvalidManifest(_) => "invalid-manifest",
+                qbz_local_catalog::FallbackReason::MissingGeneration(_) => "missing-generation",
+                qbz_local_catalog::FallbackReason::CatalogRejected(_) => "catalog-rejected",
+            }
+            .to_string(),
+            generation: None,
+            tracks: None,
+            bytes: None,
+            runtime_check: "not available".to_string(),
+            runtime_ok: false,
+            fts_activation_verified: false,
+            routes,
+        },
+        qbz_local_catalog::ActiveCatalog::Ready { catalog, manifest } => {
+            let stats = catalog.stats();
+            let integrity = catalog.runtime_integrity_check();
+            let (runtime_check, runtime_ok) = match integrity {
+                Ok(report) => {
+                    let ok = report.sqlite_ok
+                        && report.foreign_key_violations == 0
+                        && report.materialized_views_ok;
+                    (
+                        format!(
+                            "sqlite={} foreign-keys={} materialized={}",
+                            if report.sqlite_ok { "ok" } else { "failed" },
+                            report.foreign_key_violations,
+                            if report.materialized_views_ok {
+                                "ok"
+                            } else {
+                                "failed"
+                            }
+                        ),
+                        ok,
+                    )
+                }
+                Err(_) => ("check failed".to_string(), false),
+            };
+            CatalogDiagnostics {
+                state: "active".to_string(),
+                reason: String::new(),
+                generation: Some(manifest.active_generation),
+                tracks: stats.as_ref().ok().map(|value| value.track_count),
+                bytes: stats.as_ref().ok().map(|value| {
+                    value.page_size_bytes.saturating_mul(value.page_count)
+                }),
+                runtime_check,
+                runtime_ok,
+                fts_activation_verified: true,
+                routes,
+            }
+        }
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let bytes = bytes as f64;
+    if bytes >= GIB {
+        format!("{:.2} GiB", bytes / GIB)
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes / KIB)
+    } else {
+        format!("{} B", bytes as u64)
     }
 }
 
@@ -301,6 +434,7 @@ async fn gather() -> Result<Gathered, String> {
         pb,
         track,
         qc,
+        catalog: b.catalog,
     })
 }
 
@@ -471,7 +605,7 @@ fn env_opt(name: &str) -> String {
 
 fn build_sections(g: &Gathered) -> Sections {
     Sections {
-        system: build_system_rows(&g.sys),
+        system: build_system_rows(&g.sys, &g.catalog),
         playback: build_playback_rows(&g.pb, g.track.as_ref()),
         qconnect: build_qconnect_rows(&g.qc),
         cast: Vec::new(),
@@ -481,7 +615,10 @@ fn build_sections(g: &Gathered) -> Sections {
     }
 }
 
-fn build_system_rows(s: &qbz_app::diagnostics::SystemInfo) -> Vec<Row> {
+fn build_system_rows(
+    s: &qbz_app::diagnostics::SystemInfo,
+    catalog: &CatalogDiagnostics,
+) -> Vec<Row> {
     let mut rows = vec![
         row("OS", "—", &s.os, 0),
         row("Arch", "—", &s.arch, 0),
@@ -504,6 +641,57 @@ fn build_system_rows(s: &qbz_app::diagnostics::SystemInfo) -> Vec<Row> {
     rows.push(row("ALSA", "—", &opt(&s.alsa_version), 0));
     rows.push(row("PipeWire", "—", &opt(&s.pipewire_version), 0));
     rows.push(row("PulseAudio", "—", &opt(&s.pulseaudio_version), 0));
+    rows.push(row(
+        "Local Catalog",
+        "—",
+        &if catalog.reason.is_empty() {
+            catalog.state.clone()
+        } else {
+            format!("{} ({})", catalog.state, catalog.reason)
+        },
+        if catalog.state == "active" { 1 } else { 2 },
+    ));
+    rows.push(row(
+        "Local Catalog Generation",
+        "—",
+        &catalog
+            .generation
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "—".to_string()),
+        0,
+    ));
+    rows.push(row(
+        "Local Catalog Tracks",
+        "—",
+        &catalog
+            .tracks
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "—".to_string()),
+        0,
+    ));
+    rows.push(row(
+        "Local Catalog Size",
+        "—",
+        &catalog.bytes.map(format_bytes).unwrap_or_else(|| "—".to_string()),
+        0,
+    ));
+    rows.push(row(
+        "Local Catalog Runtime Check",
+        "—",
+        &catalog.runtime_check,
+        if catalog.runtime_ok { 1 } else { 2 },
+    ));
+    rows.push(row(
+        "Local Catalog FTS",
+        "—",
+        if catalog.fts_activation_verified {
+            "verified at activation"
+        } else {
+            "not active"
+        },
+        if catalog.fts_activation_verified { 1 } else { 0 },
+    ));
+    rows.push(row("Local Library Routes", "—", &catalog.routes, 0));
     rows
 }
 
@@ -842,6 +1030,7 @@ fn build_export_json(g: &Gathered) -> Value {
             "pipewireVersion": s.pipewire_version,
             "pulseaudioVersion": s.pulseaudio_version,
         },
+        "localCatalog": g.catalog,
         "audio": {
             "outputDevice": d.audio_output_device,
             "backendType": d.audio_backend_type,
@@ -1126,6 +1315,13 @@ mod tests {
     fn trims_whole_khz_but_keeps_fractions() {
         assert_eq!(trim_khz(96.0), "96");
         assert_eq!(trim_khz(44.1), "44.1");
+    }
+
+    #[test]
+    fn catalog_size_uses_binary_units_without_exposing_a_path() {
+        assert_eq!(format_bytes(900), "900 B");
+        assert_eq!(format_bytes(1_536), "1.5 KiB");
+        assert_eq!(format_bytes(2 * 1024 * 1024), "2.0 MiB");
     }
 
     #[test]

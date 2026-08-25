@@ -18,6 +18,7 @@ pub use bootstrap::{
 };
 pub use catalog::{
     normalize_artist_key, normalize_sort_key, Catalog, CatalogStats, IntegrityReport, QueryMetrics,
+    RuntimeIntegrityReport,
 };
 pub use legacy::{
     bootstrap_legacy_caches, bootstrap_legacy_caches_at_with_progress,

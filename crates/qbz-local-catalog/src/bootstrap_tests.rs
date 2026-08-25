@@ -9,8 +9,9 @@ use tempfile::tempdir;
 use crate::{
     bootstrap_legacy_caches, bootstrap_legacy_caches_at_with_progress, ActiveCatalog,
     BootstrapBatch, BootstrapLayout, BootstrapManifest, BootstrapOutcome, Catalog, CatalogError,
-    FallbackReason, LegacyLocations, PreflightReport, ProjectedTrack, QueryDescriptor, SourceKey,
-    SourceKind, SourceProbe, TrackRef, BOOTSTRAP_BATCH_ROWS, SCHEMA_VERSION,
+    FallbackReason, LegacyLocations, PreflightReport, ProjectedTrack, ProjectionOutcome,
+    QueryDescriptor, SourceKey, SourceKind, SourceProbe, TrackRef, BOOTSTRAP_BATCH_ROWS,
+    SCHEMA_VERSION,
 };
 
 fn source(kind: SourceKind, instance: &str) -> SourceKey {
@@ -357,6 +358,77 @@ fn legacy_fixture_bootstraps_all_sources_read_only_and_is_idempotent() {
     assert!(!BootstrapLayout::new(temp.path()).building_path(2).exists());
 }
 
+/// Explicit recovery-cost gate using the production Rust legacy reader,
+/// projector, materialized views, FTS activation check and side-by-side rename.
+/// Ordinary unit runs skip it because the 200k case intentionally creates a
+/// large temporary catalog and measures wall time rather than correctness only.
+#[test]
+#[ignore = "explicit 20k/200k end-to-end legacy recovery metric"]
+fn legacy_recovery_cost_uses_the_real_projector_at_scale() {
+    for rows in [20_000_u64, 200_000] {
+        let temp = tempdir().unwrap();
+        let source_path = temp.path().join("plex_cache.db");
+        create_plex_scale_fixture(&source_path, rows);
+        let source_bytes = fs::metadata(&source_path).unwrap().len();
+        let source_before = fs::read(&source_path).unwrap();
+
+        let started = Instant::now();
+        let outcome = bootstrap_legacy_caches(temp.path(), &AtomicBool::new(false)).unwrap();
+        let elapsed = started.elapsed();
+        assert!(matches!(
+            outcome,
+            BootstrapOutcome::Activated {
+                generation: 1,
+                track_count,
+                ..
+            } if track_count == rows
+        ));
+        let layout = BootstrapLayout::new(temp.path());
+        let catalog_bytes = fs::metadata(layout.generation_path(1)).unwrap().len();
+        let ActiveCatalog::Ready { catalog, .. } = layout.open_active() else {
+            panic!("scaled recovery fixture did not activate")
+        };
+        let runtime = catalog.runtime_integrity_check().unwrap();
+        assert!(runtime.sqlite_ok && runtime.materialized_views_ok);
+        assert_eq!(runtime.foreign_key_violations, 0);
+        assert_eq!(fs::read(&source_path).unwrap(), source_before);
+
+        let source = Connection::open(&source_path).unwrap();
+        source
+            .execute(
+                "UPDATE plex_cache_tracks
+                    SET title='Changed Track', updated_at=?1
+                  WHERE rating_key='1'",
+                [rows as i64 + 1],
+            )
+            .unwrap();
+        drop(source);
+        let changed_source = fs::read(&source_path).unwrap();
+        let reconcile_started = Instant::now();
+        let projection = crate::reconcile_legacy_caches(
+            temp.path(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let reconcile_elapsed = reconcile_started.elapsed();
+        assert!(matches!(
+            projection,
+            ProjectionOutcome::Activated {
+                generation: 2,
+                track_count,
+                changed_sources: 1,
+                ..
+            } if track_count == rows
+        ));
+        assert_eq!(fs::read(&source_path).unwrap(), changed_source);
+        println!(
+            "RECOVERY_METRIC rows={rows} bootstrap_ms={:.3} reconcile_ms={:.3} source_bytes={source_bytes} catalog_bytes={catalog_bytes}",
+            elapsed.as_secs_f64() * 1_000.0,
+            reconcile_elapsed.as_secs_f64() * 1_000.0,
+        );
+    }
+}
+
 #[test]
 fn obsolete_catalog_schema_rebuilds_side_by_side_without_touching_sources() {
     let temp = tempdir().unwrap();
@@ -471,6 +543,47 @@ fn create_plex_fixture(path: &std::path::Path) {
                     id.to_string(),
                     format!("Plex {id:04}"),
                     id
+                ])
+                .unwrap();
+        }
+    }
+    tx.commit().unwrap();
+}
+
+fn create_plex_scale_fixture(path: &std::path::Path, rows: u64) {
+    let mut conn = Connection::open(path).unwrap();
+    conn.execute_batch(
+        "PRAGMA journal_mode=OFF;
+         PRAGMA synchronous=OFF;
+         CREATE TABLE plex_cache_tracks (
+             rating_key TEXT PRIMARY KEY, server_id TEXT, title TEXT NOT NULL,
+             artist TEXT, album TEXT, duration_ms INTEGER, codec TEXT,
+             container TEXT, bit_depth INTEGER, sampling_rate_hz INTEGER,
+             artwork_path TEXT, updated_at INTEGER, year INTEGER,
+             disc_number INTEGER, track_number INTEGER
+         );",
+    )
+    .unwrap();
+    let tx = conn.transaction().unwrap();
+    {
+        let mut insert = tx
+            .prepare(
+                "INSERT INTO plex_cache_tracks VALUES
+                 (?1,'scale-server',?2,?3,?4,210000,'flac','flac',24,96000,?5,?6,?7,?8,?9)",
+            )
+            .unwrap();
+        for id in 1..=rows {
+            insert
+                .execute(rusqlite::params![
+                    id.to_string(),
+                    format!("Track {id:06}"),
+                    format!("Artist {:05}", id % 10_000),
+                    format!("Album {:05}", id / 12),
+                    format!("art-{:05}", id / 12),
+                    id as i64,
+                    1980 + (id % 44) as i64,
+                    1_i64,
+                    (id % 12 + 1) as i64,
                 ])
                 .unwrap();
         }

@@ -49,6 +49,18 @@ pub struct IntegrityReport {
     pub fts_ok: bool,
 }
 
+/// Checks that are safe against the read-only active generation. Full FTS5
+/// integrity is verified before activation; SQLite exposes that check through
+/// a virtual-table write command, so diagnostics must not run it against the
+/// live catalog merely to display health.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeIntegrityReport {
+    pub sqlite_ok: bool,
+    pub sqlite_result: String,
+    pub foreign_key_violations: u64,
+    pub materialized_views_ok: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueryMetrics {
     pub sql_time: Duration,
@@ -1188,6 +1200,58 @@ impl Catalog {
             sqlite_ok: result == "ok",
             foreign_key_violations: foreign_key_violations as u64,
             fts_ok: tracks_fts_ok && albums_fts_ok && artists_fts_ok,
+        })
+    }
+
+    /// Re-check the active generation without acquiring a write connection.
+    /// FTS5 consistency remains an activation invariant; this runtime probe
+    /// covers SQLite pages, foreign keys and every derived aggregate.
+    pub fn runtime_integrity_check(&self) -> Result<RuntimeIntegrityReport> {
+        // A database-wide `quick_check` asks FTS5 to validate its inverted
+        // index, and SQLite implements that virtual-table callback as a write
+        // operation. Check every ordinary catalog table explicitly so this
+        // remains valid on the read-only active connection; the full FTS
+        // integrity command is an activation gate before the file is promoted.
+        let mut sqlite_ok = true;
+        let mut failures = Vec::new();
+        for table in [
+            "catalog_meta",
+            "source_state",
+            "logical_albums",
+            "editions",
+            "source_copies",
+            "tracks",
+            "artist_credits",
+            "artist_identity_credits",
+            "albums_materialized",
+            "artists_materialized",
+            "artist_source_stats",
+            "edition_artists",
+        ] {
+            let result: String = self.conn.query_row(
+                &format!("PRAGMA quick_check('{table}')"),
+                [],
+                |row| row.get(0),
+            )?;
+            if result != "ok" {
+                sqlite_ok = false;
+                failures.push(format!("{table}: {result}"));
+            }
+        }
+        let foreign_key_violations: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                    row.get(0)
+                })?;
+        Ok(RuntimeIntegrityReport {
+            sqlite_ok,
+            sqlite_result: if failures.is_empty() {
+                "ok".to_string()
+            } else {
+                failures.join("; ")
+            },
+            foreign_key_violations: foreign_key_violations as u64,
+            materialized_views_ok: self.materialized_views_valid()?,
         })
     }
 

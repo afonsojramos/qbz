@@ -798,6 +798,21 @@ fn opening_an_unrelated_sqlite_file_is_refused_without_mutating_it() {
 }
 
 #[test]
+fn active_catalog_runtime_integrity_probe_is_read_only_and_complete() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("local_catalog-v1-g1.db");
+    let mut building = Catalog::open(&path, 1).unwrap();
+    insert_album_fixture(&mut building, 321);
+    drop(building);
+
+    let active = Catalog::open_read_only(&path, 1).unwrap();
+    let report = active.runtime_integrity_check().unwrap();
+    assert!(report.sqlite_ok, "{report:?}");
+    assert_eq!(report.foreign_key_violations, 0);
+    assert!(report.materialized_views_ok);
+}
+
+#[test]
 fn identical_native_ids_from_distinct_sources_never_collide() {
     let mut catalog = Catalog::open_in_memory(1).unwrap();
     let mut local = projected(42, SourceKind::Local);
@@ -856,6 +871,119 @@ fn upsert_retains_identity_and_fts_tracks_updates_and_deletes() {
     );
     assert!(catalog.remove_track(&track.track_ref).unwrap());
     assert_eq!(catalog.stats().unwrap().track_count, 0);
+    let integrity = catalog.integrity_check().unwrap();
+    assert!(integrity.sqlite_ok && integrity.fts_ok);
+    assert_eq!(integrity.foreign_key_violations, 0);
+}
+
+#[test]
+fn reconciliation_keeps_album_and_artist_fts_in_sync_across_update_and_delete() {
+    let mut catalog = Catalog::open_in_memory(1).unwrap();
+    let source = SourceKey {
+        source: SourceKind::Jellyfin,
+        source_instance: source_instance(SourceKind::Jellyfin).to_string(),
+    };
+    let mut track = projected(7, SourceKind::Jellyfin);
+    track.album = "Old Album Needle".to_string();
+    track.album_artist = "Old Artist Needle".to_string();
+    track.artist = track.album_artist.clone();
+    track.credits = vec![ArtistCredit {
+        display_name: track.artist.clone(),
+        role: CreditRole::TrackArtist,
+        ordinal: 0,
+    }];
+
+    catalog.begin_reconciliation(&source, "snapshot-1").unwrap();
+    catalog
+        .apply_reconciliation_batch(&ReconciliationBatch {
+            source: source.clone(),
+            snapshot_version: "snapshot-1".to_string(),
+            expected_cursor: String::new(),
+            next_cursor: "1".to_string(),
+            tracks: vec![track.clone()],
+            complete: true,
+        })
+        .unwrap();
+    catalog.rebuild_materialized_views().unwrap();
+    assert_eq!(
+        catalog
+            .count_albums(&QueryDescriptor::albums().with_search("Old Album Needle"))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        catalog
+            .count_artists(&QueryDescriptor::artists().with_search("Old Artist Needle"))
+            .unwrap(),
+        1
+    );
+
+    track.album = "New Album Signal".to_string();
+    track.album_artist = "New Artist Signal".to_string();
+    track.artist = track.album_artist.clone();
+    track.credits[0].display_name = track.artist.clone();
+    catalog.begin_reconciliation(&source, "snapshot-2").unwrap();
+    catalog
+        .apply_reconciliation_batch(&ReconciliationBatch {
+            source: source.clone(),
+            snapshot_version: "snapshot-2".to_string(),
+            expected_cursor: String::new(),
+            next_cursor: "1".to_string(),
+            tracks: vec![track],
+            complete: true,
+        })
+        .unwrap();
+    catalog.rebuild_materialized_views().unwrap();
+    assert_eq!(
+        catalog
+            .count_albums(&QueryDescriptor::albums().with_search("Old Album Needle"))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        catalog
+            .count_artists(&QueryDescriptor::artists().with_search("Old Artist Needle"))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        catalog
+            .count_albums(&QueryDescriptor::albums().with_search("New Album Signal"))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        catalog
+            .count_artists(&QueryDescriptor::artists().with_search("New Artist Signal"))
+            .unwrap(),
+        1
+    );
+
+    catalog.begin_reconciliation(&source, "snapshot-3").unwrap();
+    catalog
+        .apply_reconciliation_batch(&ReconciliationBatch {
+            source,
+            snapshot_version: "snapshot-3".to_string(),
+            expected_cursor: String::new(),
+            next_cursor: String::new(),
+            tracks: Vec::new(),
+            complete: true,
+        })
+        .unwrap();
+    catalog.rebuild_materialized_views().unwrap();
+    assert_eq!(catalog.stats().unwrap().track_count, 0);
+    assert_eq!(
+        catalog
+            .count_albums(&QueryDescriptor::albums().with_search("New Album Signal"))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        catalog
+            .count_artists(&QueryDescriptor::artists().with_search("New Artist Signal"))
+            .unwrap(),
+        0
+    );
     let integrity = catalog.integrity_check().unwrap();
     assert!(integrity.sqlite_ok && integrity.fts_ok);
     assert_eq!(integrity.foreign_key_violations, 0);
