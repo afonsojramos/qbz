@@ -960,6 +960,27 @@ msgstr "That file is not a disc image."
 msgid "SACD"
 msgstr "SACD"
 
+msgid "Genres"
+msgstr "Genres"
+
+msgid "All genres"
+msgstr "All genres"
+
+msgid "All artists"
+msgstr "All artists"
+
+msgid "All albums"
+msgstr "All albums"
+
+msgid "No albums match these filters"
+msgstr "No albums match these filters"
+
+msgid "Try a different genre, artist, album, source or quality."
+msgstr "Try a different genre, artist, album, source or quality."
+
+msgid "Favorites only"
+msgstr "Favorites only"
+
 msgid "Where should the ripped album go?"
 msgstr "Where should the ripped album go?"
 
@@ -1220,6 +1241,53 @@ msgstr "Open media"
 msgid "Open folder…"
 msgstr "Open folder…"
 
+# Local Library tab order and logged-off landing (2026-08-24)
+msgid "LIBRARY TABS"
+msgstr "LIBRARY TABS"
+
+msgid "Tab order and default"
+msgstr "Tab order and default"
+
+msgid "Choose the order of Local Library tabs. The first one opens by default, including when QBZ starts without a Qobuz session."
+msgstr "Choose the order of Local Library tabs. The first one opens by default, including when QBZ starts without a Qobuz session."
+
+msgid "Customize"
+msgstr "Customize"
+
+msgid "Local Library tabs"
+msgstr "Local Library tabs"
+
+msgid "Reorder the Local Library tabs. The first tab opens by default and is shown when starting without a Qobuz session."
+msgstr "Reorder the Local Library tabs. The first tab opens by default and is shown when starting without a Qobuz session."
+
+msgid "Clicking a section in the sidebar or title bar opens its first tab — including your chosen Local Library default — instead of only showing its menu"
+msgstr "Clicking a section in the sidebar or title bar opens its first tab — including your chosen Local Library default — instead of only showing its menu"
+
+msgid "Reset to defaults"
+msgstr "Reset to defaults"
+
+# Local Library Genres filter placement (2026-08-24)
+msgid "GENRES VIEW"
+msgstr "GENRES VIEW"
+
+msgid "Genre filters position"
+msgstr "Genre filters position"
+
+msgid "Place the chained genre filters above, beside or below the album results."
+msgstr "Place the chained genre filters above, beside or below the album results."
+
+msgid "Top"
+msgstr "Top"
+
+msgid "Right"
+msgstr "Right"
+
+msgid "Left"
+msgstr "Left"
+
+msgid "Bottom"
+msgstr "Bottom"
+
 msgid "Album"
 msgstr "Album"
 
@@ -1393,3 +1461,108 @@ msgstr "{} must be a positive number."
 
 msgid "The ephemeral session changed; reopen the metadata editor."
 msgstr "The ephemeral session changed; reopen the metadata editor."
+
+msgid "Album artists"
+msgstr "Album artists"
+
+msgid "Album artists (ordered; separate with semicolons)"
+msgstr "Album artists (ordered; separate with semicolons)"
+
+msgid "Artist credit"
+msgstr "Artist credit"
+
+msgid "Artists"
+msgstr "Artists"
+
+msgid "Artists (ordered; semicolon separated)"
+msgstr "Artists (ordered; semicolon separated)"
+
+msgid "Artwork is larger than 25 MiB."
+msgstr "Artwork is larger than 25 MiB."
+
+msgid "Artwork search failed."
+msgstr "Artwork search failed."
+
+msgid "Artwork source did not provide a secure URL."
+msgstr "Artwork source did not provide a secure URL."
+
+msgid "Choose album artwork"
+msgstr "Choose album artwork"
+
+msgid "Choose another file"
+msgstr "Choose another file"
+
+msgid "Choose file"
+msgstr "Choose file"
+
+msgid "Compilation / Various Artists"
+msgstr "Compilation / Various Artists"
+
+msgid "Composers"
+msgstr "Composers"
+
+msgid "Couldn't download that artwork."
+msgstr "Couldn't download that artwork."
+
+msgid "Couldn't stage artwork"
+msgstr "Couldn't stage artwork"
+
+msgid "Current artwork"
+msgstr "Current artwork"
+
+msgid "Discogs release ID"
+msgstr "Discogs release ID"
+
+msgid "Enter an album title to find artwork."
+msgstr "Enter an album title to find artwork."
+
+msgid "File"
+msgstr "File"
+
+msgid "Find artwork"
+msgstr "Find artwork"
+
+msgid "Local file"
+msgstr "Local file"
+
+msgid "MusicBrainz album artist IDs"
+msgstr "MusicBrainz album artist IDs"
+
+msgid "MusicBrainz artist IDs"
+msgstr "MusicBrainz artist IDs"
+
+msgid "MusicBrainz recording ID"
+msgstr "MusicBrainz recording ID"
+
+msgid "MusicBrainz release ID"
+msgstr "MusicBrainz release ID"
+
+msgid "MusicBrainz release-group ID"
+msgstr "MusicBrainz release-group ID"
+
+msgid "MusicBrainz track ID"
+msgstr "MusicBrainz track ID"
+
+msgid "Performers"
+msgstr "Performers"
+
+msgid "Revert selection"
+msgstr "Revert selection"
+
+msgid "Selected track details"
+msgstr "Selected track details"
+
+msgid "That artwork result is no longer available."
+msgstr "That artwork result is no longer available."
+
+msgid "The selected artwork changed; choose it again."
+msgstr "The selected artwork changed; choose it again."
+
+msgid "The selected artwork has unsupported dimensions."
+msgstr "The selected artwork has unsupported dimensions."
+
+msgid "The selected file is not a supported image."
+msgstr "The selected file is not a supported image."
+
+msgid "Title"
+msgstr "Title"

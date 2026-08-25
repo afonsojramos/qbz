@@ -5403,6 +5403,24 @@ msgstr "Dat bestand is geen schijfimage."
 msgid "SACD"
 msgstr "SACD"
 
+msgid "Genres"
+msgstr "Genres"
+
+msgid "All genres"
+msgstr "Alle genres"
+
+msgid "All albums"
+msgstr "Alle albums"
+
+msgid "No albums match these filters"
+msgstr "Geen albums komen overeen met deze filters"
+
+msgid "Try a different genre, artist, album, source or quality."
+msgstr "Probeer een ander genre, artiest, album, bron of kwaliteitsniveau."
+
+msgid "Favorites only"
+msgstr "Alleen favorieten"
+
 msgid "Where should the ripped album go?"
 msgstr "Waar moet het geripte album heen?"
 
@@ -5683,6 +5701,42 @@ msgstr "Media openen"
 
 msgid "Open folder…"
 msgstr "Map openen…"
+
+# Tabvolgorde van de lokale bibliotheek en starten zonder sessie (2026-08-24)
+msgid "LIBRARY TABS"
+msgstr "BIBLIOTHEEKTABBLADEN"
+
+msgid "Tab order and default"
+msgstr "Tabvolgorde en standaardtab"
+
+msgid "Choose the order of Local Library tabs. The first one opens by default, including when QBZ starts without a Qobuz session."
+msgstr "Kies de volgorde van de tabbladen van de lokale bibliotheek. Het eerste opent standaard, ook wanneer QBZ zonder Qobuz-sessie start."
+
+msgid "Local Library tabs"
+msgstr "Tabbladen van de lokale bibliotheek"
+
+msgid "Reorder the Local Library tabs. The first tab opens by default and is shown when starting without a Qobuz session."
+msgstr "Wijzig de volgorde van de tabbladen van de lokale bibliotheek. Het eerste opent standaard en wordt getoond bij starten zonder Qobuz-sessie."
+
+msgid "Clicking a section in the sidebar or title bar opens its first tab — including your chosen Local Library default — instead of only showing its menu"
+msgstr "Klikken op een onderdeel in de zij- of titelbalk opent het eerste tabblad — inclusief de gekozen standaard voor de lokale bibliotheek — in plaats van alleen het menu"
+
+# Positie van de genrefilters in de lokale bibliotheek (2026-08-24)
+msgid "GENRES VIEW"
+msgstr "GENREWEERGAVE"
+
+msgid "Genre filters position"
+msgstr "Positie van genrefilters"
+
+msgid "Place the chained genre filters above, beside or below the album results."
+msgstr "Plaats de gekoppelde genrefilters boven, naast of onder de albumresultaten."
+
+msgid "Top"
+msgstr "Boven"
+
+msgid "Bottom"
+msgstr "Onder"
+
 msgid "Album metadata saved."
 msgstr "Albummetadata opgeslagen."
 
@@ -5805,3 +5859,102 @@ msgstr "{} moet een positief getal zijn."
 
 msgid "The ephemeral session changed; reopen the metadata editor."
 msgstr "De tijdelijke sessie is gewijzigd; open de metadata-editor opnieuw."
+
+msgid "Album artists"
+msgstr "Albumartiesten"
+
+msgid "Album artists (ordered; separate with semicolons)"
+msgstr "Albumartiesten (op volgorde; scheid met puntkomma's)"
+
+msgid "Artist credit"
+msgstr "Artiestvermelding"
+
+msgid "Artists (ordered; semicolon separated)"
+msgstr "Artiesten (op volgorde; gescheiden door puntkomma's)"
+
+msgid "Artwork is larger than 25 MiB."
+msgstr "De albumafbeelding is groter dan 25 MiB."
+
+msgid "Artwork search failed."
+msgstr "Zoeken naar albumafbeeldingen is mislukt."
+
+msgid "Artwork source did not provide a secure URL."
+msgstr "De afbeeldingsbron gaf geen beveiligde URL."
+
+msgid "Choose album artwork"
+msgstr "Albumafbeelding kiezen"
+
+msgid "Choose another file"
+msgstr "Een ander bestand kiezen"
+
+msgid "Choose file"
+msgstr "Bestand kiezen"
+
+msgid "Compilation / Various Artists"
+msgstr "Verzamelalbum / Diverse artiesten"
+
+msgid "Composers"
+msgstr "Componisten"
+
+msgid "Couldn't download that artwork."
+msgstr "Kon die albumafbeelding niet downloaden."
+
+msgid "Couldn't stage artwork"
+msgstr "Kon albumafbeelding niet voorbereiden"
+
+msgid "Current artwork"
+msgstr "Huidige albumafbeelding"
+
+msgid "Discogs release ID"
+msgstr "Discogs-release-ID"
+
+msgid "Enter an album title to find artwork."
+msgstr "Voer een albumtitel in om albumafbeeldingen te zoeken."
+
+msgid "File"
+msgstr "Bestand"
+
+msgid "Find artwork"
+msgstr "Albumafbeelding zoeken"
+
+msgid "Local file"
+msgstr "Lokaal bestand"
+
+msgid "MusicBrainz album artist IDs"
+msgstr "MusicBrainz-ID's van albumartiesten"
+
+msgid "MusicBrainz artist IDs"
+msgstr "MusicBrainz-ID's van artiesten"
+
+msgid "MusicBrainz recording ID"
+msgstr "MusicBrainz-opname-ID"
+
+msgid "MusicBrainz release ID"
+msgstr "MusicBrainz-release-ID"
+
+msgid "MusicBrainz release-group ID"
+msgstr "MusicBrainz-releasegroep-ID"
+
+msgid "MusicBrainz track ID"
+msgstr "MusicBrainz-track-ID"
+
+msgid "Performers"
+msgstr "Uitvoerenden"
+
+msgid "Revert selection"
+msgstr "Selectie terugdraaien"
+
+msgid "Selected track details"
+msgstr "Details van geselecteerde track"
+
+msgid "That artwork result is no longer available."
+msgstr "Dat resultaat voor de albumafbeelding is niet meer beschikbaar."
+
+msgid "The selected artwork changed; choose it again."
+msgstr "De geselecteerde albumafbeelding is gewijzigd; kies deze opnieuw."
+
+msgid "The selected artwork has unsupported dimensions."
+msgstr "De geselecteerde albumafbeelding heeft niet-ondersteunde afmetingen."
+
+msgid "The selected file is not a supported image."
+msgstr "Het geselecteerde bestand is geen ondersteunde afbeelding."

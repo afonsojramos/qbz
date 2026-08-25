@@ -4482,126 +4482,6 @@ msgstr "Alle Titel zufällig abspielen"
 msgid "Select multiple tracks"
 msgstr "Mehrere Titel auswählen"
 
-
-msgid "Album metadata saved."
-msgstr "Album-Metadaten gespeichert."
-
-msgid "Album title is required."
-msgstr "Ein Albumtitel ist erforderlich."
-
-msgid "Apply to form"
-msgstr "Auf Formular anwenden"
-
-msgid "CUE-based albums can only be edited with a sidecar."
-msgstr "CUE-basierte Alben können nur mit einer Sidecar-Datei bearbeitet werden."
-
-msgid "CUE-based albums use sidecar metadata."
-msgstr "CUE-basierte Alben verwenden Sidecar-Metadaten."
-
-msgid "Canonical"
-msgstr "Kanonisch"
-
-msgid "Close without saving"
-msgstr "Ohne Speichern schließen"
-
-msgid "Couldn't inspect album metadata."
-msgstr "Die Album-Metadaten konnten nicht geprüft werden."
-
-msgid "Couldn't load that metadata result."
-msgstr "Dieses Metadatenergebnis konnte nicht geladen werden."
-
-msgid "Couldn't open the metadata source."
-msgstr "Die Metadatenquelle konnte nicht geöffnet werden."
-
-msgid "Detected"
-msgstr "Erkannt"
-
-msgid "Disc number"
-msgstr "Disc-Nummer"
-
-msgid "Editing the selected physical version"
-msgstr "Die ausgewählte physische Version wird bearbeitet"
-
-msgid "Enter an album title or artist to search."
-msgstr "Gib einen Albumtitel oder Künstler für die Suche ein."
-
-msgid "Every track needs a title."
-msgstr "Jeder Track benötigt einen Titel."
-
-msgid "File names are shown for reference and cannot be changed here."
-msgstr "Dateinamen werden zur Orientierung angezeigt und können hier nicht geändert werden."
-
-msgid "Find metadata"
-msgstr "Metadaten suchen"
-
-msgid "ID3 writing"
-msgstr "ID3-Schreibformat"
-
-msgid "Metadata editing is available for local file versions only."
-msgstr "Metadaten können nur für lokale Dateiversionen bearbeitet werden."
-
-msgid "Metadata search failed."
-msgstr "Die Metadatensuche ist fehlgeschlagen."
-
-msgid "No local album version is selected."
-msgstr "Es ist keine lokale Albumversion ausgewählt."
-
-msgid "None"
-msgstr "Keine"
-
-msgid "One or more audio files are unavailable."
-msgstr "Eine oder mehrere Audiodateien sind nicht verfügbar."
-
-msgid "Open source"
-msgstr "Quelle öffnen"
-
-msgid "QBZ will preflight every file, update its canonical tag layer, then read it back to verify the change. Keep a backup if these files cannot be replaced."
-msgstr "QBZ prüft jede Datei vorab, aktualisiert ihre kanonische Tag-Ebene und liest sie anschließend zur Kontrolle erneut. Bewahre eine Sicherung auf, wenn diese Dateien nicht ersetzt werden können."
-
-msgid "Save changes to"
-msgstr "Änderungen speichern in"
-
-msgid "Some files contain conflicting tag layers. The canonical layer wins unless synchronization is enabled."
-msgstr "Einige Dateien enthalten widersprüchliche Tag-Ebenen. Die kanonische Ebene hat Vorrang, sofern die Synchronisierung nicht aktiviert ist."
-
-msgid "Synchronize compatible tag layers"
-msgstr "Kompatible Tag-Ebenen synchronisieren"
-
-msgid "Tag layers"
-msgstr "Tag-Ebenen"
-
-msgid "The canonical tag is not writable for every file."
-msgstr "Das kanonische Tag kann nicht in jede Datei geschrieben werden."
-
-msgid "The metadata editor is no longer open."
-msgstr "Der Metadateneditor ist nicht mehr geöffnet."
-
-msgid "The metadata form could not be read."
-msgstr "Das Metadatenformular konnte nicht gelesen werden."
-
-msgid "The track list changed; reopen the editor."
-msgstr "Die Trackliste wurde geändert; öffne den Editor erneut."
-
-msgid "The track list contains a duplicate row."
-msgstr "Die Trackliste enthält eine doppelte Zeile."
-
-msgid "Track number"
-msgstr "Tracknummer"
-
-msgid "Unknown metadata persistence mode."
-msgstr "Unbekannter Speichermodus für Metadaten."
-
-msgid "Write and verify"
-msgstr "Schreiben und prüfen"
-
-msgid "Write metadata into audio files?"
-msgstr "Metadaten in die Audiodateien schreiben?"
-
-msgid "Year must be a valid number."
-msgstr "Das Jahr muss eine gültige Zahl sein."
-
-msgid "{} must be a positive number."
-msgstr "{} muss eine positive Zahl sein."
 msgid "Play a random album"
 msgstr "Zufälliges Album abspielen"
 
@@ -5535,6 +5415,24 @@ msgstr "Diese Datei ist kein Disc-Image."
 msgid "SACD"
 msgstr "SACD"
 
+msgid "Genres"
+msgstr "Genres"
+
+msgid "All genres"
+msgstr "Alle Genres"
+
+msgid "All albums"
+msgstr "Alle Alben"
+
+msgid "No albums match these filters"
+msgstr "Keine Alben entsprechen diesen Filtern"
+
+msgid "Try a different genre, artist, album, source or quality."
+msgstr "Versuche es mit einem anderen Genre, Künstler, Album, einer anderen Quelle oder Qualität."
+
+msgid "Favorites only"
+msgstr "Nur Favoriten"
+
 msgid "Where should the ripped album go?"
 msgstr "Wohin soll das gerippte Album?"
 
@@ -5816,5 +5714,259 @@ msgstr "Medium öffnen"
 msgid "Open folder…"
 msgstr "Ordner öffnen…"
 
+# Tab-Reihenfolge der lokalen Bibliothek und Start ohne Sitzung (2026-08-24)
+msgid "LIBRARY TABS"
+msgstr "BIBLIOTHEKS-TABS"
+
+msgid "Tab order and default"
+msgstr "Tab-Reihenfolge und Standard"
+
+msgid "Choose the order of Local Library tabs. The first one opens by default, including when QBZ starts without a Qobuz session."
+msgstr "Lege die Reihenfolge der Tabs der lokalen Bibliothek fest. Der erste wird standardmäßig geöffnet, auch wenn QBZ ohne Qobuz-Sitzung startet."
+
+msgid "Local Library tabs"
+msgstr "Tabs der lokalen Bibliothek"
+
+msgid "Reorder the Local Library tabs. The first tab opens by default and is shown when starting without a Qobuz session."
+msgstr "Ordne die Tabs der lokalen Bibliothek neu. Der erste wird standardmäßig geöffnet und beim Start ohne Qobuz-Sitzung angezeigt."
+
+msgid "Clicking a section in the sidebar or title bar opens its first tab — including your chosen Local Library default — instead of only showing its menu"
+msgstr "Ein Klick auf einen Bereich in der Seiten- oder Titelleiste öffnet dessen ersten Tab — einschließlich des gewählten Standards der lokalen Bibliothek — statt nur das Menü anzuzeigen"
+
+# Position der Genrefilter in der lokalen Bibliothek (2026-08-24)
+msgid "GENRES VIEW"
+msgstr "GENRE-ANSICHT"
+
+msgid "Genre filters position"
+msgstr "Position der Genrefilter"
+
+msgid "Place the chained genre filters above, beside or below the album results."
+msgstr "Platziere die verketteten Genrefilter über, neben oder unter den Albumergebnissen."
+
+msgid "Top"
+msgstr "Oben"
+
+msgid "Bottom"
+msgstr "Unten"
+
+msgid "Album metadata saved."
+msgstr "Album-Metadaten gespeichert."
+
+msgid "Album title is required."
+msgstr "Ein Albumtitel ist erforderlich."
+
+msgid "Apply to form"
+msgstr "Auf Formular anwenden"
+
+msgid "CUE-based albums can only be edited with a sidecar."
+msgstr "CUE-basierte Alben können nur mit einer Sidecar-Datei bearbeitet werden."
+
+msgid "CUE-based albums use sidecar metadata."
+msgstr "CUE-basierte Alben verwenden Sidecar-Metadaten."
+
+msgid "Canonical"
+msgstr "Kanonisch"
+
+msgid "Close without saving"
+msgstr "Ohne Speichern schließen"
+
+msgid "Couldn't inspect album metadata."
+msgstr "Die Album-Metadaten konnten nicht geprüft werden."
+
+msgid "Couldn't load that metadata result."
+msgstr "Dieses Metadatenergebnis konnte nicht geladen werden."
+
+msgid "Couldn't open the metadata source."
+msgstr "Die Metadatenquelle konnte nicht geöffnet werden."
+
+msgid "Detected"
+msgstr "Erkannt"
+
+msgid "Disc number"
+msgstr "Disc-Nummer"
+
+msgid "Editing the selected physical version"
+msgstr "Die ausgewählte physische Version wird bearbeitet"
+
+msgid "Enter an album title or artist to search."
+msgstr "Gib einen Albumtitel oder Künstler für die Suche ein."
+
+msgid "Every track needs a title."
+msgstr "Jeder Track benötigt einen Titel."
+
+msgid "File names are shown for reference and cannot be changed here."
+msgstr "Dateinamen werden zur Orientierung angezeigt und können hier nicht geändert werden."
+
+msgid "Find metadata"
+msgstr "Metadaten suchen"
+
+msgid "ID3 writing"
+msgstr "ID3-Schreibformat"
+
+msgid "Metadata editing is available for local file versions only."
+msgstr "Metadaten können nur für lokale Dateiversionen bearbeitet werden."
+
+msgid "Metadata search failed."
+msgstr "Die Metadatensuche ist fehlgeschlagen."
+
+msgid "No local album version is selected."
+msgstr "Es ist keine lokale Albumversion ausgewählt."
+
+msgid "None"
+msgstr "Keine"
+
+msgid "One or more audio files are unavailable."
+msgstr "Eine oder mehrere Audiodateien sind nicht verfügbar."
+
+msgid "Open source"
+msgstr "Quelle öffnen"
+
+msgid "QBZ will preflight every file, update its canonical tag layer, then read it back to verify the change. Keep a backup if these files cannot be replaced."
+msgstr "QBZ prüft jede Datei vorab, aktualisiert ihre kanonische Tag-Ebene und liest sie anschließend zur Kontrolle erneut. Bewahre eine Sicherung auf, wenn diese Dateien nicht ersetzt werden können."
+
+msgid "Save changes to"
+msgstr "Änderungen speichern in"
+
+msgid "Some files contain conflicting tag layers. The canonical layer wins unless synchronization is enabled."
+msgstr "Einige Dateien enthalten widersprüchliche Tag-Ebenen. Die kanonische Ebene hat Vorrang, sofern die Synchronisierung nicht aktiviert ist."
+
+msgid "Synchronize compatible tag layers"
+msgstr "Kompatible Tag-Ebenen synchronisieren"
+
+msgid "Tag layers"
+msgstr "Tag-Ebenen"
+
+msgid "The canonical tag is not writable for every file."
+msgstr "Das kanonische Tag kann nicht in jede Datei geschrieben werden."
+
+msgid "The metadata editor is no longer open."
+msgstr "Der Metadateneditor ist nicht mehr geöffnet."
+
+msgid "The metadata form could not be read."
+msgstr "Das Metadatenformular konnte nicht gelesen werden."
+
+msgid "The track list changed; reopen the editor."
+msgstr "Die Trackliste wurde geändert; öffne den Editor erneut."
+
+msgid "The track list contains a duplicate row."
+msgstr "Die Trackliste enthält eine doppelte Zeile."
+
+msgid "Track number"
+msgstr "Tracknummer"
+
+msgid "Unknown metadata persistence mode."
+msgstr "Unbekannter Speichermodus für Metadaten."
+
+msgid "Write and verify"
+msgstr "Schreiben und prüfen"
+
+msgid "Write metadata into audio files?"
+msgstr "Metadaten in die Audiodateien schreiben?"
+
+msgid "Year must be a valid number."
+msgstr "Das Jahr muss eine gültige Zahl sein."
+
+msgid "{} must be a positive number."
+msgstr "{} muss eine positive Zahl sein."
+
 msgid "The ephemeral session changed; reopen the metadata editor."
 msgstr "Die temporäre Sitzung wurde geändert; öffne den Metadaten-Editor erneut."
+
+msgid "Album artists"
+msgstr "Albuminterpreten"
+
+msgid "Album artists (ordered; separate with semicolons)"
+msgstr "Albuminterpreten (geordnet; mit Semikolon trennen)"
+
+msgid "Artist credit"
+msgstr "Interpretenangabe"
+
+msgid "Artists (ordered; semicolon separated)"
+msgstr "Interpreten (geordnet; mit Semikolon getrennt)"
+
+msgid "Artwork is larger than 25 MiB."
+msgstr "Das Cover ist größer als 25 MiB."
+
+msgid "Artwork search failed."
+msgstr "Die Cover-Suche ist fehlgeschlagen."
+
+msgid "Artwork source did not provide a secure URL."
+msgstr "Die Cover-Quelle hat keine sichere URL bereitgestellt."
+
+msgid "Choose album artwork"
+msgstr "Albumcover auswählen"
+
+msgid "Choose another file"
+msgstr "Andere Datei auswählen"
+
+msgid "Choose file"
+msgstr "Datei auswählen"
+
+msgid "Compilation / Various Artists"
+msgstr "Kompilation / Verschiedene Interpreten"
+
+msgid "Composers"
+msgstr "Komponisten"
+
+msgid "Couldn't download that artwork."
+msgstr "Dieses Cover konnte nicht heruntergeladen werden."
+
+msgid "Couldn't stage artwork"
+msgstr "Das Cover konnte nicht vorbereitet werden"
+
+msgid "Current artwork"
+msgstr "Aktuelles Cover"
+
+msgid "Discogs release ID"
+msgstr "Discogs-Veröffentlichungs-ID"
+
+msgid "Enter an album title to find artwork."
+msgstr "Gib einen Albumtitel ein, um Cover zu suchen."
+
+msgid "File"
+msgstr "Datei"
+
+msgid "Find artwork"
+msgstr "Cover suchen"
+
+msgid "Local file"
+msgstr "Lokale Datei"
+
+msgid "MusicBrainz album artist IDs"
+msgstr "MusicBrainz-IDs der Albuminterpreten"
+
+msgid "MusicBrainz artist IDs"
+msgstr "MusicBrainz-Interpreten-IDs"
+
+msgid "MusicBrainz recording ID"
+msgstr "MusicBrainz-Aufnahme-ID"
+
+msgid "MusicBrainz release ID"
+msgstr "MusicBrainz-Veröffentlichungs-ID"
+
+msgid "MusicBrainz release-group ID"
+msgstr "MusicBrainz-Veröffentlichungsgruppen-ID"
+
+msgid "MusicBrainz track ID"
+msgstr "MusicBrainz-Titel-ID"
+
+msgid "Performers"
+msgstr "Mitwirkende"
+
+msgid "Revert selection"
+msgstr "Auswahl zurücksetzen"
+
+msgid "Selected track details"
+msgstr "Details des ausgewählten Titels"
+
+msgid "That artwork result is no longer available."
+msgstr "Dieses Cover-Ergebnis ist nicht mehr verfügbar."
+
+msgid "The selected artwork changed; choose it again."
+msgstr "Das ausgewählte Cover wurde geändert; wähle es erneut aus."
+
+msgid "The selected artwork has unsupported dimensions."
+msgstr "Das ausgewählte Cover hat nicht unterstützte Abmessungen."
+
+msgid "The selected file is not a supported image."
+msgstr "Die ausgewählte Datei ist kein unterstütztes Bild."

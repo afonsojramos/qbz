@@ -3716,126 +3716,6 @@ msgstr "{} треков"
 msgid "Choose folder"
 msgstr "Выберите папку"
 
-
-msgid "Album metadata saved."
-msgstr "Метаданные альбома сохранены."
-
-msgid "Album title is required."
-msgstr "Необходимо указать название альбома."
-
-msgid "Apply to form"
-msgstr "Применить к форме"
-
-msgid "CUE-based albums can only be edited with a sidecar."
-msgstr "Альбомы на основе CUE можно редактировать только через сопроводительный файл."
-
-msgid "CUE-based albums use sidecar metadata."
-msgstr "Альбомы на основе CUE используют метаданные в сопроводительном файле."
-
-msgid "Canonical"
-msgstr "Канонический слой"
-
-msgid "Close without saving"
-msgstr "Закрыть без сохранения"
-
-msgid "Couldn't inspect album metadata."
-msgstr "Не удалось проверить метаданные альбома."
-
-msgid "Couldn't load that metadata result."
-msgstr "Не удалось загрузить выбранный результат метаданных."
-
-msgid "Couldn't open the metadata source."
-msgstr "Не удалось открыть источник метаданных."
-
-msgid "Detected"
-msgstr "Обнаружены"
-
-msgid "Disc number"
-msgstr "Номер диска"
-
-msgid "Editing the selected physical version"
-msgstr "Редактирование выбранной физической версии"
-
-msgid "Enter an album title or artist to search."
-msgstr "Введите название альбома или имя исполнителя для поиска."
-
-msgid "Every track needs a title."
-msgstr "У каждого трека должно быть название."
-
-msgid "File names are shown for reference and cannot be changed here."
-msgstr "Имена файлов показаны для справки и не могут быть изменены здесь."
-
-msgid "Find metadata"
-msgstr "Найти метаданные"
-
-msgid "ID3 writing"
-msgstr "Запись ID3"
-
-msgid "Metadata editing is available for local file versions only."
-msgstr "Редактирование метаданных доступно только для локальных файловых версий."
-
-msgid "Metadata search failed."
-msgstr "Поиск метаданных завершился ошибкой."
-
-msgid "No local album version is selected."
-msgstr "Локальная версия альбома не выбрана."
-
-msgid "None"
-msgstr "Нет"
-
-msgid "One or more audio files are unavailable."
-msgstr "Один или несколько аудиофайлов недоступны."
-
-msgid "Open source"
-msgstr "Открыть источник"
-
-msgid "QBZ will preflight every file, update its canonical tag layer, then read it back to verify the change. Keep a backup if these files cannot be replaced."
-msgstr "QBZ предварительно проверит каждый файл, обновит его канонический слой тегов и повторно прочитает его для проверки. Сохраните резервную копию, если эти файлы нельзя заменить."
-
-msgid "Save changes to"
-msgstr "Сохранить изменения в"
-
-msgid "Some files contain conflicting tag layers. The canonical layer wins unless synchronization is enabled."
-msgstr "Некоторые файлы содержат конфликтующие слои тегов. Канонический слой имеет приоритет, если синхронизация не включена."
-
-msgid "Synchronize compatible tag layers"
-msgstr "Синхронизировать совместимые слои тегов"
-
-msgid "Tag layers"
-msgstr "Слои тегов"
-
-msgid "The canonical tag is not writable for every file."
-msgstr "Канонический тег доступен для записи не во всех файлах."
-
-msgid "The metadata editor is no longer open."
-msgstr "Редактор метаданных уже закрыт."
-
-msgid "The metadata form could not be read."
-msgstr "Не удалось прочитать форму метаданных."
-
-msgid "The track list changed; reopen the editor."
-msgstr "Список треков изменился; откройте редактор заново."
-
-msgid "The track list contains a duplicate row."
-msgstr "Список треков содержит повторяющуюся строку."
-
-msgid "Track number"
-msgstr "Номер трека"
-
-msgid "Unknown metadata persistence mode."
-msgstr "Неизвестный режим хранения метаданных."
-
-msgid "Write and verify"
-msgstr "Записать и проверить"
-
-msgid "Write metadata into audio files?"
-msgstr "Записать метаданные в аудиофайлы?"
-
-msgid "Year must be a valid number."
-msgstr "Год должен быть допустимым числом."
-
-msgid "{} must be a positive number."
-msgstr "{} должно быть положительным числом."
 msgid "Couldn't add to library"
 msgstr "Не удалось добавить в библиотеку"
 
@@ -5552,6 +5432,24 @@ msgstr "Это не образ диска."
 msgid "SACD"
 msgstr "SACD"
 
+msgid "Genres"
+msgstr "Жанры"
+
+msgid "All genres"
+msgstr "Все жанры"
+
+msgid "All albums"
+msgstr "Все альбомы"
+
+msgid "No albums match these filters"
+msgstr "Нет альбомов, соответствующих этим фильтрам"
+
+msgid "Try a different genre, artist, album, source or quality."
+msgstr "Попробуйте выбрать другой жанр, исполнителя, альбом, источник или качество."
+
+msgid "Favorites only"
+msgstr "Только избранное"
+
 msgid "Where should the ripped album go?"
 msgstr "Куда сохранить извлечённый альбом?"
 
@@ -5565,6 +5463,7 @@ msgid "Ripped {} track to your library"
 msgid_plural "Ripped {} tracks to your library"
 msgstr[0] "Извлечена {} дорожка в вашу библиотеку"
 msgstr[1] "Извлечено {} дорожек в вашу библиотеку"
+msgstr[2] "Извлечено {} дорожек в вашу библиотеку"
 
 # Discs: rip wizard, metadata lookup and the disc tooltips (2026-08-21)
 
@@ -5833,5 +5732,259 @@ msgstr "Открыть медиафайл"
 msgid "Open folder…"
 msgstr "Открыть папку…"
 
+# Порядок вкладок локальной медиатеки и запуск без сеанса (2026-08-24)
+msgid "LIBRARY TABS"
+msgstr "ВКЛАДКИ МЕДИАТЕКИ"
+
+msgid "Tab order and default"
+msgstr "Порядок вкладок и вкладка по умолчанию"
+
+msgid "Choose the order of Local Library tabs. The first one opens by default, including when QBZ starts without a Qobuz session."
+msgstr "Выберите порядок вкладок локальной медиатеки. Первая открывается по умолчанию, в том числе при запуске QBZ без сеанса Qobuz."
+
+msgid "Local Library tabs"
+msgstr "Вкладки локальной медиатеки"
+
+msgid "Reorder the Local Library tabs. The first tab opens by default and is shown when starting without a Qobuz session."
+msgstr "Измените порядок вкладок локальной медиатеки. Первая открывается по умолчанию и отображается при запуске без сеанса Qobuz."
+
+msgid "Clicking a section in the sidebar or title bar opens its first tab — including your chosen Local Library default — instead of only showing its menu"
+msgstr "Щелчок по разделу на боковой панели или панели заголовка открывает его первую вкладку — включая выбранную вкладку локальной медиатеки по умолчанию — вместо простого отображения меню"
+
+# Расположение фильтров жанра локальной медиатеки (2026-08-24)
+msgid "GENRES VIEW"
+msgstr "ПРОСМОТР ПО ЖАНРАМ"
+
+msgid "Genre filters position"
+msgstr "Расположение фильтров жанра"
+
+msgid "Place the chained genre filters above, beside or below the album results."
+msgstr "Разместите связанные фильтры жанра над результатами альбомов, сбоку или под ними."
+
+msgid "Top"
+msgstr "Сверху"
+
+msgid "Bottom"
+msgstr "Снизу"
+
+msgid "Album metadata saved."
+msgstr "Метаданные альбома сохранены."
+
+msgid "Album title is required."
+msgstr "Необходимо указать название альбома."
+
+msgid "Apply to form"
+msgstr "Применить к форме"
+
+msgid "CUE-based albums can only be edited with a sidecar."
+msgstr "Альбомы на основе CUE можно редактировать только через сопроводительный файл."
+
+msgid "CUE-based albums use sidecar metadata."
+msgstr "Альбомы на основе CUE используют метаданные в сопроводительном файле."
+
+msgid "Canonical"
+msgstr "Канонический слой"
+
+msgid "Close without saving"
+msgstr "Закрыть без сохранения"
+
+msgid "Couldn't inspect album metadata."
+msgstr "Не удалось проверить метаданные альбома."
+
+msgid "Couldn't load that metadata result."
+msgstr "Не удалось загрузить выбранный результат метаданных."
+
+msgid "Couldn't open the metadata source."
+msgstr "Не удалось открыть источник метаданных."
+
+msgid "Detected"
+msgstr "Обнаружены"
+
+msgid "Disc number"
+msgstr "Номер диска"
+
+msgid "Editing the selected physical version"
+msgstr "Редактирование выбранной физической версии"
+
+msgid "Enter an album title or artist to search."
+msgstr "Введите название альбома или имя исполнителя для поиска."
+
+msgid "Every track needs a title."
+msgstr "У каждого трека должно быть название."
+
+msgid "File names are shown for reference and cannot be changed here."
+msgstr "Имена файлов показаны для справки и не могут быть изменены здесь."
+
+msgid "Find metadata"
+msgstr "Найти метаданные"
+
+msgid "ID3 writing"
+msgstr "Запись ID3"
+
+msgid "Metadata editing is available for local file versions only."
+msgstr "Редактирование метаданных доступно только для локальных файловых версий."
+
+msgid "Metadata search failed."
+msgstr "Поиск метаданных завершился ошибкой."
+
+msgid "No local album version is selected."
+msgstr "Локальная версия альбома не выбрана."
+
+msgid "None"
+msgstr "Нет"
+
+msgid "One or more audio files are unavailable."
+msgstr "Один или несколько аудиофайлов недоступны."
+
+msgid "Open source"
+msgstr "Открыть источник"
+
+msgid "QBZ will preflight every file, update its canonical tag layer, then read it back to verify the change. Keep a backup if these files cannot be replaced."
+msgstr "QBZ предварительно проверит каждый файл, обновит его канонический слой тегов и повторно прочитает его для проверки. Сохраните резервную копию, если эти файлы нельзя заменить."
+
+msgid "Save changes to"
+msgstr "Сохранить изменения в"
+
+msgid "Some files contain conflicting tag layers. The canonical layer wins unless synchronization is enabled."
+msgstr "Некоторые файлы содержат конфликтующие слои тегов. Канонический слой имеет приоритет, если синхронизация не включена."
+
+msgid "Synchronize compatible tag layers"
+msgstr "Синхронизировать совместимые слои тегов"
+
+msgid "Tag layers"
+msgstr "Слои тегов"
+
+msgid "The canonical tag is not writable for every file."
+msgstr "Канонический тег доступен для записи не во всех файлах."
+
+msgid "The metadata editor is no longer open."
+msgstr "Редактор метаданных уже закрыт."
+
+msgid "The metadata form could not be read."
+msgstr "Не удалось прочитать форму метаданных."
+
+msgid "The track list changed; reopen the editor."
+msgstr "Список треков изменился; откройте редактор заново."
+
+msgid "The track list contains a duplicate row."
+msgstr "Список треков содержит повторяющуюся строку."
+
+msgid "Track number"
+msgstr "Номер трека"
+
+msgid "Unknown metadata persistence mode."
+msgstr "Неизвестный режим хранения метаданных."
+
+msgid "Write and verify"
+msgstr "Записать и проверить"
+
+msgid "Write metadata into audio files?"
+msgstr "Записать метаданные в аудиофайлы?"
+
+msgid "Year must be a valid number."
+msgstr "Год должен быть допустимым числом."
+
+msgid "{} must be a positive number."
+msgstr "{} должно быть положительным числом."
+
 msgid "The ephemeral session changed; reopen the metadata editor."
 msgstr "Эфемерный сеанс изменился; снова откройте редактор метаданных."
+
+msgid "Album artists"
+msgstr "Исполнители альбома"
+
+msgid "Album artists (ordered; separate with semicolons)"
+msgstr "Исполнители альбома (по порядку; разделяйте точкой с запятой)"
+
+msgid "Artist credit"
+msgstr "Указание исполнителей"
+
+msgid "Artists (ordered; semicolon separated)"
+msgstr "Исполнители (по порядку; через точку с запятой)"
+
+msgid "Artwork is larger than 25 MiB."
+msgstr "Размер обложки превышает 25 МиБ."
+
+msgid "Artwork search failed."
+msgstr "Не удалось найти обложку."
+
+msgid "Artwork source did not provide a secure URL."
+msgstr "Источник обложки не предоставил безопасный URL."
+
+msgid "Choose album artwork"
+msgstr "Выбрать обложку альбома"
+
+msgid "Choose another file"
+msgstr "Выбрать другой файл"
+
+msgid "Choose file"
+msgstr "Выбрать файл"
+
+msgid "Compilation / Various Artists"
+msgstr "Сборник / Разные исполнители"
+
+msgid "Composers"
+msgstr "Композиторы"
+
+msgid "Couldn't download that artwork."
+msgstr "Не удалось загрузить эту обложку."
+
+msgid "Couldn't stage artwork"
+msgstr "Не удалось подготовить обложку"
+
+msgid "Current artwork"
+msgstr "Текущая обложка"
+
+msgid "Discogs release ID"
+msgstr "ID релиза Discogs"
+
+msgid "Enter an album title to find artwork."
+msgstr "Введите название альбома для поиска обложки."
+
+msgid "File"
+msgstr "Файл"
+
+msgid "Find artwork"
+msgstr "Найти обложку"
+
+msgid "Local file"
+msgstr "Локальный файл"
+
+msgid "MusicBrainz album artist IDs"
+msgstr "ID исполнителей альбома MusicBrainz"
+
+msgid "MusicBrainz artist IDs"
+msgstr "ID исполнителей MusicBrainz"
+
+msgid "MusicBrainz recording ID"
+msgstr "ID записи MusicBrainz"
+
+msgid "MusicBrainz release ID"
+msgstr "ID релиза MusicBrainz"
+
+msgid "MusicBrainz release-group ID"
+msgstr "ID группы релизов MusicBrainz"
+
+msgid "MusicBrainz track ID"
+msgstr "ID дорожки MusicBrainz"
+
+msgid "Performers"
+msgstr "Исполнители партий"
+
+msgid "Revert selection"
+msgstr "Отменить выбор"
+
+msgid "Selected track details"
+msgstr "Сведения о выбранной дорожке"
+
+msgid "That artwork result is no longer available."
+msgstr "Этот результат поиска обложки больше недоступен."
+
+msgid "The selected artwork changed; choose it again."
+msgstr "Выбранная обложка изменилась; выберите её снова."
+
+msgid "The selected artwork has unsupported dimensions."
+msgstr "Размеры выбранной обложки не поддерживаются."
+
+msgid "The selected file is not a supported image."
+msgstr "Выбранный файл не является поддерживаемым изображением."
