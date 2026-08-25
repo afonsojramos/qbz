@@ -311,7 +311,7 @@ Rectangle {
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
                     visible: root.width >= 720
-                    text: QbzSession.tr("Queue View", QbzSession.trRev)
+                    text: QbzSession.tr("Listen list", QbzSession.trRev)
                     color: theme.textPrimary
                     font.pixelSize: theme.fontSection
                     font.weight: theme.weightSemibold

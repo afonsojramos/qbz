@@ -5060,8 +5060,8 @@ msgstr "コンパクトビュー"
 msgid "Artwork View"
 msgstr "アートワークビュー"
 
-msgid "Queue View"
-msgstr "キュービュー"
+msgid "Listen list"
+msgstr "再生リスト"
 
 msgid "Lyrics View"
 msgstr "歌詞ビュー"
@@ -5397,6 +5397,9 @@ msgstr "そのファイルはディスクイメージではありません。"
 
 msgid "SACD"
 msgstr "SACD"
+
+msgid "Library Explorer"
+msgstr "ライブラリエクスプローラー"
 
 msgid "Genres"
 msgstr "ジャンル"

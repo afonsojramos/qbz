@@ -5065,8 +5065,8 @@ msgstr "Compacte weergave"
 msgid "Artwork View"
 msgstr "Hoesweergave"
 
-msgid "Queue View"
-msgstr "Wachtrijweergave"
+msgid "Listen list"
+msgstr "Luisterlijst"
 
 msgid "Lyrics View"
 msgstr "Songtekstweergave"
@@ -5402,6 +5402,9 @@ msgstr "Dat bestand is geen schijfimage."
 
 msgid "SACD"
 msgstr "SACD"
+
+msgid "Library Explorer"
+msgstr "Bibliotheekverkenner"
 
 msgid "Genres"
 msgstr "Genres"

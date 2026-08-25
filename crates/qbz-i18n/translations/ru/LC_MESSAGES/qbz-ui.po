@@ -5092,8 +5092,8 @@ msgstr "Компактный вид"
 msgid "Artwork View"
 msgstr "Вид обложки"
 
-msgid "Queue View"
-msgstr "Вид очереди"
+msgid "Listen list"
+msgstr "Список прослушивания"
 
 msgid "Lyrics View"
 msgstr "Вид текста песни"
@@ -5431,6 +5431,9 @@ msgstr "Это не образ диска."
 
 msgid "SACD"
 msgstr "SACD"
+
+msgid "Library Explorer"
+msgstr "Обозреватель библиотеки"
 
 msgid "Genres"
 msgstr "Жанры"

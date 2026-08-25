@@ -960,6 +960,12 @@ msgstr "That file is not a disc image."
 msgid "SACD"
 msgstr "SACD"
 
+msgid "Library Explorer"
+msgstr "Library Explorer"
+
+msgid "Listen list"
+msgstr "Listen list"
+
 msgid "Genres"
 msgstr "Genres"
 

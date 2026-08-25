@@ -5075,8 +5075,8 @@ msgstr "Kompaktansicht"
 msgid "Artwork View"
 msgstr "Cover-Ansicht"
 
-msgid "Queue View"
-msgstr "Warteschlangen-Ansicht"
+msgid "Listen list"
+msgstr "Hörliste"
 
 msgid "Lyrics View"
 msgstr "Songtext-Ansicht"
@@ -5414,6 +5414,9 @@ msgstr "Diese Datei ist kein Disc-Image."
 
 msgid "SACD"
 msgstr "SACD"
+
+msgid "Library Explorer"
+msgstr "Bibliotheks-Explorer"
 
 msgid "Genres"
 msgstr "Genres"

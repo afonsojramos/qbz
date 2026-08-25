@@ -5075,8 +5075,8 @@ msgstr "Vue compacte"
 msgid "Artwork View"
 msgstr "Vue pochette"
 
-msgid "Queue View"
-msgstr "Vue file d'attente"
+msgid "Listen list"
+msgstr "Liste d'écoute"
 
 msgid "Lyrics View"
 msgstr "Vue paroles"
@@ -5412,6 +5412,9 @@ msgstr "Ce fichier n'est pas une image disque."
 
 msgid "SACD"
 msgstr "SACD"
+
+msgid "Library Explorer"
+msgstr "Explorateur de bibliothèque"
 
 msgid "Genres"
 msgstr "Genres"
