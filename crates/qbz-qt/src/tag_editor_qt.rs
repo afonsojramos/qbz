@@ -1833,13 +1833,22 @@ mod tests {
     #[test]
     fn view_consumes_seed_when_loading_finishes_after_json_publish() {
         let qml = include_str!("../qml/controls/TagEditorModal.qml");
+        let workspace = include_str!("../qml/controls/TagEditorWorkspace.qml");
         assert!(qml.contains("function onEditorJsonChanged()"));
         assert!(qml.contains("function onEditorLoadingChanged()"));
         assert!(qml.contains("!QbzTagEditor.editorLoading"));
         assert!(qml.contains("event.kind === \"artwork-selected\""));
-        assert!(qml.contains("QbzTagEditor.chooseArtwork()"));
-        assert!(qml.contains("id: trackDelegate"));
-        assert!(qml.contains("root.selectedTrackIndex = trackDelegate.index"));
-        assert!(!qml.contains("root.selectedTrackIndex = index"));
+        assert!(workspace.contains("QbzTagEditor.chooseArtwork()"));
+        assert!(workspace.contains("id: trackDelegate"));
+        assert!(workspace.contains("workspace.editor.selectedTrackIndex = trackDelegate.index"));
+        assert!(!workspace.contains("selectedTrackIndex = index"));
+        assert!(qml.contains("TagEditorWorkspace"));
+        assert!(workspace.contains("* 8 / 12"));
+        assert!(workspace.contains("workspace.compactPane === \"tracks\""));
+        assert!(workspace.contains("workspace.compactPane === \"tags\""));
+        assert!(workspace.contains("color: selected ? theme.alphaTier(12)"));
+        assert!(workspace
+            .contains("visible: QbzTagEditor.artworkSearching || QbzTagEditor.artworkLoading"));
+        assert!(workspace.contains("id: lookupCard"));
     }
 }

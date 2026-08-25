@@ -478,6 +478,7 @@ fn main() {
                 "qml/controls/TrackReplacementModal.qml",
                 "qml/controls/DiscMetaModal.qml",
                 "qml/controls/TagEditorModal.qml",
+                "qml/controls/TagEditorWorkspace.qml",
                 "qml/controls/RipWizardModal.qml",
                 "qml/controls/RipProgressModal.qml",
                 "qml/controls/RipTick.qml",
