@@ -109,7 +109,18 @@ QVector<QPointF> mapPoints(const QVariantList &source,
             points.push_back(QPointF(pad + (0.5 + side * 0.47) * drawWidth,
                                      pad + (0.5 - mid * 0.47) * drawHeight));
         } else {
-            const qreal value = qBound<qreal>(-1.0, source[index].toReal() * gain, 1.0);
+            // The DSP publishes two pitch-locked periods. Repeat that stable
+            // window according to the item's aspect ratio so a wide monitor
+            // gains temporal detail instead of stretching two enormous
+            // lobes. A square panel remains the original two-period scope.
+            const int repeats = qBound(1, qRound(width / qMax<qreal>(1.0, height)), 4);
+            const qreal wrapped = std::fmod(index * repeats, count - 1.0);
+            const int first = qBound(0, static_cast<int>(std::floor(wrapped)), count - 1);
+            const int second = qMin(first + 1, count - 1);
+            const qreal fraction = wrapped - first;
+            const qreal sample = source[first].toReal() * (1.0 - fraction)
+                + source[second].toReal() * fraction;
+            const qreal value = qBound<qreal>(-1.0, sample * gain, 1.0);
             points.push_back(QPointF(pad + index * drawWidth / qMax(1, count - 1),
                                      pad + (0.5 - value * 0.47) * drawHeight));
         }

@@ -145,9 +145,11 @@ Item {
     ImmersiveAtmosphere {
         anchors.fill: parent
         visible: QbzShaderScene.scene === 0
+            && !(QbzImmersive.viewMode === 0
+                 && (QbzImmersive.mode === 7 || QbzImmersive.mode === 8))
         source: QbzImmersive.atmosphereUrl
         fallbackSource: QbzPlayer.npArtworkPath
-        animated: QbzPlayer.npPlaying && QbzImmersive.open
+        animated: visible && QbzPlayer.npPlaying && QbzImmersive.open
         dim: 0.15
     }
 
@@ -308,6 +310,20 @@ Item {
             && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 7
         visible: active
         sourceComponent: Item {
+            // A single host-generated blurred cover, without the animated
+            // four-layer atmosphere. The dark veil makes one album-derived
+            // high-luminance trace colour hold over the whole viewport.
+            Rectangle { anchors.fill: parent; color: "#090909" }
+            Image {
+                anchors.fill: parent
+                source: QbzImmersive.atmosphereUrl
+                fillMode: Image.PreserveAspectCrop
+                asynchronous: true
+                smooth: true
+                mipmap: true
+                opacity: status === Image.Ready ? 0.78 : 0.0
+            }
+            Rectangle { anchors.fill: parent; color: "#66000000" }
             ScopePanel {
                 width: Math.max(1, Math.min(parent.width - 96, parent.height - 196))
                 height: width
@@ -315,7 +331,7 @@ Item {
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: 132
                 scopeMode: 0
-                traceColor: theme.accent
+                albumContrast: true
             }
         }
     }
@@ -325,14 +341,18 @@ Item {
             && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 8
         visible: active
         sourceComponent: Item {
+            Rectangle { anchors.fill: parent; color: "#000000" }
             ScopePanel {
-                width: Math.max(1, Math.min(parent.width - 96, parent.height - 196))
-                height: width
-                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
                 anchors.bottom: parent.bottom
+                anchors.leftMargin: 48
+                anchors.rightMargin: 48
+                anchors.topMargin: 96
                 anchors.bottomMargin: 132
                 scopeMode: 1
-                traceColor: theme.accent
+                albumContrast: true
             }
         }
     }

@@ -62,6 +62,7 @@ public:
     QColor baseGeometryColor;
     QColor cacheGeometryColor;
     QColor playedGeometryColor;
+    int geometryRenderMode = -1;
 };
 
 void setVertex(QSGGeometry::ColoredPoint2D &vertex,
@@ -100,17 +101,70 @@ void setLayerGeometry(QSGGeometryNode *node,
                       const std::vector<float> &values,
                       qreal width,
                       qreal height,
-                      const QColor &color)
+                      const QColor &color,
+                      int renderMode)
 {
     auto *geometry = node->geometry();
     const int count = static_cast<int>(values.size());
+    const float centre = static_cast<float>(height * 0.5);
+    const float halfHeight = std::max(1.0f, static_cast<float>(height * 0.47));
+
+    if (renderMode == 1) {
+        // Small NPB: the RMS document has no signed samples, so present its
+        // loudness contour as one continuous, centre-crossing curve. A few
+        // dozen well-spaced segments read as a waveform at 11 px; hundreds
+        // of sub-pixel bars only read as a rough blue rail.
+        geometry->allocate(6 + std::max(0, count - 1) * 6);
+        geometry->setDrawingMode(QSGGeometry::DrawTriangles);
+        auto *vertices = geometry->vertexDataAsColoredPoint2D();
+        const float railHalf = std::min(0.42f, halfHeight * 0.12f);
+        setQuad(vertices, 0.0f, centre - railHalf, static_cast<float>(width),
+                centre + railHalf, color, 0.32f, 0.32f);
+        if (count < 2) {
+            node->markDirty(QSGNode::DirtyGeometry);
+            return;
+        }
+
+        const float lineHalf = std::clamp(static_cast<float>(height * 0.085), 0.62f, 1.15f);
+        const float swing = static_cast<float>(height * 0.36);
+        auto pointAt = [&](int index) {
+            const float x = index * static_cast<float>(width) / (count - 1);
+            const float y = centre + (0.5f - values[index]) * swing * 2.0f;
+            return QPointF(x, y);
+        };
+        int vertex = 6;
+        for (int index = 0; index + 1 < count; ++index) {
+            const QPointF first = pointAt(index);
+            const QPointF second = pointAt(index + 1);
+            const QPointF delta = second - first;
+            const qreal length = std::hypot(delta.x(), delta.y());
+            const QPointF normal = length > 0.0001
+                ? QPointF(-delta.y() / length * lineHalf,
+                          delta.x() / length * lineHalf)
+                : QPointF(0.0, lineHalf);
+            setVertex(vertices[vertex], static_cast<float>((first + normal).x()),
+                      static_cast<float>((first + normal).y()), color, 0.92f);
+            setVertex(vertices[vertex + 1], static_cast<float>((first - normal).x()),
+                      static_cast<float>((first - normal).y()), color, 0.92f);
+            setVertex(vertices[vertex + 2], static_cast<float>((second + normal).x()),
+                      static_cast<float>((second + normal).y()), color, 0.92f);
+            setVertex(vertices[vertex + 3], static_cast<float>((second + normal).x()),
+                      static_cast<float>((second + normal).y()), color, 0.92f);
+            setVertex(vertices[vertex + 4], static_cast<float>((first - normal).x()),
+                      static_cast<float>((first - normal).y()), color, 0.92f);
+            setVertex(vertices[vertex + 5], static_cast<float>((second - normal).x()),
+                      static_cast<float>((second - normal).y()), color, 0.92f);
+            vertex += 6;
+        }
+        node->markDirty(QSGNode::DirtyGeometry);
+        return;
+    }
+
     const int visibleBars = static_cast<int>(std::count_if(values.begin(), values.end(),
         [](float value) { return value > 0.0005f; }));
     geometry->allocate(6 + visibleBars * 12);
     geometry->setDrawingMode(QSGGeometry::DrawTriangles);
     auto *vertices = geometry->vertexDataAsColoredPoint2D();
-    const float centre = static_cast<float>(height * 0.5);
-    const float halfHeight = std::max(1.0f, static_cast<float>(height * 0.47));
 
     // A permanent hairline makes the temporal axis readable before the whole
     // track has been analysed. Its three clipped color layers retain the
@@ -127,10 +181,10 @@ void setLayerGeometry(QSGGeometryNode *node,
     constexpr int groupSize = 8;
     const int groupBreaks = (count - 1) / groupSize;
     const float nominalSlot = static_cast<float>(width) / count;
-    const float groupGap = std::min(1.7f, std::max(0.65f, nominalSlot * 0.48f));
+    const float groupGap = std::min(2.8f, std::max(1.1f, nominalSlot * 0.52f));
     const float usableWidth = std::max(1.0f, static_cast<float>(width) - groupBreaks * groupGap);
     const float slot = usableWidth / count;
-    const float barWidth = std::max(0.65f, std::min(slot * 0.66f, slot - 0.18f));
+    const float barWidth = std::max(1.2f, std::min(slot * 0.74f, slot - 0.35f));
     int vertex = 6;
 
     for (int index = 0; index < count; ++index) {
@@ -152,7 +206,7 @@ void setLayerGeometry(QSGGeometryNode *node,
     node->markDirty(QSGNode::DirtyGeometry);
 }
 
-std::vector<float> renderValues(const QVariantList &source, int columns)
+std::vector<float> renderValues(const QVariantList &source, int columns, float gamma)
 {
     if (source.isEmpty() || columns < 2)
         return {};
@@ -165,7 +219,7 @@ std::vector<float> renderValues(const QVariantList &source, int columns)
         float peak = 0.0f;
         for (int index = begin; index < std::min(end, sourceCount); ++index)
             peak = std::max(peak, std::clamp(source[index].toFloat(), 0.0f, 1.0f));
-        values[column] = std::pow(peak, 1.42f);
+        values[column] = std::pow(peak, gamma);
     }
 
     std::vector<float> scratch(columns, 0.0f);
@@ -242,6 +296,15 @@ void SeekWaveformItem::setPlayedColor(const QColor &color)
     update();
 }
 
+void SeekWaveformItem::setRenderMode(int mode)
+{
+    mode = mode == 1 ? 1 : 0;
+    if (m_renderMode == mode)
+        return;
+    m_renderMode = mode;
+    update();
+}
+
 QSGNode *SeekWaveformItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
 {
     if (m_values.isEmpty() || width() <= 0.0 || height() <= 0.0) {
@@ -262,17 +325,20 @@ QSGNode *SeekWaveformItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData
         || root->cacheGeometryColor != m_cacheColor
         || root->playedGeometryColor != m_playedColor;
     if (root->geometryRevision != m_valuesRevision || root->geometrySize != size()
-        || colorsChanged) {
-        const int columns = qBound(24, static_cast<int>(std::ceil(width() / 2.45)), 512);
-        const auto values = renderValues(m_values, columns);
-        setLayerGeometry(root->baseLayer, values, width(), height(), m_baseColor);
-        setLayerGeometry(root->cacheLayer, values, width(), height(), m_cacheColor);
-        setLayerGeometry(root->playedLayer, values, width(), height(), m_playedColor);
+        || colorsChanged || root->geometryRenderMode != m_renderMode) {
+        const int columns = m_renderMode == 1
+            ? qBound(32, static_cast<int>(std::ceil(width() / 9.0)), 192)
+            : qBound(40, static_cast<int>(std::ceil(width() / 5.5)), 256);
+        const auto values = renderValues(m_values, columns, m_renderMode == 1 ? 0.9f : 0.78f);
+        setLayerGeometry(root->baseLayer, values, width(), height(), m_baseColor, m_renderMode);
+        setLayerGeometry(root->cacheLayer, values, width(), height(), m_cacheColor, m_renderMode);
+        setLayerGeometry(root->playedLayer, values, width(), height(), m_playedColor, m_renderMode);
         root->geometryRevision = m_valuesRevision;
         root->geometrySize = size();
         root->baseGeometryColor = m_baseColor;
         root->cacheGeometryColor = m_cacheColor;
         root->playedGeometryColor = m_playedColor;
+        root->geometryRenderMode = m_renderMode;
     }
     return root;
 }

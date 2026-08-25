@@ -308,7 +308,7 @@ Rectangle {
         // dock (AppShell.slint's large-active padding).
         Item {
             width: parent.width
-            height: 20
+            height: 32
             Text {
                 x: root.dockWidth > 0 ? root.dockWidth + 6 : 6
                 anchors.verticalCenter: parent.verticalCenter
@@ -323,7 +323,7 @@ Rectangle {
                 anchors.right: parent.right
                 anchors.leftMargin: (root.dockWidth > 0 ? root.dockWidth + 6 : 6) + (QbzPlayer.npHasTrack ? 46 : 0)
                 anchors.rightMargin: 6 + (QbzPlayer.npHasTrack ? 46 : 0)
-                height: root.waveformVisible ? 18 : 4
+                height: root.waveformVisible ? 30 : 4
                 radius: 2
                 anchors.verticalCenter: parent.verticalCenter
                 color: root.waveformVisible ? "transparent" : theme.surfaceElevated
@@ -337,6 +337,7 @@ Rectangle {
                     cacheColor: Qt.rgba(theme.textMuted.r, theme.textMuted.g,
                                         theme.textMuted.b, 0.35)
                     playedColor: theme.accent
+                    renderMode: 0
                 }
                 // Buffered / cache line — SeekBar.slint:58 paints it
                 // text-muted @0.35, NOT border-muted: border-muted is an
@@ -406,13 +407,13 @@ Rectangle {
             }
         }
 
-        Item { width: 1; height: 6 }
+        Item { width: 1; height: 2 }
 
         // --- Controls: the responsive symmetric zones -----------------------
         Item {
             id: controlsLayout
             width: parent.width
-            height: parent.height - 38
+            height: parent.height - 40
 
             // The three zones keep PLAY centred and the right cluster pinned,
             // but the SongCard is sized against the controls themselves, not

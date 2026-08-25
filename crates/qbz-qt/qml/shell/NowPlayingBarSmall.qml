@@ -234,6 +234,7 @@ Rectangle {
                     cacheColor: Qt.rgba(theme.textMuted.r, theme.textMuted.g,
                                         theme.textMuted.b, 0.35)
                     playedColor: theme.accent
+                    renderMode: 1
                 }
 
                 // Buffered / cache line.

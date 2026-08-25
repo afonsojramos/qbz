@@ -446,7 +446,7 @@ Rectangle {
         sourceComponent: ScopePanel {
             compact: true
             scopeMode: 0
-            traceColor: theme.accent
+            traceColor: band.topColor
         }
     }
     Loader {
@@ -455,7 +455,7 @@ Rectangle {
         sourceComponent: ScopePanel {
             compact: true
             scopeMode: 1
-            traceColor: theme.accent
+            traceColor: band.topColor
         }
     }
 
