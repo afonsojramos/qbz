@@ -23,9 +23,11 @@
 //! selected version rather than the logical collection.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use cxx_qt_lib::QString;
+use qbz_app::settings::local_favorites::LocalFavItem;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
 use qbz_library::{AudioFormat, LocalTrack};
@@ -33,10 +35,10 @@ use qbz_models::QueueTrack;
 use serde::Serialize;
 
 use crate::local_bridge::ui;
-use crate::local_playback::local_queue_track;
+use crate::local_playback::{fill_missing_covers, local_queue_track};
 use crate::local_rows::{
-    album_key, badge_source, badge_source_raw, map_track, tier_of, to_json, total_duration,
-    AlbumRow, TrackRow,
+    album_favorite_source, album_key, badge_source, badge_source_raw, map_track, tier_of, to_json,
+    total_duration, AlbumRow, TrackRow,
 };
 use crate::local_state::{state, with_art};
 
@@ -51,6 +53,10 @@ type Runtime = Arc<AppRuntime<LoggingAdapter>>;
 /// `qml/views/local/VersionPicker.qml`.
 #[derive(Clone, Default, Serialize)]
 pub struct AlbumVersion {
+    /// Stable identity of the FILTERED physical row set. QML uses it to keep
+    /// an unchanged selected version mounted when a newly enabled source only
+    /// adds another picker option.
+    pub key: String,
     /// "Remastered", "Deluxe Edition", … when metadata makes it inferable.
     pub version: String,
     #[serde(rename = "trackCount")]
@@ -102,7 +108,6 @@ pub struct DiscRow {
     pub cover: String,
 }
 
-
 /// `{album:{…}, tracks:[…], discs:[…]}` — the `localAlbumJson` document.
 #[derive(Clone, Serialize)]
 pub struct AlbumDetailDoc {
@@ -111,6 +116,23 @@ pub struct AlbumDetailDoc {
     /// EMPTY for a single-disc album. Present only so a multi-disc box can
     /// label and illustrate its dividers — see `DiscRow`.
     pub discs: Vec<DiscRow>,
+}
+
+/// The bounded payload consumed by one expanded row in the Genres browser.
+/// It deliberately reuses `DiscRow`: AlbumView and Genres must not disagree
+/// about a box set's per-disc subtitle or cover merely because they are two
+/// surfaces over the same selected physical version.
+#[derive(Clone, Serialize)]
+pub struct GenreAlbumDetailDoc {
+    /// Version-specific artwork key. Empty only when no physical copy has a
+    /// cover, in which case QML retains the logical card placeholder.
+    #[serde(rename = "artKey")]
+    pub art_key: String,
+    pub tracks: Vec<TrackRow>,
+    pub discs: Vec<DiscRow>,
+    pub versions: Vec<AlbumVersion>,
+    #[serde(rename = "versionIndex")]
+    pub version_index: i32,
 }
 
 // ---------------------------------------------------------------------------
@@ -130,8 +152,7 @@ fn version_rank(t: &LocalTrack) -> (u8, u32, u64) {
     );
     let sample_rate = t.sample_rate.max(0.0) as u64;
     let depth = t.bit_depth.unwrap_or(0);
-    let tier = if t.format == AudioFormat::Dsd
-        || (lossless && (depth > 16 || sample_rate > 48_000))
+    let tier = if t.format == AudioFormat::Dsd || (lossless && (depth > 16 || sample_rate > 48_000))
     {
         3
     } else if lossless {
@@ -180,11 +201,21 @@ pub fn split_versions(tracks: Vec<LocalTrack>) -> Vec<(String, Vec<LocalTrack>)>
 fn version_info(tracks: &[LocalTrack]) -> AlbumVersion {
     match tracks.iter().max_by_key(|track| version_rank(track)) {
         Some(t) => {
+            let mut identity = std::collections::hash_map::DefaultHasher::new();
+            for track in tracks {
+                track.album_group_key.hash(&mut identity);
+                track.source.hash(&mut identity);
+                track.id.hash(&mut identity);
+                track.file_path.hash(&mut identity);
+                track.disc_number.hash(&mut identity);
+                track.track_number.hash(&mut identity);
+            }
             let detail =
                 crate::home_qt::quality_detail_from_parts(t.bit_depth, Some(t.sample_rate));
             let fmt = t.format.to_string();
             let raw_source = badge_source_raw(t.source.as_deref());
             AlbumVersion {
+                key: format!("{:016x}", identity.finish()),
                 version: crate::local_albums::edition_descriptor(&t.album_group_title),
                 track_count: tracks.len() as u32,
                 quality: if detail.is_empty() {
@@ -203,6 +234,49 @@ fn version_info(tracks: &[LocalTrack]) -> AlbumVersion {
     }
 }
 
+/// The selected copy owns the cover when it has one. A coverless selected
+/// copy falls back to the first artwork-bearing copy in `versions`, which is
+/// already ordered by audio quality then track count. Returning the source
+/// beside the token is essential: a Plex metadata key is meaningless when
+/// resolved through Jellyfin credentials (and vice versa).
+fn version_artwork_ref(
+    selected: &[LocalTrack],
+    versions: &[(String, Vec<LocalTrack>)],
+) -> Option<(Option<String>, String)> {
+    let find = |tracks: &[LocalTrack]| {
+        tracks
+            .iter()
+            .find_map(|track| {
+                track
+                    .collection_artwork_path
+                    .as_ref()
+                    .filter(|path| !path.is_empty())
+                    .map(|path| (track.source.clone(), path.clone()))
+            })
+            .or_else(|| {
+                tracks.iter().find_map(|track| {
+                    track
+                        .artwork_path
+                        .as_ref()
+                        .filter(|path| !path.is_empty())
+                        .map(|path| (track.source.clone(), path.clone()))
+                })
+            })
+    };
+    find(selected).or_else(|| {
+        versions
+            .iter()
+            .find_map(|(_, tracks)| find(tracks.as_slice()))
+    })
+}
+
+/// A cover request is keyed by physical VERSION, not only logical album.
+/// Reusing `album:{id}` let an earlier async resolve publish after the picker
+/// changed and overwrite the newly selected edition's art.
+fn album_version_art_key(id: &str, index: usize) -> String {
+    format!("album-version:{id}:{index}")
+}
+
 /// Open `id`: cache its versions, select the best-quality one and return its
 /// document. Called by `local_albums::load_album_detail_blocking` (BLOCKING
 /// context — no Qt, no await).
@@ -213,7 +287,10 @@ pub fn open_versions(id: &str, tracks: Vec<LocalTrack>) -> Option<AlbumDetailDoc
     }
     // Keep the RAW rows of EVERY version so a context-menu enqueue on a Plex
     // detail row resolves without a DB id (`local_playback::find_track_blocking`).
-    let all: Vec<LocalTrack> = versions.iter().flat_map(|(_, v)| v.iter().cloned()).collect();
+    let all: Vec<LocalTrack> = versions
+        .iter()
+        .flat_map(|(_, v)| v.iter().cloned())
+        .collect();
     state(|s| {
         s.album_id = id.to_string();
         s.album_versions = versions;
@@ -226,7 +303,7 @@ pub fn open_versions(id: &str, tracks: Vec<LocalTrack>) -> Option<AlbumDetailDoc
 /// Build the document for version `index` of the OPEN album. Reads the cached
 /// split — no DB round-trip (the Slint's `apply_album_version`).
 pub fn version_doc(id: &str, index: usize) -> Option<AlbumDetailDoc> {
-    let (infos, tracks) = state(|s| {
+    let (infos, tracks, artwork) = state(|s| {
         let infos: Vec<AlbumVersion> = s
             .album_versions
             .iter()
@@ -237,25 +314,28 @@ pub fn version_doc(id: &str, index: usize) -> Option<AlbumDetailDoc> {
             .get(index)
             .map(|(_, v)| v.clone())
             .unwrap_or_default();
-        (infos, tracks)
+        let artwork = version_artwork_ref(&tracks, &s.album_versions);
+        (infos, tracks, artwork)
     });
     if tracks.is_empty() {
         return None;
     }
-    let row = album_header(id, &tracks);
+    let mut row = album_header(id, &tracks);
+    row.art_key = album_version_art_key(id, index);
     // Register the album cover + the per-row sources in the art index (the
     // windowed artwork channel resolves them; nothing rides the document).
     let rows = with_art(|art| {
-        if let Some(p) = tracks
-            .iter()
-            .find_map(|t| t.artwork_path.as_ref().filter(|p| !p.is_empty()))
-        {
-            let source = tracks.first().and_then(|t| t.source.as_deref());
-            if let Some(t) = crate::local_rows::art_token(source, p) {
-                art.entry(row.art_key.clone()).or_insert(t);
+        if let Some((source, path)) = artwork.as_ref() {
+            if let Some(token) = crate::local_rows::art_token(source.as_deref(), path) {
+                art.insert(row.art_key.clone(), token);
             }
+        } else {
+            art.remove(&row.art_key);
         }
-        tracks.iter().map(|t| map_track(t, art)).collect::<Vec<TrackRow>>()
+        tracks
+            .iter()
+            .map(|t| map_track(t, art))
+            .collect::<Vec<TrackRow>>()
     });
     let discs = disc_rows(&tracks, &row.title);
     Some(AlbumDetailDoc {
@@ -295,7 +375,7 @@ pub fn version_doc(id: &str, index: usize) -> Option<AlbumDetailDoc> {
 ///   3. nothing, and the divider stays the bare "Disc N" it has always been.
 ///
 /// EMPTY for a single-disc album: there is no divider there to feed.
-fn disc_rows(tracks: &[LocalTrack], group_title: &str) -> Vec<DiscRow> {
+pub(crate) fn disc_rows(tracks: &[LocalTrack], group_title: &str) -> Vec<DiscRow> {
     use std::collections::BTreeMap;
     let mut first: BTreeMap<u32, &LocalTrack> = BTreeMap::new();
     for t in tracks {
@@ -315,6 +395,66 @@ fn disc_rows(tracks: &[LocalTrack], group_title: &str) -> Vec<DiscRow> {
         .collect()
 }
 
+/// Map one selected physical version for Genres Details while carrying the
+/// compact picker metadata for every other version. The heavy track rows stay
+/// bounded to the selected copy; switching copies republishes this document
+/// from `LocalState::genre_detail_versions` without another database query.
+pub(crate) fn genre_detail_doc(
+    album_id: &str,
+    versions: &[(String, Vec<LocalTrack>)],
+    version_index: usize,
+) -> GenreAlbumDetailDoc {
+    let tracks = versions
+        .get(version_index)
+        .map(|(_, tracks)| tracks.as_slice())
+        .unwrap_or_default();
+    let group_title = tracks
+        .first()
+        .map(|track| track.album_group_title.as_str())
+        .unwrap_or_default();
+    let discs = disc_rows(tracks, group_title);
+    let artwork = version_artwork_ref(tracks, versions);
+    let art_key = if artwork.is_some() {
+        album_version_art_key(album_id, version_index)
+    } else {
+        String::new()
+    };
+    let rows = with_art(|art| {
+        if let Some((source, path)) = artwork.as_ref() {
+            if let Some(token) = crate::local_rows::art_token(source.as_deref(), path) {
+                art.insert(art_key.clone(), token);
+            }
+        }
+        tracks
+            .iter()
+            .map(|track| map_track(track, art))
+            .collect::<Vec<_>>()
+    });
+    GenreAlbumDetailDoc {
+        art_key,
+        tracks: rows,
+        discs,
+        versions: versions
+            .iter()
+            .map(|(_, tracks)| version_info(tracks))
+            .collect(),
+        version_index: version_index as i32,
+    }
+}
+
+/// Change one Genres album's selected physical copy. This cache is keyed by
+/// album id because several expanded rows coexist; the routed AlbumView's
+/// singleton `album_version_index` would make the last opened album win.
+pub(crate) fn genre_select_version(album_id: &str, index: i32) -> Option<GenreAlbumDetailDoc> {
+    let index = usize::try_from(index).ok()?;
+    let versions = state(|s| s.genre_detail_versions.get(album_id).cloned())?;
+    let selected = versions.get(index)?.1.clone();
+    state(|s| {
+        s.genre_detail_raw.insert(album_id.to_string(), selected);
+    });
+    Some(genre_detail_doc(album_id, &versions, index))
+}
+
 /// The header for ONE version — recomputed per version (the Slint recomputes
 /// title / artist / info-line / quality in `apply_album_version`, because two
 /// copies of the same album differ exactly in those). `directoryPath` and
@@ -325,7 +465,7 @@ fn album_header(id: &str, tracks: &[LocalTrack]) -> AlbumRow {
     let artist_of = |t: &LocalTrack| t.album_artist.clone().unwrap_or_else(|| t.artist.clone());
     let lead = artist_of(first);
     let artist = if tracks.iter().all(|t| artist_of(t) == lead) {
-        lead
+        lead.clone()
     } else {
         qbz_i18n::t("Various Artists")
     };
@@ -350,11 +490,37 @@ fn album_header(id: &str, tracks: &[LocalTrack]) -> AlbumRow {
             .find(|a| a.id == id)
             .cloned()
     });
+    let sources = card.as_ref().map(|c| c.sources.clone()).unwrap_or_else(|| {
+        let mut values = Vec::new();
+        for track in state(|s| {
+            s.album_versions
+                .iter()
+                .filter_map(|(_, tracks)| tracks.first().cloned())
+                .collect::<Vec<_>>()
+        }) {
+            let raw = badge_source_raw(track.source.as_deref());
+            let source = if raw.is_empty() {
+                badge_source(track.source.as_deref())
+            } else {
+                raw
+            };
+            if !values.contains(&source) {
+                values.push(source);
+            }
+        }
+        values
+    });
+    let favoriteable = album_favorite_source(&sources).is_some();
     AlbumRow {
         id: id.to_string(),
         title: first.album_group_title.clone(),
         artist,
         all_artists: all_artists.join(", "),
+        artists: {
+            let names = all_artists.to_vec();
+            let aliases = crate::local_artist_match::build_artist_family_aliases(&names);
+            crate::local_artist_match::album_credit_names(&lead, &all_artists.join(","), &aliases)
+        },
         year: first.year.map(|y| y.to_string()).unwrap_or_default(),
         track_count: tracks.len() as u32,
         duration: total_duration(tracks.iter().map(|t| t.duration_secs).sum()),
@@ -365,32 +531,89 @@ fn album_header(id: &str, tracks: &[LocalTrack]) -> AlbumRow {
             best.sample_rate,
         ),
         format: best.format.to_string(),
+        genres: {
+            let mut values = tracks
+                .iter()
+                .flat_map(|track| track.genres.iter().cloned())
+                .collect::<Vec<_>>();
+            values.sort_by_key(|genre| genre.to_lowercase());
+            values.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+            values
+        },
         art_key: album_key(id),
         source: badge_source(first.source.as_deref()),
-        sources: card.as_ref().map(|c| c.sources.clone()).unwrap_or_else(|| {
-            let mut values = Vec::new();
-            for track in state(|s| {
-                s.album_versions
-                    .iter()
-                    .filter_map(|(_, tracks)| tracks.first().cloned())
-                    .collect::<Vec<_>>()
-            }) {
-                let raw = badge_source_raw(track.source.as_deref());
-                let source = if raw.is_empty() {
-                    badge_source(track.source.as_deref())
-                } else {
-                    raw
-                };
-                if !values.contains(&source) {
-                    values.push(source);
+        sources,
+        source_raw: badge_source_raw(first.source.as_deref()),
+        directory_path: card
+            .as_ref()
+            .map(|c| c.directory_path.clone())
+            .unwrap_or_default(),
+        folder_count: card.map(|c| c.folder_count).unwrap_or(0),
+        is_favorite: favoriteable && crate::library_qt::is_local_favorite("album", id),
+        favoriteable,
+    }
+}
+
+/// Toggle a Local Library album using the card's denormalized display
+/// snapshot. This is the Qt port of Slint's `toggle_album_favorite`, with the
+/// source guard made explicit so a remote-only row cannot write a bogus local
+/// favorite.
+pub(crate) fn toggle_album_favorite(
+    id: String,
+    title: String,
+    artist: String,
+    artwork_url: String,
+    sources_json: String,
+) {
+    let sources: Vec<String> = serde_json::from_str(&sources_json).unwrap_or_default();
+    let Some(source) = album_favorite_source(&sources) else {
+        log::warn!("[qbz-qt] local favorite refused for remote-only album {id}");
+        return;
+    };
+    let item = LocalFavItem {
+        kind: "album".to_string(),
+        id: id.clone(),
+        title,
+        subtitle: artist.clone(),
+        artwork_url,
+        artist,
+        source: source.to_string(),
+        favorited_at: 0,
+    };
+    crate::spawn(async move {
+        let id_for_write = id.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let current = crate::library_qt::is_local_favorite("album", &id_for_write);
+            (
+                crate::library_qt::toggle_local_favorite_snapshot(item),
+                current,
+            )
+        })
+        .await;
+        let favorite = match result {
+            Ok((Some(value), _)) => value,
+            Ok((None, current)) => {
+                log::warn!("[qbz-qt] local favorite store unavailable for album {id}");
+                current
+            }
+            Err(error) => {
+                log::error!("[qbz-qt] local favorite worker failed for album {id}: {error}");
+                crate::library_qt::is_local_favorite("album", &id)
+            }
+        };
+        state(|local| {
+            for row in local.albums.iter_mut().chain(local.folders.iter_mut()) {
+                if row.id == id {
+                    row.is_favorite = favorite;
                 }
             }
-            values
-        }),
-        source_raw: badge_source_raw(first.source.as_deref()),
-        directory_path: card.as_ref().map(|c| c.directory_path.clone()).unwrap_or_default(),
-        folder_count: card.map(|c| c.folder_count).unwrap_or(0),
-    }
+        });
+        ui(move |mut bridge| {
+            bridge
+                .as_mut()
+                .local_album_favorite_changed(QString::from(id.as_str()), favorite);
+        });
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -427,6 +650,21 @@ fn current_disc_tracks(disc: i32) -> Vec<LocalTrack> {
         .collect()
 }
 
+/// One disc from one concurrently expanded Genres album. Unlike the routed
+/// AlbumView cache, this is keyed by album id: opening/scrolling a second
+/// details block must not retarget the first one's menu.
+fn genre_disc_tracks(album_id: &str, disc: i32) -> Vec<LocalTrack> {
+    state(|s| {
+        s.genre_detail_raw
+            .get(album_id)
+            .into_iter()
+            .flatten()
+            .filter(|t| t.disc_number.unwrap_or(1) as i32 == disc)
+            .cloned()
+            .collect()
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
@@ -454,17 +692,92 @@ pub fn select_version(index: i32) {
 /// ("play" | "next" | "later" | "queue") over THIS disc's tracks only, reusing
 /// the same queue ops as the header play button and the per-row menu.
 pub fn disc_action(disc: i32, action: String) {
-    let tracks = current_disc_tracks(disc);
+    dispatch_disc_action(
+        "local album".to_string(),
+        current_disc_tracks(disc),
+        disc,
+        action,
+    );
+}
+
+/// The same four actions for a disc header inside Genres Details. It cannot
+/// call `disc_action`: that function intentionally reads the ONE routed
+/// AlbumView version, while Genres may keep 32 expanded albums alive.
+pub fn genre_disc_action(album_id: String, disc: i32, action: String) {
+    let tracks = genre_disc_tracks(&album_id, disc);
+    dispatch_disc_action(format!("genres album {album_id}"), tracks, disc, action);
+}
+
+/// Album and row actions for one selected Genres version. Unlike the generic
+/// album action this never re-fetches the logical album (which would include
+/// every physical copy and duplicate the queue).
+pub fn genre_album_action(album_id: String, action: String, track_id: Option<i64>) {
+    let tracks = state(|s| {
+        s.genre_detail_raw
+            .get(&album_id)
+            .cloned()
+            .unwrap_or_default()
+    });
     if tracks.is_empty() {
-        log::debug!("[qbz-qt] local album: disc {disc} has no tracks for '{action}'");
+        log::debug!("[qbz-qt] genres album {album_id}: no selected rows for '{action}'");
         return;
     }
     let runtime = crate::app();
     crate::spawn(async move {
         match action.as_str() {
-            "play" => play_rows(&runtime, tracks).await,
+            "play" | "shuffle" => {
+                let start = track_id
+                    .and_then(|id| tracks.iter().position(|track| track.id == id))
+                    .unwrap_or(0);
+                crate::local_playback::play_rows(&runtime, tracks, start, action == "shuffle")
+                    .await;
+            }
             "next" | "later" | "queue" => enqueue_rows(&runtime, tracks, &action).await,
-            other => log::debug!("[qbz-qt] local album: unhandled disc action '{other}'"),
+            other => {
+                log::debug!("[qbz-qt] genres album {album_id}: unhandled album action '{other}'")
+            }
+        }
+    });
+}
+
+/// Play the selected physical copy in the routed AlbumView. Re-querying the
+/// logical album here would concatenate every copy and would also bypass the
+/// source funnel used to open this view.
+pub fn selected_album_action(action: String, track_id: Option<i64>) {
+    let tracks = current_version_tracks();
+    if tracks.is_empty() {
+        log::debug!("[qbz-qt] local album: no selected rows for '{action}'");
+        return;
+    }
+    let runtime = crate::app();
+    crate::spawn(async move {
+        match action.as_str() {
+            "play" | "shuffle" => {
+                let start = track_id
+                    .and_then(|id| tracks.iter().position(|track| track.id == id))
+                    .unwrap_or(0);
+                crate::local_playback::play_rows(&runtime, tracks, start, action == "shuffle")
+                    .await;
+            }
+            "next" | "later" | "queue" => enqueue_rows(&runtime, tracks, &action).await,
+            other => log::debug!("[qbz-qt] local album: unhandled selected action '{other}'"),
+        }
+    });
+}
+
+fn dispatch_disc_action(context: String, tracks: Vec<LocalTrack>, disc: i32, action: String) {
+    if tracks.is_empty() {
+        log::debug!("[qbz-qt] {context}: disc {disc} has no tracks for '{action}'");
+        return;
+    }
+    let runtime = crate::app();
+    crate::spawn(async move {
+        match action.as_str() {
+            "play" | "shuffle" => {
+                crate::local_playback::play_rows(&runtime, tracks, 0, action == "shuffle").await
+            }
+            "next" | "later" | "queue" => enqueue_rows(&runtime, tracks, &action).await,
+            other => log::debug!("[qbz-qt] {context}: unhandled disc action '{other}'"),
         }
     });
 }
@@ -616,25 +929,6 @@ fn publish_doc(doc: Option<AlbumDetailDoc>) {
     });
 }
 
-/// A track SUBSET becomes the queue and starts at its first row
-/// (`local_playback::play_rows` over an explicit list — that one is private and
-/// only reachable by album/folder id, which a per-disc menu cannot express).
-async fn play_rows(runtime: &Runtime, tracks: Vec<LocalTrack>) {
-    let queue: Vec<QueueTrack> = tracks.iter().map(local_queue_track).collect();
-    let Some(first) = queue.first().cloned() else {
-        return;
-    };
-    runtime.core().set_queue(queue, Some(0)).await;
-    crate::playback_qt::publish_queue(runtime).await;
-    // THE shared audible step, not a second copy of it. The last hand-copy of
-    // this function lived here and was kept in sync by comment; it drifted
-    // anyway — it never learned that an OFFLINE row belongs to the offline
-    // tier, so a per-disc play of a downloaded album went silent exactly like
-    // the album funnel did.
-    crate::local_playback::play_audible(runtime, &first).await;
-    crate::playback_qt::refresh_now_playing(runtime).await;
-}
-
 /// "Play next" / "Play later" / "Add to queue" over a track SUBSET — the same
 /// core helpers `local_playback::enqueue` uses, just without the id round-trip.
 ///
@@ -642,6 +936,13 @@ async fn play_rows(runtime: &Runtime, tracks: Vec<LocalTrack>) {
 /// local-only batch is never Qobuz-castable, so the predicate is always false
 /// (Slint local_album_actions.rs:486-494 is likewise unhooked).
 async fn enqueue_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, mode: &str) {
+    let tracks = tokio::task::spawn_blocking(move || {
+        let mut tracks = tracks;
+        fill_missing_covers(&mut tracks);
+        tracks
+    })
+    .await
+    .unwrap_or_default();
     let queue: Vec<QueueTrack> = tracks.iter().map(local_queue_track).collect();
     if queue.is_empty() {
         return;
@@ -717,5 +1018,206 @@ mod version_tests {
         assert_eq!(info.track_count, 12);
         assert_eq!(info.source, "subsonic");
         assert!(info.quality.contains("FLAC"));
+    }
+
+    #[test]
+    fn genres_detail_keeps_each_named_disc_and_its_own_cover() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "qbz-genres-eternal-cd-box-{}-{nonce}",
+            std::process::id()
+        ));
+        let disc_one = root.join("Disc 01 - TV Series Soundtrack #01");
+        let disc_two = root.join("Disc 02 - TV Series Soundtrack #02");
+        std::fs::create_dir_all(&disc_one).unwrap();
+        std::fs::create_dir_all(&disc_two).unwrap();
+        std::fs::write(disc_one.join("cover.jpg"), b"disc-one").unwrap();
+        std::fs::write(disc_two.join("folder.jpg"), b"disc-two").unwrap();
+
+        let track = |id, disc, folder: &std::path::Path| LocalTrack {
+            id,
+            file_path: folder.join("01.flac").to_string_lossy().into_owned(),
+            title: format!("Movement {disc}"),
+            artist: "Seiji Yokoyama".to_string(),
+            album: "Saint Seiya Eternal CD-Box".to_string(),
+            album_artist: Some("Seiji Yokoyama".to_string()),
+            album_group_key: root.to_string_lossy().into_owned(),
+            album_group_title: "Saint Seiya Eternal CD-Box".to_string(),
+            track_number: Some(1),
+            disc_number: Some(disc),
+            format: AudioFormat::Flac,
+            bit_depth: Some(16),
+            sample_rate: 44_100.0,
+            ..Default::default()
+        };
+        let versions = vec![(
+            root.to_string_lossy().into_owned(),
+            vec![track(1, 1, &disc_one), track(2, 2, &disc_two)],
+        )];
+        let doc = genre_detail_doc("test:eternal-cd-box", &versions, 0);
+
+        assert_eq!(doc.tracks.len(), 2);
+        assert_eq!(doc.discs.len(), 2);
+        assert_eq!(doc.versions.len(), 1);
+        assert_eq!(doc.version_index, 0);
+        assert_eq!(doc.discs[0].title, "TV Series Soundtrack #01");
+        assert_eq!(doc.discs[1].title, "TV Series Soundtrack #02");
+        assert!(!doc.discs[0].cover.is_empty());
+        assert!(!doc.discs[1].cover.is_empty());
+        assert_ne!(doc.discs[0].cover, doc.discs[1].cover);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn remote_disc_headers_keep_each_sources_track_art_token() {
+        let track = |id, disc, token: &str| LocalTrack {
+            id,
+            file_path: format!("remote-{id}"),
+            title: format!("Movement {disc}"),
+            artist: "Seiji Yokoyama".to_string(),
+            album: "Saint Seiya Eternal CD-Box".to_string(),
+            album_group_key: "subsonic:eternal-box".to_string(),
+            album_group_title: "Saint Seiya Eternal CD-Box".to_string(),
+            track_number: Some(1),
+            disc_number: Some(disc),
+            artwork_path: Some(token.to_string()),
+            source: Some("subsonic".to_string()),
+            format: AudioFormat::Flac,
+            ..Default::default()
+        };
+        let versions = vec![(
+            "subsonic:eternal-box".to_string(),
+            vec![track(910_001, 1, "dc-disc-one"), track(910_002, 2, "dc-disc-two")],
+        )];
+        let doc = genre_detail_doc("test:remote-disc-art", &versions, 0);
+
+        assert_eq!(doc.discs.len(), 2);
+        assert_eq!(doc.discs[0].art_key, "track:910001");
+        assert_eq!(doc.discs[1].art_key, "track:910002");
+        state(|s| {
+            assert_eq!(s.art_index["track:910001"].1, "dc-disc-one");
+            assert_eq!(s.art_index["track:910002"].1, "dc-disc-two");
+            s.art_index.remove("track:910001");
+            s.art_index.remove("track:910002");
+            s.art_index.remove(&doc.art_key);
+        });
+    }
+
+    #[test]
+    fn selected_version_owns_art_and_coverless_version_falls_back() {
+        let mut jellyfin = copy("jf-hires", "jellyfin", "Album", 2, 24);
+        let mut plex = copy("plex-cd", "plex", "Album", 2, 16);
+        plex[0].artwork_path = Some("/library/metadata/album/thumb".to_string());
+        let versions = vec![
+            ("jf-hires".to_string(), jellyfin.clone()),
+            ("plex-cd".to_string(), plex.clone()),
+        ];
+
+        let fallback = version_artwork_ref(&jellyfin, &versions).expect("Plex fallback");
+        assert_eq!(fallback.0.as_deref(), Some("plex"));
+        assert_eq!(fallback.1, "/library/metadata/album/thumb");
+
+        jellyfin[1].artwork_path = Some("jf:item:cover".to_string());
+        let selected = version_artwork_ref(&jellyfin, &versions).expect("selected cover");
+        assert_eq!(selected.0.as_deref(), Some("jellyfin"));
+        assert_eq!(selected.1, "jf:item:cover");
+
+        assert_ne!(
+            album_version_art_key("logical:album", 0),
+            album_version_art_key("logical:album", 1)
+        );
+    }
+
+    #[test]
+    fn genres_version_selection_is_scoped_to_one_expanded_album() {
+        let album = "test:genres-version-picker";
+        let mut cd = copy("genres-cd", "plex", "Album", 2, 16);
+        let mut hires = copy("genres-hires", "jellyfin", "Album (Remastered)", 3, 24);
+        for track in &mut cd {
+            track.id += 100;
+        }
+        for track in &mut hires {
+            track.id += 200;
+        }
+        let versions = vec![
+            ("genres-hires".to_string(), hires.clone()),
+            ("genres-cd".to_string(), cd.clone()),
+        ];
+        state(|s| {
+            s.genre_detail_raw.insert(album.to_string(), hires);
+            s.genre_detail_versions
+                .insert(album.to_string(), versions.clone());
+        });
+
+        let doc = genre_select_version(album, 1).expect("second version");
+        assert_eq!(doc.version_index, 1);
+        assert_eq!(doc.versions.len(), 2);
+        assert_eq!(doc.tracks.len(), 2);
+        assert_eq!(
+            state(|s| s.genre_detail_raw[album]
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>()),
+            cd.iter().map(|track| track.id).collect::<Vec<_>>()
+        );
+
+        let back = genre_select_version(album, 0).expect("first version again");
+        assert_eq!(back.version_index, 0);
+        assert_eq!(back.versions.len(), 2);
+        assert_eq!(back.tracks.len(), 3);
+        assert_eq!(
+            state(|s| s.genre_detail_raw[album]
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>()),
+            versions[0]
+                .1
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>()
+        );
+        assert!(genre_select_version(album, 2).is_none());
+
+        state(|s| {
+            s.genre_detail_raw.remove(album);
+            s.genre_detail_versions.remove(album);
+        });
+    }
+
+    #[test]
+    fn genres_disc_menu_targets_its_album_and_disc_only() {
+        let album = "test:genres-disc-actions";
+        let rows = vec![
+            LocalTrack {
+                id: 11,
+                disc_number: Some(1),
+                ..Default::default()
+            },
+            LocalTrack {
+                id: 21,
+                disc_number: Some(2),
+                ..Default::default()
+            },
+            LocalTrack {
+                id: 22,
+                disc_number: Some(2),
+                ..Default::default()
+            },
+        ];
+        state(|s| {
+            s.genre_detail_raw.insert(album.to_string(), rows);
+        });
+
+        let selected = genre_disc_tracks(album, 2);
+        assert_eq!(selected.iter().map(|t| t.id).collect::<Vec<_>>(), [21, 22]);
+        assert!(genre_disc_tracks("test:another-album", 2).is_empty());
+
+        state(|s| {
+            s.genre_detail_raw.remove(album);
+        });
     }
 }

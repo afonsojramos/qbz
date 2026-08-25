@@ -6,7 +6,9 @@ use cxx_qt_build::{CxxQtBuilder, QmlModule};
 /// baked icon variants (qml/assets/icons/<tint>/<name>.svg) are too many to
 /// list by hand.
 fn collect_qrc_files(dir: &Path, out: &mut Vec<String>) {
-    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display())) {
+    for entry in
+        std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
+    {
         let path = entry.expect("dir entry").path();
         if path.is_dir() {
             collect_qrc_files(&path, out);
@@ -293,10 +295,7 @@ fn build_rhi_items() {
     .expect("Qt6 not found for the RHI items (cxx-qt-build would fail too)");
 
     let mut cc = cc::Build::new();
-    cc.cpp(true)
-        .std("c++17")
-        .pic(true)
-        .include("cxx"); // the moc outputs do `#include "<name>.h"`
+    cc.cpp(true).std("c++17").pic(true).include("cxx"); // the moc outputs do `#include "<name>.h"`
     for item in [
         "linebed_item",
         "plasma_item",
@@ -334,8 +333,10 @@ fn build_rhi_items() {
         let libs = qtbuild.qmake_query("QT_INSTALL_LIBS");
         cc.flag(&format!("-F{}", libs.trim()));
         for module in ["QtCore", "QtGui", "QtQml", "QtQuick"] {
-            let private =
-                format!("{}/{module}.framework/Headers/{version}/{module}", libs.trim());
+            let private = format!(
+                "{}/{module}.framework/Headers/{version}/{module}",
+                libs.trim()
+            );
             if Path::new(&private).is_dir() {
                 cc.include(private);
             }
@@ -400,7 +401,49 @@ fn main() {
             // (myqbz_qt.rs, blacklist_qt.rs, toast_qt.rs, …) are plain
             // modules and must NOT be listed — only files that declare a
             // #[cxx_qt::bridge] mod belong in this array.
-            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/immersive_bridge.rs", "src/shader_scene_bridge.rs", "src/suggestions_bridge.rs", "src/hotkeys_bridge.rs", "src/search_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/scene_bridge.rs", "src/musician_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs", "src/playlist_picker_bridge.rs", "src/playlist_manager_bridge.rs", "src/playlist_import_bridge.rs", "src/dac_wizard_bridge.rs", "src/folder_edit_bridge.rs", "src/playlist_edit_bridge.rs", "src/qconnect_bridge.rs", "src/kiosk_nav_bridge.rs", "src/mini_bridge.rs", "src/tray_bridge.rs", "src/about_bridge.rs", "src/purchases_bridge.rs", "src/offline_manager_bridge.rs", "src/track_replace_bridge.rs", "src/disc_meta_bridge.rs", "src/tag_editor_bridge.rs"],
+            rust_files: &[
+                "src/bridge.rs",
+                "src/session_bridge.rs",
+                "src/shell_bridge.rs",
+                "src/player_bridge.rs",
+                "src/queue_bridge.rs",
+                "src/home_bridge.rs",
+                "src/viz_bridge.rs",
+                "src/immersive_bridge.rs",
+                "src/shader_scene_bridge.rs",
+                "src/suggestions_bridge.rs",
+                "src/hotkeys_bridge.rs",
+                "src/search_bridge.rs",
+                "src/local_bridge.rs",
+                "src/library_bridge.rs",
+                "src/album_bridge.rs",
+                "src/artist_bridge.rs",
+                "src/scene_bridge.rs",
+                "src/musician_bridge.rs",
+                "src/lyrics_qt.rs",
+                "src/icon_tint_qt.rs",
+                "src/cast_bridge.rs",
+                "src/myqbz_bridge.rs",
+                "src/myqbz_add_bridge.rs",
+                "src/disco_bridge.rs",
+                "src/blacklist_bridge.rs",
+                "src/playlist_picker_bridge.rs",
+                "src/playlist_manager_bridge.rs",
+                "src/playlist_import_bridge.rs",
+                "src/dac_wizard_bridge.rs",
+                "src/folder_edit_bridge.rs",
+                "src/playlist_edit_bridge.rs",
+                "src/qconnect_bridge.rs",
+                "src/kiosk_nav_bridge.rs",
+                "src/mini_bridge.rs",
+                "src/tray_bridge.rs",
+                "src/about_bridge.rs",
+                "src/purchases_bridge.rs",
+                "src/offline_manager_bridge.rs",
+                "src/track_replace_bridge.rs",
+                "src/disc_meta_bridge.rs",
+                "src/tag_editor_bridge.rs",
+            ],
             qml_files: &[
                 "qml/LoginScreen.qml",
                 "qml/Main.qml",
@@ -661,6 +704,7 @@ fn main() {
                 "qml/settings/LibFolderEditModal.qml",
                 "qml/settings/LibraryFolderTable.qml",
                 "qml/settings/LocalLibrarySettings.qml",
+                "qml/settings/LocalTabsConfigModal.qml",
                 "qml/settings/OfflineSettings.qml",
                 "qml/settings/PlaybackSettings.qml",
                 // ONE component instantiated twice (Jellyfin + Subsonic).
@@ -697,8 +741,12 @@ fn main() {
                 "qml/views/local/LocalChrome.qml",
                 "qml/views/local/LocalEphemeralPane.qml",
                 "qml/views/local/LocalFilterPopup.qml",
+                "qml/views/local/LocalFilterButton.qml",
                 "qml/views/local/LocalFolderDetail.qml",
                 "qml/views/local/LocalFoldersTab.qml",
+                "qml/views/local/LocalGenreColumn.qml",
+                "qml/views/local/LocalGenreDetails.qml",
+                "qml/views/local/LocalGenresTab.qml",
                 "qml/views/local/LocalNote.qml",
                 "qml/views/local/LocalSearchBox.qml",
                 "qml/views/local/LocalToolbar.qml",

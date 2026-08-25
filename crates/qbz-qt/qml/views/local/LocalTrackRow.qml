@@ -88,6 +88,10 @@ Item {
     readonly property var rowItem: root.artSource === ""
         ? root.item
         : Object.assign({}, root.item, { "artPath": root.artSource })
+    readonly property string runtimeError: root.view
+        ? (root.view.localTrackErrors[
+            root.view.localTrackErrorKey(root.item.source || "local", root.item.id)] || "")
+        : ""
 
     // Local rows have a local album GROUP KEY and a bare artist NAME; both
     // routes are name/key routes, so each entry is gated on its own datum.
@@ -126,6 +130,10 @@ Item {
         // the sidebar drop handler forwards it as a Qobuz catalog id.
         draggable: false
         qualityStyle: "icon"
+        // A failed physical row stays clickable so the user can retry after a
+        // drive returns. The preflight prevents any queue/NPB mutation until
+        // that retry succeeds; the marker is cleared by the success signal.
+        leadingMarkerIcon: root.runtimeError !== "" ? "circle-alert" : ""
         // Multi-select is the SHARED row's arm now (rows/TrackRow.qml:116,
         // the port of TrackRow.slint:58 `multi-select-mode`). This file used
         // to overlay its own SelectCheck on the number cell because the

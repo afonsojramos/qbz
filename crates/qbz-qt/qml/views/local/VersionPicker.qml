@@ -18,6 +18,10 @@ Rectangle {
     /// [{ version, trackCount, quality, source }]
     property var versions: []
     property int current: 0
+    /// Details headers have one 28px trailing origin/version column. In this
+    /// arm the current source is the button and the full description stays in
+    /// the flyout; the routed AlbumView keeps the labelled select.
+    property bool compact: false
     signal picked(int index)
 
     QbzTheme { id: theme }
@@ -36,12 +40,14 @@ Rectangle {
     }
 
     height: 30
-    width: row.width
+    width: compact ? 28 : row.width
     radius: 6
-    color: pickArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
+    color: pickArea.containsMouse && versions.length > 1
+        ? theme.surfaceHover : (compact ? "transparent" : theme.surfaceElevated)
 
     Row {
         id: row
+        visible: !root.compact
         height: parent.height
         leftPadding: 10
         rightPadding: 8
@@ -71,62 +77,101 @@ Rectangle {
             tintName: "muted"
         }
     }
+    Item {
+        visible: root.compact
+        anchors.fill: parent
+        SourceIcon {
+            anchors.centerIn: parent
+            anchors.horizontalCenterOffset: root.versions.length > 1 ? -2 : 0
+            kind: root.currentVersion.source || "local"
+            mono: true
+            glyphSize: 15
+            plexSize: 16
+            qobuzSize: 16
+            localTint: "muted"
+        }
+        QbzIcon {
+            visible: root.versions.length > 1
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.rightMargin: 1
+            anchors.bottomMargin: 2
+            name: "chevron-down"
+            width: 8
+            height: 8
+            tintName: "accent"
+        }
+    }
     MouseArea {
         id: pickArea
         anchors.fill: parent
+        enabled: root.versions.length > 1
         hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onClicked: menu.openBelowRight(pickArea)
+        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+        onClicked: {
+            versionMenuLoader.active = true
+            versionMenuLoader.item.openBelowRight(pickArea)
+        }
     }
 
-    QbzContextMenu {
-        id: menu
-        menuWidth: 380
-        Repeater {
-            model: root.versions
-            delegate: Rectangle {
-                id: opt
-                required property var modelData
-                required property int index
-                width: parent ? parent.width : 0
-                height: 30
-                radius: 6
-                color: index === root.current ? theme.surfaceElevated
-                     : optArea.containsMouse ? theme.surfaceHover : "transparent"
-                Row {
-                    anchors.fill: parent
-                    anchors.leftMargin: 8
-                    anchors.rightMargin: 8
-                    spacing: 8
-                    SourceIcon {
-                        anchors.verticalCenter: parent.verticalCenter
-                        kind: opt.modelData.source || "local"
-                        mono: true
+    // The popup and every option delegate are cold until the user asks for
+    // them. Genres Details mounts a picker per visible album, while AlbumView
+    // mounts one; neither should pay for an invisible Controls.Popup tree.
+    Loader {
+        id: versionMenuLoader
+        active: false
+        sourceComponent: QbzContextMenu {
+            id: versionMenu
+            menuWidth: 380
+            Repeater {
+                model: root.versions
+                delegate: Rectangle {
+                    id: opt
+                    required property var modelData
+                    required property int index
+                    width: parent ? parent.width : 0
+                    height: 30
+                    radius: 6
+                    color: index === root.current ? theme.surfaceElevated
+                         : optArea.containsMouse ? theme.surfaceHover : "transparent"
+                    Row {
+                        anchors.fill: parent
+                        anchors.leftMargin: 8
+                        anchors.rightMargin: 8
+                        spacing: 8
+                        SourceIcon {
+                            anchors.verticalCenter: parent.verticalCenter
+                            kind: opt.modelData.source || "local"
+                            mono: true
+                        }
+                        Text {
+                            width: parent.width - 22 - (opt.index === root.current ? 20 : 0)
+                            height: parent.height
+                            text: root.optionText(opt.modelData)
+                            color: theme.textPrimary
+                            font.pixelSize: theme.fontLegal
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                        }
+                        QbzIcon {
+                            visible: opt.index === root.current
+                            anchors.verticalCenter: parent.verticalCenter
+                            name: "check"
+                            width: 12
+                            height: 12
+                            tintName: "accent"
+                        }
                     }
-                    Text {
-                        width: parent.width - 22 - (opt.index === root.current ? 20 : 0)
-                        height: parent.height
-                        text: root.optionText(opt.modelData)
-                        color: theme.textPrimary
-                        font.pixelSize: theme.fontLegal
-                        verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideRight
+                    MouseArea {
+                        id: optArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            versionMenu.close()
+                            root.picked(opt.index)
+                        }
                     }
-                    QbzIcon {
-                        visible: opt.index === root.current
-                        anchors.verticalCenter: parent.verticalCenter
-                        name: "check"
-                        width: 12
-                        height: 12
-                        tintName: "accent"
-                    }
-                }
-                MouseArea {
-                    id: optArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: { menu.close(); root.picked(opt.index) }
                 }
             }
         }

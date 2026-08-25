@@ -24,11 +24,86 @@ use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
 use qbz_library::LocalTrack;
 use qbz_models::QueueTrack;
+use qbz_source::PlaybackTicket;
 
 use crate::local_albums::fetch_album_tracks_blocking;
 use crate::local_state::{state, with_db};
 
 type Runtime = Arc<AppRuntime<LoggingAdapter>>;
+
+const LOCAL_FILE_UNAVAILABLE: &str = "File not available — is the drive mounted?";
+
+fn is_probeable_local_queue_row(track: &QueueTrack) -> bool {
+    matches!(
+        track.source.as_deref(),
+        Some("local" | "user" | "ephemeral")
+    )
+}
+
+/// Prove that a physical local row can be opened before any caller changes
+/// the queue cursor or publishes now-playing metadata. Local decoding starts
+/// lazily, so discovering a moved file inside the audible step is too late:
+/// the old audio can still be heard while queue, NPB and MPRIS already claim
+/// the failed replacement is playing.
+///
+/// The bounded reachability probe preserves the NAS rule: timeout is
+/// transient evidence only. It marks the row for this session and never
+/// deletes or rewrites the authoritative library database.
+pub(crate) async fn preflight_queue_track(track: &QueueTrack) -> Result<(), String> {
+    if !is_probeable_local_queue_row(track) {
+        return Ok(());
+    }
+    let ticket = match qbz_source::registry().playback(track).await {
+        Ok(ticket) => ticket,
+        Err(error) => {
+            let detail = error.to_string();
+            log::warn!(
+                "[qbz-qt] local playback preflight: track {} could not resolve: {detail}",
+                track.id
+            );
+            crate::local_bridge::emit_track_availability(
+                "local",
+                track.id,
+                Some(LOCAL_FILE_UNAVAILABLE),
+            );
+            crate::toast_qt::warning(qbz_i18n::t(LOCAL_FILE_UNAVAILABLE));
+            return Err(detail);
+        }
+    };
+    let path = match ticket {
+        PlaybackTicket::File { path, .. } | PlaybackTicket::DsdFile { path, .. } => path,
+        PlaybackTicket::Bytes { .. }
+        | PlaybackTicket::Stream { .. }
+        | PlaybackTicket::Catalog { .. }
+        | PlaybackTicket::SeekLoaded { .. }
+        | PlaybackTicket::CdTrack { .. } => return Ok(()),
+    };
+    // SACD references deliberately ride the DSD ticket but are not filesystem
+    // paths; their demuxer owns medium availability and must not be rejected by
+    // a path probe that cannot understand the reference.
+    if qbz_disc::SacdRef::is_sacd_path(&path.to_string_lossy()) {
+        return Ok(());
+    }
+    let reach = tokio::task::spawn_blocking(move || qbz_library::probe_default(&path))
+        .await
+        .unwrap_or(qbz_library::Reach::Unreachable);
+    if reach.is_playable() {
+        crate::local_bridge::emit_track_availability("local", track.id, None);
+        return Ok(());
+    }
+    let detail = match reach {
+        qbz_library::Reach::Missing => "local file is missing",
+        qbz_library::Reach::Unreachable => "local file is temporarily unreachable",
+        qbz_library::Reach::Present => unreachable!(),
+    };
+    log::warn!(
+        "[qbz-qt] local playback preflight: track {} {detail}",
+        track.id
+    );
+    crate::local_bridge::emit_track_availability("local", track.id, Some(LOCAL_FILE_UNAVAILABLE));
+    crate::toast_qt::warning(qbz_i18n::t(LOCAL_FILE_UNAVAILABLE));
+    Err(detail.to_string())
+}
 
 // ---------------------------------------------------------------------------
 // On-disk cover backfill (playback.rs `fill_missing_covers` +
@@ -96,8 +171,15 @@ pub(crate) fn find_folder_cover(folder: &Path) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
-/// Fill `artwork_path` for the rows that lack one, from a cover image sitting
-/// in the track's folder — the port of `playback.rs:1490 fill_missing_covers`,
+/// Fill `artwork_path` from a cover image sitting in the track's own folder —
+/// the port of `playback.rs:1490 fill_missing_covers`, extended for box sets:
+/// a folder-local cover replaces an album-root value stored by an older scan.
+/// Current scans already resolve embedded/disc/collection art in that order;
+/// this queue-time pass keeps pre-migration rows equally safe until rescan.
+///
+/// Rows with no folder-local cover keep their existing artwork and only then
+/// use the reference fallback. Remote rows never touch the filesystem.
+///
 /// which the reference runs on EVERY local play/enqueue path before it maps
 /// rows to `QueueTrack`s (playback.rs:1094/1322/1349/1382, local_library.rs:1826,
 /// main.rs:10636, offline_favorites.rs:128). This port had none of it, so a
@@ -113,7 +195,15 @@ pub(crate) fn fill_missing_covers(tracks: &mut [LocalTrack]) {
     use std::collections::HashMap;
     let mut memo: HashMap<String, Option<String>> = HashMap::new();
     for t in tracks.iter_mut() {
-        if t.artwork_path.as_deref().is_some_and(|s| !s.is_empty()) {
+        // Media-server `file_path` values are ids/URLs, not audio files whose
+        // parent may be scanned. A Qobuz download is different: its path is
+        // the encrypted bundle directory and that directory can legitimately
+        // contain the only `cover.jpg`, so retain the old missing-art fallback
+        // for it without overriding an already authoritative artwork path.
+        if matches!(
+            t.source.as_deref(),
+            Some("plex" | "jellyfin" | "subsonic" | "navidrome" | "gonic" | "airsonic" | "astiga")
+        ) {
             continue;
         }
         let p = Path::new(&t.file_path);
@@ -126,12 +216,16 @@ pub(crate) fn fill_missing_covers(tracks: &mut [LocalTrack]) {
             }
         };
         let key = folder.to_string_lossy().into_owned();
-        let cover = memo
+        let folder_cover = memo
             .entry(key)
             .or_insert_with(|| find_folder_cover(&folder))
             .clone();
-        if cover.is_some() {
-            t.artwork_path = cover;
+        let may_override = t.source.as_deref() != Some("qobuz_download");
+        let artwork_missing = t.artwork_path.as_deref().is_none_or(str::is_empty);
+        if folder_cover.is_some() && (may_override || artwork_missing) {
+            // Override is intentional: `artwork_path` can name Box/cover.jpg
+            // while THIS row lives under Box/Disc 05/cover.jpg.
+            t.artwork_path = folder_cover;
         }
     }
 }
@@ -160,21 +254,33 @@ pub fn local_queue_track(t: &LocalTrack) -> QueueTrack {
     // A Plex row carries a RAW server-relative thumb path; it must stay raw
     // so the now-playing bar / queue resolve it from current creds.
     // `file://`-prefixing it poisons it into a local-read miss.
-    let artwork_url = t.artwork_path.as_ref().map(|p| {
-        if is_plex || p.starts_with("file://") {
-            p.clone()
-        } else if is_media {
-            // SOURCE-TAGGED, because a media server's token is meaningless on
-            // its own: a Jellyfin image tag and a Subsonic coverArt id are
-            // both opaque, and the now-playing bar / queue / MPRIS resolve an
-            // `artwork_url` through the shared taxonomy with no row in hand.
-            // The tag is what lets that taxonomy hand it back to the source
-            // that issued it instead of guessing (`artwork_qt::classify`).
-            format!("{src}:{p}")
-        } else {
-            format!("file://{p}")
-        }
-    });
+    let artwork_url = t
+        .artwork_path
+        .as_ref()
+        .filter(|path| !path.is_empty())
+        .or_else(|| {
+            t.collection_artwork_path
+                .as_ref()
+                .filter(|path| !path.is_empty())
+        })
+        .map(|p| {
+            if is_plex || p.starts_with("file://") {
+                p.clone()
+            } else if is_media {
+                // SOURCE-TAGGED, because a media server's token is meaningless on
+                // its own: a Jellyfin image tag and a Subsonic coverArt id are
+                // both opaque, and the now-playing bar / queue / MPRIS resolve an
+                // `artwork_url` through the shared taxonomy with no row in hand.
+                // The tag is what lets that taxonomy hand it back to the source
+                // that issued it instead of guessing (`artwork_qt::classify`).
+                format!("{src}:{p}")
+            } else {
+                // Encode `#`, `?` and `%` exactly like every QML artwork path.
+                // Box/disc folder names commonly contain these; a raw file URL
+                // would make MPRIS treat the tail as a fragment.
+                crate::artwork_qt::file_url(p)
+            }
+        });
     let sample_rate_khz = if t.sample_rate >= 1000.0 {
         t.sample_rate / 1000.0
     } else {
@@ -327,6 +433,28 @@ pub(crate) async fn play_audible(runtime: &Runtime, track: &QueueTrack) -> bool 
     }
 }
 
+fn report_staged_playback_failure(track: &QueueTrack) {
+    let source = track.source.as_deref().unwrap_or("local");
+    let message = if is_probeable_local_queue_row(track) {
+        qbz_i18n::t(LOCAL_FILE_UNAVAILABLE)
+    } else {
+        format!(
+            "{} playback failed; the previous track is still playing",
+            source
+        )
+    };
+    crate::local_bridge::emit_track_availability(source, track.id, Some(&message));
+    crate::toast_qt::warning(message);
+}
+
+fn clear_staged_playback_failure(track: &QueueTrack) {
+    crate::local_bridge::emit_track_availability(
+        track.source.as_deref().unwrap_or("local"),
+        track.id,
+        None,
+    );
+}
+
 /// What the local/Plex audible step did with a queue row.
 ///
 /// This used to be a `bool`, and the two `false`s meant OPPOSITE things: "this
@@ -423,6 +551,20 @@ pub(crate) async fn play_rows(
     if tracks.is_empty() {
         return;
     }
+    // Establish the actual first row before doing any filesystem artwork work
+    // or mutating shuffle/queue state. A shuffle click must validate the row it
+    // will really start, not the old ordered anchor.
+    let mut tracks = tracks;
+    let start = if shuffle {
+        crate::playback_qt::xorshift_shuffle(&mut tracks);
+        0
+    } else {
+        start.min(tracks.len() - 1)
+    };
+    let candidate = local_queue_track(&tracks[start]);
+    if preflight_queue_track(&candidate).await.is_err() {
+        return;
+    }
     // Folder-cover backfill BEFORE the mapping (the reference runs it at every
     // local play site: playback.rs:1094 / :1322 / :1349 / :1382). This is the
     // funnel for album / folder / folder-track / Tracks-tab play, so one call
@@ -437,21 +579,13 @@ pub(crate) async fn play_rows(
     if tracks.is_empty() {
         return;
     }
-    let mut queue: Vec<QueueTrack> = tracks.iter().map(local_queue_track).collect();
+    let queue: Vec<QueueTrack> = tracks.iter().map(local_queue_track).collect();
     // Shuffle reorders THIS list and starts at the top of the mixed order. The
     // mode alone only randomises what comes next, so the first track the user
     // hears was the folder's #1 every time — owner ruling 2026-08-01, every
     // shuffle must be genuinely random. The caller's anchor is meaningless once
     // the order is mixed, so it is dropped (`play_track_list_in` does the same).
-    let start = if shuffle {
-        runtime.core().set_shuffle(true).await;
-        crate::now_playing::set_shuffle(true);
-        crate::playback_qt::xorshift_shuffle(&mut queue);
-        0
-    } else {
-        start.min(queue.len() - 1)
-    };
-    let first = queue[start].clone();
+    let start = if shuffle { 0 } else { start };
     // Through the SHARED seam (not `core().set_queue`) so the origin is derived
     // from the queue: one album -> ("album", group_key), a mixed folder queue ->
     // nothing, and the per-track album fallback lands it on the same view.
@@ -461,15 +595,36 @@ pub(crate) async fn play_rows(
     // the anchor always comes back and always names `first`. Answered anyway
     // rather than discarded with a `let _`: the day a Qobuz row reaches this
     // path, this returns instead of trying to play a track the core dropped.
-    if crate::playback_qt::set_queue_stamped(runtime, queue, Some(start), None)
-        .await
-        .is_none()
-    {
+    let Some(prepared) = crate::playback_qt::prepare_queue_stamped(queue, Some(start), None) else {
         log::warn!("[qbz-qt] local play: the queue was filtered to nothing");
         return;
+    };
+    let Some(first) = prepared.anchor_track().cloned() else {
+        log::warn!("[qbz-qt] local play: prepared queue has no anchor");
+        return;
+    };
+
+    // A source-owned play is staged: first prove that the player accepted the
+    // replacement, then publish its queue. A failed Plex part or moved local
+    // file therefore leaves the currently audible track, Queue, NPB and MPRIS
+    // in agreement. Offline Qobuz bundles are the one exception because their
+    // resolver reads the current core row to find its encrypted container.
+    let offline = belongs_to_the_offline_tier(&first);
+    if !offline && !play_audible(runtime, &first).await {
+        report_staged_playback_failure(&first);
+        return;
+    }
+    crate::playback_qt::commit_prepared_queue(runtime, prepared).await;
+    if shuffle {
+        runtime.core().set_shuffle(true).await;
+        crate::now_playing::set_shuffle(true);
     }
     crate::playback_qt::publish_queue(runtime).await;
-    play_audible(runtime, &first).await;
+    if offline && !play_audible(runtime, &first).await {
+        report_staged_playback_failure(&first);
+        return;
+    }
+    clear_staged_playback_failure(&first);
     crate::playback_qt::refresh_now_playing(runtime).await;
 }
 
@@ -482,14 +637,35 @@ pub async fn play_album(
     shuffle: bool,
 ) {
     let key = album_id.clone();
-    let tracks =
-        tokio::task::spawn_blocking(move || fetch_album_tracks_blocking(&key))
-            .await
-            .unwrap_or_default();
+    let tracks = tokio::task::spawn_blocking(move || fetch_album_tracks_blocking(&key))
+        .await
+        .unwrap_or_default();
     let start = start_track_id
         .and_then(|tid| tracks.iter().position(|t| t.id == tid))
         .unwrap_or(0);
     play_rows(runtime, tracks, start, shuffle).await;
+}
+
+/// Play only the physical copies admitted by the active Local Library media
+/// funnel. A logical album card can represent several servers and a local
+/// directory; reopening the unfiltered group here would silently bypass the
+/// source/format/quality choices the user is looking at.
+pub async fn play_album_filtered(
+    runtime: &Runtime,
+    album_id: String,
+    filter_json: String,
+    shuffle: bool,
+) {
+    let tracks = tokio::task::spawn_blocking(move || {
+        let filter = crate::local_filter::MediaFilter::from_json(&filter_json);
+        fetch_album_tracks_blocking(&album_id)
+            .into_iter()
+            .filter(|track| filter.track_enabled(track))
+            .collect()
+    })
+    .await
+    .unwrap_or_default();
+    play_rows(runtime, tracks, 0, shuffle).await;
 }
 
 /// Play everything under a folder, recursively, in path order.
@@ -579,6 +755,7 @@ fn find_track_blocking(row_id: i64) -> Option<LocalTrack> {
         s.tracks_raw
             .iter()
             .chain(s.detail_raw.iter())
+            .chain(s.genre_detail_raw.values().flatten())
             .find(|t| t.id == row_id)
             .cloned()
     });
@@ -617,15 +794,39 @@ pub async fn enqueue(runtime: &Runtime, kind: String, id: String, mode: String) 
     })
     .await
     .unwrap_or_default();
+    enqueue_rows(runtime, tracks, mode).await;
+}
+
+/// Enqueue only the physical album copies admitted by the active media
+/// funnel. This is the card/context-menu counterpart of
+/// `play_album_filtered`.
+pub async fn enqueue_album_filtered(
+    runtime: &Runtime,
+    album_id: String,
+    filter_json: String,
+    mode: String,
+) {
+    let tracks = tokio::task::spawn_blocking(move || {
+        let filter = crate::local_filter::MediaFilter::from_json(&filter_json);
+        let mut rows: Vec<LocalTrack> = fetch_album_tracks_blocking(&album_id)
+            .into_iter()
+            .filter(|track| filter.track_enabled(track))
+            .collect();
+        fill_missing_covers(&mut rows);
+        rows
+    })
+    .await
+    .unwrap_or_default();
+    enqueue_rows(runtime, tracks, mode).await;
+}
+
+async fn enqueue_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, mode: String) {
     if tracks.is_empty() {
         return;
     }
     // Same stamping seam the Qobuz enqueue paths use, so an appended local
     // block carries its own origin instead of inheriting whatever is playing.
-    let queue = crate::playback_qt::stamped(
-        tracks.iter().map(local_queue_track).collect(),
-        None,
-    );
+    let queue = crate::playback_qt::stamped(tracks.iter().map(local_queue_track).collect(), None);
     // Same core helpers the Qobuz rows use: "next" inserts at the cursor
     // (reversed so a multi-track insert keeps its order), "later" appends to
     // the block tail, anything else appends.
@@ -752,6 +953,101 @@ mod tests {
             );
         }
     }
+
+    /// The album card may correctly use the box cover, but every queue row
+    /// must carry its own disc folder's cover. NPB, MPRIS and notifications
+    /// all consume `QueueTrack.artwork_url`; if this mapping collapses, those
+    /// three surfaces disagree with the disc divider and track hover.
+    #[test]
+    fn box_set_queue_rows_keep_each_discs_own_artwork() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let box_dir =
+            std::env::temp_dir().join(format!("qbz-queue-disc-art-{}-{nonce}", std::process::id()));
+        let disc_one = box_dir.join("Disc 01 - Sanctuary");
+        let disc_five = box_dir.join("Disc 05 - Movie OST");
+        std::fs::create_dir_all(&disc_one).unwrap();
+        std::fs::create_dir_all(&disc_five).unwrap();
+        std::fs::write(box_dir.join("cover.jpg"), b"box").unwrap();
+        std::fs::write(disc_one.join("cover.jpg"), b"one").unwrap();
+        std::fs::write(disc_five.join("cover.jpg"), b"five").unwrap();
+
+        let box_cover = box_dir.join("cover.jpg").to_string_lossy().into_owned();
+        let mut tracks = vec![
+            LocalTrack {
+                id: 1,
+                source: Some("user".into()),
+                file_path: disc_one.join("01.flac").to_string_lossy().into_owned(),
+                artwork_path: Some(box_cover.clone()),
+                ..Default::default()
+            },
+            LocalTrack {
+                id: 5,
+                source: Some("user".into()),
+                file_path: disc_five.join("01.flac").to_string_lossy().into_owned(),
+                artwork_path: Some(box_cover),
+                ..Default::default()
+            },
+        ];
+
+        super::fill_missing_covers(&mut tracks);
+        let one = super::local_queue_track(&tracks[0]);
+        let five = super::local_queue_track(&tracks[1]);
+        assert_ne!(one.artwork_url, five.artwork_url);
+        assert!(one.artwork_url.as_deref().unwrap().contains("Disc 01"));
+        assert!(five.artwork_url.as_deref().unwrap().contains("Disc 05"));
+
+        std::fs::remove_dir_all(&box_dir).unwrap();
+    }
+
+    /// Qobuz downloads are encrypted bundle directories, not ordinary album
+    /// folders. Keep their historical on-disk fallback when the index has no
+    /// art, but never replace an artwork URL already supplied by the catalog.
+    #[test]
+    fn qobuz_bundle_cover_is_fallback_only() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let bundle = std::env::temp_dir().join(format!(
+            "qbz-qobuz-bundle-cover-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("cover.jpg"), b"bundle").unwrap();
+
+        let row = |artwork_path| LocalTrack {
+            source: Some("qobuz_download".into()),
+            file_path: bundle.to_string_lossy().into_owned(),
+            artwork_path,
+            ..Default::default()
+        };
+        let mut tracks = vec![
+            row(None),
+            row(Some(String::new())),
+            row(Some("https://catalog/art.jpg".into())),
+        ];
+
+        super::fill_missing_covers(&mut tracks);
+        assert!(tracks[0]
+            .artwork_path
+            .as_deref()
+            .unwrap()
+            .ends_with("cover.jpg"));
+        assert!(tracks[1]
+            .artwork_path
+            .as_deref()
+            .unwrap()
+            .ends_with("cover.jpg"));
+        assert_eq!(
+            tracks[2].artwork_path.as_deref(),
+            Some("https://catalog/art.jpg")
+        );
+
+        std::fs::remove_dir_all(&bundle).unwrap();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -785,12 +1081,12 @@ pub async fn play_single_from_source(runtime: &Runtime, track_id: u64, source: &
     let track = match source {
         // A library row: the DB has everything, and `local_queue_track` builds
         // the QueueTrack the audible step expects.
-        "local" | "qobuz_download" => {
-            tokio::task::spawn_blocking(move || with_db(|db| db.get_track(track_id as i64)).flatten())
-                .await
-                .ok()
-                .flatten()
-        }
+        "local" | "qobuz_download" => tokio::task::spawn_blocking(move || {
+            with_db(|db| db.get_track(track_id as i64)).flatten()
+        })
+        .await
+        .ok()
+        .flatten(),
         // A Plex row is SYNTHETIC — `local_plex::map_cached_to_local_track`
         // mints it and it never touches library.db, so there is no row to read.
         // The cache is queried by ALBUM, and the recently-played entry carries
@@ -830,16 +1126,24 @@ pub async fn play_single_from_source(runtime: &Runtime, track_id: u64, source: &
             };
             return match qbz_source::registry().tracks_of(&raw).await {
                 Ok(tracks) if !tracks.is_empty() => {
-                    let first = tracks[0].clone();
-                    if crate::playback_qt::set_queue_stamped(runtime, tracks, Some(0), None)
-                        .await
-                        .is_none()
-                    {
+                    let Some(prepared) =
+                        crate::playback_qt::prepare_queue_stamped(tracks, Some(0), None)
+                    else {
                         log::warn!("[qbz-qt] {source} play: the queue was filtered to nothing");
                         return false;
-                    }
-                    crate::playback_qt::publish_queue(runtime).await;
+                    };
+                    let Some(first) = prepared.anchor_track().cloned() else {
+                        log::warn!("[qbz-qt] {source} play: prepared queue has no anchor");
+                        return false;
+                    };
                     let played = play_audible(runtime, &first).await;
+                    if !played {
+                        report_staged_playback_failure(&first);
+                        return false;
+                    }
+                    crate::playback_qt::commit_prepared_queue(runtime, prepared).await;
+                    crate::playback_qt::publish_queue(runtime).await;
+                    clear_staged_playback_failure(&first);
                     crate::playback_qt::refresh_now_playing(runtime).await;
                     played
                 }

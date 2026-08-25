@@ -96,7 +96,8 @@ pub(crate) fn publish_media_gates() {
     ui(move |mut b| {
         b.as_mut().set_media_has_jellyfin(jf);
         b.as_mut().set_media_has_subsonic(sub);
-        b.as_mut().set_albums_filter(cxx_qt_lib::QString::from(filter.as_str()));
+        b.as_mut()
+            .set_albums_filter(cxx_qt_lib::QString::from(filter.as_str()));
     });
 }
 
@@ -108,7 +109,8 @@ pub(crate) fn save_albums_filter(json: &str) {
     let value = if json.trim().is_empty() {
         serde_json::Value::Object(serde_json::Map::new())
     } else {
-        serde_json::from_str(json).unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
+        serde_json::from_str(json)
+            .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
     };
     crate::settings_qt::save_pref(ALBUMS_FILTER_KEY, value);
 }
@@ -121,8 +123,7 @@ pub(crate) fn save_albums_filter(json: &str) {
 /// ever match zero rows, and the chip that would let the user untick it is
 /// hidden by the same gate.
 fn pruned_albums_filter(has_jellyfin: bool, has_subsonic: bool) -> String {
-    let Some(serde_json::Value::Object(mut map)) =
-        crate::settings_qt::read_pref(ALBUMS_FILTER_KEY)
+    let Some(serde_json::Value::Object(mut map)) = crate::settings_qt::read_pref(ALBUMS_FILTER_KEY)
     else {
         return String::new();
     };
@@ -148,6 +149,21 @@ pub(crate) fn reload_browse() {
     // wrong. This is the single chokepoint for local-library mutations, which
     // is why the invalidation lives here rather than at each call site.
     crate::search_cache_qt::invalidate();
+    // Expanded Genres albums cache their physical versions so switching the
+    // picker never re-queries four sources. A source reconciliation changes
+    // exactly that membership (and may prune provider ids), so keeping these
+    // documents would republish a removed copy after the cards themselves had
+    // refreshed. The visible QML document remains stable until its next open;
+    // every subsequent expand/select is rebuilt from authoritative caches.
+    crate::local_state::state(|state| {
+        state.genre_detail_raw.clear();
+        state.genre_detail_all_tracks.clear();
+        state.genre_detail_versions.clear();
+        state.genre_detail_docs.clear();
+        state.genre_detail_filters.clear();
+        state.genre_detail_requests.clear();
+        state.genre_detail_version_generations.clear();
+    });
     load_albums();
     load_artists();
     load_tracks(true);
@@ -211,6 +227,9 @@ pub(crate) fn load_tab_impl(tab: String) {
         // commit, and it still derives album credits from that document.
         "albums-legacy" => load_albums_legacy(),
         "artists" => load_artists(),
+        // The browser needs the bounded logical-album document even when the
+        // Albums surface itself is using the optional native model.
+        "genres" => load_albums_legacy(),
         "folders" => load_folders(),
         "tracks" => load_tracks(true),
         // The ephemeral session lives in memory and is published the moment it
@@ -286,8 +305,7 @@ pub(crate) fn load_albums_legacy() {
             Err(e) => {
                 log::warn!("[qbz-qt] local albums load failed: {e}");
                 ui(move |mut b| {
-                    b.as_mut()
-                        .set_local_albums_error(QString::from(e.as_str()));
+                    b.as_mut().set_local_albums_error(QString::from(e.as_str()));
                     b.as_mut().set_local_albums_loading(false);
                 });
             }
@@ -386,11 +404,7 @@ pub(crate) fn load_tracks(reset: bool) {
             log_surface_route("tracks", "catalog", "feature-enabled");
             return;
         }
-        log_surface_route(
-            "tracks",
-            "legacy",
-            "feature-disabled-or-session-failed",
-        );
+        log_surface_route("tracks", "legacy", "feature-disabled-or-session-failed");
     } else {
         log_surface_route("tracks", "legacy", "legacy-pagination");
     }

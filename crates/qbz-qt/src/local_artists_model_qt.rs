@@ -284,8 +284,15 @@ pub(crate) fn requested() -> bool {
         .is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
 }
 
-pub(crate) fn reset(search: String) -> bool {
+pub(crate) fn reset(search: String, sort: String, filter_json: String) -> bool {
     if !requested() {
+        return false;
+    }
+    if sort != "name-asc"
+        || crate::local_filter::MediaFilter::from_json(&filter_json)
+            != crate::local_filter::MediaFilter::default()
+    {
+        deactivate_for_legacy("unsupported-artist-facets");
         return false;
     }
     *LAST_SEARCH
@@ -325,7 +332,7 @@ pub(crate) fn retry_last() -> bool {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clone();
-    search.is_some_and(reset)
+    search.is_some_and(|search| reset(search, "name-asc".to_string(), String::new()))
 }
 
 pub(crate) fn request_page(page: i32, generation: i32) {
@@ -585,9 +592,7 @@ fn activate_artists(opened: OpenedArtists) {
         cpp_artist_reset(generation, total, artist_total);
         let bytes = publish_artist_page_now(generation, 0, &wire);
         bridge.as_mut().set_local_artists_native_active(true);
-        bridge
-            .as_mut()
-            .set_local_artists_json(QString::from("[]"));
+        bridge.as_mut().set_local_artists_json(QString::from("[]"));
         bridge
             .as_mut()
             .set_local_artists_native_total(artist_total.min(i64::MAX as u64) as i64);
@@ -1327,6 +1332,11 @@ fn map_artist(record: &ArtistRecord) -> NativeArtist {
             track_count: record.track_count,
             art_key,
             source: record.source.clone(),
+            sources: Vec::new(),
+            formats: Vec::new(),
+            quality_tiers: Vec::new(),
+            years: Vec::new(),
+            year: String::new(),
         },
         artist_key: record.artist_key.clone(),
         art_path: String::new(),
@@ -1344,12 +1354,33 @@ fn map_album(record: &AlbumRecord, index: usize) -> NativeAlbum {
         }
     }
     let format = audio_format(&record.format);
+    let names = [record.artist.as_str()]
+        .into_iter()
+        .chain(record.all_artists.split(','))
+        .collect::<Vec<_>>();
+    let aliases = crate::local_artist_match::build_artist_family_aliases(&names);
+    let artists = crate::local_artist_match::album_credit_names(
+        &record.artist,
+        &record.all_artists,
+        &aliases,
+    );
+    let source = badge_source(Some(source_word(record)));
+    let source_raw = badge_source_raw(Some(source_word(record)));
+    let sources = vec![if source_raw.is_empty() {
+        source.clone()
+    } else {
+        source_raw.clone()
+    }];
+    let favoriteable = crate::local_rows::album_favorite_source(&sources).is_some();
     NativeAlbum {
         row: AlbumRow {
+            is_favorite: favoriteable && crate::library_qt::is_local_favorite("album", &id),
+            favoriteable,
             id,
             title: record.title.clone(),
             artist: record.artist.clone(),
             all_artists: record.all_artists.clone(),
+            artists,
             year: record.year.map(|year| year.to_string()).unwrap_or_default(),
             track_count: record.track_count,
             duration: total_duration(record.total_duration_ms / 1_000),
@@ -1360,10 +1391,11 @@ fn map_album(record: &AlbumRecord, index: usize) -> NativeAlbum {
                 record.sample_rate_hz.unwrap_or(0) as f64,
             ),
             format: record.format.to_ascii_uppercase(),
+            genres: Vec::new(),
             art_key,
-            source: badge_source(Some(source_word(record))),
-            sources: vec![badge_source(Some(source_word(record)))],
-            source_raw: badge_source_raw(Some(source_word(record))),
+            source,
+            sources,
+            source_raw,
             directory_path: record.directory_path.clone(),
             folder_count: record.folder_count,
         },
@@ -1597,6 +1629,11 @@ mod tests {
                     track_count: 1,
                     art_key: format!("artist:{index}"),
                     source: "local".to_string(),
+                    sources: vec!["local".to_string()],
+                    formats: Vec::new(),
+                    quality_tiers: Vec::new(),
+                    years: Vec::new(),
+                    year: String::new(),
                 },
                 artist_key: format!("artist {index}"),
                 art_path: String::new(),
@@ -1656,6 +1693,11 @@ mod tests {
                     _ => "subsonic",
                 }
                 .to_string(),
+                sources: Vec::new(),
+                formats: Vec::new(),
+                quality_tiers: Vec::new(),
+                years: Vec::new(),
+                year: String::new(),
             })
             .collect::<Vec<_>>();
         let legacy_bytes = serde_json::to_vec(&legacy).unwrap().len();

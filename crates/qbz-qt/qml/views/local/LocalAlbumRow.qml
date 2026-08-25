@@ -6,16 +6,14 @@
 // column and the trailing ⋯ overflow. Multi-select puts the shared checkbox
 // in front of the cover, as the collection view does.
 //
-// The ⋯ menu is AlbumListRow.slint:381 minus its two Qobuz-only entries: the
-// favourite heart (local albums are not catalog favourites) and "Block this
-// album" (which the Slint itself hides for source local/plex, :435). What is
-// left is the five entries Slint always shows — Open album, Play, Play next,
-// Play later, Add to queue — and all five are wired. Right-clicking the row
-// opens the same menu at the pointer.
+// The ⋯ menu carries the same local/Plex favorite as the grid overlay. Remote-
+// only rows omit it because the shared LocalFavoritesService deliberately
+// accepts genuine local and Plex snapshots only.
 
 import QtQuick
 import com.blitzfc.qbz
 import "../../controls"
+import "../../rows"
 import "../../theme"
 
 Rectangle {
@@ -23,6 +21,7 @@ Rectangle {
 
     property var item: ({})
     property string artSource: ""
+    property bool isFavorite: root.item.isFavorite === true
     /// The LocalLibraryView root — the shared skeleton pulse, the per-item
     /// artwork gate and the settle bound all live there (never duplicated
     /// per row, so the rule cannot drift between surfaces).
@@ -30,18 +29,42 @@ Rectangle {
     property bool showSource: true
     property bool selectMode: false
     property bool checked: false
+    /// Details surfaces keep albums open by default but must not replace the
+    /// album row with bespoke chrome. The optional caret is the one extra
+    /// affordance; clicking the rest of the row still opens AlbumView.
+    property bool expandable: false
+    property bool expanded: true
+    /// Genres Details uses the same album semantics/menu but a taller table
+    /// header whose trailing columns line up with LocalTrackRow.
+    property bool detailsMode: false
+    property var versions: []
+    property int versionIndex: 0
     signal opened()
     signal playRequested()
+    signal shuffleRequested()
     signal enqueueRequested(string mode)
+    signal favoriteRequested()
+    signal toggleExpanded()
+    signal versionPicked(int index)
     /// `modifiers` rides straight off the mouse event: Shift is what turns
     /// a click into a range (controls/SelectionModel.qml).
     signal toggleSelect(int modifiers)
 
     QbzTheme { id: theme }
+    TrackCols { id: cols }
 
-    height: 56
+    height: detailsMode ? 72 : 56
     radius: 6
     color: rowArea.containsMouse ? theme.surfaceHover : "transparent"
+
+    function openRowMenuAt(anchor, x, y) {
+        rowMenuLoader.active = true
+        rowMenuLoader.item.openAtCursor(anchor, x, y)
+    }
+    function openRowMenuBelow(anchor) {
+        rowMenuLoader.active = true
+        rowMenuLoader.item.openBelowRight(anchor)
+    }
 
     MouseArea {
         id: rowArea
@@ -51,7 +74,7 @@ Rectangle {
         cursorShape: Qt.PointingHandCursor
         onClicked: function (mouse) {
             if (mouse.button === Qt.RightButton) {
-                rowMenu.openAtCursor(rowArea, mouse.x, mouse.y)
+                root.openRowMenuAt(rowArea, mouse.x, mouse.y)
                 return
             }
             if (root.selectMode) root.toggleSelect(mouse.modifiers)
@@ -60,24 +83,43 @@ Rectangle {
         onDoubleClicked: if (!root.selectMode) root.playRequested()
     }
 
-    CardMenu {
-        id: rowMenu
-        menuWidth: 196
-        entries: [
-            { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
-            { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-            { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-            { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
-            { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-        ]
-        onPicked: function (a) {
-            if (a === "open") root.opened()
-            else if (a === "play") root.playRequested()
-            else root.enqueueRequested(a)
+    // Same cold-menu contract as LocalTrackRow: a list/detail viewport should
+    // construct album rows, not five invisible popup delegates per row.
+    Loader {
+        id: rowMenuLoader
+        active: false
+        sourceComponent: CardMenu {
+            menuWidth: 196
+            entries: {
+                var rows = [
+                    { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
+                    { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
+                    { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
+                    { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
+                    { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" }
+                ]
+                if (root.item.favoriteable === true) {
+                    rows.push({
+                        "label": root.isFavorite
+                            ? QbzSession.tr("Remove from Library", QbzSession.trRev)
+                            : QbzSession.tr("Add to Library", QbzSession.trRev),
+                        "icon": root.isFavorite ? "heart-filled" : "heart",
+                        "action": "favorite"
+                    })
+                }
+                return rows
+            }
+            onPicked: function (a) {
+                if (a === "open") root.opened()
+                else if (a === "play") root.playRequested()
+                else if (a === "favorite") root.favoriteRequested()
+                else root.enqueueRequested(a)
+            }
         }
     }
 
     Row {
+        visible: !root.detailsMode
         anchors.fill: parent
         anchors.leftMargin: 10
         anchors.rightMargin: 12
@@ -124,6 +166,7 @@ Rectangle {
             width: parent.width - 40 - 70 - 90 - 92 - 32
                 - (root.showSource ? 34 : 0)
                 - (root.selectMode ? 28 : 0) - 6 * 12
+                - (root.expandable ? 28 + 12 : 0)
             anchors.verticalCenter: parent.verticalCenter
             spacing: 2
             Text {
@@ -197,6 +240,28 @@ Rectangle {
                 }
             }
         }
+        Rectangle {
+            visible: root.expandable
+            width: visible ? 28 : 0
+            height: 28
+            radius: 6
+            anchors.verticalCenter: parent.verticalCenter
+            color: expandArea.containsMouse ? theme.surfaceElevated : "transparent"
+            QbzIcon {
+                name: root.expanded ? "chevron-down" : "chevron-right"
+                width: 14
+                height: 14
+                anchors.centerIn: parent
+                tintName: expandArea.containsMouse ? "textPrimary" : "muted"
+            }
+            MouseArea {
+                id: expandArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.toggleExpanded()
+            }
+        }
         // Trailing ⋯ overflow (AlbumListRow.slint:360).
         Rectangle {
             width: 32
@@ -216,8 +281,146 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: function (mouse) { rowMenu.openAtCursor(moreArea, mouse.x, mouse.y) }
+                onClicked: function (mouse) {
+                    root.openRowMenuAt(moreArea, mouse.x, mouse.y)
+                }
             }
+        }
+    }
+
+    // Genres Details header. LocalTrackRow holds back 26px for its source
+    // indicator and 46px for its local menu; the formulas below use those
+    // same gutters so quality, menu and version/source share exact centres.
+    Item {
+        id: detailsLayout
+        visible: root.detailsMode
+        anchors.fill: parent
+
+        readonly property int qualityX: width - 26 - (cols.colMenu + cols.gap)
+            - cols.padH - cols.colQuality
+        readonly property int menuX: width - 70
+
+        QbzIconButton {
+            id: detailsFold
+            visible: root.expandable
+            x: 8
+            anchors.verticalCenter: parent.verticalCenter
+            btnSize: 26
+            iconSize: 12
+            name: root.expanded ? "minus" : "plus"
+            onClicked: root.toggleExpanded()
+        }
+
+        Rectangle {
+            x: 46
+            width: 48
+            height: 48
+            anchors.verticalCenter: parent.verticalCenter
+            radius: 5
+            color: theme.surfaceElevated
+            clip: true
+            RoundedImage {
+                id: detailsArt
+                anchors.fill: parent
+                source: root.artSource
+                radius: 5
+            }
+            QbzSkeleton {
+                variant: "art"
+                anchors.fill: parent
+                blockRadius: 5
+                pending: root.view ? root.view.artWanted(root.item.artKey) : false
+                coverReady: detailsArt.ready
+                phase: root.view ? root.view.skelPhase : false
+                settleMs: root.view ? root.view.artSettleMs : 0
+                settleHold: root.view ? root.view.artPulse : false
+            }
+        }
+
+        Column {
+            x: 106
+            y: 9
+            width: Math.max(0, albumActions.x - x - 14)
+            spacing: 1
+            Text {
+                width: parent.width
+                text: root.item.title || ""
+                color: theme.textPrimary
+                font.pixelSize: 14
+                font.weight: theme.weightMedium
+                elide: Text.ElideRight
+            }
+            Text {
+                width: parent.width
+                text: root.item.artist || ""
+                color: theme.textSecondary
+                font.pixelSize: 12
+                elide: Text.ElideRight
+            }
+            Text {
+                width: parent.width
+                text: {
+                    var parts = []
+                    if ((root.item.year || "") !== "") parts.push(root.item.year)
+                    parts.push((root.item.trackCount || 0) + " "
+                        + QbzSession.tr("tracks", QbzSession.trRev))
+                    return parts.join(" · ")
+                }
+                color: theme.textMuted
+                font.pixelSize: theme.fontLegal
+                elide: Text.ElideRight
+            }
+        }
+
+        // Compact and deliberately not centred: it floats at the right edge
+        // of the metadata region, before the table's quality/actions columns.
+        Row {
+            id: albumActions
+            x: detailsLayout.qualityX - width - 16
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 6
+            QbzIconButton {
+                btnSize: 26
+                iconSize: 13
+                name: "play-fill"
+                onClicked: root.playRequested()
+            }
+            QbzIconButton {
+                btnSize: 26
+                iconSize: 13
+                name: "shuffle"
+                onClicked: root.shuffleRequested()
+            }
+        }
+
+        Item {
+            x: detailsLayout.qualityX
+            width: cols.colQuality
+            height: parent.height
+            QualityMini {
+                tier: root.item.qualityTier || ""
+                anchors.centerIn: parent
+            }
+        }
+
+        QbzIconButton {
+            id: detailsMenuButton
+            x: detailsLayout.menuX
+            anchors.verticalCenter: parent.verticalCenter
+            btnSize: cols.colMenu
+            iconSize: 16
+            name: "ellipsis"
+            onClicked: root.openRowMenuBelow(detailsMenuButton)
+        }
+
+        VersionPicker {
+            visible: root.showSource && root.versions.length > 0
+            x: parent.width - width
+            anchors.verticalCenter: parent.verticalCenter
+            compact: true
+            versions: root.versions
+            current: root.versionIndex
+            onPicked: function (index) { root.versionPicked(index) }
         }
     }
 }

@@ -36,6 +36,9 @@ Column {
     /// previews — every call site guards, so a preview degrades to the old
     /// unconfirmed behaviour rather than swallowing the click.
     property var confirmHost: null
+    /// View-level reorder modal. It must live outside this scrolled Loader so
+    /// its scrim covers Settings instead of moving with the panel.
+    property var tabOrderModal: null
 
     QbzTheme { id: theme }
 
@@ -112,6 +115,46 @@ Column {
                 text: QbzSession.tr("Manage", QbzSession.trRev)
                 trailingIconName: "chevron-right"
                 onClicked: QbzBridge.settingsString("library-open-folders", "")
+            }
+        }
+    }
+
+    Item { width: 1; height: 22 }
+
+    // ============================ TAB ORDER ==============================
+    GroupHeader { text: QbzSession.tr("LIBRARY TABS", QbzSession.trRev) }
+    SettingRow {
+        label: QbzSession.tr("Tab order and default", QbzSession.trRev)
+        description: QbzSession.tr("Choose the order of Local Library tabs. The first one opens by default, including when QBZ starts without a Qobuz session.", QbzSession.trRev)
+        SettingsButton {
+            text: QbzSession.tr("Customize", QbzSession.trRev)
+            trailingIconName: "chevron-right"
+            onClicked: if (root.tabOrderModal) root.tabOrderModal.open()
+        }
+    }
+
+    Item { width: 1; height: 22 }
+
+    // =========================== GENRES VIEW ============================
+    GroupHeader { text: QbzSession.tr("GENRES VIEW", QbzSession.trRev) }
+    SettingRow {
+        label: QbzSession.tr("Genre filters position", QbzSession.trRev)
+        description: QbzSession.tr("Place the chained genre filters above, beside or below the album results.", QbzSession.trRev)
+        QbzSelect {
+            menuWidth: 170
+            options: [
+                QbzSession.tr("Top", QbzSession.trRev),
+                QbzSession.tr("Right", QbzSession.trRev),
+                QbzSession.tr("Left", QbzSession.trRev),
+                QbzSession.tr("Bottom", QbzSession.trRev)
+            ]
+            currentIndex: {
+                var value = root.doc.genreFiltersPosition || "top"
+                var index = ["top", "right", "left", "bottom"].indexOf(value)
+                return index >= 0 ? index : 0
+            }
+            onSelected: function (index) {
+                QbzBridge.settingsSelect("genre-filters-position", index)
             }
         }
     }

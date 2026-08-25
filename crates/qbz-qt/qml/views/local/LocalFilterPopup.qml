@@ -51,6 +51,7 @@ Item {
             qualityRow.implicitWidth,
             formatRow1.implicitWidth,
             formatRow2.implicitWidth,
+            favoriteRow.visible ? favoriteRow.implicitWidth : 0,
             sourceRow.implicitWidth)
         width: Math.min(Math.max(372, card.contentWidth + 32),
                         Math.max(372, root.width - 72))
@@ -109,6 +110,29 @@ Item {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: root.view.clearFilter()
                     }
+                }
+            }
+
+            // Album membership lives here, not in the three chained Genres
+            // columns: it narrows the resulting album set just like quality,
+            // format and source do.
+            Text {
+                visible: root.view.activeTab === "albums"
+                    || root.view.activeTab === "genres"
+                text: QbzSession.tr("Favorites", QbzSession.trRev)
+                color: theme.textMuted
+                font.pixelSize: theme.fontLegal
+                font.weight: theme.weightSemibold
+            }
+            Row {
+                id: favoriteRow
+                visible: root.view.activeTab === "albums"
+                    || root.view.activeTab === "genres"
+                spacing: 8
+                FilterChip {
+                    label: QbzSession.tr("Favorites only", QbzSession.trRev)
+                    active: root.view.filter.favorite === true
+                    onToggled: root.view.toggleFilter("favorite")
                 }
             }
 

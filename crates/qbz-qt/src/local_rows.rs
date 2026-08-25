@@ -40,6 +40,8 @@ pub struct AlbumRow {
     pub artist: String,
     #[serde(rename = "allArtists")]
     pub all_artists: String,
+    /// Canonical individual contributors used by chained artist facets.
+    pub artists: Vec<String>,
     pub year: String,
     #[serde(rename = "trackCount")]
     pub track_count: u32,
@@ -49,6 +51,8 @@ pub struct AlbumRow {
     #[serde(rename = "qualityDetail")]
     pub quality_detail: String,
     pub format: String,
+    /// Every genre represented by this logical album, across all versions.
+    pub genres: Vec<String>,
     #[serde(rename = "artKey")]
     pub art_key: String,
     /// "local" | "offline" | "plex" (the source badge).
@@ -67,6 +71,13 @@ pub struct AlbumRow {
     /// the "album spans N folders" tooltip case).
     #[serde(rename = "folderCount")]
     pub folder_count: u32,
+    /// Heart state from the shared LocalFavoritesService.
+    #[serde(rename = "isFavorite")]
+    pub is_favorite: bool,
+    /// True only when the logical album includes a genuine local or Plex
+    /// copy. Jellyfin/Subsonic and Qobuz-offline-only rows are intentionally
+    /// outside the existing local-favorites database contract.
+    pub favoriteable: bool,
 }
 
 /// One track row (Tracks tab, album detail, folder detail).
@@ -93,6 +104,7 @@ pub struct TrackRow {
     #[serde(rename = "qualityDetail")]
     pub quality_detail: String,
     pub format: String,
+    pub genres: Vec<String>,
     pub year: String,
     #[serde(rename = "artKey")]
     pub art_key: String,
@@ -121,6 +133,18 @@ pub struct ArtistRow {
     pub art_key: String,
     /// "local" | "plex" | "mixed" — the rail's provenance hint.
     pub source: String,
+    /// Facets aggregated from every album credited to this artist. Keeping
+    /// these on the bounded artist document lets the Artists toolbar reuse
+    /// the Albums funnel without materialising tracks or guessing from the
+    /// representative portrait source.
+    pub sources: Vec<String>,
+    pub formats: Vec<String>,
+    #[serde(rename = "qualityTiers")]
+    pub quality_tiers: Vec<String>,
+    pub years: Vec<u32>,
+    /// Most recent known release year; empty when the source supplied none.
+    /// The reversible year sort is deliberately defined over one stable key.
+    pub year: String,
 }
 
 /// One row of the FLATTENED folder tree (the rail renders a windowed list
@@ -300,10 +324,9 @@ pub fn disc_display_title(t: &LocalTrack, group_title: &str) -> String {
 
 /// THIS disc's own folder cover as an encoded `file://` url, or empty.
 ///
-/// NOT the track's scan-time `artwork_path`: `find_folder_artwork` gives the
-/// album ROOT a +5 bonus against a strict `>`, so `Box/cover.jpg` beats
-/// `Box/Disc 01 - X/cover.jpg` on every track of every disc and a per-disc
-/// thumbnail drawn from it would be N copies of one image.
+/// This direct URL remains the local-file fallback beside the track's id-keyed
+/// `artwork_path`. Current scans preserve embedded/disc/collection precedence;
+/// older database rows can still carry one album-root image for every disc.
 ///
 /// Encoded through `artwork_qt::file_url`, which is not optional: these folder
 /// names contain '#', and in a URL that opens a FRAGMENT — a raw concatenation
@@ -404,9 +427,25 @@ pub fn art_token(source_word: Option<&str>, token: &str) -> Option<(SourceId, St
 // ---------------------------------------------------------------------------
 
 pub fn map_album(a: LocalAlbum, art: &mut HashMap<String, (SourceId, String)>) -> AlbumRow {
+    let names = [a.artist.as_str()]
+        .into_iter()
+        .chain(a.all_artists.split(','))
+        .collect::<Vec<_>>();
+    let aliases = crate::local_artist_match::build_artist_family_aliases(&names);
+    let artists =
+        crate::local_artist_match::album_credit_names(&a.artist, &a.all_artists, &aliases);
+    map_album_with_artists(a, art, artists)
+}
+
+pub fn map_album_with_artists(
+    a: LocalAlbum,
+    art: &mut HashMap<String, (SourceId, String)>,
+    artists: Vec<String>,
+) -> AlbumRow {
     let key = album_key(&a.id);
     if let Some(p) = a.artwork_path.as_ref().filter(|p| !p.is_empty()) {
-        if let Some(t) = art_token(Some(a.source.as_str()), p) {
+        let artwork_source = a.artwork_source.as_deref().unwrap_or(a.source.as_str());
+        if let Some(t) = art_token(Some(artwork_source), p) {
             art.insert(key.clone(), t);
         }
     }
@@ -437,10 +476,13 @@ pub fn map_album(a: LocalAlbum, art: &mut HashMap<String, (SourceId, String)>) -
             .collect::<Vec<_>>()
     };
     sources.dedup();
+    let favoriteable = album_favorite_source(&sources).is_some();
+    let is_favorite = favoriteable && crate::library_qt::is_local_favorite("album", &a.id);
     AlbumRow {
         quality_tier: tier_of(&a.format, a.bit_depth, a.sample_rate).into(),
         quality_detail: detail_of(&a.format, a.bit_depth, a.sample_rate),
         format: a.format.to_string(),
+        genres: a.genres,
         year: a.year.map(|y| y.to_string()).unwrap_or_default(),
         duration: total_duration(a.total_duration_secs),
         track_count: a.track_count,
@@ -450,16 +492,47 @@ pub fn map_album(a: LocalAlbum, art: &mut HashMap<String, (SourceId, String)>) -
         source_raw,
         directory_path: a.directory_path,
         all_artists: a.all_artists,
+        artists,
         folder_count,
+        is_favorite,
+        favoriteable,
         id: a.id,
         title: a.title,
         artist: a.artist,
     }
 }
 
+/// Resolve the source word accepted by `local_favorites.db`. Prefer a real
+/// local copy when a logical album spans both local and Plex; both are valid,
+/// but the local snapshot remains usable if the server is later disconnected.
+pub fn album_favorite_source(sources: &[String]) -> Option<&'static str> {
+    if sources
+        .iter()
+        .any(|source| source.eq_ignore_ascii_case("local"))
+    {
+        Some("local")
+    } else if sources
+        .iter()
+        .any(|source| source.eq_ignore_ascii_case("plex"))
+    {
+        Some("plex")
+    } else {
+        None
+    }
+}
+
 pub fn map_track(t: &LocalTrack, art: &mut HashMap<String, (SourceId, String)>) -> TrackRow {
     let key = track_key(t.id);
-    if let Some(p) = t.artwork_path.as_ref().filter(|p| !p.is_empty()) {
+    if let Some(p) = t
+        .artwork_path
+        .as_ref()
+        .filter(|p| !p.is_empty())
+        .or_else(|| {
+            t.collection_artwork_path
+                .as_ref()
+                .filter(|p| !p.is_empty())
+        })
+    {
         if let Some(tok) = art_token(t.source.as_deref(), p) {
             art.insert(key.clone(), tok);
         }
@@ -477,6 +550,7 @@ pub fn map_track(t: &LocalTrack, art: &mut HashMap<String, (SourceId, String)>) 
         quality_tier: tier_of(&t.format, t.bit_depth, t.sample_rate).into(),
         quality_detail: detail_of(&t.format, t.bit_depth, t.sample_rate),
         format: t.format.to_string(),
+        genres: t.genres.clone(),
         year: t.year.map(|y| y.to_string()).unwrap_or_default(),
         art_key: key,
         art_path: String::new(),
@@ -490,4 +564,39 @@ pub fn map_track(t: &LocalTrack, art: &mut HashMap<String, (SourceId, String)>) 
 /// The bridge publishes strings, never structs.
 pub fn to_json<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::album_favorite_source;
+
+    fn sources(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_string()).collect()
+    }
+
+    #[test]
+    fn album_favorite_prefers_a_local_copy() {
+        assert_eq!(
+            album_favorite_source(&sources(&["plex", "jellyfin", "local"])),
+            Some("local")
+        );
+    }
+
+    #[test]
+    fn album_favorite_accepts_plex_only() {
+        assert_eq!(album_favorite_source(&sources(&["plex"])), Some("plex"));
+    }
+
+    #[test]
+    fn album_favorite_refuses_remote_and_offline_only() {
+        assert_eq!(
+            album_favorite_source(&sources(&[
+                "jellyfin",
+                "subsonic",
+                "qobuz_purchase",
+                "offline",
+            ])),
+            None
+        );
+    }
 }

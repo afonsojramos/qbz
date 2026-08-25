@@ -1,0 +1,304 @@
+// Settings > Local Library tab order. Same interaction as Discover's Home
+// configurator: live up/down reordering plus Reset, with no Save ceremony.
+// The first row is both the ordinary Local Library landing and the page shown
+// when an unauthenticated user chooses Start offline.
+
+import QtQuick
+import com.blitzfc.qbz
+import "../theme"
+
+Item {
+    id: root
+
+    property bool _open: false
+    property var draftOrder: []
+    readonly property var defaultOrder: ["genres", "albums", "artists", "folders", "tracks"]
+    readonly property bool opened: root._open
+
+    QbzTheme { id: theme }
+
+    function storedOrder() {
+        try {
+            var value = JSON.parse(QbzBridge.settingsJson).localTabOrder
+            if (Array.isArray(value) && value.length > 0) return value.slice()
+        } catch (e) { /* boot fallback below */ }
+        return root.defaultOrder.slice()
+    }
+
+    function labelFor(id) {
+        if (id === "albums") return QbzSession.tr("Albums", QbzSession.trRev)
+        if (id === "artists") return QbzSession.tr("Artists", QbzSession.trRev)
+        if (id === "folders") return QbzSession.tr("Folders", QbzSession.trRev)
+        if (id === "tracks") return QbzSession.tr("Tracks", QbzSession.trRev)
+        return QbzSession.tr("Library Explorer", QbzSession.trRev)
+    }
+
+    function iconFor(id) {
+        if (id === "albums") return "disc"
+        if (id === "artists") return "user"
+        if (id === "folders") return "folder"
+        if (id === "tracks") return "music"
+        return "music-note-slider"
+    }
+
+    function open() {
+        root.draftOrder = root.storedOrder()
+        root._open = true
+    }
+
+    function close() { root._open = false }
+
+    function publish(order) {
+        root.draftOrder = order
+        QbzBridge.settingsString("local-tab-order", JSON.stringify(order))
+    }
+
+    function move(index, delta) {
+        var nextIndex = index + delta
+        if (index < 0 || nextIndex < 0 || nextIndex >= root.draftOrder.length)
+            return
+        var next = root.draftOrder.slice()
+        var held = next[index]
+        next[index] = next[nextIndex]
+        next[nextIndex] = held
+        root.publish(next)
+    }
+
+    Connections {
+        target: QbzBridge
+        function onSettingsJsonChanged() {
+            if (root._open) root.draftOrder = root.storedOrder()
+        }
+    }
+
+    visible: root._open
+    enabled: root._open
+    z: 3100
+
+    Rectangle {
+        anchors.fill: parent
+        radius: theme.radiusMd
+        color: "#bf000000"
+        MouseArea {
+            anchors.fill: parent
+            onClicked: root.close()
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
+    }
+
+    Rectangle {
+        id: panel
+        width: Math.min(root.width - 80, 500)
+        height: panelCol.implicitHeight + 40
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        radius: theme.radiusMd
+        color: theme.surfaceCard
+        border.width: 1
+        border.color: theme.borderSubtle
+        clip: true
+
+        MouseArea {
+            anchors.fill: parent
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
+
+        Column {
+            id: panelCol
+            x: 20
+            y: 20
+            width: parent.width - 40
+            spacing: 14
+
+            Item {
+                width: parent.width
+                height: 28
+                Text {
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: QbzSession.tr("Local Library tabs", QbzSession.trRev)
+                    color: theme.textPrimary
+                    font.pixelSize: theme.fontHeading
+                    font.weight: theme.weightSemibold
+                }
+                Rectangle {
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 28
+                    height: 28
+                    radius: 6
+                    color: closeArea.containsMouse ? theme.surfaceHover : "transparent"
+                    QbzIcon {
+                        anchors.centerIn: parent
+                        name: "x"
+                        width: 17
+                        height: 17
+                        tintName: closeArea.containsMouse ? "textPrimary" : "muted"
+                    }
+                    MouseArea {
+                        id: closeArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.close()
+                    }
+                }
+            }
+
+            Text {
+                width: parent.width
+                text: QbzSession.tr("Reorder the Local Library tabs. The first tab opens by default and is shown when starting without a Qobuz session.", QbzSession.trRev)
+                color: theme.textSecondary
+                font.pixelSize: theme.fontBody
+                wrapMode: Text.WordWrap
+            }
+
+            Column {
+                width: parent.width
+                spacing: 2
+
+                Repeater {
+                    model: root.draftOrder
+
+                    delegate: Rectangle {
+                        id: tabRow
+                        required property string modelData
+                        required property int index
+                        width: parent.width
+                        height: 44
+                        radius: theme.radiusSm
+                        color: rowArea.containsMouse ? theme.surfaceHover : "transparent"
+
+                        MouseArea {
+                            id: rowArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                        }
+
+                        Row {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 6
+                            spacing: 10
+
+                            QbzIcon {
+                                anchors.verticalCenter: parent.verticalCenter
+                                name: root.iconFor(tabRow.modelData)
+                                width: 17
+                                height: 17
+                                tintName: tabRow.index === 0 ? "accent" : "secondary"
+                            }
+                            Text {
+                                width: Math.max(0, parent.width - 17 - defaultPill.width - 56 - 4 * 10)
+                                height: parent.height
+                                text: root.labelFor(tabRow.modelData)
+                                color: theme.textPrimary
+                                font.pixelSize: theme.fontBody
+                                font.weight: theme.weightMedium
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
+                            Rectangle {
+                                id: defaultPill
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: tabRow.index === 0
+                                width: visible ? defaultText.implicitWidth + 14 : 0
+                                height: 22
+                                radius: 11
+                                color: Qt.rgba(theme.accent.r, theme.accent.g,
+                                               theme.accent.b, 0.14)
+                                Text {
+                                    id: defaultText
+                                    anchors.centerIn: parent
+                                    text: QbzSession.tr("Default", QbzSession.trRev)
+                                    color: theme.accent
+                                    font.pixelSize: theme.fontLegal
+                                    font.weight: theme.weightSemibold
+                                }
+                            }
+                            ReorderButton {
+                                anchors.verticalCenter: parent.verticalCenter
+                                glyph: "chevron-up"
+                                buttonEnabled: tabRow.index > 0
+                                onClicked: root.move(tabRow.index, -1)
+                            }
+                            ReorderButton {
+                                anchors.verticalCenter: parent.verticalCenter
+                                glyph: "chevron-down"
+                                buttonEnabled: tabRow.index < root.draftOrder.length - 1
+                                onClicked: root.move(tabRow.index, 1)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: resetRow.width + 24
+                height: 34
+                radius: theme.radiusSm
+                color: resetArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
+                border.width: 1
+                border.color: theme.borderSubtle
+                Row {
+                    id: resetRow
+                    anchors.centerIn: parent
+                    spacing: 8
+                    QbzIcon {
+                        name: "rotate-ccw"
+                        width: 15
+                        height: 15
+                        anchors.verticalCenter: parent.verticalCenter
+                        tintName: "secondary"
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: QbzSession.tr("Reset to defaults", QbzSession.trRev)
+                        color: theme.textPrimary
+                        font.pixelSize: theme.fontBody
+                    }
+                }
+                MouseArea {
+                    id: resetArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        root.draftOrder = root.defaultOrder.slice()
+                        QbzBridge.settingsString("local-tab-order-reset", "")
+                    }
+                }
+            }
+        }
+    }
+
+    component ReorderButton: Rectangle {
+        id: reorderRoot
+        property string glyph: "chevron-up"
+        property bool buttonEnabled: true
+        signal clicked()
+
+        width: 28
+        height: 28
+        radius: theme.radiusSm
+        opacity: reorderRoot.buttonEnabled ? 1.0 : 0.3
+        color: reorderRoot.buttonEnabled && reorderArea.containsMouse
+            ? theme.surfaceHover : "transparent"
+
+        QbzIcon {
+            anchors.centerIn: parent
+            name: reorderRoot.glyph
+            width: 16
+            height: 16
+            tintName: "secondary"
+        }
+        MouseArea {
+            id: reorderArea
+            anchors.fill: parent
+            enabled: reorderRoot.buttonEnabled
+            hoverEnabled: reorderRoot.buttonEnabled
+            cursorShape: reorderRoot.buttonEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            onClicked: reorderRoot.clicked()
+        }
+    }
+}

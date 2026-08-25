@@ -84,6 +84,8 @@ Item {
         target: root.view
         function onArtistsGroupedChanged() { root.rebuild() }
         function onArtistsSearchChanged() { nativeQueryCoalescer.restart() }
+        function onArtistsSortChanged() { nativeQueryCoalescer.restart() }
+        function onArtistsFilterChanged() { nativeQueryCoalescer.restart() }
         function onSelectedArtistChanged() { detailQueryCoalescer.restart() }
         function onArtworkRefresh() { root.reportSoon() }
     }
@@ -107,7 +109,10 @@ Item {
         id: nativeQueryCoalescer
         interval: 0
         onTriggered: if (root.view)
-            QbzLocal.artistsNativeReset(root.view.artistsSearch)
+            QbzLocal.artistsNativeReset(
+                root.view.artistsSearch,
+                root.view.artistsSort,
+                JSON.stringify(root.view.artistsFilter || ({})))
     }
     Timer {
         id: detailQueryCoalescer
@@ -387,8 +392,12 @@ Item {
                     nativeJumpsJson: "[]"
                     onColsChanged: detailQueryCoalescer.restart()
                     onOpenRequested: function (id) { root.view.openAlbum(id) }
-                    onPlayRequested: function (id) { QbzLocal.playAlbum(id, false) }
-                    onEnqueueRequested: function (id, m) { QbzLocal.enqueue("album", id, m) }
+                    onPlayRequested: function (id) {
+                        QbzLocal.playAlbumFiltered(id, JSON.stringify(root.view.artistsFilter || {}), false)
+                    }
+                    onEnqueueRequested: function (id, m) {
+                        QbzLocal.enqueueAlbumFiltered(id, JSON.stringify(root.view.artistsFilter || {}), m)
+                    }
                 }
             }
         }

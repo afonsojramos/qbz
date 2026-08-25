@@ -62,12 +62,19 @@ Item {
     // Slint gates the Recommendations entry on SettingsState.show-recommendations
     // (discover_prefs `show_recommendations`, default ON) — the port publishes
     // it in QbzBridge.settingsJson.
-    readonly property bool showRecommendations: {
+    readonly property var settingsDoc: {
         try {
-            return JSON.parse(QbzBridge.settingsJson).showRecommendations !== false
+            return JSON.parse(QbzBridge.settingsJson)
         } catch (e) {
-            return true
+            return ({})
         }
+    }
+    readonly property bool showRecommendations:
+        nav.settingsDoc.showRecommendations !== false
+    readonly property var localTabOrder: {
+        var stored = nav.settingsDoc.localTabOrder
+        return Array.isArray(stored) && stored.length > 0
+            ? stored : ["genres", "albums", "artists", "folders", "tracks"]
     }
 
     // MyQBZ branding — `label` (user-editable in Settings > Appearance,
@@ -108,7 +115,8 @@ Item {
     // buildSections purely so the binding re-runs on a language switch
     // (QbzSession.trRev is the translation revision counter every other
     // tr() call site binds to).
-    readonly property var sections: buildSections(QbzSession.trRev, showRecommendations)
+    readonly property var sections:
+        buildSections(QbzSession.trRev, showRecommendations, localTabOrder)
 
     function trs(s) { return QbzSession.tr(s, QbzSession.trRev) }
 
@@ -121,7 +129,7 @@ Item {
     //                  `icon`"; a non-empty path is a user-supplied image
     //                  rendered raw by shell/NavSectionGlyph.qml. Only the
     //                  MyQBZ section can carry one. }
-    function buildSections(rev, reco) {
+    function buildSections(rev, reco, localOrder) {
         // Discover — glyph-less rows (Slint has-glyph: false).
         var discover = [
             { "label": nav.trs("Home"), "icon": "", "view": "home", "tab": "home", "enabled": true },
@@ -131,6 +139,40 @@ Item {
         if (reco) {
             discover.push({ "label": nav.trs("Recommendations"), "icon": "", "view": "home", "tab": "recommendations", "enabled": true })
         }
+        // Local Library's fixed surfaces have ONE authoritative user order.
+        // Build both flyout hosts from it, then append the ephemeral Open
+        // submenu: Open is an action/session, not a reorderable landing tab.
+        var localById = {
+            "albums": { "label": nav.trs("Albums"), "icon": "disc", "view": "local", "tab": "albums", "enabled": true },
+            "artists": { "label": nav.trs("Artists"), "icon": "user", "view": "local", "tab": "artists", "enabled": true },
+            "genres": { "label": nav.trs("Library Explorer"), "icon": "music-note-slider", "view": "local", "tab": "genres", "enabled": true },
+            "folders": { "label": QbzSession.offline ? nav.trs("Folder view") : nav.trs("Folders"),
+                         "icon": "folder", "view": "local", "tab": "folders", "enabled": true },
+            "tracks": { "label": nav.trs("Tracks"), "icon": "music", "view": "local", "tab": "tracks", "enabled": true }
+        }
+        var localEntries = []
+        var seenLocal = ({})
+        for (var li = 0; li < localOrder.length; li++) {
+            var localId = localOrder[li]
+            if (localById[localId] && seenLocal[localId] !== true) {
+                localEntries.push(localById[localId])
+                seenLocal[localId] = true
+            }
+        }
+        // Defensive completion for the construction-time/pre-migration frame.
+        var localFallback = ["genres", "albums", "artists", "folders", "tracks"]
+        for (var lf = 0; lf < localFallback.length; lf++) {
+            var fallbackId = localFallback[lf]
+            if (seenLocal[fallbackId] !== true)
+                localEntries.push(localById[fallbackId])
+        }
+        localEntries.push({
+            "label": QbzLocal.localEphemeralActive
+                         ? QbzLocal.localEphemeralLabel
+                         : (QbzSession.offline ? nav.trs("Open media") : nav.trs("Open")),
+            "icon": "folder-open", "view": "", "tab": "", "enabled": true,
+            "hasSubmenu": true, "submenu": nav.openMediaEntries()
+        })
         return [
             {
                 "id": "discover",
@@ -161,19 +203,7 @@ Item {
                 "label": nav.trs("Local Library"),
                 "qobuz": false,
                 "enabled": true,
-                "entries": [
-                    { "label": nav.trs("Albums"), "icon": "disc", "view": "local", "tab": "albums", "enabled": true },
-                    { "label": nav.trs("Artists"), "icon": "user", "view": "local", "tab": "artists", "enabled": true },
-                    { "label": nav.trs("Tracks"), "icon": "music", "view": "local", "tab": "tracks", "enabled": true },
-                    { "label": QbzSession.offline ? nav.trs("Folder view") : nav.trs("Folders"),
-                      "icon": "folder", "view": "local", "tab": "folders", "enabled": true },
-                    { "label": QbzLocal.localEphemeralActive
-                                   ? QbzLocal.localEphemeralLabel
-                                   : (QbzSession.offline ? nav.trs("Open media") : nav.trs("Open")),
-                      "icon": "folder-open", "view": "", "tab": "", "enabled": true,
-                      "hasSubmenu": true,
-                      "submenu": nav.openMediaEntries() }
-                ]
+                "entries": localEntries
             },
             {
                 "id": "myqbz",

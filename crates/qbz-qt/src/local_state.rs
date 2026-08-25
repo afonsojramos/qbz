@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use qbz_app::user_data::UserDataPaths;
 use qbz_library::{LibraryDatabase, LibraryError, LocalTrack};
@@ -45,6 +45,7 @@ pub struct TracksLoadRequest {
     pub query: String,
     pub sort: String,
     pub group: String,
+    pub filter: crate::local_filter::MediaFilter,
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +114,36 @@ pub struct LocalState {
     /// rationale as `tracks_raw`: a context-menu enqueue on a Plex detail row
     /// has no `local_tracks` id to re-query with.
     pub detail_raw: Vec<LocalTrack>,
+    /// The currently selected physical version for every album expanded by
+    /// Genres Details. Kept separate from the routed album pane so concurrent
+    /// expanded albums cannot clobber one another's row actions.
+    pub genre_detail_raw: HashMap<String, Vec<LocalTrack>>,
+    /// Unfiltered authoritative rows behind the same bounded detail cache.
+    /// Source/format/quality chip changes derive a new picker document from
+    /// these rows instead of re-querying every enabled backend.
+    pub genre_detail_all_tracks: HashMap<String, Arc<Vec<LocalTrack>>>,
+    /// Every physical version behind the same expanded albums. The QML
+    /// version picker changes `genre_detail_raw` from this cache, without a
+    /// DB round-trip and without retargeting another expanded album.
+    pub genre_detail_versions: HashMap<String, Vec<(String, Vec<LocalTrack>)>>,
+    /// Last serialized selected-version document for the same bounded set.
+    /// A Genres view destroyed by navigation can republish this immediately
+    /// instead of re-querying every authoritative source on Back.
+    pub genre_detail_docs: HashMap<String, String>,
+    /// Media funnel used to build each cached Genres detail. The album id
+    /// alone is insufficient because the same logical row can expose a
+    /// different set of physical versions after a source/filter change.
+    pub genre_detail_filters: HashMap<String, String>,
+    /// Requested (possibly in-flight) funnel per expanded album. This must be
+    /// separate from `genre_detail_filters`: marking an old document with the
+    /// new filter before its worker finished let a duplicate request publish
+    /// that stale document as a cache hit, so the version picker appeared not
+    /// to gain a newly enabled source.
+    pub genre_detail_requests: HashMap<String, String>,
+    /// Last version-selection request for each expanded album. Version
+    /// documents are serialized off the UI thread, so a quick A -> B -> A
+    /// sequence needs a per-album generation to keep B from publishing last.
+    pub genre_detail_version_generations: HashMap<String, u64>,
     pub tracks_offsets: TrackSourceOffsets,
     /// Search/sort generation. An older worker may not mutate or publish.
     pub tracks_generation: u64,
@@ -122,6 +153,7 @@ pub struct LocalState {
     /// (locallibrary_ui `tracks_group`). It is part of the immutable paged
     /// query: otherwise a later page can sort ahead of the visible prefix.
     pub tracks_group: String,
+    pub tracks_filter: String,
     pub tracks_has_more: bool,
     /// The FULL flattened tree (visible derivation applies the rail search).
     pub tree: Vec<TreeNode>,
@@ -169,6 +201,7 @@ pub fn state<R>(f: impl FnOnce(&mut LocalState) -> R) -> R {
             album_mode: prefs.albums_id_mode,
             tracks_sort: prefs.tracks_sort,
             tracks_group: prefs.tracks_group,
+            tracks_filter: prefs.tracks_filter,
             ..LocalState::default()
         }
     });
@@ -200,6 +233,8 @@ pub struct Prefs {
     pub tracks_group: String,
     #[serde(default = "d_default")]
     pub tracks_sort: String,
+    #[serde(default)]
+    pub tracks_filter: String,
     #[serde(default = "d_folder")]
     pub albums_id_mode: String,
     #[serde(default)]
@@ -221,6 +256,7 @@ impl Default for Prefs {
         Self {
             tracks_group: d_off(),
             tracks_sort: d_default(),
+            tracks_filter: String::new(),
             albums_id_mode: d_folder(),
             ephemeral_folder: None,
         }
@@ -314,7 +350,11 @@ pub fn group_mode() -> qbz_library::album_grouping::AlbumGroupMode {
 }
 
 pub fn set_album_mode(mode: &str) {
-    let mode = if mode == "metadata" { "metadata" } else { "folder" };
+    let mode = if mode == "metadata" {
+        "metadata"
+    } else {
+        "folder"
+    };
     state(|s| s.album_mode = mode.to_string());
     update_prefs(|p| p.albums_id_mode = mode.to_string());
     // The grouping IS the query: `LocalSource` resolves an album's tracks
@@ -362,6 +402,15 @@ pub fn tracks_query() -> String {
     state(|s| s.tracks_query.clone())
 }
 
+pub fn set_tracks_filter(json: &str) {
+    state(|s| s.tracks_filter = json.to_string());
+    update_prefs(|p| p.tracks_filter = json.to_string());
+}
+
+pub fn tracks_filter() -> String {
+    state(|s| s.tracks_filter.clone())
+}
+
 pub fn begin_tracks_load(reset: bool) -> TracksLoadRequest {
     state(|s| {
         if reset {
@@ -380,6 +429,7 @@ pub fn begin_tracks_load(reset: bool) -> TracksLoadRequest {
             query: s.tracks_query.clone(),
             sort: s.tracks_sort.clone(),
             group: s.tracks_group.clone(),
+            filter: crate::local_filter::MediaFilter::from_json(&s.tracks_filter),
         }
     })
 }
@@ -456,8 +506,7 @@ mod phase_a_tests {
     use std::sync::{mpsc, Arc};
 
     use super::{
-        library_sources_available, tracks_request_is_current, TrackSourceOffsets,
-        TracksLoadRequest,
+        library_sources_available, tracks_request_is_current, TrackSourceOffsets, TracksLoadRequest,
     };
 
     #[test]
@@ -481,6 +530,7 @@ mod phase_a_tests {
             query: "old".to_string(),
             sort: "title-asc".to_string(),
             group: "off".to_string(),
+            filter: Default::default(),
         };
         let old = std::thread::spawn(move || {
             old_started_tx.send(()).unwrap();
@@ -500,6 +550,7 @@ mod phase_a_tests {
             query: "new".to_string(),
             sort: "artist-asc".to_string(),
             group: "off".to_string(),
+            filter: Default::default(),
         };
         allow_old_finish_tx.send(()).unwrap();
 
@@ -562,6 +613,75 @@ mod phase_a_tests {
     }
 
     #[test]
+    fn genres_details_virtualizes_the_nested_box_set_rows() {
+        // The outer ListView is album-granular: a 150-track box is one visible
+        // delegate. A plain nested Repeater therefore creates every TrackRow,
+        // plus one hidden disc-header tree per track. Keep only cheap geometry
+        // items outside the viewport and instantiate controls in a look-ahead
+        // band. Menus are click-cold for the same reason.
+        let details = include_str!("../qml/views/local/LocalGenreDetails.qml");
+        let column = include_str!("../qml/views/local/LocalGenreColumn.qml");
+        let tab = include_str!("../qml/views/local/LocalGenresTab.qml");
+        let versions = include_str!("../qml/views/local/VersionPicker.qml");
+        let album_row = include_str!("../qml/views/local/LocalAlbumRow.qml");
+        assert!(details.contains("readonly property bool inViewportBand:"));
+        assert!(details.contains("active: trackBlock.showDisc && trackBlock.inViewportBand"));
+        assert!(details.contains("&& trackBlock.inViewportBand"));
+        assert!(!details.contains("visible: trackBlock.showDisc"));
+        // A cold album is one compact loading row. `trackCount` is metadata,
+        // never permission to reserve hundreds or thousands of blank pixels
+        // before the detail query has returned.
+        assert!(details.contains("readonly property int loadingBodyH: 50"));
+        assert!(details.contains("? (loaded"));
+        assert!(details.contains(": loadingBodyH)"));
+        // Cache-hit publication is deferred by the Rust bridge, so delegates
+        // can request synchronously. All remaining delayed work belongs to the
+        // view: those timers are cancelled when its Loader is destroyed and
+        // cannot retain a recycled delegate's QML context.
+        assert!(details.contains("function ensureCurrent()"));
+        assert!(details.contains("Component.onCompleted: ensureCurrent()"));
+        assert!(details.contains("id: ensureVisibleTimer"));
+        assert!(details.contains("id: reportTimer"));
+        assert!(details.contains("interval: 16"));
+        assert!(!details.contains("Qt.callLater"));
+        assert!(column.contains("interval: root.debounceMs"));
+        assert!(tab.contains("debounceMs: facetIndex === 2 ? 140 : 90"));
+        assert!(details.contains("maxConcurrentDetailRequests: 2"));
+        assert!(details.contains("maxConcurrentDetailRequests - currentPendingCount()"));
+        assert!(details.contains("property var detailFilters: ({})"));
+        assert!(details.contains("function stableFilterJson(value)"));
+        assert!(details.contains("detailFilters[albumId] === mediaFilterJson"));
+        assert!(details.contains("previousVersion.key === (nextVersion.key || \"\")"));
+        assert!(!details.contains("detailCache = ({})"));
+        let bridge = include_str!("local_bridge.rs");
+        assert!(bridge.contains("state.genre_detail_requests.get(&id) == Some(&filter_json)"));
+        assert!(bridge.contains("state.genre_detail_requests.remove(&request_id)"));
+        let bridge = include_str!("local_bridge.rs");
+        let cache_path = bridge
+            .split("pub fn genre_album_tracks")
+            .nth(1)
+            .and_then(|tail| tail.split("crate::spawn").next())
+            .expect("genre album cache-hit path");
+        assert!(cache_path.contains("queue_genre_album_ready(id, json, filter_json, \"cache-hit\", started)"));
+        assert!(!cache_path.contains("local_genre_album_ready"));
+        assert!(
+            details.contains("id: discMenuLoader\n                                active: false")
+        );
+        assert!(versions.contains("id: versionMenuLoader\n        active: false"));
+        assert!(album_row.contains("id: rowMenuLoader\n        active: false"));
+    }
+
+    #[test]
+    fn explicit_ephemeral_open_routes_globally_and_keeps_a_loading_surface() {
+        let router = include_str!("../qml/shell/ContentRouter.qml");
+        let pane = include_str!("../qml/views/local/LocalEphemeralPane.qml");
+        assert!(router.contains("function onLocalEphemeralOpenSeqChanged()"));
+        assert!(router.contains("QbzShell.navigateToTab(\"local\", \"ephemeral\")"));
+        assert!(pane.contains("visible: QbzLocal.localEphemeralLoading"));
+        assert!(pane.contains("variant: \"rowList\""));
+    }
+
+    #[test]
     fn explicit_remote_resync_is_authoritative() {
         // Jellyfin deltas cannot enumerate deleted/reminted provider ids. The
         // Local Library menu says "Resync", so both its direct rows and the
@@ -571,5 +691,12 @@ mod phase_a_tests {
         assert!(chrome.contains("QbzLocal.mediaSync(\"subsonic\", true)"));
         assert!(!chrome.contains("QbzLocal.mediaSync(\"jellyfin\", false)"));
         assert!(!chrome.contains("QbzLocal.mediaSync(\"subsonic\", false)"));
+    }
+
+    #[test]
+    fn genre_columns_use_the_shared_app_radius() {
+        let column = include_str!("../qml/views/local/LocalGenreColumn.qml");
+        assert!(column.contains("radius: theme.radiusSm"));
+        assert!(column.contains("clip: true"));
     }
 }

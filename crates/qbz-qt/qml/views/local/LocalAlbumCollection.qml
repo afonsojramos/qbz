@@ -104,7 +104,7 @@ Item {
     readonly property var emptySlot: ({
         "id": "", "title": "", "artist": "", "year": "",
         "qualityTier": "", "artKey": "", "source": "", "sourceRaw": "",
-        "sources": []
+        "sources": [], "isFavorite": false, "favoriteable": false
     })
 
     // ---------------------------------------------------------------------
@@ -223,10 +223,13 @@ Item {
         onTriggered: root.resetNativeQuery()
     }
     function scheduleNativeReset() {
-        if (nativeSurface && cols > 0) nativeQueryCoalescer.restart()
+        if (nativeSurface && cols > 0 && view
+                && view.albumsFilter.favorite !== true)
+            nativeQueryCoalescer.restart()
     }
     function resetNativeQuery() {
-        if (!nativeSurface || !view || cols <= 0) return
+        if (!nativeSurface || !view || cols <= 0
+                || view.albumsFilter.favorite === true) return
         QbzLocal.albumsNativeReset(
             view.albumsSearch,
             view.albumsSort,
@@ -433,44 +436,8 @@ Item {
                             width: 200
                             height: 246
 
-                            // Right-click menu for the card (AlbumCard.slint's
-                            // album-menu, local arm: no favourite, no Block —
-                            // the Slint hides Block for source local/plex).
-                            // The card's own ⋯ overlay button opens AlbumCard's
-                            // built-in menu; see the GLUE note about aligning
-                            // that one's entries with these.
-                            // LAZY, like AlbumCard's own. This cell carried a
-                            // SECOND popup on top of the card's, so a grid of
-                            // 1267 local albums paid two Popup constructions
-                            // per cell — and the ListView recycles a screenful
-                            // of cells on every scroll step, which is what the
-                            // owner reports as heavy scrolling here.
-                            Loader {
-                                id: cardMenuLoader
-                                active: false
-                                sourceComponent: CardMenu {
-                                    menuWidth: 196
-                                    entries: [
-                                        { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
-                                        { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                                        { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-                                        { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
-                                        { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-                                    ]
-                                    onPicked: function (a) {
-                                        if (a === "open") root.openRequested(cardCell.slot.id)
-                                        else if (a === "play") root.playRequested(cardCell.slot.id)
-                                        else root.enqueueRequested(cardCell.slot.id, a)
-                                    }
-                                }
-                            }
-                            /// Build the popup on first use, then open it.
-                            function openCardMenu(anchor, x, y) {
-                                cardMenuLoader.active = true
-                                cardMenuLoader.item.openAtCursor(anchor, x, y)
-                            }
-
                             AlbumCard {
+                                id: albumCard
                                 localMode: true
                                 albumId: cardCell.slot.id
                                 title: cardCell.slot.title
@@ -499,6 +466,14 @@ Item {
                                     || cardCell.slot.source
                                 sources: cardCell.slot.sources || []
                                 showSourceBadge: root.showSource
+                                hostFavorite: cardCell.slot.favoriteable === true
+                                isFavorite: root.view
+                                    ? root.view.albumFavorite(cardCell.slot)
+                                    : cardCell.slot.isFavorite === true
+                                onFavoriteRequested: if (root.view) {
+                                    root.view.toggleAlbumFavorite(
+                                        cardCell.slot, albumCard.artSource)
+                                }
                                 // SELECT MODE IS THE CARD'S (AlbumCard's
                                 // `selectMode`/`selected`/`selectToggled`, the
                                 // port of discover/AlbumCard.slint:83, :179-197,
@@ -565,7 +540,7 @@ Item {
                                 anchors.fill: parent
                                 acceptedButtons: Qt.RightButton
                                 onClicked: function (mouse) {
-                                    cardCell.openCardMenu(cardRc, mouse.x, mouse.y)
+                                    albumCard.openAlbumMenu(cardRc, mouse.x, mouse.y)
                                 }
                             }
                             // (The multi-select tick that used to sit here is
@@ -586,6 +561,9 @@ Item {
                     artSource: root.view
                         ? (modelData.items[0].artPath
                            || root.view.artMap[modelData.items[0].artKey] || "") : ""
+                    isFavorite: root.view
+                        ? root.view.albumFavorite(modelData.items[0])
+                        : modelData.items[0].isFavorite === true
                     showSource: root.showSource
                     selectMode: root.selectMode
                     checked: root.nativeActive
@@ -595,6 +573,9 @@ Item {
                     onPlayRequested: root.playRequested(modelData.items[0].id)
                     onEnqueueRequested: function (m) {
                         root.enqueueRequested(modelData.items[0].id, m)
+                    }
+                    onFavoriteRequested: if (root.view) {
+                        root.view.toggleAlbumFavorite(modelData.items[0], artSource)
                     }
                     onToggleSelect: function (mods) {
                         if (root.nativeActive)

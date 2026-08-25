@@ -224,10 +224,15 @@ pub(crate) fn reset() -> bool {
     let query = crate::local_state::tracks_query();
     let sort = parse_sort(&crate::local_state::tracks_sort());
     let group = parse_group(&crate::local_state::tracks_group());
+    let filter = crate::local_filter::MediaFilter::from_json(&crate::local_state::tracks_filter());
     let descriptor = QueryDescriptor::tracks()
         .with_search(query.clone())
         .with_sort(sort)
-        .with_group(group);
+        .with_group(group)
+        .with_formats(filter.formats)
+        .including_other_formats(filter.other_formats)
+        .with_quality_tiers(filter.qualities)
+        .with_source_buckets(filter.sources);
 
     *SESSION.lock().unwrap_or_else(|error| error.into_inner()) = None;
     if !query.is_empty() && query.chars().count() < 3 {
@@ -1177,6 +1182,7 @@ fn map_record(record: &TrackRecord, art: &mut HashMap<String, (SourceId, String)
             record.sample_rate_hz.unwrap_or(0) as f64,
         ),
         format: record.format.to_ascii_uppercase(),
+        genres: Vec::new(),
         year: record.year.map(|year| year.to_string()).unwrap_or_default(),
         art_key,
         art_path: String::new(),

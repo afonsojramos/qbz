@@ -72,8 +72,13 @@ fn playback() -> &'static PlaybackPreferencesState {
 }
 
 fn with_audio<T>(f: impl FnOnce(&AudioSettingsStore) -> Result<T, String>) -> Result<T, String> {
-    let guard = audio().store.lock().map_err(|_| "audio store lock poisoned".to_string())?;
-    let store = guard.as_ref().ok_or_else(|| "audio settings store not open".to_string())?;
+    let guard = audio()
+        .store
+        .lock()
+        .map_err(|_| "audio store lock poisoned".to_string())?;
+    let store = guard
+        .as_ref()
+        .ok_or_else(|| "audio settings store not open".to_string())?;
     f(store)
 }
 
@@ -432,7 +437,10 @@ pub fn streaming_quality() -> String {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|v| v.get("streaming_quality").and_then(|q| q.as_str().map(str::to_string)))
+        .and_then(|v| {
+            v.get("streaming_quality")
+                .and_then(|q| q.as_str().map(str::to_string))
+        })
         .unwrap_or_else(|| "hires_plus".to_string())
 }
 
@@ -630,7 +638,10 @@ pub fn shell_pulse_ms() -> i32 {
 /// the pane, and because a SCROLLING list invalidates it every frame — it is
 /// here to be measured, not assumed.
 pub fn pane_layer() -> bool {
-    matches!(std::env::var("QBZ_PANE_LAYER").as_deref(), Ok("1") | Ok("true"))
+    matches!(
+        std::env::var("QBZ_PANE_LAYER").as_deref(),
+        Ok("1") | Ok("true")
+    )
 }
 
 /// Offscreen render-target multiplier for the ambient field, QBZ_BG_SCALE.
@@ -732,7 +743,10 @@ pub fn npb_mode_index() -> i32 {
     let key = std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|v| v.get("npb_mode").and_then(|q| q.as_str().map(str::to_string)))
+        .and_then(|v| {
+            v.get("npb_mode")
+                .and_then(|q| q.as_str().map(str::to_string))
+        })
         .unwrap_or_else(|| "new".to_string());
     match key.as_str() {
         "classic" => 1,
@@ -1158,6 +1172,94 @@ pub fn pref_json(key: &str) -> Option<serde_json::Value> {
         .and_then(|v| v.get(key).cloned())
 }
 
+// ---------------------------------------------------------------------------
+// Local Library tab order + landing tab
+// ---------------------------------------------------------------------------
+
+/// The shipped Local Library order. The first entry is also the landing tab
+/// for a fresh Local Library mount and for an unauthenticated offline entry.
+///
+/// This preference is deliberately APP-WIDE (`ui_prefs.json`), not per-user:
+/// "Start offline" must resolve it before a Qobuz account exists. Unknown,
+/// duplicated and missing ids are normalized so a stale/future document can
+/// never make a tab disappear or leave the view without a valid landing.
+pub(crate) const LOCAL_TAB_DEFAULT_ORDER: &[&str] =
+    &["genres", "albums", "artists", "folders", "tracks"];
+
+/// Settings order is user-facing and therefore stable: Top remains index 0
+/// and the default, followed by the two sidebar positions and Bottom.
+const LOCAL_GENRE_FILTER_POSITION_VALUES: &[&str] = &["top", "right", "left", "bottom"];
+
+fn local_genre_filters_position_from(raw: &str) -> String {
+    LOCAL_GENRE_FILTER_POSITION_VALUES
+        .iter()
+        .copied()
+        .find(|value| *value == raw)
+        .unwrap_or("top")
+        .to_string()
+}
+
+pub(crate) fn local_genre_filters_position() -> String {
+    local_genre_filters_position_from(&pref_str("local_genre_filters_position", "top"))
+}
+
+fn normalize_local_tab_order(value: Option<&serde_json::Value>) -> Vec<String> {
+    let mut order = Vec::with_capacity(LOCAL_TAB_DEFAULT_ORDER.len());
+    if let Some(serde_json::Value::Array(items)) = value {
+        for id in items.iter().filter_map(serde_json::Value::as_str) {
+            if LOCAL_TAB_DEFAULT_ORDER.contains(&id) && !order.iter().any(|v| v == id) {
+                order.push(id.to_string());
+            }
+        }
+    }
+    for id in LOCAL_TAB_DEFAULT_ORDER {
+        if !order.iter().any(|v| v == id) {
+            order.push((*id).to_string());
+        }
+    }
+    order
+}
+
+pub(crate) fn local_tab_order() -> Vec<String> {
+    let value = pref_json("local_tab_order");
+    normalize_local_tab_order(value.as_ref())
+}
+
+/// First tab that the active shell can actually render. Desktop supports the
+/// full order; kiosk has no Genres column browser, so it takes the first of the
+/// remaining four instead of mounting a blank surface.
+pub(crate) fn local_landing_tab(kiosk: bool) -> String {
+    local_landing_tab_from(&local_tab_order(), kiosk)
+}
+
+fn local_landing_tab_from(order: &[String], kiosk: bool) -> String {
+    order
+        .into_iter()
+        .find(|id| !kiosk || id.as_str() != "genres")
+        .cloned()
+        .unwrap_or_else(|| "albums".to_string())
+}
+
+/// Construction-time seed for `QbzBridge.settingsJson`. NavFlyout and Local
+/// Library can be built before the asynchronous full settings snapshot lands;
+/// seeding this one boot-critical key prevents a default-order flash and makes
+/// the logged-off landing deterministic on the first frame.
+pub(crate) fn settings_seed_json() -> String {
+    serde_json::json!({ "localTabOrder": local_tab_order() }).to_string()
+}
+
+fn save_local_tab_order_payload(raw: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return false;
+    };
+    if !value.is_array() {
+        return false;
+    }
+    let order = normalize_local_tab_order(Some(&value));
+    save_pref("local_tab_order", serde_json::json!(order));
+    true
+}
+
 /// f32 reader WITH a default — same additive single-key discipline as
 /// `pref_bool`/`pref_str`/`pref_i32`. Added for the miniplayer geometry keys
 /// (`mini_width`/`mini_height`), which the Slint app declares as f32 and
@@ -1293,9 +1395,14 @@ const DSD_MODE_LABELS: &[&str] = &[
     "Native DSD (kernel support required)",
 ];
 const DSD_MODE_VALUES: &[&str] = &["convert", "dop", "native"];
-const ALSA_PLUGIN_LABELS: &[&str] = &["hw (Direct Hardware)", "plughw (Auto-convert)", "pcm (Most compatible)"];
+const ALSA_PLUGIN_LABELS: &[&str] = &[
+    "hw (Direct Hardware)",
+    "plughw (Auto-convert)",
+    "pcm (Most compatible)",
+];
 const ALSA_PLUGIN_VALUES: &[AlsaPlugin] = &[AlsaPlugin::Hw, AlsaPlugin::PlugHw, AlsaPlugin::Pcm];
-const RETRY_BEHAVIOR_LABELS: &[&str] = &["Ask me", "Always try lowest quality", "Always skip track"];
+const RETRY_BEHAVIOR_LABELS: &[&str] =
+    &["Ask me", "Always try lowest quality", "Always skip track"];
 const RETRY_BEHAVIOR_VALUES: &[&str] = &["ask", "always_fallback", "always_skip"];
 const QCONNECT_STARTUP_LABELS: &[&str] = &["Remember state", "On by default", "Off by default"];
 const QCONNECT_STARTUP_VALUES: &[&str] = &["remember_last", "on", "off"];
@@ -1303,7 +1410,14 @@ const QCONNECT_STARTUP_VALUES: &[&str] = &["remember_last", "on", "off"];
 const APP_BACKGROUND_LABELS: &[&str] = &["Off", "Ambient", "Blurred art"];
 const APP_BACKGROUND_VALUES: &[&str] = &["off", "ambient", "blurred"];
 const LANGUAGE_LABELS: &[&str] = &[
-    "Auto", "English", "Español", "Français", "Deutsch", "Português", "Русский", "日本語",
+    "Auto",
+    "English",
+    "Español",
+    "Français",
+    "Deutsch",
+    "Português",
+    "Русский",
+    "日本語",
     "Nederlands",
 ];
 const LANGUAGE_VALUES: &[&str] = &["auto", "en", "es", "fr", "de", "pt", "ru", "ja", "nl"];
@@ -1362,22 +1476,50 @@ pub fn app_font_family() -> String {
         .unwrap_or(&"")
         .to_string()
 }
-const IMMERSIVE_SEARCH_LABELS: &[&str] =
-    &["Disabled", "Replace current queue", "Play next", "Add to queue"];
+const IMMERSIVE_SEARCH_LABELS: &[&str] = &[
+    "Disabled",
+    "Replace current queue",
+    "Play next",
+    "Add to queue",
+];
 const IMMERSIVE_SEARCH_VALUES: &[&str] = &["disabled", "replace", "next", "queue"];
-const IMMERSIVE_VIEW_LABELS: &[&str] =
-    &["Remember last", "Album Reactive", "Static", "Coverflow", "Spectrum", "Lyrics", "Queue"];
-const IMMERSIVE_VIEW_VALUES: &[&str] =
-    &["remember", "reactive", "static", "coverflow", "spectrum", "lyrics", "queue"];
-const MINI_VIEW_LABELS: &[&str] =
-    &["Remember last used", "Micro", "Compact", "Artwork", "Queue", "Lyrics"];
+const IMMERSIVE_VIEW_LABELS: &[&str] = &[
+    "Remember last",
+    "Album Reactive",
+    "Static",
+    "Coverflow",
+    "Spectrum",
+    "Lyrics",
+    "Queue",
+];
+const IMMERSIVE_VIEW_VALUES: &[&str] = &[
+    "remember",
+    "reactive",
+    "static",
+    "coverflow",
+    "spectrum",
+    "lyrics",
+    "queue",
+];
+const MINI_VIEW_LABELS: &[&str] = &[
+    "Remember last used",
+    "Micro",
+    "Compact",
+    "Artwork",
+    "Queue",
+    "Lyrics",
+];
 const MINI_VIEW_VALUES: &[&str] = &["remember", "micro", "compact", "artwork", "queue", "lyrics"];
 const STARTUP_PAGE_LABELS: &[&str] = &["Home", "Where you left off"];
 const STARTUP_PAGE_VALUES: &[&str] = &["home", "remember"];
 const WC_POSITION_LABELS: &[&str] = &["Left", "Right"];
 const WC_POSITION_VALUES: &[&str] = &["left", "right"];
-const RENDERER_LABELS: &[&str] =
-    &["Auto (recommended)", "GPU", "GPU (compatibility)", "Software"];
+const RENDERER_LABELS: &[&str] = &[
+    "Auto (recommended)",
+    "GPU",
+    "GPU (compatibility)",
+    "Software",
+];
 const RENDERER_VALUES: &[&str] = &["auto", "wgpu", "gl", "software"];
 const TRAY_ICON_LABELS: &[&str] = &["Auto", "Mono light", "Mono dark", "Color"];
 const TRAY_ICON_VALUES: &[&str] = &["auto", "mono-light", "mono-dark", "color"];
@@ -1608,6 +1750,12 @@ pub struct SettingsDoc {
     /// the section's flyout and the user picks a tab from it.
     #[serde(rename = "navClickFirstTab")]
     pub nav_click_first_tab: bool,
+    /// Authoritative Local Library tab order. First = default landing.
+    #[serde(rename = "localTabOrder")]
+    pub local_tab_order: Vec<String>,
+    /// Where the Genres three-stage browser sits around its album results.
+    #[serde(rename = "genreFiltersPosition")]
+    pub genre_filters_position: String,
     pub renderers: Vec<String>,
     #[serde(rename = "rendererIndex")]
     pub renderer_index: i32,
@@ -1924,10 +2072,7 @@ pub async fn publish_snapshot() {
             backend_is_jack: active_backend == AudioBackendType::Jack,
             devices,
             device_index: device_index as i32,
-            alsa_plugins: ALSA_PLUGIN_LABELS
-                .iter()
-                .map(|l| qbz_i18n::t(l))
-                .collect(),
+            alsa_plugins: ALSA_PLUGIN_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             alsa_plugin_index: alsa_plugin_index as i32,
             alsa_plugin_is_hw: alsa_plugin == AlsaPlugin::Hw,
             alsa_hardware_volume: audio_settings.alsa_hardware_volume,
@@ -2002,7 +2147,13 @@ pub async fn publish_snapshot() {
             app_fonts: APP_FONT_LABELS
                 .iter()
                 .enumerate()
-                .map(|(i, l)| if i == 0 { qbz_i18n::t(l) } else { (*l).to_string() })
+                .map(|(i, l)| {
+                    if i == 0 {
+                        qbz_i18n::t(l)
+                    } else {
+                        (*l).to_string()
+                    }
+                })
                 .collect(),
             app_font_index: app_font_index(),
             immersive_search_actions: IMMERSIVE_SEARCH_LABELS
@@ -2036,30 +2187,23 @@ pub async fn publish_snapshot() {
             window_title_show: pref_bool("window_title_show", false),
             use_system_title_bar: use_system_title_bar(),
             hide_title_bar: pref_bool("hide_title_bar", false),
-            wc_positions: WC_POSITION_LABELS
-                .iter()
-                .map(|l| qbz_i18n::t(l))
-                .collect(),
+            wc_positions: WC_POSITION_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             wc_position_index: index_of(WC_POSITION_VALUES, &pref_str("wc_position", "right"), 1),
             show_window_controls: pref_bool("show_window_controls", true),
             show_volume_steppers: pref_bool("show_volume_steppers", false),
-            mini_default_views: MINI_VIEW_LABELS
-                .iter()
-                .map(|l| qbz_i18n::t(l))
-                .collect(),
+            mini_default_views: MINI_VIEW_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             mini_default_view_index: index_of(
                 MINI_VIEW_VALUES,
                 &pref_str("mini_default_view", "remember"),
                 0,
             ),
-            startup_pages: STARTUP_PAGE_LABELS
-                .iter()
-                .map(|l| qbz_i18n::t(l))
-                .collect(),
+            startup_pages: STARTUP_PAGE_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             startup_page_index: index_of(STARTUP_PAGE_VALUES, &pref_str("startup_page", "home"), 0),
             show_purchases: pref_bool("show_purchases", false),
             nav_tb_purchases: pref_bool("nav_tb_purchases", false),
             nav_click_first_tab: pref_bool("nav_click_first_tab", false),
+            local_tab_order: local_tab_order(),
+            genre_filters_position: local_genre_filters_position(),
             renderers: RENDERER_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             renderer_index: index_of(RENDERER_VALUES, &pref_str("renderer", "auto"), 0),
             gpu_powers: gpu_power_choice().0,
@@ -2093,10 +2237,7 @@ pub async fn publish_snapshot() {
                 .map(|t| t.mac_hide_dock)
                 .unwrap_or(false),
             is_macos: cfg!(target_os = "macos"),
-            tray_icon_themes: TRAY_ICON_LABELS
-                .iter()
-                .map(|l| qbz_i18n::t(l))
-                .collect(),
+            tray_icon_themes: TRAY_ICON_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             tray_icon_theme_index: tray()
                 .get_settings()
                 .map(|t| index_of(TRAY_ICON_VALUES, &t.tray_icon_theme, 0))
@@ -2207,15 +2348,11 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         "alsa-hardware-volume" => {
             with_audio(|s| s.set_alsa_hardware_volume(value)).map(|_| Apply::Reinit)
         }
-        "exclusive-mode" => {
-            with_audio(|s| s.set_exclusive_mode(value)).map(|_| Apply::Reinit)
-        }
+        "exclusive-mode" => with_audio(|s| s.set_exclusive_mode(value)).map(|_| Apply::Reinit),
         "reserve-dac" => {
             with_audio(|s| s.set_reserve_dac_while_running(value)).map(|_| Apply::Reload)
         }
-        "dac-passthrough" => {
-            with_audio(|s| s.set_dac_passthrough(value)).map(|_| Apply::Reinit)
-        }
+        "dac-passthrough" => with_audio(|s| s.set_dac_passthrough(value)).map(|_| Apply::Reinit),
         "pw-force-bitperfect" => {
             with_audio(|s| s.set_pw_force_bitperfect(value)).map(|_| Apply::Reload)
         }
@@ -2225,19 +2362,13 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         "sync-audio-on-startup" => {
             with_audio(|s| s.set_sync_audio_on_startup(value)).map(|_| Apply::Reload)
         }
-        "skip-sink-switch" => {
-            with_audio(|s| s.set_skip_sink_switch(value)).map(|_| Apply::Reinit)
-        }
+        "skip-sink-switch" => with_audio(|s| s.set_skip_sink_switch(value)).map(|_| Apply::Reinit),
         "gapless" => with_audio(|s| s.set_gapless_enabled(value)).map(|_| Apply::Reload),
         "normalization" => {
             with_audio(|s| s.set_normalization_enabled(value)).map(|_| Apply::Reload)
         }
-        "stream-uncached" => {
-            with_audio(|s| s.set_stream_first_track(value)).map(|_| Apply::Reload)
-        }
-        "streaming-only" => {
-            with_audio(|s| s.set_streaming_only(value)).map(|_| Apply::Reload)
-        }
+        "stream-uncached" => with_audio(|s| s.set_stream_first_track(value)).map(|_| Apply::Reload),
+        "streaming-only" => with_audio(|s| s.set_streaming_only(value)).map(|_| Apply::Reload),
         "continue-playback" => {
             let mode = if value {
                 AutoplayMode::ContinueWithinSource
@@ -2447,15 +2578,11 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         "scrobble-collapse" => {
             crate::integrations_qt::set_scrobble_collapsed(value).map(|_| Apply::None)
         }
-        "lastfm-enable" => {
-            crate::integrations_qt::set_lastfm_enabled(value).map(|_| Apply::None)
-        }
+        "lastfm-enable" => crate::integrations_qt::set_lastfm_enabled(value).map(|_| Apply::None),
         "listenbrainz-enable" => {
             crate::integrations_qt::set_listenbrainz_enabled(value).map(|_| Apply::None)
         }
-        "discord-rpc" => {
-            crate::integrations_qt::set_discord_enabled(value).map(|_| Apply::None)
-        }
+        "discord-rpc" => crate::integrations_qt::set_discord_enabled(value).map(|_| Apply::None),
         // --- Offline -------------------------------------------------------
         // Induced offline. The engine takes the #279 stream-first snapshot,
         // so the audio settings can change under us -> Reload the player.
@@ -2595,7 +2722,11 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             let Some(id) = id else {
                 return;
             };
-            let device_opt = if id.is_empty() { None } else { Some(id.as_str()) };
+            let device_opt = if id.is_empty() {
+                None
+            } else {
+                Some(id.as_str())
+            };
             if let Err(e) = with_audio(|s| s.set_output_device(device_opt)) {
                 log::error!("[qbz-qt] persist output device failed: {e}");
                 return;
@@ -2720,6 +2851,12 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             };
             save_pref("startup_page", serde_json::json!(v));
         }
+        "genre-filters-position" => {
+            let Some(v) = LOCAL_GENRE_FILTER_POSITION_VALUES.get(index) else {
+                return;
+            };
+            save_pref("local_genre_filters_position", serde_json::json!(v));
+        }
         "renderer" => {
             let Some(v) = RENDERER_VALUES.get(index) else {
                 return;
@@ -2818,6 +2955,15 @@ pub async fn settings_string(key: &str, value: String) {
             return;
         }
         // --- Local Library -------------------------------------------------
+        "local-tab-order" => {
+            if !save_local_tab_order_payload(&value) {
+                log::warn!("[qbz-qt] rejected malformed Local Library tab order");
+            }
+        }
+        "local-tab-order-reset" => save_pref(
+            "local_tab_order",
+            serde_json::json!(LOCAL_TAB_DEFAULT_ORDER),
+        ),
         "library-add-folder" => library::add_folder(value).await,
         // --- Per-folder settings modal (LibFolderEditModal) ------------------
         "library-folder-edit-open" => {
@@ -3094,4 +3240,49 @@ fn qconnect_default_name() -> String {
             .unwrap_or_else(|| "device".to_string());
         format!("Qbz - {host}")
     })
+}
+
+#[cfg(test)]
+mod local_tab_order_tests {
+    use super::*;
+
+    #[test]
+    fn absent_or_invalid_order_uses_the_complete_default() {
+        let expected: Vec<String> = LOCAL_TAB_DEFAULT_ORDER
+            .iter()
+            .map(|id| (*id).to_string())
+            .collect();
+        assert_eq!(normalize_local_tab_order(None), expected);
+        assert_eq!(
+            normalize_local_tab_order(Some(&serde_json::json!("albums"))),
+            expected
+        );
+    }
+
+    #[test]
+    fn stored_order_deduplicates_filters_and_appends_missing_tabs() {
+        let value = serde_json::json!(["tracks", "future-tab", "tracks", "albums", 7, "artists"]);
+        assert_eq!(
+            normalize_local_tab_order(Some(&value)),
+            ["tracks", "albums", "artists", "genres", "folders"]
+        );
+    }
+
+    #[test]
+    fn kiosk_fallback_contract_always_has_a_supported_tab() {
+        let normalized = normalize_local_tab_order(Some(&serde_json::json!([
+            "genres", "folders", "albums", "artists", "tracks"
+        ])));
+        assert_eq!(local_landing_tab_from(&normalized, false), "genres");
+        assert_eq!(local_landing_tab_from(&normalized, true), "folders");
+    }
+
+    #[test]
+    fn genre_filter_position_is_closed_and_defaults_to_top() {
+        for value in LOCAL_GENRE_FILTER_POSITION_VALUES {
+            assert_eq!(local_genre_filters_position_from(value), *value);
+        }
+        assert_eq!(local_genre_filters_position_from("future-edge"), "top");
+        assert_eq!(local_genre_filters_position_from(""), "top");
+    }
 }

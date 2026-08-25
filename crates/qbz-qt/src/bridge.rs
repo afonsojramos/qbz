@@ -45,7 +45,6 @@ pub mod qbz_bridge {
         // Blacklist. This is Slint's `SettingsState.section`, which is a global
         // for the same reason (SettingsView.slint:121-200).
         #[qproperty(i32, settings_section)]
-
         // --- Search: MOVED (cortinilla-parity contract C0) -----------------
         // cortinilla_* + search_json + intelligent_search -> QbzSearch
         // (search_bridge.rs). `selected_index` was RENAMED on the way out to
@@ -57,7 +56,6 @@ pub mod qbz_bridge {
         // ONE JSON document (playlist_qt.rs PlaylistDoc: header + track
         // rows + ownership/follow/pin/sort/search state).
         #[qproperty(QString, playlist_json)]
-
         // --- Filter by genre (shared, per context) -------------------------
         // ONE JSON document (genre_filter_qt.rs FilterDoc): the popup model
         // (chips / tree / remember / advanced / loading) PLUS the per-context
@@ -66,12 +64,10 @@ pub mod qbz_bridge {
         // "discover", server-side via get_discover_index) and Library > All
         // (context "library-all", client-side over the feed).
         #[qproperty(QString, genre_filter_json)]
-
         // --- Discover section configurator (the toolbar gear) --------------
         // ONE JSON document (discover_config_qt.rs ConfigDoc: the active
         // tab's ordered rows + enabled/total counts).
         #[qproperty(QString, discover_config_json)]
-
         type QbzBridge = super::QbzBridgeRust;
 
         /// TEMP (phase 23 split): registers the QbzBridge Qt-thread
@@ -244,16 +240,18 @@ pub struct QbzBridgeRust {
 impl Default for QbzBridgeRust {
     fn default() -> Self {
         Self {
-            settings_json: QString::from("{}"),
+            // The Local Library order is boot-critical: NavFlyout and a
+            // logged-off shell can mount before the async full settings
+            // snapshot. Seed that global pref synchronously so their first
+            // frame already has the user's real landing tab.
+            settings_json: QString::from(crate::settings_qt::settings_seed_json().as_str()),
             // 0 = Audio, the section Settings opens on.
             settings_section: 0,
             playlist_json: QString::from("{}"),
             // Seeded from the PERSISTED selection (no network): a remembered
             // filter colors both genre buttons and narrows the Library feed
             // before the popup has ever been opened.
-            genre_filter_json: QString::from(
-                crate::genre_filter_qt::current_json().as_str(),
-            ),
+            genre_filter_json: QString::from(crate::genre_filter_qt::current_json().as_str()),
             // Seeded for the tab Discover mounts on.
             discover_config_json: QString::from(
                 crate::discover_config_qt::rows_json("home").as_str(),
@@ -415,7 +413,12 @@ impl qbz_bridge::QbzBridge {
         crate::discover_config_qt::toggle_section(&tab.to_string(), &section_id.to_string());
     }
 
-    pub fn discover_move_section(self: Pin<&mut Self>, tab: QString, section_id: QString, dir: i32) {
+    pub fn discover_move_section(
+        self: Pin<&mut Self>,
+        tab: QString,
+        section_id: QString,
+        dir: i32,
+    ) {
         crate::discover_config_qt::move_section(&tab.to_string(), &section_id.to_string(), dir);
     }
 

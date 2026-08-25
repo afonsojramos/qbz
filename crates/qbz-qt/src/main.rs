@@ -20,11 +20,11 @@ mod auth_qt;
 //      object's Qt event loop (no-op pre-registration).
 // All singletons live in the SAME QML module (com.blitzfc.qbz); the
 // invokables stay one-line forwards into the domain controllers below.
-mod session_bridge;
-mod shell_bridge;
+mod home_bridge;
 mod player_bridge;
 mod queue_bridge;
-mod home_bridge;
+mod session_bridge;
+mod shell_bridge;
 mod viz_bridge;
 // Immersive mode (2026-08-02 immersive-port contract, block B1): the
 // QbzImmersive singleton (§3) — open funnel + view persistence + the §3.4
@@ -47,32 +47,32 @@ mod search_bridge;
 // + blocking mappers shared by the desktop and immersive dropdowns.
 mod search_local;
 // Instant cached paint for the cortinilla (contract C11, rulings R1+R6).
-mod search_cache_qt;
-mod local_bridge;
-mod library_bridge;
 mod album_bridge;
 mod artist_bridge;
+mod cast_bridge;
+mod library_bridge;
+mod local_bridge;
 mod musician_bridge;
 mod scene_bridge;
-mod cast_bridge;
+mod search_cache_qt;
 // MyQBZ splits across THREE singletons rather than one, because the two
 // modals are global overlays with their own lifetime: QbzMyQbz carries the
 // two grids + the detail page + the edit/mix modals + the branding,
 // QbzMyQbzAdd carries only the app-wide "Add to Mixtape/Collection" picker
 // (mounted in AppShell, reachable from any view's row menu), and QbzDisco
 // carries the Artist-Collection builder.
-mod myqbz_bridge;
-mod myqbz_add_bridge;
-mod disco_bridge;
 mod blacklist_bridge;
+mod disco_bridge;
+mod myqbz_add_bridge;
+mod myqbz_bridge;
 mod playlist_picker_bridge;
 // Playlist Manager. THREE singletons, not one (contract D2): the manager
 // document + folder list + organisation writes here, the folder modals on
 // QbzFolderEdit and the shared playlist editor on QbzPlaylistEdit — so a
 // folder save cannot perturb an open playlist editor.
-mod playlist_manager_bridge;
 mod folder_edit_bridge;
 mod playlist_edit_bridge;
+mod playlist_manager_bridge;
 // Purchases (2026-08-15 purchases contract §G.1): the QbzPurchases singleton —
 // two documents (list + album detail) and a publish counter. Its controller
 // half is `purchases_qt` below, a PLAIN module. This file DOES belong in
@@ -113,13 +113,13 @@ mod mini_bridge;
 // System tray (the same contract, block B5): the QbzTray singleton — the
 // window verbs' Qt-thread hop. Its controllers are `tray_qt` (portable) and
 // `tray_linux` (the ksni item), both PLAIN modules below.
-mod tray_bridge;
 mod kiosk_nav_qt;
+mod tray_bridge;
 // The kiosk profile itself (the same contract, §8): env/pref resolution, the
 // live Kiosk <-> Desktop toggle, and the boot decisions that follow from it.
-mod kiosk_profile_qt;
 mod artwork_qt;
 mod atmosphere_qt;
+mod kiosk_profile_qt;
 // THE audible step (design 02 §9 stage 3): one exhaustive match over
 // `qbz_source::PlaybackTicket`, replacing the three drifted copies of
 // `play_audible` that each matched on `track.source` by hand.
@@ -134,11 +134,11 @@ mod media_servers_qt;
 // The library sweep. Lives in the frontend because it needs the tokio runtime
 // and a channel to the progress UI; it writes through the cache handle the
 // SOURCE owns, so sweep and reads can never point at different users.
-mod media_sync_qt;
 mod custom_theme_qt;
 mod diagnostics_qt;
 mod discover_config_qt;
 mod fav_cache_qt;
+mod media_sync_qt;
 // The folder-modal controller. A plain module — it declares no
 // #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
 mod folder_edit_qt;
@@ -154,12 +154,12 @@ mod dac_wizard_qt;
 // what may be offered because of it (the Qt analogue of Slint's
 // `use_gpu_renderer`). A plain module: it declares no #[cxx_qt::bridge], so it
 // must NOT appear in build.rs's rust_files.
-mod renderer_qt;
 mod foryou_qt;
 mod genre_filter_qt;
 mod home_qt;
 mod icon_tint_qt;
 mod recently_qt;
+mod renderer_qt;
 // The in-app log viewer over `qbz_log::ring` — the read surface that turns
 // "Share logs" from an `open::that(path)` handoff into a filterable view with
 // copy / bundle / upload.
@@ -169,18 +169,19 @@ mod log_viewer_qt;
 // other two are plain controller modules and must NOT be.
 mod about_bridge;
 mod about_qt;
-mod whats_new_qt;
-mod recommendations_qt;
-mod library_db_qt;
-mod library_qt;
 mod library_bulk;
+mod library_db_qt;
 mod library_prefs;
+mod library_qt;
 mod library_sidepanel;
-mod local_library_qt;
 mod local_artist_match;
+mod local_catalog_qt;
+mod local_filter;
+mod local_library_qt;
 mod local_rows;
 mod local_state;
-mod local_catalog_qt;
+mod recommendations_qt;
+mod whats_new_qt;
 // Watcher hints + periodic root reconciliation for the incremental scanner.
 mod local_scan_maintenance_qt;
 // Native bounded Tracks QAbstractListModel + catalog query controller (phase E).
@@ -195,37 +196,37 @@ mod local_plex;
 // Check-connection ping. Over `qbz_plex`'s existing pin/start, pin/check and
 // ping calls — the protocol was always in the shared crate, only the glue was
 // missing.
-mod plex_pin_qt;
+mod local_album_actions;
 mod local_albums;
-mod local_tree;
 mod local_artwork;
-mod local_playback;
-mod local_playlist_qt;
 mod local_bridge_ops;
 mod local_bulk;
 mod local_ephemeral;
-mod local_album_actions;
+mod local_playback;
+mod local_playlist_qt;
+mod local_tree;
+mod plex_pin_qt;
 // MyQBZ domain controllers. One module per concern, all driven by the three
 // bridges above: the grids + Create modal (myqbz_qt), the per-user branding
 // and per-collection view prefs (myqbz_prefs_qt), the detail page
 // (myqbz_detail_qt) and its playback / edit / cover / DJ-mix arms, the
 // app-wide Add picker (myqbz_add_qt) and the Artist-Collection builder
 // (myqbz_builder_qt + its Qobuz/local/Plex fetchers).
-mod myqbz_qt;
-mod myqbz_prefs_qt;
-mod myqbz_detail_qt;
-mod myqbz_play_qt;
-mod myqbz_edit_qt;
-mod myqbz_cover_qt;
-mod myqbz_mix_qt;
 mod myqbz_add_qt;
-mod myqbz_builder_qt;
 mod myqbz_builder_fetch_qt;
+mod myqbz_builder_qt;
+mod myqbz_cover_qt;
+mod myqbz_detail_qt;
+mod myqbz_edit_qt;
+mod myqbz_mix_qt;
+mod myqbz_play_qt;
+mod myqbz_prefs_qt;
+mod myqbz_qt;
 // Blacklist: the per-user store (artist_blacklist), the Recommendations
 // dismissal store (reco_dismiss_qt) and the manager view's controller.
 mod artist_blacklist;
-mod reco_dismiss_qt;
 mod blacklist_qt;
+mod reco_dismiss_qt;
 // Artist page per-section release sort, persisted by release_type. Co-owns
 // `<data-dir>/qbz/artist_ui.json` with the Slint's crates/qbz/src/artist_prefs.rs
 // exactly the way library_prefs co-owns favorites_ui.json.
@@ -245,52 +246,52 @@ mod toast_qt;
 // Share links + the system clipboard (the port of crates/qbz/src/share.rs).
 // A plain module, NOT a bridge — the artist header's ⋯ → Share reaches it
 // through QbzArtist.share (artist_bridge.rs).
-mod share_qt;
-mod nav_qt;
 mod browse_qt;
 mod cast_qt;
 mod cdda_qt;
-mod sacd_qt;
 mod disc_identity;
 mod disc_meta_bridge;
 mod disc_meta_qt;
-mod tag_editor_bridge;
-mod tag_editor_qt;
-mod rip_qt;
-mod rip_wizard_qt;
 mod label_qt;
+mod nav_qt;
 mod now_playing;
+mod offline_fwd;
 mod output_labels;
 mod quality_qt;
 mod quality_state;
-mod offline_fwd;
+mod rip_qt;
+mod rip_wizard_qt;
+mod sacd_qt;
+mod share_qt;
+mod tag_editor_bridge;
+mod tag_editor_qt;
 // Offline cache (downloads tier): state activation on login + the action
 // set. offline_fwd.rs is the offline MODE (connectivity); these two are the
 // user-managed download cache (see AGENTS.md's caching-model note).
-mod offline_qt;
 mod offline_cache_qt;
-mod offline_manager_qt;
 mod offline_manager_bridge;
+mod offline_manager_qt;
+mod offline_qt;
 // Shared multi-select bulk actions for Qobuz track listings (playlist,
 // artist, label — the album page has its own album-ordered variant).
-mod bulk_tracks_qt;
 mod album_qt;
 mod award_qt;
+mod bulk_tracks_qt;
 mod track_info_qt;
 // Album Info (Credits/Review) modal controller — info_modals.rs port.
 mod album_info_qt;
 // Album custom covers + cover file actions — the album half of the Slint
 // `custom_artwork.rs` store (SAME json file, shared between both apps).
+mod ambient_qt;
 mod cover_artwork_qt;
 mod external_reco_qt;
-mod ambient_qt;
 // Tunnel Flow scene (B1, 2026-08-15 immersive-completion contract): the
 // Tauri line-palette extraction, published on QbzShaderScene per track.
-mod tunnelflow_qt;
 mod artist_qt;
 mod lyrics_qt;
 mod playback_qt;
 mod playlist_picker_qt;
+mod tunnelflow_qt;
 // Playlist Importer controller (the `qbz-playlist-import` crate's frontend
 // half). Plain module — it declares no #[cxx_qt::bridge], so it must NOT
 // appear in build.rs's rust_files.
@@ -302,8 +303,8 @@ mod playlist_import_qt;
 // #[cxx_qt::bridge], so they must NOT appear in build.rs's rust_files.
 mod playlist_manager_ops;
 mod playlist_manager_qt;
-mod playlist_snapshot_qt;
 mod playlist_manager_rows;
+mod playlist_snapshot_qt;
 // The SHARED playlist editor's controller (rename · description ·
 // offline-only · delete), driven from the manager's three delegates, the
 // sidebar row menu and the playlist detail header. Plain module — it declares
@@ -333,11 +334,11 @@ mod suggestions_qt;
 // faithful port of the Slint crates/qbz/src/keybindings.rs. Plain module —
 // no #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
 mod hotkeys_qt;
+mod integrations_qt;
 mod settings_qt;
 mod sidebar_qt;
 mod sleep_timer_qt;
 mod theme_qt;
-mod integrations_qt;
 mod viz_qt;
 // Qobuz Connect port (2026-08-01 contract), blocks B1/B2: transport config +
 // credential discovery + device identity, and the renderer engine over
@@ -360,9 +361,9 @@ mod mini_qt;
 // the ksni StatusNotifierItem and carries no inner cfg, so the gate is on the
 // mod line (the shape of `crates/qbz/src/tray/mod.rs:26-27`). Owner ruling K2
 // keeps macOS and Windows out — neither has a tray in either frontend.
-mod tray_qt;
 #[cfg(target_os = "linux")]
 mod tray_linux;
+mod tray_qt;
 // macOS menu-bar tray (NSStatusItem), ported 2026-08-05. The K2 ruling that
 // kept macOS out was reasoned from a premise that reads the reference
 // backwards — see the module header.
@@ -453,7 +454,11 @@ fn restore_session_once() {
     // ignored, which is what we want (the runtime is process-global anyway).
     qbz_app::session_persist::bind_exit_ctx(
         app(),
-        TOKIO.get().expect("tokio runtime set before the shell mounts").handle().clone(),
+        TOKIO
+            .get()
+            .expect("tokio runtime set before the shell mounts")
+            .handle()
+            .clone(),
     );
     // Crash-chain rung 3: two consecutive boots died even after the view reset,
     // so skip the queue restore for THIS boot only. The persisted queue stays
@@ -582,7 +587,7 @@ pub(crate) fn on_boot() {
             Ok(Some(session)) => enter_shell(session),
             Ok(None) => session_bridge::ui(|mut b| b.as_mut().set_screen(QString::from("login"))),
             Err(e) => session_bridge::ui(move |mut b| {
-                                b.as_mut().set_restore_error(QString::from(e.as_str()));
+                b.as_mut().set_restore_error(QString::from(e.as_str()));
                 b.as_mut().set_screen(QString::from("login"));
             }),
         }
@@ -644,9 +649,28 @@ fn on_session_entered() {
     // Library / Mixtapes / Collections and painted an EMPTY page — the view is
     // fed by a Rust document that only `navigate_to` ever asked for, and a
     // restore does not go through `navigate_to`.
-    let entry_view = nav_qt::shell_entry_view();
+    // Always consume the ordinary one-shot entry decision, even when this is
+    // an unauthenticated offline session. A later OAuth login in the SAME
+    // process must keep the existing fresh-session behaviour (Home), not
+    // replay a remembered startup route that the offline entry skipped.
+    let ordinary_entry = nav_qt::shell_entry_view();
+    let logged_off = offline_fwd::engine().status().offline_session;
+    let entry_view = if logged_off {
+        "local".to_string()
+    } else {
+        ordinary_entry
+    };
     nav_qt::record(&entry_view);
     hydrate_view(&entry_view);
+    // Logged-off startup is the ONLY automatic redirect. An authenticated
+    // account keeps the established startup/restore flow even when physical
+    // connectivity is down. The selected tab is the first user-ordered Local
+    // Library tab; kiosk takes the first surface it can render (Genres is a
+    // desktop column browser).
+    if logged_off {
+        let landing = settings_qt::local_landing_tab(kiosk_profile_qt::active());
+        navigate_to_tab("local", &landing);
+    }
     now_playing::publish_current();
     // Phase 3: fetch Discover > Home (online sessions only — the offline
     // engine gates Qobuz calls anyway, and the view shows the offline
@@ -720,7 +744,9 @@ fn on_session_entered() {
     // Restore the persisted player volume so audio starts at the SAVED level
     // (1:1 with qbz/src/main.rs:220-227). Without it every launch started at
     // 100% — on an exclusive-mode DAC that is not a cosmetic default.
-    let restored = crate::settings_qt::read_pref_f32("volume").unwrap_or(1.0).clamp(0.0, 1.0);
+    let restored = crate::settings_qt::read_pref_f32("volume")
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0);
     let rt = app();
     spawn(async move { playback_qt::set_volume(&rt, restored).await });
     // ...and seed the UI model with the SAME value, or the engine and the
@@ -781,8 +807,10 @@ fn on_session_entered() {
 fn enter_shell(session: auth_qt::SessionInfo) {
     on_session_entered();
     session_bridge::ui(move |mut b| {
-        b.as_mut().set_session_user_name(QString::from(session.display_name.as_str()));
-        b.as_mut().set_session_subscription(QString::from(session.subscription.as_str()));
+        b.as_mut()
+            .set_session_user_name(QString::from(session.display_name.as_str()));
+        b.as_mut()
+            .set_session_subscription(QString::from(session.subscription.as_str()));
         b.as_mut().set_has_previous_session(true);
         b.as_mut().set_login_error(QString::from(""));
         b.as_mut().set_restore_error(QString::from(""));
@@ -806,7 +834,7 @@ pub(crate) fn start_login() {
         }
     }
     session_bridge::ui(|mut b| {
-                b.as_mut().set_login_error(QString::from(""));
+        b.as_mut().set_login_error(QString::from(""));
         b.as_mut().set_login_phase(1);
     });
 
@@ -824,7 +852,7 @@ pub(crate) fn start_login() {
         match result {
             Ok(session) => enter_shell(session),
             Err(e) => session_bridge::ui(move |mut b| {
-                                b.as_mut().set_login_phase(0);
+                b.as_mut().set_login_phase(0);
                 b.as_mut().set_login_error(QString::from(e.as_str()));
             }),
         }
@@ -860,7 +888,8 @@ pub(crate) fn start_offline() {
                 // uses it — NOT the two-line subset this used to run.
                 on_session_entered();
                 session_bridge::ui(move |mut b| {
-                    b.as_mut().set_session_user_name(QString::from(name.as_str()));
+                    b.as_mut()
+                        .set_session_user_name(QString::from(name.as_str()));
                     b.as_mut().set_session_subscription(QString::from(""));
                     b.as_mut().set_login_error(QString::from(""));
                     b.as_mut().set_restore_error(QString::from(""));
@@ -1058,11 +1087,16 @@ pub(crate) fn reload_sidebar_including_local() {
 pub(crate) fn publish_sidebar() {
     let entries = sidebar_qt::rebuild();
     let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
-    log::debug!("[qbz-qt] sidebar published: {} entries ({} bytes)", entries.len(), json.len());
+    log::debug!(
+        "[qbz-qt] sidebar published: {} entries ({} bytes)",
+        entries.len(),
+        json.len()
+    );
     let (sort_by, sort_asc) = sidebar_qt::sort_state();
     shell_bridge::ui(move |mut b| {
         b.as_mut().set_sidebar_json(QString::from(json.as_str()));
-        b.as_mut().set_sidebar_sort_by(QString::from(sort_by.as_str()));
+        b.as_mut()
+            .set_sidebar_sort_by(QString::from(sort_by.as_str()));
         b.as_mut().set_sidebar_sort_asc(sort_asc);
     });
 }
@@ -1111,7 +1145,8 @@ pub(crate) fn sidebar_open_folder_popup(folder_id: &str) {
     let json = doc.to_string();
     log::debug!("[qbz-qt] sidebar folder popup: {folder_id} ({count} rows)");
     shell_bridge::ui(move |mut b| {
-        b.as_mut().set_sidebar_folder_popup_json(QString::from(json.as_str()));
+        b.as_mut()
+            .set_sidebar_folder_popup_json(QString::from(json.as_str()));
     });
 }
 
@@ -1177,12 +1212,10 @@ pub(crate) fn open_album(album_id: String) {
     });
     spawn(async move {
         match album_qt::load_album_view(&runtime, &album_id).await {
-            Ok(json) => {
-                                album_bridge::ui(move |mut b| {
-                    b.as_mut().set_album_json(QString::from(json.as_str()));
-                    b.as_mut().set_album_loading(false);
-                })
-            },
+            Ok(json) => album_bridge::ui(move |mut b| {
+                b.as_mut().set_album_json(QString::from(json.as_str()));
+                b.as_mut().set_album_loading(false);
+            }),
             Err(e) => {
                 log::warn!("[qbz-qt] album view load failed: {e}");
                 album_bridge::ui(move |mut b| b.as_mut().set_album_loading(false));
@@ -1226,8 +1259,13 @@ pub(crate) fn open_artist(artist_id: String) {
 pub(crate) fn load_release_section(artist_id: String, release_type: String, offset: i32) {
     let runtime = app();
     spawn(async move {
-        match artist_qt::load_release_page(&runtime, &artist_id, &release_type, offset.max(0) as u32)
-            .await
+        match artist_qt::load_release_page(
+            &runtime,
+            &artist_id,
+            &release_type,
+            offset.max(0) as u32,
+        )
+        .await
         {
             Ok((cards, has_more)) => {
                 // The user may have opened ANOTHER artist while this page was
@@ -1297,7 +1335,13 @@ pub(crate) fn enqueue_album(album_id: String, mode: String) {
 /// EVERY consumer here is a cache patch or an in-place badge signal. The rule
 /// this encodes: a per-click mutation must never republish a document. See
 /// `home_qt::apply_pin_change`'s docs for what republishing cost.
-pub(crate) fn toggle_pin(kind: String, id: String, title: String, subtitle: String, artwork_url: String) {
+pub(crate) fn toggle_pin(
+    kind: String,
+    id: String,
+    title: String,
+    subtitle: String,
+    artwork_url: String,
+) {
     if let Some(value) = sidebar_qt::toggle_pin(&kind, &id, &title, &subtitle, &artwork_url) {
         let key = format!("{kind}:{id}");
         library_bridge::ui(move |mut b| {
@@ -1319,7 +1363,10 @@ pub(crate) fn toggle_pin(kind: String, id: String, title: String, subtitle: Stri
 static LYRICS_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub(crate) fn toggle_lyrics() {
-    let open = !LYRICS_OPEN.swap(!LYRICS_OPEN.load(std::sync::atomic::Ordering::SeqCst), std::sync::atomic::Ordering::SeqCst);
+    let open = !LYRICS_OPEN.swap(
+        !LYRICS_OPEN.load(std::sync::atomic::Ordering::SeqCst),
+        std::sync::atomic::Ordering::SeqCst,
+    );
     shell_bridge::ui(move |mut b| {
         b.as_mut().set_lyrics_open(open);
     });
@@ -1375,12 +1422,7 @@ pub(crate) fn queue_extended_play(phase: String, index: i32, expected_id: String
     });
 }
 
-pub(crate) fn queue_extended_drop(
-    phase: String,
-    index: i32,
-    expected_id: String,
-    slot: i32,
-) {
+pub(crate) fn queue_extended_drop(phase: String, index: i32, expected_id: String, slot: i32) {
     let Ok(track_id) = expected_id.parse::<u64>() else {
         return;
     };
@@ -1419,7 +1461,9 @@ pub(crate) fn queue_remove_all_after(index: i32) {
 
 pub(crate) fn queue_move_track(from: i32, to: i32) {
     let runtime = app();
-    spawn(async move { queue_qt::move_track(&runtime, from.max(0) as usize, to.max(0) as usize).await });
+    spawn(
+        async move { queue_qt::move_track(&runtime, from.max(0) as usize, to.max(0) as usize).await },
+    );
 }
 
 pub(crate) fn queue_play_history(index: i32) {
@@ -1486,7 +1530,8 @@ pub(crate) fn play_album_from_track(album_id: String, track_id: u64) {
 pub(crate) fn enqueue_album_track(album_id: String, track_id: u64, mode: String) {
     let runtime = app();
     spawn(async move {
-        if let Err(e) = playback_qt::enqueue_album_track(&runtime, &album_id, track_id, &mode).await {
+        if let Err(e) = playback_qt::enqueue_album_track(&runtime, &album_id, track_id, &mode).await
+        {
             log::error!("[qbz-qt] enqueue_album_track failed: {e}");
         }
     });
@@ -1531,7 +1576,11 @@ pub(crate) fn enqueue_artist_top(mode: String) {
 
 /// Track-row click (Library tracks): one-track queue through the core.
 pub(crate) fn play_track(track_id: u64) {
-    search_qt::record_page_interaction("track", &track_id.to_string(), search_qt::InteractionAction::Play);
+    search_qt::record_page_interaction(
+        "track",
+        &track_id.to_string(),
+        search_qt::InteractionAction::Play,
+    );
     now_playing::begin_loading();
     let runtime = app();
     spawn(async move {
@@ -1576,7 +1625,11 @@ pub(crate) fn open_playlist(playlist_id: String) {
     // Learn from results-page interactions too, not only from the
     // cortinilla. Self-gated on the Search view being current, so every other
     // caller of this router is unaffected.
-    search_qt::record_page_interaction("playlist", &playlist_id, search_qt::InteractionAction::Open);
+    search_qt::record_page_interaction(
+        "playlist",
+        &playlist_id,
+        search_qt::InteractionAction::Open,
+    );
     // Drop the previous detail's "mixed" latch before either arm runs. `load`
     // sets it authoritatively at the end, but between here and there sits a
     // network fetch, and a remove clicked inside that window would otherwise
@@ -1766,9 +1819,7 @@ pub(crate) fn playlist_remove_track(row_id: String) {
         // A sidecar row of a MIXED Qobuz playlist: it comes out of
         // `library.db`, not out of the Qobuz membership. Returns false when the
         // row turns out to be an ordinary Qobuz one, so this falls through.
-        if playlist_qt::is_mixed()
-            && playlist_qt::remove_sidecar_row(&runtime, &row_id).await
-        {
+        if playlist_qt::is_mixed() && playlist_qt::remove_sidecar_row(&runtime, &row_id).await {
             return;
         }
         let Ok(playlist_track_id) = row_id.parse::<u64>() else {
@@ -1851,7 +1902,8 @@ pub(crate) fn drag_start(track_id: String, title: String, subtitle: String, x: f
     shell_bridge::ui(move |mut b| {
         b.as_mut().set_drag_count(if id > 0 { 1 } else { 0 });
         b.as_mut().set_drag_title(QString::from(title.as_str()));
-        b.as_mut().set_drag_subtitle(QString::from(subtitle.as_str()));
+        b.as_mut()
+            .set_drag_subtitle(QString::from(subtitle.as_str()));
         b.as_mut().set_drag_x(x);
         b.as_mut().set_drag_y(y);
         b.as_mut().set_drag_over_playlist_id(QString::default());
@@ -2345,7 +2397,9 @@ fn republish_artist(artist_id: String) {
     let runtime = app();
     spawn(async move {
         if let Ok(json) = artist_qt::load_artist_view(&runtime, &artist_id).await {
-            artist_bridge::ui(move |mut b| b.as_mut().set_artist_json(QString::from(json.as_str())));
+            artist_bridge::ui(move |mut b| {
+                b.as_mut().set_artist_json(QString::from(json.as_str()))
+            });
         }
     });
 }
@@ -2411,9 +2465,7 @@ pub(crate) fn settings_bool(key: String, value: bool) {
 
 pub(crate) fn settings_select(key: String, index: i32) {
     let runtime = app();
-    spawn(async move {
-        settings_qt::settings_select(&runtime, &key, index.max(0) as usize).await
-    });
+    spawn(async move { settings_qt::settings_select(&runtime, &key, index.max(0) as usize).await });
 }
 
 pub(crate) fn settings_slider(key: String, value: i32) {
@@ -2556,7 +2608,8 @@ pub(crate) fn reload_library() {
                     t.elapsed(),
                 );
                 library_bridge::ui(move |mut b| {
-                    b.as_mut().set_library_json(QString::from(feed_json.as_str()));
+                    b.as_mut()
+                        .set_library_json(QString::from(feed_json.as_str()));
                     b.as_mut()
                         .set_library_counts_json(QString::from(counts_json.as_str()));
                     b.as_mut().set_library_loading(false);
@@ -2599,7 +2652,8 @@ pub(crate) fn publish_library_document() {
         return;
     };
     library_bridge::ui(move |mut b| {
-        b.as_mut().set_library_json(QString::from(feed_json.as_str()));
+        b.as_mut()
+            .set_library_json(QString::from(feed_json.as_str()));
         b.as_mut()
             .set_library_counts_json(QString::from(counts_json.as_str()));
     });
@@ -2819,7 +2873,11 @@ pub(crate) fn reload_home() {
                 missing.dedup();
                 let count: usize = sections.home.iter().map(|s| s.items.len()).sum::<usize>()
                     + sections.editor.iter().map(|s| s.items.len()).sum::<usize>()
-                    + sections.for_you.iter().map(|s| s.items.len()).sum::<usize>();
+                    + sections
+                        .for_you
+                        .iter()
+                        .map(|s| s.items.len())
+                        .sum::<usize>();
 
                 publish_home_sections(&sections);
                 // LIVENESS. The shell has a mounted view with real content, so
@@ -2863,16 +2921,17 @@ pub(crate) fn reload_home() {
 fn publish_home_sections(sections: &home_qt::DiscoverSections) {
     let home_json = serde_json::to_string(&sections.home).unwrap_or_else(|_| "[]".to_string());
     let editor_json = serde_json::to_string(&sections.editor).unwrap_or_else(|_| "[]".to_string());
-    let for_you_json = serde_json::to_string(&sections.for_you).unwrap_or_else(|_| "[]".to_string());
+    let for_you_json =
+        serde_json::to_string(&sections.for_you).unwrap_or_else(|_| "[]".to_string());
     home_bridge::ui(move |mut b| {
-        b.as_mut().set_home_sections_json(QString::from(home_json.as_str()));
+        b.as_mut()
+            .set_home_sections_json(QString::from(home_json.as_str()));
         b.as_mut()
             .set_editor_sections_json(QString::from(editor_json.as_str()));
         b.as_mut()
             .set_for_you_sections_json(QString::from(for_you_json.as_str()));
     });
 }
-
 
 /// The Settings > Appearance RENDERER row, consumed at startup (PARITY-DEBT
 /// #104 — the row rendered and persisted into the SAME ui_prefs the Slint
@@ -3033,7 +3092,9 @@ pub(crate) fn arm_hard_exit_watchdog(source: &'static str) {
     if HARD_EXIT_ARMED.swap(true, Ordering::SeqCst) {
         return;
     }
-    log::info!("[shutdown] hard-exit watchdog armed ({source}); force-exit in 5s if shutdown wedges");
+    log::info!(
+        "[shutdown] hard-exit watchdog armed ({source}); force-exit in 5s if shutdown wedges"
+    );
     let _ = std::thread::Builder::new()
         .name("qbz-exit-watchdog".into())
         .spawn(move || {
@@ -3108,9 +3169,7 @@ fn main() {
     // so this costs nothing until the Large dock's band is shown. It is a
     // read-only copy downstream of the bit-perfect stream — no device/stream
     // init is touched.
-    let runtime = Arc::new(AppRuntime::with_visualizer(LoggingAdapter::new(
-        "[qbz-qt]",
-    )));
+    let runtime = Arc::new(AppRuntime::with_visualizer(LoggingAdapter::new("[qbz-qt]")));
     if let Some(tap) = runtime.visualizer_tap().cloned() {
         viz_qt::install(tap);
         viz_qt::set_mode(settings_qt::large_spectrum_mode());
@@ -3197,9 +3256,7 @@ fn main() {
     }
 
     if let Some(engine) = engine.as_mut() {
-        engine.load(&QUrl::from(
-            "qrc:/qt/qml/com/blitzfc/qbz/qml/Main.qml",
-        ));
+        engine.load(&QUrl::from("qrc:/qt/qml/com/blitzfc/qbz/qml/Main.qml"));
     }
 
     if let Some(app) = app.as_mut() {

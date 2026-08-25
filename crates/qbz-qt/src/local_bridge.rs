@@ -51,7 +51,6 @@ pub mod qbz_local {
         /// Album identity: "folder" | "metadata" (persisted; shared with
         /// the Slint frontend's locallibrary_ui.json).
         #[qproperty(QString, local_album_mode)]
-
         // --- Albums tab ---------------------------------------------------
         #[qproperty(bool, local_albums_loading)]
         #[qproperty(QString, local_albums_error)]
@@ -64,7 +63,6 @@ pub mod qbz_local {
         /// Bounded A-Z jump metadata (`[{letter,index}]`), never album rows.
         #[qproperty(QString, local_albums_native_jumps_json)]
         #[qproperty(QString, local_albums_native_error)]
-
         // --- Artists tab --------------------------------------------------
         #[qproperty(bool, local_artists_loading)]
         #[qproperty(QString, local_artists_json)]
@@ -75,11 +73,9 @@ pub mod qbz_local {
         #[qproperty(bool, local_artist_albums_loading)]
         #[qproperty(QString, local_artists_native_jumps_json)]
         #[qproperty(QString, local_artists_native_error)]
-
         // --- Folders tab, FLAT mode ---------------------------------------
         #[qproperty(bool, local_folders_loading)]
         #[qproperty(QString, local_folders_json)]
-
         // --- Folders tab, TREE mode ---------------------------------------
         #[qproperty(bool, local_tree_loading)]
         /// The FLATTENED, search-filtered visible tree — a plain array the
@@ -91,12 +87,13 @@ pub mod qbz_local {
         #[qproperty(bool, local_detail_loading)]
         /// {path, name, trackCount, subfolders[], tracks[]}
         #[qproperty(QString, local_detail_json)]
-
         // --- Tracks tab (server-paginated) --------------------------------
         #[qproperty(bool, local_tracks_loading)]
         #[qproperty(bool, local_tracks_loading_more)]
         #[qproperty(bool, local_tracks_has_more)]
         #[qproperty(QString, local_tracks_sort)]
+        /// Persisted quality/format/source funnel JSON for the Tracks query.
+        #[qproperty(QString, local_tracks_filter)]
         /// Tracks-tab grouping: "off" | "album" | "artist" | "name". A
         /// CLIENT-side visual reorder (unlike the sort, which is the SQL
         /// ORDER BY), but persisted in the SAME locallibrary_ui.json key the
@@ -111,7 +108,6 @@ pub mod qbz_local {
         /// Bounded A-Z jump metadata (`[{letter,index}]`), never track rows.
         #[qproperty(QString, local_tracks_native_jumps_json)]
         #[qproperty(QString, local_tracks_native_error)]
-
         // --- Local album detail (the album pane) ---------------------------
         #[qproperty(bool, local_album_loading)]
         /// {album:{...}, tracks:[...]} — "" while nothing is open.
@@ -188,7 +184,6 @@ pub mod qbz_local {
         /// destination, index, count, fraction, overall, tracks}`. Rate-limited
         /// to ~10 Hz at the source — the rip callback fires per chunk.
         #[qproperty(QString, local_rip_status)]
-
         // --- Plex ----------------------------------------------------------
         /// Master toggle (Settings > Local Library > Plex). Drives whether
         /// the browse union includes Plex at all + the source filter chip.
@@ -241,7 +236,6 @@ pub mod qbz_local {
         #[qproperty(QString, pin_auth_url)]
         /// The pin/start request is in flight ("Working...").
         #[qproperty(bool, pin_busy)]
-
         type QbzLocal = super::QbzLocalRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -272,17 +266,9 @@ pub mod qbz_local {
             columns: i32,
         );
         #[qinvokable]
-        fn albums_native_page_miss(
-            self: Pin<&mut QbzLocal>,
-            page: i32,
-            generation: i32,
-        );
+        fn albums_native_page_miss(self: Pin<&mut QbzLocal>, page: i32, generation: i32);
         #[qinvokable]
-        fn albums_native_toggle_select(
-            self: Pin<&mut QbzLocal>,
-            index: i64,
-            shift: bool,
-        );
+        fn albums_native_toggle_select(self: Pin<&mut QbzLocal>, index: i64, shift: bool);
         #[qinvokable]
         fn albums_native_select_all(self: Pin<&mut QbzLocal>);
         #[qinvokable]
@@ -292,25 +278,18 @@ pub mod qbz_local {
 
         // --- Artists tab (native paged models) ---------------------------
         #[qinvokable]
-        fn artists_native_reset(self: Pin<&mut QbzLocal>, search: QString);
-        #[qinvokable]
-        fn artists_native_page_miss(
+        fn artists_native_reset(
             self: Pin<&mut QbzLocal>,
-            page: i32,
-            generation: i32,
+            search: QString,
+            sort: QString,
+            filter_json: QString,
         );
         #[qinvokable]
-        fn artists_native_select(
-            self: Pin<&mut QbzLocal>,
-            artist: QString,
-            columns: i32,
-        );
+        fn artists_native_page_miss(self: Pin<&mut QbzLocal>, page: i32, generation: i32);
         #[qinvokable]
-        fn artist_albums_native_page_miss(
-            self: Pin<&mut QbzLocal>,
-            page: i32,
-            generation: i32,
-        );
+        fn artists_native_select(self: Pin<&mut QbzLocal>, artist: QString, columns: i32);
+        #[qinvokable]
+        fn artist_albums_native_page_miss(self: Pin<&mut QbzLocal>, page: i32, generation: i32);
 
         // --- Tracks tab ----------------------------------------------------
         /// Toolbar search (server-side; resets to page 1).
@@ -319,6 +298,8 @@ pub mod qbz_local {
         /// Toolbar sort (SQL ORDER BY; resets to page 1).
         #[qinvokable]
         fn tracks_set_sort(self: Pin<&mut QbzLocal>, sort: QString);
+        #[qinvokable]
+        fn tracks_set_filter_json(self: Pin<&mut QbzLocal>, json: QString);
         /// Toolbar grouping ("off" | "album" | "artist" | "name"): persist +
         /// republish. NO re-query — the group modes reorder what is already
         /// loaded, on top of the SQL sort.
@@ -329,17 +310,9 @@ pub mod qbz_local {
         fn tracks_load_more(self: Pin<&mut QbzLocal>);
         /// QAbstractListModel page miss -> async catalog keyset page.
         #[qinvokable]
-        fn tracks_native_page_miss(
-            self: Pin<&mut QbzLocal>,
-            page: i32,
-            generation: i32,
-        );
+        fn tracks_native_page_miss(self: Pin<&mut QbzLocal>, page: i32, generation: i32);
         #[qinvokable]
-        fn tracks_native_toggle_select(
-            self: Pin<&mut QbzLocal>,
-            index: i64,
-            shift: bool,
-        );
+        fn tracks_native_toggle_select(self: Pin<&mut QbzLocal>, index: i64, shift: bool);
         #[qinvokable]
         fn tracks_native_select_all(self: Pin<&mut QbzLocal>);
         #[qinvokable]
@@ -349,17 +322,9 @@ pub mod qbz_local {
         #[qinvokable]
         fn tracks_native_play(self: Pin<&mut QbzLocal>, index: i64);
         #[qinvokable]
-        fn tracks_native_enqueue(
-            self: Pin<&mut QbzLocal>,
-            index: i64,
-            mode: QString,
-        );
+        fn tracks_native_enqueue(self: Pin<&mut QbzLocal>, index: i64, mode: QString);
         #[qinvokable]
-        fn tracks_native_row_action(
-            self: Pin<&mut QbzLocal>,
-            index: i64,
-            action: QString,
-        );
+        fn tracks_native_row_action(self: Pin<&mut QbzLocal>, index: i64, action: QString);
         #[qinvokable]
         fn tracks_native_bulk_action(self: Pin<&mut QbzLocal>, action: QString);
 
@@ -387,7 +352,12 @@ pub mod qbz_local {
         fn folders_bulk_action(self: Pin<&mut QbzLocal>, action: QString);
         /// Albums-grid / Tracks-table bulk bar. scope = "album" | "track".
         #[qinvokable]
-        fn bulk_action(self: Pin<&mut QbzLocal>, scope: QString, ids_json: QString, action: QString);
+        fn bulk_action(
+            self: Pin<&mut QbzLocal>,
+            scope: QString,
+            ids_json: QString,
+            action: QString,
+        );
         /// Row body: select a folder and load its detail pane.
         #[qinvokable]
         fn select_folder(self: Pin<&mut QbzLocal>, path: QString);
@@ -397,6 +367,14 @@ pub mod qbz_local {
         /// tracks). A `plex:<hash>` id is served from the Plex cache.
         #[qinvokable]
         fn open_album(self: Pin<&mut QbzLocal>, id: QString);
+        /// Open a logical album while preserving the Local Library funnel at
+        /// the click site; filtered-out physical copies stay inaccessible.
+        #[qinvokable]
+        fn open_album_filtered(
+            self: Pin<&mut QbzLocal>,
+            id: QString,
+            filter_json: QString,
+        );
         /// Close the album pane (back to the grid).
         #[qinvokable]
         fn close_album(self: Pin<&mut QbzLocal>);
@@ -422,6 +400,35 @@ pub mod qbz_local {
         /// QML uses it to filter the very array it renders.
         #[qinvokable]
         fn artist_album_ids(self: &QbzLocal, artist: QString) -> QString;
+        /// Genres details mode: fetch one logical album's rows without
+        /// navigating away. Results are id-keyed so concurrent visible albums
+        /// may finish in any order without publishing over each other.
+        #[qinvokable]
+        fn genre_album_tracks(
+            self: Pin<&mut QbzLocal>,
+            id: QString,
+            filter_json: QString,
+        );
+        /// Genres details version picker: switch one expanded album without
+        /// retargeting the routed AlbumView or re-querying the database.
+        #[qinvokable]
+        fn genre_album_select_version(self: Pin<&mut QbzLocal>, album_id: QString, index: i32);
+        /// Play/shuffle/enqueue the selected version; `track_id` is empty for
+        /// an album header action and set for a displayed track-row click.
+        #[qinvokable]
+        fn genre_album_action(
+            self: Pin<&mut QbzLocal>,
+            album_id: QString,
+            action: QString,
+            track_id: QString,
+        );
+        /// Play/enqueue the currently selected physical copy in AlbumView.
+        #[qinvokable]
+        fn album_selected_action(
+            self: Pin<&mut QbzLocal>,
+            action: QString,
+            track_id: QString,
+        );
         /// Album header pencil — LOGGED SEAM (no tag-editor modal yet).
         #[qinvokable]
         fn album_edit_tags(self: Pin<&mut QbzLocal>, id: QString);
@@ -437,6 +444,16 @@ pub mod qbz_local {
         /// Per-disc menu: "play" | "next" | "later" | "queue".
         #[qinvokable]
         fn album_disc_action(self: Pin<&mut QbzLocal>, disc: i32, action: QString);
+        /// Same menu for one concurrently expanded Genres album. Album id is
+        /// required because the routed AlbumView's singleton cache is not the
+        /// source of these rows.
+        #[qinvokable]
+        fn genre_album_disc_action(
+            self: Pin<&mut QbzLocal>,
+            album_id: QString,
+            disc: i32,
+            action: QString,
+        );
         // --- Ephemeral folder ------------------------------------------------
         /// Pick a folder OUTSIDE the library, scan it, show the pane.
         #[qinvokable]
@@ -493,6 +510,14 @@ pub mod qbz_local {
         /// Album card / detail header Play (optionally shuffled).
         #[qinvokable]
         fn play_album(self: Pin<&mut QbzLocal>, id: QString, shuffle: bool);
+        /// Album card Play constrained to the active Local Library funnel.
+        #[qinvokable]
+        fn play_album_filtered(
+            self: Pin<&mut QbzLocal>,
+            id: QString,
+            filter_json: QString,
+            shuffle: bool,
+        );
         /// Album-detail row click: play the album from that track.
         #[qinvokable]
         fn play_album_track(self: Pin<&mut QbzLocal>, id: QString, track_id: QString);
@@ -517,6 +542,25 @@ pub mod qbz_local {
         /// mode = "next" | "later" | "queue".
         #[qinvokable]
         fn enqueue(self: Pin<&mut QbzLocal>, kind: QString, id: QString, mode: QString);
+        /// Album enqueue constrained to the active Local Library funnel.
+        #[qinvokable]
+        fn enqueue_album_filtered(
+            self: Pin<&mut QbzLocal>,
+            id: QString,
+            filter_json: QString,
+            mode: QString,
+        );
+        /// Heart a genuine local/Plex logical album using the display
+        /// snapshot already rendered by the Local Library card.
+        #[qinvokable]
+        fn album_toggle_favorite(
+            self: Pin<&mut QbzLocal>,
+            id: QString,
+            title: QString,
+            artist: QString,
+            artwork_url: QString,
+            sources_json: QString,
+        );
 
         // --- Plex ------------------------------------------------------------
         /// Header Sync button (#573): re-fetch the Plex sections + tracks
@@ -620,6 +664,27 @@ pub mod qbz_local {
         /// wrong row.
         #[qsignal]
         fn local_artwork_ready(self: Pin<&mut QbzLocal>, key: QString, path: QString);
+        #[qsignal]
+        fn local_genre_album_ready(
+            self: Pin<&mut QbzLocal>,
+            id: QString,
+            tracks_json: QString,
+            filter_json: QString,
+        );
+        /// Session-only reachability result for one physical local row.
+        /// An empty message clears a previous failure after a successful
+        /// retry; no database row is rewritten from this transient evidence.
+        #[qsignal]
+        fn local_track_availability(
+            self: Pin<&mut QbzLocal>,
+            source: QString,
+            id: QString,
+            message: QString,
+        );
+        /// Successful store result (also carries rollback after a failed
+        /// optimistic card flip).
+        #[qsignal]
+        fn local_album_favorite_changed(self: Pin<&mut QbzLocal>, id: QString, favorite: bool);
     }
 
     impl cxx_qt::Threading for QbzLocal {}
@@ -659,6 +724,7 @@ pub struct QbzLocalRust {
     local_tracks_loading_more: bool,
     local_tracks_has_more: bool,
     local_tracks_sort: QString,
+    local_tracks_filter: QString,
     local_tracks_group: QString,
     local_tracks_json: QString,
     local_tracks_native_active: bool,
@@ -732,6 +798,7 @@ impl Default for QbzLocalRust {
             local_tracks_loading_more: false,
             local_tracks_has_more: false,
             local_tracks_sort: QString::from("default"),
+            local_tracks_filter: QString::default(),
             local_tracks_group: QString::from("off"),
             local_tracks_json: QString::from("[]"),
             local_tracks_native_active: false,
@@ -788,6 +855,47 @@ pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzLocal>) + Send + 'static) {
     }
 }
 
+/// Publish a transient playback reachability result without changing the
+/// authoritative library row. A missing file may have moved and an
+/// unreachable NAS may return later; both must remain retryable and neither
+/// is evidence that authorizes pruning.
+pub(crate) fn emit_track_availability(source: &str, id: u64, message: Option<&str>) {
+    let source = source.to_string();
+    let id = id.to_string();
+    let message = message.unwrap_or_default().to_string();
+    ui(move |mut b| {
+        b.as_mut().local_track_availability(
+            QString::from(source.as_str()),
+            QString::from(id.as_str()),
+            QString::from(message.as_str()),
+        );
+    });
+}
+
+/// Publish genre details on the next Qt event-loop turn for both cache hits
+/// and freshly queried rows. A synchronous cache-hit signal can fire while a
+/// Loader is still mounting `LocalGenreDetails`; that first response then has
+/// no live `Connections` receiver and its delegate remains pending forever.
+fn queue_genre_album_ready(
+    id: String,
+    json: String,
+    filter_json: String,
+    phase: &'static str,
+    started: std::time::Instant,
+) {
+    log::info!(
+        "[qbz-qt][perf] genre album detail phase={phase} id={id} bytes={} elapsed={:?}",
+        json.len(),
+        started.elapsed()
+    );
+    ui(move |mut bridge| {
+        bridge.as_mut().local_genre_album_ready(
+            QString::from(id.as_str()),
+            QString::from(json.as_str()),
+            QString::from(filter_json.as_str()),
+        );
+    });
+}
 
 impl qbz_local::QbzLocal {
     pub fn boot(self: Pin<&mut Self>) {
@@ -802,6 +910,7 @@ impl qbz_local::QbzLocal {
         let mode = lib::album_mode();
         let sort = lib::tracks_sort();
         let group = lib::tracks_group();
+        let tracks_filter = lib::tracks_filter();
         crate::spawn(async move {
             let available = tokio::task::spawn_blocking(lib::has_library)
                 .await
@@ -814,6 +923,8 @@ impl qbz_local::QbzLocal {
                     .set_local_tracks_sort(QString::from(sort.as_str()));
                 b.as_mut()
                     .set_local_tracks_group(QString::from(group.as_str()));
+                b.as_mut()
+                    .set_local_tracks_filter(QString::from(tracks_filter.as_str()));
             });
         });
         publish_plex_state();
@@ -867,19 +978,11 @@ impl qbz_local::QbzLocal {
         );
     }
 
-    pub fn albums_native_page_miss(
-        self: Pin<&mut Self>,
-        page: i32,
-        generation: i32,
-    ) {
+    pub fn albums_native_page_miss(self: Pin<&mut Self>, page: i32, generation: i32) {
         crate::local_albums_model_qt::request_page(page, generation);
     }
 
-    pub fn albums_native_toggle_select(
-        self: Pin<&mut Self>,
-        index: i64,
-        shift: bool,
-    ) {
+    pub fn albums_native_toggle_select(self: Pin<&mut Self>, index: i64, shift: bool) {
         crate::local_albums_model_qt::toggle_selection(index, shift);
     }
 
@@ -895,31 +998,30 @@ impl qbz_local::QbzLocal {
         crate::local_albums_model_qt::bulk_action(action.to_string());
     }
 
-    pub fn artists_native_reset(self: Pin<&mut Self>, search: QString) {
-        crate::local_artists_model_qt::reset(search.to_string());
+    pub fn artists_native_reset(
+        self: Pin<&mut Self>,
+        search: QString,
+        sort: QString,
+        filter_json: QString,
+    ) {
+        if !crate::local_artists_model_qt::reset(
+            search.to_string(),
+            sort.to_string(),
+            filter_json.to_string(),
+        ) {
+            crate::local_bridge_ops::load_artists_legacy();
+        }
     }
 
-    pub fn artists_native_page_miss(
-        self: Pin<&mut Self>,
-        page: i32,
-        generation: i32,
-    ) {
+    pub fn artists_native_page_miss(self: Pin<&mut Self>, page: i32, generation: i32) {
         crate::local_artists_model_qt::request_page(page, generation);
     }
 
-    pub fn artists_native_select(
-        self: Pin<&mut Self>,
-        artist: QString,
-        columns: i32,
-    ) {
+    pub fn artists_native_select(self: Pin<&mut Self>, artist: QString, columns: i32) {
         crate::local_artists_model_qt::select_artist(artist.to_string(), columns);
     }
 
-    pub fn artist_albums_native_page_miss(
-        self: Pin<&mut Self>,
-        page: i32,
-        generation: i32,
-    ) {
+    pub fn artist_albums_native_page_miss(self: Pin<&mut Self>, page: i32, generation: i32) {
         crate::local_artists_model_qt::request_detail_page(page, generation);
     }
 
@@ -934,6 +1036,16 @@ impl qbz_local::QbzLocal {
         ui(move |mut b| {
             b.as_mut()
                 .set_local_tracks_sort(QString::from(sort.as_str()));
+        });
+        load_tracks(true);
+    }
+
+    pub fn tracks_set_filter_json(self: Pin<&mut Self>, json: QString) {
+        let json = json.to_string();
+        lib::set_tracks_filter(&json);
+        ui(move |mut b| {
+            b.as_mut()
+                .set_local_tracks_filter(QString::from(json.as_str()));
         });
         load_tracks(true);
     }
@@ -963,11 +1075,7 @@ impl qbz_local::QbzLocal {
         crate::local_tracks_model_qt::request_page(page, generation);
     }
 
-    pub fn tracks_native_toggle_select(
-        self: Pin<&mut Self>,
-        index: i64,
-        shift: bool,
-    ) {
+    pub fn tracks_native_toggle_select(self: Pin<&mut Self>, index: i64, shift: bool) {
         crate::local_tracks_model_qt::toggle_selection(index, shift);
     }
 
@@ -987,11 +1095,7 @@ impl qbz_local::QbzLocal {
         crate::local_tracks_model_qt::enqueue(index, mode.to_string());
     }
 
-    pub fn tracks_native_row_action(
-        self: Pin<&mut Self>,
-        index: i64,
-        action: QString,
-    ) {
+    pub fn tracks_native_row_action(self: Pin<&mut Self>, index: i64, action: QString) {
         crate::local_tracks_model_qt::row_action(index, action.to_string());
     }
 
@@ -1026,9 +1130,10 @@ impl qbz_local::QbzLocal {
         let path = path.to_string();
         ui(|mut b| b.as_mut().set_local_detail_loading(true));
         crate::spawn(async move {
-            let detail = tokio::task::spawn_blocking(move || lib::load_folder_detail_blocking(&path))
-                .await
-                .ok();
+            let detail =
+                tokio::task::spawn_blocking(move || lib::load_folder_detail_blocking(&path))
+                    .await
+                    .ok();
             let json = detail.map(|d| lib::to_json(&d)).unwrap_or_default();
             ui(move |mut b| {
                 b.as_mut()
@@ -1040,6 +1145,14 @@ impl qbz_local::QbzLocal {
 
     pub fn open_album(self: Pin<&mut Self>, id: QString) {
         open_album_by_id(id.to_string());
+    }
+
+    pub fn open_album_filtered(
+        self: Pin<&mut Self>,
+        id: QString,
+        filter_json: QString,
+    ) {
+        open_album_by_id_filtered(id.to_string(), filter_json.to_string());
     }
 
     pub fn close_album(self: Pin<&mut Self>) {
@@ -1054,6 +1167,19 @@ impl qbz_local::QbzLocal {
         let runtime = crate::app();
         crate::spawn(async move {
             lib::play_album(&runtime, id, None, shuffle).await;
+        });
+    }
+
+    pub fn play_album_filtered(
+        self: Pin<&mut Self>,
+        id: QString,
+        filter_json: QString,
+        shuffle: bool,
+    ) {
+        let (id, filter_json) = (id.to_string(), filter_json.to_string());
+        let runtime = crate::app();
+        crate::spawn(async move {
+            lib::play_album_filtered(&runtime, id, filter_json, shuffle).await;
         });
     }
 
@@ -1085,11 +1211,7 @@ impl qbz_local::QbzLocal {
         });
     }
 
-    pub fn play_tracks_visible(
-        self: Pin<&mut Self>,
-        visible_ids_json: QString,
-        track_id: QString,
-    ) {
+    pub fn play_tracks_visible(self: Pin<&mut Self>, visible_ids_json: QString, track_id: QString) {
         let Ok(row) = track_id.to_string().parse::<i64>() else {
             return;
         };
@@ -1108,6 +1230,40 @@ impl qbz_local::QbzLocal {
         });
     }
 
+    pub fn enqueue_album_filtered(
+        self: Pin<&mut Self>,
+        id: QString,
+        filter_json: QString,
+        mode: QString,
+    ) {
+        let (id, filter_json, mode) = (
+            id.to_string(),
+            filter_json.to_string(),
+            mode.to_string(),
+        );
+        let runtime = crate::app();
+        crate::spawn(async move {
+            lib::enqueue_album_filtered(&runtime, id, filter_json, mode).await;
+        });
+    }
+
+    pub fn album_toggle_favorite(
+        self: Pin<&mut Self>,
+        id: QString,
+        title: QString,
+        artist: QString,
+        artwork_url: QString,
+        sources_json: QString,
+    ) {
+        crate::local_album_actions::toggle_album_favorite(
+            id.to_string(),
+            title.to_string(),
+            artist.to_string(),
+            artwork_url.to_string(),
+            sources_json.to_string(),
+        );
+    }
+
     // --- Plex --------------------------------------------------------------
 
     pub fn sync_plex(self: Pin<&mut Self>) {
@@ -1123,7 +1279,8 @@ impl qbz_local::QbzLocal {
         let text = json.to_string();
         // The qproperty is what the view re-seeds from on its next mount, so
         // it is written on EVERY toggle, not only on close.
-        self.as_mut().set_albums_filter(QString::from(text.as_str()));
+        self.as_mut()
+            .set_albums_filter(QString::from(text.as_str()));
         crate::local_bridge_ops::save_albums_filter(&text);
     }
 
@@ -1402,6 +1559,267 @@ impl qbz_local::QbzLocal {
         QString::from(crate::local_albums::artist_album_ids(&artist.to_string()).as_str())
     }
 
+    pub fn genre_album_tracks(
+        _self: Pin<&mut Self>,
+        id: QString,
+        filter_json: QString,
+    ) {
+        let started = std::time::Instant::now();
+        let id = id.to_string();
+        let filter_json = filter_json.to_string();
+        enum Request {
+            Cached(String),
+            Pending,
+            Spawn,
+        }
+        let request = crate::local_state::state(|state| {
+            if state.genre_detail_filters.get(&id) == Some(&filter_json) {
+                if let Some(json) = state.genre_detail_docs.get(&id).cloned() {
+                    return Request::Cached(json);
+                }
+            }
+            if state.genre_detail_requests.get(&id) == Some(&filter_json) {
+                return Request::Pending;
+            }
+            state
+                .genre_detail_requests
+                .insert(id.clone(), filter_json.clone());
+            // A version switch serialized against the old funnel must not
+            // publish over the replacement document that starts here.
+            let generation = state
+                .genre_detail_version_generations
+                .get(&id)
+                .copied()
+                .unwrap_or(0)
+                .wrapping_add(1);
+            state
+                .genre_detail_version_generations
+                .insert(id.clone(), generation);
+            Request::Spawn
+        });
+        match request {
+            Request::Cached(json) => {
+                queue_genre_album_ready(id, json, filter_json, "cache-hit", started);
+                return;
+            }
+            // The original worker owns the one eventual signal. Spawning a
+            // duplicate here used to double the database/map/serialize work
+            // for every ListView remount during a filter transition.
+            Request::Pending => return,
+            Request::Spawn => {}
+        }
+        crate::spawn(async move {
+            let request_id = id.clone();
+            let request_filter = filter_json.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let fetch_started = std::time::Instant::now();
+                let cached_tracks = crate::local_state::state(|state| {
+                    state.genre_detail_all_tracks.get(&request_id).cloned()
+                });
+                let raw_cache_hit = cached_tracks.is_some();
+                let all_tracks = cached_tracks.unwrap_or_else(|| {
+                    let mut tracks =
+                        crate::local_albums::fetch_album_tracks_blocking(&request_id);
+                    crate::local_playback::fill_missing_covers(&mut tracks);
+                    std::sync::Arc::new(tracks)
+                });
+                let fetch_elapsed = fetch_started.elapsed();
+                let project_started = std::time::Instant::now();
+                let filter = crate::local_filter::MediaFilter::from_json(&request_filter);
+                // The raw cache is shared: changing a source/quality chip must
+                // not deep-clone every physical copy before throwing most of
+                // them away. Clone only the rows admitted by this funnel.
+                let tracks = all_tracks
+                    .iter()
+                    .filter(|track| filter.track_enabled(track))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let filtered_rows = tracks.len();
+                let versions = crate::local_album_actions::split_versions(tracks);
+                let selected = versions
+                    .first()
+                    .map(|(_, rows)| rows.clone())
+                    .unwrap_or_default();
+                let doc = crate::local_album_actions::genre_detail_doc(&request_id, &versions, 0);
+                let json = crate::local_rows::to_json(&doc);
+                let project_elapsed = project_started.elapsed();
+                let versions_empty = versions.is_empty();
+                log::info!(
+                    "[qbz-qt][perf] genre album detail phase=worker id={} raw_cache={} raw_rows={} filtered_rows={} versions={} fetch={:?} project={:?}",
+                    request_id,
+                    raw_cache_hit,
+                    all_tracks.len(),
+                    filtered_rows,
+                    doc.versions.len(),
+                    fetch_elapsed,
+                    project_elapsed,
+                );
+                let cached_json = json.clone();
+                let current = crate::local_state::state(move |state| {
+                    if state.genre_detail_requests.get(&request_id) != Some(&request_filter) {
+                        return false;
+                    }
+                    if !all_tracks.is_empty() {
+                        if state.genre_detail_all_tracks.len() >= 32
+                            && !state.genre_detail_all_tracks.contains_key(&request_id)
+                        {
+                            if let Some(oldest) =
+                                state.genre_detail_all_tracks.keys().min().cloned()
+                            {
+                                state.genre_detail_raw.remove(&oldest);
+                                state.genre_detail_all_tracks.remove(&oldest);
+                                state.genre_detail_versions.remove(&oldest);
+                                state.genre_detail_docs.remove(&oldest);
+                                state.genre_detail_filters.remove(&oldest);
+                                state.genre_detail_requests.remove(&oldest);
+                                state.genre_detail_version_generations.remove(&oldest);
+                            }
+                        }
+                        state
+                            .genre_detail_all_tracks
+                            .insert(request_id.clone(), all_tracks);
+                    }
+                    state.genre_detail_requests.remove(&request_id);
+                    // An unavailable NAS/server is not an authoritative empty
+                    // album. Let this view render the miss, but keep the old
+                    // completed-cache tag (if any) so a later retry is not
+                    // mistaken for a completed hit of this funnel.
+                    if versions_empty {
+                        return true;
+                    }
+                    state.genre_detail_raw.insert(request_id.clone(), selected);
+                    state
+                        .genre_detail_versions
+                        .insert(request_id.clone(), versions);
+                    state
+                        .genre_detail_docs
+                        .insert(request_id.clone(), cached_json);
+                    state
+                        .genre_detail_filters
+                        .insert(request_id, request_filter);
+                    true
+                });
+                if !current {
+                    return None;
+                }
+                // An unavailable NAS/server is not an authoritative empty
+                // album. Publish the miss for this view, but do not make it a
+                // process-lifetime cache hit that prevents a later retry.
+                if versions_empty {
+                    return Some((json, raw_cache_hit));
+                }
+                Some((json, raw_cache_hit))
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some((result, raw_cache_hit)) = result {
+                queue_genre_album_ready(
+                    id,
+                    result,
+                    filter_json,
+                    if raw_cache_hit { "filter-cache" } else { "query" },
+                    started,
+                );
+            }
+        });
+    }
+
+    pub fn genre_album_select_version(self: Pin<&mut Self>, album_id: QString, index: i32) {
+        let album_id = album_id.to_string();
+        let generation = crate::local_state::state(|state| {
+            let generation = state
+                .genre_detail_version_generations
+                .get(&album_id)
+                .copied()
+                .unwrap_or(0)
+                .wrapping_add(1);
+            state
+                .genre_detail_version_generations
+                .insert(album_id.clone(), generation);
+            generation
+        });
+        crate::spawn(async move {
+            let request_id = album_id.clone();
+            let selection = tokio::task::spawn_blocking(move || {
+                let index = usize::try_from(index).ok()?;
+                let (versions, filter_json) = crate::local_state::state(|state| {
+                    Some((
+                        state.genre_detail_versions.get(&request_id)?.clone(),
+                        state
+                            .genre_detail_filters
+                            .get(&request_id)
+                            .cloned()
+                            .unwrap_or_default(),
+                    ))
+                })?;
+                let selected = versions.get(index)?.1.clone();
+                let doc =
+                    crate::local_album_actions::genre_detail_doc(&request_id, &versions, index);
+                Some((
+                    request_id,
+                    selected,
+                    crate::local_rows::to_json(&doc),
+                    filter_json,
+                ))
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some((request_id, selected, json, filter_json)) = selection {
+                let current = crate::local_state::state(|state| {
+                    if state
+                        .genre_detail_version_generations
+                        .get(&request_id)
+                        .copied()
+                        != Some(generation)
+                    {
+                        return false;
+                    }
+                    state.genre_detail_raw.insert(request_id.clone(), selected);
+                    state
+                        .genre_detail_docs
+                        .insert(request_id.clone(), json.clone());
+                    true
+                });
+                if !current {
+                    return;
+                }
+                ui(move |mut bridge| {
+                    bridge.as_mut().local_genre_album_ready(
+                        QString::from(request_id.as_str()),
+                        QString::from(json.as_str()),
+                        QString::from(filter_json.as_str()),
+                    );
+                });
+            }
+        });
+    }
+
+    pub fn genre_album_action(
+        self: Pin<&mut Self>,
+        album_id: QString,
+        action: QString,
+        track_id: QString,
+    ) {
+        crate::local_album_actions::genre_album_action(
+            album_id.to_string(),
+            action.to_string(),
+            track_id.to_string().parse::<i64>().ok(),
+        );
+    }
+
+    pub fn album_selected_action(
+        self: Pin<&mut Self>,
+        action: QString,
+        track_id: QString,
+    ) {
+        crate::local_album_actions::selected_album_action(
+            action.to_string(),
+            track_id.to_string().parse::<i64>().ok(),
+        );
+    }
+
     pub fn album_edit_tags(self: Pin<&mut Self>, id: QString) {
         crate::local_album_actions::edit_tags(id.to_string());
     }
@@ -1420,6 +1838,19 @@ impl qbz_local::QbzLocal {
 
     pub fn album_disc_action(self: Pin<&mut Self>, disc: i32, action: QString) {
         crate::local_album_actions::disc_action(disc, action.to_string());
+    }
+
+    pub fn genre_album_disc_action(
+        self: Pin<&mut Self>,
+        album_id: QString,
+        disc: i32,
+        action: QString,
+    ) {
+        crate::local_album_actions::genre_disc_action(
+            album_id.to_string(),
+            disc,
+            action.to_string(),
+        );
     }
 
     // --- Ephemeral folder ----------------------------------------------------
@@ -1520,7 +1951,6 @@ impl qbz_local::QbzLocal {
             crate::local_ephemeral::play_track(&runtime, row).await;
         });
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -1530,6 +1960,10 @@ impl qbz_local::QbzLocal {
 /// Open a LOCAL/Plex album. Lifted out of the invokable so `open_album` in
 /// main.rs can route to it when a local id reaches the catalog path.
 pub(crate) fn open_album_by_id(id: String) {
+    open_album_by_id_filtered(id, String::new());
+}
+
+pub(crate) fn open_album_by_id_filtered(id: String, filter_json: String) {
     ui(|mut b| {
         // Clear the previous local album with the loading flag — the same
         // stale-render the catalog album view had.
@@ -1537,10 +1971,12 @@ pub(crate) fn open_album_by_id(id: String) {
         b.as_mut().set_local_album_loading(true);
     });
     crate::spawn(async move {
-        let detail = tokio::task::spawn_blocking(move || lib::load_album_detail_blocking(&id))
-            .await
-            .ok()
-            .flatten();
+        let detail = tokio::task::spawn_blocking(move || {
+            lib::load_album_detail_filtered_blocking(&id, &filter_json)
+        })
+        .await
+        .ok()
+        .flatten();
         let json = detail.map(|d| lib::to_json(&d)).unwrap_or_default();
         ui(move |mut b| {
             b.as_mut()

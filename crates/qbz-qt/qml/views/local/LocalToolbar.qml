@@ -86,6 +86,7 @@ Row {
             id: albumsSearchBox
             anchors.verticalCenter: parent.verticalCenter
             placeholder: QbzSession.tr("Search", QbzSession.trRev)
+            text: root.view ? root.view.albumsSearch : ""
             // DEBOUNCED, like the Tracks box below — which had it and this one
             // did not, in the same file.
             //
@@ -102,7 +103,7 @@ Row {
             //
             // The box keeps showing what was typed immediately; only the
             // filter waits.
-            property string pending: ""
+            property string pending: root.view ? root.view.albumsSearch : ""
             onEdited: function (v) {
                 albumsSearchBox.pending = v
                 albumsSearchDebounce.restart()
@@ -149,76 +150,10 @@ Row {
                 QbzLocal.setAlbumMode(i === 1 ? "metadata" : "folder")
             }
         }
-        // Quality/format/source filter popup trigger + active-count badge.
-        Item {
-            width: 34
-            height: 30
+        LocalFilterButton {
             anchors.verticalCenter: parent.verticalCenter
-            Rectangle {
-                anchors.fill: parent
-                radius: 6
-                border.width: 1
-                border.color: root.view.filterCount > 0 ? theme.accent : theme.borderSubtle
-                color: filtArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
-                QbzIcon {
-                    name: "list-filter"
-                    width: 15
-                    height: 15
-                    anchors.centerIn: parent
-                    tintName: root.view.filterCount > 0 ? "accent" : "secondary"
-                }
-                MouseArea {
-                    id: filtArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        localFilterTip.exit()
-                        root.view.filterOpen = !root.view.filterOpen
-                    }
-                    onEntered: localFilterTip.enter()
-                    onExited: localFilterTip.exit()
-                }
-            }
-            // WHAT is filtered, not just that something is. The funnel is a
-            // 10-key one and its badge only ever said a number, so a user
-            // coming back to a session had to open the popup to find out what
-            // they had set.
-            QbzFilterTip {
-                id: localFilterTip
+            view: root.view
                 ownerKey: "local-albums-filter"
-                anchor: filtArea
-                groups: root.view.filterSummaryGroups
-            }
-            // The plain one-line tip stays for the UNFILTERED case: with
-            // nothing applied there is no summary to show, and "Quality, format
-            // and source filters" is what the control needs to say then.
-            LocalTip {
-                visible: filtArea.containsMouse && !localFilterTip.hasSummary
-                text: QbzSession.tr("Quality, format and source filters", QbzSession.trRev)
-            }
-            Rectangle {
-                visible: root.view.filterCount > 0
-                x: parent.width - width + 3
-                y: -4
-                width: 15
-                height: 15
-                radius: 7.5
-                color: theme.accent
-                Text {
-                    anchors.centerIn: parent
-                    text: root.view.filterCount
-                    // 9px bold on a 15px accent dot — the smallest on-accent
-                    // text in the app, so the floor matters most here. NOT a
-                    // departure from locallibrary/LocalLibraryView.slint:887
-                    // (`Theme.accent-text`); the twin returns accent-text on
-                    // 34 of the 35 palettes and only overrides rose-pine-dawn
-                    // (2.56:1 -> 7.38:1).
-                    color: theme.accentGlyphColor
-                    font.pixelSize: 9
-                    font.weight: theme.weightBold
-                }
-            }
         }
         QbzSegToggle {
             anchors.verticalCenter: parent.verticalCenter
@@ -247,6 +182,7 @@ Row {
         LocalSearchBox {
             anchors.verticalCenter: parent.verticalCenter
             placeholder: QbzSession.tr("Search", QbzSession.trRev)
+            text: root.view ? root.view.tracksSearch : ""
             onEdited: function (v) {
                 root.view.tracksSearch = v
                 tracksSearchDebounce.restart()
@@ -282,6 +218,11 @@ Row {
             // global across every keyset page.
             onSelected: function (i) { QbzLocal.tracksSetGroup(root.tracksGroupIds[i]) }
         }
+        LocalFilterButton {
+            anchors.verticalCenter: parent.verticalCenter
+            view: root.view
+            ownerKey: "local-tracks-filter"
+        }
         // Multi-select LAST — never to the LEFT of a search box. The expandable
         // field keeps a 30px footprint and grows its inner box LEFT
         // (QbzLineEdit.qml:157-161, `x: root.width - width`), so anything
@@ -310,6 +251,7 @@ Row {
             LocalSearchBox {
                 anchors.verticalCenter: parent.verticalCenter
                 placeholder: QbzSession.tr("Search", QbzSession.trRev)
+                text: root.view ? root.view.foldersSearch : ""
                 onEdited: function (v) { root.view.foldersSearch = v }
             }
             LocalIconSelect {
@@ -353,16 +295,20 @@ Row {
     }
 
     // ============================ ARTISTS ================================
-    LocalSearchBox {
+    Row {
         visible: root.view && root.view.activeTab === "artists"
             && ((QbzLocal.localArtistsNativeActive
                     ? QbzLocal.localArtistsNativeTotal > 0
                     : root.view.artists.length > 0)
                 || root.view.artistsSearch !== ""
                 || QbzLocal.localArtistsLoading)
+        spacing: 8
+        height: parent.height
+        LocalSearchBox {
         anchors.verticalCenter: parent.verticalCenter
         placeholder: QbzSession.tr("Search artists", QbzSession.trRev)
-        property string pending: ""
+            text: root.view ? root.view.artistsSearch : ""
+            property string pending: root.view ? root.view.artistsSearch : ""
         onEdited: function (v) {
             pending = v
             artistsSearchDebounce.restart()
@@ -371,6 +317,66 @@ Row {
             id: artistsSearchDebounce
             interval: 200
             onTriggered: root.view.artistsSearch = parent.pending
+        }
+    }
+        LocalIconSelect {
+            anchors.verticalCenter: parent.verticalCenter
+            iconName: "arrow-up-down"
+            label: root.sortTip
+            menuWidth: 180
+            options: [
+                QbzSession.tr("Name A-Z", QbzSession.trRev),
+                QbzSession.tr("Name Z-A", QbzSession.trRev),
+                QbzSession.tr("Year (newest)", QbzSession.trRev),
+                QbzSession.tr("Year (oldest)", QbzSession.trRev),
+            ]
+            currentIndex: Math.max(0, ["name-asc", "name-desc", "year-desc", "year-asc"]
+                .indexOf(root.view.artistsSort))
+            onSelected: function(i) {
+                root.view.artistsSort = ["name-asc", "name-desc", "year-desc", "year-asc"][i]
+            }
+        }
+        LocalFilterButton {
+            anchors.verticalCenter: parent.verticalCenter
+            view: root.view
+            ownerKey: "local-artists-filter"
+        }
+    }
+
+    // ============================ GENRES =================================
+    Row {
+        visible: root.view && root.view.activeTab === "genres"
+        spacing: 8
+        height: parent.height
+        LocalIconSelect {
+            anchors.verticalCenter: parent.verticalCenter
+            iconName: "arrow-up-down"
+            label: root.sortTip
+            menuWidth: 180
+            options: [
+                QbzSession.tr("Name A-Z", QbzSession.trRev),
+                QbzSession.tr("Name Z-A", QbzSession.trRev),
+                QbzSession.tr("Year (newest)", QbzSession.trRev),
+                QbzSession.tr("Year (oldest)", QbzSession.trRev),
+            ]
+            currentIndex: Math.max(0, ["title-asc", "title-desc", "year-desc", "year-asc"]
+                .indexOf(root.view.genresSort))
+            onSelected: function(i) {
+                root.view.genresSort = ["title-asc", "title-desc", "year-desc", "year-asc"][i]
+            }
+        }
+        LocalFilterButton {
+            anchors.verticalCenter: parent.verticalCenter
+            view: root.view
+            ownerKey: "local-genres-filter"
+        }
+        QbzSegToggle {
+            anchors.verticalCenter: parent.verticalCenter
+            segments: [{ "id": "grid", "icon": "layout-grid" },
+                       { "id": "list", "icon": "list" },
+                       { "id": "details", "icon": "rows-3" }]
+            mode: root.view.genresView
+            onSetMode: function(v) { root.view.genresView = v }
         }
     }
 }

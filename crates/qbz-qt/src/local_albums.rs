@@ -20,11 +20,12 @@ use qbz_library::{AlbumTrackEvidence, AudioFormat, LocalAlbum, LocalTrack};
 
 use crate::local_album_actions::AlbumDetailDoc;
 use crate::local_artist_match::{
-    album_matches_artist_with_aliases, build_artist_family_aliases, merge_artists,
-    normalize_artist, AlbumCredit, ArtistInput,
+    album_credit_names, album_matches_artist_with_aliases, build_artist_family_aliases,
+    merge_artists, normalize_artist, AlbumCredit, ArtistInput,
 };
 use crate::local_rows::{
-    artist_key, map_album, map_track, AlbumRow, ArtistRow, LocalCounts, TrackRow,
+    artist_key, badge_source, map_album, map_album_with_artists, map_track, tier_of, AlbumRow,
+    ArtistRow, LocalCounts, TrackRow,
 };
 use crate::local_state::{
     commit_tracks_page, group_mode, state, tracks_generation, with_art, with_db,
@@ -74,10 +75,21 @@ pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
     let total = albums.len() as u64;
     let n = albums.len();
     let t1 = std::time::Instant::now();
+    let mut family_names = albums
+        .iter()
+        .map(|album| album.artist.as_str())
+        .collect::<Vec<_>>();
+    for album in &albums {
+        family_names.extend(album.all_artists.split(',').filter(|name| !name.is_empty()));
+    }
+    let aliases = build_artist_family_aliases(&family_names);
     let rows = with_art(|art| {
         albums
             .into_iter()
-            .map(|a| map_album(a, art))
+            .map(|a| {
+                let artists = album_credit_names(&a.artist, &a.all_artists, &aliases);
+                map_album_with_artists(a, art, artists)
+            })
             .collect::<Vec<AlbumRow>>()
     });
     log::info!(
@@ -159,7 +171,53 @@ fn coalesce_album_versions(
                 .iter()
                 .map(|album| album.id.clone())
                 .collect::<Vec<_>>();
+            let mut genres = group
+                .iter()
+                .flat_map(|album| album.genres.iter().cloned())
+                .collect::<Vec<_>>();
+            genres.sort_by_key(|genre| genre.to_lowercase());
+            genres.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+            let mut all_artists = group
+                .iter()
+                .flat_map(|album| {
+                    std::iter::once(album.artist.clone()).chain(
+                        album
+                            .all_artists
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|name| !name.is_empty())
+                            .map(str::to_string),
+                    )
+                })
+                .collect::<Vec<_>>();
+            all_artists.sort_by_key(|artist| normalize_artist(artist));
+            all_artists.dedup_by(|left, right| normalize_artist(left) == normalize_artist(right));
+            // `group` is already best-audio-first. Pick the best-ranked copy
+            // that actually has artwork, but keep its provenance separate
+            // from the representative audio source. A coverless Jellyfin
+            // hi-res copy must not erase the Plex cover on the logical card.
+            let best_artwork = group.iter().find_map(|album| {
+                album
+                    .artwork_path
+                    .as_ref()
+                    .filter(|path| !path.is_empty())
+                    .map(|path| {
+                        (
+                            path.clone(),
+                            album
+                                .artwork_source
+                                .clone()
+                                .unwrap_or_else(|| album.source.clone()),
+                        )
+                    })
+            });
             let mut representative = group.remove(0);
+            representative.genres = genres;
+            representative.all_artists = all_artists.join(",");
+            if let Some((path, source)) = best_artwork {
+                representative.artwork_path = Some(path);
+                representative.artwork_source = Some(source);
+            }
             if !group.is_empty() {
                 let logical_id = logical_album_id(&ids);
                 let mut source_words = std::iter::once(&representative)
@@ -355,8 +413,7 @@ fn strip_edition_suffix(value: &str) -> &str {
 pub fn load_folders_blocking() -> Result<Vec<AlbumRow>, String> {
     let albums = with_db(|db| {
         db.get_albums_with_full_filter(
-            /* include_hidden */ false,
-            /* include_qobuz_downloads */ true,
+            /* include_hidden */ false, /* include_qobuz_downloads */ true,
             /* exclude_network_folders */ false,
         )
     })
@@ -404,8 +461,7 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
     // so an artist's album count matches the grid the user sees.
     let (artists, albums, custom) = with_db(|db| {
         let artists = db.get_artists_with_filter(
-            /* include_qobuz_downloads */ true,
-            /* exclude_network_folders */ false,
+            /* include_qobuz_downloads */ true, /* exclude_network_folders */ false,
         )?;
         let albums = if plex_on || remote_on {
             db.get_albums_metadata_page(
@@ -424,8 +480,7 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
             .albums
         } else {
             db.get_albums_with_full_filter(
-                /* include_hidden */ false,
-                /* include_qobuz_downloads */ true,
+                /* include_hidden */ false, /* include_qobuz_downloads */ true,
                 /* exclude_network_folders */ false,
             )?
         };
@@ -495,6 +550,19 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
         plex_on || remote_on,
     );
 
+    // One alias corpus for both the identity merge above and the facet pass.
+    // Facets follow credited albums, never the portrait chosen for the row:
+    // the latter is one image from one source and cannot describe a mixed
+    // artist's actual source/format/quality/year availability.
+    let mut family_names = albums
+        .iter()
+        .map(|album| album.artist.as_str())
+        .collect::<Vec<_>>();
+    for album in &albums {
+        family_names.extend(album.all_artists.split(',').filter(|name| !name.is_empty()));
+    }
+    let aliases = build_artist_family_aliases(&family_names);
+
     // The artwork index is keyed on the DISPLAY name (`artist:{name}`), so the
     // portrait is registered under the CANONICAL spelling the row carries —
     // registering it under the Plex spelling is what left a merged row with a
@@ -513,12 +581,62 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
                         art.insert(key.clone(), t);
                     }
                 }
+                let selected = normalize_artist(&m.name);
+                let mut sources = Vec::new();
+                let mut formats = Vec::new();
+                let mut quality_tiers = Vec::new();
+                let mut years = Vec::new();
+                for album in albums.iter().filter(|album| {
+                    album_matches_artist_with_aliases(
+                        &album.artist,
+                        &album.all_artists,
+                        &selected,
+                        &aliases,
+                    )
+                }) {
+                    let source_values = if album.sources.is_empty() {
+                        std::slice::from_ref(&album.source)
+                    } else {
+                        album.sources.as_slice()
+                    };
+                    for source in source_values {
+                        let source = badge_source(Some(source));
+                        if !sources.iter().any(|value: &String| value == &source) {
+                            sources.push(source);
+                        }
+                    }
+                    let format = album.format.to_string().to_ascii_lowercase();
+                    if !formats.iter().any(|value: &String| value == &format) {
+                        formats.push(format);
+                    }
+                    let tier =
+                        tier_of(&album.format, album.bit_depth, album.sample_rate).to_string();
+                    if !tier.is_empty()
+                        && !quality_tiers.iter().any(|value: &String| value == &tier)
+                    {
+                        quality_tiers.push(tier);
+                    }
+                    if let Some(year) = album.year {
+                        if !years.contains(&year) {
+                            years.push(year);
+                        }
+                    }
+                }
+                sources.sort();
+                formats.sort();
+                quality_tiers.sort();
+                years.sort_unstable();
                 ArtistRow {
                     art_key: key,
                     name: m.name,
                     album_count: m.album_count,
                     track_count: m.track_count,
                     source: m.source,
+                    sources,
+                    formats,
+                    quality_tiers,
+                    year: years.last().map(u32::to_string).unwrap_or_default(),
+                    years,
                 }
             })
             .collect()
@@ -637,26 +755,38 @@ pub fn load_tracks_page_blocking(
     let effective_sort = effective_tracks_sort(&request.sort, &request.group);
     let query_started = std::time::Instant::now();
     // No library.db is valid for a remote-only installation.
-    let local = with_db(|db| {
-        db.search_with_filter_page(
-            request.query.trim(),
-            request.offsets.local,
-            candidate_limit,
-            true,
-            false,
-            effective_sort,
-        )
-    })
-    .unwrap_or_default();
+    let local =
+        if request.filter.source_enabled("local") || request.filter.source_enabled("offline") {
+            with_db(|db| {
+                db.search_with_filter_page_faceted(
+                    request.query.trim(),
+                    request.offsets.local,
+                    candidate_limit,
+                    true,
+                    false,
+                    effective_sort,
+                    &request.filter.formats,
+                    request.filter.other_formats,
+                    &request.filter.qualities,
+                    &request.filter.sources,
+                )
+            })
+            .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
     if tracks_generation() != request.generation {
         return Ok(None);
     }
-    let plex = if crate::local_plex::is_enabled() {
+    let plex = if crate::local_plex::is_enabled() && request.filter.source_enabled("plex") {
         crate::local_plex::search_tracks_page(
             &request.query,
             request.offsets.plex,
             candidate_limit,
             effective_sort,
+            &request.filter.formats,
+            request.filter.other_formats,
+            &request.filter.qualities,
         )
     } else {
         Vec::new()
@@ -664,23 +794,37 @@ pub fn load_tracks_page_blocking(
     if tracks_generation() != request.generation {
         return Ok(None);
     }
-    let jellyfin = crate::media_servers_qt::search_tracks_page(
-        "jellyfin",
-        &request.query,
-        request.offsets.jellyfin,
-        candidate_limit,
-        effective_sort,
-    );
+    let jellyfin = if request.filter.source_enabled("jellyfin") {
+        crate::media_servers_qt::search_tracks_page(
+            "jellyfin",
+            &request.query,
+            request.offsets.jellyfin,
+            candidate_limit,
+            effective_sort,
+            &request.filter.formats,
+            request.filter.other_formats,
+            &request.filter.qualities,
+        )
+    } else {
+        Vec::new()
+    };
     if tracks_generation() != request.generation {
         return Ok(None);
     }
-    let subsonic = crate::media_servers_qt::search_tracks_page(
-        "subsonic",
-        &request.query,
-        request.offsets.subsonic,
-        candidate_limit,
-        effective_sort,
-    );
+    let subsonic = if request.filter.source_enabled("subsonic") {
+        crate::media_servers_qt::search_tracks_page(
+            "subsonic",
+            &request.query,
+            request.offsets.subsonic,
+            candidate_limit,
+            effective_sort,
+            &request.filter.formats,
+            request.filter.other_formats,
+            &request.filter.qualities,
+        )
+    } else {
+        Vec::new()
+    };
     let query_time = query_started.elapsed();
     let candidates = TrackSourceCounts {
         local: local.len(),
@@ -695,10 +839,22 @@ pub fn load_tracks_page_blocking(
     let merge_started = std::time::Instant::now();
     let merged = merge_track_pages(
         vec![
-            CandidatePage { source: TrackSourcePage::Local, rows: local },
-            CandidatePage { source: TrackSourcePage::Plex, rows: plex },
-            CandidatePage { source: TrackSourcePage::Jellyfin, rows: jellyfin },
-            CandidatePage { source: TrackSourcePage::Subsonic, rows: subsonic },
+            CandidatePage {
+                source: TrackSourcePage::Local,
+                rows: local,
+            },
+            CandidatePage {
+                source: TrackSourcePage::Plex,
+                rows: plex,
+            },
+            CandidatePage {
+                source: TrackSourcePage::Jellyfin,
+                rows: jellyfin,
+            },
+            CandidatePage {
+                source: TrackSourcePage::Subsonic,
+                rows: subsonic,
+            },
         ],
         effective_sort,
         TRACKS_PAGE as usize,
@@ -782,7 +938,12 @@ fn merge_track_pages(pages: Vec<CandidatePage>, sort: &str, limit: usize) -> Mer
         source.bump_count(&mut published);
         rows.push(row);
     }
-    MergedTrackPage { rows, consumed, published, has_more }
+    MergedTrackPage {
+        rows,
+        consumed,
+        published,
+        has_more,
+    }
 }
 
 /// The tab badges. Cheap: the Tracks count never materializes the table.
@@ -857,7 +1018,13 @@ fn fetch_source_album_tracks_blocking(id: &str) -> Vec<LocalTrack> {
 /// header, the picker entries and the raw-row cache are all owned by
 /// `local_album_actions`, which is also what the version picker and the
 /// per-disc menu read back.
-pub fn load_album_detail_blocking(id: &str) -> Option<AlbumDetailDoc> {
+/// The routed Local Library detail, constrained to the media funnel that was
+/// active at the click site. A logical card may represent several sources;
+/// opening it must not make filtered-out physical versions selectable again.
+pub fn load_album_detail_filtered_blocking(
+    id: &str,
+    filter_json: &str,
+) -> Option<AlbumDetailDoc> {
     let mut tracks = fetch_album_tracks_blocking(id);
     if tracks.is_empty() {
         return None;
@@ -868,6 +1035,8 @@ pub fn load_album_detail_blocking(id: &str) -> Option<AlbumDetailDoc> {
     // rows AND everything that later reads `detail_raw` (the per-disc menu, the
     // bulk bar, `find_track_blocking`) carry the cover the folder has.
     crate::local_playback::fill_missing_covers(&mut tracks);
+    let filter = crate::local_filter::MediaFilter::from_json(filter_json);
+    tracks.retain(|track| filter.track_enabled(track));
     crate::local_album_actions::open_versions(id, tracks)
 }
 
@@ -953,11 +1122,7 @@ mod phase_a_tests {
         }
     }
 
-    fn native_tie(
-        source: TrackSourcePage,
-        a: &LocalTrack,
-        b: &LocalTrack,
-    ) -> std::cmp::Ordering {
+    fn native_tie(source: TrackSourcePage, a: &LocalTrack, b: &LocalTrack) -> std::cmp::Ordering {
         match source {
             TrackSourcePage::Plex => a.file_path.cmp(&b.file_path),
             _ => a.id.cmp(&b.id),
@@ -1295,7 +1460,9 @@ mod phase_a_tests {
             all_artists: "Talk Talk".to_string(),
             year: Some(1988),
             catalog_number: None,
+            genres: Vec::new(),
             artwork_path: None,
+            artwork_source: None,
             track_count: tracks.len() as u32,
             total_duration_secs: tracks.iter().map(|(_, duration)| duration).sum(),
             format: AudioFormat::Flac,
@@ -1355,6 +1522,38 @@ mod phase_a_tests {
         );
         let (rows, _) = coalesce_album_versions(vec![rows[0].clone(), unrelated]);
         assert_eq!(rows.len(), 2, "title and artist alone must never merge");
+    }
+
+    #[test]
+    fn coverless_best_audio_copy_uses_the_best_available_group_cover() {
+        let tracks = [("Eres Toda una Mujer", 209), ("Amar y Querer", 191)];
+        let mut jellyfin = album_copy(
+            "jellyfin:romanticos",
+            "jellyfin",
+            "Siempre Romanticos!",
+            &tracks,
+            24,
+            96_000.0,
+        );
+        jellyfin.artwork_path = None;
+        let mut plex = album_copy(
+            "plex:romanticos",
+            "plex",
+            "Siempre Romanticos!",
+            &tracks,
+            16,
+            44_100.0,
+        );
+        plex.artwork_path = Some("/library/metadata/romanticos/thumb".to_string());
+
+        let (rows, _) = coalesce_album_versions(vec![plex, jellyfin]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source, "jellyfin");
+        assert_eq!(
+            rows[0].artwork_path.as_deref(),
+            Some("/library/metadata/romanticos/thumb")
+        );
+        assert_eq!(rows[0].artwork_source.as_deref(), Some("plex"));
     }
 
     #[test]

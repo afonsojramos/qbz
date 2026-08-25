@@ -19,7 +19,7 @@ Item {
     id: root
 
     property var view: null
-    readonly property bool nativeActive: QbzLocal.localAlbumsNativeActive
+    readonly property bool nativeActive: root.view.albumsNativeViewActive
     readonly property int albumTotal: nativeActive
         ? QbzLocal.localAlbumsNativeTotal : root.view.albums.length
 
@@ -68,7 +68,7 @@ Item {
         SettingsButton {
             anchors.horizontalCenter: parent.horizontalCenter
             text: QbzSession.tr("Retry", QbzSession.trRev)
-            onClicked: QbzLocal.loadTab("albums")
+            onClicked: root.view.loadTabForView("albums")
         }
     }
 
@@ -138,8 +138,12 @@ Item {
                 selectMode: root.view.albumsMultiSelect
                 selected: root.view.albumsSelected
                 onOpenRequested: function (id) { root.view.openAlbum(id) }
-                onPlayRequested: function (id) { QbzLocal.playAlbum(id, false) }
-                onEnqueueRequested: function (id, m) { QbzLocal.enqueue("album", id, m) }
+                onPlayRequested: function (id) {
+                    QbzLocal.playAlbumFiltered(id, JSON.stringify(root.view.albumsFilter || {}), false)
+                }
+                onEnqueueRequested: function (id, m) {
+                    QbzLocal.enqueueAlbumFiltered(id, JSON.stringify(root.view.albumsFilter || {}), m)
+                }
                 onToggleSelect: function (id, mods) { root.view.toggleAlbumSelected(id, mods) }
                 onNativeToggleSelect: function (index, mods) {
                     root.view.toggleNativeAlbumSelected(index, mods)

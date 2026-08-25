@@ -199,12 +199,18 @@ Item {
             // click that can only fail. `ephemeralActive` is the same flag the
             // pane itself keys on, so the tab and its body cannot disagree.
             tabs: {
-                var t = [
-                    { "id": "albums", "label": QbzSession.tr("Albums", QbzSession.trRev), "count": root.view.counts.albums || 0 },
-                    { "id": "artists", "label": QbzSession.tr("Artists", QbzSession.trRev), "count": root.view.counts.artists || 0 },
-                    { "id": "folders", "label": QbzSession.tr("Folders", QbzSession.trRev), "count": root.view.counts.folders || 0 },
-                    { "id": "tracks", "label": QbzSession.tr("Tracks", QbzSession.trRev), "count": root.view.counts.tracks || 0 },
-                ]
+                var byId = {
+                    "albums": { "id": "albums", "label": QbzSession.tr("Albums", QbzSession.trRev), "count": root.view.counts.albums || 0 },
+                    "artists": { "id": "artists", "label": QbzSession.tr("Artists", QbzSession.trRev), "count": root.view.counts.artists || 0 },
+                    "genres": { "id": "genres", "label": QbzSession.tr("Library Explorer", QbzSession.trRev), "count": root.view.genreNames.length },
+                    "folders": { "id": "folders", "label": QbzSession.tr("Folders", QbzSession.trRev), "count": root.view.counts.folders || 0 },
+                    "tracks": { "id": "tracks", "label": QbzSession.tr("Tracks", QbzSession.trRev), "count": root.view.counts.tracks || 0 }
+                }
+                var t = []
+                for (var i = 0; i < root.view.localTabOrder.length; i++) {
+                    var id = root.view.localTabOrder[i]
+                    if (byId[id]) t.push(byId[id])
+                }
                 if (root.view.ephemeralActive)
                     t.push({ "id": "ephemeral",
                              "label": root.view.ephemeralLabel,

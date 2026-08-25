@@ -16,7 +16,9 @@ use qbz_source::SourceId;
 use serde::Serialize;
 
 use crate::local_bridge::ui;
-use crate::local_rows::{badge_source, badge_source_raw, detail_of, total_duration, AlbumRow};
+use crate::local_rows::{
+    album_favorite_source, badge_source, badge_source_raw, detail_of, total_duration, AlbumRow,
+};
 
 const PAGE_ENTRIES: usize = 100;
 const FLAT_QUERY_ROWS: usize = 500;
@@ -1023,12 +1025,33 @@ fn map_album(record: &AlbumRecord, index: usize) -> NativeAlbum {
         }
     }
     let format = audio_format(&record.format);
+    let names = [record.artist.as_str()]
+        .into_iter()
+        .chain(record.all_artists.split(','))
+        .collect::<Vec<_>>();
+    let aliases = crate::local_artist_match::build_artist_family_aliases(&names);
+    let artists = crate::local_artist_match::album_credit_names(
+        &record.artist,
+        &record.all_artists,
+        &aliases,
+    );
+    let source = badge_source(Some(record.source_raw_or_kind()));
+    let source_raw = badge_source_raw(Some(record.source_raw_or_kind()));
+    let sources = vec![if source_raw.is_empty() {
+        source.clone()
+    } else {
+        source_raw.clone()
+    }];
+    let favoriteable = album_favorite_source(&sources).is_some();
     NativeAlbum {
         row: AlbumRow {
+            is_favorite: favoriteable && crate::library_qt::is_local_favorite("album", &id),
+            favoriteable,
             id,
             title: record.title.clone(),
             artist: record.artist.clone(),
             all_artists: record.all_artists.clone(),
+            artists,
             year: record.year.map(|year| year.to_string()).unwrap_or_default(),
             track_count: record.track_count,
             duration: total_duration(record.total_duration_ms / 1_000),
@@ -1039,10 +1062,11 @@ fn map_album(record: &AlbumRecord, index: usize) -> NativeAlbum {
                 record.sample_rate_hz.unwrap_or(0) as f64,
             ),
             format: record.format.to_ascii_uppercase(),
+            genres: Vec::new(),
             art_key,
-            source: badge_source(Some(record.source_raw_or_kind())),
-            sources: vec![badge_source(Some(record.source_raw_or_kind()))],
-            source_raw: badge_source_raw(Some(record.source_raw_or_kind())),
+            source,
+            sources,
+            source_raw,
             directory_path: record.directory_path.clone(),
             folder_count: record.folder_count,
         },
@@ -1170,9 +1194,7 @@ fn clear_selection_generation(generation: u64) {
 fn set_loading() {
     ui(|mut bridge| {
         bridge.as_mut().set_local_albums_loading(true);
-        bridge
-            .as_mut()
-            .set_local_albums_error(QString::default());
+        bridge.as_mut().set_local_albums_error(QString::default());
         bridge
             .as_mut()
             .set_local_albums_native_error(QString::default());

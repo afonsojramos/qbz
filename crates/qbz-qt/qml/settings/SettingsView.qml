@@ -333,7 +333,8 @@ Item {
                                 LocalLibrarySettings {
                                     width: parent.width
                                     doc: root.doc
-                                confirmHost: confirmHost
+                                    confirmHost: confirmHost
+                                    tabOrderModal: localTabsConfigModal
                                 }
                             }
                         }
@@ -397,6 +398,13 @@ Item {
     // Panels that need it are handed the reference (see LocalLibrarySettings
     // / PlexSettings `confirmHost`).
     SettingsConfirmHost { id: confirmHost }
+
+    // App-wide Local Library order. Mounted at the view root so its scrim
+    // covers the sub-navigation and the scrolled panel alike.
+    LocalTabsConfigModal {
+        id: localTabsConfigModal
+        anchors.fill: parent
+    }
 
     // The per-folder settings modal. Same reasoning as the confirm host: it
     // must overlay the whole view, so it cannot live inside the scrolled

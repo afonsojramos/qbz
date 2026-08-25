@@ -67,8 +67,33 @@ Rectangle {
     readonly property var nativeArtistAlbumsModel: QbzLocalArtistAlbums
 
     // ============================ state ==================================
-    // Slint defaults, verbatim (state.slint LocalLibraryState).
-    property string activeTab: "albums"
+    // One app-wide order drives this bar, both nav flyouts and logged-off
+    // startup. Rust seeds the key synchronously before the full settings
+    // snapshot, so the first frame never flashes a different default.
+    readonly property var localTabOrder: {
+        try {
+            var stored = JSON.parse(QbzBridge.settingsJson).localTabOrder
+            if (Array.isArray(stored) && stored.length > 0) return stored
+        } catch (e) { /* construction fallback below */ }
+        return ["genres", "albums", "artists", "folders", "tracks"]
+    }
+    readonly property string localDefaultTab:
+        localTabOrder.length > 0 ? localTabOrder[0] : "genres"
+    readonly property string genreFiltersPosition: {
+        try {
+            var value = JSON.parse(QbzBridge.settingsJson).genreFiltersPosition || "top"
+            if (["top", "right", "left", "bottom"].indexOf(value) >= 0) return value
+        } catch (e) { /* construction fallback below */ }
+        return "top"
+    }
+    property string activeTab: localDefaultTab
+    // Session-only file reachability. Keys are `source:id`; values are the
+    // user-facing reason. This is deliberately not persisted: a moved file or
+    // unavailable NAS must remain retryable and a rescan remains authoritative.
+    property var localTrackErrors: ({})
+    function localTrackErrorKey(source, id) {
+        return (source || "local") + ":" + String(id || "")
+    }
 
     // Albums tab.
     property string albumsSearch: ""
@@ -77,7 +102,7 @@ Rectangle {
     property string albumsView: "grid"      // grid | list
     property bool albumsMultiSelect: false
     property var albumsSelected: ({})
-    readonly property int albumsSelectedCount: QbzLocal.localAlbumsNativeActive
+    readonly property int albumsSelectedCount: root.albumsNativeViewActive
         ? QbzLocal.localAlbumsNativeSelectedCount
         : Object.keys(albumsSelected).length
 
@@ -96,6 +121,7 @@ Rectangle {
 
     // Artists tab.
     property string artistsSearch: ""
+    property string artistsSort: "name-asc"
     property string selectedArtist: ""
 
     // Tracks tab.
@@ -112,17 +138,193 @@ Rectangle {
         ? QbzLocal.localTracksNativeSelectedCount
         : Object.keys(tracksSelected).length
 
-    // Albums quality/format/source filter (LibAlbumFilterState).
+    // Genres column browser. Selections are maps so Ctrl/Cmd toggles stay
+    // O(1), and an empty map is the explicit All state.
+    property string genresSearch: ""
+    property string genreArtistsSearch: ""
+    property string genreAlbumsSearch: ""
+    property var selectedGenres: ({})
+    property var selectedGenreArtists: ({})
+    property var selectedGenreAlbums: ({})
+    readonly property int selectedGenreCount: Object.keys(selectedGenres).length
+    readonly property int selectedGenreArtistCount: Object.keys(selectedGenreArtists).length
+    readonly property int selectedGenreAlbumCount: Object.keys(selectedGenreAlbums).length
+    property bool genresBrowserCollapsed: false
+    property string genresView: "details"   // grid | list | details
+    property string genresSort: "title-asc"
+
+    // Routed history state. Scroll is handled independently by ScrollMemory;
+    // this document restores the controls that determine what that offset
+    // means before the tab asks for data.
+    property bool _restoringNavigationState: false
+    readonly property string navigationStateJson: JSON.stringify({
+        activeTab: root.activeTab,
+        albumsSearch: root.albumsSearch,
+        albumsSort: root.albumsSort,
+        albumsGroup: root.albumsGroup,
+        albumsView: root.albumsView,
+        albumsFilter: root.albumsFilter,
+        artistsFilter: root.artistsFilter,
+        tracksFilter: root.tracksFilter,
+        genresFilter: root.genresFilter,
+        foldersMode: root.foldersMode,
+        foldersSearch: root.foldersSearch,
+        foldersSort: root.foldersSort,
+        foldersGroup: root.foldersGroup,
+        foldersGridView: root.foldersGridView,
+        treeSearch: root.treeSearch,
+        selectedFolder: root.selectedFolder,
+        folderDetailSearch: root.folderDetailSearch,
+        folderDetailView: root.folderDetailView,
+        treeRailWidth: root.treeRailWidth,
+        artistsSearch: root.artistsSearch,
+        artistsSort: root.artistsSort,
+        selectedArtist: root.selectedArtist,
+        tracksSearch: root.tracksSearch,
+        genresSearch: root.genresSearch,
+        genreArtistsSearch: root.genreArtistsSearch,
+        genreAlbumsSearch: root.genreAlbumsSearch,
+        selectedGenres: root.selectedGenres,
+        selectedGenreArtists: root.selectedGenreArtists,
+        selectedGenreAlbums: root.selectedGenreAlbums,
+        genresBrowserCollapsed: root.genresBrowserCollapsed,
+        genresView: root.genresView,
+        genresSort: root.genresSort
+    })
+    onNavigationStateJsonChanged: {
+        if (!root._restoringNavigationState && QbzShell.currentView === "local")
+            QbzShell.reportNavState("local", root.navigationStateJson)
+    }
+    function restoreNavigationState() {
+        if (QbzShell.restoreStateScope !== "local" || QbzShell.stateRestore === "")
+            return
+        var saved
+        try { saved = JSON.parse(QbzShell.stateRestore) }
+        catch (e) { QbzShell.restoreStateScope = ""; return }
+        root._restoringNavigationState = true
+        function text(name, fallback) {
+            return typeof saved[name] === "string" ? saved[name] : fallback
+        }
+        root.activeTab = text("activeTab", root.activeTab)
+        root.albumsSearch = text("albumsSearch", root.albumsSearch)
+        root.albumsSort = text("albumsSort", root.albumsSort)
+        root.albumsGroup = text("albumsGroup", root.albumsGroup)
+        root.albumsView = text("albumsView", root.albumsView)
+        if (saved.albumsFilter && typeof saved.albumsFilter === "object")
+            root.albumsFilter = saved.albumsFilter
+        else if (saved.filter && typeof saved.filter === "object")
+            root.albumsFilter = saved.filter
+        if (saved.artistsFilter && typeof saved.artistsFilter === "object")
+            root.artistsFilter = saved.artistsFilter
+        if (saved.tracksFilter && typeof saved.tracksFilter === "object")
+            root.tracksFilter = saved.tracksFilter
+        if (saved.genresFilter && typeof saved.genresFilter === "object")
+            root.genresFilter = saved.genresFilter
+        // Older history entries kept four independent funnels. Adopt the one
+        // belonging to the restored tab as the shared quality/format/source
+        // state, while preserving the Albums/Genres-only favorite predicate.
+        var restoredFilter = root.activeTab === "tracks" ? root.tracksFilter
+            : root.activeTab === "artists" ? root.artistsFilter
+            : root.activeTab === "genres" ? root.genresFilter
+            : root.albumsFilter
+        if (root.albumsFilter.favorite === true
+                || root.genresFilter.favorite === true) {
+            restoredFilter = Object.assign({}, restoredFilter)
+            restoredFilter.favorite = true
+        }
+        root.synchronizeFilters(root.activeTab, restoredFilter, false)
+        root.foldersMode = text("foldersMode", root.foldersMode)
+        root.foldersSearch = text("foldersSearch", root.foldersSearch)
+        root.foldersSort = text("foldersSort", root.foldersSort)
+        root.foldersGroup = text("foldersGroup", root.foldersGroup)
+        root.foldersGridView = text("foldersGridView", root.foldersGridView)
+        root.treeSearch = text("treeSearch", root.treeSearch)
+        root.selectedFolder = text("selectedFolder", root.selectedFolder)
+        root.folderDetailSearch = text("folderDetailSearch", root.folderDetailSearch)
+        root.folderDetailView = text("folderDetailView", root.folderDetailView)
+        if (typeof saved.treeRailWidth === "number") root.treeRailWidth = saved.treeRailWidth
+        root.artistsSearch = text("artistsSearch", root.artistsSearch)
+        root.artistsSort = text("artistsSort", root.artistsSort)
+        root.selectedArtist = text("selectedArtist", root.selectedArtist)
+        root.tracksSearch = text("tracksSearch", root.tracksSearch)
+        root.genresSearch = text("genresSearch", root.genresSearch)
+        root.genreArtistsSearch = text("genreArtistsSearch", root.genreArtistsSearch)
+        root.genreAlbumsSearch = text("genreAlbumsSearch", root.genreAlbumsSearch)
+        if (saved.selectedGenres && typeof saved.selectedGenres === "object")
+            root.selectedGenres = saved.selectedGenres
+        if (saved.selectedGenreArtists && typeof saved.selectedGenreArtists === "object")
+            root.selectedGenreArtists = saved.selectedGenreArtists
+        if (saved.selectedGenreAlbums && typeof saved.selectedGenreAlbums === "object")
+            root.selectedGenreAlbums = saved.selectedGenreAlbums
+        if (typeof saved.genresBrowserCollapsed === "boolean")
+            root.genresBrowserCollapsed = saved.genresBrowserCollapsed
+        root.genresView = text("genresView", root.genresView)
+        root.genresSort = text("genresSort", root.genresSort)
+        QbzShell.restoreStateScope = ""
+        root._restoringNavigationState = false
+        QbzShell.reportNavState("local", root.navigationStateJson)
+    }
+
+    // One quality/format/source funnel follows the user across Albums,
+    // Artists, Genres and Tracks. Favorites remains an Albums/Genres-only
+    // predicate, but it survives visits to tabs where that chip is absent.
     property bool filterOpen: false
     // SEEDED FROM THE BRIDGE, not defaulted to `{}`. This view is DESTROYED on
     // every navigation away (see the bridge's `albums_filter` doc), so a
     // view-local default meant the funnel reset the moment the user visited
     // Discover — and never survived a restart at all. `QbzLocal.albumsFilter`
     // outlives the view and mirrors `ui_prefs.json`.
-    property var filter: root.parseFilter(QbzLocal.albumsFilter)
+    property var albumsFilter: root.parseFilter(QbzLocal.albumsFilter)
+    property var artistsFilter: root.commonFilter(albumsFilter)
+    property var tracksFilter: root.commonFilter(albumsFilter)
+    property var genresFilter: Object.assign({}, albumsFilter)
+    // Live heart fan-out. Album JSON/native pages are immutable snapshots;
+    // this tiny id map updates every mounted card and the Favorites-only
+    // predicate without republishing thousands of album rows (and therefore
+    // without moving the scroll position).
+    property var favoriteOverrides: ({})
+    readonly property bool albumsNativeViewActive:
+        QbzLocal.localAlbumsNativeActive
+        && albumsFilter.favorite !== true
+        && activeTab === "albums"
+    readonly property var filter: activeTab === "artists" ? artistsFilter
+        : activeTab === "tracks" ? tracksFilter
+        : activeTab === "genres" ? genresFilter
+        : albumsFilter
     function parseFilter(json) {
         if (!json || json === "") return ({})
         try { return JSON.parse(json) || ({}) } catch (e) { return ({}) }
+    }
+    function commonFilter(value) {
+        var out = Object.assign({}, value || ({}))
+        delete out.favorite
+        return out
+    }
+    function synchronizeFilters(sourceTab, value, persist) {
+        var wasFavoriteOnly = albumsFilter.favorite === true
+        var favorite = sourceTab === "albums" || sourceTab === "genres"
+            ? value.favorite === true : wasFavoriteOnly
+        var common = commonFilter(value)
+        var albumValue = Object.assign({}, common)
+        var genreValue = Object.assign({}, common)
+        if (favorite) {
+            albumValue.favorite = true
+            genreValue.favorite = true
+        }
+        albumsFilter = albumValue
+        artistsFilter = Object.assign({}, common)
+        tracksFilter = Object.assign({}, common)
+        genresFilter = genreValue
+        if (!persist) return
+        QbzLocal.setAlbumsFilterJson(Object.keys(albumValue).length === 0
+            ? "" : JSON.stringify(albumValue))
+        // This setter resets the Tracks query, so call it only while Tracks
+        // is the visible consumer. A later tab switch applies the already
+        // shared state before loading page one.
+        if (activeTab === "tracks")
+            QbzLocal.tracksSetFilterJson(JSON.stringify(common))
+        if (!wasFavoriteOnly && favorite && activeTab === "albums")
+            QbzLocal.loadTab("albums-legacy")
     }
     // A LATER republish still wins: the gates and the saved funnel are
     // published together when a media server is connected or removed, and the
@@ -133,8 +335,20 @@ Rectangle {
         target: QbzLocal
         function onAlbumsFilterChanged() {
             var next = root.parseFilter(QbzLocal.albumsFilter)
-            if (JSON.stringify(next) !== JSON.stringify(root.filter))
-                root.filter = next
+            if (JSON.stringify(next) !== JSON.stringify(root.albumsFilter))
+                root.synchronizeFilters("albums", next, false)
+        }
+        function onLocalAlbumFavoriteChanged(id, favorite) {
+            var next = Object.assign({}, root.favoriteOverrides)
+            next[id] = favorite
+            root.favoriteOverrides = next
+        }
+        function onLocalTrackAvailability(source, id, message) {
+            var next = Object.assign({}, root.localTrackErrors)
+            var key = root.localTrackErrorKey(source, id)
+            if (message === "") delete next[key]
+            else next[key] = message
+            root.localTrackErrors = next
         }
     }
     readonly property int filterCount: {
@@ -142,12 +356,10 @@ Rectangle {
         for (var k in filter) if (filter[k]) n++
         return n
     }
-    /// The ONE writer. Both mutators funnel through it, so neither can change
-    /// the funnel and forget to persist it.
+    /// The ONE writer. Both mutators funnel through it, so the four tabs
+    /// cannot drift into different source/format/quality states.
     function setFilter(f) {
-        filter = f
-        QbzLocal.setAlbumsFilterJson(
-            Object.keys(f).length === 0 ? "" : JSON.stringify(f))
+        synchronizeFilters(activeTab, f, true)
     }
     function toggleFilter(key) {
         var f = Object.assign({}, filter)
@@ -157,7 +369,7 @@ Rectangle {
     }
     function clearFilter() { setFilter({}) }
 
-    /// The funnel's state as the applied-filters tooltip wants it: three groups
+    /// The funnel's state as the applied-filters tooltip wants it: grouped
     /// in the popup's own order, each holding the labels of the keys that are
     /// on. Built HERE because this is where the state lives — the toolbar only
     /// draws the trigger, and `LocalFilterPopup` only draws chips.
@@ -175,6 +387,8 @@ Rectangle {
         }
         var tr = QbzSession.trRev
         return [
+            { group: QbzSession.tr("Favorites", tr),
+              values: pick(["favorite"], [QbzSession.tr("Favorites only", tr)]) },
             { group: QbzSession.tr("Quality", tr),
               values: pick(["hires", "cd", "lossy"],
                            [QbzSession.tr("Hi-Res", tr), QbzSession.tr("CD", tr),
@@ -216,10 +430,12 @@ Rectangle {
     /// The ephemeral tab is the only one that can VANISH while the user stands
     /// on it (the folder is closed, the disc is ejected). Without this the view
     /// keeps `activeTab === "ephemeral"` with no tab in the bar and no Loader
-    /// active: a blank content area and no way back except another tab. Albums
-    /// is the fallback because it is this view's own default (:63).
+    /// active: a blank content area and no way back except another tab. The
+    /// user's first ordered surface is the same fallback every other Local
+    /// Library entry point uses.
     onEphemeralActiveChanged: {
-        if (!ephemeralActive && activeTab === "ephemeral") activeTab = "albums"
+        if (!ephemeralActive && activeTab === "ephemeral")
+            activeTab = root.localDefaultTab
     }
 
     /// Opening something must LAND you on it. While the pane was an arm of the
@@ -238,6 +454,11 @@ Rectangle {
     Connections {
         target: QbzLocal
         function onLocalEphemeralOpenSeqChanged() { root.activeTab = "ephemeral" }
+    }
+
+    function loadTabForView(tab) {
+        QbzLocal.loadTab(tab === "albums" && root.albumsFilter.favorite === true
+            ? "albums-legacy" : tab)
     }
 
     // ---------------------------- documents ------------------------------
@@ -415,7 +636,17 @@ Rectangle {
     // Mount: load the default tab. Tab switches load on demand (each tab is
     // one query; the Albums/Folders/Artists sets are bounded).
     Component.onCompleted: {
-        QbzLocal.loadTab(root.activeTab)
+        restoreNavigationState()
+        // Initial bindings are not a reliable change notification contract:
+        // explicitly seed history even when this is a fresh entry whose state
+        // happens to equal every default.
+        QbzShell.reportNavState("local", root.navigationStateJson)
+        if (root.activeTab === "tracks")
+            QbzLocal.tracksSetFilterJson(JSON.stringify(root.tracksFilter))
+        else
+            root.loadTabForView(root.activeTab)
+        if (root.activeTab === "tracks" && root.tracksSearch !== "")
+            QbzLocal.tracksSearch(root.tracksSearch)
         consumePendingArtist()
         consumePendingRoute()
     }
@@ -424,7 +655,14 @@ Rectangle {
         if (QbzLocal.localTracksNativeActive) QbzLocal.tracksNativeClearSelection()
     }
     onActiveTabChanged: {
-        QbzLocal.loadTab(activeTab)
+        // Tracks owns a server-side descriptor; install the shared funnel
+        // before its first page is queried. The setter performs that load.
+        if (!root._restoringNavigationState) {
+            if (activeTab === "tracks")
+                QbzLocal.tracksSetFilterJson(JSON.stringify(root.tracksFilter))
+            else
+                root.loadTabForView(activeTab)
+        }
         // The tab that just appeared has covers to ask for and the one that
         // left has covers to let go of. Each surface answers for itself.
         artworkRefresh()
@@ -503,6 +741,9 @@ Rectangle {
     // and an AND across sections — an empty section means "any".
     function sourceBucket(word) {
         var source = (word || "local").toLowerCase()
+        // library.db stores ordinary scanner rows as `user`; every Local
+        // Library surface exposes that storage word through the Local chip.
+        if (source === "" || source === "user") return "local"
         if (source === "qobuz_purchase" || source === "qobuz_download")
             return "offline"
         if (source === "navidrome" || source === "gonic"
@@ -511,28 +752,30 @@ Rectangle {
         return source
     }
 
-    function applyFilter(rows) {
-        if (filterCount === 0) return rows
-        var qAny = filter.hires || filter.cd || filter.lossy
-        var fAny = filter.flac || filter.alac || filter.ape || filter.wav
-            || filter.mp3 || filter.aac || filter.other
-        var sAny = filter.local || filter.offline || filter.plex
-            || filter.jellyfin || filter.subsonic
+    function applyFilter(rows, selectedFilter) {
+        var selected = selectedFilter || ({})
+        if (Object.keys(selected).length === 0) return rows
+        var qAny = selected.hires || selected.cd || selected.lossy
+        var fAny = selected.flac || selected.alac || selected.ape || selected.wav
+            || selected.mp3 || selected.aac || selected.other
+        var sAny = selected.local || selected.offline || selected.plex
+            || selected.jellyfin || selected.subsonic
         var known = { "flac": 1, "alac": 1, "ape": 1, "wav": 1, "mp3": 1, "aac": 1 }
         var out = []
         for (var i = 0; i < rows.length; i++) {
             var r = rows[i]
+            if (selected.favorite === true && !root.albumFavorite(r)) continue
             var tier = (r.qualityTier || "").toLowerCase()
             var fmt = (r.format || "").toLowerCase()
             if (qAny) {
-                var qok = (filter.hires && (tier === "hires" || tier === "max"))
-                    || (filter.cd && tier === "cd")
-                    || (filter.lossy && (tier === "mp3" || tier === "lossy"))
+                var qok = (selected.hires && (tier === "hires" || tier === "max"))
+                    || (selected.cd && tier === "cd")
+                    || (selected.lossy && (tier === "mp3" || tier === "lossy"))
                 if (!qok) continue
             }
             if (fAny) {
-                var fok = filter[fmt] === true
-                    || (filter.other === true && known[fmt] !== 1)
+                var fok = selected[fmt] === true
+                    || (selected.other === true && known[fmt] !== 1)
                 if (!fok) continue
             }
             if (sAny) {
@@ -550,7 +793,7 @@ Rectangle {
                     ? r.sources : [r.source || "local"]
                 var sourceMatches = false
                 for (var si = 0; si < sources.length; si++) {
-                    if (filter[sourceBucket(sources[si])] === true) {
+                    if (selected[sourceBucket(sources[si])] === true) {
                         sourceMatches = true
                         break
                     }
@@ -560,6 +803,24 @@ Rectangle {
             out.push(r)
         }
         return out
+    }
+
+    function albumFavorite(album) {
+        if (!album || !album.id) return false
+        var override = root.favoriteOverrides[album.id]
+        return override === undefined ? album.isFavorite === true : override === true
+    }
+
+    function toggleAlbumFavorite(album, artworkUrl) {
+        if (!album || !album.id || album.favoriteable !== true) return
+        var sources = album.sources && album.sources.length > 0
+            ? album.sources : [album.sourceRaw || album.source || ""]
+        QbzLocal.albumToggleFavorite(
+            album.id,
+            album.title || "",
+            album.artist || "",
+            artworkUrl || "",
+            JSON.stringify(sources))
     }
 
     // A-Z / by-artist grouping — [{ letter, items }] plus the alpha jumps the
@@ -591,9 +852,8 @@ Rectangle {
     // Once F1 owns the Albums tab, never run the legacy O(n) JS pipeline in
     // parallel. The old document may still be resident because Artists uses
     // it until F2; it is evaluated only while that legacy surface is active.
-    readonly property var albumsVisible: QbzLocal.localAlbumsNativeActive
-        && activeTab === "albums" ? []
-        : applyFilter(sortRows(filterRows(albums, albumsSearch), albumsSort))
+    readonly property var albumsVisible: root.albumsNativeViewActive ? []
+        : applyFilter(sortRows(filterRows(albums, albumsSearch), albumsSort), albumsFilter)
     readonly property var albumsGrouped: groupRows(albumsVisible, albumsGroup)
 
     readonly property var foldersVisible:
@@ -606,14 +866,72 @@ Rectangle {
     // track hundreds of indices whenever a later page belonged ahead of it.
     readonly property var tracksVisible: tracks
 
+    function artistMatchesFilter(artist, selected) {
+        if (!selected || Object.keys(selected).length === 0) return true
+        var qAny = selected.hires || selected.cd || selected.lossy
+        var fAny = selected.flac || selected.alac || selected.ape || selected.wav
+            || selected.mp3 || selected.aac || selected.other
+        var sAny = selected.local || selected.offline || selected.plex
+            || selected.jellyfin || selected.subsonic
+        var known = { "flac": 1, "alac": 1, "ape": 1, "wav": 1,
+                      "mp3": 1, "aac": 1 }
+        var i, value
+        if (qAny) {
+            var qualityOk = false
+            for (i = 0; i < (artist.qualityTiers || []).length; i++) {
+                value = (artist.qualityTiers[i] || "").toLowerCase()
+                if ((selected.hires && (value === "hires" || value === "max"))
+                    || (selected.cd && value === "cd")
+                    || (selected.lossy && (value === "mp3" || value === "lossy"))) {
+                    qualityOk = true; break
+                }
+            }
+            if (!qualityOk) return false
+        }
+        if (fAny) {
+            var formatOk = false
+            for (i = 0; i < (artist.formats || []).length; i++) {
+                value = (artist.formats[i] || "").toLowerCase()
+                if (selected[value] === true
+                    || (selected.other === true && known[value] !== 1)) {
+                    formatOk = true; break
+                }
+            }
+            if (!formatOk) return false
+        }
+        if (sAny) {
+            var sourceOk = false
+            for (i = 0; i < (artist.sources || []).length; i++) {
+                if (selected[sourceBucket(artist.sources[i])] === true) {
+                    sourceOk = true; break
+                }
+            }
+            if (!sourceOk) return false
+        }
+        return true
+    }
+
     readonly property var artistsVisible: {
         if (QbzLocal.localArtistsNativeActive && activeTab === "artists") return []
         var q = artistsSearch.trim().toLowerCase()
-        if (q === "") return artists
         var out = []
         for (var i = 0; i < artists.length; i++) {
-            if ((artists[i].name || "").toLowerCase().indexOf(q) >= 0) out.push(artists[i])
+            var artist = artists[i]
+            if (q !== "" && (artist.name || "").toLowerCase().indexOf(q) < 0)
+                continue
+            if (!artistMatchesFilter(artist, artistsFilter)) continue
+            out.push(artist)
         }
+        out.sort(function(a, b) {
+            var key = root.artistsSort
+            var year = key.indexOf("year-") === 0
+            var av = year ? Number(a.year || 0) : (a.name || "").toLowerCase()
+            var bv = year ? Number(b.year || 0) : (b.name || "").toLowerCase()
+            if (year && av === 0) return 1
+            if (year && bv === 0) return -1
+            var cmp = av < bv ? -1 : av > bv ? 1 : 0
+            return key.slice(-4) === "desc" ? -cmp : cmp
+        })
         return out
     }
     readonly property int artistsVisibleCount: artistsVisible.length
@@ -633,6 +951,127 @@ Rectangle {
         for (i = 0; i < order.length; i++) {
             out.push({ "letter": order[i], "items": buckets[order[i]] })
         }
+        return out
+    }
+
+    // --------------------- Genres column browser -------------------------
+    // Empty selection maps are the explicit All state. Multiple selections
+    // are OR-ed within one column and AND-ed across the chained columns.
+    readonly property var genreBaseAlbums: applyFilter(albums, genresFilter)
+
+    function albumArtistNames(album) {
+        if (album.artists && album.artists.length > 0)
+            return album.artists
+        var values = []
+        var seen = {}
+        var raw = (album.allArtists || "").trim()
+        var parts = raw === "" ? [album.artist || ""] : raw.split(",")
+        if ((album.artist || "").trim() !== "") parts.unshift(album.artist)
+        for (var i = 0; i < parts.length; i++) {
+            var display = (parts[i] || "").trim()
+            var key = display.toLowerCase()
+            if (display !== "" && !seen[key]) { seen[key] = true; values.push(display) }
+        }
+        return values
+    }
+
+    function albumHasSelectedGenre(album) {
+        if (selectedGenreCount === 0) return true
+        var genres = album.genres || []
+        for (var i = 0; i < genres.length; i++)
+            if (selectedGenres[(genres[i] || "").toLowerCase()] === true) return true
+        return false
+    }
+
+    function albumHasSelectedArtist(album) {
+        if (selectedGenreArtistCount === 0) return true
+        var names = albumArtistNames(album)
+        for (var i = 0; i < names.length; i++)
+            if (selectedGenreArtists[names[i].toLowerCase()] === true) return true
+        return false
+    }
+
+    readonly property var genreNames: {
+        var values = {}, display = {}
+        for (var i = 0; i < genreBaseAlbums.length; i++) {
+            var genres = genreBaseAlbums[i].genres || []
+            for (var j = 0; j < genres.length; j++) {
+                var name = (genres[j] || "").trim(), key = name.toLowerCase()
+                if (name !== "" && !values[key]) { values[key] = true; display[key] = name }
+            }
+        }
+        var out = []
+        var q = genresSearch.trim().toLowerCase()
+        for (var key in values)
+            if (q === "" || display[key].toLowerCase().indexOf(q) >= 0)
+                out.push({ "key": key, "label": display[key] })
+        out.sort(function(a, b) { return a.label.localeCompare(b.label) })
+        return out
+    }
+
+    readonly property var genreArtistOptions: {
+        var values = {}, display = {}
+        for (var i = 0; i < genreBaseAlbums.length; i++) {
+            var album = genreBaseAlbums[i]
+            if (!albumHasSelectedGenre(album)) continue
+            var names = albumArtistNames(album)
+            for (var j = 0; j < names.length; j++) {
+                var key = names[j].toLowerCase()
+                if (!values[key]) { values[key] = true; display[key] = names[j] }
+            }
+        }
+        var out = [], q = genreArtistsSearch.trim().toLowerCase()
+        for (var key in values)
+            if (q === "" || display[key].toLowerCase().indexOf(q) >= 0)
+                out.push({ "key": key, "label": display[key] })
+        out.sort(function(a, b) { return a.label.localeCompare(b.label) })
+        return out
+    }
+
+    readonly property var genreAlbumOptions: {
+        var out = [], q = genreAlbumsSearch.trim().toLowerCase()
+        for (var i = 0; i < genreBaseAlbums.length; i++) {
+            var album = genreBaseAlbums[i]
+            if (!albumHasSelectedGenre(album) || !albumHasSelectedArtist(album)) continue
+            if (q !== "" && (album.title || "").toLowerCase().indexOf(q) < 0) continue
+            out.push({ "key": album.id, "label": album.title || "", "album": album })
+        }
+        out.sort(function(a, b) { return a.label.localeCompare(b.label) })
+        return out
+    }
+
+    readonly property var genreAlbumsVisible: {
+        var rows = []
+        for (var i = 0; i < genreAlbumOptions.length; i++) {
+            var option = genreAlbumOptions[i]
+            if (selectedGenreAlbumCount === 0 || selectedGenreAlbums[option.key] === true)
+                rows.push(option.album)
+        }
+        return sortRows(rows, genresSort)
+    }
+
+    function toggleGenre(key, modifiers) {
+        selectedGenres = nextFacetSelection(selectedGenres, key, modifiers)
+        selectedGenreArtists = ({})
+        selectedGenreAlbums = ({})
+    }
+    function toggleGenreArtist(key, modifiers) {
+        selectedGenreArtists = nextFacetSelection(selectedGenreArtists, key, modifiers)
+        selectedGenreAlbums = ({})
+    }
+    function toggleGenreAlbum(key, modifiers) {
+        selectedGenreAlbums = nextFacetSelection(selectedGenreAlbums, key, modifiers)
+    }
+    function nextFacetSelection(current, key, modifiers) {
+        if (key === "") return ({})
+        var additive = (modifiers & Qt.ControlModifier) !== 0
+            || (modifiers & Qt.MetaModifier) !== 0
+        if (!additive) {
+            var only = {}; only[key] = true; return only
+        }
+        var out = Object.assign({}, current)
+        if (out[key]) delete out[key]
+        else out[key] = true
         return out
     }
 
@@ -907,7 +1346,7 @@ Rectangle {
 
     // ============================ actions ================================
     function openAlbum(id) {
-        QbzLocal.openAlbum(id)
+        QbzLocal.openAlbumFiltered(id, JSON.stringify(root.filter || {}))
         QbzShell.navigateTo("localalbum")
     }
     function selectFolder(path) {
@@ -1085,6 +1524,11 @@ Rectangle {
             }
             Loader {
                 anchors.fill: parent
+                active: QbzLocal.localAvailable && root.activeTab === "genres"
+                sourceComponent: LocalGenresTab { view: root }
+            }
+            Loader {
+                anchors.fill: parent
                 active: QbzLocal.localAvailable && root.activeTab === "folders"
                 sourceComponent: LocalFoldersTab { view: root }
             }
@@ -1113,7 +1557,8 @@ Rectangle {
     // it instead of taking a layout slot (the Slint mount, :2470).
     LocalFilterPopup {
         anchors.fill: parent
-        visible: root.filterOpen && root.activeTab === "albums"
+        visible: root.filterOpen
+            && ["albums", "artists", "genres", "tracks"].indexOf(root.activeTab) >= 0
         view: root
     }
 }

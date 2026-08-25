@@ -351,9 +351,9 @@ pub fn large_art_blocking(src: &str, track_id: Option<u64>) -> Option<PathBuf> {
     }
     // `src` is a 500px thumb — its hash is one-way, so the original is
     // re-derived from the track row.
-    let Some(track) = track_id.and_then(|id| {
-        crate::local_state::with_db(|db| db.get_track(id as i64)).flatten()
-    }) else {
+    let Some(track) =
+        track_id.and_then(|id| crate::local_state::with_db(|db| db.get_track(id as i64)).flatten())
+    else {
         return Some(path.to_path_buf());
     };
     // Serialize per source (the module-docs race): the large tier shares the
@@ -366,7 +366,7 @@ pub fn large_art_blocking(src: &str, track_id: Option<u64>) -> Option<PathBuf> {
     out
 }
 
-/// Embedded bytes first (the scanner's precedence), folder art second.
+/// Embedded bytes first, THIS disc directory second, collection fallback last.
 fn large_art_for_track(track: &qbz_library::LocalTrack) -> Option<PathBuf> {
     let file = Path::new(&track.file_path);
     if let Some(bytes) = qbz_library::MetadataExtractor::extract_artwork_bytes(file) {
@@ -374,6 +374,13 @@ fn large_art_for_track(track: &qbz_library::LocalTrack) -> Option<PathBuf> {
             qbz_library::get_or_generate_large_thumbnail_from_bytes(&bytes, &track.file_path)
         {
             return Some(p);
+        }
+    }
+    if let Some(dir) = file.parent() {
+        if let Some(art) = qbz_library::MetadataExtractor::folder_artwork_in_dir(dir) {
+            if let Ok(path) = qbz_library::get_or_generate_large_thumbnail(Path::new(&art)) {
+                return Some(path);
+            }
         }
     }
     let art = qbz_library::MetadataExtractor::find_folder_artwork(file, Some(&track.album))?;
