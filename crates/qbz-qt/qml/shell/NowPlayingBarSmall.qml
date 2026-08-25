@@ -44,6 +44,9 @@ Rectangle {
     // PlayerBarSmall.slint).
     color: ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
     readonly property bool ambientOn: theme.ambientOn
+    readonly property bool waveformVisible: QbzShell.seekbarWaveform
+        && QbzPlayer.npSeekWaveformAnalyzed > 0
+        && QbzPlayer.npSeekWaveform.length > 0
 
 
     QbzTheme { id: theme }
@@ -216,12 +219,26 @@ Rectangle {
             Rectangle {
                 id: seekTrack
                 width: parent.width
-                height: 3
+                height: root.waveformVisible ? 9 : 3
+                anchors.verticalCenter: parent.verticalCenter
                 radius: 2
-                color: theme.surfaceElevated
+                color: root.waveformVisible ? "transparent" : theme.surfaceElevated
+
+                SeekWaveformItem {
+                    anchors.fill: parent
+                    visible: root.waveformVisible
+                    values: QbzPlayer.npSeekWaveform
+                    playedProgress: QbzPlayer.npProgress
+                    cacheProgress: QbzPlayer.npCacheProgress
+                    baseColor: theme.surfaceElevated
+                    cacheColor: Qt.rgba(theme.textMuted.r, theme.textMuted.g,
+                                        theme.textMuted.b, 0.35)
+                    playedColor: theme.accent
+                }
 
                 // Buffered / cache line.
                 Rectangle {
+                    visible: !root.waveformVisible
                     width: parent.width * Math.min(Math.max(QbzPlayer.npCacheProgress, 0), 1)
                     height: parent.height
                     radius: 2
@@ -235,6 +252,7 @@ Rectangle {
                 }
                 // Playback progress line.
                 Rectangle {
+                    visible: !root.waveformVisible
                     width: parent.width * Math.min(Math.max(QbzPlayer.npProgress, 0), 1)
                     height: parent.height
                     radius: 2

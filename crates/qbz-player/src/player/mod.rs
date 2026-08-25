@@ -48,9 +48,9 @@ use symphonia::default::{get_codecs, get_probe};
 use playback_engine::PlaybackEngine;
 use qbz_audio::{
     calculate_gain_factor, db_to_linear, extract_replaygain, AnalyzerMessage, AnalyzerTap,
-    AudioBackendType, AudioDiagnostic, AudioSettings, BackendConfig, BackendManager,
-    BitPerfectMode, DiagnosticSource, DynamicAmplify, LoudnessAnalyzer, LoudnessCache,
-    TappedSource, VisualizerTap,
+    AnalyzerWaveformTrack, AudioBackendType, AudioDiagnostic, AudioSettings, BackendConfig,
+    BackendManager, BitPerfectMode, DiagnosticSource, DynamicAmplify, LoudnessAnalyzer,
+    LoudnessCache, TappedSource, VisualizerTap,
 };
 use qbz_models::{AssetOrigin, ExternalStreamAsset, Quality, StreamQualityInfo};
 use qbz_qobuz::QobuzClient;
@@ -1581,16 +1581,33 @@ impl Player {
             // Pipeline order (normalization ON):
             //   Diagnostic (raw) → AnalyzerTap → DynamicAmplify → Visualizer
             // Pipeline order (normalization OFF — bit-perfect):
-            //   Diagnostic (raw) → Visualizer
+            //   Diagnostic (raw) → dormant/seek-waveform AnalyzerTap → Visualizer
             let wrap_source = |source: Box<dyn Source<Item = f32> + Send>,
                                normalization_gain: Option<f32>,
                                gain_atomic: Option<Arc<AtomicU32>>,
                                analyzer_tx: &SyncSender<AnalyzerMessage>,
-                               analyzer_enabled: &Arc<AtomicBool>|
+                               analyzer_enabled: &Arc<AtomicBool>,
+                               waveform_track: Option<AnalyzerWaveformTrack>,
+                               waveform_start_frame: u64|
              -> Box<dyn Source<Item = f32> + Send> {
                 // Diagnostic tap (innermost — captures raw decoded samples)
                 let source: Box<dyn Source<Item = f32> + Send> =
                     Box::new(DiagnosticSource::new(source, thread_diagnostic.clone()));
+
+                if gain_atomic.is_some() {
+                    analyzer_enabled.store(true, Ordering::SeqCst);
+                }
+                // The tap is always present but its disabled path is one
+                // relaxed flag check. This lets the waveform setting turn on
+                // during a track without rebuilding the audible source.
+                let source: Box<dyn Source<Item = f32> + Send> =
+                    Box::new(AnalyzerTap::new_with_waveform(
+                        source,
+                        analyzer_tx.clone(),
+                        analyzer_enabled.clone(),
+                        waveform_track,
+                        waveform_start_frame,
+                    ));
 
                 // Normalization: dynamic (Phase 2) > static (Phase 1 fallback) > none (bit-perfect)
                 let source: Box<dyn Source<Item = f32> + Send> =
@@ -1599,10 +1616,6 @@ impl Player {
                         log::info!(
                             "Audio thread: dynamic normalization enabled (initial gain {:.4})",
                             initial_gain
-                        );
-                        analyzer_enabled.store(true, Ordering::SeqCst);
-                        let source: Box<dyn Source<Item = f32> + Send> = Box::new(
-                            AnalyzerTap::new(source, analyzer_tx.clone(), analyzer_enabled.clone()),
                         );
                         Box::new(DynamicAmplify::new(source, gain_atomic, initial_gain))
                     } else if let Some(gain) = normalization_gain {
@@ -2276,15 +2289,6 @@ impl Player {
                                         );
                                     }
 
-                                    // Notify analyzer of new track
-                                    let _ = analyzer_tx.try_send(AnalyzerMessage::NewTrack {
-                                        track_id,
-                                        sample_rate,
-                                        channels,
-                                        target_lufs,
-                                        gain_atomic: atomic.clone(),
-                                    });
-
                                     (rg_gain, Some(atomic))
                                 } else {
                                     (None, None)
@@ -2298,9 +2302,19 @@ impl Player {
                             let source = wrap_source(
                                 source,
                                 normalization,
-                                gain_atomic,
+                                gain_atomic.clone(),
                                 &analyzer_tx,
                                 &analyzer_enabled,
+                                Some(AnalyzerWaveformTrack {
+                                    track_id,
+                                    sample_rate,
+                                    channels,
+                                    duration_secs: actual_duration,
+                                    start_frame: 0,
+                                    target_lufs: norm_settings,
+                                    gain_atomic,
+                                }),
+                                0,
                             );
                             if let Err(e) = engine.append(source) {
                                 log::error!("Failed to append source to engine: {}", e);
@@ -2839,15 +2853,6 @@ impl Player {
                                     log::info!("Streaming normalization: cache hit for track {}, gain {:.4}", track_id, cached_gain);
                                 }
 
-                                // Notify analyzer of new track
-                                let _ = analyzer_tx.try_send(AnalyzerMessage::NewTrack {
-                                    track_id,
-                                    sample_rate,
-                                    channels,
-                                    target_lufs,
-                                    gain_atomic: atomic.clone(),
-                                });
-
                                 (rg_gain, Some(atomic))
                             } else {
                                 (None, None)
@@ -2896,9 +2901,20 @@ impl Player {
                             let source_to_play = wrap_source(
                                 source_to_play,
                                 normalization,
-                                gain_atomic,
+                                gain_atomic.clone(),
                                 &analyzer_tx,
                                 &analyzer_enabled,
+                                Some(AnalyzerWaveformTrack {
+                                    track_id,
+                                    sample_rate: actual_sr,
+                                    channels: actual_ch,
+                                    duration_secs,
+                                    start_frame: start_position_secs
+                                        .saturating_mul(actual_sr as u64),
+                                    target_lufs: norm_settings,
+                                    gain_atomic,
+                                }),
+                                start_position_secs.saturating_mul(actual_sr as u64),
                             );
                             if let Err(e) = engine.append(source_to_play) {
                                 log::error!("Failed to append streaming source to engine: {}", e);
@@ -3411,6 +3427,10 @@ impl Player {
                                     current_gain_atomic.clone(),
                                     &analyzer_tx,
                                     &analyzer_enabled,
+                                    None,
+                                    resume_pos.saturating_mul(
+                                        (*current_track_sample_rate).unwrap_or(0) as u64,
+                                    ),
                                 );
                                 if let Err(e) = engine.append(skipped_source) {
                                     log::error!("Failed to append source for resume: {}", e);
@@ -3709,6 +3729,10 @@ impl Player {
                                 current_gain_atomic.clone(),
                                 &analyzer_tx,
                                 &analyzer_enabled,
+                                None,
+                                position_secs.saturating_mul(
+                                    (*current_track_sample_rate).unwrap_or(0) as u64,
+                                ),
                             );
                             if let Err(e) = engine.append(skipped_source) {
                                 seek_abort(
@@ -3868,13 +3892,6 @@ impl Player {
                                         let cached_gain = db_to_linear(cached.gain_db.min(6.0));
                                         atomic.store(cached_gain.to_bits(), Ordering::Relaxed);
                                     }
-                                    let _ = analyzer_tx.try_send(AnalyzerMessage::NewTrack {
-                                        track_id,
-                                        sample_rate,
-                                        channels,
-                                        target_lufs,
-                                        gain_atomic: atomic.clone(),
-                                    });
                                     (rg_gain, Some(atomic))
                                 } else {
                                     (None, None)
@@ -3885,9 +3902,19 @@ impl Player {
                             let source = wrap_source(
                                 source,
                                 normalization,
-                                gain_atomic,
+                                gain_atomic.clone(),
                                 &analyzer_tx,
                                 &analyzer_enabled,
+                                Some(AnalyzerWaveformTrack {
+                                    track_id,
+                                    sample_rate,
+                                    channels,
+                                    duration_secs: actual_duration,
+                                    start_frame: 0,
+                                    target_lufs: norm_settings,
+                                    gain_atomic,
+                                }),
+                                0,
                             );
 
                             // Append to existing Sink (gapless queue).
@@ -4024,13 +4051,6 @@ impl Player {
                                         Ordering::Relaxed,
                                     );
                                 }
-                                let _ = analyzer_tx.try_send(AnalyzerMessage::NewTrack {
-                                    track_id,
-                                    sample_rate,
-                                    channels,
-                                    target_lufs,
-                                    gain_atomic: atomic.clone(),
-                                });
                                 (replay_gain, Some(atomic))
                             } else {
                                 (None, None)
@@ -4039,9 +4059,19 @@ impl Player {
                             let source_to_play = wrap_source(
                                 Box::new(incremental),
                                 normalization,
-                                gain_atomic,
+                                gain_atomic.clone(),
                                 &analyzer_tx,
                                 &analyzer_enabled,
+                                Some(AnalyzerWaveformTrack {
+                                    track_id,
+                                    sample_rate,
+                                    channels,
+                                    duration_secs,
+                                    start_frame: 0,
+                                    target_lufs: norm_settings,
+                                    gain_atomic,
+                                }),
+                                0,
                             );
                             let engine_was_empty = engine.empty();
                             if let Err(error) = engine.append(source_to_play) {

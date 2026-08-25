@@ -3058,6 +3058,7 @@ fn main() {
     local_tracks_model_qt::register_qml_model();
     local_albums_model_qt::register_qml_model();
     local_artists_model_qt::register_qml_model();
+    player_bridge::register_seek_waveform_qml_item();
     // BEFORE any restore reads a pref: read + increment the crash chain, so a
     // boot that dies from a restored view or queue degrades the NEXT boot
     // instead of trapping the user in a loop it cannot escape from inside the

@@ -3251,6 +3251,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // limit still belongs to the previous tick (the setter dedupes,
             // so a fully-available track costs no extra hop).
             crate::now_playing::set_seekable_max(seekable_max);
+            crate::now_playing::publish_seek_waveform(track_id);
             crate::now_playing::set_position(
                 position as i32,
                 duration as i32,

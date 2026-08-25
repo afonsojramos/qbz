@@ -840,6 +840,10 @@ pub fn set_large_visualizer_on(on: bool) -> bool {
     on
 }
 
+pub fn seekbar_waveform() -> bool {
+    pref_bool("seekbar_waveform", false)
+}
+
 /// The band's render mode: 0 Bars / 1 Waveform / 2 Energy / 3 Goniometer /
 /// 4 Oscilloscope.
 pub fn large_spectrum_mode() -> i32 {
@@ -1564,6 +1568,8 @@ pub struct SettingsDoc {
     pub local_library_track_artwork: bool,
     #[serde(rename = "playIndicatorAnimation")]
     pub play_indicator_animation: bool,
+    #[serde(rename = "seekbarWaveform")]
+    pub seekbar_waveform: bool,
     #[serde(rename = "invertSwipeNavigation")]
     pub invert_swipe_navigation: bool,
     #[serde(rename = "inAppToasts")]
@@ -2023,6 +2029,7 @@ pub async fn publish_snapshot() {
             sidebar_playlist_collage: pref_bool("sidebar_playlist_collage", true),
             local_library_track_artwork: pref_bool("local_library_track_artwork", false),
             play_indicator_animation: pref_bool("play_indicator_animation", false),
+            seekbar_waveform: seekbar_waveform(),
             invert_swipe_navigation: pref_bool("invert_swipe_navigation", false),
             in_app_toasts: pref_bool("in_app_toasts", true),
             system_notifications: pref_bool("system_notifications", true),
@@ -2308,6 +2315,12 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         }
         "play-indicator-animation" => {
             save_pref("play_indicator_animation", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "seekbar-waveform" => {
+            save_pref("seekbar_waveform", serde_json::json!(value));
+            qbz_audio::set_seek_waveform_enabled(value);
+            crate::shell_bridge::ui(move |mut shell| shell.as_mut().set_seekbar_waveform(value));
             Ok(Apply::None)
         }
         "invert-swipe-navigation" => {

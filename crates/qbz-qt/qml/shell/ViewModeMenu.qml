@@ -82,6 +82,63 @@ QbzContextMenu {
         }
     }
 
+    Item {
+        width: parent ? parent.width : 0
+        height: 7
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            height: 1
+            color: theme.borderSubtle
+        }
+    }
+    Rectangle {
+        width: parent ? parent.width : 0
+        height: 33
+        radius: 5
+        color: waveformArea.containsMouse ? theme.surfaceHover : "transparent"
+        Row {
+            anchors.fill: parent
+            anchors.leftMargin: 8
+            spacing: 8
+            QbzIcon {
+                name: "audio-lines"
+                width: 15
+                height: 15
+                anchors.verticalCenter: parent.verticalCenter
+                tintName: "secondary"
+            }
+            Text {
+                height: parent.height
+                width: parent.width - 23 - 22
+                text: QbzSession.tr("Track waveform", QbzSession.trRev)
+                color: theme.textSecondary
+                font.pixelSize: 13
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+            }
+            QbzIcon {
+                visible: QbzShell.seekbarWaveform
+                name: "check"
+                width: 13
+                height: 13
+                anchors.verticalCenter: parent.verticalCenter
+                tintName: "accent"
+            }
+        }
+        MouseArea {
+            id: waveformArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+                root.close()
+                QbzBridge.settingsBool("seekbar-waveform", !QbzShell.seekbarWaveform)
+            }
+        }
+    }
+
     // Divider + the window-mode rows (Miniplayer / Immersive / Kiosk), all
     // three live.
     Item {

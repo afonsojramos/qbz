@@ -5958,3 +5958,9 @@ msgstr "ゴニオメーター"
 
 msgid "Oscilloscope"
 msgstr "オシロスコープ"
+
+msgid "Track waveform"
+msgstr "トラック波形"
+
+msgid "Show the full-track waveform in the player seek bar."
+msgstr "プレーヤーのシークバーにトラック全体の波形を表示します。"

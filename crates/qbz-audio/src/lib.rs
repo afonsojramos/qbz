@@ -54,6 +54,7 @@ pub mod loudness_cache;
 pub mod network_throttle;
 pub mod output_sinks;
 pub mod settings;
+pub mod seek_waveform;
 pub mod visualizer;
 
 // Re-export commonly used types
@@ -86,6 +87,10 @@ pub use loudness_analyzer::LoudnessAnalyzer;
 pub use loudness_cache::LoudnessCache;
 pub use output_sinks::{list_output_sinks, OutputSinkInfo};
 pub use settings::AudioSettings;
+pub use seek_waveform::{
+    register_seek_waveform_key, seek_waveform_content_key, seek_waveform_snapshot,
+    set_seek_waveform_enabled, SeekWaveformSnapshot, SEEK_WAVEFORM_BINS,
+};
 pub use visualizer::{RingBuffer, TappedSource, VisualizerTap};
 
 /// Stub: returns the ID unchanged on non-Linux (no ALSA normalization needed).

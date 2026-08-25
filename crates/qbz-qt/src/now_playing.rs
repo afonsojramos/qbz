@@ -22,9 +22,10 @@
 //! by the Qobuz Connect port (qconnect_event_sink_qt's badge refresh + the
 //! facade's disconnect tail).
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use cxx_qt_lib::QString;
+use cxx_qt_lib::{QList, QString};
 
 use crate::quality_state::Delivered;
 
@@ -98,6 +99,8 @@ fn idle() -> NowPlayingModel {
 }
 
 static MODEL: Mutex<Option<NowPlayingModel>> = Mutex::new(None);
+static WAVEFORM_REVISION: AtomicU64 = AtomicU64::new(0);
+static WAVEFORM_TRACK: AtomicU64 = AtomicU64::new(0);
 
 fn with_model<T>(f: impl FnOnce(&mut NowPlayingModel) -> T) -> (T, NowPlayingModel) {
     let mut guard = MODEL.lock().unwrap();
@@ -193,6 +196,45 @@ pub fn publish_current() {
     // the stamp is correct before the first track ever plays (the bridge
     // defaults are the unlit SYST/DEFAULT pair).
     crate::output_labels::publish_current();
+}
+
+/// Publish the 512-bin seek waveform only when its analyzer revision moves.
+/// Position ticks continue through `publish()` without cloning this document,
+/// so an already-rendered waveform is static scenegraph data.
+pub fn publish_seek_waveform(track_id: u64) {
+    let snapshot = qbz_audio::seek_waveform_snapshot();
+    if track_id == 0 || snapshot.track_id != track_id {
+        if WAVEFORM_TRACK.swap(track_id, Ordering::Relaxed) != track_id {
+            WAVEFORM_REVISION.store(0, Ordering::Relaxed);
+            crate::player_bridge::ui(|mut player| {
+                player.as_mut().set_np_seek_waveform(QList::default());
+                player.as_mut().set_np_seek_waveform_analyzed(0.0);
+                player.as_mut().set_np_seek_waveform_complete(false);
+            });
+        }
+        return;
+    }
+    if WAVEFORM_TRACK.load(Ordering::Relaxed) == track_id
+        && WAVEFORM_REVISION.load(Ordering::Relaxed) == snapshot.revision
+    {
+        return;
+    }
+    WAVEFORM_TRACK.store(track_id, Ordering::Relaxed);
+    WAVEFORM_REVISION.store(snapshot.revision, Ordering::Relaxed);
+    let mut bins = QList::<f32>::default();
+    for value in snapshot.bins {
+        bins.append(value as f32 / 255.0);
+    }
+    let analyzed = snapshot.analyzed_bins as f32 / qbz_audio::SEEK_WAVEFORM_BINS as f32;
+    crate::player_bridge::ui(move |mut player| {
+        player.as_mut().set_np_seek_waveform(bins);
+        player
+            .as_mut()
+            .set_np_seek_waveform_analyzed(analyzed.clamp(0.0, 1.0));
+        player
+            .as_mut()
+            .set_np_seek_waveform_complete(snapshot.complete);
+    });
 }
 
 /// Re-publish the "Show track playing context" preference onto the bar (the

@@ -5974,3 +5974,9 @@ msgstr "Goniômetro"
 
 msgid "Oscilloscope"
 msgstr "Osciloscópio"
+
+msgid "Track waveform"
+msgstr "Forma de onda da faixa"
+
+msgid "Show the full-track waveform in the player seek bar."
+msgstr "Mostra a forma de onda completa da faixa na barra de busca do player."

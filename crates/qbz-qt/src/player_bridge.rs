@@ -10,12 +10,14 @@ use std::sync::OnceLock;
 
 use cxx_qt::CxxQtThread;
 use cxx_qt::Threading as _;
-use cxx_qt_lib::QString;
+use cxx_qt_lib::{QList, QString};
 
 #[cxx_qt::bridge]
 pub mod qbz_player {
     extern "C++" {
+        include!("cxx-qt-lib/qlist.h");
         include!("cxx-qt-lib/qstring.h");
+        type QList_f32 = cxx_qt_lib::QList<f32>;
         type QString = cxx_qt_lib::QString;
     }
 
@@ -49,6 +51,12 @@ pub mod qbz_player {
         // `np_cache_progress` is the DECORATIVE overlay of the same fill and
         // must not be used as the limit.
         #[qproperty(f32, np_seekable_max)]
+        // Full-track RMS waveform: 512 normalized bins plus the fraction of
+        // bins observed so far. The seekbar renders it only when the single
+        // app-wide preference is enabled.
+        #[qproperty(QList_f32, np_seek_waveform)]
+        #[qproperty(f32, np_seek_waveform_analyzed)]
+        #[qproperty(bool, np_seek_waveform_complete)]
         #[qproperty(bool, np_playing)]
         #[qproperty(bool, np_loading)]
         #[qproperty(f32, np_volume)]
@@ -274,6 +282,9 @@ pub struct QbzPlayerRust {
     np_progress: f32,
     np_cache_progress: f32,
     np_seekable_max: f32,
+    np_seek_waveform: QList<f32>,
+    np_seek_waveform_analyzed: f32,
+    np_seek_waveform_complete: bool,
     np_playing: bool,
     np_loading: bool,
     np_volume: f32,
@@ -328,6 +339,9 @@ impl Default for QbzPlayerRust {
             // (`NowPlayingState.seekable-max: 1.0`). Zero here would lock the
             // bar shut before the first track ever opens.
             np_seekable_max: 1.0,
+            np_seek_waveform: QList::default(),
+            np_seek_waveform_analyzed: 0.0,
+            np_seek_waveform_complete: false,
             np_playing: false,
             np_loading: false,
             np_muted: false,
@@ -376,6 +390,17 @@ impl Default for QbzPlayerRust {
 // ---------------------------------------------------------------------------
 
 static QT_THREAD: OnceLock<CxxQtThread<QbzPlayer>> = OnceLock::new();
+
+extern "C" {
+    fn qbz_seek_waveform_register_qml_type();
+}
+
+pub(crate) fn register_seek_waveform_qml_item() {
+    // SAFETY: no arguments; the C++ side guards duplicate registration. This
+    // explicit reference keeps the hand-written scenegraph item linked from
+    // the static archive on every platform.
+    unsafe { qbz_seek_waveform_register_qml_type() };
+}
 
 /// Queue a player-bridge mutation onto the Qt event loop (no-op before
 /// boot registers the thread).

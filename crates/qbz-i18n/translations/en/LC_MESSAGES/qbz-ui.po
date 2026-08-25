@@ -1572,3 +1572,9 @@ msgstr "Goniometer"
 
 msgid "Oscilloscope"
 msgstr "Oscilloscope"
+
+msgid "Track waveform"
+msgstr "Track waveform"
+
+msgid "Show the full-track waveform in the player seek bar."
+msgstr "Show the full-track waveform in the player seek bar."

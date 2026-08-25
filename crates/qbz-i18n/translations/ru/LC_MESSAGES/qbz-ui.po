@@ -5994,3 +5994,9 @@ msgstr "Гониометр"
 
 msgid "Oscilloscope"
 msgstr "Осциллограф"
+
+msgid "Track waveform"
+msgstr "Форма волны трека"
+
+msgid "Show the full-track waveform in the player seek bar."
+msgstr "Показывать форму волны всего трека на шкале воспроизведения."

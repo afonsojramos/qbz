@@ -303,6 +303,7 @@ fn build_rhi_items() {
         "ribbon_item",
         "tunnelflow_item",
         "scope_trace_item",
+        "seek_waveform_item",
         "local_tracks_model",
         "local_albums_model",
         "local_artists_model",

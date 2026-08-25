@@ -5964,3 +5964,9 @@ msgstr "Goniometer"
 
 msgid "Oscilloscope"
 msgstr "Oscilloscoop"
+
+msgid "Track waveform"
+msgstr "Golfvorm van nummer"
+
+msgid "Show the full-track waveform in the player seek bar."
+msgstr "Toon de golfvorm van het volledige nummer in de zoekbalk van de speler."

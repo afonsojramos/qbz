@@ -81,6 +81,9 @@ pub mod qbz_shell {
         // 3 Large — the ui_prefs npb_mode key, live-switchable.
         #[qproperty(i32, npb_mode)]
 
+        // One persisted toggle shared by Appearance, the view-mode flyout and
+        // both seekbar mounts.
+        #[qproperty(bool, seekbar_waveform)]
         // --- Large-NPB dock (SidebarNowPlayingDock.slint) -----------------
         // The dock is the L's vertical arm: a square cover pinned flush to the
         // window bottom-left, with an optional FFT band above it.
@@ -754,6 +757,7 @@ pub struct QbzShellRust {
     nav_tab_view: QString,
     nav_tab_seq: i32,
     npb_mode: i32,
+    seekbar_waveform: bool,
     large_visualizer_on: bool,
     large_spectrum_mode: i32,
     large_dock_height: f32,
@@ -826,6 +830,8 @@ impl Default for QbzShellRust {
         // One file read for the restored size (the pair is all-or-nothing —
         // see settings_qt::window_size).
         let (window_width, window_height) = crate::settings_qt::window_size();
+        let seekbar_waveform = crate::settings_qt::seekbar_waveform();
+        qbz_audio::set_seek_waveform_enabled(seekbar_waveform);
         Self {
             sidebar_state: crate::settings_qt::sidebar_state(),
             nav_in_sidebar: crate::settings_qt::nav_in_sidebar(),
@@ -847,6 +853,7 @@ impl Default for QbzShellRust {
             nav_tab_seq: 0,
             can_forward: false,
             npb_mode: crate::settings_qt::npb_mode_index(),
+            seekbar_waveform,
             large_visualizer_on: crate::settings_qt::large_visualizer_on(),
             large_spectrum_mode: crate::settings_qt::large_spectrum_mode(),
             large_dock_height: large_dock_height(crate::settings_qt::large_visualizer_on()),

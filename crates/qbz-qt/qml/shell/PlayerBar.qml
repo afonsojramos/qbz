@@ -73,6 +73,9 @@ Rectangle {
     readonly property bool ambientOn: theme.ambientOn
     readonly property bool largeActive: QbzShell.npbMode === 3 && QbzShell.sidebarState === 0
     readonly property bool isClassic: QbzShell.npbMode === 1
+    readonly property bool waveformVisible: QbzShell.seekbarWaveform
+        && QbzPlayer.npSeekWaveformAnalyzed > 0
+        && QbzPlayer.npSeekWaveform.length > 0
 
     // The shell's shared hover-tooltip overlay (controls/QbzTooltip.qml),
     // fed in through NowPlayingBar.qml's Binding. Consumed by the Qobuz
@@ -320,10 +323,21 @@ Rectangle {
                 anchors.right: parent.right
                 anchors.leftMargin: (root.dockWidth > 0 ? root.dockWidth + 6 : 6) + (QbzPlayer.npHasTrack ? 46 : 0)
                 anchors.rightMargin: 6 + (QbzPlayer.npHasTrack ? 46 : 0)
-                height: 4
+                height: root.waveformVisible ? 14 : 4
                 radius: 2
                 anchors.verticalCenter: parent.verticalCenter
-                color: theme.surfaceElevated
+                color: root.waveformVisible ? "transparent" : theme.surfaceElevated
+                SeekWaveformItem {
+                    anchors.fill: parent
+                    visible: root.waveformVisible
+                    values: QbzPlayer.npSeekWaveform
+                    playedProgress: QbzPlayer.npProgress
+                    cacheProgress: QbzPlayer.npCacheProgress
+                    baseColor: theme.surfaceElevated
+                    cacheColor: Qt.rgba(theme.textMuted.r, theme.textMuted.g,
+                                        theme.textMuted.b, 0.35)
+                    playedColor: theme.accent
+                }
                 // Buffered / cache line — SeekBar.slint:58 paints it
                 // text-muted @0.35, NOT border-muted: border-muted is an
                 // alpha-over-surface token (white-based on dark themes,
@@ -331,6 +345,7 @@ Rectangle {
                 // surface-elevated rail on light themes. The Small bar
                 // already used the right pair.
                 Rectangle {
+                    visible: !root.waveformVisible
                     width: parent.width * Math.min(Math.max(QbzPlayer.npCacheProgress, 0), 1)
                     height: parent.height
                     radius: 2
@@ -343,6 +358,7 @@ Rectangle {
                     // it lets rail + cache + progress merge.
                 }
                 Rectangle {
+                    visible: !root.waveformVisible
                     width: parent.width * Math.min(Math.max(QbzPlayer.npProgress, 0), 1)
                     height: parent.height
                     radius: 2

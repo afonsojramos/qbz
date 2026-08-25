@@ -416,6 +416,14 @@ Column {
         }
     }
     SettingRow {
+        label: QbzSession.tr("Track waveform", QbzSession.trRev)
+        description: QbzSession.tr("Show the full-track waveform in the player seek bar.", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.seekbarWaveform === true
+            onToggled: function (v) { QbzBridge.settingsBool("seekbar-waveform", v) }
+        }
+    }
+    SettingRow {
         label: QbzSession.tr("Show playlist cover collages in sidebar", QbzSession.trRev)
         description: QbzSession.tr("Render a 2×2 thumbnail of track covers next to each playlist. Disable on low-end machines to skip the extra images.", QbzSession.trRev)
         QbzToggle {

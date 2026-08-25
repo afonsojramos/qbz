@@ -129,6 +129,7 @@ pub(crate) async fn play_ticket(runtime: &Runtime, ticket: PlaybackTicket) -> bo
 
         PlaybackTicket::Bytes { bytes, play_id } => {
             let len = bytes.len();
+            qbz_audio::register_seek_waveform_key(play_id, qbz_audio::seek_waveform_content_key(&bytes));
             if let Err(e) = runtime.core().player().play_data(bytes, play_id) {
                 log::error!("[qbz-qt] audible: play_data {play_id} ({len} B) failed: {e}");
                 return false;
@@ -245,6 +246,7 @@ pub(crate) async fn queue_gapless_successor(
         );
         return Ok(false);
     }
+    qbz_audio::register_seek_waveform_key(next_id, qbz_audio::seek_waveform_content_key(&bytes));
     player.play_next(bytes, next_id).map(|()| true)
 }
 
@@ -307,6 +309,7 @@ async fn play_file(
         return false;
     };
 
+    qbz_audio::register_seek_waveform_key(play_id, qbz_audio::seek_waveform_content_key(&bytes));
     if let Err(e) = runtime.core().player().play_data(bytes, play_id) {
         log::error!("[qbz-qt] audible: play_data {play_id} failed: {e}");
         return false;
@@ -334,6 +337,7 @@ async fn play_stream(
     start_secs: u64,
     log_tag: &'static str,
 ) -> bool {
+    qbz_audio::register_seek_waveform_key(play_id, format!("remote:{log_tag}:{play_id}"));
     let t0 = std::time::Instant::now();
     // The url carries the server's token in its query string. `origin` is what
     // may be logged: it answers the question these lines exist for — whether
