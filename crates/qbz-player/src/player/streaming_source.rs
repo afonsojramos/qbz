@@ -808,6 +808,12 @@ impl IncrementalStreamingSource {
 
             match self.decoder.decode(&packet) {
                 Ok(audio_buf) => {
+                    // Vorbis/Opus setup, comment, and padding packets can decode to zero frames.
+                    // Passing one to copy_interleaved_ref panics on the CPAL output thread,
+                    // tearing down audio output and closing its command channel for the session.
+                    if audio_buf.frames() == 0 {
+                        continue;
+                    }
                     let spec = *audio_buf.spec();
                     let mut sample_buf = SampleBuffer::<f32>::new(audio_buf.frames() as u64, spec);
                     sample_buf.copy_interleaved_ref(audio_buf);
@@ -1022,6 +1028,12 @@ impl InMemorySource {
 
             match self.decoder.decode(&packet) {
                 Ok(audio_buf) => {
+                    // Vorbis/Opus setup, comment, and padding packets can decode to zero frames.
+                    // Passing one to copy_interleaved_ref panics on the CPAL output thread,
+                    // tearing down audio output and closing its command channel for the session.
+                    if audio_buf.frames() == 0 {
+                        continue;
+                    }
                     let spec = *audio_buf.spec();
                     let mut sample_buf = SampleBuffer::<f32>::new(audio_buf.frames() as u64, spec);
                     sample_buf.copy_interleaved_ref(audio_buf);
