@@ -8,9 +8,34 @@
 
 mod models;
 pub use models::{
-    RemoteAlbumMetadata, RemoteAlbumSearchResult, RemoteMetadataError, RemoteProvider,
-    RemoteSearchRequest, RemoteSearchResponse, RemoteTrackMetadata,
+    RemoteAlbumMetadata, RemoteAlbumSearchResult, RemoteArtistCredit, RemoteMetadataError,
+    RemoteProvider, RemoteSearchRequest, RemoteSearchResponse, RemoteTrackMetadata,
 };
+
+fn musicbrainz_credits(
+    credits: Option<&Vec<crate::musicbrainz::ArtistCredit>>,
+) -> Vec<RemoteArtistCredit> {
+    credits
+        .into_iter()
+        .flatten()
+        .map(|credit| RemoteArtistCredit {
+            name: credit
+                .name
+                .as_deref()
+                .unwrap_or(&credit.artist.name)
+                .to_string(),
+            join_phrase: credit.joinphrase.clone().unwrap_or_default(),
+            provider_id: Some(credit.artist.id.clone()),
+        })
+        .collect()
+}
+
+fn display_credit(credits: &[RemoteArtistCredit]) -> String {
+    credits
+        .iter()
+        .map(|credit| format!("{}{}", credit.name, credit.join_phrase))
+        .collect()
+}
 
 pub fn musicbrainz_release_to_search_result(
     release: &crate::musicbrainz::ReleaseResult,
@@ -206,24 +231,8 @@ pub fn discogs_extended_to_search_result(
 pub fn musicbrainz_full_to_metadata(
     release: &crate::musicbrainz::ReleaseFullResponse,
 ) -> RemoteAlbumMetadata {
-    // Extract artist from artist-credit
-    let artist = release
-        .artist_credit
-        .as_ref()
-        .map(|credits| {
-            credits
-                .iter()
-                .map(|c| {
-                    format!(
-                        "{}{}",
-                        c.name.as_deref().unwrap_or(&c.artist.name),
-                        c.joinphrase.as_deref().unwrap_or("")
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("")
-        })
-        .unwrap_or_default();
+    let artist_credits = musicbrainz_credits(release.artist_credit.as_ref());
+    let artist = display_credit(&artist_credits);
 
     // Extract year from date
     let year = release
@@ -267,6 +276,12 @@ pub fn musicbrainz_full_to_metadata(
             for medium in media {
                 if let Some(tracks) = &medium.tracks {
                     for track in tracks {
+                        let track_credits = track
+                            .recording
+                            .as_ref()
+                            .map(|recording| musicbrainz_credits(recording.artist_credit.as_ref()))
+                            .filter(|credits| !credits.is_empty())
+                            .unwrap_or_else(|| artist_credits.clone());
                         all_tracks.push(RemoteTrackMetadata {
                             disc_number: medium.position.unwrap_or(1),
                             track_number: track.position.unwrap_or(1),
@@ -281,6 +296,13 @@ pub fn musicbrainz_full_to_metadata(
                                     .as_ref()
                                     .and_then(|r| r.length.map(|l| l as u32))
                             }),
+                            artist_credit: display_credit(&track_credits),
+                            artist_credits: track_credits,
+                            recording_id: track
+                                .recording
+                                .as_ref()
+                                .map(|recording| recording.id.clone()),
+                            track_id: track.id.clone(),
                         });
                     }
                 }
@@ -294,6 +316,7 @@ pub fn musicbrainz_full_to_metadata(
         provider_id: release.id.clone(),
         title: release.title.clone(),
         artist,
+        artist_credits,
         year,
         genres,
         label,
@@ -303,6 +326,7 @@ pub fn musicbrainz_full_to_metadata(
         tracks,
         disc_count,
         source_url: Some(format!("https://musicbrainz.org/release/{}", release.id)),
+        release_group_id: release.release_group.as_ref().map(|group| group.id.clone()),
     }
 }
 
@@ -310,18 +334,21 @@ pub fn musicbrainz_full_to_metadata(
 pub fn discogs_full_to_metadata(
     release: &crate::discogs::DiscogsReleaseMetadata,
 ) -> RemoteAlbumMetadata {
-    // Combine artists with join phrases
-    let artist = release
+    let artist_credits = release
         .artists
         .as_ref()
         .map(|artists| {
             artists
                 .iter()
-                .map(|a| format!("{}{}", a.name.clone(), a.join.as_deref().unwrap_or("")))
+                .map(|artist| RemoteArtistCredit {
+                    name: artist.name.clone(),
+                    join_phrase: artist.join.clone().unwrap_or_default(),
+                    provider_id: artist.id.map(|id| id.to_string()),
+                })
                 .collect::<Vec<_>>()
-                .join("")
         })
         .unwrap_or_default();
+    let artist = display_credit(&artist_credits);
 
     // Combine genres and styles
     let genres: Vec<String> = {
@@ -361,6 +388,10 @@ pub fn discogs_full_to_metadata(
                         track_number,
                         title: t.title.clone(),
                         duration_ms: t.duration.as_ref().and_then(|d| parse_discogs_duration(d)),
+                        artist_credit: artist.clone(),
+                        artist_credits: artist_credits.clone(),
+                        recording_id: None,
+                        track_id: None,
                     }
                 })
                 .collect()
@@ -375,6 +406,7 @@ pub fn discogs_full_to_metadata(
         provider_id: release.id.to_string(),
         title: release.title.clone(),
         artist,
+        artist_credits,
         year: release.year.map(|y| y as u16),
         genres,
         label,
@@ -384,6 +416,7 @@ pub fn discogs_full_to_metadata(
         tracks,
         disc_count,
         source_url: release.uri.clone(),
+        release_group_id: None,
     }
 }
 
@@ -537,7 +570,10 @@ mod orchestration_tests {
 
     #[test]
     fn the_artist_is_taken_off_the_front_of_the_query_once() {
-        assert_eq!(strip_prefix_ci("Tool Fear Inoculum", "Tool"), "Fear Inoculum");
+        assert_eq!(
+            strip_prefix_ci("Tool Fear Inoculum", "Tool"),
+            "Fear Inoculum"
+        );
         assert_eq!(
             strip_prefix_ci("Black Sabbath Black Sabbath", "Black Sabbath"),
             "Black Sabbath",
@@ -562,6 +598,55 @@ mod orchestration_tests {
         assert!(
             !is_rate_limit("limit must be between 1 and 25"),
             "the bare word `limit` is not a 429"
+        );
+    }
+
+    #[test]
+    fn musicbrainz_converter_keeps_display_credits_components_and_ids_separate() {
+        let release: crate::musicbrainz::ReleaseFullResponse = serde_json::from_value(
+            serde_json::json!({
+                "id": "release-id",
+                "title": "Collaborations",
+                "artist-credit": [
+                    {"name": "Alpha", "joinphrase": " feat. ", "artist": {"id": "alpha-id", "name": "Alpha"}},
+                    {"name": "Beta", "joinphrase": "", "artist": {"id": "beta-id", "name": "Beta"}}
+                ],
+                "release-group": {"id": "group-id", "primary-type": "Album"},
+                "media": [{
+                    "position": 1,
+                    "tracks": [{
+                        "id": "track-id",
+                        "position": 1,
+                        "title": "A Song",
+                        "recording": {
+                            "id": "recording-id",
+                            "title": "A Song",
+                            "artist-credit": [
+                                {"name": "Gamma", "joinphrase": "", "artist": {"id": "gamma-id", "name": "Gamma"}}
+                            ]
+                        }
+                    }]
+                }]
+            }),
+        )
+        .unwrap();
+
+        let metadata = musicbrainz_full_to_metadata(&release);
+        assert_eq!(metadata.artist, "Alpha feat. Beta");
+        assert_eq!(metadata.release_group_id.as_deref(), Some("group-id"));
+        assert_eq!(
+            metadata.artist_credits[0].provider_id.as_deref(),
+            Some("alpha-id")
+        );
+        assert_eq!(metadata.tracks[0].artist_credit, "Gamma");
+        assert_eq!(
+            metadata.tracks[0].recording_id.as_deref(),
+            Some("recording-id")
+        );
+        assert_eq!(metadata.tracks[0].track_id.as_deref(), Some("track-id"));
+        assert_eq!(
+            metadata.tracks[0].artist_credits[0].provider_id.as_deref(),
+            Some("gamma-id")
         );
     }
 }

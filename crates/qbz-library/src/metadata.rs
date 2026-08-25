@@ -957,6 +957,26 @@ impl MetadataExtractor {
         }
     }
 
+    /// Generate a stable thumbnail for artwork bytes whose source may be a
+    /// temporary editor staging file. The content hash is part of the cache
+    /// key, so replacing an album cover cannot reuse the thumbnail generated
+    /// for the previous image at the same audio or folder path.
+    pub fn cache_artwork_bytes(bytes: &[u8]) -> Option<String> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        let cache_key = format!("metadata-editor-artwork-{:016x}", hasher.finish());
+        match generate_thumbnail_from_bytes(bytes, &cache_key) {
+            Ok(thumbnail_path) => Some(thumbnail_path.to_string_lossy().to_string()),
+            Err(error) => {
+                log::warn!("Failed to generate edited-art thumbnail: {}", error);
+                None
+            }
+        }
+    }
+
     /// Look for folder artwork by file name heuristics
     /// A cover living in THIS directory, ignoring the album root.
     ///

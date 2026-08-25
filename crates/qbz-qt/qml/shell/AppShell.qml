@@ -736,11 +736,6 @@ Rectangle {
     DiscMetaModal {
         anchors.fill: parent
     }
-    // Selected-version metadata editor. Saving republishes the album beneath
-    // it, so it shares the app-wide lifetime of the disc and rip modals.
-    TagEditorModal {
-        anchors.fill: parent
-    }
     RipWizardModal {
         anchors.fill: parent
     }

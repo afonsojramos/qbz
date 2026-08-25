@@ -174,6 +174,7 @@ Item {
             : v === "local"
                 ? (root.kiosk ? "../kiosk/KioskLocalLibrary.qml" : "../views/LocalLibraryView.qml")
             : v === "localalbum" ? "../views/LocalAlbumView.qml"
+            : v === "metadataeditor" ? "../controls/TagEditorModal.qml"
             : v === "album"
                 ? (root.kiosk ? "../kiosk/KioskAlbum.qml" : "../views/AlbumView.qml")
             : v === "artist"

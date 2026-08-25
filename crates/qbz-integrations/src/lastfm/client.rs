@@ -791,6 +791,64 @@ impl LastFmClient {
         Ok(albums)
     }
 
+    /// Public `album.getInfo` lookup used by the local metadata editor for a
+    /// conservative artwork candidate. No Last.fm user session is required;
+    /// the existing proxy supplies the application key.
+    pub async fn get_album_info(
+        &self,
+        artist: &str,
+        album: &str,
+    ) -> IntegrationResult<LastFmAlbum> {
+        let url = format!("{}/album.getInfo", LASTFM_PROXY_URL);
+        let response = self
+            .client
+            .post(&url)
+            .json(&json!({
+                "artist": artist,
+                "album": album,
+                "autocorrect": 1,
+            }))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(IntegrationError::internal(format!(
+                "Last.fm album.getInfo failed: {text}"
+            )));
+        }
+        let data: serde_json::Value = response.json().await?;
+        if let Some(error) = data.get("error") {
+            return Err(IntegrationError::api(
+                error.as_u64().unwrap_or(0) as u32,
+                data.get("message")
+                    .and_then(|message| message.as_str())
+                    .unwrap_or("Unknown error")
+                    .to_string(),
+            ));
+        }
+        let value = data.get("album").ok_or_else(|| {
+            IntegrationError::internal("Last.fm returned no album object".to_string())
+        })?;
+        let name = value
+            .get("name")
+            .and_then(|name| name.as_str())
+            .unwrap_or(album)
+            .to_string();
+        let artist = value
+            .get("artist")
+            .and_then(|artist| artist.as_str())
+            .unwrap_or(artist)
+            .to_string();
+        Ok(LastFmAlbum {
+            name,
+            artist,
+            artist_mbid: None,
+            mbid: extract_mbid(value),
+            image: extract_image(value),
+            playcount: parse_u64(value.get("playcount")),
+        })
+    }
+
     /// user.getTopAlbums — the USER's scrobbled albums (their playcount).
     ///
     /// The "already heard" exclusion set for Recommended Albums. Public read
@@ -900,14 +958,11 @@ fn extract_mbid(value: &serde_json::Value) -> Option<String> {
 
 /// Extract a Unix timestamp from a Last.fm `date.uts` field (string or number).
 fn extract_uts(value: &serde_json::Value) -> Option<i64> {
-    value
-        .get("date")
-        .and_then(|d| d.get("uts"))
-        .and_then(|u| {
-            u.as_str()
-                .and_then(|s| s.parse::<i64>().ok())
-                .or_else(|| u.as_i64())
-        })
+    value.get("date").and_then(|d| d.get("uts")).and_then(|u| {
+        u.as_str()
+            .and_then(|s| s.parse::<i64>().ok())
+            .or_else(|| u.as_i64())
+    })
 }
 
 /// Parse a `u64` that Last.fm may return as a JSON string or number; defaults to 0.

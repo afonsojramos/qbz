@@ -11,9 +11,10 @@ use std::sync::{Mutex, OnceLock};
 
 use cxx_qt_lib::QString;
 use qbz_library::{
-    AlbumMetadataOverride, AlbumTagInspection, AlbumTagSidecar, AlbumTagWrite,
-    AlbumTrackUpdate, DirectTagWriteOptions, Id3v2WriteVersion, LocalTrack,
-    TrackMetadataOverride, TrackTagWrite,
+    AlbumExtendedMetadataOverride, AlbumMetadataOverride, AlbumTagInspection, AlbumTagSidecar,
+    AlbumTagWrite, DirectTagWriteOptions, ExtendedAlbumTagWrite, ExtendedTrackTagWrite,
+    FrontCoverWrite, Id3v2WriteVersion, LocalTrack, TrackExtendedMetadataOverride,
+    TrackMetadataOverride, TrackMetadataUpdateFull, TrackTagWrite,
 };
 use serde::{Deserialize, Serialize};
 
@@ -31,13 +32,37 @@ struct EditorSession {
     directory: String,
     tracks: Vec<LocalTrack>,
     target: EditorTarget,
+    staged_artwork: Option<StagedArtwork>,
+    artwork_candidates: HashMap<String, ArtworkCandidate>,
+}
+
+#[derive(Clone)]
+struct StagedArtwork {
+    token: String,
+    bytes: Vec<u8>,
+    preview_path: String,
+    source: String,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArtworkCandidate {
+    id: String,
+    preview_url: String,
+    source: String,
+    title: String,
+    detail: String,
 }
 
 static SESSION: OnceLock<Mutex<Option<EditorSession>>> = OnceLock::new();
 static OPEN_GEN: AtomicU64 = AtomicU64::new(0);
 static SAVE_GEN: AtomicU64 = AtomicU64::new(0);
 static REMOTE_GEN: AtomicU64 = AtomicU64::new(0);
+static ARTWORK_GEN: AtomicU64 = AtomicU64::new(0);
 static REMOTE_SEQ: AtomicI32 = AtomicI32::new(0);
+static ARTWORK_SEQ: AtomicU64 = AtomicU64::new(0);
 static SAVE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 fn session() -> &'static Mutex<Option<EditorSession>> {
@@ -120,6 +145,23 @@ struct TrackSeed {
     track_number: String,
     disc_number: String,
     cue_based: bool,
+    artist_credit: String,
+    artists: Vec<String>,
+    composers: Vec<String>,
+    performers: Vec<String>,
+    musicbrainz_recording_id: String,
+    musicbrainz_track_id: String,
+    musicbrainz_artist_ids: Vec<String>,
+}
+
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct ArtworkSeed {
+    preview_path: String,
+    token: String,
+    source: String,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Serialize)]
@@ -130,10 +172,17 @@ struct EditorSeed {
     directory: String,
     album_title: String,
     album_artist: String,
+    album_artists: Vec<String>,
+    compilation: bool,
     year: String,
     genre: String,
     catalog_number: String,
     total_discs: u32,
+    musicbrainz_release_id: String,
+    musicbrainz_release_group_id: String,
+    musicbrainz_album_artist_ids: Vec<String>,
+    discogs_release_id: String,
+    artwork: ArtworkSeed,
     sidecar_exists: bool,
     can_direct_write: bool,
     direct_write_reason: String,
@@ -151,6 +200,17 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
         .map(|track| track.file_path.clone())
         .collect::<Vec<_>>();
     let inspection = InspectionDoc::from_result(qbz_library::inspect_album_tag_layers(&paths));
+    let snapshots = qbz_library::read_editor_tag_snapshots(&paths);
+    let snapshot_by_path = snapshots
+        .iter()
+        .map(|snapshot| (snapshot.file_path.as_str(), snapshot))
+        .collect::<HashMap<_, _>>();
+    let sidecar = qbz_library::read_album_sidecar(Path::new(&open.directory))
+        .ok()
+        .flatten();
+    let extended_sidecar = sidecar
+        .as_ref()
+        .and_then(|sidecar| sidecar.extended_album.as_ref());
     let local_files = tracks
         .iter()
         .all(|track| Path::new(&track.file_path).is_file());
@@ -178,6 +238,18 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
         })
         .unwrap_or_default();
     let album_artist = qbz_library::compute_track_artist_match(tracks).unwrap_or_default();
+    let first_snapshot = snapshots.first();
+    let mut album_artists = first_snapshot
+        .map(|snapshot| snapshot.album_artists.clone())
+        .unwrap_or_default();
+    if let Some(sidecar) = extended_sidecar {
+        if !sidecar.album_artists.is_empty() {
+            album_artists = sidecar.album_artists.clone();
+        }
+    }
+    if album_artists.is_empty() && !album_artist.trim().is_empty() {
+        album_artists.push(album_artist.clone());
+    }
     let year = tracks
         .iter()
         .find_map(|track| track.year)
@@ -185,7 +257,12 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
         .unwrap_or_default();
     let genre = tracks
         .iter()
-        .find_map(|track| track.genre.as_ref().filter(|value| !value.trim().is_empty()))
+        .find_map(|track| {
+            track
+                .genre
+                .as_ref()
+                .filter(|value| !value.trim().is_empty())
+        })
         .map(|value| value.trim().to_string())
         .unwrap_or_default();
     let catalog_number = tracks
@@ -204,6 +281,63 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
         .max()
         .unwrap_or(1)
         .max(1);
+    let artwork_path = open
+        .staged_artwork
+        .as_ref()
+        .map(|artwork| artwork.preview_path.clone())
+        .or_else(|| {
+            tracks
+                .iter()
+                .filter_map(|track| track.artwork_path.as_ref())
+                .find(|path| Path::new(path).is_file())
+                .cloned()
+        })
+        .unwrap_or_default();
+    let artwork = open
+        .staged_artwork
+        .as_ref()
+        .map(|artwork| ArtworkSeed {
+            preview_path: crate::artwork_qt::file_url(&artwork.preview_path),
+            token: artwork.token.clone(),
+            source: artwork.source.clone(),
+            width: artwork.width,
+            height: artwork.height,
+        })
+        .unwrap_or_else(|| ArtworkSeed {
+            preview_path: if artwork_path.is_empty() {
+                String::new()
+            } else {
+                crate::artwork_qt::file_url(&artwork_path)
+            },
+            source: if artwork_path.is_empty() {
+                String::new()
+            } else {
+                qbz_i18n::t("Current artwork")
+            },
+            ..ArtworkSeed::default()
+        });
+    let compilation = extended_sidecar
+        .and_then(|extended| extended.compilation)
+        .or_else(|| first_snapshot.and_then(|snapshot| snapshot.compilation))
+        .unwrap_or(false);
+    let musicbrainz_release_id = extended_sidecar
+        .and_then(|extended| extended.musicbrainz_release_id.clone())
+        .or_else(|| first_snapshot.and_then(|snapshot| snapshot.musicbrainz_release_id.clone()))
+        .unwrap_or_default();
+    let musicbrainz_release_group_id = extended_sidecar
+        .and_then(|extended| extended.musicbrainz_release_group_id.clone())
+        .or_else(|| {
+            first_snapshot.and_then(|snapshot| snapshot.musicbrainz_release_group_id.clone())
+        })
+        .unwrap_or_default();
+    let musicbrainz_album_artist_ids = extended_sidecar
+        .map(|extended| extended.musicbrainz_album_artist_ids.clone())
+        .filter(|ids| !ids.is_empty())
+        .or_else(|| first_snapshot.map(|snapshot| snapshot.musicbrainz_album_artist_ids.clone()))
+        .unwrap_or_default();
+    let discogs_release_id = extended_sidecar
+        .and_then(|extended| extended.discogs_release_id.clone())
+        .unwrap_or_default();
 
     EditorSeed {
         album_id: open.album_id.clone(),
@@ -211,33 +345,94 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
         directory: open.directory.clone(),
         album_title,
         album_artist,
+        album_artists,
+        compilation,
         year,
         genre,
         catalog_number,
         total_discs,
+        musicbrainz_release_id,
+        musicbrainz_release_group_id,
+        musicbrainz_album_artist_ids,
+        discogs_release_id,
+        artwork,
         sidecar_exists: qbz_library::sidecar_path(Path::new(&open.directory)).exists(),
         can_direct_write,
         direct_write_reason,
         inspection,
         tracks: tracks
             .iter()
-            .map(|track| TrackSeed {
-                id: track.id.to_string(),
-                file_name: Path::new(&track.file_path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or(&track.file_path)
-                    .to_string(),
-                title: track.title.clone(),
-                track_number: track
-                    .track_number
-                    .map(|number| number.to_string())
-                    .unwrap_or_default(),
-                disc_number: track
-                    .disc_number
-                    .map(|number| number.to_string())
-                    .unwrap_or_default(),
-                cue_based: track.cue_file_path.is_some() || track.cue_start_secs.is_some(),
+            .map(|track| {
+                let snapshot = snapshot_by_path.get(track.file_path.as_str()).copied();
+                let extended = sidecar.as_ref().and_then(|sidecar| {
+                    sidecar.extended_tracks.iter().find(|entry| {
+                        entry.file_path == track.file_path
+                            && match (entry.cue_start_secs, track.cue_start_secs) {
+                                (Some(a), Some(b)) => (a - b).abs() < 0.001,
+                                (None, None) => true,
+                                _ => false,
+                            }
+                    })
+                });
+                let artist_credit = extended
+                    .map(|entry| entry.artist_credit.clone())
+                    .filter(|artist| !artist.trim().is_empty())
+                    .or_else(|| snapshot.map(|snapshot| snapshot.artist_credit.clone()))
+                    .filter(|artist| !artist.trim().is_empty())
+                    .unwrap_or_else(|| track.artist.clone());
+                let artists = extended
+                    .map(|entry| entry.artists.clone())
+                    .filter(|artists| !artists.is_empty())
+                    .or_else(|| snapshot.map(|snapshot| snapshot.artists.clone()))
+                    .filter(|artists| !artists.is_empty())
+                    .unwrap_or_else(|| vec![artist_credit.clone()]);
+                TrackSeed {
+                    id: track.id.to_string(),
+                    file_name: Path::new(&track.file_path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(&track.file_path)
+                        .to_string(),
+                    title: track.title.clone(),
+                    track_number: track
+                        .track_number
+                        .map(|number| number.to_string())
+                        .unwrap_or_default(),
+                    disc_number: track
+                        .disc_number
+                        .map(|number| number.to_string())
+                        .unwrap_or_default(),
+                    cue_based: track.cue_file_path.is_some() || track.cue_start_secs.is_some(),
+                    artist_credit,
+                    artists,
+                    composers: extended
+                        .map(|entry| entry.composers.clone())
+                        .or_else(|| snapshot.map(|snapshot| snapshot.composers.clone()))
+                        .unwrap_or_default(),
+                    performers: extended
+                        .map(|entry| entry.performers.clone())
+                        .or_else(|| snapshot.map(|snapshot| snapshot.performers.clone()))
+                        .unwrap_or_default(),
+                    musicbrainz_recording_id: extended
+                        .and_then(|entry| entry.musicbrainz_recording_id.clone())
+                        .or_else(|| {
+                            snapshot.and_then(|snapshot| snapshot.musicbrainz_recording_id.clone())
+                        })
+                        .unwrap_or_default(),
+                    musicbrainz_track_id: extended
+                        .and_then(|entry| entry.musicbrainz_track_id.clone())
+                        .or_else(|| {
+                            snapshot.and_then(|snapshot| snapshot.musicbrainz_track_id.clone())
+                        })
+                        .unwrap_or_default(),
+                    musicbrainz_artist_ids: extended
+                        .map(|entry| entry.musicbrainz_artist_ids.clone())
+                        .filter(|ids| !ids.is_empty())
+                        .or_else(|| {
+                            snapshot.map(|snapshot| snapshot.musicbrainz_artist_ids.clone())
+                        })
+                        .unwrap_or_default(),
+                }
             })
             .collect(),
     }
@@ -272,6 +467,8 @@ fn open_session(
         directory,
         tracks,
         target,
+        staged_artwork: None,
+        artwork_candidates: HashMap::new(),
     };
     *session().lock().expect("tag editor session lock") = Some(open.clone());
     crate::tag_editor_bridge::ui(|mut bridge| {
@@ -284,7 +481,10 @@ fn open_session(
         bridge.as_mut().set_remote_json(QString::from("{}"));
         bridge.as_mut().set_remote_searching(false);
         bridge.as_mut().set_remote_loading(false);
+        bridge.as_mut().set_artwork_searching(false);
+        bridge.as_mut().set_artwork_loading(false);
     });
+    crate::nav_qt::record("metadataeditor");
 
     crate::spawn(async move {
         let started = std::time::Instant::now();
@@ -310,11 +510,8 @@ fn open_session(
             }
             Err(error) => {
                 log::error!("[qbz-qt] tag editor preflight task failed: {error}");
-                crate::tag_editor_bridge::ui(|mut bridge| {
-                    bridge.as_mut().set_editor_loading(false);
-                    bridge.as_mut().set_editor_open(false);
-                });
                 crate::toast_qt::error(qbz_i18n::t("Couldn't inspect album metadata."));
+                close();
             }
         }
     });
@@ -350,19 +547,56 @@ pub fn open_ephemeral(group_key: String) {
     );
 }
 
-pub fn close() {
+fn clear_session() {
     if SAVE_ACTIVE.load(Ordering::Acquire) {
         return;
     }
     OPEN_GEN.fetch_add(1, Ordering::SeqCst);
     REMOTE_GEN.fetch_add(1, Ordering::SeqCst);
-    *session().lock().expect("tag editor session lock") = None;
+    ARTWORK_GEN.fetch_add(1, Ordering::SeqCst);
+    let prior = session().lock().expect("tag editor session lock").take();
+    if let Some(path) = prior
+        .and_then(|session| session.staged_artwork)
+        .map(|artwork| artwork.preview_path)
+        .filter(|path| {
+            Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".tag-editor-stage-"))
+        })
+    {
+        let _ = std::fs::remove_file(path);
+    }
     crate::tag_editor_bridge::ui(|mut bridge| {
         bridge.as_mut().set_editor_open(false);
         bridge.as_mut().set_editor_loading(false);
         bridge.as_mut().set_remote_searching(false);
         bridge.as_mut().set_remote_loading(false);
+        bridge.as_mut().set_artwork_searching(false);
+        bridge.as_mut().set_artwork_loading(false);
     });
+}
+
+pub fn close() {
+    clear_session();
+    if crate::nav_qt::current_view() == "metadataeditor" {
+        crate::nav_qt::back();
+    }
+}
+
+/// Navigation has already moved away from the editor. Tear down its immutable
+/// snapshot and cancel late provider work without adding another history step.
+pub fn leave() {
+    if SAVE_ACTIVE.load(Ordering::Acquire) {
+        // The file/DB transaction must finish, but work that can still publish
+        // into the abandoned editor is cancelled immediately. The save task
+        // clears the retained immutable snapshot once it completes.
+        OPEN_GEN.fetch_add(1, Ordering::SeqCst);
+        REMOTE_GEN.fetch_add(1, Ordering::SeqCst);
+        ARTWORK_GEN.fetch_add(1, Ordering::SeqCst);
+        return;
+    }
+    clear_session();
 }
 
 #[derive(Deserialize)]
@@ -372,6 +606,20 @@ struct TrackDraft {
     title: String,
     track_number: String,
     disc_number: String,
+    #[serde(default)]
+    artist_credit: String,
+    #[serde(default)]
+    artists: Vec<String>,
+    #[serde(default)]
+    composers: Vec<String>,
+    #[serde(default)]
+    performers: Vec<String>,
+    #[serde(default)]
+    musicbrainz_recording_id: String,
+    #[serde(default)]
+    musicbrainz_track_id: String,
+    #[serde(default)]
+    musicbrainz_artist_ids: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -379,13 +627,57 @@ struct TrackDraft {
 struct SaveDraft {
     album_title: String,
     album_artist: String,
+    #[serde(default)]
+    album_artists: Vec<String>,
+    #[serde(default)]
+    compilation: bool,
     year: String,
     genre: String,
     catalog_number: String,
     persistence: String,
     id3v2_version: String,
     synchronize_secondary_tags: bool,
+    #[serde(default)]
+    musicbrainz_release_id: String,
+    #[serde(default)]
+    musicbrainz_release_group_id: String,
+    #[serde(default)]
+    musicbrainz_album_artist_ids: Vec<String>,
+    #[serde(default)]
+    discogs_release_id: String,
+    #[serde(default)]
+    artwork_token: String,
     tracks: Vec<TrackDraft>,
+}
+
+fn normalized_list(values: Vec<String>, field: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::<String>::new();
+    let mut seen = HashSet::<String>::new();
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if value.chars().count() > 512 {
+            return Err(qbz_i18n::t_args(
+                "{} contains an excessively long value.",
+                &[field],
+            ));
+        }
+        let folded = value.to_lowercase();
+        if seen.insert(folded) {
+            out.push(value.to_string());
+        }
+        if out.len() > 64 {
+            return Err(qbz_i18n::t_args("{} contains too many values.", &[field]));
+        }
+    }
+    Ok(out)
+}
+
+fn normalized_id(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= 128).then(|| value.to_string())
 }
 
 fn parse_optional_number(value: &str, field: &str) -> Result<Option<u32>, String> {
@@ -414,11 +706,13 @@ struct SavePayload {
     session: EditorSession,
     album: AlbumTagWrite,
     direct_tracks: Vec<TrackTagWrite>,
-    db_updates: Vec<AlbumTrackUpdate>,
+    db_updates: Vec<TrackMetadataUpdateFull>,
+    extended_album: ExtendedAlbumTagWrite,
+    extended_tracks: Vec<ExtendedTrackTagWrite>,
+    front_cover: Option<FrontCoverWrite>,
     sidecar: AlbumTagSidecar,
     direct: bool,
     options: DirectTagWriteOptions,
-    prior_artist: Option<String>,
 }
 
 fn validate_draft(draft: SaveDraft, open: EditorSession) -> Result<SavePayload, String> {
@@ -452,9 +746,12 @@ fn validate_draft(draft: SaveDraft, open: EditorSession) -> Result<SavePayload, 
             return Err(qbz_i18n::t("The track list contains a duplicate row."));
         }
     }
-    let expected_ids = open.tracks.iter().map(|track| track.id).collect::<HashSet<_>>();
-    if incoming.len() != expected_ids.len()
-        || incoming.keys().any(|id| !expected_ids.contains(id))
+    let expected_ids = open
+        .tracks
+        .iter()
+        .map(|track| track.id)
+        .collect::<HashSet<_>>();
+    if incoming.len() != expected_ids.len() || incoming.keys().any(|id| !expected_ids.contains(id))
     {
         return Err(qbz_i18n::t("The track list changed; reopen the editor."));
     }
@@ -462,9 +759,38 @@ fn validate_draft(draft: SaveDraft, open: EditorSession) -> Result<SavePayload, 
     let album_artist = draft.album_artist.trim().to_string();
     let genre = draft.genre.trim().to_string();
     let catalog = draft.catalog_number.trim().to_string();
+    let mut album_artists = normalized_list(draft.album_artists, &qbz_i18n::t("Album artists"))?;
+    if album_artists.is_empty() && !album_artist.is_empty() {
+        album_artists.push(album_artist.clone());
+    }
+    let front_cover = if draft.artwork_token.trim().is_empty() {
+        None
+    } else {
+        let staged = open
+            .staged_artwork
+            .as_ref()
+            .filter(|artwork| artwork.token == draft.artwork_token)
+            .ok_or_else(|| qbz_i18n::t("The selected artwork changed; choose it again."))?;
+        Some(FrontCoverWrite {
+            bytes: staged.bytes.clone(),
+        })
+    };
+    let extended_album = ExtendedAlbumTagWrite {
+        album_artists: album_artists.clone(),
+        compilation: Some(draft.compilation),
+        musicbrainz_release_id: normalized_id(&draft.musicbrainz_release_id),
+        musicbrainz_release_group_id: normalized_id(&draft.musicbrainz_release_group_id),
+        musicbrainz_album_artist_ids: normalized_list(
+            draft.musicbrainz_album_artist_ids,
+            &qbz_i18n::t("MusicBrainz album artist IDs"),
+        )?,
+        discogs_release_id: normalized_id(&draft.discogs_release_id),
+    };
     let mut direct_tracks = Vec::with_capacity(open.tracks.len());
     let mut db_updates = Vec::with_capacity(open.tracks.len());
     let mut sidecar_tracks = Vec::with_capacity(open.tracks.len());
+    let mut extended_tracks = Vec::with_capacity(open.tracks.len());
+    let mut extended_sidecar_tracks = Vec::with_capacity(open.tracks.len());
     for track in &open.tracks {
         let row = incoming
             .remove(&track.id)
@@ -475,17 +801,60 @@ fn validate_draft(draft: SaveDraft, open: EditorSession) -> Result<SavePayload, 
         }
         let track_number = parse_optional_number(&row.track_number, &qbz_i18n::t("Track number"))?;
         let disc_number = parse_optional_number(&row.disc_number, &qbz_i18n::t("Disc number"))?;
+        let artist_credit = if row.artist_credit.trim().is_empty() {
+            track.artist.clone()
+        } else {
+            row.artist_credit.trim().to_string()
+        };
+        let mut artists = normalized_list(row.artists, &qbz_i18n::t("Artists"))?;
+        if artists.is_empty() {
+            artists.push(artist_credit.clone());
+        }
+        let composers = normalized_list(row.composers, &qbz_i18n::t("Composers"))?;
+        let performers = normalized_list(row.performers, &qbz_i18n::t("Performers"))?;
+        let musicbrainz_artist_ids = normalized_list(
+            row.musicbrainz_artist_ids,
+            &qbz_i18n::t("MusicBrainz artist IDs"),
+        )?;
         direct_tracks.push(TrackTagWrite {
             file_path: track.file_path.clone(),
             title: title.clone(),
             track_number,
             disc_number,
         });
-        db_updates.push(AlbumTrackUpdate {
+        db_updates.push(TrackMetadataUpdateFull {
             id: track.id,
             title: title.clone(),
+            artist: artist_credit.clone(),
+            album: album_title.clone(),
+            album_artist: (!album_artist.is_empty()).then(|| album_artist.clone()),
+            album_group_title: album_title.clone(),
             track_number,
             disc_number,
+            year,
+            genre: (!genre.is_empty()).then(|| genre.clone()),
+            catalog_number: (!catalog.is_empty()).then(|| catalog.clone()),
+        });
+        extended_tracks.push(ExtendedTrackTagWrite {
+            file_path: track.file_path.clone(),
+            artist_credit: artist_credit.clone(),
+            artists: artists.clone(),
+            composers: composers.clone(),
+            performers: performers.clone(),
+            musicbrainz_recording_id: normalized_id(&row.musicbrainz_recording_id),
+            musicbrainz_track_id: normalized_id(&row.musicbrainz_track_id),
+            musicbrainz_artist_ids: musicbrainz_artist_ids.clone(),
+        });
+        extended_sidecar_tracks.push(TrackExtendedMetadataOverride {
+            file_path: track.file_path.clone(),
+            cue_start_secs: track.cue_start_secs,
+            artist_credit,
+            artists,
+            composers,
+            performers,
+            musicbrainz_recording_id: normalized_id(&row.musicbrainz_recording_id),
+            musicbrainz_track_id: normalized_id(&row.musicbrainz_track_id),
+            musicbrainz_artist_ids,
         });
         // Sidecar v1 uses explicit sentinels for clears. Empty/None used to
         // mean "no override", which made a cleared field reappear on rescan.
@@ -507,6 +876,18 @@ fn validate_draft(draft: SaveDraft, open: EditorSession) -> Result<SavePayload, 
             catalog_number: Some(catalog.clone()),
         },
         sidecar_tracks,
+    )
+    .with_extended(
+        AlbumExtendedMetadataOverride {
+            album_artists,
+            compilation: Some(draft.compilation),
+            musicbrainz_release_id: extended_album.musicbrainz_release_id.clone(),
+            musicbrainz_release_group_id: extended_album.musicbrainz_release_group_id.clone(),
+            musicbrainz_album_artist_ids: extended_album.musicbrainz_album_artist_ids.clone(),
+            discogs_release_id: extended_album.discogs_release_id.clone(),
+            artwork_path: None,
+        },
+        extended_sidecar_tracks,
     );
     let album = AlbumTagWrite {
         album_title,
@@ -523,35 +904,29 @@ fn validate_draft(draft: SaveDraft, open: EditorSession) -> Result<SavePayload, 
         },
         synchronize_secondary_tags: draft.synchronize_secondary_tags,
     };
-    let prior_artist = qbz_library::compute_track_artist_match(&open.tracks);
     Ok(SavePayload {
         session: open,
         album,
         direct_tracks,
         db_updates,
+        extended_album,
+        extended_tracks,
+        front_cover,
         sidecar,
         direct,
         options,
-        prior_artist,
     })
 }
 
 fn apply_database_update(
     payload: &SavePayload,
+    artwork_path: Option<&str>,
 ) -> Result<Vec<LocalTrack>, qbz_library::LibraryError> {
-    let path = crate::local_state::db_path()
-        .ok_or_else(|| qbz_library::LibraryError::Database("library path unavailable".to_string()))?;
+    let path = crate::local_state::db_path().ok_or_else(|| {
+        qbz_library::LibraryError::Database("library path unavailable".to_string())
+    })?;
     let mut db = qbz_library::LibraryDatabase::open(&path)?;
-    db.update_album_group_metadata(
-        &payload.session.group_key,
-        &payload.album.album_title,
-        &payload.album.album_artist,
-        payload.album.year,
-        payload.album.genre.as_deref(),
-        payload.album.catalog_number.as_deref(),
-        payload.prior_artist.as_deref(),
-        &payload.db_updates,
-    )?;
+    db.update_tracks_metadata_and_artwork_by_id(&payload.db_updates, artwork_path)?;
     db.get_album_tracks(&payload.session.group_key)
 }
 
@@ -577,14 +952,9 @@ fn updated_ephemeral_tracks(payload: &SavePayload) -> Vec<LocalTrack> {
             track.album_group_title = payload.album.album_title.clone();
             track.album_artist = (!payload.album.album_artist.trim().is_empty())
                 .then(|| payload.album.album_artist.clone());
-            if payload.prior_artist.as_deref() == Some(track.artist.as_str())
-                && !payload.album.album_artist.trim().is_empty()
-            {
-                track.artist = payload.album.album_artist.clone();
-            }
+            track.artist = update.artist.clone();
             track.year = payload.album.year;
             track.genre = payload.album.genre.clone();
-            track.genres = payload.album.genre.iter().cloned().collect();
             track.catalog_number = payload.album.catalog_number.clone();
             track
         })
@@ -625,34 +995,62 @@ pub fn save(draft_json: &str) {
     crate::tag_editor_bridge::ui(|mut bridge| {
         bridge.as_mut().set_editor_saving(true);
         bridge.as_mut().set_editor_progress_current(0);
-        bridge
-            .as_mut()
-            .set_editor_progress_total(0);
+        bridge.as_mut().set_editor_progress_total(0);
     });
 
     crate::spawn(async move {
         let result = tokio::task::spawn_blocking(move || {
+            let mut payload = payload;
+            let mut artwork_path = None::<String>;
             if payload.direct {
                 let total = payload.direct_tracks.len() as i32;
                 crate::tag_editor_bridge::ui(move |mut bridge| {
                     bridge.as_mut().set_editor_progress_total(total);
                 });
-                qbz_library::write_album_tags_to_files_with_options(
+                qbz_library::write_album_tags_to_files_extended(
                     &payload.album,
+                    &payload.extended_album,
                     &payload.direct_tracks,
+                    &payload.extended_tracks,
+                    payload.front_cover.as_ref(),
                     payload.options,
                     |current, total| {
                         crate::tag_editor_bridge::ui(move |mut bridge| {
-                            bridge
-                                .as_mut()
-                                .set_editor_progress_current(current as i32);
+                            bridge.as_mut().set_editor_progress_current(current as i32);
                             bridge.as_mut().set_editor_progress_total(total as i32);
                         });
                     },
                 )?;
+                if let Some(cover) = payload.front_cover.as_ref() {
+                    artwork_path =
+                        qbz_library::MetadataExtractor::cache_artwork_bytes(&cover.bytes);
+                    if artwork_path.is_none() {
+                        return Err(qbz_library::LibraryError::Other(
+                            "edited artwork could not be projected into the thumbnail cache"
+                                .to_string(),
+                        ));
+                    }
+                }
                 // A sidecar is removed only after every file was verified.
                 qbz_library::delete_album_sidecar(Path::new(&payload.session.directory))?;
             } else {
+                if let Some(cover) = payload.front_cover.as_ref() {
+                    qbz_library::write_folder_front_cover(
+                        Path::new(&payload.session.directory),
+                        &cover.bytes,
+                    )?;
+                    artwork_path =
+                        qbz_library::MetadataExtractor::cache_artwork_bytes(&cover.bytes);
+                    if artwork_path.is_none() {
+                        return Err(qbz_library::LibraryError::Other(
+                            "edited artwork could not be projected into the thumbnail cache"
+                                .to_string(),
+                        ));
+                    }
+                    if let Some(extended) = payload.sidecar.extended_album.as_mut() {
+                        extended.artwork_path = artwork_path.clone();
+                    }
+                }
                 qbz_library::write_album_sidecar(
                     Path::new(&payload.session.directory),
                     &payload.sidecar,
@@ -661,10 +1059,15 @@ pub fn save(draft_json: &str) {
             let outcome = match &payload.session.target {
                 EditorTarget::Library => SaveOutcome::Library {
                     album_id: payload.session.album_id.clone(),
-                    tracks: apply_database_update(&payload)?,
+                    tracks: apply_database_update(&payload, artwork_path.as_deref())?,
                 },
                 EditorTarget::Ephemeral { session_path } => {
-                    let tracks = updated_ephemeral_tracks(&payload);
+                    let mut tracks = updated_ephemeral_tracks(&payload);
+                    if let Some(path) = artwork_path.as_ref() {
+                        for track in &mut tracks {
+                            track.artwork_path = Some(path.clone());
+                        }
+                    }
                     crate::local_ephemeral::apply_editor_update(session_path, &tracks)?;
                     SaveOutcome::Ephemeral
                 }
@@ -679,14 +1082,20 @@ pub fn save(draft_json: &str) {
         });
 
         SAVE_ACTIVE.store(false, Ordering::Release);
+        let editor_visible = crate::nav_qt::current_view() == "metadataeditor";
         if SAVE_GEN.load(Ordering::SeqCst) != save_generation {
+            if !editor_visible {
+                clear_session();
+            }
             return;
         }
-        crate::tag_editor_bridge::ui(|mut bridge| {
-            bridge.as_mut().set_editor_saving(false);
-            bridge.as_mut().set_editor_progress_current(0);
-            bridge.as_mut().set_editor_progress_total(0);
-        });
+        if editor_visible {
+            crate::tag_editor_bridge::ui(|mut bridge| {
+                bridge.as_mut().set_editor_saving(false);
+                bridge.as_mut().set_editor_progress_current(0);
+                bridge.as_mut().set_editor_progress_total(0);
+            });
+        }
         match result {
             Ok(SaveOutcome::Library { album_id, tracks }) => {
                 // Publish from the authoritative DB rows directly. In metadata
@@ -721,6 +1130,9 @@ pub fn save(draft_json: &str) {
                 ));
             }
         }
+        if !editor_visible {
+            clear_session();
+        }
     });
 }
 
@@ -733,6 +1145,373 @@ fn publish_remote(kind: &str, value: serde_json::Value) {
             .set_remote_json(QString::from(json.as_str()));
         bridge.as_mut().set_remote_seq(sequence);
     });
+}
+
+const MAX_ARTWORK_BYTES: usize = 25 * 1024 * 1024;
+
+fn staged_artwork_seed(artwork: &StagedArtwork) -> ArtworkSeed {
+    ArtworkSeed {
+        preview_path: crate::artwork_qt::file_url(&artwork.preview_path),
+        token: artwork.token.clone(),
+        source: artwork.source.clone(),
+        width: artwork.width,
+        height: artwork.height,
+    }
+}
+
+fn is_editor_stage_path(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(".tag-editor-stage-"))
+}
+
+fn prepare_staged_artwork(
+    generation: u64,
+    bytes: Vec<u8>,
+    source: String,
+) -> Result<StagedArtwork, String> {
+    if bytes.is_empty() || bytes.len() > MAX_ARTWORK_BYTES {
+        return Err(qbz_i18n::t(
+            "Artwork must be a non-empty image no larger than 25 MiB.",
+        ));
+    }
+    let decoded = image::load_from_memory(&bytes)
+        .map_err(|_| qbz_i18n::t("The selected file is not a supported image."))?;
+    let width = decoded.width();
+    let height = decoded.height();
+    if width == 0 || height == 0 || width > 12_000 || height > 12_000 {
+        return Err(qbz_i18n::t(
+            "The selected artwork has unsupported dimensions.",
+        ));
+    }
+    let sequence = ARTWORK_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    let directory = std::env::temp_dir().join("qbz-tag-editor");
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("{}: {error}", qbz_i18n::t("Couldn't stage artwork")))?;
+    let path = directory.join(format!(".tag-editor-stage-{generation}-{sequence}.img"));
+    std::fs::write(&path, &bytes)
+        .map_err(|error| format!("{}: {error}", qbz_i18n::t("Couldn't stage artwork")))?;
+    Ok(StagedArtwork {
+        token: format!("artwork-{generation}-{sequence}"),
+        bytes,
+        preview_path: path.to_string_lossy().to_string(),
+        source,
+        width,
+        height,
+    })
+}
+
+fn install_staged_artwork(generation: u64, artwork: StagedArtwork) -> bool {
+    let seed = staged_artwork_seed(&artwork);
+    let prior = {
+        let mut guard = session().lock().expect("tag editor session lock");
+        let Some(open) = guard.as_mut().filter(|open| open.generation == generation) else {
+            let _ = std::fs::remove_file(&artwork.preview_path);
+            return false;
+        };
+        open.staged_artwork.replace(artwork)
+    };
+    if let Some(path) = prior
+        .map(|artwork| artwork.preview_path)
+        .filter(|path| is_editor_stage_path(path))
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    publish_remote(
+        "artwork-selected",
+        serde_json::to_value(seed).unwrap_or_else(|_| serde_json::json!({})),
+    );
+    true
+}
+
+async fn download_bounded_https(url: &str) -> Result<Vec<u8>, String> {
+    if !url.starts_with("https://") {
+        return Err(qbz_i18n::t("Artwork source did not provide a secure URL."));
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(8))
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("QBZ/2 metadata-editor")
+        .build()
+        .map_err(|error| error.to_string())?;
+    let mut response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .map_err(|error| error.to_string())?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_ARTWORK_BYTES as u64)
+    {
+        return Err(qbz_i18n::t("Artwork is larger than 25 MiB."));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+        if bytes.len().saturating_add(chunk.len()) > MAX_ARTWORK_BYTES {
+            return Err(qbz_i18n::t("Artwork is larger than 25 MiB."));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+pub fn choose_artwork() {
+    let generation = session()
+        .lock()
+        .expect("tag editor session lock")
+        .as_ref()
+        .map(|open| open.generation);
+    let Some(generation) = generation else {
+        return;
+    };
+    crate::spawn(async move {
+        let Some(file) = rfd::AsyncFileDialog::new()
+            .set_title(&qbz_i18n::t("Choose album artwork"))
+            .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif", "bmp"])
+            .pick_file()
+            .await
+        else {
+            return;
+        };
+        crate::tag_editor_bridge::ui(|mut bridge| {
+            bridge.as_mut().set_artwork_loading(true);
+        });
+        let result = match tokio::fs::metadata(file.path()).await {
+            Ok(metadata) if metadata.len() <= MAX_ARTWORK_BYTES as u64 => {
+                match tokio::fs::read(file.path()).await {
+                    Ok(bytes) => tokio::task::spawn_blocking(move || {
+                        prepare_staged_artwork(generation, bytes, qbz_i18n::t("Local file"))
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result),
+                    Err(error) => Err(error.to_string()),
+                }
+            }
+            Ok(_) => Err(qbz_i18n::t("Artwork is larger than 25 MiB.")),
+            Err(error) => Err(error.to_string()),
+        };
+        crate::tag_editor_bridge::ui(|mut bridge| {
+            bridge.as_mut().set_artwork_loading(false);
+        });
+        match result {
+            Ok(artwork) => {
+                install_staged_artwork(generation, artwork);
+            }
+            Err(error) => crate::toast_qt::error(error),
+        }
+    });
+}
+
+pub fn search_artwork(provider: &str, title: &str, artist: &str, catalog_number: &str) {
+    let provider = provider.trim().to_ascii_lowercase();
+    let title = title.trim().to_string();
+    let artist = artist.trim().to_string();
+    let catalog_number = catalog_number.trim().to_string();
+    if title.is_empty() {
+        crate::toast_qt::error(qbz_i18n::t("Enter an album title to find artwork."));
+        return;
+    }
+    let open_generation = session()
+        .lock()
+        .expect("tag editor session lock")
+        .as_ref()
+        .map(|open| open.generation);
+    let Some(open_generation) = open_generation else {
+        return;
+    };
+    let operation = ARTWORK_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    crate::tag_editor_bridge::ui(|mut bridge| {
+        bridge.as_mut().set_artwork_searching(true);
+    });
+    crate::spawn(async move {
+        let result: Result<Vec<ArtworkCandidate>, String> = match provider.as_str() {
+            "discogs" => qbz_integrations::DiscogsClient::new()
+                .search_artwork_options(
+                    &artist,
+                    &title,
+                    (!catalog_number.is_empty()).then_some(catalog_number.as_str()),
+                )
+                .await
+                .map(|rows| {
+                    rows.into_iter()
+                        .enumerate()
+                        .map(|(index, row)| ArtworkCandidate {
+                            id: format!("art-{operation}-{index}"),
+                            preview_url: row.url,
+                            source: "Discogs".to_string(),
+                            title: row.release_title.unwrap_or_else(|| title.clone()),
+                            detail: format!(
+                                "{} x {}{}",
+                                row.width,
+                                row.height,
+                                row.release_year
+                                    .map(|year| format!(" - {year}"))
+                                    .unwrap_or_default()
+                            ),
+                        })
+                        .collect()
+                }),
+            "lastfm" => qbz_integrations::LastFmClient::new()
+                .get_album_info(&artist, &title)
+                .await
+                .map_err(|error| error.to_string())
+                .map(|album| {
+                    album
+                        .image
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, url)| ArtworkCandidate {
+                            id: format!("art-{operation}-{index}"),
+                            preview_url: url,
+                            source: "Last.fm".to_string(),
+                            title: album.name.clone(),
+                            detail: album.artist.clone(),
+                        })
+                        .collect()
+                }),
+            _ => qbz_integrations::MusicBrainzClient::new()
+                .search_releases_extended(
+                    &title,
+                    &artist,
+                    (!catalog_number.is_empty()).then_some(catalog_number.as_str()),
+                    10,
+                )
+                .await
+                .map_err(|error| error.to_string())
+                .map(|response| {
+                    response
+                        .releases
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, release)| ArtworkCandidate {
+                            id: format!("art-{operation}-{index}"),
+                            preview_url: format!(
+                                "https://coverartarchive.org/release/{}/front-500",
+                                release.id
+                            ),
+                            source: "MusicBrainz".to_string(),
+                            title: release.title,
+                            detail: release.date.unwrap_or_default(),
+                        })
+                        .collect()
+                }),
+        };
+        if ARTWORK_GEN.load(Ordering::SeqCst) != operation
+            || OPEN_GEN.load(Ordering::SeqCst) != open_generation
+        {
+            return;
+        }
+        crate::tag_editor_bridge::ui(|mut bridge| {
+            bridge.as_mut().set_artwork_searching(false);
+        });
+        match result {
+            Ok(rows) => {
+                let value = serde_json::to_value(&rows).unwrap_or_else(|_| serde_json::json!([]));
+                let mut guard = session().lock().expect("tag editor session lock");
+                if let Some(open) = guard
+                    .as_mut()
+                    .filter(|open| open.generation == open_generation)
+                {
+                    open.artwork_candidates = rows
+                        .into_iter()
+                        .map(|candidate| (candidate.id.clone(), candidate))
+                        .collect();
+                    drop(guard);
+                    publish_remote("artwork-results", value);
+                }
+            }
+            Err(error) => {
+                log::warn!("[qbz-qt] artwork search failed: {error}");
+                publish_remote("artwork-results", serde_json::json!([]));
+                crate::toast_qt::error(qbz_i18n::t("Artwork search failed."));
+            }
+        }
+    });
+}
+
+pub fn select_artwork(candidate_id: &str) {
+    let selected = {
+        let guard = session().lock().expect("tag editor session lock");
+        guard.as_ref().and_then(|open| {
+            open.artwork_candidates
+                .get(candidate_id)
+                .cloned()
+                .map(|candidate| (open.generation, candidate))
+        })
+    };
+    let Some((open_generation, candidate)) = selected else {
+        crate::toast_qt::error(qbz_i18n::t("That artwork result is no longer available."));
+        return;
+    };
+    let operation = ARTWORK_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    crate::tag_editor_bridge::ui(|mut bridge| {
+        bridge.as_mut().set_artwork_loading(true);
+    });
+    crate::spawn(async move {
+        let bytes = if candidate.source == "Discogs" {
+            qbz_integrations::DiscogsClient::new()
+                .download_artwork_bytes(&candidate.preview_url, MAX_ARTWORK_BYTES)
+                .await
+        } else {
+            download_bounded_https(&candidate.preview_url).await
+        };
+        let result = match bytes {
+            Ok(bytes) => tokio::task::spawn_blocking(move || {
+                prepare_staged_artwork(open_generation, bytes, candidate.source)
+            })
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result),
+            Err(error) => Err(error),
+        };
+        if ARTWORK_GEN.load(Ordering::SeqCst) != operation
+            || OPEN_GEN.load(Ordering::SeqCst) != open_generation
+        {
+            if let Ok(artwork) = result {
+                let _ = std::fs::remove_file(artwork.preview_path);
+            }
+            return;
+        }
+        crate::tag_editor_bridge::ui(|mut bridge| {
+            bridge.as_mut().set_artwork_loading(false);
+        });
+        match result {
+            Ok(artwork) => {
+                install_staged_artwork(open_generation, artwork);
+            }
+            Err(error) => {
+                log::warn!("[qbz-qt] artwork download failed: {error}");
+                crate::toast_qt::error(qbz_i18n::t("Couldn't download that artwork."));
+            }
+        }
+    });
+}
+
+pub fn clear_artwork() {
+    ARTWORK_GEN.fetch_add(1, Ordering::SeqCst);
+    let prior = session()
+        .lock()
+        .expect("tag editor session lock")
+        .as_mut()
+        .and_then(|open| open.staged_artwork.take());
+    if let Some(path) = prior
+        .map(|artwork| artwork.preview_path)
+        .filter(|path| is_editor_stage_path(path))
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    crate::tag_editor_bridge::ui(|mut bridge| {
+        bridge.as_mut().set_artwork_loading(false);
+        bridge.as_mut().set_artwork_searching(false);
+    });
+    publish_remote(
+        "artwork-selected",
+        serde_json::to_value(ArtworkSeed::default()).unwrap_or_else(|_| serde_json::json!({})),
+    );
 }
 
 pub fn search_remote(provider: &str, title: &str, artist: &str) {
@@ -752,11 +1531,14 @@ pub fn search_remote(provider: &str, title: &str, artist: &str) {
         let result: Result<Vec<qbz_integrations::RemoteAlbumSearchResult>, String> =
             if provider == "discogs" {
                 let client = qbz_integrations::DiscogsClient::new();
-                client.search_releases(&artist, &title, None, 12).await.map(|rows| {
-                    rows.iter()
-                        .map(qbz_integrations::discogs_extended_to_search_result)
-                        .collect()
-                })
+                client
+                    .search_releases(&artist, &title, None, 12)
+                    .await
+                    .map(|rows| {
+                        rows.iter()
+                            .map(qbz_integrations::discogs_extended_to_search_result)
+                            .collect()
+                    })
             } else {
                 let client = qbz_integrations::MusicBrainzClient::new();
                 client
@@ -802,7 +1584,8 @@ pub fn load_remote(provider: &str, provider_id: &str) {
         bridge.as_mut().set_remote_loading(true);
     });
     crate::spawn(async move {
-        let result: Result<qbz_integrations::RemoteAlbumMetadata, String> = if provider == "discogs" {
+        let result: Result<qbz_integrations::RemoteAlbumMetadata, String> = if provider == "discogs"
+        {
             match provider_id.parse::<u64>() {
                 Ok(id) => {
                     let client = qbz_integrations::DiscogsClient::new();
@@ -862,6 +1645,8 @@ mod tests {
             group_key: "/library/album".to_string(),
             directory: "/library/album".to_string(),
             target: EditorTarget::Library,
+            staged_artwork: None,
+            artwork_candidates: HashMap::new(),
             tracks: vec![
                 LocalTrack {
                     id: 10,
@@ -974,10 +1759,84 @@ mod tests {
     }
 
     #[test]
-    fn modal_consumes_seed_when_loading_finishes_after_json_publish() {
+    fn rich_credit_components_and_provider_ids_survive_validation() {
+        let draft: SaveDraft = serde_json::from_str(
+            r#"{
+                "albumTitle":"Compilation",
+                "albumArtist":"Various Artists",
+                "albumArtists":["Various Artists"],
+                "compilation":true,
+                "year":"2026",
+                "genre":"Soundtrack",
+                "catalogNumber":"CAT-2",
+                "persistence":"sidecar",
+                "id3v2Version":"2.4",
+                "synchronizeSecondaryTags":false,
+                "musicbrainzReleaseId":"release",
+                "musicbrainzReleaseGroupId":"group",
+                "musicbrainzAlbumArtistIds":["va-id"],
+                "discogsReleaseId":"123",
+                "tracks":[
+                    {"id":"10","title":"First","trackNumber":"1","discNumber":"1",
+                     "artistCredit":"Alpha feat. Beta","artists":["Alpha","Beta"],
+                     "composers":["Composer"],"performers":["Player (guitar)"],
+                     "musicbrainzRecordingId":"recording-1","musicbrainzTrackId":"track-1",
+                     "musicbrainzArtistIds":["alpha-id","beta-id"]},
+                    {"id":"20","title":"Second","trackNumber":"2","discNumber":"1",
+                     "artistCredit":"Gamma","artists":["Gamma"],
+                     "musicbrainzRecordingId":"recording-2","musicbrainzTrackId":"track-2",
+                     "musicbrainzArtistIds":["gamma-id"]}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let payload = validate_draft(draft, session_fixture()).unwrap();
+        assert_eq!(payload.extended_album.album_artists, ["Various Artists"]);
+        assert_eq!(payload.extended_album.compilation, Some(true));
+        assert_eq!(
+            payload
+                .extended_album
+                .musicbrainz_release_group_id
+                .as_deref(),
+            Some("group")
+        );
+        assert_eq!(payload.extended_tracks[0].artist_credit, "Alpha feat. Beta");
+        assert_eq!(payload.extended_tracks[0].artists, ["Alpha", "Beta"]);
+        assert_eq!(payload.db_updates[0].artist, "Alpha feat. Beta");
+        assert_eq!(
+            payload.sidecar.extended_tracks[0]
+                .musicbrainz_recording_id
+                .as_deref(),
+            Some("recording-1")
+        );
+    }
+
+    #[test]
+    fn artwork_staging_rejects_non_images_and_uses_an_opaque_token() {
+        assert!(prepare_staged_artwork(99, b"not an image".to_vec(), "test".into()).is_err());
+
+        let mut bytes = Vec::new();
+        image::DynamicImage::new_rgb8(2, 3)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let staged = prepare_staged_artwork(99, bytes, "test".into()).unwrap();
+        assert!(staged.token.starts_with("artwork-99-"));
+        assert!(!staged.token.contains(&staged.preview_path));
+        assert_eq!((staged.width, staged.height), (2, 3));
+        std::fs::remove_file(staged.preview_path).unwrap();
+    }
+
+    #[test]
+    fn view_consumes_seed_when_loading_finishes_after_json_publish() {
         let qml = include_str!("../qml/controls/TagEditorModal.qml");
         assert!(qml.contains("function onEditorJsonChanged()"));
         assert!(qml.contains("function onEditorLoadingChanged()"));
         assert!(qml.contains("!QbzTagEditor.editorLoading"));
+        assert!(qml.contains("event.kind === \"artwork-selected\""));
+        assert!(qml.contains("QbzTagEditor.chooseArtwork()"));
     }
 }

@@ -359,6 +359,8 @@ pub struct Medium {
 /// A track on a medium
 #[derive(Debug, Deserialize)]
 pub struct MediumTrack {
+    #[serde(default)]
+    pub id: Option<String>,
     pub position: Option<u8>,
     pub number: Option<String>,
     pub title: Option<String>,

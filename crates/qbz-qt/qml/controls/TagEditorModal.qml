@@ -1,6 +1,7 @@
-// Local album metadata editor. The selected physical version is immutable for
-// the lifetime of this modal: QML edits row ids and values only; Rust owns the
-// file paths, preflights the whole batch and verifies direct writes.
+// Full-page local album metadata editor. The historical filename is retained
+// so existing qrc registrations stay stable; ContentRouter is its only mount.
+// The selected physical version is immutable for the lifetime of this view:
+// QML edits row ids and values only; Rust owns paths and verifies direct writes.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -8,12 +9,13 @@ import "../theme"
 
 Item {
     id: root
-    visible: QbzTagEditor.editorOpen
-    enabled: visible
-    z: 3150
+    visible: true
+    enabled: true
 
     property string albumTitle: ""
     property string albumArtist: ""
+    property string albumArtistsText: ""
+    property bool compilation: false
     property string year: ""
     property string genre: ""
     property string catalogNumber: ""
@@ -28,10 +30,26 @@ Item {
     property var remoteResults: []
     property var remoteMetadata: null
     property string remoteProvider: "musicbrainz"
+    property string musicbrainzReleaseId: ""
+    property string musicbrainzReleaseGroupId: ""
+    property string musicbrainzAlbumArtistIdsText: ""
+    property string discogsReleaseId: ""
+    property var artwork: ({})
+    property var artworkResults: []
+    property string artworkProvider: "musicbrainz"
+    property int selectedTrackIndex: -1
 
     function tr(s) { return QbzSession.tr(s, QbzSession.trRev) }
     function parse(value) {
         try { return JSON.parse(value) } catch (e) { return ({}) }
+    }
+    function listText(values) {
+        return (values || []).join("; ")
+    }
+    function splitList(value) {
+        return String(value || "").split(/[;\n]/).map(function(part) {
+            return part.trim()
+        }).filter(function(part) { return part.length > 0 })
     }
     function cloneRows(rows) {
         var copy = []
@@ -42,6 +60,13 @@ Item {
                 "title": rows[i].title || "",
                 "trackNumber": rows[i].trackNumber || "",
                 "discNumber": rows[i].discNumber || "",
+                "artistCredit": rows[i].artistCredit || "",
+                "artists": (rows[i].artists || []).slice(),
+                "composers": (rows[i].composers || []).slice(),
+                "performers": (rows[i].performers || []).slice(),
+                "musicbrainzRecordingId": rows[i].musicbrainzRecordingId || "",
+                "musicbrainzTrackId": rows[i].musicbrainzTrackId || "",
+                "musicbrainzArtistIds": (rows[i].musicbrainzArtistIds || []).slice(),
                 "cueBased": rows[i].cueBased === true
             })
         }
@@ -60,9 +85,17 @@ Item {
             return
         albumTitle = doc.albumTitle || ""
         albumArtist = doc.albumArtist || ""
+        albumArtistsText = listText(doc.albumArtists)
+        compilation = doc.compilation === true
         year = doc.year || ""
         genre = doc.genre || ""
         catalogNumber = doc.catalogNumber || ""
+        musicbrainzReleaseId = doc.musicbrainzReleaseId || ""
+        musicbrainzReleaseGroupId = doc.musicbrainzReleaseGroupId || ""
+        musicbrainzAlbumArtistIdsText = listText(doc.musicbrainzAlbumArtistIds)
+        discogsReleaseId = doc.discogsReleaseId || ""
+        artwork = doc.artwork || ({})
+        artworkResults = []
         tracks = cloneRows(doc.tracks)
         inspection = doc.inspection || ({})
         canDirectWrite = doc.canDirectWrite === true
@@ -72,6 +105,7 @@ Item {
         syncSecondary = false
         remoteResults = []
         remoteMetadata = null
+        selectedTrackIndex = tracks.length > 0 ? 0 : -1
         seeded = true
         keyScope.forceActiveFocus()
     }
@@ -81,15 +115,29 @@ Item {
                 "id": row.id,
                 "title": row.title,
                 "trackNumber": row.trackNumber,
-                "discNumber": row.discNumber
+                "discNumber": row.discNumber,
+                "artistCredit": row.artistCredit,
+                "artists": row.artists || [],
+                "composers": row.composers || [],
+                "performers": row.performers || [],
+                "musicbrainzRecordingId": row.musicbrainzRecordingId || "",
+                "musicbrainzTrackId": row.musicbrainzTrackId || "",
+                "musicbrainzArtistIds": row.musicbrainzArtistIds || []
             }
         })
         return JSON.stringify({
             "albumTitle": albumTitle,
             "albumArtist": albumArtist,
+            "albumArtists": splitList(albumArtistsText),
+            "compilation": compilation,
             "year": year,
             "genre": genre,
             "catalogNumber": catalogNumber,
+            "musicbrainzReleaseId": musicbrainzReleaseId,
+            "musicbrainzReleaseGroupId": musicbrainzReleaseGroupId,
+            "musicbrainzAlbumArtistIds": splitList(musicbrainzAlbumArtistIdsText),
+            "discogsReleaseId": discogsReleaseId,
+            "artworkToken": artwork.token || "",
             "persistence": persistence,
             "id3v2Version": id3Version,
             "synchronizeSecondaryTags": syncSecondary,
@@ -110,9 +158,20 @@ Item {
             return
         if (m.title) albumTitle = m.title
         if (m.artist) albumArtist = m.artist
+        if (m.artist_credits && m.artist_credits.length)
+            albumArtistsText = listText(m.artist_credits.map(function(credit) { return credit.name }))
         year = m.year ? String(m.year) : ""
         genre = m.genres && m.genres.length ? m.genres.join("; ") : ""
         catalogNumber = m.catalog_number || ""
+        if (String(m.provider) === "musicbrainz") {
+            musicbrainzReleaseId = m.provider_id || ""
+            musicbrainzReleaseGroupId = m.release_group_id || ""
+            musicbrainzAlbumArtistIdsText = listText((m.artist_credits || []).map(function(credit) {
+                return credit.provider_id || ""
+            }).filter(function(value) { return value.length > 0 }))
+        } else if (String(m.provider) === "discogs") {
+            discogsReleaseId = m.provider_id || ""
+        }
 
         var byPosition = ({})
         var remoteTracks = m.tracks || []
@@ -131,6 +190,15 @@ Item {
                 next[i].title = match.title || next[i].title
                 next[i].discNumber = String(match.disc_number || next[i].discNumber)
                 next[i].trackNumber = String(match.track_number || next[i].trackNumber)
+                next[i].artistCredit = match.artist_credit || next[i].artistCredit
+                if (match.artist_credits && match.artist_credits.length) {
+                    next[i].artists = match.artist_credits.map(function(credit) { return credit.name })
+                    next[i].musicbrainzArtistIds = match.artist_credits.map(function(credit) {
+                        return credit.provider_id || ""
+                    }).filter(function(value) { return value.length > 0 })
+                }
+                next[i].musicbrainzRecordingId = match.recording_id || next[i].musicbrainzRecordingId
+                next[i].musicbrainzTrackId = match.track_id || next[i].musicbrainzTrackId
             }
         }
         tracks = next
@@ -150,19 +218,19 @@ Item {
         }
     }
 
-    onVisibleChanged: {
-        if (visible && !QbzTagEditor.editorLoading)
+    Component.onCompleted: {
+        if (!QbzTagEditor.editorLoading)
             seed(parse(QbzTagEditor.editorJson))
-        if (!visible) {
-            seeded = false
-            restoreShellFocus()
-        }
+    }
+    Component.onDestruction: {
+        QbzTagEditor.leave()
+        restoreShellFocus()
     }
 
     Connections {
         target: QbzTagEditor
         function onEditorJsonChanged() {
-            if (root.visible && !QbzTagEditor.editorLoading)
+            if (!QbzTagEditor.editorLoading)
                 root.seed(root.parse(QbzTagEditor.editorJson))
         }
         // Rust publishes the immutable document before it clears loading so
@@ -170,7 +238,7 @@ Item {
         // document on that second signal as well; otherwise the JSON change is
         // deliberately ignored while loading and the modal spins forever.
         function onEditorLoadingChanged() {
-            if (root.visible && !QbzTagEditor.editorLoading)
+            if (!QbzTagEditor.editorLoading)
                 root.seed(root.parse(QbzTagEditor.editorJson))
         }
         function onRemoteSeqChanged() {
@@ -180,6 +248,10 @@ Item {
                 root.remoteMetadata = null
             } else if (event.kind === "metadata") {
                 root.remoteMetadata = event.value || null
+            } else if (event.kind === "artwork-results") {
+                root.artworkResults = event.value || []
+            } else if (event.kind === "artwork-selected") {
+                root.artwork = event.value || ({})
             }
         }
     }
@@ -196,22 +268,11 @@ Item {
     }
 
     Rectangle {
-        anchors.fill: parent
-        color: "#bf000000"
-        MouseArea { anchors.fill: parent; onClicked: root.closeEditor() }
-    }
-
-    Rectangle {
         id: panel
-        anchors.centerIn: parent
-        width: Math.min(parent.width - 64, 1040)
-        height: Math.min(parent.height - 48, 820)
-        radius: theme.radiusLg
+        anchors.fill: parent
+        radius: 0
         color: theme.surfaceMain
-        border.width: 1
-        border.color: theme.borderSubtle
         clip: true
-        MouseArea { anchors.fill: parent }
 
         Item {
             id: header
@@ -286,6 +347,171 @@ Item {
                         font.pixelSize: theme.fontSection
                         font.weight: theme.weightSemibold
                     }
+                    Row {
+                        width: parent.width
+                        height: 154
+                        spacing: 16
+
+                        Rectangle {
+                            width: 154
+                            height: 154
+                            radius: theme.radiusMd
+                            color: theme.surfaceElevated
+                            border.width: 1
+                            border.color: theme.borderSubtle
+                            clip: true
+                            Image {
+                                id: albumArtwork
+                                anchors.fill: parent
+                                source: root.artwork.previewPath || ""
+                                fillMode: Image.PreserveAspectCrop
+                                asynchronous: true
+                                cache: false
+                                visible: source !== ""
+                            }
+                            QbzIcon {
+                                anchors.centerIn: parent
+                                name: "disc-3"
+                                width: 42
+                                height: 42
+                                tintName: "muted"
+                                visible: !albumArtwork.visible
+                            }
+                            QbzSpinner {
+                                anchors.centerIn: parent
+                                size: 26
+                                visible: QbzTagEditor.artworkLoading
+                            }
+                        }
+
+                        Column {
+                            width: parent.width - 170
+                            spacing: 8
+                            Row {
+                                id: artworkActions
+                                width: parent.width
+                                spacing: 8
+                                SettingsButton {
+                                    text: root.artwork.previewPath ? root.tr("Choose another file") : root.tr("Choose file")
+                                    iconName: "image-plus"
+                                    minWidth: 0
+                                    enabled: !QbzTagEditor.artworkLoading
+                                    onClicked: QbzTagEditor.chooseArtwork()
+                                }
+                                SettingsButton {
+                                    visible: (root.artwork.token || "") !== ""
+                                    text: root.tr("Revert selection")
+                                    iconName: "rotate-ccw"
+                                    minWidth: 0
+                                    enabled: !QbzTagEditor.artworkLoading
+                                    onClicked: QbzTagEditor.clearArtwork()
+                                }
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: Math.max(0, artworkActions.width
+                                                    - artworkActions.children[0].width
+                                                    - artworkActions.children[1].width
+                                                    - artworkActions.spacing * 2)
+                                    text: (root.artwork.source || "")
+                                        + (root.artwork.width ? " · " + root.artwork.width + " × " + root.artwork.height : "")
+                                    color: theme.textMuted
+                                    font.pixelSize: theme.fontLegal
+                                    elide: Text.ElideRight
+                                }
+                            }
+                            Row {
+                                spacing: 8
+                                QbzSelect {
+                                    width: 150
+                                    menuWidth: 150
+                                    options: ["MusicBrainz", "Discogs", "Last.fm"]
+                                    currentIndex: root.artworkProvider === "discogs" ? 1
+                                        : root.artworkProvider === "lastfm" ? 2 : 0
+                                    enabled: !QbzTagEditor.artworkSearching && !QbzTagEditor.artworkLoading
+                                    onSelected: function(index) {
+                                        root.artworkProvider = index === 1 ? "discogs"
+                                            : index === 2 ? "lastfm" : "musicbrainz"
+                                    }
+                                }
+                                SettingsButton {
+                                    text: QbzTagEditor.artworkSearching ? root.tr("Searching…") : root.tr("Find artwork")
+                                    iconName: "search"
+                                    minWidth: 0
+                                    enabled: !QbzTagEditor.artworkSearching && !QbzTagEditor.artworkLoading
+                                    onClicked: QbzTagEditor.searchArtwork(
+                                        root.artworkProvider,
+                                        root.albumTitle,
+                                        root.albumArtist,
+                                        root.catalogNumber)
+                                }
+                            }
+                            ListView {
+                                id: artworkList
+                                width: parent.width
+                                height: 92
+                                orientation: ListView.Horizontal
+                                spacing: 8
+                                clip: true
+                                model: root.artworkResults
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    width: 196
+                                    height: 88
+                                    radius: theme.radiusSm
+                                    color: artMouse.containsMouse ? theme.surfaceHover : theme.surfaceElevated
+                                    border.width: 1
+                                    border.color: theme.borderSubtle
+                                    Image {
+                                        anchors.left: parent.left
+                                        anchors.top: parent.top
+                                        anchors.bottom: parent.bottom
+                                        anchors.margins: 4
+                                        width: 80
+                                        source: modelData.previewUrl || ""
+                                        fillMode: Image.PreserveAspectCrop
+                                        asynchronous: true
+                                    }
+                                    Column {
+                                        anchors.left: parent.left
+                                        anchors.leftMargin: 92
+                                        anchors.right: parent.right
+                                        anchors.rightMargin: 7
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        spacing: 3
+                                        Text {
+                                            width: parent.width
+                                            text: modelData.title || ""
+                                            color: theme.textPrimary
+                                            font.pixelSize: theme.fontLegal
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            width: parent.width
+                                            text: modelData.source || ""
+                                            color: theme.textSecondary
+                                            font.pixelSize: theme.fontLegal
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            width: parent.width
+                                            text: modelData.detail || ""
+                                            color: theme.textMuted
+                                            font.pixelSize: theme.fontLegal
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                    MouseArea {
+                                        id: artMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        enabled: !QbzTagEditor.artworkLoading
+                                        onClicked: QbzTagEditor.selectArtwork(parent.modelData.id || "")
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Grid {
                         width: parent.width
                         columns: 2
@@ -301,6 +527,32 @@ Item {
                                 text: root.albumTitle
                                 onEdited: function(value) { root.albumTitle = value }
                                 onCommitted: function(value) { root.albumTitle = value }
+                            }
+                        }
+                        Column {
+                            width: (content.width - 16) / 2
+                            spacing: 5
+                            Text { text: root.tr("Album artists (ordered; separate with semicolons)"); color: theme.textSecondary; font.pixelSize: theme.fontLegal }
+                            QbzLineEdit {
+                                width: parent.width
+                                text: root.albumArtistsText
+                                onEdited: function(value) { root.albumArtistsText = value }
+                                onCommitted: function(value) { root.albumArtistsText = value }
+                            }
+                        }
+                        Row {
+                            width: (content.width - 16) / 2
+                            spacing: 8
+                            QbzToggle {
+                                anchors.verticalCenter: parent.verticalCenter
+                                checked: root.compilation
+                                onToggled: function(value) { root.compilation = value }
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: root.tr("Compilation / Various Artists")
+                                color: theme.textSecondary
+                                font.pixelSize: theme.fontBody
                             }
                         }
                         Column {
@@ -349,6 +601,50 @@ Item {
                                     onEdited: function(value) { root.catalogNumber = value }
                                     onCommitted: function(value) { root.catalogNumber = value }
                                 }
+                            }
+                        }
+                        Column {
+                            width: (content.width - 16) / 2
+                            spacing: 5
+                            Text { text: root.tr("MusicBrainz release ID"); color: theme.textSecondary; font.pixelSize: theme.fontLegal }
+                            QbzLineEdit {
+                                width: parent.width
+                                text: root.musicbrainzReleaseId
+                                onEdited: function(value) { root.musicbrainzReleaseId = value }
+                                onCommitted: function(value) { root.musicbrainzReleaseId = value }
+                            }
+                        }
+                        Column {
+                            width: (content.width - 16) / 2
+                            spacing: 5
+                            Text { text: root.tr("MusicBrainz release-group ID"); color: theme.textSecondary; font.pixelSize: theme.fontLegal }
+                            QbzLineEdit {
+                                width: parent.width
+                                text: root.musicbrainzReleaseGroupId
+                                onEdited: function(value) { root.musicbrainzReleaseGroupId = value }
+                                onCommitted: function(value) { root.musicbrainzReleaseGroupId = value }
+                            }
+                        }
+                        Column {
+                            width: (content.width - 16) / 2
+                            spacing: 5
+                            Text { text: root.tr("MusicBrainz album artist IDs"); color: theme.textSecondary; font.pixelSize: theme.fontLegal }
+                            QbzLineEdit {
+                                width: parent.width
+                                text: root.musicbrainzAlbumArtistIdsText
+                                onEdited: function(value) { root.musicbrainzAlbumArtistIdsText = value }
+                                onCommitted: function(value) { root.musicbrainzAlbumArtistIdsText = value }
+                            }
+                        }
+                        Column {
+                            width: (content.width - 16) / 2
+                            spacing: 5
+                            Text { text: root.tr("Discogs release ID"); color: theme.textSecondary; font.pixelSize: theme.fontLegal }
+                            QbzLineEdit {
+                                width: parent.width
+                                text: root.discogsReleaseId
+                                onEdited: function(value) { root.discogsReleaseId = value }
+                                onCommitted: function(value) { root.discogsReleaseId = value }
                             }
                         }
                     }
@@ -515,7 +811,7 @@ Item {
                     Row {
                         width: parent.width
                         Text {
-                            text: root.tr("Tracks") + " · " + root.tr("Disc") + " / " + root.tr("Track")
+                            text: root.tr("Tracks")
                             color: theme.textPrimary
                             font.pixelSize: theme.fontSection
                             font.weight: theme.weightSemibold
@@ -529,52 +825,273 @@ Item {
                             elide: Text.ElideRight
                         }
                     }
+                    Rectangle {
+                        width: parent.width
+                        height: 32
+                        color: theme.surfaceElevated
+                        border.width: 1
+                        border.color: theme.borderSubtle
+                        Row {
+                            anchors.fill: parent
+                            Text {
+                                width: 64
+                                height: parent.height
+                                leftPadding: 10
+                                text: root.tr("Disc")
+                                color: theme.textMuted
+                                font.pixelSize: theme.fontLegal
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            Rectangle { width: 1; height: parent.height; color: theme.borderSubtle }
+                            Text {
+                                width: 72
+                                height: parent.height
+                                leftPadding: 10
+                                text: root.tr("Track")
+                                color: theme.textMuted
+                                font.pixelSize: theme.fontLegal
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            Rectangle { width: 1; height: parent.height; color: theme.borderSubtle }
+                            Text {
+                                width: Math.max(160, parent.width - 64 - 72 - 220 - 240 - 4)
+                                height: parent.height
+                                leftPadding: 10
+                                text: root.tr("Title")
+                                color: theme.textMuted
+                                font.pixelSize: theme.fontLegal
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            Rectangle { width: 1; height: parent.height; color: theme.borderSubtle }
+                            Text {
+                                width: 220
+                                height: parent.height
+                                leftPadding: 10
+                                text: root.tr("Artist credit")
+                                color: theme.textMuted
+                                font.pixelSize: theme.fontLegal
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            Rectangle { width: 1; height: parent.height; color: theme.borderSubtle }
+                            Text {
+                                width: 240
+                                height: parent.height
+                                leftPadding: 10
+                                text: root.tr("File")
+                                color: theme.textMuted
+                                font.pixelSize: theme.fontLegal
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+                    }
                     ListView {
                         id: trackList
                         width: parent.width
-                        height: Math.min(280, Math.max(108, content.height > scroll.height ? 180 : 280))
+                        height: Math.min(360, Math.max(112, root.tracks.length * 36))
                         clip: true
-                        spacing: 4
+                        spacing: 0
                         model: root.tracks
                         delegate: Rectangle {
                             required property var modelData
                             width: trackList.width
-                            height: 44
-                            radius: theme.radiusSm
-                            color: index % 2 ? theme.surfaceElevated : theme.surfaceCard
+                            height: 36
+                            color: index % 2 ? theme.surfaceElevated : "transparent"
+                            border.width: 1
+                            border.color: theme.borderSubtle
                             Row {
                                 anchors.fill: parent
-                                anchors.margins: 5
-                                spacing: 8
-                                QbzLineEdit {
-                                    width: 52
-                                    text: modelData.discNumber
-                                    placeholder: root.tr("Disc")
-                                    onEdited: function(value) { modelData.discNumber = value }
-                                    onCommitted: function(value) { modelData.discNumber = value }
+                                Rectangle {
+                                    width: 64
+                                    height: parent.height
+                                    color: "transparent"
+                                    TextInput {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 10
+                                        anchors.rightMargin: 8
+                                        text: modelData.discNumber
+                                        color: theme.textPrimary
+                                        font.pixelSize: theme.fontBody
+                                        verticalAlignment: TextInput.AlignVCenter
+                                        selectByMouse: true
+                                        inputMethodHints: Qt.ImhDigitsOnly
+                                        onTextEdited: modelData.discNumber = text
+                                        onActiveFocusChanged: if (activeFocus) root.selectedTrackIndex = index
+                                    }
                                 }
-                                QbzLineEdit {
-                                    width: 58
-                                    text: modelData.trackNumber
-                                    placeholder: root.tr("Track")
-                                    onEdited: function(value) { modelData.trackNumber = value }
-                                    onCommitted: function(value) { modelData.trackNumber = value }
+                                Rectangle { width: 1; height: parent.height; color: theme.borderSubtle }
+                                Rectangle {
+                                    width: 72
+                                    height: parent.height
+                                    color: "transparent"
+                                    TextInput {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 10
+                                        anchors.rightMargin: 8
+                                        text: modelData.trackNumber
+                                        color: theme.textPrimary
+                                        font.pixelSize: theme.fontBody
+                                        verticalAlignment: TextInput.AlignVCenter
+                                        selectByMouse: true
+                                        inputMethodHints: Qt.ImhDigitsOnly
+                                        onTextEdited: modelData.trackNumber = text
+                                        onActiveFocusChanged: if (activeFocus) root.selectedTrackIndex = index
+                                    }
                                 }
-                                QbzLineEdit {
-                                    width: parent.width - 52 - 58 - fileName.width - 24
-                                    text: modelData.title
-                                    onEdited: function(value) { modelData.title = value }
-                                    onCommitted: function(value) { modelData.title = value }
+                                Rectangle { width: 1; height: parent.height; color: theme.borderSubtle }
+                                Rectangle {
+                                    width: Math.max(160, parent.width - 64 - 72 - 220 - 240 - 4)
+                                    height: parent.height
+                                    color: "transparent"
+                                    TextInput {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 10
+                                        anchors.rightMargin: 8
+                                        text: modelData.title
+                                        color: theme.textPrimary
+                                        font.pixelSize: theme.fontBody
+                                        verticalAlignment: TextInput.AlignVCenter
+                                        selectByMouse: true
+                                        clip: true
+                                        onTextEdited: modelData.title = text
+                                        onActiveFocusChanged: if (activeFocus) root.selectedTrackIndex = index
+                                    }
                                 }
+                                Rectangle { width: 1; height: parent.height; color: theme.borderSubtle }
+                                Rectangle {
+                                    width: 220
+                                    height: parent.height
+                                    color: "transparent"
+                                    TextInput {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 10
+                                        anchors.rightMargin: 8
+                                        text: modelData.artistCredit
+                                        color: theme.textPrimary
+                                        font.pixelSize: theme.fontBody
+                                        verticalAlignment: TextInput.AlignVCenter
+                                        selectByMouse: true
+                                        clip: true
+                                        onTextEdited: modelData.artistCredit = text
+                                        onActiveFocusChanged: if (activeFocus) root.selectedTrackIndex = index
+                                    }
+                                }
+                                Rectangle { width: 1; height: parent.height; color: theme.borderSubtle }
                                 Text {
                                     id: fileName
-                                    width: Math.min(220, implicitWidth)
+                                    width: 240
                                     height: parent.height
+                                    leftPadding: 10
+                                    rightPadding: 8
                                     text: modelData.fileName
                                     color: theme.textMuted
                                     font.pixelSize: theme.fontLegal
                                     verticalAlignment: Text.AlignVCenter
                                     elide: Text.ElideMiddle
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        onClicked: root.selectedTrackIndex = index
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Rectangle {
+                        id: trackDetails
+                        property var rowData: root.selectedTrackIndex >= 0
+                            && root.selectedTrackIndex < root.tracks.length
+                            ? root.tracks[root.selectedTrackIndex] : null
+                        visible: rowData !== null
+                        width: parent.width
+                        height: visible ? 190 : 0
+                        color: theme.surfaceElevated
+                        border.width: 1
+                        border.color: theme.borderSubtle
+                        radius: theme.radiusSm
+                        Column {
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            spacing: 8
+                            Row {
+                                width: parent.width
+                                Text {
+                                    text: root.tr("Selected track details")
+                                    color: theme.textPrimary
+                                    font.pixelSize: theme.fontBody
+                                    font.weight: theme.weightSemibold
+                                }
+                                Text {
+                                    width: parent.width - parent.children[0].implicitWidth
+                                    horizontalAlignment: Text.AlignRight
+                                    text: trackDetails.rowData ? trackDetails.rowData.fileName : ""
+                                    color: theme.textMuted
+                                    font.pixelSize: theme.fontLegal
+                                    elide: Text.ElideMiddle
+                                }
+                            }
+                            Grid {
+                                width: parent.width
+                                columns: 2
+                                columnSpacing: 12
+                                rowSpacing: 7
+                                Column {
+                                    width: (trackDetails.width - 32) / 2
+                                    spacing: 3
+                                    Text { text: root.tr("Artists (ordered; semicolon separated)"); color: theme.textMuted; font.pixelSize: theme.fontLegal }
+                                    QbzLineEdit {
+                                        width: parent.width
+                                        text: trackDetails.rowData ? root.listText(trackDetails.rowData.artists) : ""
+                                        onEdited: function(value) { if (trackDetails.rowData) trackDetails.rowData.artists = root.splitList(value) }
+                                    }
+                                }
+                                Column {
+                                    width: (trackDetails.width - 32) / 2
+                                    spacing: 3
+                                    Text { text: root.tr("Composers"); color: theme.textMuted; font.pixelSize: theme.fontLegal }
+                                    QbzLineEdit {
+                                        width: parent.width
+                                        text: trackDetails.rowData ? root.listText(trackDetails.rowData.composers) : ""
+                                        onEdited: function(value) { if (trackDetails.rowData) trackDetails.rowData.composers = root.splitList(value) }
+                                    }
+                                }
+                                Column {
+                                    width: (trackDetails.width - 32) / 2
+                                    spacing: 3
+                                    Text { text: root.tr("Performers"); color: theme.textMuted; font.pixelSize: theme.fontLegal }
+                                    QbzLineEdit {
+                                        width: parent.width
+                                        text: trackDetails.rowData ? root.listText(trackDetails.rowData.performers) : ""
+                                        onEdited: function(value) { if (trackDetails.rowData) trackDetails.rowData.performers = root.splitList(value) }
+                                    }
+                                }
+                                Column {
+                                    width: (trackDetails.width - 32) / 2
+                                    spacing: 3
+                                    Text { text: root.tr("MusicBrainz artist IDs"); color: theme.textMuted; font.pixelSize: theme.fontLegal }
+                                    QbzLineEdit {
+                                        width: parent.width
+                                        text: trackDetails.rowData ? root.listText(trackDetails.rowData.musicbrainzArtistIds) : ""
+                                        onEdited: function(value) { if (trackDetails.rowData) trackDetails.rowData.musicbrainzArtistIds = root.splitList(value) }
+                                    }
+                                }
+                                Column {
+                                    width: (trackDetails.width - 32) / 2
+                                    spacing: 3
+                                    Text { text: root.tr("MusicBrainz recording ID"); color: theme.textMuted; font.pixelSize: theme.fontLegal }
+                                    QbzLineEdit {
+                                        width: parent.width
+                                        text: trackDetails.rowData ? trackDetails.rowData.musicbrainzRecordingId : ""
+                                        onEdited: function(value) { if (trackDetails.rowData) trackDetails.rowData.musicbrainzRecordingId = value }
+                                    }
+                                }
+                                Column {
+                                    width: (trackDetails.width - 32) / 2
+                                    spacing: 3
+                                    Text { text: root.tr("MusicBrainz track ID"); color: theme.textMuted; font.pixelSize: theme.fontLegal }
+                                    QbzLineEdit {
+                                        width: parent.width
+                                        text: trackDetails.rowData ? trackDetails.rowData.musicbrainzTrackId : ""
+                                        onEdited: function(value) { if (trackDetails.rowData) trackDetails.rowData.musicbrainzTrackId = value }
+                                    }
                                 }
                             }
                         }

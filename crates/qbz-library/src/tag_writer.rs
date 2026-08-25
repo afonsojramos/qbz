@@ -4,7 +4,7 @@
 //! reported through an `on_progress` closure (no Tauri event bus); the caller
 //! orchestrates the DB update + sidecar removal.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::path::Path;
 
@@ -79,10 +79,7 @@ fn tag_has_editor_conflict(tagged_file: &lofty::file::TaggedFile) -> bool {
     use lofty::prelude::*;
     use lofty::tag::ItemKey;
 
-    fn distinct_text(
-        tagged_file: &lofty::file::TaggedFile,
-        key: ItemKey,
-    ) -> bool {
+    fn distinct_text(tagged_file: &lofty::file::TaggedFile, key: ItemKey) -> bool {
         let mut values = Vec::<String>::new();
         for tag in tagged_file.tags() {
             if let Some(value) = tag
@@ -214,6 +211,7 @@ pub fn inspect_album_tag_layers(paths: &[String]) -> Result<AlbumTagInspection, 
 /// Album-level fields written into every file's embedded tags. A `None`
 /// (or blank) field REMOVES that tag (direct write is destructive, unlike the
 /// override-only sidecar).
+#[derive(Debug, Clone)]
 pub struct AlbumTagWrite {
     pub album_title: String,
     pub album_artist: String, // "" => remove the AlbumArtist tag
@@ -223,11 +221,177 @@ pub struct AlbumTagWrite {
 }
 
 /// One file's per-track fields.
+#[derive(Debug, Clone)]
 pub struct TrackTagWrite {
     pub file_path: String,
     pub title: String,
     pub track_number: Option<u32>,
     pub disc_number: Option<u32>,
+}
+
+/// Standards-oriented album fields owned by the expanded Qt editor.
+///
+/// `album_artist` in [`AlbumTagWrite`] remains the human-readable credit.
+/// `album_artists` stores the ordered, lossless components in the dedicated
+/// ALBUMARTISTS key where the target tag format supports it.
+#[derive(Debug, Clone, Default)]
+pub struct ExtendedAlbumTagWrite {
+    pub album_artists: Vec<String>,
+    pub compilation: Option<bool>,
+    pub musicbrainz_release_id: Option<String>,
+    pub musicbrainz_release_group_id: Option<String>,
+    pub musicbrainz_album_artist_ids: Vec<String>,
+    /// Provenance retained by the sidecar. There is no interoperable Discogs
+    /// key in Lofty's generic tag map, so it is deliberately not embedded.
+    pub discogs_release_id: Option<String>,
+}
+
+/// Standards-oriented fields for one physical track.
+#[derive(Debug, Clone, Default)]
+pub struct ExtendedTrackTagWrite {
+    pub file_path: String,
+    /// Display credit, including intentional join phrases such as "A feat. B".
+    pub artist_credit: String,
+    /// Ordered components written to ARTISTS independently from ARTIST.
+    pub artists: Vec<String>,
+    pub composers: Vec<String>,
+    pub performers: Vec<String>,
+    pub musicbrainz_recording_id: Option<String>,
+    pub musicbrainz_track_id: Option<String>,
+    pub musicbrainz_artist_ids: Vec<String>,
+}
+
+/// A validated front-cover candidate. Callers stage bytes before save; the
+/// writer never follows a QML-provided path or URL while mutating audio files.
+#[derive(Debug, Clone)]
+pub struct FrontCoverWrite {
+    pub bytes: Vec<u8>,
+}
+
+/// Decode and atomically install a conventional folder front cover.
+/// The old file is restored if the final rename fails.
+pub fn write_folder_front_cover(album_dir: &Path, bytes: &[u8]) -> Result<String, LibraryError> {
+    if bytes.is_empty() || bytes.len() > 25 * 1024 * 1024 {
+        return Err(LibraryError::Metadata(
+            "The selected cover is empty or larger than 25 MiB.".to_string(),
+        ));
+    }
+    let image = image::load_from_memory(bytes).map_err(|error| {
+        LibraryError::Metadata(format!("The selected cover could not be decoded: {error}"))
+    })?;
+    if image.width() == 0
+        || image.height() == 0
+        || image.width() > 12_000
+        || image.height() > 12_000
+    {
+        return Err(LibraryError::Metadata(
+            "The selected cover has unsupported dimensions.".to_string(),
+        ));
+    }
+    let target = album_dir.join("cover.jpg");
+    let temporary = album_dir.join(".cover.jpg.qbz-tmp");
+    let backup = album_dir.join(".cover.jpg.qbz-backup");
+    image
+        .save_with_format(&temporary, image::ImageFormat::Jpeg)
+        .map_err(|error| LibraryError::Metadata(format!("Cover encode failed: {error}")))?;
+
+    let had_target = target.is_file();
+    if had_target {
+        if backup.exists() {
+            std::fs::remove_file(&backup).map_err(LibraryError::Io)?;
+        }
+        std::fs::rename(&target, &backup).map_err(LibraryError::Io)?;
+    }
+    if let Err(error) = std::fs::rename(&temporary, &target) {
+        if had_target {
+            let _ = std::fs::rename(&backup, &target);
+        }
+        return Err(LibraryError::Io(error));
+    }
+    if had_target && backup.exists() {
+        std::fs::remove_file(&backup).map_err(LibraryError::Io)?;
+    }
+    Ok(target.to_string_lossy().to_string())
+}
+
+/// Rich values read from one file's canonical tag for editor seeding.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EditorTrackTagSnapshot {
+    pub file_path: String,
+    pub artist_credit: String,
+    pub artists: Vec<String>,
+    pub album_artists: Vec<String>,
+    pub composers: Vec<String>,
+    pub performers: Vec<String>,
+    pub compilation: Option<bool>,
+    pub musicbrainz_release_id: Option<String>,
+    pub musicbrainz_release_group_id: Option<String>,
+    pub musicbrainz_recording_id: Option<String>,
+    pub musicbrainz_track_id: Option<String>,
+    pub musicbrainz_artist_ids: Vec<String>,
+    pub musicbrainz_album_artist_ids: Vec<String>,
+}
+
+fn normalized_values(tag: &lofty::tag::Tag, key: lofty::tag::ItemKey) -> Vec<String> {
+    let mut seen = HashSet::<String>::new();
+    tag.get_strings(key)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter_map(|value| {
+            let folded = value.to_lowercase();
+            seen.insert(folded).then(|| value.to_string())
+        })
+        .collect()
+}
+
+fn normalized_optional(tag: &lofty::tag::Tag, key: lofty::tag::ItemKey) -> Option<String> {
+    normalized_values(tag, key).into_iter().next()
+}
+
+/// Read the canonical rich-tag projection used by the Qt editor.
+/// Unreadable rows return an empty snapshot rather than borrowing values from
+/// a neighbouring file; the ordinary editor preflight reports writability.
+pub fn read_editor_tag_snapshots(paths: &[String]) -> Vec<EditorTrackTagSnapshot> {
+    use lofty::prelude::*;
+    use lofty::tag::ItemKey;
+
+    paths
+        .iter()
+        .map(|path| {
+            let mut snapshot = EditorTrackTagSnapshot {
+                file_path: path.clone(),
+                ..EditorTrackTagSnapshot::default()
+            };
+            let Ok(file) = lofty::read_from_path(Path::new(path)) else {
+                return snapshot;
+            };
+            let Some(tag) = file.primary_tag().or_else(|| file.first_tag()) else {
+                return snapshot;
+            };
+            snapshot.artist_credit =
+                normalized_optional(tag, ItemKey::TrackArtist).unwrap_or_default();
+            snapshot.artists = normalized_values(tag, ItemKey::TrackArtists);
+            if snapshot.artists.is_empty() && !snapshot.artist_credit.is_empty() {
+                snapshot.artists.push(snapshot.artist_credit.clone());
+            }
+            snapshot.album_artists = normalized_values(tag, ItemKey::AlbumArtists);
+            snapshot.composers = normalized_values(tag, ItemKey::Composer);
+            snapshot.performers = normalized_values(tag, ItemKey::Performer);
+            snapshot.compilation = normalized_optional(tag, ItemKey::FlagCompilation)
+                .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"));
+            snapshot.musicbrainz_release_id =
+                normalized_optional(tag, ItemKey::MusicBrainzReleaseId);
+            snapshot.musicbrainz_release_group_id =
+                normalized_optional(tag, ItemKey::MusicBrainzReleaseGroupId);
+            snapshot.musicbrainz_recording_id =
+                normalized_optional(tag, ItemKey::MusicBrainzRecordingId);
+            snapshot.musicbrainz_track_id = normalized_optional(tag, ItemKey::MusicBrainzTrackId);
+            snapshot.musicbrainz_artist_ids = normalized_values(tag, ItemKey::MusicBrainzArtistId);
+            snapshot.musicbrainz_album_artist_ids =
+                normalized_values(tag, ItemKey::MusicBrainzReleaseArtistId);
+            snapshot
+        })
+        .collect()
 }
 
 /// Should this file's per-track ARTIST be rewritten to the album artist?
@@ -351,6 +515,88 @@ fn apply_editor_fields(
     }
 }
 
+fn replace_text_values(tag: &mut lofty::tag::Tag, key: lofty::tag::ItemKey, values: &[String]) {
+    use lofty::tag::{ItemValue, TagItem};
+
+    tag.remove_key(key);
+    for value in values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        tag.push(TagItem::new(key, ItemValue::Text(value.to_string())));
+    }
+}
+
+fn replace_optional_text(tag: &mut lofty::tag::Tag, key: lofty::tag::ItemKey, value: Option<&str>) {
+    let values = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| vec![value.to_string()])
+        .unwrap_or_default();
+    replace_text_values(tag, key, &values);
+}
+
+fn apply_extended_editor_fields(
+    tag: &mut lofty::tag::Tag,
+    album: &ExtendedAlbumTagWrite,
+    track: &ExtendedTrackTagWrite,
+    artwork: Option<&lofty::picture::Picture>,
+) {
+    use lofty::picture::PictureType;
+    use lofty::prelude::*;
+    use lofty::tag::ItemKey;
+
+    if !track.artist_credit.trim().is_empty() {
+        tag.set_artist(track.artist_credit.trim().to_string());
+    } else {
+        tag.remove_key(ItemKey::TrackArtist);
+    }
+    replace_text_values(tag, ItemKey::TrackArtists, &track.artists);
+    replace_text_values(tag, ItemKey::AlbumArtists, &album.album_artists);
+    replace_text_values(tag, ItemKey::Composer, &track.composers);
+    replace_text_values(tag, ItemKey::Performer, &track.performers);
+    match album.compilation {
+        Some(true) => replace_optional_text(tag, ItemKey::FlagCompilation, Some("1")),
+        Some(false) => tag.remove_key(ItemKey::FlagCompilation),
+        None => {}
+    }
+    replace_optional_text(
+        tag,
+        ItemKey::MusicBrainzReleaseId,
+        album.musicbrainz_release_id.as_deref(),
+    );
+    replace_optional_text(
+        tag,
+        ItemKey::MusicBrainzReleaseGroupId,
+        album.musicbrainz_release_group_id.as_deref(),
+    );
+    replace_text_values(
+        tag,
+        ItemKey::MusicBrainzReleaseArtistId,
+        &album.musicbrainz_album_artist_ids,
+    );
+    replace_optional_text(
+        tag,
+        ItemKey::MusicBrainzRecordingId,
+        track.musicbrainz_recording_id.as_deref(),
+    );
+    replace_optional_text(
+        tag,
+        ItemKey::MusicBrainzTrackId,
+        track.musicbrainz_track_id.as_deref(),
+    );
+    replace_text_values(
+        tag,
+        ItemKey::MusicBrainzArtistId,
+        &track.musicbrainz_artist_ids,
+    );
+    if let Some(picture) = artwork {
+        tag.remove_picture_type(PictureType::CoverFront);
+        tag.push_picture(picture.clone());
+    }
+}
+
 fn normalized_tag_text(tag: &lofty::tag::Tag, key: lofty::tag::ItemKey) -> Option<String> {
     tag.get_string(key)
         .map(str::trim)
@@ -363,6 +609,9 @@ fn verify_editor_write(
     album: &AlbumTagWrite,
     track: &TrackTagWrite,
     expected_artist: Option<&str>,
+    extended_album: Option<&ExtendedAlbumTagWrite>,
+    extended_track: Option<&ExtendedTrackTagWrite>,
+    expected_artwork: Option<&[u8]>,
 ) -> Result<(), LibraryError> {
     use lofty::prelude::*;
     use lofty::tag::ItemKey;
@@ -393,10 +642,10 @@ fn verify_editor_write(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    let expected_album_artist = (!album.album_artist.trim().is_empty())
-        .then(|| album.album_artist.trim().to_string());
+    let expected_album_artist =
+        (!album.album_artist.trim().is_empty()).then(|| album.album_artist.trim().to_string());
 
-    let matches = tag.title().as_deref().map(str::trim) == Some(track.title.trim())
+    let mut matches = tag.title().as_deref().map(str::trim) == Some(track.title.trim())
         && tag.album().as_deref().map(str::trim) == Some(album.album_title.trim())
         && tag.track() == track.track_number
         && tag.disk() == track.disc_number
@@ -407,6 +656,62 @@ fn verify_editor_write(
         && expected_artist.map_or(true, |artist| {
             tag.artist().as_deref().map(str::trim) == Some(artist)
         });
+    if let (Some(album), Some(track)) = (extended_album, extended_track) {
+        let supports = |key: ItemKey| key.map_key(tag.tag_type()).is_some();
+        let values_match = |key: ItemKey, expected: &[String]| {
+            !supports(key) || normalized_values(tag, key) == expected
+        };
+        let option_match = |key: ItemKey, expected: Option<&str>| {
+            !supports(key)
+                || normalized_optional(tag, key).as_deref()
+                    == expected.map(str::trim).filter(|value| !value.is_empty())
+        };
+        matches = matches
+            && tag.artist().as_deref().map(str::trim) == Some(track.artist_credit.trim())
+            && values_match(ItemKey::TrackArtists, &track.artists)
+            && values_match(ItemKey::AlbumArtists, &album.album_artists)
+            && values_match(ItemKey::Composer, &track.composers)
+            && values_match(ItemKey::Performer, &track.performers)
+            && option_match(
+                ItemKey::MusicBrainzReleaseId,
+                album.musicbrainz_release_id.as_deref(),
+            )
+            && option_match(
+                ItemKey::MusicBrainzReleaseGroupId,
+                album.musicbrainz_release_group_id.as_deref(),
+            )
+            && values_match(
+                ItemKey::MusicBrainzReleaseArtistId,
+                &album.musicbrainz_album_artist_ids,
+            )
+            && option_match(
+                ItemKey::MusicBrainzRecordingId,
+                track.musicbrainz_recording_id.as_deref(),
+            )
+            && option_match(
+                ItemKey::MusicBrainzTrackId,
+                track.musicbrainz_track_id.as_deref(),
+            )
+            && values_match(ItemKey::MusicBrainzArtistId, &track.musicbrainz_artist_ids);
+        if let Some(compilation) = album.compilation {
+            matches = matches
+                && (!supports(ItemKey::FlagCompilation)
+                    || normalized_optional(tag, ItemKey::FlagCompilation)
+                        .map(|value| {
+                            matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
+                        })
+                        .unwrap_or(false)
+                        == compilation);
+        }
+    }
+    if let Some(bytes) = expected_artwork {
+        use lofty::picture::PictureType;
+        matches = matches
+            && tag
+                .get_picture_type(PictureType::CoverFront)
+                .map(|picture| picture.data())
+                == Some(bytes);
+    }
     if matches {
         Ok(())
     } else {
@@ -430,15 +735,45 @@ fn verify_editor_write(
 /// `synchronize_secondary_tags`, existing writable modern layers are updated
 /// too; ID3v1 stays untouched because its 30-byte/Latin-1 limits would silently
 /// truncate or corrupt values that are valid in the canonical tag.
-pub fn write_album_tags_to_files_with_options(
+fn write_album_tags_impl(
     album: &AlbumTagWrite,
+    extended_album: &ExtendedAlbumTagWrite,
     tracks: &[TrackTagWrite],
+    extended_tracks: &[ExtendedTrackTagWrite],
+    front_cover: Option<&FrontCoverWrite>,
+    apply_extended: bool,
     options: DirectTagWriteOptions,
     mut on_progress: impl FnMut(usize, usize),
 ) -> Result<(), LibraryError> {
     use lofty::config::WriteOptions;
     use lofty::prelude::*;
     use lofty::tag::{Tag, TagType};
+
+    let extended_by_path = extended_tracks
+        .iter()
+        .map(|track| (track.file_path.as_str(), track))
+        .collect::<HashMap<_, _>>();
+    if apply_extended
+        && tracks
+            .iter()
+            .any(|track| !extended_by_path.contains_key(track.file_path.as_str()))
+    {
+        return Err(LibraryError::Metadata(
+            "The extended tag rows do not match the audio rows.".to_string(),
+        ));
+    }
+    let artwork = front_cover
+        .map(|cover| {
+            let mut picture = lofty::picture::Picture::from_reader(&mut cover.bytes.as_slice())
+                .map_err(|error| {
+                    LibraryError::Metadata(format!(
+                        "The selected cover is not a supported image: {error}"
+                    ))
+                })?;
+            picture.set_pic_type(lofty::picture::PictureType::CoverFront);
+            Ok::<_, LibraryError>(picture)
+        })
+        .transpose()?;
 
     let mut seen = HashSet::new();
     let unique: Vec<&TrackTagWrite> = tracks
@@ -539,6 +874,12 @@ pub fn write_album_tags_to_files_with_options(
                 ))
             })?;
             apply_editor_fields(tag, album, track, previous_artist.as_deref());
+            if apply_extended {
+                let extended_track = extended_by_path
+                    .get(track.file_path.as_str())
+                    .expect("validated extended editor row");
+                apply_extended_editor_fields(tag, extended_album, extended_track, artwork.as_ref());
+            }
         }
 
         prepared.push((track, tagged_file, expected_artist));
@@ -561,11 +902,75 @@ pub fn write_album_tags_to_files_with_options(
                     path.display()
                 ))
             })?;
-        verify_editor_write(path, album, track, expected_artist.as_deref())?;
+        let extended_track = apply_extended.then(|| {
+            extended_by_path
+                .get(track.file_path.as_str())
+                .copied()
+                .expect("validated extended editor row")
+        });
+        verify_editor_write(
+            path,
+            album,
+            track,
+            expected_artist.as_deref(),
+            apply_extended.then_some(extended_album),
+            extended_track,
+            apply_extended
+                .then(|| front_cover.map(|cover| cover.bytes.as_slice()))
+                .flatten(),
+        )?;
         on_progress(index + 1, total);
     }
 
     Ok(())
+}
+
+/// Write the editor's canonical display fields, ordered artist components,
+/// credits, standard MusicBrainz identifiers and an optional front cover.
+pub fn write_album_tags_to_files_extended(
+    album: &AlbumTagWrite,
+    extended_album: &ExtendedAlbumTagWrite,
+    tracks: &[TrackTagWrite],
+    extended_tracks: &[ExtendedTrackTagWrite],
+    front_cover: Option<&FrontCoverWrite>,
+    options: DirectTagWriteOptions,
+    on_progress: impl FnMut(usize, usize),
+) -> Result<(), LibraryError> {
+    write_album_tags_impl(
+        album,
+        extended_album,
+        tracks,
+        extended_tracks,
+        front_cover,
+        true,
+        options,
+        on_progress,
+    )
+}
+
+pub fn write_album_tags_to_files_with_options(
+    album: &AlbumTagWrite,
+    tracks: &[TrackTagWrite],
+    options: DirectTagWriteOptions,
+    on_progress: impl FnMut(usize, usize),
+) -> Result<(), LibraryError> {
+    let extended_tracks = tracks
+        .iter()
+        .map(|track| ExtendedTrackTagWrite {
+            file_path: track.file_path.clone(),
+            ..ExtendedTrackTagWrite::default()
+        })
+        .collect::<Vec<_>>();
+    write_album_tags_impl(
+        album,
+        &ExtendedAlbumTagWrite::default(),
+        tracks,
+        &extended_tracks,
+        None,
+        false,
+        options,
+        on_progress,
+    )
 }
 
 /// Backwards-compatible default used by the frozen Slint frontend: canonical
@@ -734,7 +1139,12 @@ pub fn write_purchase_tags(
                 ..Default::default()
             });
         }
-        if let Some(genre) = meta.genre.as_deref().map(str::trim).filter(|g| !g.is_empty()) {
+        if let Some(genre) = meta
+            .genre
+            .as_deref()
+            .map(str::trim)
+            .filter(|g| !g.is_empty())
+        {
             tag.set_genre(genre.to_string());
         }
 
@@ -972,6 +1382,103 @@ mod editor_write_target_tests {
         assert_eq!(tag.disk(), None);
         assert_eq!(progress, vec![(1, 1)]);
     }
+
+    #[test]
+    fn rich_writer_preserves_display_credit_components_ids_and_front_cover() {
+        use lofty::picture::PictureType;
+        use lofty::prelude::*;
+        use std::io::Cursor;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("credits.flac");
+        std::fs::write(&file, flac_with_leading_id3v2()).unwrap();
+        let mut cover = Vec::new();
+        image::DynamicImage::new_rgb8(2, 2)
+            .write_to(&mut Cursor::new(&mut cover), image::ImageFormat::Png)
+            .unwrap();
+        let album = AlbumTagWrite {
+            album_title: "Compilation".to_string(),
+            album_artist: "Various Artists".to_string(),
+            year: Some(2026),
+            genre: Some("Soundtrack".to_string()),
+            catalog_number: Some("CAT-42".to_string()),
+        };
+        let extended_album = ExtendedAlbumTagWrite {
+            album_artists: vec!["Various Artists".to_string()],
+            compilation: Some(true),
+            musicbrainz_release_id: Some("release-id".to_string()),
+            musicbrainz_release_group_id: Some("group-id".to_string()),
+            musicbrainz_album_artist_ids: vec!["va-id".to_string()],
+            discogs_release_id: Some("123".to_string()),
+        };
+        let tracks = vec![TrackTagWrite {
+            file_path: file.to_string_lossy().to_string(),
+            title: "Collaboration".to_string(),
+            track_number: Some(1),
+            disc_number: Some(1),
+        }];
+        let rich_tracks = vec![ExtendedTrackTagWrite {
+            file_path: tracks[0].file_path.clone(),
+            artist_credit: "Alpha feat. Beta".to_string(),
+            artists: vec!["Alpha".to_string(), "Beta".to_string()],
+            composers: vec!["Composer One".to_string()],
+            performers: vec!["Player One (guitar)".to_string()],
+            musicbrainz_recording_id: Some("recording-id".to_string()),
+            musicbrainz_track_id: Some("track-id".to_string()),
+            musicbrainz_artist_ids: vec!["alpha-id".to_string(), "beta-id".to_string()],
+        }];
+
+        write_album_tags_to_files_extended(
+            &album,
+            &extended_album,
+            &tracks,
+            &rich_tracks,
+            Some(&FrontCoverWrite {
+                bytes: cover.clone(),
+            }),
+            DirectTagWriteOptions::default(),
+            |_, _| {},
+        )
+        .unwrap();
+
+        let snapshot = read_editor_tag_snapshots(
+            &tracks
+                .iter()
+                .map(|t| t.file_path.clone())
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(snapshot[0].artist_credit, "Alpha feat. Beta");
+        assert_eq!(snapshot[0].artists, ["Alpha", "Beta"]);
+        assert_eq!(snapshot[0].album_artists, ["Various Artists"]);
+        assert_eq!(snapshot[0].composers, ["Composer One"]);
+        assert_eq!(
+            snapshot[0].musicbrainz_release_id.as_deref(),
+            Some("release-id")
+        );
+        assert_eq!(
+            snapshot[0].musicbrainz_recording_id.as_deref(),
+            Some("recording-id")
+        );
+        assert_eq!(snapshot[0].musicbrainz_artist_ids, ["alpha-id", "beta-id"]);
+        let after = lofty::read_from_path(&file).unwrap();
+        assert_eq!(
+            after
+                .primary_tag()
+                .and_then(|tag| tag.get_picture_type(PictureType::CoverFront))
+                .map(|picture| picture.data()),
+            Some(cover.as_slice())
+        );
+    }
+
+    #[test]
+    fn folder_cover_rejects_invalid_bytes_without_replacing_existing_art() {
+        let tmp = tempfile::tempdir().unwrap();
+        let existing = tmp.path().join("cover.jpg");
+        std::fs::write(&existing, b"existing cover").unwrap();
+
+        assert!(write_folder_front_cover(tmp.path(), b"not an image").is_err());
+        assert_eq!(std::fs::read(existing).unwrap(), b"existing cover");
+    }
 }
 
 #[cfg(test)]
@@ -1001,13 +1508,29 @@ mod tests {
         // is the data loss this guard exists to stop.
         assert!(!should_rename_artist(Some("MAKE-UP"), None, ""));
         assert!(!should_rename_artist(Some("MAKE-UP"), Some("MAKE-UP"), ""));
-        assert!(!should_rename_artist(Some("MAKE-UP"), Some("MAKE-UP"), "   "));
+        assert!(!should_rename_artist(
+            Some("MAKE-UP"),
+            Some("MAKE-UP"),
+            "   "
+        ));
     }
 
     #[test]
     fn no_uniform_prior_artist_means_nothing_is_renamed() {
-        assert!(!should_rename_artist(Some("MAKE-UP"), None, "Various Artists"));
-        assert!(!should_rename_artist(Some("MAKE-UP"), Some(""), "Various Artists"));
-        assert!(!should_rename_artist(None, Some("MAKE-UP"), "Yokoyama Seiji"));
+        assert!(!should_rename_artist(
+            Some("MAKE-UP"),
+            None,
+            "Various Artists"
+        ));
+        assert!(!should_rename_artist(
+            Some("MAKE-UP"),
+            Some(""),
+            "Various Artists"
+        ));
+        assert!(!should_rename_artist(
+            None,
+            Some("MAKE-UP"),
+            "Yokoyama Seiji"
+        ));
     }
 }

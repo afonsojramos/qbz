@@ -34,6 +34,8 @@ pub mod qbz_tag_editor_bridge {
         #[qproperty(QString, remote_json)]
         #[qproperty(bool, remote_searching)]
         #[qproperty(bool, remote_loading)]
+        #[qproperty(bool, artwork_searching)]
+        #[qproperty(bool, artwork_loading)]
         /// Bumps for every remote publish, including two byte-identical ones.
         #[qproperty(i32, remote_seq)]
         type QbzTagEditor = super::QbzTagEditorRust;
@@ -43,6 +45,11 @@ pub mod qbz_tag_editor_bridge {
 
         #[qinvokable]
         fn close(self: Pin<&mut QbzTagEditor>);
+
+        /// Drop the editor session because navigation already left its view.
+        /// Unlike `close`, this must not mutate history a second time.
+        #[qinvokable]
+        fn leave(self: Pin<&mut QbzTagEditor>);
 
         /// The entire validated draft, encoded as JSON. File paths never come
         /// back from QML; Rust resolves row ids against the open session.
@@ -58,14 +65,28 @@ pub mod qbz_tag_editor_bridge {
         );
 
         #[qinvokable]
-        fn load_remote(
-            self: Pin<&mut QbzTagEditor>,
-            provider: QString,
-            provider_id: QString,
-        );
+        fn load_remote(self: Pin<&mut QbzTagEditor>, provider: QString, provider_id: QString);
 
         #[qinvokable]
         fn open_remote(self: Pin<&mut QbzTagEditor>, provider: QString, provider_id: QString);
+
+        #[qinvokable]
+        fn choose_artwork(self: Pin<&mut QbzTagEditor>);
+
+        #[qinvokable]
+        fn search_artwork(
+            self: Pin<&mut QbzTagEditor>,
+            provider: QString,
+            title: QString,
+            artist: QString,
+            catalog_number: QString,
+        );
+
+        #[qinvokable]
+        fn select_artwork(self: Pin<&mut QbzTagEditor>, candidate_id: QString);
+
+        #[qinvokable]
+        fn clear_artwork(self: Pin<&mut QbzTagEditor>);
     }
 
     impl cxx_qt::Threading for QbzTagEditor {}
@@ -83,6 +104,8 @@ pub struct QbzTagEditorRust {
     remote_json: QString,
     remote_searching: bool,
     remote_loading: bool,
+    artwork_searching: bool,
+    artwork_loading: bool,
     remote_seq: i32,
 }
 
@@ -98,6 +121,8 @@ impl Default for QbzTagEditorRust {
             remote_json: QString::from("{}"),
             remote_searching: false,
             remote_loading: false,
+            artwork_searching: false,
+            artwork_loading: false,
             remote_seq: 0,
         }
     }
@@ -124,16 +149,15 @@ impl qbz_tag_editor_bridge::QbzTagEditor {
         crate::tag_editor_qt::close();
     }
 
+    pub fn leave(self: Pin<&mut Self>) {
+        crate::tag_editor_qt::leave();
+    }
+
     pub fn save(self: Pin<&mut Self>, draft_json: QString) {
         crate::tag_editor_qt::save(&draft_json.to_string());
     }
 
-    pub fn search_remote(
-        self: Pin<&mut Self>,
-        provider: QString,
-        title: QString,
-        artist: QString,
-    ) {
+    pub fn search_remote(self: Pin<&mut Self>, provider: QString, title: QString, artist: QString) {
         crate::tag_editor_qt::search_remote(
             &provider.to_string(),
             &title.to_string(),
@@ -147,5 +171,32 @@ impl qbz_tag_editor_bridge::QbzTagEditor {
 
     pub fn open_remote(self: Pin<&mut Self>, provider: QString, provider_id: QString) {
         crate::tag_editor_qt::open_remote(&provider.to_string(), &provider_id.to_string());
+    }
+
+    pub fn choose_artwork(self: Pin<&mut Self>) {
+        crate::tag_editor_qt::choose_artwork();
+    }
+
+    pub fn search_artwork(
+        self: Pin<&mut Self>,
+        provider: QString,
+        title: QString,
+        artist: QString,
+        catalog_number: QString,
+    ) {
+        crate::tag_editor_qt::search_artwork(
+            &provider.to_string(),
+            &title.to_string(),
+            &artist.to_string(),
+            &catalog_number.to_string(),
+        );
+    }
+
+    pub fn select_artwork(self: Pin<&mut Self>, candidate_id: QString) {
+        crate::tag_editor_qt::select_artwork(&candidate_id.to_string());
+    }
+
+    pub fn clear_artwork(self: Pin<&mut Self>) {
+        crate::tag_editor_qt::clear_artwork();
     }
 }

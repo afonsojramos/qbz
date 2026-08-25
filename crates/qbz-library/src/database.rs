@@ -3194,6 +3194,140 @@ impl LibraryDatabase {
         Ok(())
     }
 
+    /// Commit one metadata-editor draft and its optional front cover as a
+    /// single exact-row transaction. A stale/deleted row aborts the entire
+    /// draft instead of leaving tags, index metadata and artwork out of sync.
+    pub fn update_tracks_metadata_and_artwork_by_id(
+        &mut self,
+        updates: &[TrackMetadataUpdateFull],
+        artwork_path: Option<&str>,
+    ) -> Result<(), LibraryError> {
+        if updates.is_empty() {
+            return Err(LibraryError::Database(
+                "Metadata update requires at least one track".to_string(),
+            ));
+        }
+        if artwork_path.is_some_and(|path| path.trim().is_empty()) {
+            return Err(LibraryError::Database(
+                "Artwork path cannot be blank".to_string(),
+            ));
+        }
+        let unique = updates
+            .iter()
+            .map(|update| update.id)
+            .collect::<std::collections::HashSet<_>>();
+        if unique.len() != updates.len() {
+            return Err(LibraryError::Database(
+                "Metadata update contains duplicate track ids".to_string(),
+            ));
+        }
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|error| LibraryError::Database(error.to_string()))?;
+        {
+            let mut statement = tx
+                .prepare(
+                    r#"
+                    UPDATE local_tracks
+                    SET
+                        title = ?1,
+                        artist = ?2,
+                        album = ?3,
+                        album_artist = ?4,
+                        album_group_title = ?5,
+                        track_number = ?6,
+                        disc_number = ?7,
+                        year = ?8,
+                        genre = ?9,
+                        catalog_number = ?10,
+                        artwork_path = COALESCE(?11, artwork_path)
+                    WHERE id = ?12
+                    "#,
+                )
+                .map_err(|error| LibraryError::Database(error.to_string()))?;
+            for update in updates {
+                let changed = statement
+                    .execute(params![
+                        update.title.trim(),
+                        update.artist.trim(),
+                        update.album.trim(),
+                        update
+                            .album_artist
+                            .as_ref()
+                            .map(|value| value.trim().to_string()),
+                        update.album_group_title.trim(),
+                        update.track_number,
+                        update.disc_number,
+                        update.year,
+                        update.genre.as_ref().map(|value| value.trim().to_string()),
+                        update
+                            .catalog_number
+                            .as_ref()
+                            .map(|value| value.trim().to_string()),
+                        artwork_path,
+                        update.id,
+                    ])
+                    .map_err(|error| LibraryError::Database(error.to_string()))?;
+                if changed != 1 {
+                    return Err(LibraryError::Database(format!(
+                        "Metadata target track {} no longer exists",
+                        update.id
+                    )));
+                }
+            }
+        }
+        tx.commit()
+            .map_err(|error| LibraryError::Database(error.to_string()))?;
+        Ok(())
+    }
+
+    /// Apply an editor-selected cover only to the snapshotted physical rows.
+    /// Album-group-wide artwork updates are intentionally avoided because a
+    /// multi-disc collection may carry a different cover on every disc.
+    pub fn update_tracks_artwork_by_id(
+        &mut self,
+        ids: &[i64],
+        artwork_path: &str,
+    ) -> Result<(), LibraryError> {
+        if ids.is_empty() || artwork_path.trim().is_empty() {
+            return Err(LibraryError::Database(
+                "Artwork update requires track ids and a path".to_string(),
+            ));
+        }
+        let unique = ids
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        if unique.len() != ids.len() {
+            return Err(LibraryError::Database(
+                "Artwork update contains duplicate track ids".to_string(),
+            ));
+        }
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|error| LibraryError::Database(error.to_string()))?;
+        {
+            let mut statement = tx
+                .prepare("UPDATE local_tracks SET artwork_path = ?1 WHERE id = ?2")
+                .map_err(|error| LibraryError::Database(error.to_string()))?;
+            for id in ids {
+                let changed = statement
+                    .execute(params![artwork_path, id])
+                    .map_err(|error| LibraryError::Database(error.to_string()))?;
+                if changed != 1 {
+                    return Err(LibraryError::Database(format!(
+                        "Artwork target track {id} no longer exists"
+                    )));
+                }
+            }
+        }
+        tx.commit()
+            .map_err(|error| LibraryError::Database(error.to_string()))?;
+        Ok(())
+    }
+
     pub fn find_album_group_key(
         &self,
         album: &str,
@@ -7669,5 +7803,98 @@ mod audio_format_roundtrip_tests {
     fn parsing_is_case_insensitive() {
         assert_eq!(LibraryDatabase::parse_format("dsd"), AudioFormat::Dsd);
         assert_eq!(LibraryDatabase::parse_format("Dsd"), AudioFormat::Dsd);
+    }
+}
+
+#[cfg(test)]
+mod metadata_editor_transaction_tests {
+    use super::*;
+
+    fn update(id: i64, title: &str) -> TrackMetadataUpdateFull {
+        TrackMetadataUpdateFull {
+            id,
+            title: title.to_string(),
+            artist: "Artist".to_string(),
+            album: "Album".to_string(),
+            album_artist: Some("Artist".to_string()),
+            album_group_title: "Album".to_string(),
+            track_number: Some(1),
+            disc_number: Some(1),
+            year: Some(2026),
+            genre: Some("Rock".to_string()),
+            catalog_number: Some("CAT-1".to_string()),
+        }
+    }
+
+    #[test]
+    fn metadata_and_artwork_update_only_exact_rows_and_rollback_on_stale_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
+        let first = db
+            .insert_track(&LocalTrack {
+                file_path: "/music/album/01.flac".to_string(),
+                title: "One".to_string(),
+                artist: "Artist".to_string(),
+                album: "Album".to_string(),
+                album_group_key: "/music/album".to_string(),
+                album_group_title: "Album".to_string(),
+                artwork_path: Some("/art/disc-one.jpg".to_string()),
+                ..LocalTrack::default()
+            })
+            .unwrap();
+        let second = db
+            .insert_track(&LocalTrack {
+                file_path: "/music/album/02.flac".to_string(),
+                title: "Two".to_string(),
+                artist: "Artist".to_string(),
+                album: "Album".to_string(),
+                album_group_key: "/music/album".to_string(),
+                album_group_title: "Album".to_string(),
+                artwork_path: Some("/art/disc-two.jpg".to_string()),
+                ..LocalTrack::default()
+            })
+            .unwrap();
+
+        db.update_tracks_metadata_and_artwork_by_id(
+            &[update(first, "Edited")],
+            Some("/art/new.jpg"),
+        )
+        .unwrap();
+        let first_row: (String, String) = db
+            .conn
+            .query_row(
+                "SELECT title, artwork_path FROM local_tracks WHERE id = ?1",
+                params![first],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let second_art: String = db
+            .conn
+            .query_row(
+                "SELECT artwork_path FROM local_tracks WHERE id = ?1",
+                params![second],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            first_row,
+            ("Edited".to_string(), "/art/new.jpg".to_string())
+        );
+        assert_eq!(second_art, "/art/disc-two.jpg");
+
+        let error = db.update_tracks_metadata_and_artwork_by_id(
+            &[update(first, "Must Roll Back"), update(i64::MAX, "Missing")],
+            Some("/art/should-not-land.jpg"),
+        );
+        assert!(error.is_err());
+        let after: (String, String) = db
+            .conn
+            .query_row(
+                "SELECT title, artwork_path FROM local_tracks WHERE id = ?1",
+                params![first],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(after, first_row);
     }
 }
