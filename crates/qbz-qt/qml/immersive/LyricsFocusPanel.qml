@@ -51,10 +51,11 @@ Item {
     readonly property bool noLyrics: root.status === 3
         || (root.status === 2 && root.lines.length === 0)
 
-    // Same responsive active size as immersive split lyrics. Keeping this
-    // scale identical prevents a jarring type jump between full and split.
-    readonly property real lineSize: Math.round(Math.max(28,
-        Math.min(root.width * 0.022, 42)))
+    // Keep the split-view typeface and weight, with a modest size lift for
+    // the single-line stage. The bounded content width below remains the
+    // wrapping authority, so longer lines gain rows rather than clipping.
+    readonly property real lineSize: Math.round(Math.max(30,
+        Math.min(root.width * 0.026, 48)))
 
     readonly property string fontDir: "qrc:/qt/qml/com/blitzfc/qbz/qml/assets/fonts/"
     FontLoader { id: fLineSeed; source: QbzLyrics.fontIndex === 1 ? root.fontDir + "LINESeedJP-Regular.ttf" : "" }
@@ -113,6 +114,7 @@ Item {
             fontFamily: root.fontFamily
             activeColor: "#ffffff"
             liteFill: false
+            centered: true
             textShadow: true
             // The translate-up is applied via anchors.verticalCenterOffset so
             // the centering anchor survives the offset.

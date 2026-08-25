@@ -57,6 +57,9 @@ Column {
     // Lite fill: light the active line whole, no per-frame clip sweep.
     property bool liteFill: false
     property bool showTranslation: false
+    // Full-screen one-line lyrics centre every visual wrap segment while the
+    // split list keeps its established left alignment.
+    property bool centered: false
     // The full-screen one-line host enables this lightweight native text
     // shadow. It avoids an extra blurred layer while keeping every glyph
     // readable over arbitrary album artwork.
@@ -110,6 +113,7 @@ Column {
         width: row.contentWidth
         text: row.displayText
         wrapMode: Text.WordWrap
+        horizontalAlignment: row.centered ? Text.AlignHCenter : Text.AlignLeft
         opacity: row.lineOpacity()
         // 1:1 with Slint's 220ms ease-out: upcoming lines fade IN as they
         // brighten toward active, passed lines fade OUT to their dim tier,
@@ -204,6 +208,7 @@ Column {
             delegate: Item {
                 id: seg
                 required property var modelData
+                x: row.centered ? (row.contentWidth - width) * 0.5 : 0
                 width: segBase.width
                 height: segBase.height
 
@@ -269,6 +274,7 @@ Column {
         width: row.contentWidth
         text: row.translationText
         wrapMode: Text.WordWrap
+        horizontalAlignment: row.centered ? Text.AlignHCenter : Text.AlignLeft
         opacity: row.lineOpacity()
         Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutQuad } }
         // Slint: text-muted when past, text-secondary @ 0.7 otherwise.

@@ -73,9 +73,9 @@ Rectangle {
     readonly property bool ambientOn: theme.ambientOn
     readonly property bool largeActive: QbzShell.npbMode === 3 && QbzShell.sidebarState === 0
     readonly property bool isClassic: QbzShell.npbMode === 1
-    readonly property bool waveformVisible: QbzShell.seekbarWaveform
-        && QbzPlayer.npSeekWaveformAnalyzed > 0
-        && QbzPlayer.npSeekWaveform.length > 0
+    // Feature parked for a later release. The renderer and preference remain
+    // intact; every full-height NPB uses the classic seekbar for now.
+    readonly property bool waveformVisible: false
 
     // The shell's shared hover-tooltip overlay (controls/QbzTooltip.qml),
     // fed in through NowPlayingBar.qml's Binding. Consumed by the Qobuz

@@ -29,7 +29,7 @@
 //      spectrum band and the viz eye toggle; port of the Slint root
 //      TouchArea :1283-1286). Stacked BELOW panels + chrome.
 //   3. FOCUS panels (viewMode==0 && mode==N) / the SPLIT layout (viewMode==1)
-//   4. ImmersiveSongCard (Wave Bed, full Lyrics and shader scenes;
+//   4. ImmersiveSongCard (Wave Bed, full Lyrics, scopes and shader scenes;
 //      does NOT fade with the chrome)
 //   5. ImmersivePlayerBar (B5, :1607-1616) — centered, y = height-90-24,
 //      fades with the chrome like the header
@@ -639,9 +639,9 @@ Item {
 
     // --- Layer 4: ImmersiveSongCard (§5.1, :1602-1605) ----------------------
     // Keep the compact bottom-right metadata over shader backgrounds,
-    // Wave Bed and full-screen Lyrics. The lyrics surface deliberately keeps
-    // one line at a time, so the card supplies the otherwise absent track
-    // context without competing with the active line.
+    // Wave Bed, full-screen Lyrics and the two scope views. The lyrics surface
+    // deliberately keeps one line at a time, so the card supplies the
+    // otherwise absent track context without competing with the active line.
     // shader-mode was constant 0 so the first arm was dead (trap 19); A1
     // makes it real. NON-interactive; does NOT fade with the auto-hide
     // chrome (no opacity binding here — that is deliberate).
@@ -653,7 +653,8 @@ Item {
         anchors.bottomMargin: 24
         visible: (QbzShaderScene.scene > 0
                   || (QbzImmersive.viewMode === 0
-                      && (QbzImmersive.mode === 4 || QbzImmersive.mode === 6)))
+                      && (QbzImmersive.mode === 4 || QbzImmersive.mode === 6
+                          || QbzImmersive.mode === 7 || QbzImmersive.mode === 8)))
             && QbzPlayer.npHasTrack
     }
 

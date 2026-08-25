@@ -83,6 +83,9 @@ QbzContextMenu {
     }
 
     Item {
+        // Park this divider with the hidden waveform row. The live divider
+        // below remains the single boundary before the window-mode actions.
+        visible: false
         width: parent ? parent.width : 0
         height: 7
         Rectangle {
@@ -94,6 +97,9 @@ QbzContextMenu {
         }
     }
     Rectangle {
+        // The waveform seekbar is parked for a later release. Preserve this
+        // control and its preference wiring, but do not expose a dead toggle.
+        visible: false
         width: parent ? parent.width : 0
         height: 33
         radius: 5

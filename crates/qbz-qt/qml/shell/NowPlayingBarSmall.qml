@@ -44,8 +44,9 @@ Rectangle {
     // PlayerBarSmall.slint).
     color: ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
     readonly property bool ambientOn: theme.ambientOn
-    readonly property bool waveformVisible: QbzShell.seekbarWaveform
-        && QbzPlayer.npHasTrack
+    // Feature parked for a later release. Keep the compact renderer in place
+    // but use the classic seekbar consistently with the other NPB modes.
+    readonly property bool waveformVisible: false
 
 
     QbzTheme { id: theme }

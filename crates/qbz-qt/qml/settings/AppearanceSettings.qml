@@ -416,6 +416,9 @@ Column {
         }
     }
     SettingRow {
+        // Parked for a later visual pass. Keep the preference wiring intact so
+        // restoring the experiment does not require a settings migration.
+        visible: false
         label: QbzSession.tr("Track waveform", QbzSession.trRev)
         description: QbzSession.tr("Show the full-track waveform in the player seek bar.", QbzSession.trRev)
         QbzToggle {
