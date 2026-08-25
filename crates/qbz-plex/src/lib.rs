@@ -460,6 +460,26 @@ fn with_token(url: &str, token: &str) -> String {
     format!("{url}{sep}X-Plex-Token={token}")
 }
 
+/// Ask Plex for the original media bytes rather than its bare part route.
+///
+/// Some Plex servers advertise a valid `/library/parts/.../file` key but
+/// answer HTTP 500 when that key is fetched without `download=1`; the same
+/// part immediately serves ranged `audio/flac` bytes with the flag. Plex Web
+/// and Plexamp hide that server quirk behind their delivery negotiation. QBZ
+/// needs the explicit flag because it Range-streams the original part itself.
+fn as_download(url: &str) -> String {
+    if url.split_once('?').is_some_and(|(_, query)| {
+        query.split('&').any(|pair| {
+            pair.split_once('=')
+                .is_some_and(|(key, value)| key.eq_ignore_ascii_case("download") && value == "1")
+        })
+    }) {
+        return url.to_string();
+    }
+    let sep = if url.contains('?') { "&" } else { "?" };
+    format!("{url}{sep}download=1")
+}
+
 /// Render a request failure without reqwest's URL. Plex authentication is
 /// carried in the query string, and reqwest's Display output includes that URL
 /// for several error kinds. Callers may surface these strings in UI logs, so
@@ -2576,7 +2596,7 @@ pub async fn plex_resolve_track_media(
         .clone()
         .ok_or_else(|| format!("Track {rating_key} does not include a playable Part key"))?;
 
-    let part_url = with_token(&format!("{base}{part_key}"), &token);
+    let part_url = with_token(&as_download(&format!("{base}{part_key}")), &token);
     let part_response = client
         .get(&part_url)
         .send()
@@ -2665,7 +2685,7 @@ pub async fn plex_resolve_part_url(
         .clone()
         .ok_or_else(|| format!("Track {rating_key} does not include a playable Part key"))?;
 
-    let part_url = with_token(&format!("{base}{part_key}"), &token);
+    let part_url = with_token(&as_download(&format!("{base}{part_key}")), &token);
     let playback_id = playback_track_id(&rating_key);
 
     Ok(PlexPartLocation {
@@ -2683,6 +2703,29 @@ pub async fn plex_resolve_part_url(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plex_part_download_flag_preserves_existing_query_parameters() {
+        assert_eq!(
+            as_download("http://plex/library/parts/7/file.flac"),
+            "http://plex/library/parts/7/file.flac?download=1"
+        );
+        assert_eq!(
+            as_download("http://plex/library/parts/7/file.flac?foo=bar"),
+            "http://plex/library/parts/7/file.flac?foo=bar&download=1"
+        );
+        assert_eq!(
+            as_download("http://plex/library/parts/7/file.flac?download=1&foo=bar"),
+            "http://plex/library/parts/7/file.flac?download=1&foo=bar"
+        );
+        assert_eq!(
+            with_token(
+                &as_download("http://plex/library/parts/7/file.flac?foo=bar"),
+                "secret"
+            ),
+            "http://plex/library/parts/7/file.flac?foo=bar&download=1&X-Plex-Token=secret"
+        );
+    }
 
     fn search_db(track_count: u32) -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();
