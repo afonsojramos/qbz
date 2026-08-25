@@ -157,11 +157,41 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { id: "focus.seekForwardLong", label_en: "Seek Forward (10s)", category: Category::Immersive, default: "Shift+ArrowRight", context: Context::Immersive },
     ActionDef { id: "focus.seekBackLong", label_en: "Seek Back (10s)", category: Category::Immersive, default: "Shift+ArrowLeft", context: Context::Immersive },
     // Mini Player (contextual — dispatched on the mini window)
-    ActionDef { id: "mini.micro", label_en: "Micro View", category: Category::Mini, default: "1", context: Context::Mini },
-    ActionDef { id: "mini.compact", label_en: "Compact View", category: Category::Mini, default: "2", context: Context::Mini },
-    ActionDef { id: "mini.artwork", label_en: "Artwork View", category: Category::Mini, default: "3", context: Context::Mini },
-    ActionDef { id: "mini.queue", label_en: "Queue View", category: Category::Mini, default: "4", context: Context::Mini },
-    ActionDef { id: "mini.lyrics", label_en: "Lyrics View", category: Category::Mini, default: "5", context: Context::Mini },
+    ActionDef {
+        id: "mini.micro",
+        label_en: "Micro View",
+        category: Category::Mini,
+        default: "1",
+        context: Context::Mini,
+    },
+    ActionDef {
+        id: "mini.compact",
+        label_en: "Compact View",
+        category: Category::Mini,
+        default: "2",
+        context: Context::Mini,
+    },
+    ActionDef {
+        id: "mini.artwork",
+        label_en: "Artwork View",
+        category: Category::Mini,
+        default: "3",
+        context: Context::Mini,
+    },
+    ActionDef {
+        id: "mini.queue",
+        label_en: "Listen list",
+        category: Category::Mini,
+        default: "4",
+        context: Context::Mini,
+    },
+    ActionDef {
+        id: "mini.lyrics",
+        label_en: "Lyrics View",
+        category: Category::Mini,
+        default: "5",
+        context: Context::Mini,
+    },
 ];
 
 pub fn action(id: &str) -> Option<&'static ActionDef> {
