@@ -1566,3 +1566,9 @@ msgstr "The selected file is not a supported image."
 
 msgid "Title"
 msgstr "Title"
+
+msgid "Goniometer"
+msgstr "Goniometer"
+
+msgid "Oscilloscope"
+msgstr "Oscilloscope"

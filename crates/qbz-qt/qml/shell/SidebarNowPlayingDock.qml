@@ -4,14 +4,13 @@
 // Mounted as a ROOT overlay by AppShell, pinned flush to the window
 // bottom-left (NOT inside the sidebar — that floated it above the bar).
 // Layout, bottom-up: a square album cover (= the fed width) at the very
-// bottom; ABOVE it a compact spectrum band the user can hide with the
-// top-right eye button on the cover.
+// bottom; ABOVE it either the compact spectrum band or a square scope the
+// user can hide with the top-right eye button on the cover.
 //
 // HEIGHT IS LOAD-BEARING. `QbzShell.largeDockHeight` (shell_bridge.rs) is the
 // single source of truth and the layout below is derived from the SAME
-// constants:
-//   ON  = 9 top pad + 42 band + 10 gap + 208 art + 4 bottom gap = 273
-//   OFF = 9 top pad                    + 208 art + 4 bottom gap = 221
+// constants and the persisted render mode: legacy modes are 42px high;
+// scope modes use the same square size as the artwork and grow upward.
 // Sidebar.qml reserves `largeDockHeight - npb height` so the playlist list
 // stops ABOVE the cover, and AppShell pins this overlay at
 // `height - largeDockHeight`. Change the arithmetic in one place and the
@@ -42,7 +41,8 @@ Item {
     property bool ambientOn: false
 
     readonly property bool bandOn: QbzShell.largeVisualizerOn
-    readonly property int bandHeight: 42
+    readonly property int bandHeight: QbzShell.largeSpectrumMode >= 3
+        ? Math.round(root.width) : 42
     readonly property int padTop: 9
     readonly property int bandGap: 10
     // The cover's top edge: below the band when it is shown.

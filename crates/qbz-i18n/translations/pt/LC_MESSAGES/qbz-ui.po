@@ -5968,3 +5968,9 @@ msgstr "A capa selecionada tem dimensões incompatíveis."
 
 msgid "The selected file is not a supported image."
 msgstr "O arquivo selecionado não é uma imagem compatível."
+
+msgid "Goniometer"
+msgstr "Goniômetro"
+
+msgid "Oscilloscope"
+msgstr "Osciloscópio"

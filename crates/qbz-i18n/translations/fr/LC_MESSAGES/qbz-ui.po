@@ -5968,3 +5968,9 @@ msgstr "La pochette sélectionnée a des dimensions non prises en charge."
 
 msgid "The selected file is not a supported image."
 msgstr "Le fichier sélectionné n’est pas une image prise en charge."
+
+msgid "Goniometer"
+msgstr "Goniomètre"
+
+msgid "Oscilloscope"
+msgstr "Oscilloscope"

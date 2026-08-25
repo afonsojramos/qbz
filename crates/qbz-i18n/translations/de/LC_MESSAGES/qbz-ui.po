@@ -5970,3 +5970,9 @@ msgstr "Das ausgewählte Cover hat nicht unterstützte Abmessungen."
 
 msgid "The selected file is not a supported image."
 msgstr "Die ausgewählte Datei ist kein unterstütztes Bild."
+
+msgid "Goniometer"
+msgstr "Goniometer"
+
+msgid "Oscilloscope"
+msgstr "Oszilloskop"

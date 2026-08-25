@@ -1997,14 +1997,19 @@ pub(crate) fn large_toggle_visualizer() {
     });
 }
 
-/// Large dock, band click: cycle Bars -> Waveform -> Energy.
+/// Large dock, band click: cycle Bars -> Waveform -> Energy -> Goniometer ->
+/// Oscilloscope.
 pub(crate) fn large_cycle_spectrum() {
-    let mode = settings_qt::set_large_spectrum_mode((settings_qt::large_spectrum_mode() + 1) % 3);
+    let mode = settings_qt::set_large_spectrum_mode((settings_qt::large_spectrum_mode() + 1) % 5);
+    let height = shell_bridge::large_dock_height(settings_qt::large_visualizer_on());
     log::info!("[qbz-qt] large spectrum mode -> {mode}");
     // Point the drain at the new stream BEFORE the UI switches, so the first
     // frame the new mode renders already has data.
     viz_qt::set_mode(mode);
-    shell_bridge::ui(move |mut b| b.as_mut().set_large_spectrum_mode(mode));
+    shell_bridge::ui(move |mut b| {
+        b.as_mut().set_large_spectrum_mode(mode);
+        b.as_mut().set_large_dock_height(height);
+    });
 }
 
 /// Artist-network row click: resolve a musician NAME and open the right

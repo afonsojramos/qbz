@@ -5988,3 +5988,9 @@ msgstr "Размеры выбранной обложки не поддержив
 
 msgid "The selected file is not a supported image."
 msgstr "Выбранный файл не является поддерживаемым изображением."
+
+msgid "Goniometer"
+msgstr "Гониометр"
+
+msgid "Oscilloscope"
+msgstr "Осциллограф"

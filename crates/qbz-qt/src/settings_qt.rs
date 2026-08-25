@@ -840,7 +840,8 @@ pub fn set_large_visualizer_on(on: bool) -> bool {
     on
 }
 
-/// The band's render mode: 0 Bars / 1 Waveform / 2 Energy.
+/// The band's render mode: 0 Bars / 1 Waveform / 2 Energy / 3 Goniometer /
+/// 4 Oscilloscope.
 pub fn large_spectrum_mode() -> i32 {
     let Some(path) = prefs_path() else {
         return 0;
@@ -848,14 +849,17 @@ pub fn large_spectrum_mode() -> i32 {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|v| v.get("large_spectrum_mode").and_then(serde_json::Value::as_i64))
-        .map(|m| (m as i32).clamp(0, 2))
+        .and_then(|v| {
+            v.get("large_spectrum_mode")
+                .and_then(serde_json::Value::as_i64)
+        })
+        .map(|m| (m as i32).clamp(0, 4))
         .unwrap_or(0)
 }
 
-/// Persist the band mode (clamped 0-2); returns the stored index.
+/// Persist the band mode (clamped 0-4); returns the stored index.
 pub fn set_large_spectrum_mode(mode: i32) -> i32 {
-    let mode = mode.clamp(0, 2);
+    let mode = mode.clamp(0, 4);
     save_pref(
         "large_spectrum_mode",
         serde_json::Value::Number(mode.into()),

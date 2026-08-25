@@ -944,13 +944,11 @@ impl Default for QbzShellRust {
 // ---------------------------------------------------------------------------
 // Large-NPB dock geometry
 // ---------------------------------------------------------------------------
-// SidebarNowPlayingDock.slint's height formula, verbatim. The cover is square
-// and as wide as the sidebar's content column (240 sidebar - 16 left - 16
-// right gutters = 208), so the totals are constants:
-//   ON  = 9 top pad + 42 band + 10 gap + 208 art + 4 bottom gap = 273
-//   OFF = 9 top pad                    + 208 art + 4 bottom gap = 221
-// SidebarNowPlayingDock.qml lays itself out from these SAME numbers — if you
-// change one, change both, or the cover shifts off the window bottom edge.
+// The cover is square and as wide as the sidebar's content column (240
+// sidebar - 16 left - 16 right gutters = 208). Legacy spectrum modes use a
+// compact 42px band; scope modes use the same 208px square as the artwork and
+// grow upward from their bottom edge. SidebarNowPlayingDock.qml derives its
+// band height from the same mode boundary.
 pub(crate) const DOCK_ART_SIZE: f32 = 208.0;
 pub(crate) const DOCK_BAND_HEIGHT: f32 = 42.0;
 pub(crate) const DOCK_PAD_TOP: f32 = 9.0;
@@ -961,7 +959,12 @@ pub(crate) const DOCK_BAND_GAP: f32 = 10.0;
 pub(crate) fn large_dock_height(visualizer_on: bool) -> f32 {
     let base = DOCK_PAD_TOP + DOCK_ART_SIZE + DOCK_PAD_BOTTOM;
     if visualizer_on {
-        base + DOCK_BAND_HEIGHT + DOCK_BAND_GAP
+        let band_height = if crate::settings_qt::large_spectrum_mode() >= 3 {
+            DOCK_ART_SIZE
+        } else {
+            DOCK_BAND_HEIGHT
+        };
+        base + band_height + DOCK_BAND_GAP
     } else {
         base
     }

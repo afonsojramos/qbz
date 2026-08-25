@@ -47,6 +47,8 @@ import "../theme"
 Item {
     id: root
 
+    QbzTheme { id: theme }
+
     // Self-gated on the bridge open flag (§5.1: closed = invisible,
     // non-interactive, zero-cost). Every open/close transition funnels
     // through QbzImmersive's open setter (§3/D3) — this item only reacts.
@@ -299,6 +301,40 @@ Item {
         anchors.fill: parent
         visible: QbzShaderScene.scene === 0
             && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 6
+    }
+    Loader {
+        anchors.fill: parent
+        active: QbzShaderScene.scene === 0
+            && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 7
+        visible: active
+        sourceComponent: Item {
+            ScopePanel {
+                width: Math.max(1, Math.min(parent.width - 96, parent.height - 196))
+                height: width
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 132
+                scopeMode: 0
+                traceColor: theme.accent
+            }
+        }
+    }
+    Loader {
+        anchors.fill: parent
+        active: QbzShaderScene.scene === 0
+            && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 8
+        visible: active
+        sourceComponent: Item {
+            ScopePanel {
+                width: Math.max(1, Math.min(parent.width - 96, parent.height - 196))
+                height: width
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 132
+                scopeMode: 1
+                traceColor: theme.accent
+            }
+        }
     }
     // FOCUS Lyrics (mode 4, B4 §6.6): the giant-line variant. It shares the
     // immersive LyricsSyncEngine with the split lyrics mount (trap 22 — the

@@ -352,6 +352,7 @@ fn is_shipped(scene: i32) -> bool {
 /// notify.
 pub(crate) fn apply_on_immersive_open() {
     let target = remembered_scene();
+    crate::viz_qt::set_immersive_scene_active(target != 0);
     ui(move |mut s| {
         if s.scene == target {
             return;
@@ -477,6 +478,7 @@ impl qbz_shader_scene::QbzShaderScene {
         }
         self.as_mut().rust_mut().scene = value;
         self.as_mut().scene_changed();
+        crate::viz_qt::set_immersive_scene_active(value != 0);
         if RESTORING.load(Ordering::SeqCst) {
             return;
         }

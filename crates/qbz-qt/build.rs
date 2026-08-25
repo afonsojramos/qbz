@@ -302,6 +302,7 @@ fn build_rhi_items() {
         "plasma_item",
         "ribbon_item",
         "tunnelflow_item",
+        "scope_trace_item",
         "local_tracks_model",
         "local_albums_model",
         "local_artists_model",
@@ -445,6 +446,7 @@ fn main() {
                 // Per-page scroll memory for the back/forward stack; mounted
                 // beside each view's scroll container.
                 "qml/controls/ScrollMemory.qml",
+                "qml/controls/ScopePanel.qml",
                 "qml/controls/QbzSegToggle.qml",
                 "qml/controls/QbzSelect.qml",
                 "qml/controls/QbzSlider.qml",

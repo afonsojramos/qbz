@@ -12,10 +12,12 @@
 
 mod processor;
 mod ring_buffer;
+mod scope;
 mod tapped_source;
 
 pub use processor::{spawn_visualizer_thread, VizFrame, VizSink};
 pub use ring_buffer::RingBuffer;
+pub use scope::{GONIOMETER_BIT, OSCILLOSCOPE_BIT};
 pub use tapped_source::TappedSource;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -47,6 +49,9 @@ pub struct VisualizerTap {
     pub paused: Arc<AtomicBool>,
     /// Current sample rate
     pub sample_rate: Arc<AtomicU32>,
+    /// Requested real-time scope producers. Frontends update this off the
+    /// audio thread; zero keeps the added DSP completely idle.
+    pub scope_mask: Arc<AtomicU32>,
 }
 
 impl VisualizerTap {
@@ -57,6 +62,7 @@ impl VisualizerTap {
             enabled: Arc::new(AtomicBool::new(false)),
             paused: Arc::new(AtomicBool::new(false)),
             sample_rate: Arc::new(AtomicU32::new(44100)),
+            scope_mask: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -96,6 +102,11 @@ impl VisualizerTap {
     /// Update the sample rate
     pub fn set_sample_rate(&self, rate: u32) {
         self.sample_rate.store(rate, Ordering::Relaxed);
+    }
+
+    /// Select the scope DSP that the visible frontend surfaces consume.
+    pub fn set_scope_mask(&self, mask: u32) {
+        self.scope_mask.store(mask, Ordering::Relaxed);
     }
 }
 

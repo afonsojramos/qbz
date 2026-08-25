@@ -5952,3 +5952,9 @@ msgstr "選択したアートワークの寸法はサポートされていませ
 
 msgid "The selected file is not a supported image."
 msgstr "選択したファイルはサポートされている画像ではありません。"
+
+msgid "Goniometer"
+msgstr "ゴニオメーター"
+
+msgid "Oscilloscope"
+msgstr "オシロスコープ"

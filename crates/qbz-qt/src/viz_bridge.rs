@@ -58,7 +58,11 @@ pub mod qbz_viz {
         // 256 L samples followed by 256 R (VizFrame::Wave256x2). The dock's
         // Waveform mode downsamples the L half (indices 0..235 step 5).
         #[qproperty(QList_f32, waveform)]
-
+        // Packed x/y mid-side points for the goniometer.
+        #[qproperty(QList_f32, goniometer)]
+        // Pitch-locked mono scope samples.
+        #[qproperty(QList_f32, oscilloscope)]
+        #[qproperty(f32, stereo_correlation)]
         type QbzViz = super::QbzVizRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -87,6 +91,7 @@ type QListF32 = QList<f32>;
 pub(crate) const BARS_LEN: usize = 16;
 pub(crate) const ENERGY_LEN: usize = 5;
 pub(crate) const WAVEFORM_LEN: usize = 512;
+pub(crate) const SCOPE_LEN: usize = 512;
 
 fn zeros(n: usize) -> QListF32 {
     let mut list = QListF32::default();
@@ -101,6 +106,9 @@ pub struct QbzVizRust {
     bars: QListF32,
     energy: QListF32,
     waveform: QListF32,
+    goniometer: QListF32,
+    oscilloscope: QListF32,
+    stereo_correlation: f32,
 }
 
 impl Default for QbzVizRust {
@@ -109,6 +117,9 @@ impl Default for QbzVizRust {
             bars: zeros(BARS_LEN),
             energy: zeros(ENERGY_LEN),
             waveform: zeros(WAVEFORM_LEN),
+            goniometer: zeros(SCOPE_LEN),
+            oscilloscope: zeros(SCOPE_LEN),
+            stereo_correlation: 0.0,
         }
     }
 }

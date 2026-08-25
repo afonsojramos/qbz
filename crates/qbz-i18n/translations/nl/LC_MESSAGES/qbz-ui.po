@@ -5958,3 +5958,9 @@ msgstr "De geselecteerde albumafbeelding heeft niet-ondersteunde afmetingen."
 
 msgid "The selected file is not a supported image."
 msgstr "Het geselecteerde bestand is geen ondersteunde afbeelding."
+
+msgid "Goniometer"
+msgstr "Goniometer"
+
+msgid "Oscilloscope"
+msgstr "Oscilloscoop"

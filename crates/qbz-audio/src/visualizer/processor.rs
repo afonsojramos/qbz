@@ -22,6 +22,7 @@ use spectrum_analyzer::{samples_fft_to_spectrum, FrequencyLimit};
 
 use crate::SpectralAnalyzer;
 
+use super::scope::{ScopeProcessor, GONIOMETER_BIT, OSCILLOSCOPE_BIT};
 use super::{VisualizerTap, FFT_SIZE, NUM_BARS, TARGET_FPS};
 
 /// Number of energy bands for the Energy Bands visualizer
@@ -56,6 +57,13 @@ pub enum VizFrame {
     Energy5([f32; 5]),
     /// A single transient intensity, submitted only on detection (`viz:transient`).
     Transient1(f32),
+    /// 256 packed mid/side points plus the stereo correlation coefficient.
+    Goniometer {
+        points: Box<[f32; 512]>,
+        correlation: f32,
+    },
+    /// 512 pitch-locked mono samples.
+    Oscilloscope(Box<[f32; 512]>),
 }
 
 /// Frontend-agnostic consumer of visualization frames. Implemented by the Tauri
@@ -113,6 +121,7 @@ fn run_fft_loop(tap: VisualizerTap, sink: Arc<dyn VizSink>) {
         SPECTRAL_UPDATE_RATE_HZ,
         SPECTRAL_SMOOTHING,
     );
+    let mut scopes = ScopeProcessor::default();
 
     // Transient detection state
     let mut prev_rms = 0.0f32;
@@ -145,6 +154,23 @@ fn run_fft_loop(tap: VisualizerTap, sink: Arc<dyn VizSink>) {
 
             // Get samples from ring buffer
             tap.ring_buffer.snapshot(&mut samples);
+
+            // The scope pipeline is explicitly requested by the visible
+            // frontend destination. Its FIR and pitch FFT remain completely
+            // idle for the existing bars/waveform/energy modes.
+            let scope_mask = tap.scope_mask.load(Ordering::Relaxed);
+            if scope_mask & GONIOMETER_BIT != 0 {
+                let (points, correlation) = scopes.goniometer(&samples, sample_rate);
+                sink.submit(VizFrame::Goniometer {
+                    points,
+                    correlation,
+                });
+            }
+            if scope_mask & OSCILLOSCOPE_BIT != 0 {
+                sink.submit(VizFrame::Oscilloscope(
+                    scopes.oscilloscope(&samples, sample_rate),
+                ));
+            }
 
             // Compact, progressive spectrogram bands for the Spectral Ribbon,
             // gated on the analyzer's own update cadence.

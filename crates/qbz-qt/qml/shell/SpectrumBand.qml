@@ -1,6 +1,6 @@
 // SpectrumBand — the compact 42px spectrum strip above the Large-NPB cover.
 // Split out of SidebarNowPlayingDock.qml: the dock owns the layout arithmetic
-// and the cover, this file owns the three render modes and their motion.
+// and the cover, this file owns the five render modes and their motion.
 // QML port of the `spectrum := Rectangle` block in
 // crates/qbz-ui/ui/shell/SidebarNowPlayingDock.slint:122-183 (VBar / WaveCol).
 //
@@ -88,6 +88,7 @@
 import QtQuick
 import QtQuick.Window
 import com.blitzfc.qbz
+import "../controls"
 import "../theme"
 
 Rectangle {
@@ -436,7 +437,29 @@ Rectangle {
         }
     }
 
-    // Click the band → cycle Bars -> Waveform -> Energy (persisted).
+    // Modes 3/4 — real-time scopes. Each Loader owns a single scene-graph
+    // line strip; when inactive the item does not exist and Rust also disables
+    // that scope's DSP bit.
+    Loader {
+        anchors.fill: parent
+        active: band.shown && QbzShell.largeSpectrumMode === 3
+        sourceComponent: ScopePanel {
+            compact: true
+            scopeMode: 0
+            traceColor: theme.accent
+        }
+    }
+    Loader {
+        anchors.fill: parent
+        active: band.shown && QbzShell.largeSpectrumMode === 4
+        sourceComponent: ScopePanel {
+            compact: true
+            scopeMode: 1
+            traceColor: theme.accent
+        }
+    }
+
+    // Click the band → cycle all five modes (persisted).
     MouseArea {
         anchors.fill: parent
         cursorShape: Qt.PointingHandCursor

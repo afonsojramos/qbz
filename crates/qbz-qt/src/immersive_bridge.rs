@@ -6,7 +6,8 @@
 //! (`qbz-nix-docs/qt-frontend/2026-08-02-immersive-port/00-CONTRACT.md` §3).
 //! All enums are `i32` with the Slint numbering verbatim
 //! (`state.slint:4238,4249,4254`): view_mode 0 FOCUS / 1 SPLIT; mode 0 Album
-//! Reactive, 1 Static, 2 Coverflow, 3 Spectrum, 4 Lyrics, 5 Queue, 6 WaveBed;
+//! Reactive, 1 Static, 2 Coverflow, 3 Spectrum, 4 Lyrics, 5 Queue, 6 WaveBed,
+//! 7 Goniometer, 8 Oscilloscope;
 //! split_panel 0 Lyrics, 1 TrackInfo, 2 Suggestions, 3 Queue.
 //!
 //! The `open` property uses a CUSTOM WRITE (`set_open`) so EVERY write — the
@@ -61,7 +62,8 @@ pub mod qbz_immersive {
         // restore — QML never writes these directly (§3.2).
         #[qproperty(i32, view_mode)]
         // FOCUS foreground: 0 AlbumReactive, 1 Static, 2 Coverflow, 3
-        // Spectrum, 4 Lyrics, 5 Queue, 6 WaveBed.
+        // Spectrum, 4 Lyrics, 5 Queue, 6 WaveBed, 7 Goniometer,
+        // 8 Oscilloscope.
         #[qproperty(i32, mode)]
         // SPLIT active panel: 0 Lyrics, 1 TrackInfo, 2 Suggestions, 3 Queue.
         #[qproperty(i32, split_panel)]
@@ -297,6 +299,7 @@ fn apply_open(mut this: Pin<&mut QbzImmersive>, value: bool) {
         }
         // Unknown key: Slint's `_ => {}` — leave the current view alone.
         crate::viz_qt::immersive_opened();
+        crate::viz_qt::set_immersive_view(this.view_mode, this.mode);
         // Shader scenes (block A1): the open edge decides the scene. Under
         // "remember" it restores the last one (2026-08-19 — the triple above
         // never covered the scenes, so Plasma / Ribbon / Line Bed / Tunnel
@@ -356,6 +359,7 @@ impl qbz_immersive::QbzImmersive {
         self.as_mut().set_view_mode(view_mode);
         self.as_mut().set_mode(mode);
         self.as_mut().set_split_panel(split_panel);
+        crate::viz_qt::set_immersive_view(view_mode, mode);
         if crate::settings_qt::pref_str("immersive_default_view", "remember") == "remember" {
             // JSON numbers — co-owned file, Slint declares the keys i32 (see
             // apply_open's comment).

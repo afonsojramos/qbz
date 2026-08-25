@@ -15,7 +15,7 @@
 //! aliasing, and zero idle wakeups (cheaper than the old poll, not just
 //! smoother).
 //!
-//! Cost controls (the Slint install() has the same three, and they are why the
+//! Cost controls (the frozen reference install() has the same three, and they are why the
 //! ambient field sits under 3% CPU during playback):
 //!   1. The tap starts DISABLED — nothing is captured and the producer idles
 //!      until the dock's eye toggle calls `set_enabled(true)`.
@@ -26,8 +26,10 @@
 //! Plus the mode gate: only the ONE stream the visible mode renders is
 //! marshalled into a `QList` (in Bars mode the 512-float waveform is latched
 //! for an instant mode switch but never published) — UNLESS the immersive
-//! overlay is open, which owns the marshalling set and publishes all three
-//! streams every frame (§4.2 of the immersive-port contract). Block A1
+//! overlay is open, which owns the legacy marshalling set and publishes bars,
+//! energy and waveform every frame (§4.2 of the immersive-port contract).
+//! The two scope streams are requested independently and only while their
+//! panel is visible. Block A1
 //! (2026-08-15 immersive-completion) extends the immersive set: `Spectral512`
 //! and `Transient1` are LATCHED too (still never dock-marshalled), and the
 //! drain derives the shader-scenes uniform pack from them HOST-SIDE
@@ -49,7 +51,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::Thread;
 
 use cxx_qt_lib::QList;
-use qbz_audio::visualizer::{spawn_visualizer_thread, VizFrame, VizSink};
+use qbz_audio::visualizer::{
+    spawn_visualizer_thread, VizFrame, VizSink, GONIOMETER_BIT, OSCILLOSCOPE_BIT,
+};
 use qbz_audio::VisualizerTap;
 
 use crate::viz_bridge;
@@ -83,6 +87,8 @@ struct VizCells {
     // (visualizer.rs:146-178).
     spectral: Mutex<Option<Vec<f32>>>,
     transient: Mutex<Option<f32>>,
+    goniometer: Mutex<Option<(Box<[f32; 512]>, f32)>>,
+    oscilloscope: Mutex<Option<Box<[f32; 512]>>>,
 }
 
 /// Producer-side sink: latches frames into the shared cells and signals the
@@ -135,6 +141,17 @@ impl VizSink for QtVizSink {
                 }
                 false
             }
+            VizFrame::Goniometer {
+                points,
+                correlation,
+            } => {
+                *self.cells.goniometer.lock().unwrap() = Some((points, correlation));
+                stream_wakes(mode, all, Stream::Goniometer)
+            }
+            VizFrame::Oscilloscope(points) => {
+                *self.cells.oscilloscope.lock().unwrap() = Some(points);
+                stream_wakes(mode, all, Stream::Oscilloscope)
+            }
         };
         if wake {
             wake_drain();
@@ -155,7 +172,8 @@ static DRAIN_THREAD: OnceLock<Thread> = OnceLock::new();
 /// This is the EFFECTIVE enable — the OR of the per-source bits in
 /// `ENABLED_MASK` (§4.2a); nothing writes it except `apply_effective_enabled`.
 static ENABLED: AtomicBool = AtomicBool::new(false);
-/// The band's render mode (0 Bars / 1 Waveform / 2 Energy). The drain only
+/// The band's render mode (0 Bars / 1 Waveform / 2 Energy / 3 Goniometer /
+/// 4 Oscilloscope). The drain only
 /// publishes the ONE stream that mode consumes: in Bars mode, marshalling the
 /// 512-float waveform into a QList 30 times a second would be pure waste.
 static ACTIVE_MODE: AtomicI32 = AtomicI32::new(0);
@@ -176,8 +194,13 @@ static ENABLED_MASK: AtomicU32 = AtomicU32::new(0);
 /// bars AND energy AND waveform publish every frame, regardless of
 /// `ACTIVE_MODE`. Dock mode-cycle writes while it is set still record
 /// `ACTIVE_MODE` (and the dock's pref) but have no effect on the marshalled
-/// set; the close edge restores `ACTIVE_MODE` from the pref anyway.
+/// legacy set; the close edge restores `ACTIVE_MODE` from the pref anyway.
+/// Scope DSP remains visibility-gated by the two scope masks below.
 static MARSHAL_ALL: AtomicBool = AtomicBool::new(false);
+static DOCK_SCOPE_MASK: AtomicU32 = AtomicU32::new(0);
+static IMMERSIVE_PANEL_SCOPE_MASK: AtomicU32 = AtomicU32::new(0);
+static IMMERSIVE_SCOPE_MASK: AtomicU32 = AtomicU32::new(0);
+static IMMERSIVE_SCENE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// A consumer of the FFT tap (§4.2a).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -196,31 +219,73 @@ impl VizSource {
 }
 
 fn mask_with(mask: u32, bit: u32, on: bool) -> u32 {
-    if on { mask | bit } else { mask & !bit }
+    if on {
+        mask | bit
+    } else {
+        mask & !bit
+    }
 }
 
 fn mask_enabled(mask: u32) -> bool {
     mask != 0
 }
 
-/// The three marshalled streams (the wake table's rows).
+/// The five dock render streams (the wake table's rows).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Stream {
     Bars,
     Waveform,
     Energy,
+    Goniometer,
+    Oscilloscope,
 }
 
-/// Wake table for the drain signal: marshal-all wakes on EVERY stream;
-/// otherwise exactly the ONE stream the dock's active mode renders.
+/// Wake table for the drain signal: immersive marshal-all wakes on every
+/// legacy stream; scope frames hitchhike on that cadence. Otherwise exactly
+/// the ONE stream the dock's active mode renders wakes the drain.
 fn stream_wakes(mode: i32, marshal_all: bool, stream: Stream) -> bool {
-    if marshal_all {
+    if marshal_all && matches!(stream, Stream::Bars | Stream::Waveform | Stream::Energy) {
         return true;
     }
     match stream {
-        Stream::Bars => !matches!(mode, 1 | 2),
+        Stream::Bars => mode == 0,
         Stream::Waveform => mode == 1,
         Stream::Energy => mode == 2,
+        Stream::Goniometer => !marshal_all && mode == 3,
+        Stream::Oscilloscope => !marshal_all && mode == 4,
+    }
+}
+
+fn scope_mask_for_mode(mode: i32) -> u32 {
+    match mode {
+        3 | 7 => GONIOMETER_BIT,
+        4 | 8 => OSCILLOSCOPE_BIT,
+        _ => 0,
+    }
+}
+
+fn visible_scope_mask(requested: u32, scene_active: bool) -> u32 {
+    if scene_active {
+        0
+    } else {
+        requested
+    }
+}
+
+fn apply_immersive_scope_mask() {
+    let mask = visible_scope_mask(
+        IMMERSIVE_PANEL_SCOPE_MASK.load(Ordering::Relaxed),
+        IMMERSIVE_SCENE_ACTIVE.load(Ordering::Relaxed),
+    );
+    IMMERSIVE_SCOPE_MASK.store(mask, Ordering::Relaxed);
+    apply_scope_mask();
+}
+
+fn apply_scope_mask() {
+    if let Some(handles) = HANDLES.get() {
+        handles.tap.set_scope_mask(
+            DOCK_SCOPE_MASK.load(Ordering::Relaxed) | IMMERSIVE_SCOPE_MASK.load(Ordering::Relaxed),
+        );
     }
 }
 
@@ -418,13 +483,24 @@ fn publish_active(cells: &VizCells, pack: &mut ShaderPackState, linebed: &mut li
         if let Some(b) = waveform {
             viz_bridge::ui(move |mut v| v.as_mut().set_waveform(to_qlist(b.as_ref())));
         }
+        let goniometer = cells.goniometer.lock().unwrap().take();
+        if let Some((points, correlation)) = goniometer {
+            viz_bridge::ui(move |mut v| {
+                v.as_mut().set_goniometer(to_qlist(points.as_ref()));
+                v.as_mut().set_stereo_correlation(correlation);
+            });
+        }
+        let oscilloscope = cells.oscilloscope.lock().unwrap().take();
+        if let Some(points) = oscilloscope {
+            viz_bridge::ui(move |mut v| {
+                v.as_mut().set_oscilloscope(to_qlist(points.as_ref()));
+            });
+        }
         // A1: the scene-only streams, latched by the sink without waking.
         let spectral = cells.spectral.lock().unwrap().take();
         let transient = cells.transient.lock().unwrap().take();
         if fresh_frame {
-            crate::shader_scene_bridge::publish_pack(
-                pack.tick(transient, spectral.as_deref()),
-            );
+            crate::shader_scene_bridge::publish_pack(pack.tick(transient, spectral.as_deref()));
         }
         // A4 (Line Bed, mode 5): push the SAME latched Spectral512 frame
         // into the depth ring (fresh frames only, like the reference's
@@ -471,6 +547,23 @@ fn publish_active(cells: &VizCells, pack: &mut ShaderPackState, linebed: &mut li
                 viz_bridge::ui(move |mut v| v.as_mut().set_energy(to_qlist(&b)));
             }
         }
+        3 => {
+            let frame = cells.goniometer.lock().unwrap().take();
+            if let Some((points, correlation)) = frame {
+                viz_bridge::ui(move |mut v| {
+                    v.as_mut().set_goniometer(to_qlist(points.as_ref()));
+                    v.as_mut().set_stereo_correlation(correlation);
+                });
+            }
+        }
+        4 => {
+            let frame = cells.oscilloscope.lock().unwrap().take();
+            if let Some(points) = frame {
+                viz_bridge::ui(move |mut v| {
+                    v.as_mut().set_oscilloscope(to_qlist(points.as_ref()));
+                });
+            }
+        }
         _ => {
             let frame = cells.bars.lock().unwrap().take();
             if let Some(b) = frame {
@@ -488,6 +581,11 @@ pub fn install(tap: VisualizerTap) {
         log::warn!("[qbz-qt][viz] install called twice; ignoring");
         return;
     }
+
+    // The startup macro is normally sufficient, but the explicit symbol
+    // reference keeps the custom item linked from static archives on every
+    // platform and guarantees registration before the QML module loads.
+    register_scope_qml_item();
 
     let cells = Arc::new(VizCells::default());
 
@@ -543,6 +641,13 @@ pub fn install(tap: VisualizerTap) {
 /// a tap the other consumer still needs.
 pub fn set_enabled(on: bool) {
     set_enabled_source(VizSource::Dock, on);
+    let mask = if on {
+        scope_mask_for_mode(ACTIVE_MODE.load(Ordering::Relaxed))
+    } else {
+        0
+    };
+    DOCK_SCOPE_MASK.store(mask, Ordering::Relaxed);
+    apply_scope_mask();
 }
 
 /// §4.2a two-source enable: set one consumer's bit; the EFFECTIVE enable is
@@ -604,6 +709,9 @@ pub(crate) fn immersive_opened() {
 /// while immersive was open already updated it via
 /// `settings_qt::set_large_spectrum_mode`).
 pub(crate) fn immersive_closed() {
+    IMMERSIVE_PANEL_SCOPE_MASK.store(0, Ordering::Relaxed);
+    IMMERSIVE_SCOPE_MASK.store(0, Ordering::Relaxed);
+    apply_scope_mask();
     set_enabled_source(VizSource::Immersive, false);
     MARSHAL_ALL.store(false, Ordering::Relaxed);
     set_mode(crate::settings_qt::large_spectrum_mode());
@@ -612,7 +720,18 @@ pub(crate) fn immersive_closed() {
 /// Point the drain at the stream the band is actually rendering. Called at
 /// install time (from the persisted pref) and on every mode cycle.
 pub fn set_mode(mode: i32) {
-    ACTIVE_MODE.store(mode.clamp(0, 2), Ordering::Relaxed);
+    let mode = mode.clamp(0, 4);
+    ACTIVE_MODE.store(mode, Ordering::Relaxed);
+    let dock_visible = ENABLED_MASK.load(Ordering::Relaxed) & DOCK_BIT != 0;
+    DOCK_SCOPE_MASK.store(
+        if dock_visible {
+            scope_mask_for_mode(mode)
+        } else {
+            0
+        },
+        Ordering::Relaxed,
+    );
+    apply_scope_mask();
     // The new stream may already have a frame latched from before the switch;
     // publish it now instead of showing the old mode's last frame until the
     // producer's next tick (and it is what unblocks a switch made while the
@@ -620,6 +739,36 @@ pub fn set_mode(mode: i32) {
     if ENABLED.load(Ordering::Relaxed) {
         wake_drain();
     }
+}
+
+/// Update the scope requested by the active immersive FOCUS panel. Split
+/// layouts and every existing FOCUS mode leave both scope producers idle.
+pub(crate) fn set_immersive_view(view_mode: i32, mode: i32) {
+    let mask = if MARSHAL_ALL.load(Ordering::Relaxed) && view_mode == 0 {
+        scope_mask_for_mode(mode)
+    } else {
+        0
+    };
+    IMMERSIVE_PANEL_SCOPE_MASK.store(mask, Ordering::Relaxed);
+    apply_immersive_scope_mask();
+}
+
+/// A shader scene replaces every FOCUS panel. Keep the desired scope mode so
+/// returning to the panel is instant, but disable its DSP and Qt publishes
+/// while the scene is covering it.
+pub(crate) fn set_immersive_scene_active(active: bool) {
+    IMMERSIVE_SCENE_ACTIVE.store(active, Ordering::Relaxed);
+    apply_immersive_scope_mask();
+}
+
+extern "C" {
+    fn qbz_scope_trace_register_qml_type();
+}
+
+fn register_scope_qml_item() {
+    // SAFETY: no arguments; registration is guarded and occurs before QML is
+    // loaded. The explicit reference also keeps the static-library object.
+    unsafe { qbz_scope_trace_register_qml_type() };
 }
 
 /// Mirror the transport onto the tap so a paused player parks the producer.
@@ -668,11 +817,18 @@ mod tests {
         assert!(!mask_enabled(none));
     }
 
-    /// The pre-immersive wake table: exactly ONE stream per dock mode.
+    /// The dock wake table: exactly ONE stream per render mode.
     #[test]
     fn single_stream_wake_table() {
-        for mode in 0..=2 {
-            let wakes: Vec<bool> = [Stream::Bars, Stream::Waveform, Stream::Energy]
+        let streams = [
+            Stream::Bars,
+            Stream::Waveform,
+            Stream::Energy,
+            Stream::Goniometer,
+            Stream::Oscilloscope,
+        ];
+        for mode in 0..=4 {
+            let wakes: Vec<bool> = streams
                 .into_iter()
                 .map(|s| stream_wakes(mode, false, s))
                 .collect();
@@ -681,18 +837,33 @@ mod tests {
         assert!(stream_wakes(0, false, Stream::Bars));
         assert!(stream_wakes(1, false, Stream::Waveform));
         assert!(stream_wakes(2, false, Stream::Energy));
+        assert!(stream_wakes(3, false, Stream::Goniometer));
+        assert!(stream_wakes(4, false, Stream::Oscilloscope));
     }
 
-    /// §4.2b: marshal-all wakes on EVERY stream regardless of ACTIVE_MODE —
-    /// which is also why dock mode-cycle writes while immersive is open have
-    /// no effect on the marshalled set.
+    /// §4.2b: marshal-all wakes on every legacy stream regardless of
+    /// ACTIVE_MODE. Scope frames hitchhike on that fixed cadence, avoiding
+    /// extra drain wakeups while immersive is open.
     #[test]
     fn marshal_all_wakes_every_stream() {
         for mode in 0..=2 {
             for s in [Stream::Bars, Stream::Waveform, Stream::Energy] {
                 assert!(stream_wakes(mode, true, s), "mode {mode} stream {s:?}");
             }
+            assert!(!stream_wakes(mode, true, Stream::Goniometer));
+            assert!(!stream_wakes(mode, true, Stream::Oscilloscope));
         }
+    }
+
+    #[test]
+    fn shader_scene_suppresses_hidden_scope() {
+        assert_eq!(visible_scope_mask(GONIOMETER_BIT, false), GONIOMETER_BIT);
+        assert_eq!(
+            visible_scope_mask(OSCILLOSCOPE_BIT, false),
+            OSCILLOSCOPE_BIT
+        );
+        assert_eq!(visible_scope_mask(GONIOMETER_BIT, true), 0);
+        assert_eq!(visible_scope_mask(OSCILLOSCOPE_BIT, true), 0);
     }
 
     /// The hooks against the REAL statics (kept in ONE test so parallel test
@@ -702,19 +873,33 @@ mod tests {
     /// application is a no-op and only the masks/flags move.
     #[test]
     fn immersive_hooks_switch_and_restore() {
+        // Selecting a scope while the dock is hidden only records the mode;
+        // its DSP request stays off until the dock becomes visible.
+        set_mode(3);
+        assert_eq!(DOCK_SCOPE_MASK.load(Ordering::Relaxed), 0);
+
         // Dock was on (the common case: dock drives the tap, then immersive
         // opens on top).
         set_enabled(true);
         assert_eq!(ENABLED_MASK.load(Ordering::Relaxed), DOCK_BIT);
+        assert_eq!(DOCK_SCOPE_MASK.load(Ordering::Relaxed), GONIOMETER_BIT);
 
         immersive_opened();
         assert!(MARSHAL_ALL.load(Ordering::Relaxed));
-        assert_eq!(ENABLED_MASK.load(Ordering::Relaxed), DOCK_BIT | IMMERSIVE_BIT);
+        assert_eq!(
+            ENABLED_MASK.load(Ordering::Relaxed),
+            DOCK_BIT | IMMERSIVE_BIT
+        );
 
         // A dock mode-cycle while immersive is open records ACTIVE_MODE but
         // the wake table stays all-three (marshal-all short-circuits it).
         set_mode(2);
-        assert!(stream_wakes(2, MARSHAL_ALL.load(Ordering::Relaxed), Stream::Bars));
+        assert_eq!(DOCK_SCOPE_MASK.load(Ordering::Relaxed), 0);
+        assert!(stream_wakes(
+            2,
+            MARSHAL_ALL.load(Ordering::Relaxed),
+            Stream::Bars
+        ));
 
         immersive_closed();
         assert!(!MARSHAL_ALL.load(Ordering::Relaxed));
@@ -729,6 +914,7 @@ mod tests {
         // Leave the statics as found for any later test in the process.
         set_enabled(false);
         assert_eq!(ENABLED_MASK.load(Ordering::Relaxed), 0);
+        assert_eq!(DOCK_SCOPE_MASK.load(Ordering::Relaxed), 0);
     }
 
     // --- A1: the shader-pack derivation (visualizer.rs:203-269 parity) -----

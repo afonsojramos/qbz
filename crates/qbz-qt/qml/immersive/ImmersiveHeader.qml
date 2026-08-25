@@ -207,8 +207,8 @@ Item {
         }
         Repeater {
             // FOCUS rows IN SLINT ORDER (:586-650): Album Reactive(0),
-            // Static(1), Coverflow(2), Spectrum(3), Wave Bed(6), Lyrics(4),
-            // Queue(5).
+            // Static(1), Coverflow(2), Spectrum(3), Wave Bed(6),
+            // Goniometer(7), Oscilloscope(8), Lyrics(4), Queue(5).
             model: [
                 { "vm": 0, "m": 0, "sp": -1, "entry": "",
                   "label": QbzSession.tr("Album Reactive", QbzSession.trRev) },
@@ -220,6 +220,10 @@ Item {
                   "label": QbzSession.tr("Spectrum", QbzSession.trRev) },
                 { "vm": 0, "m": 6, "sp": -1, "entry": "",
                   "label": QbzSession.tr("Wave Bed", QbzSession.trRev) },
+                { "vm": 0, "m": 7, "sp": -1, "entry": "",
+                  "label": QbzSession.tr("Goniometer", QbzSession.trRev) },
+                { "vm": 0, "m": 8, "sp": -1, "entry": "",
+                  "label": QbzSession.tr("Oscilloscope", QbzSession.trRev) },
                 { "vm": 0, "m": 4, "sp": -1, "entry": "",
                   "label": QbzSession.tr("Lyrics", QbzSession.trRev) },
                 { "vm": 0, "m": 5, "sp": -1, "entry": "queue",

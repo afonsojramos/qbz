@@ -5976,3 +5976,9 @@ msgstr "La portada seleccionada tiene dimensiones no compatibles."
 
 msgid "The selected file is not a supported image."
 msgstr "El archivo seleccionado no es una imagen compatible."
+
+msgid "Goniometer"
+msgstr "Goniómetro"
+
+msgid "Oscilloscope"
+msgstr "Osciloscopio"
