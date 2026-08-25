@@ -323,7 +323,7 @@ Rectangle {
                 anchors.right: parent.right
                 anchors.leftMargin: (root.dockWidth > 0 ? root.dockWidth + 6 : 6) + (QbzPlayer.npHasTrack ? 46 : 0)
                 anchors.rightMargin: 6 + (QbzPlayer.npHasTrack ? 46 : 0)
-                height: root.waveformVisible ? 14 : 4
+                height: root.waveformVisible ? 18 : 4
                 radius: 2
                 anchors.verticalCenter: parent.verticalCenter
                 color: root.waveformVisible ? "transparent" : theme.surfaceElevated

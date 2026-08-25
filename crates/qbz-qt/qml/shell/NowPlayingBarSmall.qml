@@ -219,7 +219,7 @@ Rectangle {
             Rectangle {
                 id: seekTrack
                 width: parent.width
-                height: root.waveformVisible ? 9 : 3
+                height: root.waveformVisible ? 11 : 3
                 anchors.verticalCenter: parent.verticalCenter
                 radius: 2
                 color: root.waveformVisible ? "transparent" : theme.surfaceElevated
