@@ -4,10 +4,9 @@
 // built fresh — shell/SongCard.qml is the bar's INTERACTIVE meta-link card
 // with AudioStamp; this twin is NON-interactive with the E chip).
 //
-// Mounted by ImmersiveView as layer 4: visible ONLY
-// `viewMode==0 && mode==6 && npHasTrack` (trap 19), bottom-right 24px
-// insets, and it does NOT fade with the auto-hide chrome
-// (ImmersiveView.slint:1602-1605). Content-sized: the card hugs its content
+// Mounted by ImmersiveView as layer 4 over Wave Bed, full Lyrics and every
+// shader scene, bottom-right with 24px insets. It does NOT fade with the
+// auto-hide chrome. Content-sized: the card hugs its content
 // and the mount pins it bottom-right, so a wider card grows LEFTWARD.
 //
 //   meta column (right-aligned): title 15px semibold capped 420px + elide

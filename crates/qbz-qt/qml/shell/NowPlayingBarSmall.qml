@@ -45,8 +45,7 @@ Rectangle {
     color: ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
     readonly property bool ambientOn: theme.ambientOn
     readonly property bool waveformVisible: QbzShell.seekbarWaveform
-        && QbzPlayer.npSeekWaveformAnalyzed > 0
-        && QbzPlayer.npSeekWaveform.length > 0
+        && QbzPlayer.npHasTrack
 
 
     QbzTheme { id: theme }
@@ -219,7 +218,7 @@ Rectangle {
             Rectangle {
                 id: seekTrack
                 width: parent.width
-                height: root.waveformVisible ? 11 : 3
+                height: root.waveformVisible ? 13 : 3
                 anchors.verticalCenter: parent.verticalCenter
                 radius: 2
                 color: root.waveformVisible ? "transparent" : theme.surfaceElevated

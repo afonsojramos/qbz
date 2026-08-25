@@ -1,10 +1,10 @@
-// LyricsFocusPanel — FOCUS mode 4, the giant-line lyrics variant (§6.6 of
+// LyricsFocusPanel — FOCUS mode 4, the one-line lyrics variant (§6.6 of
 // the 2026-08-02 immersive-port contract), port of
 // crates/qbz-ui/ui/immersive/ImmersiveLyricsFocusPanel.slint:50-151.
 //
-// One giant centered CURRENT line, cross-faded on every line change; NO
-// karaoke fill (whole-line swap only, exactly like the Slint/Svelte source
-// which omits activeProgress). Data: the QbzLyrics doc (lines/status/synced,
+// One centered CURRENT line, cross-faded on every line change. The host still
+// advances one line at a time, but the active line now reuses the split-view
+// typography and per-line time fill. Data: the QbzLyrics doc (lines/status/synced,
 // passed in by the mount) + the SHARED immersive LyricsSyncEngine instance
 // from ImmersiveView (`sync`) — the Slint reads the one global LyricsState
 // active-index; Qt has one engine per surface group, and the focus panel +
@@ -18,12 +18,12 @@
 // does not animate), a 16ms one-shot releases it and the 500ms
 // cubic-bezier(0.22,1,0.36,1) runs forward.
 //
-// The line takes QbzShell.ambientAccent — the album-art accent that is the
-// COMPLEMENT of the cover's dominant hue (ImmersiveState.lyrics-accent),
-// NOT the UI lyrics color, NOT plain white (:102-107).
+// The line uses split-lyrics white plus a restrained native shadow so the
+// timed fill remains legible over every immersive background.
 
 import QtQuick
 import com.blitzfc.qbz
+import "../shell"
 
 Item {
     id: root
@@ -51,9 +51,23 @@ Item {
     readonly property bool noLyrics: root.status === 3
         || (root.status === 2 && root.lines.length === 0)
 
-    // Responsive font size (clamp(28px, 5vw, 56px), :50-51) — vw = the
-    // panel's own width (full-viewport in the focus placement).
-    readonly property real lineSize: Math.max(28, Math.min(root.width * 0.05, 56))
+    // Same responsive active size as immersive split lyrics. Keeping this
+    // scale identical prevents a jarring type jump between full and split.
+    readonly property real lineSize: Math.round(Math.max(28,
+        Math.min(root.width * 0.022, 42)))
+
+    readonly property string fontDir: "qrc:/qt/qml/com/blitzfc/qbz/qml/assets/fonts/"
+    FontLoader { id: fLineSeed; source: QbzLyrics.fontIndex === 1 ? root.fontDir + "LINESeedJP-Regular.ttf" : "" }
+    FontLoader { id: fMontserrat; source: QbzLyrics.fontIndex === 2 ? root.fontDir + "Montserrat-VariableFont_wght.ttf" : "" }
+    FontLoader { id: fNoto; source: QbzLyrics.fontIndex === 3 ? root.fontDir + "NotoSans-VariableFont_wdth,wght.ttf" : "" }
+    FontLoader { id: fSource; source: QbzLyrics.fontIndex === 4 ? root.fontDir + "SourceSans3-VariableFont_wght.ttf" : "" }
+    readonly property string fontFamily: {
+        if (QbzLyrics.fontIndex === 1) return fLineSeed.status === FontLoader.Ready ? fLineSeed.name : ""
+        if (QbzLyrics.fontIndex === 2) return fMontserrat.status === FontLoader.Ready ? fMontserrat.name : ""
+        if (QbzLyrics.fontIndex === 3) return fNoto.status === FontLoader.Ready ? fNoto.name : ""
+        if (QbzLyrics.fontIndex === 4) return fSource.status === FontLoader.Ready ? fSource.name : ""
+        return ""
+    }
 
     // --- Entry-animation retrigger (:57-74) --------------------------------
     readonly property int watchedIndex: root.activeIndex
@@ -82,19 +96,24 @@ Item {
         anchors.rightMargin: 60
         anchors.bottomMargin: 140
 
-        // Current line — fadeInUp-lite (:100-126). Centered in the block.
-        Text {
+        // Current line — one line at a time, with the exact split-view
+        // karaoke renderer and a restrained native shadow.
+        LyricsLineRow {
             visible: root.hasCurrent
             anchors.centerIn: parent
-            // width min(parent, vw*0.9) (:114).
-            width: Math.min(parent.width, root.width * 0.9)
-            text: root.currentLine
-            color: QbzShell.ambientAccent
-            font.pixelSize: root.lineSize
-            font.weight: Font.Bold // 700
-            font.letterSpacing: 0.2
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.WordWrap
+            contentWidth: Math.min(parent.width, root.width * 0.9)
+            lineText: root.currentLine
+            lineIndex: root.activeIndex
+            sync: root.sync
+            synced: root.synced
+            activeIndex: root.activeIndex
+            sizeInactive: root.lineSize
+            sizeActive: root.lineSize
+            uppercase: QbzLyrics.uppercase
+            fontFamily: root.fontFamily
+            activeColor: "#ffffff"
+            liteFill: false
+            textShadow: true
             // The translate-up is applied via anchors.verticalCenterOffset so
             // the centering anchor survives the offset.
             anchors.verticalCenterOffset: root.entering ? 24 : 0

@@ -29,8 +29,8 @@
 //      spectrum band and the viz eye toggle; port of the Slint root
 //      TouchArea :1283-1286). Stacked BELOW panels + chrome.
 //   3. FOCUS panels (viewMode==0 && mode==N) / the SPLIT layout (viewMode==1)
-//   4. ImmersiveSongCard (viewMode==0 && mode==6 && npHasTrack — trap 19;
-//      does NOT fade with the chrome, :1602-1605)
+//   4. ImmersiveSongCard (Wave Bed, full Lyrics and shader scenes;
+//      does NOT fade with the chrome)
 //   5. ImmersivePlayerBar (B5, :1607-1616) — centered, y = height-90-24,
 //      fades with the chrome like the header
 //   6. ImmersiveHeader band
@@ -356,7 +356,7 @@ Item {
             }
         }
     }
-    // FOCUS Lyrics (mode 4, B4 §6.6): the giant-line variant. It shares the
+    // FOCUS Lyrics (mode 4, B4 §6.6): the one-line variant. It shares the
     // immersive LyricsSyncEngine with the split lyrics mount (trap 22 — the
     // gate covers BOTH lyric surfaces and nothing else). No entry load: Qt
     // fetches lyrics automatically per track (§5.5).
@@ -638,9 +638,10 @@ Item {
     }
 
     // --- Layer 4: ImmersiveSongCard (§5.1, :1602-1605) ----------------------
-    // Slint shows it bottom-right ONLY over the shader backgrounds OR in
-    // WaveBed (shader-mode > 0 || (view-mode == 0 && mode == 6)) &&
-    // has-track — the focus panels render their own metadata. In v1
+    // Keep the compact bottom-right metadata over shader backgrounds,
+    // Wave Bed and full-screen Lyrics. The lyrics surface deliberately keeps
+    // one line at a time, so the card supplies the otherwise absent track
+    // context without competing with the active line.
     // shader-mode was constant 0 so the first arm was dead (trap 19); A1
     // makes it real. NON-interactive; does NOT fade with the auto-hide
     // chrome (no opacity binding here — that is deliberate).
@@ -651,7 +652,8 @@ Item {
         anchors.rightMargin: 24
         anchors.bottomMargin: 24
         visible: (QbzShaderScene.scene > 0
-                  || (QbzImmersive.viewMode === 0 && QbzImmersive.mode === 6))
+                  || (QbzImmersive.viewMode === 0
+                      && (QbzImmersive.mode === 4 || QbzImmersive.mode === 6)))
             && QbzPlayer.npHasTrack
     }
 

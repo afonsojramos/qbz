@@ -57,6 +57,11 @@ Column {
     // Lite fill: light the active line whole, no per-frame clip sweep.
     property bool liteFill: false
     property bool showTranslation: false
+    // The full-screen one-line host enables this lightweight native text
+    // shadow. It avoids an extra blurred layer while keeping every glyph
+    // readable over arbitrary album artwork.
+    property bool textShadow: false
+    property color textShadowColor: "#b0000000"
 
     QbzTheme { id: theme }
 
@@ -115,6 +120,8 @@ Column {
         font.pixelSize: row.sizeInactive
         font.weight: theme.weightMedium
         font.letterSpacing: 0.2
+        style: row.textShadow ? Text.Raised : Text.Normal
+        styleColor: row.textShadowColor
     }
 
     // ---- ACTIVE: per-visual-line karaoke -------------------------------
@@ -209,6 +216,8 @@ Column {
                     font.pixelSize: row.sizeActive
                     font.weight: theme.weightBold
                     font.letterSpacing: 0.2
+                    style: row.textShadow ? Text.Raised : Text.Normal
+                    styleColor: row.textShadowColor
                 }
 
                 // Bright (sung) overlay, clipped to this segment's LOCAL fill:
@@ -246,6 +255,8 @@ Column {
                         font.pixelSize: row.sizeActive
                         font.weight: theme.weightBold
                         font.letterSpacing: 0.2
+                        style: row.textShadow ? Text.Raised : Text.Normal
+                        styleColor: row.textShadowColor
                     }
                 }
             }
@@ -269,5 +280,7 @@ Column {
         font.pixelSize: Math.round((row.isActive ? row.sizeActive : row.sizeInactive) * 0.72)
         font.weight: theme.weightRegular
         font.letterSpacing: 0.2
+        style: row.textShadow ? Text.Raised : Text.Normal
+        styleColor: row.textShadowColor
     }
 }
