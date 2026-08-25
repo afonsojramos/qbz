@@ -1850,5 +1850,9 @@ mod tests {
         assert!(workspace
             .contains("visible: QbzTagEditor.artworkSearching || QbzTagEditor.artworkLoading"));
         assert!(workspace.contains("id: lookupCard"));
+        // SettingsButton is the shared secondary settings control and has no
+        // `primary` property. An unknown assignment invalidates the entire QML
+        // type lazily, so neither AlbumView nor ephemeral can mount the editor.
+        assert!(!workspace.contains("primary: true"));
     }
 }

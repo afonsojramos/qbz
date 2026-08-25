@@ -912,7 +912,6 @@ Item {
                         SettingsButton {
                             text: workspace.editor.tr("Apply to form")
                             iconName: "download"
-                            primary: true
                             minWidth: 0
                             onClicked: workspace.editor.applyRemote()
                         }
