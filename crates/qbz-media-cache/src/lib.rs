@@ -56,6 +56,7 @@
 //! to remove, so it is not worth reintroducing for a marginally simpler write.
 
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -68,6 +69,19 @@ pub const SUBSONIC_ID_FLOOR: i64 = 1 << 42;
 /// low 40 bits and the floors stay disjoint.
 pub const ID_PAYLOAD_BITS: u32 = 40;
 const PAYLOAD_MASK: i64 = (1 << ID_PAYLOAD_BITS) - 1;
+
+// Jellyfin, Subsonic, and the quality hydrator own separate SQLite connections
+// to the same cache file. WAL keeps their readers concurrent, but SQLite still
+// permits only one writer. Serializing the short write transactions here avoids
+// two deferred transactions colliding on their first UPDATE during Resync all.
+// The SQLite busy timeout below remains the fallback for another QBZ process.
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_writer() -> MutexGuard<'static, ()> {
+    WRITE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// Which remote source a cached row came from. The wire values are the same
 /// words `qbz_source::SourceId` uses, so nothing has to translate.
@@ -225,7 +239,7 @@ pub fn open(path: &Path) -> Result<Connection> {
         std::fs::create_dir_all(dir).map_err(map_err("create dir"))?;
     }
     let conn = Connection::open(path).map_err(map_err("open"))?;
-    conn.busy_timeout(Duration::from_millis(2_500))
+    conn.busy_timeout(Duration::from_secs(10))
         .map_err(map_err("busy timeout"))?;
     init_schema(&conn)?;
     Ok(conn)
@@ -233,6 +247,7 @@ pub fn open(path: &Path) -> Result<Connection> {
 
 /// The schema. Split out so tests can drive an in-memory connection.
 pub fn init_schema(conn: &Connection) -> Result<()> {
+    let _writer = lock_writer();
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
         .map_err(map_err("pragmas"))?;
     conn.execute_batch(
@@ -388,6 +403,7 @@ pub fn save_tracks(
     if tracks.is_empty() {
         return Ok(0);
     }
+    let _writer = lock_writer();
     let ts = now();
     let tx = conn.transaction().map_err(map_err("begin"))?;
     {
@@ -467,6 +483,7 @@ pub fn begin_source_sync(
     conn: &mut Connection,
     source: RemoteSource,
 ) -> Result<SourceSyncGeneration> {
+    let _writer = lock_writer();
     let tx = conn.transaction().map_err(map_err("begin source sync"))?;
     let previous = tx
         .query_row(
@@ -531,6 +548,7 @@ fn save_source_generation_page(
     if tracks.is_empty() {
         return Ok(0);
     }
+    let _writer = lock_writer();
     let tx = conn
         .transaction()
         .map_err(map_err("begin essential page"))?;
@@ -652,6 +670,7 @@ pub fn complete_source_sync(
     generation: u64,
     prune_old: bool,
 ) -> Result<usize> {
+    let _writer = lock_writer();
     let tx = conn
         .transaction()
         .map_err(map_err("begin source completion"))?;
@@ -707,6 +726,7 @@ pub fn interrupt_source_sync(
     source: RemoteSource,
     generation: u64,
 ) -> Result<()> {
+    let _writer = lock_writer();
     conn.execute(
         "UPDATE remote_cache_source_sync SET status='interrupted',updated_at=?3
           WHERE source=?1 AND generation=?2 AND status='running'",
@@ -782,6 +802,7 @@ pub fn update_track_quality(
     if updates.is_empty() {
         return Ok(0);
     }
+    let _writer = lock_writer();
     let tx = conn
         .transaction()
         .map_err(map_err("begin quality update"))?;
@@ -826,6 +847,7 @@ pub fn defer_track_quality(
     if item_ids.is_empty() {
         return Ok(0);
     }
+    let _writer = lock_writer();
     let retry_at = now().saturating_add(retry_after_secs.max(1));
     let tx = conn.transaction().map_err(map_err("begin quality defer"))?;
     let mut affected = 0usize;
@@ -852,6 +874,7 @@ pub fn save_libraries(
     source: RemoteSource,
     libs: &[CachedLibrary],
 ) -> Result<()> {
+    let _writer = lock_writer();
     let ts = now();
     let tx = conn.transaction().map_err(map_err("begin"))?;
     tx.execute(
@@ -1066,6 +1089,7 @@ pub fn count(conn: &Connection, source: RemoteSource) -> Result<u64> {
 
 /// Forget everything one source cached (a disconnect, or a server swap).
 pub fn clear(conn: &mut Connection, source: RemoteSource) -> Result<usize> {
+    let _writer = lock_writer();
     let tx = conn.transaction().map_err(map_err("begin"))?;
     let n = tx
         .execute(
@@ -1098,6 +1122,7 @@ pub fn clear(conn: &mut Connection, source: RemoteSource) -> Result<usize> {
 /// connection halfway through — would otherwise read as "the server deleted
 /// everything it did not get to".
 pub fn prune_stale(conn: &mut Connection, source: RemoteSource, before: i64) -> Result<usize> {
+    let _writer = lock_writer();
     let tx = conn.transaction().map_err(map_err("begin"))?;
     let n = tx
         .execute(
@@ -1781,5 +1806,41 @@ mod tests {
         assert!(track_by_item_id(&c, RemoteSource::Subsonic, "gone")
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn shared_cache_writes_are_serialized_across_connections() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("remote-media.db");
+        let _first = open(&path).unwrap();
+        let mut second = open(&path).unwrap();
+        let writer = lock_writer();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            done_tx
+                .send(save_tracks(
+                    &mut second,
+                    RemoteSource::Subsonic,
+                    &[track("serialized", "album", Some(1), Some(1))],
+                ))
+                .unwrap();
+        });
+
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "a second cache connection wrote while the writer lock was held"
+        );
+        drop(writer);
+        assert_eq!(
+            done_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap(),
+            1
+        );
+        worker.join().unwrap();
     }
 }
