@@ -67,7 +67,7 @@ pub use alsa_direct::AlsaDirectStream;
 #[cfg(target_os = "linux")]
 pub use jack_backend::JackStream;
 pub use analysis::SpectralAnalyzer;
-pub use analyzer_tap::{AnalyzerMessage, AnalyzerTap};
+pub use analyzer_tap::{AnalyzerMessage, AnalyzerTap, AnalyzerWaveformTrack};
 pub use backend::{
     AlsaDirectError, AlsaPlugin, AudioBackend, AudioBackendType, AudioDevice, BackendConfig,
     BackendManager, BackendResult, BitPerfectMode,
