@@ -1838,5 +1838,8 @@ mod tests {
         assert!(qml.contains("!QbzTagEditor.editorLoading"));
         assert!(qml.contains("event.kind === \"artwork-selected\""));
         assert!(qml.contains("QbzTagEditor.chooseArtwork()"));
+        assert!(qml.contains("id: trackDelegate"));
+        assert!(qml.contains("root.selectedTrackIndex = trackDelegate.index"));
+        assert!(!qml.contains("root.selectedTrackIndex = index"));
     }
 }

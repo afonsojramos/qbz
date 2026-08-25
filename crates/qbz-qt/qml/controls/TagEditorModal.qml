@@ -892,10 +892,13 @@ Item {
                         spacing: 0
                         model: root.tracks
                         delegate: Rectangle {
+                            id: trackDelegate
                             required property var modelData
+                            required property int index
                             width: trackList.width
                             height: 36
-                            color: index % 2 ? theme.surfaceElevated : "transparent"
+                            color: trackDelegate.index % 2
+                                ? theme.surfaceElevated : "transparent"
                             border.width: 1
                             border.color: theme.borderSubtle
                             Row {
@@ -915,7 +918,8 @@ Item {
                                         selectByMouse: true
                                         inputMethodHints: Qt.ImhDigitsOnly
                                         onTextEdited: modelData.discNumber = text
-                                        onActiveFocusChanged: if (activeFocus) root.selectedTrackIndex = index
+                                        onActiveFocusChanged: if (activeFocus)
+                                            root.selectedTrackIndex = trackDelegate.index
                                     }
                                 }
                                 Rectangle { width: 1; height: parent.height; color: theme.borderSubtle }
@@ -934,7 +938,8 @@ Item {
                                         selectByMouse: true
                                         inputMethodHints: Qt.ImhDigitsOnly
                                         onTextEdited: modelData.trackNumber = text
-                                        onActiveFocusChanged: if (activeFocus) root.selectedTrackIndex = index
+                                        onActiveFocusChanged: if (activeFocus)
+                                            root.selectedTrackIndex = trackDelegate.index
                                     }
                                 }
                                 Rectangle { width: 1; height: parent.height; color: theme.borderSubtle }
@@ -953,7 +958,8 @@ Item {
                                         selectByMouse: true
                                         clip: true
                                         onTextEdited: modelData.title = text
-                                        onActiveFocusChanged: if (activeFocus) root.selectedTrackIndex = index
+                                        onActiveFocusChanged: if (activeFocus)
+                                            root.selectedTrackIndex = trackDelegate.index
                                     }
                                 }
                                 Rectangle { width: 1; height: parent.height; color: theme.borderSubtle }
@@ -972,7 +978,8 @@ Item {
                                         selectByMouse: true
                                         clip: true
                                         onTextEdited: modelData.artistCredit = text
-                                        onActiveFocusChanged: if (activeFocus) root.selectedTrackIndex = index
+                                        onActiveFocusChanged: if (activeFocus)
+                                            root.selectedTrackIndex = trackDelegate.index
                                     }
                                 }
                                 Rectangle { width: 1; height: parent.height; color: theme.borderSubtle }
@@ -989,7 +996,7 @@ Item {
                                     elide: Text.ElideMiddle
                                     MouseArea {
                                         anchors.fill: parent
-                                        onClicked: root.selectedTrackIndex = index
+                                        onClicked: root.selectedTrackIndex = trackDelegate.index
                                     }
                                 }
                             }
