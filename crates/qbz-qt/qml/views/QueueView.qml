@@ -37,25 +37,34 @@ Rectangle {
 
     Component.onCompleted: {
         QbzQueue.queueExtendedOpened()
-        artDispatch.restart()
+        root.scheduleVisibleCovers()
     }
     Component.onDestruction: QbzQueue.queueExtendedClosed()
-    onDocChanged: artDispatch.restart()
+    onDocChanged: root.scheduleVisibleCovers()
 
     // ----------------------------- artwork ------------------------------
 
     property var coverMap: ({})
-    property var askedCovers: ({})
+    // URLs in the current visible artwork window. Unlike the old
+    // `askedCovers`, this is not a permanent latch: a first miss against a
+    // waking NAS must be allowed to settle on a later bounded attempt.
+    property var wantedCovers: ({})
+    property int artRetriesLeft: 0
 
     Connections {
         target: QbzLibrary
         function onLibraryArtworkReady(key, path) {
-            if (root.askedCovers[key] !== true)
+            if (root.wantedCovers[key] !== true)
                 return
             var next = Object.assign({}, root.coverMap)
             next[key] = path
             root.coverMap = next
         }
+    }
+
+    function scheduleVisibleCovers() {
+        root.artRetriesLeft = 2
+        artDispatch.restart()
     }
 
     function requestVisibleCovers() {
@@ -70,22 +79,36 @@ Rectangle {
         first = Math.max(0, first - 3)
         last = Math.min(root.rows.length - 1, last + 3)
         var urls = []
-        var asked = Object.assign({}, root.askedCovers)
+        var wanted = ({})
         for (var i = first; i <= last; i++) {
             var url = root.rows[i].artUrl || ""
-            if (url !== "" && asked[url] !== true && !root.coverMap[url]) {
-                asked[url] = true
+            if (url !== "" && !root.coverMap[url] && wanted[url] !== true) {
+                wanted[url] = true
                 urls.push(url)
             }
         }
-        root.askedCovers = asked
-        if (urls.length > 0)
+        // Assign before crossing into Rust: warm local hits can answer on the
+        // next Qt turn, and the signal guard above must already know the key.
+        root.wantedCovers = wanted
+        if (urls.length > 0) {
             QbzShell.sidebarArtworkWindow(JSON.stringify(urls))
+            if (root.artRetriesLeft > 0) {
+                root.artRetriesLeft--
+                artRetry.restart()
+            }
+        }
     }
 
     Timer {
         id: artDispatch
         interval: 70
+        repeat: false
+        onTriggered: root.requestVisibleCovers()
+    }
+
+    Timer {
+        id: artRetry
+        interval: 350
         repeat: false
         onTriggered: root.requestVisibleCovers()
     }
@@ -504,7 +527,7 @@ Rectangle {
                 boundsBehavior: Flickable.StopAtBounds
                 reuseItems: true
                 model: root.rows
-                onContentYChanged: artDispatch.restart()
+                onContentYChanged: root.scheduleVisibleCovers()
 
                 delegate: Item {
                     id: rowHost
