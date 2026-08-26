@@ -340,6 +340,53 @@ pub fn disc_cover_url(t: &LocalTrack) -> String {
         .unwrap_or_default()
 }
 
+/// Which layer of a source-owned artwork reference a consumer needs.
+/// Album surfaces prefer the collection/box cover; track surfaces prefer the
+/// item/disc cover. Both fall back to the other layer when their preferred one
+/// is absent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArtworkScope {
+    Album,
+    Track,
+}
+
+/// A portable artwork reference for a `LocalTrack`.
+///
+/// This is the single boundary between source-owned opaque tokens and Qt
+/// surfaces that may no longer have the source row at render time (Recents,
+/// MyQBZ, queue, search). Jellyfin/Subsonic tokens are source-qualified so the
+/// shared artwork resolver never has to guess their owner; Plex keeps its
+/// server-relative path; local files become encoded `file://` URLs. The value
+/// is safe to persist because it contains no media-server credentials.
+pub(crate) fn portable_artwork_ref(t: &LocalTrack, scope: ArtworkScope) -> Option<String> {
+    let item = t.artwork_path.as_deref().filter(|value| !value.is_empty());
+    let collection = t
+        .collection_artwork_path
+        .as_deref()
+        .filter(|value| !value.is_empty());
+    let token = match scope {
+        ArtworkScope::Album => collection.or(item),
+        ArtworkScope::Track => item.or(collection),
+    }?;
+
+    let source = t
+        .source
+        .as_deref()
+        .and_then(SourceId::from_word)
+        .unwrap_or(SourceId::LOCAL);
+    if source == SourceId::JELLYFIN || source == SourceId::SUBSONIC {
+        return Some(format!("{}:{token}", source.as_str()));
+    }
+    if source == SourceId::PLEX
+        || token.starts_with("http://")
+        || token.starts_with("https://")
+        || token.starts_with("file://")
+    {
+        return Some(token.to_owned());
+    }
+    Some(crate::artwork_qt::file_url(token))
+}
+
 pub fn track_key(id: i64) -> String {
     format!("track:{id}")
 }
@@ -568,7 +615,8 @@ pub fn to_json<T: Serialize>(value: &T) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::album_favorite_source;
+    use super::{album_favorite_source, portable_artwork_ref, ArtworkScope};
+    use qbz_library::LocalTrack;
 
     fn sources(words: &[&str]) -> Vec<String> {
         words.iter().map(|word| (*word).to_string()).collect()
@@ -597,6 +645,34 @@ mod tests {
                 "offline",
             ])),
             None
+        );
+    }
+
+    #[test]
+    fn portable_artwork_ref_preserves_source_and_scope() {
+        let jellyfin = LocalTrack {
+            source: Some("jellyfin".into()),
+            artwork_path: Some("track-id/disc-tag".into()),
+            collection_artwork_path: Some("album-id/album-tag".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            portable_artwork_ref(&jellyfin, ArtworkScope::Track).as_deref(),
+            Some("jellyfin:track-id/disc-tag")
+        );
+        assert_eq!(
+            portable_artwork_ref(&jellyfin, ArtworkScope::Album).as_deref(),
+            Some("jellyfin:album-id/album-tag")
+        );
+
+        let navidrome = LocalTrack {
+            source: Some("navidrome".into()),
+            collection_artwork_path: Some("al-123_hash".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            portable_artwork_ref(&navidrome, ArtworkScope::Album).as_deref(),
+            Some("subsonic:al-123_hash")
         );
     }
 }

@@ -427,6 +427,21 @@ fn build_recent_sections() -> Vec<HomeSection> {
 /// most one bounded album lookup per distinct source/version. The exact played
 /// row wins for a track card (therefore its disc cover); an album card falls
 /// back to the first available disc/collection cover in that physical copy.
+fn recent_artwork_from_rows(
+    rows: &[qbz_library::LocalTrack],
+    exact_id: Option<i64>,
+    scope: crate::local_rows::ArtworkScope,
+) -> String {
+    exact_id
+        .and_then(|id| rows.iter().find(|row| row.id == id))
+        .and_then(|row| crate::local_rows::portable_artwork_ref(row, scope))
+        .or_else(|| {
+            rows.iter()
+                .find_map(|row| crate::local_rows::portable_artwork_ref(row, scope))
+        })
+        .unwrap_or_default()
+}
+
 fn backfill_recent_artwork(
     albums: &mut [crate::recently_qt::RecentAlbum],
     tracks: &mut [crate::recently_qt::RecentTrack],
@@ -454,27 +469,18 @@ fn backfill_recent_artwork(
             rows
         }).clone()
     };
-    let queue_art = |row: &qbz_library::LocalTrack| {
-        crate::local_playback::local_queue_track(row)
-            .artwork_url
-            .unwrap_or_default()
-    };
-
     for track in tracks.iter_mut() {
         if !track.artwork_url.is_empty() && !track.album_artwork_url.is_empty() {
             continue;
         }
         let rows = rows_for(&track.source, &track.album_id);
         let row_id = track.id.parse::<u64>().ok().map(|id| id as i64);
-        let exact = row_id.and_then(|id| rows.iter().find(|row| row.id == id));
-        let candidate = exact
-            .filter(|row| row.artwork_path.as_deref().is_some_and(|art| !art.is_empty()))
-            .or_else(|| {
-                rows.iter()
-                    .find(|row| row.artwork_path.as_deref().is_some_and(|art| !art.is_empty()))
-            });
-        if let Some(row) = candidate {
-            let art = queue_art(row);
+        let art = recent_artwork_from_rows(
+            &rows,
+            row_id,
+            crate::local_rows::ArtworkScope::Track,
+        );
+        if !art.is_empty() {
             if track.artwork_url.is_empty() {
                 track.artwork_url = art.clone();
             }
@@ -485,12 +491,11 @@ fn backfill_recent_artwork(
     }
     for album in albums.iter_mut().filter(|album| album.artwork_url.is_empty()) {
         let rows = rows_for(&album.source, &album.id);
-        if let Some(row) = rows
-            .iter()
-            .find(|row| row.artwork_path.as_deref().is_some_and(|art| !art.is_empty()))
-        {
-            album.artwork_url = queue_art(row);
-        }
+        album.artwork_url = recent_artwork_from_rows(
+            &rows,
+            None,
+            crate::local_rows::ArtworkScope::Album,
+        );
     }
 }
 
@@ -2195,5 +2200,24 @@ mod tests {
         assert_eq!(doc["recentlyPlayedAlbums"]["items"][0]["id"], "album-1");
         assert_eq!(doc["recentlyPlayedPlaylists"]["kind"], "playlist");
         assert_eq!(doc["continueListening"]["kind"], "slimTracks");
+    }
+
+    #[test]
+    fn recent_artwork_backfill_reads_remote_collection_tokens() {
+        let rows = vec![qbz_library::LocalTrack {
+            id: 42,
+            source: Some("jellyfin".into()),
+            artwork_path: None,
+            collection_artwork_path: Some("album-7/tag".into()),
+            ..Default::default()
+        }];
+        assert_eq!(
+            recent_artwork_from_rows(&rows, Some(42), crate::local_rows::ArtworkScope::Track),
+            "jellyfin:album-7/tag"
+        );
+        assert_eq!(
+            recent_artwork_from_rows(&rows, None, crate::local_rows::ArtworkScope::Album),
+            "jellyfin:album-7/tag"
+        );
     }
 }

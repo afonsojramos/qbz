@@ -703,6 +703,37 @@ pub(crate) fn get_collection(id: &str) -> Option<MixtapeCollection> {
     .flatten()
 }
 
+/// Persist source-resolved cover references for legacy MyQBZ items that were
+/// inserted without an artwork snapshot. One DB connection handles the whole
+/// resolve wave; the repository refuses to overwrite any non-empty value.
+fn backfill_resolved_artwork(
+    collection_id: &str,
+    repairs: &[(AlbumSource, String, String)],
+) -> usize {
+    crate::library_db_qt::with_db(false, |db| {
+        Ok(db.with_connection(|conn| {
+            repairs.iter().fold(0usize, |count, (source, id, art)| {
+                match qbz_mixtape::repo::backfill_item_artwork(
+                    conn,
+                    collection_id,
+                    source.clone(),
+                    id,
+                    art,
+                ) {
+                    Ok(changed) => count + changed,
+                    Err(error) => {
+                        log::warn!(
+                            "[qbz-qt] MyQBZ artwork backfill failed for {collection_id}/{id}: {error}"
+                        );
+                        count
+                    }
+                }
+            })
+        }))
+    })
+    .unwrap_or_default()
+}
+
 // ---------------------------------------------------------------------------
 // Row building
 // ---------------------------------------------------------------------------
@@ -1584,15 +1615,40 @@ fn resolve_items(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 // The user may have navigated to another collection while this
                 // task queued behind the cap — its result is then dead weight.
                 if current_id() != collection_id {
-                    return;
+                    return None;
                 }
                 let tracks = crate::myqbz_play_qt::fetch_item_tracks(&runtime, &item).await;
                 let resolved = resolve_from_tracks(&item, &tracks);
+                let repair = item
+                    .artwork_url
+                    .as_deref()
+                    .is_none_or(str::is_empty)
+                    .then(|| resolved.artwork_url.clone())
+                    .filter(|art| !art.is_empty())
+                    .map(|art| (item.source.clone(), item.source_item_id.clone(), art));
                 apply_resolved(&item, resolved, &collection_id);
+                repair
             }));
         }
+        let mut repairs = Vec::new();
         for handle in handles {
-            let _ = handle.await;
+            if let Ok(Some(repair)) = handle.await {
+                repairs.push(repair);
+            }
+        }
+        if !repairs.is_empty() {
+            let id = collection_id.clone();
+            let repaired = tokio::task::spawn_blocking(move || {
+                backfill_resolved_artwork(&id, &repairs)
+            })
+            .await
+            .unwrap_or_default();
+            if repaired > 0 {
+                // The index cards keep item snapshots in their mosaic cache.
+                // One reload after the whole resolve wave makes the repair
+                // visible when Back returns there; never one reload per item.
+                crate::myqbz_qt::reload_grids();
+            }
         }
     });
 }

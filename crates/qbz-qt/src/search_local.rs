@@ -98,7 +98,8 @@ pub(crate) fn local_album_artist(t: &qbz_library::LocalTrack) -> String {
         .unwrap_or_else(|| t.artist.clone())
 }
 
-/// Split a local artwork path into this port's `(art_url, art_path)` pair.
+/// Split one source-owned artwork reference into this port's
+/// `(art_url, art_path)` pair.
 ///
 /// **This is a DELIBERATE divergence from the reference and must not be
 /// "fixed" back.** The Slint stores one RAW path with any `file://` STRIPPED,
@@ -107,39 +108,21 @@ pub(crate) fn local_album_artist(t: &qbz_library::LocalTrack) -> String {
 ///
 /// - a local filesystem cover becomes a `file://` url in `art_path`, handed
 ///   straight to QML;
-/// - a Plex thumb or an http(s) cover goes to `art_url`, so it rides the
-///   SHARED `attach_urls` + `download_missing` pipeline exactly like the Qobuz
-///   rows and shares its cache entry with the Local Library grid;
+/// - Plex, HTTP and source-qualified Jellyfin/Subsonic references go to
+///   `art_url`, so they ride the SHARED `attach_urls` + `download_missing`
+///   pipeline exactly like Qobuz rows;
 /// - nothing usable yields two empty strings.
-pub(crate) fn local_art_split(source: Option<&str>, path: Option<&str>) -> (String, String) {
-    let Some(p) = path.filter(|p| !p.is_empty()) else {
+pub(crate) fn local_art_split(
+    track: &qbz_library::LocalTrack,
+    scope: crate::local_rows::ArtworkScope,
+) -> (String, String) {
+    let Some(reference) = crate::local_rows::portable_artwork_ref(track, scope) else {
         return (String::new(), String::new());
     };
-    // The ROW's source decides, not the shape of the string (design 02 §9
-    // stage 4). `classify` stood here and would read a Jellyfin token as a
-    // filesystem path purely because it starts with `/`.
-    // Resolved here rather than deferred: this list is the cortinilla's
-    // bounded result set (76 rows), not the whole library, and the split it
-    // needs — `art_path` for a file, `art_url` for a fetch — is decided per
-    // row by definition.
-    let Some((src, token)) = crate::local_rows::art_token(source, p) else {
-        return (String::new(), String::new());
-    };
-    match qbz_source::registry().artwork_token(src, &token, qbz_source::ArtSize::Card) {
-        qbz_source::ArtRef::File(f) => (
-            String::new(),
-            crate::artwork_qt::file_url(&f.to_string_lossy()),
-        ),
-        // The RAW token, not the resolved url: `attach_urls` /
-        // `download_missing` re-resolve it downstream and memoize under it, so
-        // this row shares its cache entry with the Local Library grid. That
-        // sharing is the whole reason this split exists.
-        qbz_source::ArtRef::Fetch { .. } => (p.to_string(), String::new()),
-        // Nothing usable, or a server that is not connected — two empty
-        // strings either way, which is what leaves the placeholder up.
-        qbz_source::ArtRef::None | qbz_source::ArtRef::Unavailable(_) => {
-            (String::new(), String::new())
-        }
+    if reference.starts_with("file://") {
+        (String::new(), reference)
+    } else {
+        (reference, String::new())
     }
 }
 
@@ -212,7 +195,8 @@ pub(crate) fn derive_local_album_rows(
         if out.len() >= cap {
             continue; // keep counting for an honest has_more
         }
-        let (art_url, art_path) = local_art_split(t.source.as_deref(), t.artwork_path.as_deref());
+        let (art_url, art_path) =
+            local_art_split(t, crate::local_rows::ArtworkScope::Album);
         out.push(CortRow {
             kind: "album".into(),
             id: key,
@@ -264,7 +248,8 @@ pub(crate) fn derive_local_artist_rows(
         if out.len() >= cap {
             continue;
         }
-        let (art_url, art_path) = local_art_split(t.source.as_deref(), t.artwork_path.as_deref());
+        let (art_url, art_path) =
+            local_art_split(t, crate::local_rows::ArtworkScope::Album);
         out.push(CortRow {
             kind: "artist".into(),
             id: String::new(),
@@ -288,7 +273,8 @@ pub(crate) fn derive_local_artist_rows(
 /// media action. `id` is the library row id; the router resolves the concrete
 /// `LocalTrack` back from the per-query snapshot, NOT from this id.
 pub(crate) fn map_local_track_to_cort_row(t: &qbz_library::LocalTrack) -> CortRow {
-    let (art_url, art_path) = local_art_split(t.source.as_deref(), t.artwork_path.as_deref());
+    let (art_url, art_path) =
+        local_art_split(t, crate::local_rows::ArtworkScope::Track);
     // "artist · album" when both exist, else whichever does (U+00B7).
     let subtitle = match (t.artist.is_empty(), t.album.is_empty()) {
         (false, false) => format!("{} · {}", t.artist, t.album),
@@ -561,6 +547,23 @@ mod tests {
         assert_eq!(row.kind, "track");
         assert_eq!(row.source, "local");
         assert_eq!(row.quality_detail, "24-bit / 96 kHz");
+    }
+
+    #[test]
+    fn remote_collection_art_keeps_its_source_in_search_rows() {
+        let mut jellyfin = track("The Writing on the Wall", "Iron Maiden", "Senjutsu");
+        jellyfin.source = Some("jellyfin".into());
+        jellyfin.artwork_path = None;
+        jellyfin.collection_artwork_path = Some("jf-album/tag".into());
+        let (albums, _) = derive_local_album_rows(&[jellyfin], 3, "Senjutsu");
+        assert_eq!(albums[0].art_url, "jellyfin:jf-album/tag");
+
+        let mut navidrome = track("Song", "Artist", "Navidrome Album");
+        navidrome.source = Some("navidrome".into());
+        navidrome.artwork_path = None;
+        navidrome.collection_artwork_path = Some("al-42_hash".into());
+        let row = map_local_track_to_cort_row(&navidrome);
+        assert_eq!(row.art_url, "subsonic:al-42_hash");
     }
 
     /// has_more must describe the MATCHING set. Counting rejected groups

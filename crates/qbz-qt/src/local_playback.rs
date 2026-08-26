@@ -251,36 +251,10 @@ pub fn local_queue_track(t: &LocalTrack) -> QueueTrack {
     let is_offline = src == "qobuz_download";
     let is_plex = src == "plex";
     let is_media = src == "jellyfin" || src == "subsonic";
-    // A Plex row carries a RAW server-relative thumb path; it must stay raw
-    // so the now-playing bar / queue resolve it from current creds.
-    // `file://`-prefixing it poisons it into a local-read miss.
-    let artwork_url = t
-        .artwork_path
-        .as_ref()
-        .filter(|path| !path.is_empty())
-        .or_else(|| {
-            t.collection_artwork_path
-                .as_ref()
-                .filter(|path| !path.is_empty())
-        })
-        .map(|p| {
-            if is_plex || p.starts_with("file://") {
-                p.clone()
-            } else if is_media {
-                // SOURCE-TAGGED, because a media server's token is meaningless on
-                // its own: a Jellyfin image tag and a Subsonic coverArt id are
-                // both opaque, and the now-playing bar / queue / MPRIS resolve an
-                // `artwork_url` through the shared taxonomy with no row in hand.
-                // The tag is what lets that taxonomy hand it back to the source
-                // that issued it instead of guessing (`artwork_qt::classify`).
-                format!("{src}:{p}")
-            } else {
-                // Encode `#`, `?` and `%` exactly like every QML artwork path.
-                // Box/disc folder names commonly contain these; a raw file URL
-                // would make MPRIS treat the tail as a fragment.
-                crate::artwork_qt::file_url(p)
-            }
-        });
+    let artwork_url = crate::local_rows::portable_artwork_ref(
+        t,
+        crate::local_rows::ArtworkScope::Track,
+    );
     let sample_rate_khz = if t.sample_rate >= 1000.0 {
         t.sample_rate / 1000.0
     } else {

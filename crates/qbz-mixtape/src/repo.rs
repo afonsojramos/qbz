@@ -343,6 +343,36 @@ pub fn item_exists(
     Ok(exists)
 }
 
+/// Fill an artwork snapshot that was absent when an item was inserted.
+/// Existing non-empty artwork is authoritative (including a user-selected
+/// snapshot) and is never overwritten. Every duplicate of the same
+/// source-owned item in the collection is repaired together.
+pub fn backfill_item_artwork(
+    conn: &Connection,
+    collection_id: &str,
+    source: AlbumSource,
+    source_item_id: &str,
+    artwork_url: &str,
+) -> Result<usize> {
+    if artwork_url.trim().is_empty() {
+        return Ok(0);
+    }
+    conn.execute(
+        "UPDATE mixtape_collection_items
+            SET artwork_url = ?1
+          WHERE collection_id = ?2
+            AND source = ?3
+            AND source_item_id = ?4
+            AND (artwork_url IS NULL OR TRIM(artwork_url) = '')",
+        params![
+            artwork_url,
+            collection_id,
+            serialize_source(source),
+            source_item_id,
+        ],
+    )
+}
+
 pub fn remove_item(conn: &Connection, collection_id: &str, position: i32) -> Result<()> {
     conn.execute(
         "DELETE FROM mixtape_collection_items
@@ -651,6 +681,61 @@ mod tests {
         assert!(matches!(items[0].item_type, ItemType::Album));
         assert!(matches!(items[1].item_type, ItemType::Track));
         assert!(matches!(items[2].item_type, ItemType::Playlist));
+    }
+
+    #[test]
+    fn artwork_backfill_only_repairs_empty_snapshots() {
+        let conn = fresh_db();
+        let c = create_collection(
+            &conn,
+            CollectionKind::Collection,
+            "remote",
+            None,
+            CollectionSourceType::Manual,
+            None,
+        )
+        .unwrap();
+        add_item(
+            &conn,
+            &c.id,
+            ItemType::Album,
+            AlbumSource::Local,
+            "jellyfin:album-1",
+            "Album",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            backfill_item_artwork(
+                &conn,
+                &c.id,
+                AlbumSource::Local,
+                "jellyfin:album-1",
+                "jellyfin:album-1/tag",
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            backfill_item_artwork(
+                &conn,
+                &c.id,
+                AlbumSource::Local,
+                "jellyfin:album-1",
+                "jellyfin:new-tag",
+            )
+            .unwrap(),
+            0,
+            "a resolved refresh must not replace an existing snapshot"
+        );
+        assert_eq!(
+            list_items(&conn, &c.id).unwrap()[0].artwork_url.as_deref(),
+            Some("jellyfin:album-1/tag")
+        );
     }
 
     #[test]

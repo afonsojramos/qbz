@@ -923,14 +923,19 @@ pub fn add_to_mixtape(id: String) {
         // carried a url. This call site was the only place that could produce
         // them.
         //
-        // A local absolute path is CORRECT here and is not the file:// cache
-        // path the track sites are warned off: the store keeps local paths raw
-        // and the mosaic passes them through unrewritten, which is what lets a
-        // collection of local albums render with no network at all.
+        // The portable reference is safe to persist: local covers are encoded
+        // file URLs, Plex remains a server-relative thumb, and Jellyfin /
+        // Subsonic tokens carry their source prefix without credentials. The
+        // collection layer wins because this payload represents an ALBUM, not
+        // one disc/track.
         artwork_url: tracks
             .iter()
-            .find_map(|t| t.artwork_path.as_ref().filter(|p| !p.is_empty()))
-            .cloned(),
+            .find_map(|track| {
+                crate::local_rows::portable_artwork_ref(
+                    track,
+                    crate::local_rows::ArtworkScope::Album,
+                )
+            }),
         year: None,
         track_count: Some(tracks.len() as i32),
     };
