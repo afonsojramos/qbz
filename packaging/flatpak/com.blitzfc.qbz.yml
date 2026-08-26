@@ -1,23 +1,21 @@
-# Flatpak manifest — GitHub Releases bundle (network build).
+# Flatpak manifest — GitHub Releases bundle.
 #
-# Rewritten 2026-07-02 for the Tauri -> Slint migration (v2.0): builds the
-# crates/ workspace with the rust-stable SDK extension. The node SDK, the
-# whole intltool/libdbusmenu/libayatana-appindicator module chain and the
-# lib64 workaround are gone — the Slint tray is ksni (pure Rust over D-Bus),
-# no C appindicator involved.
+# Rewritten 2026-08-25 for the Slint -> Qt frontend switch. This is a REPACK
+# of the bare binary built by build-qt-linux.yml (release-flatpak.yml drops it
+# at packaging/flatpak/payload/ before flatpak-builder runs): no cargo, no
+# rust SDK extension, no memory-tier env. Qt comes from the KDE runtime
+# (org.kde.Platform 6.9 >= the 6.8 floor; a binary built against 6.8 loads on
+# 6.9 — Qt keeps forward ABI compatibility within a major).
 #
-# The FLATHUB manifest (flathub/com.blitzfc.qbz repo) is the OFFLINE twin of
-# this file (cargo-sources.json, no network); keep the two in sync when
-# changing modules or finish-args. scripts/update-flathub.sh regenerates it.
+# The FLATHUB manifest (flathub/com.blitzfc.qbz repo) is the sibling of this
+# file consuming the published release tarball with x-checker-data; keep
+# runtime and finish-args in sync. Hashes there are computed from the
+# published asset at its final URL, never from a local file.
 
 app-id: com.blitzfc.qbz
-runtime: org.gnome.Platform
-runtime-version: '49'
-sdk: org.gnome.Sdk
-sdk-extensions:
-  - org.freedesktop.Sdk.Extension.rust-stable
-  # bindgen (aws-lc-sys et al.) needs libclang.
-  - org.freedesktop.Sdk.Extension.llvm20
+runtime: org.kde.Platform
+runtime-version: '6.9'
+sdk: org.kde.Sdk
 command: qbz
 finish-args:
   - --share=ipc
@@ -64,32 +62,16 @@ finish-args:
 modules:
   - name: qbz
     buildsystem: simple
-    build-options:
-      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
-      build-args:
-        - --share=network
-      env:
-        LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
-        # Memory tier for 16 GB builders: the qbz_ui rustc is the ~30 GB
-        # peak; single job + high codegen-units + opt 2 is the measured
-        # MIN-footprint combination. Binary symbols are stripped by the
-        # workspace [profile.release].
-        CARGO_INCREMENTAL: '0'
-        CARGO_BUILD_JOBS: '1'
-        CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '256'
-        CARGO_PROFILE_RELEASE_OPT_LEVEL: '2'
     build-commands:
-      - cargo build --release --manifest-path crates/Cargo.toml -p qbz
-      - install -Dm755 crates/target/release/qbz /app/bin/qbz
-      - install -Dm644 packaging/flatpak/com.blitzfc.qbz.desktop /app/share/applications/com.blitzfc.qbz.desktop
-      - install -Dm644 packaging/flatpak/com.blitzfc.qbz.metainfo.xml /app/share/metainfo/com.blitzfc.qbz.metainfo.xml
-      - install -Dm644 LICENSE /app/share/licenses/com.blitzfc.qbz/LICENSE
-      - install -Dm644 packaging/icons/32x32.png /app/share/icons/hicolor/32x32/apps/com.blitzfc.qbz.png
-      - install -Dm644 packaging/icons/128x128.png /app/share/icons/hicolor/128x128/apps/com.blitzfc.qbz.png
-      - install -Dm644 packaging/icons/256x256.png /app/share/icons/hicolor/256x256/apps/com.blitzfc.qbz.png
+      - install -Dm755 payload/qbz /app/bin/qbz
+      - install -Dm755 payload/qbzd /app/bin/qbzd
+      - install -Dm644 payload/qbz.desktop /app/share/applications/com.blitzfc.qbz.desktop
+      - install -Dm644 payload/com.blitzfc.qbz.metainfo.xml /app/share/metainfo/com.blitzfc.qbz.metainfo.xml
+      - install -Dm644 payload/LICENSE /app/share/licenses/com.blitzfc.qbz/LICENSE
+      - install -Dm644 payload/icons/32x32.png /app/share/icons/hicolor/32x32/apps/com.blitzfc.qbz.png
+      - install -Dm644 payload/icons/128x128.png /app/share/icons/hicolor/128x128/apps/com.blitzfc.qbz.png
+      - install -Dm644 payload/icons/256x256.png /app/share/icons/hicolor/256x256/apps/com.blitzfc.qbz.png
     sources:
       - type: dir
-        path: ../..
-        skip:
-          - .git
-          - crates/target
+        path: payload
+        dest: payload

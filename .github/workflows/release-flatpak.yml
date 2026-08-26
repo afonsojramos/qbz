@@ -1,14 +1,10 @@
-# Flatpak bundle for GitHub Releases — Slint binary (crates/ workspace).
+# Flatpak bundle for GitHub Releases — Qt frontend.
 #
-# Rewritten 2026-07-02 for the Tauri -> Slint migration (v2.0). Builds
-# packaging/flatpak/com.blitzfc.qbz.yml (network manifest) with
-# flatpak-builder and attaches the .flatpak bundle to the Release.
-# Flathub proper is a separate repo/manifest updated at tag time via
-# scripts/update-flathub.sh (offline sources).
-#
-# The cargo build runs on the HOST's resources even though it happens
-# inside the flatpak sandbox, so this runner needs the same swap headroom
-# as release-linux.yml (qbz_ui rustc peak ~30 GB).
+# Rewritten 2026-08-25 for the Slint -> Qt frontend switch: the bundle is a
+# REPACK of the bare binary from the shared build-qt-linux.yml on the KDE
+# runtime (org.kde.Platform 6.9 provides Qt). No cargo inside flatpak-builder,
+# no swap ceremony. Same shape as the Flathub manifest, which consumes the
+# published release tarball instead.
 
 name: release-flatpak
 
@@ -16,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Optional release tag to build (e.g. v2.0.0). Empty = build HEAD, no Release publish."
+        description: "Optional release tag to build (e.g. v2.1.0). Empty = build HEAD, no Release publish."
         required: false
         type: string
   push:
@@ -28,9 +24,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  build:
+    uses: ./.github/workflows/build-qt-linux.yml
+    with:
+      arch: x86_64
+
+  # qbzd rides in the bundle too (same as deb/rpm). Slint-free, minutes-class.
+  build-qbzd:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libjack-jackd2-dev libdbus-1-dev libssl-dev
+      - run: cargo build --release --manifest-path crates/Cargo.toml -p qbzd
+      - uses: actions/upload-artifact@v7
+        with: { name: qbzd-linux-x86_64-flatpak, path: crates/target/release/qbzd }
+
   build-flatpak:
+    needs: [build, build-qbzd]
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 60
     permissions:
       contents: write
     steps:
@@ -86,20 +100,27 @@ jobs:
           p.write_text(text, encoding="utf-8")
           PY
 
-      - name: Free disk space and add swap
+      - name: Download bare binary
+        uses: actions/download-artifact@v8
+        with:
+          name: qbz-linux-x86_64
+          path: packaging/flatpak/payload
+      - name: Download qbzd
+        uses: actions/download-artifact@v8
+        with:
+          name: qbzd-linux-x86_64-flatpak
+          path: packaging/flatpak/payload
+
+      - name: Stage payload
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
-            /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift \
-            /usr/local/lib/node_modules || true
-          sudo docker system prune -af || true
-          if sudo fallocate -l 18G /swap_extra; then
-            sudo chmod 600 /swap_extra
-            sudo mkswap /swap_extra
-            sudo swapon /swap_extra
-          else
-            echo "::warning::could not allocate extra swap; build may OOM"
-          fi
-          free -h
+          set -euo pipefail
+          P=packaging/flatpak/payload
+          chmod +x "$P/qbz" "$P/qbzd"
+          cp packaging/flatpak/com.blitzfc.qbz.desktop "$P/qbz.desktop"
+          cp packaging/flatpak/com.blitzfc.qbz.metainfo.xml "$P/"
+          cp LICENSE "$P/LICENSE"
+          mkdir -p "$P/icons"; cp packaging/icons/{32x32,128x128,256x256}.png "$P/icons/"
+          ls -la "$P"
 
       - name: Install flatpak tooling
         run: |
@@ -110,11 +131,8 @@ jobs:
       - name: Install runtimes
         run: |
           flatpak install --user -y --noninteractive flathub \
-            org.gnome.Platform//49 \
-            org.gnome.Sdk//49
-          flatpak install --user -y --noninteractive flathub \
-            org.freedesktop.Sdk.Extension.rust-stable//25.08 \
-            org.freedesktop.Sdk.Extension.llvm20//25.08
+            org.kde.Platform//6.9 \
+            org.kde.Sdk//6.9
 
       - name: Build Flatpak
         id: build_flatpak
@@ -131,6 +149,21 @@ jobs:
           flatpak build-bundle flatpak-repo "dist/${BUNDLE_NAME}" com.blitzfc.qbz
           echo "bundle_name=${BUNDLE_NAME}" >> "$GITHUB_OUTPUT"
           ls -la dist
+
+      # The bundle must boot on the KDE runtime's Qt: same offscreen gate as
+      # the Linux AppDir, run inside the sandbox.
+      - name: Offscreen smoke (inside the sandbox)
+        run: |
+          set -uo pipefail
+          flatpak install --user -y --noninteractive --bundle "dist/${{ steps.build_flatpak.outputs.bundle_name }}" || \
+            flatpak install --user -y --noninteractive "dist/${{ steps.build_flatpak.outputs.bundle_name }}"
+          timeout 60 flatpak run --env=QT_QPA_PLATFORM=offscreen --env=RUST_LOG=info com.blitzfc.qbz > smoke.log 2>&1 || true
+          lines=$(wc -l < smoke.log); echo "smoke log: $lines lines"
+          if (( lines < 10 )); then cat smoke.log; echo "::error::the app did not start"; exit 1; fi
+          errs=$(grep -av 'propertyCache' smoke.log | grep -aciE 'is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed' || true)
+          if (( errs > 0 )); then grep -av 'propertyCache' smoke.log | grep -aiE 'is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed' | head -20; echo "::error::$errs QML complaint(s)"; exit 1; fi
+          grep -aq 'QbzCore initialized' smoke.log || { tail -20 smoke.log; echo "::error::never reached QbzCore init"; exit 1; }
+          echo "smoke OK"
 
       - name: Upload Flatpak bundle
         uses: actions/upload-artifact@v7
