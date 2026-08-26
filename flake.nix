@@ -50,7 +50,7 @@
           cargoRoot = "crates";
           buildAndTestSubdir = cargoRoot;
           # Build only the app binary, not every workspace member's tests.
-          cargoBuildFlags = [ "-p" "qbz" ];
+          cargoBuildFlags = [ "-p" "qbz-qt" ];
 
           cargoLock = {
             lockFile = "${src}/crates/Cargo.lock";
@@ -58,12 +58,19 @@
 
           env.LIBCLANG_PATH = "${pkgs.lib.getLib pkgs.llvmPackages.libclang}/lib";
 
+          # Qt frontend (2026-08-25): cxx-qt needs qtbase + qtdeclarative with
+          # their private headers (the RHI scene-graph items include
+          # <rhi/qrhi.h>); qtshadertools provides `qsb` (optional — the .qsb
+          # are committed); qtwayland is the Wayland platform plugin.
+          # wrapQtAppsHook sets the plugin/QML paths the binary needs at run
+          # time. nixpkgs' qt6 (6.9) is above the 6.8 floor.
           nativeBuildInputs = with pkgs; [
             clang
             pkg-config
             cmake
             nasm
-            makeWrapper
+            qt6.wrapQtAppsHook
+            qt6.qtshadertools
           ];
 
           buildInputs = with pkgs; [
@@ -71,16 +78,21 @@
             fontconfig
             freetype
             libjack2
+            dbus
+            openssl
+            qt6.qtbase
+            qt6.qtdeclarative
+            qt6.qtwayland
           ];
 
-          # The qbz_ui rustc alone peaks ~30 GB; running the test profile on
-          # top of the build doubles the wall time and memory exposure for
-          # no packaging value. Engine crates are tested in the repo's CI.
+          # Tests need an offscreen QPA + D-Bus the sandbox does not have;
+          # the crates are tested in the repo's CI (test-crates.yml).
           doCheck = false;
 
           postInstall = ''
-            wrapProgram $out/bin/qbz \
-              --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath runtimeLibs}
+            # wrapQtAppsHook wraps $out/bin/qbz; only the non-Qt dlopen'd
+            # backends need the extra library path.
+            qtWrapperArgs+=(--prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath runtimeLibs})
 
             install -Dm644 $src/packaging/linux/qbz.desktop \
               $out/share/applications/qbz.desktop
