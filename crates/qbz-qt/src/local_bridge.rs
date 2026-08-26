@@ -660,10 +660,28 @@ pub mod qbz_local {
         /// emits `localArtworkReady` per hit.
         #[qinvokable]
         fn artwork_window(self: Pin<&mut QbzLocal>, keys_json: QString);
+        /// Derive the same flat tint + blurred atmosphere used by Qobuz
+        /// AlbumView from an already-resolved local cover. Decode work stays
+        /// off the Qt thread; key/path return with the result as generation
+        /// guards for QML.
+        #[qinvokable]
+        fn album_header_atmosphere(
+            self: Pin<&mut QbzLocal>,
+            key: QString,
+            path: QString,
+        );
         /// (key, "file://…") — id-keyed so a cover can never land on the
         /// wrong row.
         #[qsignal]
         fn local_artwork_ready(self: Pin<&mut QbzLocal>, key: QString, path: QString);
+        #[qsignal]
+        fn local_album_atmosphere_ready(
+            self: Pin<&mut QbzLocal>,
+            key: QString,
+            path: QString,
+            tint: QString,
+            atmosphere: QString,
+        );
         #[qsignal]
         fn local_genre_album_ready(
             self: Pin<&mut QbzLocal>,
@@ -1509,6 +1527,47 @@ impl qbz_local::QbzLocal {
                 emit_artwork(fetched);
             };
             tokio::join!(cold, remote);
+        });
+    }
+
+    pub fn album_header_atmosphere(
+        self: Pin<&mut Self>,
+        key: QString,
+        path: QString,
+    ) {
+        let key = key.to_string();
+        let path = path.to_string();
+        if key.is_empty() || path.is_empty() {
+            return;
+        }
+        let raw_path = match crate::artwork_qt::classify(&path) {
+            crate::artwork_qt::ArtUrl::LocalFile(path) => path,
+            _ => return,
+        };
+        crate::spawn(async move {
+            let tint_path = raw_path.clone();
+            let atmo_path = raw_path;
+            let (tint, atmosphere) = tokio::join!(
+                tokio::task::spawn_blocking(move || {
+                    crate::album_qt::header_tint_hex(&tint_path)
+                }),
+                tokio::task::spawn_blocking(move || {
+                    crate::atmosphere_qt::for_cover_blocking(&atmo_path)
+                }),
+            );
+            let tint = tint.ok().flatten().unwrap_or_default();
+            let atmosphere = atmosphere.ok().flatten().unwrap_or_default();
+            if tint.is_empty() && atmosphere.is_empty() {
+                return;
+            }
+            ui(move |mut b| {
+                b.as_mut().local_album_atmosphere_ready(
+                    QString::from(key.as_str()),
+                    QString::from(path.as_str()),
+                    QString::from(tint.as_str()),
+                    QString::from(atmosphere.as_str()),
+                );
+            });
         });
     }
     // --- Tree selection + bulk actions --------------------------------------

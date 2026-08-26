@@ -35,6 +35,11 @@ Row {
     property bool artPassActive: false
     property bool skelPhase: false
     property int artSettleMs: 0
+    /// Header palette selected by LocalAlbumView from the same atmosphere /
+    /// ambient rules as Qobuz AlbumView.
+    property color strongColor: theme.textPrimary
+    property color bodyColor: theme.textSecondary
+    property bool overlay: false
     signal openArtist(string name)
     signal compactToggled()
 
@@ -88,7 +93,7 @@ Row {
                 anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.album ? (root.album.title || "") : ""
-                color: theme.textPrimary
+                color: root.strongColor
                 font.pixelSize: theme.fontSection
                 font.weight: theme.weightBold
                 elide: Text.ElideRight
@@ -108,7 +113,7 @@ Row {
                         : Math.min(implicitWidth,
                                    Math.max(80, compactHeading.width * 0.62))
                     text: root.album ? (root.album.title || "") : ""
-                    color: theme.textPrimary
+                    color: root.strongColor
                     font.pixelSize: theme.fontSection
                     font.weight: theme.weightBold
                     elide: Text.ElideRight
@@ -117,7 +122,7 @@ Row {
                     id: compactTitleSeparator
                     visible: root.album && (root.album.artist || "") !== ""
                     text: "  •  "
-                    color: theme.textSecondary
+                    color: root.bodyColor
                     font.pixelSize: theme.fontSection
                     font.weight: theme.weightBold
                 }
@@ -126,7 +131,7 @@ Row {
                         - compactAlbumTitle.width - compactTitleSeparator.width)
                     text: root.album ? (root.album.artist || "") : ""
                     color: compactArtistArea.containsMouse
-                        ? theme.textPrimary : theme.textSecondary
+                        ? root.strongColor : root.bodyColor
                     font.pixelSize: theme.fontSection
                     font.weight: theme.weightBold
                     elide: Text.ElideRight
@@ -147,6 +152,7 @@ Row {
                 btnSize: root.compact ? 22 : 26
                 iconSize: root.compact ? 11 : 13
                 name: root.compact ? "maximize-2" : "minimize-2"
+                tintOverride: root.overlay ? "white" : ""
                 onClicked: root.compactToggled()
                 HoverHandler { id: localHeaderModeHover }
                 ToolTip.visible: localHeaderModeHover.hovered
@@ -162,7 +168,7 @@ Row {
             spacing: 8
             Text {
                 text: root.album ? (root.album.artist || "") : ""
-                color: artistArea.containsMouse ? theme.textPrimary : theme.textSecondary
+                color: artistArea.containsMouse ? root.strongColor : root.bodyColor
                 font.pixelSize: theme.fontHeading
                 font.weight: theme.weightBold
                 MouseArea {
@@ -182,7 +188,7 @@ Row {
                     ? QbzSession.tr("Show less", QbzSession.trRev)
                     : "+" + (root.allArtists.length - 1) + " "
                       + QbzSession.tr("more artists", QbzSession.trRev)
-                color: moreArea.containsMouse ? theme.accent : theme.textMuted
+                color: moreArea.containsMouse ? root.strongColor : root.bodyColor
                 font.pixelSize: theme.fontBody
                 MouseArea {
                     id: moreArea
@@ -208,7 +214,7 @@ Row {
                     required property string modelData
                     height: 24
                     text: modelData
-                    color: nameArea.containsMouse ? theme.accent : theme.textSecondary
+                    color: nameArea.containsMouse ? theme.accent : root.bodyColor
                     font.pixelSize: theme.fontBody
                     verticalAlignment: Text.AlignVCenter
                     MouseArea {
@@ -225,7 +231,7 @@ Row {
         Text {
             width: parent.width
             text: root.compact ? root.compactInfoLine : root.infoLine
-            color: theme.textSecondary
+            color: root.bodyColor
             font.pixelSize: theme.fontBody
             elide: Text.ElideRight
         }
@@ -239,11 +245,13 @@ Row {
                 primary: true
                 compactPrimary: root.compact
                 diameterOverride: root.compact ? 28 : 0
+                overlay: root.overlay
                 onClicked: QbzLocal.albumSelectedAction("play", "")
             }
             QbzCircleAction {
                 name: "shuffle"
                 diameterOverride: root.compact ? 28 : 0
+                overlay: root.overlay
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzLocal.albumSelectedAction("shuffle", "")
             }
@@ -251,18 +259,21 @@ Row {
             QbzCircleAction {
                 name: "pen-line"
                 diameterOverride: root.compact ? 28 : 0
+                overlay: root.overlay
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzLocal.albumEditTags(root.album.id)
             }
             QbzCircleAction {
                 name: "list-plus"
                 diameterOverride: root.compact ? 28 : 0
+                overlay: root.overlay
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzLocal.albumAddToPlaylist(root.album.id)
             }
             QbzCircleAction {
                 name: "cassette-tape"
                 diameterOverride: root.compact ? 28 : 0
+                overlay: root.overlay
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzLocal.albumAddToMixtape(root.album.id)
             }
@@ -281,13 +292,14 @@ Row {
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.versions.length + " "
                     + QbzSession.tr("versions", QbzSession.trRev) + ":"
-                color: theme.textMuted
+                color: root.bodyColor
                 font.pixelSize: theme.fontLegal
             }
             VersionPicker {
                 anchors.verticalCenter: parent.verticalCenter
                 versions: root.versions
                 current: root.album ? (root.album.versionIndex || 0) : 0
+                overlay: root.overlay
                 onPicked: function (i) { QbzLocal.albumSelectVersion(i) }
             }
         }

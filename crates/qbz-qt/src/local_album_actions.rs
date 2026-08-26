@@ -120,6 +120,10 @@ pub struct AlbumDetailDoc {
     /// LocalAlbumView switches to the live settings document once published.
     #[serde(rename = "compactHeader")]
     pub compact_header: bool,
+    /// Cold-start fallback for the same artwork-header preference consumed
+    /// by Qobuz AlbumView. The live settings document wins once available.
+    #[serde(rename = "headerGradient")]
+    pub header_gradient: bool,
 }
 
 /// The bounded payload consumed by one expanded row in the Genres browser.
@@ -351,6 +355,7 @@ pub fn version_doc(id: &str, index: usize) -> Option<AlbumDetailDoc> {
         tracks: rows,
         discs,
         compact_header: crate::settings_qt::pref_bool("compact_album_header", false),
+        header_gradient: crate::settings_qt::pref_bool("album_header_gradient", true),
     })
 }
 

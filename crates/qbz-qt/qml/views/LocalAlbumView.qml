@@ -33,6 +33,10 @@ Rectangle {
     readonly property bool ambientOn: theme.ambientOn
     radius: 12
 
+    // Same reach as Qobuz AlbumView: through the divider, the following
+    // spacer and half of the track-toolbar band.
+    readonly property int atmoReach: 1 + 8 + 26
+
     QbzTheme { id: theme }
 
     // ---------------------------- document -------------------------------
@@ -58,6 +62,22 @@ Rectangle {
         }
         return doc && doc.compactHeader === true
     }
+    readonly property bool headerGradientPref: {
+        var raw = QbzBridge.settingsJson
+        if (raw && raw.length > 2) {
+            try {
+                var d = JSON.parse(raw)
+                if (d.albumHeaderGradient !== undefined)
+                    return d.albumHeaderGradient === true
+            } catch (e) { /* fall through to the document copy */ }
+        }
+        return !doc || doc.headerGradient !== false
+    }
+    readonly property bool headerAtmoOn: headerGradientPref && !ambientOn
+    readonly property bool headerLight: headerGradientPref || ambientOn
+    readonly property color hdrStrong: headerLight ? "#ffffff" : theme.textPrimary
+    readonly property color hdrBody: headerLight ? "#e0ffffff" : theme.textSecondary
+    readonly property bool hdrOverlay: headerLight
     property bool headerLayoutReady: false
     property int headerLayoutEpoch: 0
     property real headerSavedOffset: 0
@@ -287,12 +307,36 @@ Rectangle {
 
     // Cover — the same id-keyed artwork channel every local surface uses.
     property var artMap: ({})
+    property string headerColor: ""
+    property string headerAtmosphere: ""
+    property string headerAtmosphereKey: ""
+    property string headerAtmospherePath: ""
+    function requestHeaderAtmosphere(key, path) {
+        if (!key || !path)
+            return
+        if (root.headerAtmosphereKey === key
+                && root.headerAtmospherePath === path)
+            return
+        root.headerAtmosphereKey = key
+        root.headerAtmospherePath = path
+        QbzLocal.albumHeaderAtmosphere(key, path)
+    }
     Connections {
         target: QbzLocal
         function onLocalArtworkReady(key, path) {
             var m = root.artMap
             m[key] = path
             root.artMap = Object.assign({}, m)
+            if (root.album && key === (root.album.artKey || ""))
+                root.requestHeaderAtmosphere(key, path)
+        }
+        function onLocalAlbumAtmosphereReady(key, path, tint, atmosphere) {
+            if (!root.album || key !== (root.album.artKey || "")
+                    || key !== root.headerAtmosphereKey
+                    || path !== root.headerAtmospherePath)
+                return
+            root.headerColor = tint
+            root.headerAtmosphere = atmosphere
         }
     }
     /// The disc rows the document publishes for a MULTI-disc album
@@ -331,7 +375,18 @@ Rectangle {
             if (discRows[i].artKey) keys.push(discRows[i].artKey)
         if (keys.length > 0) QbzLocal.artworkWindow(JSON.stringify(keys))
     }
-    onAlbumChanged: requestHeaderArtwork()
+    onAlbumChanged: {
+        var key = root.album ? (root.album.artKey || "") : ""
+        if (key !== root.headerAtmosphereKey) {
+            root.headerColor = ""
+            root.headerAtmosphere = ""
+            root.headerAtmosphereKey = ""
+            root.headerAtmospherePath = ""
+        }
+        root.requestHeaderArtwork()
+        var path = key ? (root.artMap[key] || "") : ""
+        if (path !== "") root.requestHeaderAtmosphere(key, path)
+    }
     onDiscRowsChanged: requestHeaderArtwork()
 
     // ------------------------- skeleton pulse ----------------------------
@@ -362,37 +417,6 @@ Rectangle {
     }
 
     // ============================ page ===================================
-    // Neutral header band (local albums have no artwork-derived tint yet).
-    //
-    // SUPPRESSED under the app-wide dynamic background, exactly like the Qobuz
-    // page's artwork atmosphere (AlbumView.qml `headerAtmoOn = pref &&
-    // !ambientOn`, AlbumPageView.slint:168): the two backdrops clash, and the
-    // dynamic background is already providing the dark one. This band never got
-    // that gate, which is why the defect showed HERE and not on the Qobuz album
-    // page — the owner spotted it as a lost bezel, and the bezel was the
-    // symptom: the band is full-bleed at y=0 with no radius, so it painted over
-    // the content pane's rounded top corners. With the background OFF nothing
-    // changes, and nothing has to: AppShell's BezelCorner nubs are visible in
-    // that state and mask exactly these corners. They are hidden while the
-    // field is meant to show through them, which is what uncovered a band that
-    // had been square all along.
-    //
-    // Header text is `theme.textPrimary` here (not the Qobuz page's
-    // light-on-dark `hdrStrong`), so it does not depend on this band to stay
-    // readable — checked before removing the backdrop from under it.
-    Rectangle {
-        visible: !root.ambientOn
-        x: 0
-        y: 0
-        width: parent.width
-        height: 340
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: "#181820" }
-            GradientStop { position: 0.16; color: "#181820" }
-            GradientStop { position: 1.0; color: "#00181820" }
-        }
-    }
-
     Flickable {
         id: flick
         anchors.fill: parent
@@ -400,6 +424,19 @@ Rectangle {
         contentWidth: width
         contentHeight: page.height + 100
         boundsBehavior: Flickable.StopAtBounds
+
+        // Exact shared Qobuz/artist atmosphere component. It lives inside
+        // the scroll content and paints first, so the header scrolls over it
+        // without adding another clipping or shader layer.
+        HeaderGradient {
+            x: 0
+            y: 0
+            width: flick.width
+            height: page.y + headerDivider.y + root.atmoReach
+            tint: root.headerColor
+            atmosphere: root.headerAtmosphere
+            active: root.headerAtmoOn
+        }
 
         Column {
             id: page
@@ -449,12 +486,15 @@ Rectangle {
                 coverPending: root.coverPending
                 skelPhase: root.skelPhase
                 artSettleMs: root.artSettleMs
+                strongColor: root.hdrStrong
+                bodyColor: root.hdrBody
+                overlay: root.hdrOverlay
                 onOpenArtist: function (name) { root.openArtist(name) }
                 onCompactToggled: root.toggleCompactHeader()
             }
 
             Item { width: 1; height: 20 }
-            Rectangle { width: parent.width; height: 1; color: theme.borderSubtle }
+            Rectangle { id: headerDivider; width: parent.width; height: 1; color: "transparent" }
             Item { width: 1; height: 8 }
 
             // ---- Loading ----

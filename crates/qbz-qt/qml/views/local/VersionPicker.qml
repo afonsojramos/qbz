@@ -22,6 +22,9 @@ Rectangle {
     /// arm the current source is the button and the full description stays in
     /// the flyout; the routed AlbumView keeps the labelled select.
     property bool compact: false
+    /// Light-on-dark palette when mounted over an artwork atmosphere. The
+    /// flyout remains a normal themed surface; only its launcher is over art.
+    property bool overlay: false
     signal picked(int index)
 
     QbzTheme { id: theme }
@@ -42,8 +45,11 @@ Rectangle {
     height: 30
     width: compact ? 28 : row.width
     radius: 6
-    color: pickArea.containsMouse && versions.length > 1
-        ? theme.surfaceHover : (compact ? "transparent" : theme.surfaceElevated)
+    color: root.overlay
+        ? (pickArea.containsMouse && versions.length > 1
+            ? "#3dffffff" : (compact ? "transparent" : "#24ffffff"))
+        : (pickArea.containsMouse && versions.length > 1
+            ? theme.surfaceHover : (compact ? "transparent" : theme.surfaceElevated))
 
     Row {
         id: row
@@ -59,6 +65,7 @@ Rectangle {
             // hard-drive beside them. Colour logos are for cards — a list of
             // them fights the text it labels.
             mono: true
+            localTint: root.overlay ? "white" : "secondary"
             // No size overrides on purpose: LocalAlbumView.slint:24-26 draws
             // ALL THREE kinds at a flat 14px here, which is SourceIcon's
             // default (the row glyphs are the ones that grow the marks).
@@ -66,7 +73,7 @@ Rectangle {
         Text {
             anchors.verticalCenter: parent.verticalCenter
             text: root.optionText(root.currentVersion)
-            color: theme.textSecondary
+            color: root.overlay ? "#e0ffffff" : theme.textSecondary
             font.pixelSize: theme.fontLegal
         }
         QbzIcon {
@@ -74,7 +81,7 @@ Rectangle {
             name: "chevron-down"
             width: 12
             height: 12
-            tintName: "muted"
+            tintName: root.overlay ? "white" : "muted"
         }
     }
     Item {
@@ -88,7 +95,7 @@ Rectangle {
             glyphSize: 15
             plexSize: 16
             qobuzSize: 16
-            localTint: "muted"
+            localTint: root.overlay ? "white" : "muted"
         }
         QbzIcon {
             visible: root.versions.length > 1
