@@ -5,6 +5,16 @@
 //! AES-256-GCM wraps. Failure (for any reason) = we fall back to HKDF
 //! over device identifiers.
 //!
+//! **Mobile skips the keyring entirely and goes straight to the KDF path.**
+//! Not a preference — a correctness requirement. `keyring` 3.x compiles no real
+//! backend for Android, and none for iOS without its `apple-native` feature;
+//! both resolve to an in-memory `mock`. The mock's writes *succeed*, so the
+//! attempt below would not fail into the fallback: it would report success and
+//! hand back a key that dies with the process, silently making every blob
+//! wrapped in one run undecryptable in the next. The KDF path derives from a
+//! persisted install id and is stable across launches, which is what a phone
+//! needs. `keyring` is a desktop-only dependency for the same reason.
+//!
 //! The backend discriminator is baked into every wrapped blob so a blob
 //! produced by one backend can't be silently decrypted by another (and
 //! so that if a user later gains keyring access, we don't accidentally
@@ -13,6 +23,8 @@
 use std::path::Path;
 
 use hkdf::Hkdf;
+// Only the keyring path mints a random master key; the KDF path derives one.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use rand::RngCore;
 use sha2::Sha256;
 
@@ -21,6 +33,7 @@ use crate::error::SecretError;
 use crate::install_id;
 
 const MASTER_KEY_LEN: usize = 32;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 const KEYRING_ENTRY_NAME: &str = "master-key-v1";
 const HKDF_INFO: &[u8] = b"qbz-secrets master-key derivation v1";
 
@@ -47,7 +60,9 @@ pub struct Backend {
 
 impl Backend {
     pub fn new(service_name: &str, storage_dir: &Path) -> Result<Self, SecretError> {
-        // Try keyring first.
+        // Try keyring first — desktop only; see the module comment for why
+        // mobile must not, and why a mock's *success* is the dangerous case.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         match try_open_keyring(service_name) {
             Ok(master_key) => {
                 log::info!("[qbz-secrets] Using OS keyring backend");
@@ -94,6 +109,7 @@ impl Backend {
 }
 
 /// Read (or create and store) the master key from the OS keyring.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn try_open_keyring(service_name: &str) -> Result<[u8; MASTER_KEY_LEN], SecretError> {
     use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine;
@@ -125,9 +141,7 @@ fn try_open_keyring(service_name: &str) -> Result<[u8; MASTER_KEY_LEN], SecretEr
             entry
                 .set_password(&encoded)
                 .map_err(|e| SecretError::Keyring(format!("set_password: {}", e)))?;
-            log::info!(
-                "[qbz-secrets] Generated fresh 256-bit master key and stored in OS keyring"
-            );
+            log::info!("[qbz-secrets] Generated fresh 256-bit master key and stored in OS keyring");
             Ok(key)
         }
         Err(e) => Err(SecretError::Keyring(format!("get_password: {}", e))),
