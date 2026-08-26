@@ -591,6 +591,33 @@ const CORTINILLA_CAP_ARTISTS: usize = 2;
 const CORTINILLA_CAP_TRACKS: usize = 3;
 const CORTINILLA_CAP_PLAYLISTS: usize = 3;
 
+/// Make a duplicated Top result consume the same canonical row as its visible
+/// section entry.
+///
+/// Qobuz's `most_popular` object can be a shallower projection than the same
+/// item in `tracks.items` / `albums.items` (notably, a Track may omit its album
+/// image). Keeping both projections produced two independent cache keys on
+/// screen: the section row had a cover while Top result stayed blank until a
+/// later page load happened to hydrate it. Identity is `(kind, id)`; when that
+/// identity is already visible, replace the hero wholesale so artwork,
+/// quality and any future fields cannot drift independently.
+fn canonicalize_top_result(top: &mut Option<CortRow>, visible: &[&[CortRow]]) {
+    let Some((kind, id)) = top
+        .as_ref()
+        .map(|row| (row.kind.as_str(), row.id.as_str()))
+    else {
+        return;
+    };
+    let replacement = visible
+        .iter()
+        .flat_map(|rows| rows.iter())
+        .find(|row| row.kind == kind && row.id == id)
+        .cloned();
+    if let Some(row) = replacement {
+        *top = Some(row);
+    }
+}
+
 /// search.rs `map_search_all_to_cortinilla`, 1:1 (ranking, caps, top-result
 /// selection, flat-index assignment).
 fn map_search_all_to_cortinilla(query: &str, results: &SearchAllResults) -> CortinillaData {
@@ -694,7 +721,7 @@ fn map_search_all_to_cortinilla(query: &str, results: &SearchAllResults) -> Cort
         };
         sect.iter().find(|r| r.id == id).cloned()
     };
-    let top: Option<CortRow> = top_kind_id
+    let mut top: Option<CortRow> = top_kind_id
         .and_then(|(kind, id)| {
             find_in(&kind, &id).or_else(|| match kind.as_str() {
                 "artist" => results
@@ -732,6 +759,10 @@ fn map_search_all_to_cortinilla(query: &str, results: &SearchAllResults) -> Cort
         })
         .or_else(|| artist_rows.first().cloned())
         .or_else(|| album_rows.first().cloned());
+    canonicalize_top_result(
+        &mut top,
+        &[&artist_rows, &album_rows, &track_rows, &playlist_rows],
+    );
 
     let mut sections: Vec<CortSection> = Vec::new();
     let mut push_section = |title: &str, kind: &str, rows: Vec<CortRow>, total: u32| {
@@ -2803,6 +2834,31 @@ pub async fn filter_changed(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: i3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicated_top_result_adopts_the_visible_canonical_row() {
+        let mut top = Some(CortRow {
+            kind: "track".into(),
+            id: "42".into(),
+            title: "Same track".into(),
+            art_url: String::new(),
+            ..Default::default()
+        });
+        let tracks = vec![CortRow {
+            kind: "track".into(),
+            id: "42".into(),
+            title: "Same track".into(),
+            quality_detail: "24-bit / 96 kHz".into(),
+            art_url: "https://static.qobuz.com/cover.jpg".into(),
+            ..Default::default()
+        }];
+
+        canonicalize_top_result(&mut top, &[&tracks]);
+
+        let top = top.expect("top result");
+        assert_eq!(top.art_url, tracks[0].art_url);
+        assert_eq!(top.quality_detail, tracks[0].quality_detail);
+    }
 
     #[test]
     fn search_type_for_filter_maps_dropdown_index() {
