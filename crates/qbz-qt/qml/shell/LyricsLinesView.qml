@@ -68,7 +68,7 @@ Item {
     FontLoader { id: fNoto; source: view.fontIndex === 3 ? view.fontDir + "NotoSans-VariableFont_wdth,wght.ttf" : "" }
     FontLoader { id: fSource; source: view.fontIndex === 4 ? view.fontDir + "SourceSans3-VariableFont_wght.ttf" : "" }
 
-    // "" = the window default (Inter) = Slint's "System" option. A family
+    // "" = the real Qt/system default = Slint's "System" option. A family
     // that has not finished loading falls back to the default rather than
     // rendering in a wrong face.
     readonly property string fontFamily: {

@@ -1426,13 +1426,11 @@ const UI_SCALE_VALUES: &[&str] = &["xs", "small", "default", "large", "xl"];
 /// The app-wide typeface (Settings > Appearance > Typography & Language).
 ///
 /// The SAME five the lyrics panel offers (`lyrics_qt::FONTS`) and the same
-/// slugs, because they are the same files: everything here is BUNDLED in
-/// `qml/assets/fonts/`, so a choice cannot fail on a machine that does not
-/// have the face installed, and it looks identical everywhere. That is the
-/// Tauri build's mechanism, which is what the owner asked for.
+/// slugs. The four named families are bundled in `qml/assets/fonts/`, so an
+/// explicit choice cannot fail on a machine that lacks the face. "System" is
+/// the exception: it deliberately leaves Qt's operating-system choice alone.
 ///
 /// Only "System" is translated — a typeface name is a proper noun.
-/// "System" resolves to the window default, which is Inter (Main.qml).
 const APP_FONT_LABELS: &[&str] = &[
     "System",
     "LINE Seed JP",

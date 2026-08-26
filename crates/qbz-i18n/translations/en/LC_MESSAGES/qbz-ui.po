@@ -1584,3 +1584,6 @@ msgstr "Track waveform"
 
 msgid "Show the full-track waveform in the player seek bar."
 msgstr "Show the full-track waveform in the player seek bar."
+
+msgid "The typeface used across the app. System follows your operating system; the other choices are bundled with QBZ (requires restart)"
+msgstr "The typeface used across the app. System follows your operating system; the other choices are bundled with QBZ (requires restart)"

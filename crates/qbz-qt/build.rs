@@ -317,6 +317,10 @@ fn build_rhi_items() {
         let moc = qtbuild.moc(&header, qt_build_utils::MocArguments::default());
         cc.file(source).file(&moc.cpp);
     }
+    // Plain helper, no QObject/moc: registers one script-specific bundled
+    // font through QFontDatabase before Main.qml constructs any text.
+    println!("cargo:rerun-if-changed=cxx/font_fallback.cpp");
+    cc.file("cxx/font_fallback.cpp");
     for p in qtbuild.include_paths() {
         cc.include(p);
     }

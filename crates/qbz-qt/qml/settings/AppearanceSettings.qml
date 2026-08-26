@@ -239,14 +239,12 @@ Column {
             onSelected: function (i) { QbzBridge.settingsSelect("ui-scale", i) }
         }
     }
-    // The app-wide typeface. The families are the ones already BUNDLED —
-    // the same set the lyrics panel offers (shell/LyricsControlsFlyout.qml)
-    // and the same mechanism the Tauri build had — so picking one costs no
-    // download and cannot fail on a machine that lacks the face. "System"
-    // means the window default, which is Inter (Main.qml).
+    // The app-wide typeface. The four named families are bundled — the same
+    // set the lyrics panel offers (shell/LyricsControlsFlyout.qml) — while
+    // "System" deliberately leaves Qt's operating-system default untouched.
     SettingRow {
         label: QbzSession.tr("Font", QbzSession.trRev)
-        description: QbzSession.tr("The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine (requires restart)", QbzSession.trRev)
+        description: QbzSession.tr("The typeface used across the app. System follows your operating system; the other choices are bundled with QBZ (requires restart)", QbzSession.trRev)
         QbzSelect {
             menuWidth: 200
             options: root.doc.appFonts || []

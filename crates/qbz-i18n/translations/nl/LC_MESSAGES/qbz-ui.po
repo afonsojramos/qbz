@@ -5675,8 +5675,8 @@ msgstr "VENSTER"
 msgid "SYSTEM INTEGRATION"
 msgstr "SYSTEEMINTEGRATIE"
 
-msgid "The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine (requires restart)"
-msgstr "Het lettertype voor de hele app. Alleen lettertypen die met QBZ worden meegeleverd, zodat het er op elke machine hetzelfde uitziet (herstart vereist)"
+msgid "The typeface used across the app. System follows your operating system; the other choices are bundled with QBZ (requires restart)"
+msgstr "Het lettertype voor de hele app. Systeem volgt het besturingssysteem; de andere keuzes worden met QBZ meegeleverd (herstart vereist)"
 
 msgid "Library folders"
 msgstr "Bibliotheekmappen"

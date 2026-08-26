@@ -71,6 +71,7 @@ mod playlist_picker_bridge;
 // QbzFolderEdit and the shared playlist editor on QbzPlaylistEdit — so a
 // folder save cannot perturb an open playlist editor.
 mod folder_edit_bridge;
+mod font_qt;
 mod playlist_edit_bridge;
 mod playlist_manager_bridge;
 // Purchases (2026-08-15 purchases contract §G.1): the QbzPurchases singleton —
@@ -3249,6 +3250,7 @@ fn main() {
             "qrc:/qt/qml/com/blitzfc/qbz/qml/FontPreload.qml",
         ));
     }
+    font_qt::register_devanagari_fallback();
     let app_font_family = settings_qt::app_font_family();
     if !app_font_family.is_empty() {
         if let Some(app) = app.as_mut() {

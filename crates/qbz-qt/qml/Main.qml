@@ -3,9 +3,9 @@
 // sequence once the QML tree is complete (the bridge registers its Qt
 // thread handle in that first invokable, so every async UI hop lands).
 //
-// Font: the Slint app bundles the Inter 18pt faces (app.slint); the same
-// TTFs are embedded here via qrc and applied app-wide through the
-// ApplicationWindow font (children inherit).
+// Font: main.rs applies an explicitly selected bundled family before this
+// document is built. With "System" it applies nothing, so both plain Text and
+// Qt Quick Controls inherit the operating-system font chosen by Qt.
 
 import QtQuick
 import QtQuick.Controls
@@ -172,29 +172,6 @@ ApplicationWindow {
     leftPadding: 0
     rightPadding: 0
     color: "#1a1a1a"
-
-    FontLoader { id: interRegular; source: "assets/fonts/Inter_18pt-Regular.ttf" }
-    FontLoader { id: interMedium; source: "assets/fonts/Inter_18pt-Medium.ttf" }
-    FontLoader { id: interSemiBold; source: "assets/fonts/Inter_18pt-SemiBold.ttf" }
-    FontLoader { id: interBold; source: "assets/fonts/Inter_18pt-Bold.ttf" }
-    // The quality badge's face in the Tauri build — loading it here registers
-    // the family app-wide, so QualityBadge can name it without carrying its
-    // own loader into every row it renders in.
-    FontLoader { id: lineSeed; source: "assets/fonts/LINESeedJP-Regular.ttf" }
-
-    // Settings > Appearance > Typography & Language > Font — the CONTROLS half.
-    //
-    // The app's own text does not come from here: a plain `Text` takes the
-    // APPLICATION font at construction, which main() sets before this document
-    // is even loaded (see qml/FontPreload.qml for the measurements). What this
-    // line still owns is Qt Quick Controls, which follow ApplicationWindow.font
-    // and would otherwise sit on Inter while every label around them moved.
-    //
-    // "" = System, i.e. leave Qt's own choice alone, which is what this app
-    // rendered before the setting existed.
-    font.family: QbzShell.appFontFamily !== ""
-        ? QbzShell.appFontFamily
-        : (interRegular.status === FontLoader.Ready ? interRegular.name : "Sans Serif")
 
     // Phase 23: every domain singleton boots (registers its Qt-thread
     // hop; QbzSession.boot additionally fires the app boot sequence).

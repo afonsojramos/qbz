@@ -1,4 +1,4 @@
-// FontPreload — registers the bundled typefaces BEFORE any Text exists.
+// FontPreload — registers the SELECTED bundled typeface before any Text exists.
 //
 // WHY THIS FILE IS A SEPARATE DOCUMENT, loaded before Main.qml.
 //
@@ -18,26 +18,35 @@
 // is only registered once something loads its file.
 //
 // Hence this document: `QQmlApplicationEngine::load` returns with its
-// FontLoaders already in the font database (verified: the family is present
+// FontLoader already in the font database (verified: the family is present
 // the instant load() returns), so main.rs can set the application font in the
-// gap between this document and Main.qml.
+// gap between this document and Main.qml. "System" maps to an empty source:
+// no UI family is loaded and Qt keeps the operating-system default.
 //
 // It is deliberately NON-VISUAL — a QtObject, not a Window — so loading it
 // adds a root object and nothing else.
 //
-// The five faces are settings_qt::APP_FONT_VALUES, in that order. Inter is
-// here too: it is the app's own face, named by Main.qml for the Controls, and
-// it needs registering for exactly the same reason.
+// The four non-system faces are settings_qt::APP_FONT_VALUES[1..], in order.
+// Noto Sans Devanagari is registered separately by font_qt as a script-only
+// fallback; it is never an application-font selection.
 
 import QtQuick
+import com.blitzfc.qbz
 
 QtObject {
-    readonly property FontLoader inter: FontLoader { source: "assets/fonts/Inter_18pt-Regular.ttf" }
-    readonly property FontLoader interMedium: FontLoader { source: "assets/fonts/Inter_18pt-Medium.ttf" }
-    readonly property FontLoader interSemiBold: FontLoader { source: "assets/fonts/Inter_18pt-SemiBold.ttf" }
-    readonly property FontLoader interBold: FontLoader { source: "assets/fonts/Inter_18pt-Bold.ttf" }
-    readonly property FontLoader lineSeed: FontLoader { source: "assets/fonts/LINESeedJP-Regular.ttf" }
-    readonly property FontLoader montserrat: FontLoader { source: "assets/fonts/Montserrat-VariableFont_wght.ttf" }
-    readonly property FontLoader notoSans: FontLoader { source: "assets/fonts/NotoSans-VariableFont_wdth,wght.ttf" }
-    readonly property FontLoader sourceSans3: FontLoader { source: "assets/fonts/SourceSans3-VariableFont_wght.ttf" }
+    id: root
+    readonly property string selectedSource: {
+        if (QbzShell.appFontFamily === "LINE Seed JP")
+            return "assets/fonts/LINESeedJP-Regular.ttf"
+        if (QbzShell.appFontFamily === "Montserrat")
+            return "assets/fonts/Montserrat-VariableFont_wght.ttf"
+        if (QbzShell.appFontFamily === "Noto Sans")
+            return "assets/fonts/NotoSans-VariableFont_wdth,wght.ttf"
+        if (QbzShell.appFontFamily === "Source Sans 3")
+            return "assets/fonts/SourceSans3-VariableFont_wght.ttf"
+        return ""
+    }
+    readonly property FontLoader selected: FontLoader {
+        source: root.selectedSource
+    }
 }

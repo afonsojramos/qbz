@@ -20,3 +20,13 @@ bundles them instead. The whole set is ~159 KB.
 registering — dropping a file in is enough. That is also why this licence
 lives HERE and not beside the SVGs: the sweep takes every file it finds, and
 a markdown file has no business being a QML resource.
+
+## Noto Sans Devanagari (SIL OFL 1.1)
+
+`qml/assets/fonts/NotoSansDevanagari-VariableFont_wght.ttf` — the hinted,
+weight-variable slim build from Noto Sans Devanagari v2.006. Source archive:
+https://github.com/notofonts/devanagari.
+
+QBZ registers this family only as Qt's application fallback for Devanagari;
+it is not an interface-font option and never replaces the operating-system
+font selected by “System”. Licence: `LICENSE-Noto-Sans-Devanagari.txt`.

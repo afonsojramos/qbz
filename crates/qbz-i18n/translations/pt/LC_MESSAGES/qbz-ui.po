@@ -5685,8 +5685,8 @@ msgstr "JANELA"
 msgid "SYSTEM INTEGRATION"
 msgstr "INTEGRAÇÃO COM O SISTEMA"
 
-msgid "The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine (requires restart)"
-msgstr "A fonte usada em todo o app. Só são oferecidas as fontes que acompanham o QBZ, para ficar igual em qualquer máquina (requer reiniciar)"
+msgid "The typeface used across the app. System follows your operating system; the other choices are bundled with QBZ (requires restart)"
+msgstr "A fonte usada em todo o app. Sistema segue o sistema operacional; as outras opções acompanham o QBZ (requer reiniciar)"
 
 msgid "Library folders"
 msgstr "Pastas da biblioteca"

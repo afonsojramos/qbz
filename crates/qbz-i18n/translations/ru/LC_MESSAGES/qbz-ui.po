@@ -5705,8 +5705,8 @@ msgstr "ОКНО"
 msgid "SYSTEM INTEGRATION"
 msgstr "ИНТЕГРАЦИЯ С СИСТЕМОЙ"
 
-msgid "The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine (requires restart)"
-msgstr "Шрифт для всего приложения. Предлагаются только шрифты, входящие в состав QBZ, поэтому вид одинаков на любом компьютере (требуется перезапуск)"
+msgid "The typeface used across the app. System follows your operating system; the other choices are bundled with QBZ (requires restart)"
+msgstr "Шрифт для всего приложения. «Системный» использует шрифт операционной системы; остальные варианты входят в состав QBZ (требуется перезапуск)"
 
 msgid "Library folders"
 msgstr "Папки библиотеки"

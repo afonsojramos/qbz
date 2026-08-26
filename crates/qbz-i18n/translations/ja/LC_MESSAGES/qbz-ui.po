@@ -5669,8 +5669,8 @@ msgstr "ウィンドウ"
 msgid "SYSTEM INTEGRATION"
 msgstr "システム連携"
 
-msgid "The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine (requires restart)"
-msgstr "アプリ全体で使う書体です。QBZ に同梱されたフォントのみを選べるので、どの環境でも同じ見た目になります（再起動が必要）"
+msgid "The typeface used across the app. System follows your operating system; the other choices are bundled with QBZ (requires restart)"
+msgstr "アプリ全体で使う書体です。「システム」は OS のフォントを使用し、その他の選択肢は QBZ に同梱されています（再起動が必要）"
 
 msgid "Library folders"
 msgstr "ライブラリフォルダー"

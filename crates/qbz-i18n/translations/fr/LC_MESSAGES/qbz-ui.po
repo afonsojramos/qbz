@@ -5685,8 +5685,8 @@ msgstr "FENÊTRE"
 msgid "SYSTEM INTEGRATION"
 msgstr "INTÉGRATION SYSTÈME"
 
-msgid "The typeface used across the app. Only fonts shipped with QBZ are offered, so the choice looks the same on every machine (requires restart)"
-msgstr "La police utilisée dans toute l'application. Seules les polices fournies avec QBZ sont proposées, pour un rendu identique sur chaque machine (redémarrage requis)"
+msgid "The typeface used across the app. System follows your operating system; the other choices are bundled with QBZ (requires restart)"
+msgstr "La police utilisée dans toute l’application. Système suit le système d’exploitation ; les autres choix sont fournis avec QBZ (redémarrage requis)"
 
 msgid "Library folders"
 msgstr "Dossiers de la bibliothèque"

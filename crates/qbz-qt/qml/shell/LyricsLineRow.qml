@@ -68,7 +68,7 @@ Column {
 
     QbzTheme { id: theme }
 
-    // "" = the window default (Inter) — Qt resets an empty family to the
+    // "" = the Qt/system default — Qt resets an empty family to the
     // application font, exactly Slint's empty font-family = "System" option.
     readonly property string effFamily: row.fontFamily
 
