@@ -6,7 +6,7 @@
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::error::{ApiError, Result};
@@ -55,15 +55,24 @@ impl From<CachedBundle> for BundleTokens {
     }
 }
 
-fn cache_path() -> Option<PathBuf> {
-    Some(dirs::cache_dir()?.join("qbz").join("bundle_tokens.json"))
+/// Where the token cache lives.
+///
+/// `cache_dir` is what an embedder supplied; without one this falls back to the
+/// platform cache directory, which is what the desktop has always used.
+fn cache_path(cache_dir: Option<&Path>) -> Option<PathBuf> {
+    let root = cache_dir.map(Path::to_path_buf).or_else(dirs::cache_dir)?;
+    Some(root.join("qbz").join("bundle_tokens.json"))
 }
 
 /// Load cached tokens if a valid cache file exists. Returns `None` on any error
 /// (missing file, malformed JSON, empty fields) so the caller falls back to a
 /// live fetch.
 pub fn load_cached_bundle() -> Option<CachedBundle> {
-    let path = cache_path()?;
+    load_cached_bundle_from(None)
+}
+
+pub(crate) fn load_cached_bundle_from(cache_dir: Option<&Path>) -> Option<CachedBundle> {
+    let path = cache_path(cache_dir)?;
     let data = std::fs::read(&path).ok()?;
     match serde_json::from_slice::<CachedBundle>(&data) {
         Ok(c) if !c.app_id.is_empty() && !c.secrets.is_empty() => Some(c),
@@ -78,8 +87,8 @@ pub fn load_cached_bundle() -> Option<CachedBundle> {
     }
 }
 
-fn save_cached_bundle(c: &CachedBundle) {
-    let Some(path) = cache_path() else {
+fn save_cached_bundle(c: &CachedBundle, cache_dir: Option<&Path>) {
+    let Some(path) = cache_path(cache_dir) else {
         log::warn!("[Bundle] No cache dir available, skipping token cache write");
         return;
     };
@@ -177,18 +186,28 @@ async fn extract_bundle_tokens_once(client: &Client) -> Result<(BundleTokens, St
 /// [`refresh_bundle_if_changed`] on warm starts so the UI never blocks on the
 /// 7 MB download.
 pub async fn extract_and_cache_bundle_tokens(client: &Client) -> Result<BundleTokens> {
+    extract_and_cache_bundle_tokens_in(client, None).await
+}
+
+pub(crate) async fn extract_and_cache_bundle_tokens_in(
+    client: &Client,
+    cache_dir: Option<&Path>,
+) -> Result<BundleTokens> {
     let mut last_err: Option<ApiError> = None;
     let attempts = BUNDLE_EXTRACTION_RETRIES + 1;
     for attempt in 1..=attempts {
         match extract_bundle_tokens_once(client).await {
             Ok((tokens, version)) => {
-                save_cached_bundle(&CachedBundle {
-                    bundle_version: version,
-                    app_id: tokens.app_id.clone(),
-                    secrets: tokens.secrets.clone(),
-                    private_key: tokens.private_key.clone(),
-                    fetched_at: now_unix(),
-                });
+                save_cached_bundle(
+                    &CachedBundle {
+                        bundle_version: version,
+                        app_id: tokens.app_id.clone(),
+                        secrets: tokens.secrets.clone(),
+                        private_key: tokens.private_key.clone(),
+                        fetched_at: now_unix(),
+                    },
+                    cache_dir,
+                );
                 return Ok(tokens);
             }
             Err(e) => {
@@ -222,11 +241,19 @@ pub async fn refresh_bundle_if_changed(
     client: &Client,
     cached_version: &str,
 ) -> Option<BundleTokens> {
+    refresh_bundle_if_changed_in(client, cached_version, None).await
+}
+
+pub(crate) async fn refresh_bundle_if_changed_in(
+    client: &Client,
+    cached_version: &str,
+    cache_dir: Option<&Path>,
+) -> Option<BundleTokens> {
     let (_, version) = fetch_bundle_url(client).await.ok()?;
     if version == cached_version {
-        if let Some(mut c) = load_cached_bundle() {
+        if let Some(mut c) = load_cached_bundle_from(cache_dir) {
             c.fetched_at = now_unix();
-            save_cached_bundle(&c);
+            save_cached_bundle(&c, cache_dir);
         }
         log::debug!("[Bundle] Background check: version {} unchanged", version);
         return None;
@@ -236,7 +263,9 @@ pub async fn refresh_bundle_if_changed(
         cached_version,
         version
     );
-    extract_and_cache_bundle_tokens(client).await.ok()
+    extract_and_cache_bundle_tokens_in(client, cache_dir)
+        .await
+        .ok()
 }
 
 /// Backwards-compatible one-shot extraction (no caching). Retained for callers
@@ -401,6 +430,26 @@ mod tests {
         let result = extract_bundle_url(html);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "/resources/7.0.1-b001/bundle.js");
+    }
+
+    /// An embedder's root is used verbatim, and the `qbz/` namespace inside it
+    /// is kept, so the cache has the same name and shape wherever it lands.
+    #[test]
+    fn an_explicit_cache_root_keeps_the_qbz_namespace() {
+        let root = Path::new("/app/cache");
+        assert_eq!(
+            cache_path(Some(root)),
+            Some(root.join("qbz").join("bundle_tokens.json"))
+        );
+    }
+
+    /// Without one, nothing about the desktop's path changes.
+    #[test]
+    fn no_explicit_root_falls_back_to_the_platform_cache_dir() {
+        assert_eq!(
+            cache_path(None),
+            dirs::cache_dir().map(|d| d.join("qbz").join("bundle_tokens.json"))
+        );
     }
 
     #[test]

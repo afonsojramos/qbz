@@ -2,6 +2,7 @@
 
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -54,6 +55,9 @@ pub struct QobuzClient {
     validated_secret: Arc<RwLock<Option<String>>>,
     locale: Arc<RwLock<String>>,
     cmaf_session: Arc<RwLock<Option<CmafSession>>>,
+    /// Where the regenerable bundle-token cache goes, when the embedder rather
+    /// than the platform decides. `None` keeps `dirs::cache_dir()`.
+    bundle_cache_dir: Option<PathBuf>,
     /// Backs off the hot streaming/favorites paths after repeated 403s so a
     /// post-outage account hiccup can't be escalated into a per-IP edge block
     /// by the no-backoff prefetch scheduler (issue #637).
@@ -69,14 +73,27 @@ impl Clone for QobuzClient {
             validated_secret: Arc::clone(&self.validated_secret),
             locale: Arc::clone(&self.locale),
             cmaf_session: Arc::clone(&self.cmaf_session),
+            bundle_cache_dir: self.bundle_cache_dir.clone(),
             forbidden_breaker: Arc::clone(&self.forbidden_breaker),
         }
     }
 }
 
 impl QobuzClient {
-    /// Create a new client
+    /// Create a new client, caching bundle tokens under the platform cache
+    /// directory.
     pub fn new() -> Result<Self> {
+        Self::build(None)
+    }
+
+    /// Create a client whose regenerable bundle-token cache lives beneath
+    /// `cache_dir`, for hosts that are handed their cache location rather than
+    /// deriving it from the environment.
+    pub fn with_cache_dir(cache_dir: PathBuf) -> Result<Self> {
+        Self::build(Some(cache_dir))
+    }
+
+    fn build(bundle_cache_dir: Option<PathBuf>) -> Result<Self> {
         let http = Client::builder()
             .user_agent(USER_AGENT)
             .cookie_store(true)
@@ -93,6 +110,7 @@ impl QobuzClient {
             validated_secret: Arc::new(RwLock::new(None)),
             locale: Arc::new(RwLock::new("en".to_string())),
             cmaf_session: Arc::new(RwLock::new(None)),
+            bundle_cache_dir,
             forbidden_breaker: Arc::new(ForbiddenBreaker::new()),
         })
     }
@@ -147,7 +165,7 @@ impl QobuzClient {
     /// a live extraction (cold) — callers can use this to drive a "connecting"
     /// UI only when it actually matters.
     pub async fn init(&self) -> Result<bool> {
-        if let Some(cached) = bundle::load_cached_bundle() {
+        if let Some(cached) = bundle::load_cached_bundle_from(self.bundle_cache_dir.as_deref()) {
             let version = cached.bundle_version.clone();
             log::info!("[Bundle] Using cached tokens (version {})", version);
             *self.tokens.write().await = Some(cached.into());
@@ -160,9 +178,14 @@ impl QobuzClient {
                 Ok(client) => {
                     let client = client.clone();
                     let tokens_arc = Arc::clone(&self.tokens);
+                    let cache_dir = self.bundle_cache_dir.clone();
                     tokio::spawn(async move {
-                        if let Some(fresh) =
-                            bundle::refresh_bundle_if_changed(&client, &version).await
+                        if let Some(fresh) = bundle::refresh_bundle_if_changed_in(
+                            &client,
+                            &version,
+                            cache_dir.as_deref(),
+                        )
+                        .await
                         {
                             *tokens_arc.write().await = Some(fresh);
                             log::info!("[Bundle] Background refresh applied rotated tokens");
@@ -180,7 +203,11 @@ impl QobuzClient {
         // Cold start: a live bundle fetch is a network request — gated on
         // purpose so an offline cold start fails fast instead of waiting out
         // the network timeouts.
-        let tokens = bundle::extract_and_cache_bundle_tokens(self.http()?).await?;
+        let tokens = bundle::extract_and_cache_bundle_tokens_in(
+            self.http()?,
+            self.bundle_cache_dir.as_deref(),
+        )
+        .await?;
         *self.tokens.write().await = Some(tokens);
         Ok(false)
     }
