@@ -36,15 +36,14 @@
 //!   replacement search can act on, and a row carrying it plus
 //!   `cacheStatus == 3` is not dead at all — it plays from the download.
 //!
-//! POC-NOTEs:
+//! Known parity deltas:
 //! - The custom drag order persists to a per-user `playlist_orders.json`
 //!   in the user dir (the Slint uses `playlist_orders.db` with
 //!   `(u64, bool, i32)` rows — same behavior, simpler backend for the POC).
-//! - Custom cover art (set/clear via library.db), multi-select + bulk bar,
-//!   Suggested Songs, offline download of the playlist, share: not ported.
-//!   The copy path therefore also skips the reference's
-//!   `update_playlist_artwork` write (main.rs:2132) — it would be state
-//!   nothing in this port can read.
+//! - Suggested Songs and whole-playlist offline download are not ported.
+//! - Custom covers, multi-select/bulk actions and public-link sharing are live.
+//!   Copying a foreign playlist still does not clone its source artwork into a
+//!   new custom-cover override.
 
 use std::sync::{Arc, Mutex};
 
@@ -447,6 +446,14 @@ static USER_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 pub fn set_user_id(id: u64) {
     USER_ID.store(id, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Clear all account-scoped playlist authority on logout.
+pub fn teardown() {
+    *PAGE.lock().unwrap() = None;
+    USER_ID.store(0, std::sync::atomic::Ordering::SeqCst);
+    OWNED_PLAYLISTS.lock().unwrap().clear();
+    FOLLOWED_PLAYLISTS.lock().unwrap().clear();
 }
 
 /// The signed-in user's id, or `None` when no session has been activated.

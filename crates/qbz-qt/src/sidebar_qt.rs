@@ -7,16 +7,14 @@
 //! 5-option sort with direction toggle (#657), recursive name search.
 //! Entries publish as ONE JSON document (`sidebarJson`).
 //!
-//! POC-NOTEs:
-//! - LOCAL playlists (library.db `local:<uuid>` entities), the offline
-//!   D11.b synthesis, hidden-playlist filtering needs the hidden flag (it
-//!   IS read and applied), move-to-folder, folder edit/delete, context
-//!   menus, and the mini-state folder flyout: out of scope. Playlist
-//!   click only marks the row active (no playlist view yet).
+//! Local playlists, offline synthesis, hidden filtering, folder mutations,
+//! row context menus, the mini-state folder flyout and playlist navigation
+//! are all live. This module owns the data/tree side; the interaction surfaces
+//! live in `qml/shell/Sidebar*.qml` and the folder controllers.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use qbz_app::settings::pinned_items::{PinnedItem, PinnedItemsService, DB_FILE_NAME};
 use qbz_app::shell::AppRuntime;
@@ -29,19 +27,28 @@ use serde::Serialize;
 // as the local-favorites store.
 // ---------------------------------------------------------------------------
 
-static PINNED: OnceLock<Mutex<PinnedItemsService>> = OnceLock::new();
+static PINNED: LazyLock<Mutex<Option<PinnedItemsService>>> = LazyLock::new(|| Mutex::new(None));
 /// The per-user base dir the pinned store was bound to (also where the
 /// discover-prefs DB lives) — stashed so Home can read section prefs.
-static USER_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+static USER_DIR: LazyLock<Mutex<Option<std::path::PathBuf>>> = LazyLock::new(|| Mutex::new(None));
 
 /// Bind `<dir>/pinned_items.db` on every session activation (mirrors
 /// `pinned::init_for_user`; fail-open).
 pub fn init_pinned(base_dir: &Path) {
-    let _ = USER_DIR.set(base_dir.to_path_buf());
+    if let Ok(mut dir) = USER_DIR.lock() {
+        *dir = Some(base_dir.to_path_buf());
+    }
+    // Never retain the previous profile's connection if the replacement
+    // cannot be opened.
+    if let Ok(mut service) = PINNED.lock() {
+        *service = None;
+    }
     let path = base_dir.join(DB_FILE_NAME);
     match PinnedItemsService::new(&path) {
         Ok(service) => {
-            let _ = PINNED.set(Mutex::new(service));
+            if let Ok(mut guard) = PINNED.lock() {
+                *guard = Some(service);
+            }
             log::info!("[qbz-qt] pinned items store opened");
         }
         Err(e) => log::error!("[qbz-qt] pinned items store open failed: {e}"),
@@ -50,8 +57,9 @@ pub fn init_pinned(base_dir: &Path) {
 
 pub fn is_pinned(kind: &str, id: &str) -> bool {
     PINNED
-        .get()
-        .map(|s| s.lock().unwrap().is_pinned(kind, id))
+        .lock()
+        .ok()
+        .and_then(|service| service.as_ref().map(|s| s.is_pinned(kind, id)))
         .unwrap_or(false)
 }
 
@@ -59,14 +67,15 @@ pub fn is_pinned(kind: &str, id: &str) -> bool {
 /// the Home "Pinned" rail.
 pub fn list_pinned() -> Vec<PinnedItem> {
     PINNED
-        .get()
-        .and_then(|s| s.lock().unwrap().list().ok())
+        .lock()
+        .ok()
+        .and_then(|service| service.as_ref().and_then(|s| s.list().ok()))
         .unwrap_or_default()
 }
 
 /// The per-user base dir (None before any session activation).
 pub fn user_dir() -> Option<std::path::PathBuf> {
-    USER_DIR.get().cloned()
+    USER_DIR.lock().ok().and_then(|dir| dir.clone())
 }
 
 /// Toggle the pin state of an album/artist/playlist. Returns the new
@@ -78,7 +87,8 @@ pub fn toggle_pin(
     subtitle: &str,
     artwork_url: &str,
 ) -> Option<bool> {
-    let service = PINNED.get()?.lock().unwrap();
+    let service = PINNED.lock().ok()?;
+    let service = service.as_ref()?;
     if service.is_pinned(kind, id) {
         service.unpin(kind, id).ok()?;
         Some(false)
@@ -186,7 +196,13 @@ pub fn teardown() {
     *CACHE.lock().unwrap() = None;
     EXPANDED.lock().unwrap().clear();
     SEARCH.lock().unwrap().clear();
-    log::info!("[qbz-qt] sidebar cache cleared (logout)");
+    if let Ok(mut service) = PINNED.lock() {
+        *service = None;
+    }
+    if let Ok(mut dir) = USER_DIR.lock() {
+        *dir = None;
+    }
+    log::info!("[qbz-qt] sidebar and pinned stores cleared (logout)");
 }
 
 /// Fetch playlists (Qobuz) + folders + membership + hidden set (library.db).
@@ -828,4 +844,52 @@ pub fn local_covers(id: &str) -> Option<Vec<String>> {
         .iter()
         .find(|p| p.id == id)
         .map(|p| p.covers.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn unique_store_dir(name: &str) -> std::path::PathBuf {
+        static NONCE: AtomicU64 = AtomicU64::new(0);
+        let nonce = NONCE.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "qbz-qt-sidebar-{name}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    /// Pinned local content belongs to the profile that created it. Teardown
+    /// releases the handle, and reopening the guest profile restores its rows.
+    #[test]
+    fn pinned_store_rebinds_between_guest_and_account_profiles() {
+        let guest = unique_store_dir("guest");
+        let account = unique_store_dir("account");
+        std::fs::create_dir_all(&guest).expect("guest dir");
+        std::fs::create_dir_all(&account).expect("account dir");
+
+        init_pinned(&guest);
+        assert_eq!(user_dir().as_deref(), Some(guest.as_path()));
+        assert_eq!(
+            toggle_pin("album", "local:guest", "Guest Album", "", ""),
+            Some(true)
+        );
+        assert!(is_pinned("album", "local:guest"));
+
+        init_pinned(&account);
+        assert_eq!(user_dir().as_deref(), Some(account.as_path()));
+        assert!(!is_pinned("album", "local:guest"));
+
+        teardown();
+        assert!(user_dir().is_none());
+        assert!(!is_pinned("album", "local:guest"));
+
+        init_pinned(&guest);
+        assert!(is_pinned("album", "local:guest"));
+
+        teardown();
+        let _ = std::fs::remove_dir_all(&guest);
+        let _ = std::fs::remove_dir_all(&account);
+    }
 }

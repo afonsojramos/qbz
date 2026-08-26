@@ -1,24 +1,14 @@
 //! Framework-agnostic application runtime facade.
 //!
-//! [`AppRuntime`] is the composition root that a non-Tauri UI shell (Slint,
-//! TUI, headless) builds on. It owns an `Arc<QbzCore<A>>`, the framework-
+//! [`AppRuntime`] is the composition root that a native UI shell (Qt, TUI,
+//! headless) builds on. It owns an `Arc<QbzCore<A>>`, the framework-
 //! agnostic runtime state machine, and the per-user session, all without any
 //! Tauri dependency.
 //!
-//! Scope (Slint POC readiness audit, sessions 21-22):
-//!
-//! - Task 1 — composition and accessors: [`AppRuntime::new`], [`AppRuntime::core`].
-//! - Task 2 — minimal session activation: [`AppRuntime::activate`] and
-//!   friends. This is deliberately minimal. It opens only the session store
-//!   and performs the portable session scaffolding (user paths, directories,
-//!   last-user marker, runtime state). It does NOT touch Tauri's
-//!   `session_lifecycle`, does not initialize the `src-tauri`-side per-user
-//!   stores (`library`, `reco`, `lyrics`, ...), and does not run the
-//!   flat-to-user migration. A shell opens further stores per view, as the
-//!   views that need them come online.
-//!
-//! The Tauri app does not consume this module; `CoreBridge` and
-//! `session_lifecycle` keep their own paths. `AppRuntime` is purely additive.
+//! Session activation is deliberately minimal: it opens the session store and
+//! performs the portable scaffolding (user paths, directories, last-user
+//! marker, runtime state). The shell binds its additional per-user stores as
+//! each session comes online.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -103,9 +93,9 @@ impl<A: FrontendAdapter + Send + Sync + 'static> AppRuntime<A> {
     /// Build like [`AppRuntime::new`], but also wire a [`VisualizerTap`] into the
     /// player and retain it so the shell can start the frontend-agnostic FFT
     /// producer ([`qbz_audio::visualizer::spawn_visualizer_thread`]) and toggle
-    /// capture via the tap's `set_enabled`. Used by the Slint shell for the
-    /// ImmersiveView audio visualizers. The tap starts disabled, so it adds no
-    /// runtime cost until the immersive view enables it.
+    /// capture via the tap's `set_enabled`. Used by the Qt shell for the
+    /// immersive-view audio visualizers. The tap starts disabled, so it adds
+    /// no runtime cost until the immersive view enables it.
     pub fn with_visualizer(adapter: A) -> Self {
         let (device_name, audio_settings) = AudioSettingsStore::new()
             .ok()
@@ -366,6 +356,27 @@ mod tests {
         assert!(data_dir.join("session.db").exists());
         assert!(cache_dir.exists());
 
+        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&cache_dir);
+    }
+
+    /// User zero is the first-run, never-authenticated profile selected by
+    /// `activate_offline`. It is a real local session, not an auth sentinel.
+    #[tokio::test]
+    async fn guest_profile_zero_is_a_valid_local_session() {
+        let rt = test_runtime();
+        let data_dir = unique_test_dir("guest-data");
+        let cache_dir = unique_test_dir("guest-cache");
+
+        rt.activate_at(0, &data_dir, &cache_dir)
+            .await
+            .expect("guest activation succeeds without Qobuz auth");
+
+        assert!(rt.is_session_active());
+        assert_eq!(rt.active_user_id(), Some(0));
+        assert!(data_dir.join("session.db").exists());
+
+        rt.deactivate().await.expect("guest deactivation succeeds");
         let _ = std::fs::remove_dir_all(&data_dir);
         let _ = std::fs::remove_dir_all(&cache_dir);
     }

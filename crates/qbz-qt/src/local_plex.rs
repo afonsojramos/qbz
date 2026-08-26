@@ -19,9 +19,9 @@
 //!     sections fetch -> save -> default-select-ALL -> prune -> per-section
 //!     track fetch + cache save.
 //!
-//! The PIN/auth flow (`plex_auth_pin_*`) belongs to Settings and is NOT
-//! here; `connect_manual` / `disconnect` are exposed so the settings panel
-//! can drive the store without duplicating it.
+//! The PIN/auth flow (`plex_auth_pin_*`) belongs to `plex_pin_qt`; successful
+//! pairing and the manual-token fallback both enter this module through
+//! `connect_manual`, while `disconnect` clears the shared store.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -487,9 +487,7 @@ pub fn credentials() -> (String, String) {
     (cfg.base_url, cfg.token)
 }
 
-// Seam for Settings > Local Library > Plex ("write metadata back to Plex").
-// That settings surface is not ported yet, so nothing calls this today.
-#[allow(dead_code)]
+/// Settings > Local Library > Plex ("write metadata back to Plex").
 pub fn set_metadata_write_enabled(value: bool) {
     invalidate_cache();
     ensure_bound();

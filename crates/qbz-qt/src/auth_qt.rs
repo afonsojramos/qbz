@@ -4,25 +4,9 @@
 //! redirect PATH; a mismatched/absent path nonce is dropped) that the
 //! desktop auth.rs lacks.
 //!
-//! POC-NOTE (the per-user store fan-out, for the effort-measurement report).
 //! The three activation paths share ONE helper, `bind_per_user_stores`, plus
-//! the phase-ordered calls above it; adding a store means one line there and
-//! its matching `teardown()` in `logout`.
-//!
-//! Bound: offline mode, Plex settings, local favorites, the Qobuz
-//! favourite-id cache, pinned items, intelligent search, the playlist owner
-//! id, MyQBZ branding + view prefs, the MyQBZ grids + mixtape schema, the
-//! artist/album blacklist, and the Recommendations dismissal set.
-//!
-//! Still omitted (no view reads them yet; each is a mechanical
-//! `init_for_user(&dir)` when its view lands): `reco` (+train_async),
-//! `external_reco`, `qbz_reco::ArtistVectorStore`, `discover_prefs`,
-//! `lyrics`. (`session_persist` came OFF this list when the queue-restore
-//! landed — it is bound below at all three activation points.) Also omitted:
-//! the subscription purge
-//! consumer (`spawn_subscription_purge_check`) — it needs the offline
-//! cache, which IS wired now (`offline_qt::activate` runs in
-//! `bind_per_user_stores`); the purge consumer is its own TODO.
+//! the phase-ordered calls above it; adding an account-scoped store means one
+//! binding there and its matching teardown in `logout`.
 //!
 //! KEPT (the offline guardrails this phase is about):
 //! `ensure_api_initialized` (scoped gate lift), `login_with_oauth_code`,
@@ -46,10 +30,6 @@ const OAUTH_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// The authenticated user, as the shell needs it.
 pub struct SessionInfo {
-    // Carried for future shell phases (per-user views); the phase-1 shell
-    // placeholder only renders name + subscription.
-    #[allow(dead_code)]
-    pub user_id: u64,
     pub display_name: String,
     pub subscription: String,
 }
@@ -149,8 +129,6 @@ where
     // Activate the per-user session (creates dirs, opens the session store).
     runtime.activate(user_id).await?;
 
-    // POC-NOTE: per-user store fan-out skipped here (see module docs).
-
     // Offline-MODE per-user binding, then the D4 valid verdict and the D2
     // recovery: a successful login ends any unauthenticated offline session.
     if let Some(dir) = crate::offline_fwd::user_data_dir(user_id) {
@@ -190,7 +168,6 @@ where
 
     log::info!("[qbz-qt] login complete for user {user_id}");
     Ok(SessionInfo {
-        user_id,
         display_name,
         subscription,
     })
@@ -331,11 +308,8 @@ where
             let subscription = session.subscription_label.clone();
             core.set_session(session).await.map_err(|e| e.to_string())?;
             runtime.activate(user_id).await?;
-            // Per-user stores the shell depends on (pinned items for the
-            // Home rail + pin badges, local favorites for hearts) — the
-            // same binding the fresh-login path does (auth_qt login).
-            // POC-NOTE: the rest of the Slint per-user store fan-out stays
-            // skipped (see module docs).
+            // Per-user stores the shell depends on — the same binding the
+            // fresh-login path uses.
             if let Some(dir) = crate::offline_fwd::user_data_dir(user_id) {
                 crate::offline_fwd::init_for_user(&dir);
                 // Plex settings live per-user (plex_settings.db); bind the
@@ -361,7 +335,6 @@ where
             crate::media_sync_qt::resume_jellyfin_quality();
             log::info!("[qbz-qt] restored saved session for user {user_id}");
             Ok(Some(SessionInfo {
-                user_id,
                 display_name,
                 subscription,
             }))
@@ -394,10 +367,6 @@ where
 /// the same id internally), bind the offline-mode engine, and flag the
 /// session-scoped offline state (D1). Returns the resolved user id.
 ///
-/// POC-NOTE: the Slint `enter_shell_offline` also brings up the offline
-/// cache, local library, per-user pref stores, tray and media controls —
-/// all skipped here; the POC shell placeholder shows only the offline-mode
-/// status. Re-add each `init_for_user(&dir)` as its view lands.
 pub async fn start_offline_session<A>(runtime: &Arc<AppRuntime<A>>) -> Result<u64, String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
@@ -449,14 +418,7 @@ where
 /// the Qobuz client session, and tear down the offline-mode per-user state
 /// (which reopens the Qobuz gate so a logged-out user can sign back in).
 ///
-/// POC-NOTE: the Slint logout also tears down per-user stores this phase never
-/// opens — offline cache (`offline::deactivate`), reco, artist vectors
-/// (`clear_artist_vectors`), discover prefs and lyrics. It does NOT still cover
-/// pinned / local favorites / search: this phase DOES open those three (see the
-/// activation paths above), which is why they moved to the asymmetry list below
-/// rather than staying here.
-///
-/// The stores that ARE open must be dropped here, and that is not cosmetic:
+/// Every store opened above must be dropped here, and that is not cosmetic:
 /// each holds the PREVIOUS user's data in a process-global, so skipping one
 /// means the next account inherits it. The favourite-id cache holds their
 /// hearts; MyQBZ holds their mixtape grids, the open collection's items, both
@@ -464,13 +426,6 @@ where
 /// plus their collection list; the blacklist holds their blocked artists and
 /// albums; reco-dismiss holds their "not interested" set.
 ///
-/// STILL ASYMMETRIC (an `init_for_user` above with no teardown here, because
-/// the module exposes none — each needs its own file changed, so it is not
-/// done from this side): `local_plex`, `library_qt::init_local_favorites`,
-/// `sidebar_qt::init_pinned`, `playlist_qt::set_user_id`. The reference DOES
-/// tear the first three down (`pinned::teardown`,
-/// `local_favorites::teardown` — `qbz/src/auth.rs:349-352`).
-/// `search_qt::teardown` was the fourth and is now WIRED below.
 pub async fn logout<A>(runtime: &Arc<AppRuntime<A>>) -> Result<(), String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
@@ -479,6 +434,11 @@ where
     let _ = qbz_credentials::clear_oauth_token();
     let _ = runtime.core().logout().await;
     crate::fav_cache_qt::teardown();
+    crate::library_qt::teardown();
+    crate::sidebar_qt::teardown();
+    crate::local_plex::reset();
+    crate::playlist_qt::teardown();
+    crate::integrations_qt::unbind_qobuz_user();
     // Intelligent Search: the LEARNED ranking is per-user. Without this the
     // next account inherits a stranger's most-clicked results as its promoted
     // top result, and keeps writing into their buckets.

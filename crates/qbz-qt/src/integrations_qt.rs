@@ -70,20 +70,38 @@ fn scrobble() -> &'static ScrobblerSettingsState {
 pub fn init_for_user(base_dir: &Path) {
     if let Err(e) = scrobble().init_at(base_dir) {
         log::warn!("[qbz-qt] scrobbler settings store unavailable: {e}");
-        return;
+    } else {
+        let changed = SCROBBLE_DIR
+            .lock()
+            .map(|mut dir| {
+                let changed = dir.as_deref() != Some(base_dir);
+                *dir = Some(base_dir.to_path_buf());
+                changed
+            })
+            .unwrap_or(false);
+        // A timer armed for account A must never submit through account B's
+        // newly rebound credentials. Re-entering the same offline profile
+        // keeps it.
+        if changed {
+            SCROBBLE_GEN.fetch_add(1, Ordering::SeqCst);
+        }
     }
-    let changed = SCROBBLE_DIR
-        .lock()
-        .map(|mut dir| {
-            let changed = dir.as_deref() != Some(base_dir);
-            *dir = Some(base_dir.to_path_buf());
-            changed
-        })
-        .unwrap_or(false);
-    // A timer armed for account A must never submit through account B's newly
-    // rebound credentials. Re-entering the same offline profile keeps it.
-    if changed {
-        SCROBBLE_GEN.fetch_add(1, Ordering::SeqCst);
+
+    // Discover preferences belong to the Qobuz profile even though the
+    // scrobbler credentials above deliberately survive logout. Replace this
+    // handle on every account activation; the old lazy-only initialization
+    // pinned Recommendations visibility to the first user for the lifetime of
+    // the process.
+    let store = match DiscoverPrefsStore::new_at(base_dir) {
+        Ok(store) => Some(store),
+        Err(e) => {
+            log::warn!("[qbz-qt] discover prefs store unavailable: {e}");
+            None
+        }
+    };
+    let cell = DISCOVER.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = cell.lock() {
+        *guard = store;
     }
 }
 
@@ -110,6 +128,17 @@ fn with_discover<T>(f: impl FnOnce(&DiscoverPrefsStore) -> T) -> Option<T> {
     });
     let guard = cell.lock().ok()?;
     guard.as_ref().map(f)
+}
+
+/// Drop only the Qobuz-profile binding. Scrobbler credentials intentionally
+/// remain bound so opted-in local playback can continue to scrobble while the
+/// user is logged out.
+pub fn unbind_qobuz_user() {
+    if let Some(cell) = DISCOVER.get() {
+        if let Ok(mut guard) = cell.lock() {
+            *guard = None;
+        }
+    }
 }
 
 static DISCORD: OnceLock<DiscordRpc> = OnceLock::new();
@@ -1169,6 +1198,16 @@ async fn flush_listenbrainz_queue() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    fn unique_store_dir(name: &str) -> std::path::PathBuf {
+        static NONCE: AtomicU64 = AtomicU64::new(0);
+        let nonce = NONCE.fetch_add(1, AtomicOrdering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "qbz-qt-integrations-{name}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
 
     fn status(
         mode: OfflineMode,
@@ -1264,5 +1303,33 @@ mod tests {
         );
         assert_eq!(no_accumulation.action, ScrobbleAction::SendNow);
         assert!(!no_accumulation.queue_on_failure);
+    }
+
+    #[test]
+    fn discover_preferences_rebind_between_guest_and_account_profiles() {
+        let guest = unique_store_dir("guest");
+        let account = unique_store_dir("account");
+
+        init_for_user(&guest);
+        set_show_recommendations(false).expect("persist guest preference");
+        assert!(!show_recommendations());
+
+        init_for_user(&account);
+        assert!(
+            show_recommendations(),
+            "account must not inherit guest prefs"
+        );
+
+        unbind_qobuz_user();
+        assert!(show_recommendations(), "unbound state uses safe defaults");
+
+        init_for_user(&guest);
+        assert!(!show_recommendations(), "guest preference survives logout");
+
+        unbind_qobuz_user();
+        scrobble().teardown().expect("release scrobbler test store");
+        *SCROBBLE_DIR.lock().expect("scrobbler dir lock") = None;
+        let _ = std::fs::remove_dir_all(&guest);
+        let _ = std::fs::remove_dir_all(&account);
     }
 }

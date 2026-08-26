@@ -14,10 +14,11 @@
 //! bridge.rs) so a cover never lands on the wrong row and decoded-cover RAM
 //! scales with the viewport.
 //!
-//! POC-NOTEs:
-//! - Artist/album blacklist filtering: skipped (store not open).
-//! - Genre filter ("library-all" context): skipped (genre_filter glue is
-//!   Slint-side; the toolbar button is an inert stub).
+//! Known deltas:
+//! - The artist/album blacklist store is live, but this feed does not yet
+//!   apply it while assembling rows.
+//! - The Slint offline-only rail of playable cached favourites is not mounted;
+//!   offline Library currently shows its placeholder instead.
 //! - Local scope: BOTH branches are live. "favorites" (hearted local items)
 //!   comes from the LocalFavoritesService; "all" (the whole local library +
 //!   Plex) is `all_local_feed_blocking` below, over the same `library.db`
@@ -28,11 +29,11 @@
 //!   `playlist_ids` favorite param); subscribe/unsubscribe of a FOREIGN
 //!   playlist only exists on the playlist page (`playlist_qt::toggle_follow`),
 //!   not on the feed rows.
-//! - Purchase download states / Play purchases / multi-select / group
-//!   modes / alpha jumps: out of scope.
+//! Genre filtering, the local-scope preference, multiselect, grouping and A-Z
+//! navigation are all live in `LibraryView.qml`.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
 use qbz_app::settings::local_favorites::{LocalFavItem, LocalFavoritesService, DB_FILE_NAME};
@@ -210,16 +211,30 @@ fn rank(i: usize, n: usize) -> f32 {
 // Local favorites store (LocalFavoritesService, ADR-006 backend)
 // ---------------------------------------------------------------------------
 
-static LOCAL_FAVS: OnceLock<Mutex<LocalFavoritesService>> = OnceLock::new();
+/// The active user's local-favourites store.
+///
+/// This cannot be a `OnceLock<LocalFavoritesService>`: logout/login in the
+/// same process must replace the SQLite connection, otherwise account B keeps
+/// reading and writing account A's database.
+static LOCAL_FAVS: LazyLock<Mutex<Option<LocalFavoritesService>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 /// Open the per-user local-favorites DB. Called on every session
 /// activation (login / restore / offline entry) next to
 /// `offline_fwd::init_for_user`.
 pub fn init_local_favorites(base_dir: &std::path::Path) {
+    // Close the outgoing connection before opening the replacement. If the
+    // new store cannot be opened, fail closed to "no local favourites" rather
+    // than retaining another account's service.
+    if let Ok(mut guard) = LOCAL_FAVS.lock() {
+        *guard = None;
+    }
     let path = base_dir.join(DB_FILE_NAME);
     match LocalFavoritesService::new(&path) {
         Ok(service) => {
-            let _ = LOCAL_FAVS.set(Mutex::new(service));
+            if let Ok(mut guard) = LOCAL_FAVS.lock() {
+                *guard = Some(service);
+            }
             log::info!("[qbz-qt] local favorites store opened");
         }
         Err(e) => log::error!("[qbz-qt] local favorites store open failed: {e}"),
@@ -228,8 +243,9 @@ pub fn init_local_favorites(base_dir: &std::path::Path) {
 
 fn local_favorites_list() -> Vec<qbz_app::settings::local_favorites::LocalFavItem> {
     LOCAL_FAVS
-        .get()
-        .and_then(|s| s.lock().unwrap().list().ok())
+        .lock()
+        .ok()
+        .and_then(|service| service.as_ref().and_then(|s| s.list().ok()))
         .unwrap_or_default()
 }
 
@@ -238,9 +254,14 @@ fn local_favorites_list() -> Vec<qbz_app::settings::local_favorites::LocalFavIte
 /// disagrees between those two surfaces after navigation or restart.
 pub(crate) fn is_local_favorite(kind: &str, id: &str) -> bool {
     LOCAL_FAVS
-        .get()
-        .and_then(|service| service.lock().ok())
-        .is_some_and(|service| service.is_favorite(kind, id))
+        .lock()
+        .ok()
+        .and_then(|service| {
+            service
+                .as_ref()
+                .map(|service| service.is_favorite(kind, id))
+        })
+        .unwrap_or(false)
 }
 
 /// Toggle a fully described Local Library item. Unlike [`toggle_local`], this
@@ -248,7 +269,8 @@ pub(crate) fn is_local_favorite(kind: &str, id: &str) -> bool {
 /// Local Library card itself is authoritative for logical album ids that the
 /// feed may not currently contain.
 pub(crate) fn toggle_local_favorite_snapshot(item: LocalFavItem) -> Option<bool> {
-    let service = LOCAL_FAVS.get()?.lock().ok()?;
+    let service = LOCAL_FAVS.lock().ok()?;
+    let service = service.as_ref()?;
     let current = service.is_favorite(&item.kind, &item.id);
     if current {
         if let Err(error) = service.unfavorite(&item.kind, &item.id) {
@@ -1550,7 +1572,8 @@ async fn toggle_playlist_favorite(id: &str) -> Option<bool> {
 /// `.ok()?` arms used to swallow that as "nothing happened" and the heart
 /// kept the flip), None only when there is no store to talk to at all.
 fn toggle_local(kind: &str, id: &str) -> Option<bool> {
-    let service = LOCAL_FAVS.get()?.lock().unwrap();
+    let service = LOCAL_FAVS.lock().ok()?;
+    let service = service.as_ref()?;
     let current = service.is_favorite(kind, id);
     let new_state = if current {
         if let Err(e) = service.unfavorite(kind, id) {
@@ -1588,6 +1611,20 @@ fn toggle_local(kind: &str, id: &str) -> Option<bool> {
     };
     set_feed_favorite(kind, id, new_state);
     Some(new_state)
+}
+
+/// Drop every account-scoped Library cache on logout.
+///
+/// The QML documents are cleared separately, but these are the authorities
+/// later actions read. Keeping them alive would let a new session observe the
+/// previous account before its first Library reload.
+pub fn teardown() {
+    if let Ok(mut service) = LOCAL_FAVS.lock() {
+        *service = None;
+    }
+    *LIBRARY.lock().unwrap() = None;
+    LOCAL_RAW.lock().unwrap().clear();
+    log::info!("[qbz-qt] library stores cleared (logout)");
 }
 
 /// library_all.rs `is_local_feed_id` — local tracks are file paths, local
@@ -2336,5 +2373,60 @@ mod tests {
         let json = serde_json::to_value(item).expect("feed item serializes");
         assert_eq!(json["sourceUnavailable"], true);
         assert!(json.get("qobuzUnavailable").is_none());
+    }
+
+    fn unique_store_dir(name: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NONCE: AtomicU64 = AtomicU64::new(0);
+        let nonce = NONCE.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "qbz-qt-library-{name}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    /// Logout must close the active SQLite handle, not erase that profile.
+    /// A later guest entry reopens users/0, while an account activation in
+    /// between sees only its own favourites.
+    #[test]
+    fn local_favorites_rebind_between_guest_and_account_profiles() {
+        let guest = unique_store_dir("guest");
+        let account = unique_store_dir("account");
+        std::fs::create_dir_all(&guest).expect("guest dir");
+        std::fs::create_dir_all(&account).expect("account dir");
+
+        init_local_favorites(&guest);
+        let snapshot = LocalFavItem {
+            kind: "album".into(),
+            id: "/music/Guest/Album".into(),
+            title: "Guest Album".into(),
+            subtitle: "Guest Artist".into(),
+            artwork_url: String::new(),
+            artist: "Guest Artist".into(),
+            source: "local".into(),
+            favorited_at: 0,
+        };
+        LOCAL_FAVS
+            .lock()
+            .expect("local favourites lock")
+            .as_ref()
+            .expect("guest store")
+            .favorite(&snapshot)
+            .expect("persist guest favourite");
+        assert!(is_local_favorite("album", "/music/Guest/Album"));
+
+        init_local_favorites(&account);
+        assert!(!is_local_favorite("album", "/music/Guest/Album"));
+
+        teardown();
+        assert!(!is_local_favorite("album", "/music/Guest/Album"));
+
+        init_local_favorites(&guest);
+        assert!(is_local_favorite("album", "/music/Guest/Album"));
+
+        teardown();
+        let _ = std::fs::remove_dir_all(&guest);
+        let _ = std::fs::remove_dir_all(&account);
     }
 }
