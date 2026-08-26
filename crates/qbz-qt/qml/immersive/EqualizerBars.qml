@@ -25,12 +25,15 @@
 
 import QtQuick
 import com.blitzfc.qbz
+import "../theme"
 
 Item {
     id: root
 
-    /// Bar color — every immersive mount passes #7c3aed.
-    property color tint: "#7c3aed"
+    QbzTheme { id: theme }
+
+    /// Bar color follows the active theme unless a host deliberately overrides it.
+    property color tint: theme.accent
 
     width: 18
     height: 14
@@ -43,8 +46,12 @@ Item {
     // (180 Hz on the owner's panel) and every update is a whole-window
     // present. The wave's period is 800 ms, so the 30 Hz pulse samples it
     // ~24 times per loop — indistinguishable. Riding the pulse also means
-    // ZERO extra presents: the bars move in the same frame as everything
-    // else the pulse moves.
+    // ZERO extra clocks: the bars move in the same frame as everything else
+    // the pulse moves. A pulse receiver still has CPU cost, though, so an
+    // inactive indicator disconnects structurally instead of waking a JS
+    // handler just to return. TrackRow also loads this object only for the
+    // one active, visible play cell; a long expanded box set therefore owns
+    // one receiver rather than one receiver per track.
     //
     // The `active` gate belongs to the HOST, because this component mounts
     // in always-alive-but-invisible trees (the immersive overlay) where a
@@ -58,10 +65,9 @@ Item {
     property real t: 0
     readonly property int _tickMs: 33
     Connections {
-        target: QbzShell
+        target: root.active && root.visible ? QbzShell : null
         function onPulseMsChanged() {
-            if (root.active && root.visible)
-                root.t = (root.t + root._tickMs / 800.0) % 1.0
+            root.t = (root.t + root._tickMs / 800.0) % 1.0
         }
     }
 

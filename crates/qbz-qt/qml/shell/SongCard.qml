@@ -245,6 +245,11 @@ Rectangle {
                     font: albumText.font
                     text: albumText.text
                 }
+                TextMetrics {
+                    id: ellipsisMetrics
+                    font: artistText.font
+                    text: "…"
+                }
 
                 // Fixed furniture: the context box (+ its 7px gap when shown)
                 // and the separator dot with a 7px gap on each side.
@@ -255,8 +260,15 @@ Rectangle {
                 // a long album elides before the artist does, and both keep a
                 // readable slice instead of one pushing the other off the card.
                 readonly property var budget: {
-                    var a = artistMetrics.width
-                    var b = albumMetrics.width
+                    // `width` is the painted bounding box; `advanceWidth` is
+                    // what the line layout actually consumes. Budget the
+                    // larger one plus a 2px bearing/rounding guard — assigning
+                    // the exact bounding width made "Metallica" render as
+                    // "Metalli…" despite spare room.
+                    var a = Math.ceil(Math.max(artistMetrics.width,
+                                               artistMetrics.advanceWidth)) + 2
+                    var b = Math.ceil(Math.max(albumMetrics.width,
+                                               albumMetrics.advanceWidth)) + 2
                     var av = metaRow.avail
                     if (a + b <= av)
                         return [a, b]
@@ -266,6 +278,18 @@ Rectangle {
                         qa = a
                         qb = av - a
                     } else if (b < qb) {
+                        qb = b
+                        qa = av - b
+                    }
+                    // An ellipsis costs roughly the same runway as the final
+                    // one or two glyphs. If a label is within that distance of
+                    // fitting, finish the word and take the small deficit from
+                    // the other, genuinely long label instead.
+                    var near = Math.ceil(ellipsisMetrics.advanceWidth) + 3
+                    if (a > qa && a - qa <= near && av >= a) {
+                        qa = a
+                        qb = av - a
+                    } else if (b > qb && b - qb <= near && av >= b) {
                         qb = b
                         qa = av - b
                     }

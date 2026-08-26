@@ -18,13 +18,11 @@
 // views/local/LocalFolderDetail.qml (grid/list). The old
 // views/local/LocalSegToggle.qml is GONE — this file is the only copy.
 //
-// SIZING. `width` is a plain assignment, not a binding on the content, so a
-// call site with more than two segments MUST widen it: with the DEFAULT metrics
-// the segments are a centred Row of 26px cells with 2px gaps, so N segments
-// need 28N - 2 px (2 -> 54, fits the 60 default; 3 -> 82, hence the detail
-// view's 90). Too narrow does not wrap or elide — `clip: true` silently cuts
-// the last segment off, and a segment you cannot see is a segment you cannot
-// click.
+// SIZING. The well derives its width from the real segment row. With the
+// DEFAULT metrics that is 26px cells, 2px gaps and 3px of well on each side:
+// 2 segments -> 60px, 3 -> 88px. A caller may still override `width` for a
+// roomier reference metric, but adding a segment can no longer leave its
+// button visibly outside a stale 60px background.
 //
 // ── TWO METRIC SETS, AND WHY THE CELL LOOK IS PARAMETERISED ────────────────
 // The DEFAULTS below are the Local Library set, unchanged: 26x24 r4 cells with
@@ -92,7 +90,12 @@ Rectangle {
 
     QbzTheme { id: theme }
 
-    width: 60
+    readonly property int contentWidth: root.segments.length > 0
+        ? root.segments.length * root.segWidth
+            + (root.segments.length - 1) * root.segSpacing
+        : 0
+    implicitWidth: Math.max(60, root.contentWidth + 6)
+    width: implicitWidth
     height: 30
     radius: 6
     // The well itself: surface-elevated @ 0.5 under the dynamic background

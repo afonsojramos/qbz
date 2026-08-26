@@ -354,7 +354,6 @@ Item {
             // fan + metadata read as one balanced group (:276-283).
             ImmersiveTrackMeta {
                 width: root.width
-                equalizerTint: "#7c3aed"
             }
         }
     }

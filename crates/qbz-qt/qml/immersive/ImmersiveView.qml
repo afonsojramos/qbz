@@ -541,7 +541,6 @@ Item {
                     ImmersiveTrackMeta {
                         anchors.horizontalCenter: parent.horizontalCenter
                         width: parent.width - 44
-                        equalizerTint: "#7c3aed"
                     }
                 }
             }

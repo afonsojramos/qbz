@@ -20,12 +20,15 @@
 import QtQuick
 import com.blitzfc.qbz
 import "../controls"
+import "../theme"
 
 Column {
     id: root
 
-    /// Equalizer tint + "Now Playing" label color (Slint equalizer-tint).
-    property color equalizerTint: "#7c3aed"
+    QbzTheme { id: theme }
+
+    /// Equalizer tint + "Now Playing" label follow the active theme.
+    property color equalizerTint: theme.accent
 
     spacing: 6
 

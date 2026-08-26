@@ -206,7 +206,6 @@ Item {
             // Track info (shared, homologated across the panels, :173-176).
             ImmersiveTrackMeta {
                 width: root.width
-                equalizerTint: "#7c3aed"
             }
         }
     }
