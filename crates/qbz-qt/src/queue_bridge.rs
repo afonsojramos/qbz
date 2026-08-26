@@ -109,6 +109,7 @@ pub mod qbz_queue {
             phase: QString,
             index: i32,
             expected_id: QString,
+            target_phase: QString,
             slot: i32,
         );
         #[qinvokable]
@@ -253,9 +254,16 @@ impl qbz_queue::QbzQueue {
         phase: QString,
         index: i32,
         expected_id: QString,
+        target_phase: QString,
         slot: i32,
     ) {
-        crate::queue_extended_drop(phase.to_string(), index, expected_id.to_string(), slot);
+        crate::queue_extended_drop(
+            phase.to_string(),
+            index,
+            expected_id.to_string(),
+            target_phase.to_string(),
+            slot,
+        );
     }
 
     pub fn queue_remove_upcoming_flat(self: Pin<&mut Self>, index: i32) {

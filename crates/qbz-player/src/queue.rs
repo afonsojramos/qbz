@@ -7,7 +7,7 @@
 //! - Repeat modes (off, all, one)
 //! - Play history for going back
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
 use qbz_models::{QueueState, QueueTrack, RepeatMode};
@@ -17,6 +17,8 @@ enum QueueMoveDirection {
     Up,
     Down,
 }
+
+const MAX_HISTORY_LEN: usize = 50;
 
 /// Internal queue state - all in one struct to avoid deadlocks
 struct InternalState {
@@ -271,6 +273,9 @@ impl QueueManager {
         Self::remap_history_by_track_id_internal(&mut state, &new_tracks);
         state.tracks = new_tracks;
         state.current_index = start_index;
+        if let Some(current_index) = state.current_index {
+            state.history.retain(|&index| index != current_index);
+        }
 
         // Regenerate shuffle order
         Self::regenerate_shuffle_order_internal(&mut state);
@@ -313,6 +318,9 @@ impl QueueManager {
         Self::remap_history_by_track_id_internal(&mut state, &new_tracks);
         state.tracks = new_tracks;
         state.current_index = start_index;
+        if let Some(current_index) = state.current_index {
+            state.history.retain(|&index| index != current_index);
+        }
         state.shuffle = shuffle_enabled;
 
         if !shuffle_enabled {
@@ -688,6 +696,198 @@ impl QueueManager {
         true
     }
 
+    /// Reorder one playback-history occurrence. `history_index` uses the
+    /// public most-recent-first coordinate while `to_slot` is an insertion
+    /// gap in the chronological (oldest-first) Queue View projection.
+    ///
+    /// History stores canonical queue indices, not track ids. Consequently two
+    /// independently enqueued copies of the same song remain independently
+    /// movable here.
+    pub fn move_history_entry(
+        &self,
+        history_index: usize,
+        expected_id: u64,
+        to_slot: usize,
+    ) -> bool {
+        let mut state = self.state.lock().unwrap();
+        let Some(source_position) = state
+            .history
+            .len()
+            .checked_sub(history_index.saturating_add(1))
+        else {
+            return false;
+        };
+        let Some(&canonical_index) = state.history.get(source_position) else {
+            return false;
+        };
+        if state.tracks.get(canonical_index).map(|track| track.id) != Some(expected_id) {
+            return false;
+        }
+
+        let slot = to_slot.min(state.history.len());
+        if slot == source_position || slot == source_position + 1 {
+            return false;
+        }
+        let Some(entry) = state.history.remove(source_position) else {
+            return false;
+        };
+        let insertion = if slot > source_position {
+            slot - 1
+        } else {
+            slot
+        };
+        let insertion = insertion.min(state.history.len());
+        state.history.insert(insertion, entry);
+        true
+    }
+
+    /// Remove one Queue View history occurrence after an authoritative remote
+    /// renderer accepted it as a new upcoming item. The queue row itself stays
+    /// in place until the remote QueueUpdated echo materializes its canonical
+    /// order locally.
+    pub fn remove_history_entry(&self, history_index: usize, expected_id: u64) -> bool {
+        let mut state = self.state.lock().unwrap();
+        let Some(source_position) = state
+            .history
+            .len()
+            .checked_sub(history_index.saturating_add(1))
+        else {
+            return false;
+        };
+        let Some(&canonical_index) = state.history.get(source_position) else {
+            return false;
+        };
+        if state.tracks.get(canonical_index).map(|track| track.id) != Some(expected_id) {
+            return false;
+        }
+
+        let before = state.history.len();
+        // Historical sessions could contain the same canonical occurrence
+        // more than once. Removing all of those stale references establishes
+        // the same-entry/latest-play invariant immediately.
+        state.history.retain(|&index| index != canonical_index);
+        state.history.len() != before
+    }
+
+    /// Move a played queue occurrence back into an Upcoming insertion slot.
+    /// This is deliberately a MOVE of the canonical occurrence, never an
+    /// `add_track` clone. Distinct queue occurrences may share a track id and
+    /// remain distinct; replaying one occurrence merely relocates that one.
+    pub fn requeue_history_entry(
+        &self,
+        history_index: usize,
+        expected_id: u64,
+        to_slot: usize,
+    ) -> bool {
+        let mut state = self.state.lock().unwrap();
+        let Some(source_history_position) = state
+            .history
+            .len()
+            .checked_sub(history_index.saturating_add(1))
+        else {
+            return false;
+        };
+        let Some(&source_index) = state.history.get(source_history_position) else {
+            return false;
+        };
+        if state.tracks.get(source_index).map(|track| track.id) != Some(expected_id)
+            || state.current_index == Some(source_index)
+        {
+            return false;
+        }
+
+        if state.shuffle {
+            let Some(source_order_position) = state
+                .shuffle_order
+                .iter()
+                .position(|&index| index == source_index)
+            else {
+                return false;
+            };
+            let current_order_position = match state.current_index {
+                Some(current_index) => {
+                    let Some(position) = state
+                        .shuffle_order
+                        .iter()
+                        .position(|&index| index == current_index)
+                    else {
+                        return false;
+                    };
+                    Some(position)
+                }
+                None => None,
+            };
+            let source_upcoming_position = match current_order_position {
+                Some(current_position) if source_order_position > current_position => {
+                    Some(source_order_position - current_position - 1)
+                }
+                Some(_) => None,
+                None => Some(source_order_position),
+            };
+            let current_after_removal = current_order_position.map(|current_position| {
+                if source_order_position < current_position {
+                    current_position - 1
+                } else {
+                    current_position
+                }
+            });
+
+            state.history.retain(|&index| index != source_index);
+            state.shuffle_order.remove(source_order_position);
+            let base_position = current_after_removal.map(|position| position + 1).unwrap_or(0);
+            let insertion_slot = match source_upcoming_position {
+                Some(position) if to_slot > position => to_slot - 1,
+                _ => to_slot,
+            }
+            .min(state.shuffle_order.len().saturating_sub(base_position));
+            state
+                .shuffle_order
+                .insert(base_position + insertion_slot, source_index);
+            state.shuffle_position = current_after_removal.unwrap_or(0);
+            return true;
+        }
+
+        let current_before = state.current_index;
+        let source_upcoming_position = match current_before {
+            Some(current_index) if source_index > current_index => {
+                Some(source_index - current_index - 1)
+            }
+            Some(_) => None,
+            None => Some(source_index),
+        };
+        let current_after_removal = current_before.map(|current_index| {
+            if source_index < current_index {
+                current_index - 1
+            } else {
+                current_index
+            }
+        });
+        let base_index = current_after_removal.map(|index| index + 1).unwrap_or(0);
+        let insertion_slot = match source_upcoming_position {
+            Some(position) if to_slot > position => to_slot - 1,
+            _ => to_slot,
+        }
+        .min(
+            state
+                .tracks
+                .len()
+                .saturating_sub(1)
+                .saturating_sub(base_index),
+        );
+        let destination_index = base_index + insertion_slot;
+
+        state.history.retain(|&index| index != source_index);
+        let track = state.tracks.remove(source_index);
+        state.tracks.insert(destination_index, track);
+        state.current_index = current_before
+            .map(|index| Self::remap_index_after_move(index, source_index, destination_index));
+        for history_index in state.history.iter_mut() {
+            *history_index =
+                Self::remap_index_after_move(*history_index, source_index, destination_index);
+        }
+        true
+    }
+
     /// Get current track
     pub fn current_track(&self) -> Option<QueueTrack> {
         let state = self.state.lock().unwrap();
@@ -817,18 +1017,15 @@ impl QueueManager {
             return None;
         }
 
-        // Save current to history before moving
-        if let Some(curr_idx) = state.current_index {
-            state.history.push_back(curr_idx);
-            while state.history.len() > 50 {
-                state.history.pop_front();
-            }
-        }
-
         if state.repeat == RepeatMode::One {
             return state
                 .current_index
                 .and_then(|idx| state.tracks.get(idx).cloned());
+        }
+
+        // Save current to history before moving
+        if let Some(curr_idx) = state.current_index {
+            Self::record_history_internal(&mut state, curr_idx);
         }
 
         let next_idx = if state.shuffle {
@@ -853,6 +1050,9 @@ impl QueueManager {
             }
         };
 
+        if let Some(next_index) = next_idx {
+            state.history.retain(|&index| index != next_index);
+        }
         state.current_index = next_idx;
         // Manual-block bookkeeping (#442): advancing past a manual entry
         // shrinks the block; exhausting or wrapping the queue dissolves it.
@@ -874,6 +1074,7 @@ impl QueueManager {
 
         // Try to get from history first
         if let Some(prev_idx) = state.history.pop_back() {
+            state.history.retain(|&index| index != prev_idx);
             state.current_index = Some(prev_idx);
 
             if state.shuffle {
@@ -927,11 +1128,9 @@ impl QueueManager {
         if moved {
             // Record the outgoing track so `previous` still walks back.
             if let Some(curr_idx) = state.current_index {
-                state.history.push_back(curr_idx);
-                while state.history.len() > 50 {
-                    state.history.pop_front();
-                }
+                Self::record_history_internal(&mut state, curr_idx);
             }
+            state.history.retain(|&index| index != target);
             state.current_index = Some(target);
             // Keep the shuffle cursor aligned with the new position.
             if state.shuffle {
@@ -1029,10 +1228,10 @@ impl QueueManager {
             None
         };
 
-        state.history.extend(crossed);
-        while state.history.len() > 50 {
-            state.history.pop_front();
+        for crossed_index in crossed {
+            Self::record_history_internal(&mut state, crossed_index);
         }
+        state.history.retain(|&index| index != target_index);
         state.current_index = Some(target_index);
         state.manual_next_count = state
             .manual_next_count
@@ -1101,13 +1300,11 @@ impl QueueManager {
         // Matches `sync_current_to_id`'s `moved` guard.
         if let Some(curr_idx) = state.current_index {
             if curr_idx != index {
-                state.history.push_back(curr_idx);
-                while state.history.len() > 50 {
-                    state.history.pop_front();
-                }
+                Self::record_history_internal(&mut state, curr_idx);
             }
         }
 
+        state.history.retain(|&history_index| history_index != index);
         state.current_index = Some(index);
 
         if state.shuffle {
@@ -1310,12 +1507,12 @@ impl QueueManager {
     /// survive, matching the live playback-history bound.
     pub fn restore_history_indices(&self, history: Vec<usize>) {
         let mut state = self.state.lock().unwrap();
-        let valid: Vec<usize> = history
-            .into_iter()
-            .filter(|&idx| idx < state.tracks.len())
-            .collect();
-        let keep_from = valid.len().saturating_sub(50);
-        state.history = valid.into_iter().skip(keep_from).collect();
+        state.history.clear();
+        for index in history {
+            if state.current_index != Some(index) {
+                Self::record_history_internal(&mut state, index);
+            }
+        }
     }
 
     /// Get the full queue state without the upcoming/history caps applied by
@@ -1415,10 +1612,26 @@ impl QueueManager {
         }
     }
 
+    /// Record one canonical queue occurrence as the newest played entry.
+    /// Replaying that SAME occurrence moves its existing record to the end;
+    /// independently enqueued copies remain distinct because their canonical
+    /// indices differ even when their track ids are equal.
+    fn record_history_internal(state: &mut InternalState, index: usize) {
+        if index >= state.tracks.len() {
+            return;
+        }
+        state.history.retain(|&existing| existing != index);
+        state.history.push_back(index);
+        while state.history.len() > MAX_HISTORY_LEN {
+            state.history.pop_front();
+        }
+    }
+
     /// Remap history entries from `state.tracks` indices to indices into
-    /// `new_tracks`, looking up by track id. Entries whose track id is no
-    /// longer present in `new_tracks` are dropped. Must be called with the
-    /// lock held and BEFORE `state.tracks` is replaced.
+    /// `new_tracks`. Repeated track ids are matched occurrence-by-occurrence
+    /// in canonical order rather than collapsed onto the last matching id.
+    /// Entries whose occurrence no longer exists are dropped. Must be called
+    /// with the lock held and BEFORE `state.tracks` is replaced.
     ///
     /// This preserves history across queue version bumps that don't change
     /// track identity (e.g. pure reorder, shuffle toggle, or an authoritative
@@ -1429,22 +1642,31 @@ impl QueueManager {
             return;
         }
 
-        // Build lookup: track_id -> new index. If duplicate ids exist (rare),
-        // last occurrence wins; history will still resolve to a valid track.
-        let mut new_id_to_idx: std::collections::HashMap<u64, usize> =
-            std::collections::HashMap::with_capacity(new_tracks.len());
+        // QueueTrack has no separate persisted occurrence UUID. Pairing the
+        // nth old occurrence with the nth new occurrence is the strongest
+        // stable identity available across an authoritative queue replacement
+        // and, crucially, does not merge duplicate queue entries.
+        let mut new_indices_by_id: HashMap<u64, VecDeque<usize>> =
+            HashMap::with_capacity(new_tracks.len());
         for (idx, track) in new_tracks.iter().enumerate() {
-            new_id_to_idx.insert(track.id, idx);
+            new_indices_by_id.entry(track.id).or_default().push_back(idx);
+        }
+        let mut old_to_new = vec![None; state.tracks.len()];
+        for (old_index, track) in state.tracks.iter().enumerate() {
+            old_to_new[old_index] = new_indices_by_id
+                .get_mut(&track.id)
+                .and_then(VecDeque::pop_front);
         }
 
         let mut remapped: VecDeque<usize> = VecDeque::with_capacity(state.history.len());
         for &old_idx in state.history.iter() {
-            let Some(old_track) = state.tracks.get(old_idx) else {
-                continue;
-            };
-            if let Some(&new_idx) = new_id_to_idx.get(&old_track.id) {
+            if let Some(new_idx) = old_to_new.get(old_idx).copied().flatten() {
+                remapped.retain(|&existing| existing != new_idx);
                 remapped.push_back(new_idx);
             }
+        }
+        while remapped.len() > MAX_HISTORY_LEN {
+            remapped.pop_front();
         }
         state.history = remapped;
     }
@@ -2117,6 +2339,192 @@ mod tests {
     }
 
     #[test]
+    fn replaying_the_same_queue_occurrence_keeps_only_its_latest_history_entry() {
+        let queue = QueueManager::new();
+        queue.set_queue((1..=3).map(create_test_track).collect(), Some(0));
+
+        assert_eq!(queue.next().expect("track 2").id, 2);
+        assert_eq!(queue.play_index(0).expect("replay track 1").id, 1);
+        assert_eq!(
+            queue
+                .get_state_full()
+                .history
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![2],
+            "the occurrence being replayed must leave History while current"
+        );
+
+        assert_eq!(queue.next().expect("track 2 again").id, 2);
+        assert_eq!(queue.next().expect("track 3").id, 3);
+        let history = queue.get_state_full().history;
+        assert_eq!(
+            history.iter().map(|track| track.id).collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert_eq!(history.iter().filter(|track| track.id == 1).count(), 1);
+    }
+
+    #[test]
+    fn separately_enqueued_copies_keep_distinct_history_occurrences() {
+        let queue = QueueManager::new();
+        queue.set_queue(
+            vec![
+                create_test_track(7),
+                create_test_track(8),
+                create_test_track(7),
+                create_test_track(9),
+            ],
+            Some(0),
+        );
+
+        queue.next();
+        queue.next();
+        queue.next();
+
+        let history = queue.get_state_full().history;
+        assert_eq!(
+            history.iter().map(|track| track.id).collect::<Vec<_>>(),
+            vec![7, 8, 7]
+        );
+        assert_eq!(history.iter().filter(|track| track.id == 7).count(), 2);
+        assert_eq!(queue.get_persistable_state().2, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn queue_view_reorders_history_in_chronological_slot_space() {
+        let queue = QueueManager::new();
+        queue.set_queue((1..=4).map(create_test_track).collect(), Some(3));
+        queue.restore_history_indices(vec![0, 1, 2]);
+
+        // Visible History starts [1, 2, 3] (oldest first). Drag 1 to the
+        // trailing history gap, immediately before NOW.
+        assert!(queue.move_history_entry(2, 1, 3));
+        assert_eq!(
+            queue
+                .get_state_full()
+                .history
+                .iter()
+                .rev()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 1]
+        );
+        assert_eq!(queue.get_persistable_state().2, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn queue_view_requeues_the_same_history_occurrence_without_cloning() {
+        let queue = QueueManager::new();
+        queue.set_queue((1..=5).map(create_test_track).collect(), Some(3));
+        queue.restore_history_indices(vec![0, 1, 2]);
+
+        // History is publicly [3, 2, 1]. Move occurrence 1 to Upcoming slot
+        // 1: [2, 3, 4 NOW, 5, 1]. No sixth QueueTrack is created.
+        assert!(queue.requeue_history_entry(2, 1, 1));
+        let moved = queue.get_state_full();
+        assert_eq!(moved.total_tracks, 5);
+        assert_eq!(moved.current_track.expect("current").id, 4);
+        assert_eq!(
+            moved
+                .history
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![3, 2]
+        );
+        assert_eq!(
+            moved
+                .upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![5, 1]
+        );
+
+        queue
+            .play_upcoming_at_preserving_timeline(1, 1)
+            .expect("requeued occurrence");
+        assert_eq!(
+            queue
+                .get_state_full()
+                .history
+                .iter()
+                .filter(|track| track.id == 1)
+                .count(),
+            0,
+            "the replayed occurrence is current, not also historical"
+        );
+        assert!(queue.next().is_none());
+        let finished = queue.get_state_full();
+        assert_eq!(finished.total_tracks, 5);
+        assert_eq!(finished.history.iter().filter(|track| track.id == 1).count(), 1);
+    }
+
+    #[test]
+    fn queue_view_requeues_only_the_selected_duplicate_occurrence() {
+        let queue = QueueManager::new();
+        let mut first_lunch = create_test_track(7);
+        first_lunch.title = "Lunch A".into();
+        let mut second_lunch = create_test_track(7);
+        second_lunch.title = "Lunch B".into();
+        queue.set_queue(
+            vec![
+                first_lunch,
+                create_test_track(8),
+                second_lunch,
+                create_test_track(9),
+                create_test_track(10),
+            ],
+            Some(3),
+        );
+        queue.restore_history_indices(vec![0, 1, 2]);
+
+        // Most-recent History row is Lunch B. Its id equals Lunch A, so only
+        // the phase coordinate/canonical occurrence can distinguish them.
+        assert!(queue.requeue_history_entry(0, 7, 0));
+        let state = queue.get_state_full();
+        assert_eq!(state.total_tracks, 5);
+        assert_eq!(state.history.iter().filter(|track| track.id == 7).count(), 1);
+        assert_eq!(state.history[1].title, "Lunch A");
+        assert_eq!(state.upcoming[0].title, "Lunch B");
+    }
+
+    #[test]
+    fn queue_view_requeues_history_inside_the_shuffle_timeline() {
+        let queue = QueueManager::new();
+        queue.set_queue_with_order(
+            (1..=5).map(create_test_track).collect(),
+            Some(2),
+            true,
+            Some(vec![0, 1, 2, 3, 4]),
+        );
+        queue.restore_history_indices(vec![0, 1]);
+
+        assert!(queue.requeue_history_entry(0, 2, 1));
+        let state = queue.get_state_full();
+        assert_eq!(state.total_tracks, 5);
+        assert_eq!(state.current_track.expect("current").id, 3);
+        assert_eq!(
+            state
+                .history
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(
+            state
+                .upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![4, 2, 5]
+        );
+    }
+
+    #[test]
     fn listen_list_activation_rejects_a_stale_row_atomically() {
         let queue = QueueManager::new();
         queue.set_queue((1..=4).map(create_test_track).collect(), Some(0));
@@ -2377,6 +2785,44 @@ mod tests {
         assert_eq!(
             state.history.iter().copied().collect::<Vec<_>>(),
             vec![3, 2, 1]
+        );
+    }
+
+    #[test]
+    fn queue_replacement_does_not_merge_duplicate_track_occurrences() {
+        let queue = QueueManager::new();
+        queue.set_queue(
+            vec![
+                create_test_track(7),
+                create_test_track(8),
+                create_test_track(7),
+                create_test_track(9),
+            ],
+            Some(3),
+        );
+        queue.restore_history_indices(vec![0, 2]);
+
+        queue.set_queue_with_order(
+            vec![
+                create_test_track(7),
+                create_test_track(7),
+                create_test_track(8),
+                create_test_track(9),
+            ],
+            Some(3),
+            false,
+            None,
+        );
+
+        assert_eq!(queue.get_persistable_state().2, vec![0, 1]);
+        assert_eq!(
+            queue
+                .get_state_full()
+                .history
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![7, 7]
         );
     }
 

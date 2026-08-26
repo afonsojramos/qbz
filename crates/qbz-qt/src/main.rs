@@ -1447,7 +1447,13 @@ pub(crate) fn queue_extended_play(phase: String, index: i32, expected_id: String
     });
 }
 
-pub(crate) fn queue_extended_drop(phase: String, index: i32, expected_id: String, slot: i32) {
+pub(crate) fn queue_extended_drop(
+    phase: String,
+    index: i32,
+    expected_id: String,
+    target_phase: String,
+    slot: i32,
+) {
     let Ok(track_id) = expected_id.parse::<u64>() else {
         return;
     };
@@ -1458,6 +1464,7 @@ pub(crate) fn queue_extended_drop(phase: String, index: i32, expected_id: String
             &phase,
             index.max(0) as usize,
             track_id,
+            &target_phase,
             slot.max(0) as usize,
         )
         .await

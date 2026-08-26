@@ -888,15 +888,30 @@ pub async fn play_extended(
                 return;
             }
             if let Some(service) = crate::qconnect_qt::service() {
-                if service
-                    .insert_at_slot_on_peer_if_active(track.id, track.source.as_deref(), 0)
+                match service
+                    .insert_at_slot_on_peer_outcome(track.id, track.source.as_deref(), 0)
                     .await
                 {
-                    if let Err(error) = service.play_remote_renderer_track_if_active(track.id).await
-                    {
-                        log::warn!("[qbz-qt] queue: requeued remote history play failed: {error}");
+                    crate::qconnect_qt::PeerInsertAtSlotOutcome::Inserted => {
+                        // The peer creates the new upcoming occurrence. Retire
+                        // the selected local history reference immediately so
+                        // its echo cannot leave this occurrence listed twice.
+                        runtime
+                            .core()
+                            .remove_history_entry(phase_index, expected_id)
+                            .await;
+                        publish(runtime).await;
+                        if let Err(error) =
+                            service.play_remote_renderer_track_if_active(track.id).await
+                        {
+                            log::warn!(
+                                "[qbz-qt] queue: requeued remote history play failed: {error}"
+                            );
+                        }
+                        return;
                     }
-                    return;
+                    crate::qconnect_qt::PeerInsertAtSlotOutcome::HandledFailure => return,
+                    crate::qconnect_qt::PeerInsertAtSlotOutcome::Inactive => {}
                 }
             }
             if crate::local_playback::preflight_queue_track(&track)
@@ -1122,17 +1137,24 @@ async fn insert_queue_track_at(
     Ok(InsertOutcome::Local)
 }
 
-/// Commit a drag from the chronological view. Upcoming rows move; history rows
-/// are reinserted (not removed from history) at the dropped upcoming slot.
+/// Commit a Queue View drag. Upcoming rows reorder only inside Upcoming.
+/// History rows may reorder inside History or move their canonical queue
+/// occurrence back into Upcoming. The latter never clones by track id, so two
+/// separately enqueued copies remain distinct while replaying the same entry
+/// keeps only its latest history position.
 pub async fn drop_extended(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     phase: &str,
     phase_index: usize,
     expected_id: u64,
+    target_phase: &str,
     to_slot: usize,
 ) {
     match phase {
         "upcoming" => {
+            if target_phase != "upcoming" {
+                return;
+            }
             let state = runtime.core().get_queue_state_full().await;
             if state.upcoming.get(phase_index).map(|track| track.id) != Some(expected_id) {
                 log::warn!("[qbz-qt] queue: upcoming changed during extended drag");
@@ -1141,6 +1163,19 @@ pub async fn drop_extended(
             move_track_flat(runtime, phase_index, to_slot).await;
         }
         "history" => {
+            if target_phase == "history" {
+                if runtime
+                    .core()
+                    .move_history_entry(phase_index, expected_id, to_slot)
+                    .await
+                {
+                    publish(runtime).await;
+                }
+                return;
+            }
+            if target_phase != "upcoming" {
+                return;
+            }
             let state = runtime.core().get_queue_state_full().await;
             let Some(track) = state.history.get(phase_index).cloned() else {
                 return;
@@ -1158,8 +1193,35 @@ pub async fn drop_extended(
                 );
                 return;
             }
-            if let Err(error) = insert_queue_track_at(runtime, track, to_slot).await {
-                log::warn!("[qbz-qt] queue: extended history drop failed: {error}");
+            if let Some(service) = crate::qconnect_qt::service() {
+                match service
+                    .insert_at_slot_on_peer_outcome(
+                        track.id,
+                        track.source.as_deref(),
+                        to_slot,
+                    )
+                    .await
+                {
+                    crate::qconnect_qt::PeerInsertAtSlotOutcome::Inserted => {
+                        runtime
+                            .core()
+                            .remove_history_entry(phase_index, expected_id)
+                            .await;
+                        publish(runtime).await;
+                        return;
+                    }
+                    crate::qconnect_qt::PeerInsertAtSlotOutcome::HandledFailure => return,
+                    crate::qconnect_qt::PeerInsertAtSlotOutcome::Inactive => {}
+                }
+            }
+            if runtime
+                .core()
+                .requeue_history_entry(phase_index, expected_id, to_slot)
+                .await
+            {
+                publish(runtime).await;
+            } else {
+                log::warn!("[qbz-qt] queue: history changed during extended drag");
             }
         }
         _ => {}

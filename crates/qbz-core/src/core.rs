@@ -693,6 +693,60 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         success
     }
 
+    /// Reorder one playback-history occurrence inside Queue View. Source
+    /// coordinates are most-recent-first; the destination is an oldest-first
+    /// insertion slot in the chronological projection.
+    pub async fn move_history_entry(
+        &self,
+        history_index: usize,
+        expected_id: u64,
+        to_slot: usize,
+    ) -> bool {
+        let queue = self.queue.write().await;
+        let success = queue.move_history_entry(history_index, expected_id, to_slot);
+        if success {
+            self.emit(CoreEvent::QueueUpdated {
+                state: queue.get_state(),
+            })
+            .await;
+        }
+        success
+    }
+
+    /// Move one played queue occurrence back into Upcoming without cloning
+    /// it. This is the local Queue View path; remote renderers use
+    /// `remove_history_entry` after their authoritative insert succeeds.
+    pub async fn requeue_history_entry(
+        &self,
+        history_index: usize,
+        expected_id: u64,
+        to_slot: usize,
+    ) -> bool {
+        let queue = self.queue.write().await;
+        let success = queue.requeue_history_entry(history_index, expected_id, to_slot);
+        if success {
+            self.emit(CoreEvent::QueueUpdated {
+                state: queue.get_state(),
+            })
+            .await;
+        }
+        success
+    }
+
+    /// Forget the local history occurrence that an authoritative remote
+    /// renderer just accepted back into its Upcoming sequence.
+    pub async fn remove_history_entry(&self, history_index: usize, expected_id: u64) -> bool {
+        let queue = self.queue.write().await;
+        let success = queue.remove_history_entry(history_index, expected_id);
+        if success {
+            self.emit(CoreEvent::QueueUpdated {
+                state: queue.get_state(),
+            })
+            .await;
+        }
+        success
+    }
+
     /// Jump to a specific track by index
     pub async fn play_index(&self, index: usize) -> Option<QueueTrack> {
         let queue = self.queue.write().await;

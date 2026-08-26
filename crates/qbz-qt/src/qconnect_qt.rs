@@ -455,6 +455,17 @@ pub struct QtQconnectService {
     controller_manual: Mutex<ControllerManualBlock>,
 }
 
+/// Result of routing a Queue View insertion to the active peer. The historical
+/// bool API intentionally treats both a refusal and a send failure as handled
+/// (never mutate the local queue while a peer owns playback); History needs the
+/// finer answer so it only retires its local occurrence after a confirmed send.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PeerInsertAtSlotOutcome {
+    Inactive,
+    Inserted,
+    HandledFailure,
+}
+
 /// Controller-mode mirror of the local queue's manual block (#442 "Play later").
 ///
 /// The QConnect protocol has no "later" concept and the peer's queue carries no
@@ -1748,8 +1759,19 @@ impl QtQconnectService {
         source: Option<&str>,
         slot: usize,
     ) -> bool {
+        self.insert_at_slot_on_peer_outcome(track_id, source, slot)
+            .await
+            != PeerInsertAtSlotOutcome::Inactive
+    }
+
+    pub(crate) async fn insert_at_slot_on_peer_outcome(
+        &self,
+        track_id: u64,
+        source: Option<&str>,
+        slot: usize,
+    ) -> PeerInsertAtSlotOutcome {
         if !self.is_peer_renderer_active().await {
-            return false;
+            return PeerInsertAtSlotOutcome::Inactive;
         }
         if !self.is_track_castable(track_id, source) {
             log::info!("[QConnect] insert_at_slot: track {track_id} not Qobuz-castable; refusing");
@@ -1757,7 +1779,7 @@ impl QtQconnectService {
             dev_push_event(format!(
                 "-> insert_at_slot REFUSED (non-Qobuz track {track_id})"
             ));
-            return true;
+            return PeerInsertAtSlotOutcome::HandledFailure;
         }
 
         let insert_after = self
@@ -1800,13 +1822,14 @@ impl QtQconnectService {
                     "-> insert_at_slot QueueInsertTracks {track_id} slot={slot} after={insert_after:?}"
                 ));
                 self.note_controller_insert(insert_after, &[track_id]).await;
+                PeerInsertAtSlotOutcome::Inserted
             }
             Err(err) => {
                 log::warn!("[QConnect] insert_at_slot: insert failed: {err}");
                 // Still handled: a peer owns playback; never fall back to local.
+                PeerInsertAtSlotOutcome::HandledFailure
             }
         }
-        true
     }
 
     /// Controller play-LATER routing for a MULTI-track batch (#442). Same

@@ -208,20 +208,34 @@ Rectangle {
             QbzPlaylistPicker.openForTrack(row.id)
     }
 
-    // The chevrons and the pointer drop share the same queue-wide insertion
-    // contract. Moving down inserts after the following row (`from + 2`),
-    // because `queueExtendedDrop` consumes a SLOT rather than a destination
-    // row index.
+    function historyVisualIndex(row) {
+        return (root.doc.historyCount || 0) - 1 - row.phaseIndex
+    }
+
+    // The chevrons and pointer drops use insertion slots, not destination row
+    // indices. Upcoming stays inside Upcoming. History chevrons reorder the
+    // chronological past; a pointer drag may additionally cross Now Playing
+    // and move that exact occurrence back into Upcoming.
     function moveQueueRow(row, delta) {
-        if (!row || row.phase !== "upcoming" || root.searchActive
-                || root.rowBlocked(row))
+        if (!row || root.searchActive || root.rowBlocked(row))
             return
-        var from = row.phaseIndex
-        var count = root.doc.upcomingCount || 0
+        var from
+        var count
+        var targetPhase = row.phase
+        if (row.phase === "upcoming") {
+            from = row.phaseIndex
+            count = root.doc.upcomingCount || 0
+        } else if (row.phase === "history") {
+            from = root.historyVisualIndex(row)
+            count = root.doc.historyCount || 0
+        } else {
+            return
+        }
         if ((delta < 0 && from <= 0) || (delta > 0 && from >= count - 1))
             return
         var slot = delta < 0 ? from - 1 : from + 2
-        QbzQueue.queueExtendedDrop("upcoming", from, row.id, slot)
+        QbzQueue.queueExtendedDrop(row.phase, row.phaseIndex, row.id,
+                                   targetPhase, slot)
     }
 
     // -------------------------- local reorder ----------------------------
@@ -231,6 +245,7 @@ Rectangle {
     property string dragTrackId: ""
     property var dragRow: null
     property int dragRowNumber: 0
+    property string dropPhase: ""
     property int dropSlot: -1
     property real dropLineY: -1
     property bool dropHot: false
@@ -244,12 +259,14 @@ Rectangle {
         root.dragTrackId = row.id
         root.dragRow = row
         root.dragRowNumber = visualIndex + 1
+        root.dropPhase = ""
         root.dropSlot = -1
         root.dropHot = false
     }
 
     function clearInlineDrop() {
         root.dropHot = false
+        root.dropPhase = ""
         root.dropSlot = -1
         QbzShell.dragInlineVisual = false
     }
@@ -274,13 +291,24 @@ Rectangle {
             var target = queueList.itemAtIndex(index)
             insertion = target && cy >= target.y + target.height / 2 ? index + 1 : index
         }
-        insertion = Math.max(root.firstUpcoming, insertion)
-        root.dropSlot = Math.max(0, Math.min(root.doc.upcomingCount || 0,
-                                             insertion - root.firstUpcoming))
+        var historyCount = root.doc.historyCount || 0
+        var hasCurrent = root.doc.currentIndex >= 0
+        if (root.dragPhase === "history"
+                && (insertion < historyCount
+                    || (hasCurrent && insertion === historyCount))) {
+            root.dropPhase = "history"
+            root.dropSlot = Math.max(0, Math.min(historyCount, insertion))
+        } else {
+            insertion = Math.max(root.firstUpcoming, insertion)
+            root.dropPhase = "upcoming"
+            root.dropSlot = Math.max(0, Math.min(root.doc.upcomingCount || 0,
+                                                 insertion - root.firstUpcoming))
+        }
         root.dropHot = true
         QbzShell.dragInlineVisual = true
 
-        var fullIndex = root.firstUpcoming + root.dropSlot
+        var fullIndex = root.dropPhase === "history"
+            ? root.dropSlot : root.firstUpcoming + root.dropSlot
         var lineItem = fullIndex < root.rows.length ? queueList.itemAtIndex(fullIndex) : null
         if (lineItem)
             root.dropLineY = queueList.y + lineItem.y - queueList.contentY
@@ -297,17 +325,20 @@ Rectangle {
         var phase = root.dragPhase
         var phaseIndex = root.dragPhaseIndex
         var trackId = root.dragTrackId
+        var targetPhase = root.dropPhase
         var slot = root.dropSlot
         root.dragPhase = ""
         root.dragPhaseIndex = -1
         root.dragTrackId = ""
         root.dragRow = null
         root.dragRowNumber = 0
+        root.dropPhase = ""
         root.dropSlot = -1
         root.dropHot = false
         QbzShell.dragInlineVisual = false
         if (shouldCommit)
-            QbzQueue.queueExtendedDrop(phase, phaseIndex, trackId, slot)
+            QbzQueue.queueExtendedDrop(phase, phaseIndex, trackId,
+                                       targetPhase, slot)
     }
 
     function dragProxyY() {
@@ -617,11 +648,19 @@ Rectangle {
                         showDownload: false
                         showMenu: true
                         showReorder: !root.searchActive
-                            && rowHost.modelData.phase === "upcoming"
+                            && (rowHost.modelData.phase === "upcoming"
+                                || rowHost.modelData.phase === "history")
                             && !root.rowBlocked(rowHost.modelData)
-                        canMoveUp: rowHost.modelData.phaseIndex > 0
-                        canMoveDown: rowHost.modelData.phaseIndex
-                            < (root.doc.upcomingCount || 0) - 1
+                        canMoveUp: rowHost.modelData.phase === "upcoming"
+                            ? rowHost.modelData.phaseIndex > 0
+                            : (rowHost.modelData.phase === "history"
+                                && root.historyVisualIndex(rowHost.modelData) > 0)
+                        canMoveDown: rowHost.modelData.phase === "upcoming"
+                            ? rowHost.modelData.phaseIndex
+                                < (root.doc.upcomingCount || 0) - 1
+                            : (rowHost.modelData.phase === "history"
+                                && root.historyVisualIndex(rowHost.modelData)
+                                    < (root.doc.historyCount || 0) - 1)
                         zebra: true
                         artistLink: true
                         draggable: root.dragAllowed(rowHost.modelData)
@@ -682,12 +721,21 @@ Rectangle {
                 showDownload: false
                 showMenu: true
                 showReorder: root.dragRow !== null
-                    && root.dragRow.phase === "upcoming"
+                    && (root.dragRow.phase === "upcoming"
+                        || root.dragRow.phase === "history")
                     && !root.searchActive
                     && !root.rowBlocked(root.dragRow)
-                canMoveUp: root.dragRow !== null && root.dragRow.phaseIndex > 0
-                canMoveDown: root.dragRow !== null && root.dragRow.phaseIndex
-                    < (root.doc.upcomingCount || 0) - 1
+                canMoveUp: root.dragRow !== null
+                    && (root.dragRow.phase === "upcoming"
+                        ? root.dragRow.phaseIndex > 0
+                        : (root.dragRow.phase === "history"
+                            && root.historyVisualIndex(root.dragRow) > 0))
+                canMoveDown: root.dragRow !== null
+                    && (root.dragRow.phase === "upcoming"
+                        ? root.dragRow.phaseIndex < (root.doc.upcomingCount || 0) - 1
+                        : (root.dragRow.phase === "history"
+                            && root.historyVisualIndex(root.dragRow)
+                                < (root.doc.historyCount || 0) - 1))
                 zebra: true
                 artistLink: true
                 draggable: false
