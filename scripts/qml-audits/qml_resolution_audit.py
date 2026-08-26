@@ -12,6 +12,33 @@ import pathlib
 import re
 import sys
 
+def qt_qml_dir() -> pathlib.Path:
+    """Where Qt's own plugins.qmltypes live. QBZ_QT_QML_DIR wins (CI sets it to
+    the aqt install: $QT_ROOT_DIR/qml); then the distro layouts. Failing loudly
+    beats the alternative: with no qmltypes every Rectangle reads as unresolved
+    and the audit drowns the real findings in noise."""
+    import os
+    candidates = []
+    if os.environ.get("QBZ_QT_QML_DIR"):
+        # Explicit means explicit: a wrong value must not fall through to
+        # whatever Qt the box happens to have.
+        c = pathlib.Path(os.environ["QBZ_QT_QML_DIR"])
+        if c.is_dir() and any(c.rglob("plugins.qmltypes")):
+            return c
+        sys.exit(f"qml_resolution_audit: QBZ_QT_QML_DIR={c} has no plugins.qmltypes")
+    if os.environ.get("QT_ROOT_DIR"):
+        candidates.append(pathlib.Path(os.environ["QT_ROOT_DIR"]) / "qml")
+    candidates += [pathlib.Path(x) for x in (
+        "/usr/lib64/qt6/qml", "/usr/lib/x86_64-linux-gnu/qt6/qml",
+        "/usr/lib/aarch64-linux-gnu/qt6/qml", "/usr/lib/qt6/qml",
+        "/opt/homebrew/share/qt/qml", "/usr/local/share/qt/qml")]
+    for c in candidates:
+        if c.is_dir() and any(c.rglob("plugins.qmltypes")):
+            return c
+    sys.exit("qml_resolution_audit: no Qt qml dir with plugins.qmltypes found — "
+             "set QBZ_QT_QML_DIR (tried: " + ", ".join(str(c) for c in candidates) + ")")
+
+
 ROOT = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else
                     "/home/blitzkriegfc/Personal/qbz/qbz-worktrees/qbz-qt/crates/qbz-qt")
 QML = ROOT / "qml"
@@ -33,7 +60,7 @@ def strip(src: str) -> str:
 
 def qt_builtins() -> set:
     names = set()
-    for p in pathlib.Path("/usr/lib64/qt6/qml").rglob("*.qmltypes"):
+    for p in qt_qml_dir().rglob("*.qmltypes"):
         try:
             for m in re.finditer(r'"(?:[A-Za-z0-9_.]+)/([A-Z]\w+) [\d.]+"', p.read_text(errors="ignore")):
                 names.add(m.group(1))

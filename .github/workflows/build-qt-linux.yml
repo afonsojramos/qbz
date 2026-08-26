@@ -97,10 +97,11 @@ jobs:
             libwayland-client0 libwayland-egl1 libwayland-cursor0 libegl1 libgl1 \
             patchelf file binutils
 
-      # Official Qt binaries. `qtshadertools` brings `qsb`; the committed .qsb
-      # files make it optional for the build (build.rs warns), but the
-      # re-bake keeps shaders honest against the pinned Qt. The arm64 host
-      # exists in aqt from 6.7 — the first aarch64 dispatch is the proof.
+      # Official Qt binaries — WITHOUT qtshadertools: with qsb on PATH build.rs
+      # re-bakes shaders by mtime and a fresh checkout is nondeterministic.
+      # The build ships the committed .qsb (build.rs warns and keeps them);
+      # shader health is judged by test-crates.yml's shader-gate. The arm64
+      # host exists in aqt from 6.7 — the first aarch64 dispatch is the proof.
       - name: Install Qt ${{ env.QT_VERSION }}
         uses: jurplel/install-qt-action@v4
         with:
@@ -108,7 +109,6 @@ jobs:
           host: ${{ inputs.arch == 'aarch64' && 'linux_arm64' || 'linux' }}
           target: desktop
           arch: ${{ inputs.arch == 'aarch64' && 'linux_gcc_arm64' || 'linux_gcc_64' }}
-          modules: qtshadertools
           cache: true
 
       - name: Setup Rust (stable)

@@ -112,6 +112,7 @@ jobs:
             exit 1
           fi
 
+      # Without qtshadertools: the committed .qsb ship (see build-qt-linux.yml).
       - name: Install Qt ${{ env.QT_VERSION }} (universal)
         uses: jurplel/install-qt-action@v4
         with:
@@ -119,7 +120,6 @@ jobs:
           host: mac
           target: desktop
           arch: clang_64
-          modules: qtshadertools
           cache: true
 
       - name: Setup Rust (stable)

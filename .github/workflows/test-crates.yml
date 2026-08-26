@@ -97,6 +97,26 @@ jobs:
             echo "::error::qbzd graph resolves Slint crates:"; echo "$hits"; exit 1
           fi
 
+  # Every shader must bake with the pinned qsb. Separate job so qsb is never
+  # on PATH while cargo runs (see qt-gate).
+  shader-gate:
+    name: shader bake gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Qt ${{ env.QT_VERSION }} + shader tools
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: qtshadertools
+          cache: true
+      - name: Bake every shader to a temp dir
+        run: scripts/qml-audits/shader_bake_gate.sh "$QT_ROOT_DIR/bin/qsb"
+
   qt-gate:
     name: qt gate (audits, tests, offscreen boot)
     runs-on: ubuntu-24.04
@@ -104,17 +124,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
-      # Cheapest gates first. The audits are ~1 s and catch exactly the class
-      # of mistake nothing else in CI can see.
-      - name: QML audits
-        run: |
-          set -euo pipefail
-          for a in qml_resolution_audit qml_singleton_xref qml_eager_tab_audit qml_module_registration_audit qml_icon_bake_audit; do
-            echo "::group::$a"
-            python3 "scripts/qml-audits/$a.py" "$PWD/crates/qbz-qt"
-            echo "::endgroup::"
-          done
 
       - name: Install system dependencies
         run: |
@@ -124,6 +133,9 @@ jobs:
             libasound2-dev libjack-jackd2-dev libdbus-1-dev libssl-dev \
             libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev
 
+      # No qtshadertools here ON PURPOSE: with qsb on PATH build.rs re-bakes
+      # shaders by mtime, which makes a fresh checkout nondeterministic. The
+      # build ships the committed .qsb; shader health is the shader-gate job.
       - name: Install Qt ${{ env.QT_VERSION }}
         uses: jurplel/install-qt-action@v4
         with:
@@ -131,8 +143,22 @@ jobs:
           host: linux
           target: desktop
           arch: linux_gcc_64
-          modules: qtshadertools
           cache: true
+
+      # The audits need Qt's own plugins.qmltypes to resolve QtQuick types —
+      # hence after the Qt install, pointed at it. ~1 s, and the class of
+      # mistake nothing else in CI can see (a missing component, a bridge
+      # member that does not exist).
+      - name: QML audits
+        env:
+          QBZ_QT_QML_DIR: ${{ env.QT_ROOT_DIR }}/qml
+        run: |
+          set -euo pipefail
+          for a in qml_resolution_audit qml_singleton_xref qml_eager_tab_audit qml_module_registration_audit qml_icon_bake_audit; do
+            echo "::group::$a"
+            python3 "scripts/qml-audits/$a.py" "$PWD/crates/qbz-qt"
+            echo "::endgroup::"
+          done
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
