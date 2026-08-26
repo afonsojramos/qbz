@@ -2746,7 +2746,11 @@ pub(crate) fn library_toggle_favorite(kind: String, id: String) {
     let runtime = app();
     spawn(async move {
         if let Some(value) = library_qt::toggle_favorite(&runtime, &kind, &id).await {
+            let membership_changed = !value && library_qt::remove_local_favorite_row(&kind, &id);
             emit_library_favorite(&kind, &id, value);
+            if membership_changed {
+                publish_library_document();
+            }
         }
     });
 }

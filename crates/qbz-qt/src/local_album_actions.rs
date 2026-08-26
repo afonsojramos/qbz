@@ -580,6 +580,7 @@ pub(crate) fn toggle_album_favorite(
         source: source.to_string(),
         favorited_at: 0,
     };
+    let feed_item = item.clone();
     crate::spawn(async move {
         let id_for_write = id.clone();
         let result = tokio::task::spawn_blocking(move || {
@@ -601,6 +602,12 @@ pub(crate) fn toggle_album_favorite(
                 crate::library_qt::is_local_favorite("album", &id)
             }
         };
+        let membership_changed = if favorite {
+            crate::library_qt::insert_local_favorite_row(&feed_item)
+        } else {
+            crate::library_qt::set_feed_favorite("album", &id, false);
+            crate::library_qt::remove_local_favorite_row("album", &id)
+        };
         state(|local| {
             for row in local.albums.iter_mut().chain(local.folders.iter_mut()) {
                 if row.id == id {
@@ -608,6 +615,10 @@ pub(crate) fn toggle_album_favorite(
                 }
             }
         });
+        crate::emit_library_favorite("album", &id, favorite);
+        if membership_changed {
+            crate::publish_library_document();
+        }
         ui(move |mut bridge| {
             bridge
                 .as_mut()

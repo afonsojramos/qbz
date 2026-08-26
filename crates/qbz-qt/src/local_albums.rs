@@ -13,7 +13,7 @@
 //!  - Album detail: a `plex:`-prefixed group key is served from the Plex
 //!    cache instead of `library.db`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use qbz_library::album_grouping::AlbumGroupMode;
 use qbz_library::{AlbumTrackEvidence, AudioFormat, LocalAlbum, LocalTrack};
@@ -104,6 +104,66 @@ pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
         s.album_version_ids = version_ids;
     });
     Ok(rows)
+}
+
+/// Resolve which persisted local-favorite album ids still belong to the
+/// active Local Library.  A favorite is only a display snapshot; it is not
+/// proof that the underlying local/Plex album still exists.
+///
+/// The common case checks the handful of favorite ids on one DB connection.
+/// A `logical:*` id represents several physical copies and can only be
+/// reconstructed by the same coalescing pass as the Albums tab, so that rare
+/// arm deliberately runs the full loader once rather than guessing from a
+/// stale in-memory version map.
+pub fn existing_favorite_album_ids_blocking(
+    candidates: Vec<(String, String)>,
+) -> Result<HashSet<String>, String> {
+    if candidates.is_empty() {
+        return Ok(HashSet::new());
+    }
+    if candidates.iter().any(|(id, _)| id.starts_with("logical:")) {
+        return load_albums_blocking().map(|rows| rows.into_iter().map(|row| row.id).collect());
+    }
+
+    let mut existing = HashSet::new();
+    for (id, _) in candidates.iter().filter(|(_, source)| source == "plex") {
+        if crate::local_plex::is_enabled() && !crate::local_plex::album_tracks(id).is_empty() {
+            existing.insert(id.clone());
+        }
+    }
+
+    let local_ids = candidates
+        .iter()
+        .filter(|(_, source)| source != "plex")
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    if local_ids.is_empty() {
+        return Ok(existing);
+    }
+    let mode = group_mode();
+    let found = with_db(|db| {
+        let mut found = HashSet::new();
+        for id in &local_ids {
+            let tracks = match mode {
+                AlbumGroupMode::Metadata => {
+                    let metadata = db.get_album_tracks_metadata(id)?;
+                    if metadata.is_empty() {
+                        db.get_album_tracks(id)?
+                    } else {
+                        metadata
+                    }
+                }
+                AlbumGroupMode::Folder => db.get_album_tracks(id)?,
+            };
+            if !tracks.is_empty() {
+                found.insert(id.clone());
+            }
+        }
+        Ok(found)
+    })
+    .ok_or_else(|| "local library not available".to_string())?;
+    existing.extend(found);
+    Ok(existing)
 }
 
 /// Fold source copies into one visible album only when their content strongly

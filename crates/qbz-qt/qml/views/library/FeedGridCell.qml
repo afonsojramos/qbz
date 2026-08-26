@@ -85,6 +85,7 @@ Item {
             isFavorite: cell.item.isFavorite
             isPinned: cell.item.isPinned
             qobuzUnavailable: cell.item.qobuzUnavailable === true
+                || cell.item.sourceUnavailable === true
             cacheStatus: cell.item.cacheStatus !== undefined
                 ? cell.item.cacheStatus : 0
             // The pin payload's display snapshot: the REMOTE url, never

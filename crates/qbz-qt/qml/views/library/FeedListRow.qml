@@ -34,15 +34,19 @@ Rectangle {
         ? theme.surfaceHover
         : (feedRow.displayIndex % 2 === 1 ? theme.alphaTier(4) : "transparent")
 
-    // Catalog-withdrawal contract shared with TrackRow/TrackCard. A complete
-    // offline copy keeps the row live; the bridge signal updates that answer
-    // without waiting for a full Library document republish.
+    // Catalog-withdrawal contract shared with TrackRow/TrackCard, plus a
+    // persisted local favorite whose source album has disappeared. A complete
+    // offline copy only revives the Qobuz arm; a missing local source remains
+    // a non-navigable tombstone.
+    readonly property bool sourceMissing:
+        feedRow.item.sourceUnavailable === true
     readonly property bool pulled: (feedRow.item.kind === "track"
         || feedRow.item.kind === "album")
-        && feedRow.item.qobuzUnavailable === true
+        && (feedRow.item.qobuzUnavailable === true || feedRow.sourceMissing)
     property int cacheStatus: feedRow.item.cacheStatus !== undefined
         ? feedRow.item.cacheStatus : 0
-    readonly property bool pulledDead: feedRow.pulled && feedRow.cacheStatus !== 3
+    readonly property bool pulledDead: feedRow.sourceMissing
+        || (feedRow.pulled && feedRow.cacheStatus !== 3)
 
     // Live heart, as a real property — `item.isFavorite = !…` notified
     // nothing (plain JS object; see rows/TrackRow.qml for the measurement)

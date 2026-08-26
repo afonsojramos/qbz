@@ -31,7 +31,7 @@
 //! - Purchase download states / Play purchases / multi-select / group
 //!   modes / alpha jumps: out of scope.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -100,6 +100,16 @@ pub struct FeedItem {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub not_streamable: bool,
+    /// The persisted local-favorite snapshot no longer resolves in the
+    /// active Local Library.  Kept separate from `not_streamable`: a Qobuz
+    /// withdrawal may still play from a complete download, while a missing
+    /// local/Plex source must remain a non-navigable tombstone.
+    #[serde(
+        default,
+        rename = "sourceUnavailable",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub source_unavailable: bool,
     /// Liveable exception to `not_streamable`: a complete offline copy still
     /// plays after Qobuz withdraws the catalog row. Zero is omitted so the
     /// high-cardinality feed only pays for tracks that actually carry state.
@@ -904,8 +914,39 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
             raw.clear();
         }
         let locals = local_favorites_list();
+        let album_candidates = locals
+            .iter()
+            .filter(|item| item.kind == "album")
+            .map(|item| (item.id.clone(), item.source.clone()))
+            .collect::<Vec<_>>();
+        // A failed availability query must not turn every favorite into a
+        // tombstone.  `None` means "unknown" and leaves rows interactive;
+        // the next successful Library load will settle them.
+        let existing_albums: Option<HashSet<String>> = if album_candidates.is_empty() {
+            Some(HashSet::new())
+        } else {
+            match tokio::task::spawn_blocking(move || {
+                crate::local_albums::existing_favorite_album_ids_blocking(album_candidates)
+            })
+            .await
+            {
+                Ok(Ok(ids)) => Some(ids),
+                Ok(Err(error)) => {
+                    log::warn!("[qbz-qt] local favorite availability check failed: {error}");
+                    None
+                }
+                Err(error) => {
+                    log::warn!("[qbz-qt] local favorite availability worker failed: {error}");
+                    None
+                }
+            }
+        };
         let n = locals.len();
         for (i, lf) in locals.into_iter().enumerate() {
+            let source_unavailable = lf.kind == "album"
+                && existing_albums
+                    .as_ref()
+                    .is_some_and(|ids| !ids.contains(&lf.id));
             feed.push(
                 FeedItem {
                     kind: lf.kind,
@@ -915,6 +956,7 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
                     artist: lf.artist.clone(),
                     image_url: lf.artwork_url,
                     is_favorite: true,
+                    source_unavailable,
                     added_rank: rank(i, n),
                     id: lf.id,
                     title: lf.title,
@@ -1558,7 +1600,12 @@ fn toggle_local(kind: &str, id: &str) -> Option<bool> {
 pub(crate) fn is_local_feed_id(kind: &str, id: &str) -> bool {
     match kind {
         "track" | "artist" => id.parse::<u64>().is_err(),
-        "album" => is_server_album_key(id) || id.contains('|') || id.contains('/'),
+        "album" => {
+            id.starts_with("logical:")
+                || is_server_album_key(id)
+                || id.contains('|')
+                || id.contains('/')
+        }
         _ => false,
     }
 }
@@ -1612,6 +1659,73 @@ pub(crate) fn set_feed_favorite(kind: &str, id: &str, value: bool) {
             item.is_favorite = value;
         }
     });
+}
+
+/// Reconcile a local-favorite membership change with the cached mixed feed.
+/// In the `all` local scope the live row stays and only its heart changes; in
+/// the `favorites` scope the row itself joins/leaves the document.
+pub(crate) fn remove_local_favorite_row(kind: &str, id: &str) -> bool {
+    if crate::library_prefs::local_scope() != "favorites" {
+        return false;
+    }
+    with_library_mut(|data| remove_local_favorite_row_from(data, kind, id)).unwrap_or(false)
+}
+
+fn remove_local_favorite_row_from(data: &mut LibraryData, kind: &str, id: &str) -> bool {
+    let before = data.feed.len();
+    data.feed
+        .retain(|item| !(item.group == "local" && item.kind == kind && item.id == id));
+    let removed = before - data.feed.len();
+    if removed == 0 {
+        return false;
+    }
+    data.counts.all = (data.counts.all - removed as i64).max(0);
+    true
+}
+
+/// Live counterpart of [`remove_local_favorite_row`], used when the heart was
+/// clicked on a Local Library card rather than on a row already in this feed.
+pub(crate) fn insert_local_favorite_row(item: &LocalFavItem) -> bool {
+    if crate::library_prefs::local_scope() != "favorites" {
+        set_feed_favorite(&item.kind, &item.id, true);
+        return false;
+    }
+    with_library_mut(|data| insert_local_favorite_row_into(data, item)).unwrap_or(false)
+}
+
+fn insert_local_favorite_row_into(data: &mut LibraryData, item: &LocalFavItem) -> bool {
+    let mut already_present = false;
+    for row in data
+        .feed
+        .iter_mut()
+        .filter(|row| row.kind == item.kind && row.id == item.id)
+    {
+        row.is_favorite = true;
+        already_present |= row.group == "local";
+    }
+    if already_present {
+        return false;
+    }
+    data.feed.insert(
+        0,
+        FeedItem {
+            kind: item.kind.clone(),
+            group: "local".into(),
+            source: item.source.clone(),
+            id: item.id.clone(),
+            title: item.title.clone(),
+            subtitle: item.subtitle.clone(),
+            artist: item.artist.clone(),
+            image_url: item.artwork_url.clone(),
+            art_key: feed_key(&item.kind, &item.id),
+            is_favorite: true,
+            is_pinned: crate::sidebar_qt::is_pinned(&item.kind, &item.id),
+            added_rank: 0.0,
+            ..Default::default()
+        },
+    );
+    data.counts.all += 1;
+    true
 }
 
 /// An UNFOLLOW just landed: drop the playlist's rows from the live Library
@@ -2047,6 +2161,7 @@ mod tests {
         // Still true for the two shapes that always worked.
         assert!(is_local_feed_id("album", "Artist|Album"));
         assert!(is_local_feed_id("album", "/music/Artist/Album"));
+        assert!(is_local_feed_id("album", "logical:0123456789abcdef"));
     }
 
     /// The branch that keeps a local row out of the Qobuz resolver. A local
@@ -2171,5 +2286,55 @@ mod tests {
         assert!(qt.album_id.is_none());
         assert!(qt.artist_id.is_none());
         assert!(!qt.hires);
+    }
+
+    fn empty_library(feed: Vec<FeedItem>) -> LibraryData {
+        LibraryData {
+            counts: LibraryCounts {
+                tracks: 0,
+                albums: 0,
+                artists: 0,
+                playlists: 0,
+                labels: 0,
+                all: feed.len() as i64,
+            },
+            feed,
+        }
+    }
+
+    #[test]
+    fn local_favorite_membership_adds_and_removes_the_row() {
+        let snapshot = LocalFavItem {
+            kind: "album".into(),
+            id: "/music/Artist/Album".into(),
+            title: "Album".into(),
+            subtitle: "Artist".into(),
+            artwork_url: "file:///cover.jpg".into(),
+            artist: "Artist".into(),
+            source: "local".into(),
+            favorited_at: 0,
+        };
+        let mut data = empty_library(Vec::new());
+        assert!(insert_local_favorite_row_into(&mut data, &snapshot));
+        assert_eq!(data.counts.all, 1);
+        assert_eq!(data.feed[0].art_key, "album:/music/Artist/Album");
+        assert!(data.feed[0].is_favorite);
+        assert!(!insert_local_favorite_row_into(&mut data, &snapshot));
+        assert!(remove_local_favorite_row_from(
+            &mut data,
+            "album",
+            "/music/Artist/Album"
+        ));
+        assert_eq!(data.counts.all, 0);
+        assert!(data.feed.is_empty());
+    }
+
+    #[test]
+    fn missing_source_flag_is_distinct_from_qobuz_withdrawal() {
+        let mut item = album("/music/Artist/Album");
+        item.source_unavailable = true;
+        let json = serde_json::to_value(item).expect("feed item serializes");
+        assert_eq!(json["sourceUnavailable"], true);
+        assert!(json.get("qobuzUnavailable").is_none());
     }
 }
