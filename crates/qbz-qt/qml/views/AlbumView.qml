@@ -767,9 +767,9 @@ Rectangle {
                     spacing: root.compactHeaderPref ? 4 : 12
                     Item { width: 1; height: root.compactHeaderPref ? 0 : 6 }
                     QbzSkeleton { variant: "block"; width: Math.min(420, parent.width); height: root.compactHeaderPref ? 24 : 30; cellIndex: 0; phase: skeletonPhase.on }
-                    QbzSkeleton { variant: "block"; width: Math.min(260, parent.width); height: root.compactHeaderPref ? 16 : 18; cellIndex: 1; phase: skeletonPhase.on }
+                    QbzSkeleton { visible: !root.compactHeaderPref; variant: "block"; width: Math.min(260, parent.width); height: 18; cellIndex: 1; phase: skeletonPhase.on }
                     QbzSkeleton { variant: "block"; width: Math.min(340, parent.width); height: 14; cellIndex: 2; phase: skeletonPhase.on }
-                    Item { width: 1; height: root.compactHeaderPref ? 4 : 14 }
+                    Item { width: 1; height: root.compactHeaderPref ? 10 : 14 }
                     Row {
                         spacing: 12
                         Repeater {
@@ -777,8 +777,8 @@ Rectangle {
                             delegate: QbzSkeleton {
                                 required property int index
                                 variant: "circle"
-                                width: root.compactHeaderPref ? 32 : 44
-                                height: root.compactHeaderPref ? 32 : 44
+                                width: root.compactHeaderPref ? 28 : 44
+                                height: width
                                 cellIndex: index
                                 phase: skeletonPhase.on
                             }
@@ -839,6 +839,7 @@ Rectangle {
                         height: Math.max(albumTitle.implicitHeight, 32)
                         Text {
                             id: albumTitle
+                            visible: !root.compactHeaderPref
                             anchors.left: parent.left
                             anchors.right: headerModeButton.left
                             anchors.rightMargin: 12
@@ -849,13 +850,62 @@ Rectangle {
                             font.weight: theme.weightBold
                             elide: Text.ElideRight
                         }
+                        Row {
+                            id: compactHeading
+                            visible: root.compactHeaderPref
+                            anchors.left: parent.left
+                            anchors.right: headerModeButton.left
+                            anchors.rightMargin: 10
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 0
+                            Text {
+                                id: compactAlbumTitle
+                                width: (albumHeader.artist || "") === ""
+                                    ? compactHeading.width
+                                    : Math.min(implicitWidth,
+                                               Math.max(80, compactHeading.width * 0.62))
+                                text: albumHeader.title || ""
+                                color: root.hdrStrong
+                                font.pixelSize: theme.fontSection
+                                font.weight: theme.weightBold
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                id: compactTitleSeparator
+                                visible: (albumHeader.artist || "") !== ""
+                                text: "  •  "
+                                color: root.hdrBody
+                                font.pixelSize: theme.fontSection
+                                font.weight: theme.weightBold
+                            }
+                            Text {
+                                width: Math.max(0, compactHeading.width
+                                    - compactAlbumTitle.width
+                                    - compactTitleSeparator.width)
+                                text: albumHeader.artist || ""
+                                color: compactArtistArea.containsMouse
+                                       && (albumHeader.artistId || "") !== ""
+                                    ? root.hdrStrong : root.hdrBody
+                                font.pixelSize: theme.fontSection
+                                font.weight: theme.weightBold
+                                elide: Text.ElideRight
+                                MouseArea {
+                                    id: compactArtistArea
+                                    anchors.fill: parent
+                                    enabled: (albumHeader.artistId || "") !== ""
+                                    hoverEnabled: true
+                                    cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                    onClicked: QbzArtist.openArtist(albumHeader.artistId)
+                                }
+                            }
+                        }
                         QbzIconButton {
                             id: headerModeButton
                             anchors.right: parent.right
                             anchors.top: parent.top
                             anchors.topMargin: -4
-                            btnSize: 26
-                            iconSize: 13
+                            btnSize: root.compactHeaderPref ? 22 : 26
+                            iconSize: root.compactHeaderPref ? 11 : 13
                             name: root.compactHeaderPref ? "maximize-2" : "minimize-2"
                             tintOverride: root.hdrOverlay ? "white" : ""
                             onClicked: root.toggleCompactHeader()
@@ -870,12 +920,11 @@ Rectangle {
                     Item { width: 1; height: root.compactHeaderPref ? 2 : 4 }
                     // Credited-artist line (links + role suffixes).
                     Flow {
+                        visible: !root.compactHeaderPref
                         width: parent.width
                         spacing: 0
                         Repeater {
-                            model: root.compactHeaderPref
-                                ? [[albumHeader.artist || "", albumHeader.artistId || "", ""]]
-                                : (albumHeader.credits || [])
+                            model: albumHeader.credits || []
                             delegate: Row {
                                 required property var modelData
                                 required property int index
@@ -1004,7 +1053,7 @@ Rectangle {
                         }
                     }
 
-                    Item { width: 1; height: root.compactHeaderPref ? 4 : 20 }
+                    Item { width: 1; height: root.compactHeaderPref ? 10 : 20 }
                     // Action row — AlbumPageView.slint:504-640. One shared
                     // CircleAction for every button including Play (the
                     // hand-rolled 44px disc it used to be drifted from the
@@ -1016,6 +1065,7 @@ Rectangle {
                         QbzCircleAction {
                             primary: true
                             compactPrimary: root.compactHeaderPref
+                            diameterOverride: root.compactHeaderPref ? 28 : 0
                             overlay: root.hdrOverlay
                             name: "play-fill"
                             anchors.verticalCenter: parent.verticalCenter
@@ -1023,6 +1073,7 @@ Rectangle {
                         }
                         QbzCircleAction {
                             name: "shuffle"
+                            diameterOverride: root.compactHeaderPref ? 28 : 0
                             overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: QbzPlayer.playAlbumShuffled(albumHeader.id)
@@ -1030,6 +1081,7 @@ Rectangle {
                         QbzCircleAction {
                             readonly property bool favorite: root.toggleState("album", albumHeader.isFavorite)
                             name: favorite ? "heart-filled" : "heart"
+                            diameterOverride: root.compactHeaderPref ? 28 : 0
                             overlay: root.hdrOverlay
                             active: favorite
                             anchors.verticalCenter: parent.verticalCenter
@@ -1043,6 +1095,7 @@ Rectangle {
                         // minimal track objects are enriched before play).
                         QbzCircleAction {
                             name: "radio"
+                            diameterOverride: root.compactHeaderPref ? 28 : 0
                             overlay: root.hdrOverlay
                             // A radio is a fetch + an enrich + a queue write,
                             // and until the first track resolves nothing on
@@ -1057,6 +1110,7 @@ Rectangle {
                         QbzCircleAction {
                             visible: albumHeader.hasBooklet === true
                             name: "book-open"
+                            diameterOverride: root.compactHeaderPref ? 28 : 0
                             overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: QbzAlbum.downloadBooklet()
@@ -1065,6 +1119,7 @@ Rectangle {
                         // BOTH kinds — myqbz_add_qt's Accepts engine).
                         QbzCircleAction {
                             name: "cassette-tape"
+                            diameterOverride: root.compactHeaderPref ? 28 : 0
                             overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: QbzAlbum.addToMixtape(albumHeader.id)
@@ -1073,6 +1128,7 @@ Rectangle {
                         // (AlbumInfoModal.qml, data via album_info_qt.rs).
                         QbzCircleAction {
                             name: "info"
+                            diameterOverride: root.compactHeaderPref ? 28 : 0
                             overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: albumInfo.openFor(albumHeader.id)
@@ -1080,6 +1136,7 @@ Rectangle {
                         QbzCircleAction {
                             id: albumMenuBtn
                             name: "ellipsis"
+                            diameterOverride: root.compactHeaderPref ? 28 : 0
                             overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: function (mouse) { albumMenu.openAtCursor(albumMenuBtn, mouse.x, mouse.y) }

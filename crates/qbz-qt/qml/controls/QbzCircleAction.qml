@@ -71,6 +71,10 @@ Rectangle {
     /// Preserve the primary action palette while using the secondary action's
     /// footprint. Album headers use this when their global compact mode is on.
     property bool compactPrimary: false
+    /// Optional footprint for exceptionally dense hosts. Zero keeps the
+    /// canonical 44/32px sizes; compact album headers use 28px for every
+    /// action so Play no longer dominates the row.
+    property int diameterOverride: 0
     property bool btnEnabled: true
     /// While the action's work is in flight the glyph swaps for a spinning
     /// arc (CircleAction.slint:18 / :77 — the reference has this arm and the
@@ -91,9 +95,11 @@ Rectangle {
     readonly property string onSurfaceTint: "textPrimary"
 
     readonly property bool largePrimary: primary && !compactPrimary
+    readonly property int resolvedDiameter: diameterOverride > 0
+        ? diameterOverride : (largePrimary ? 44 : 32)
 
-    width: largePrimary ? 44 : 32
-    height: largePrimary ? 44 : 32
+    width: resolvedDiameter
+    height: resolvedDiameter
     radius: width / 2
     color: overlay
         ? (primary
@@ -159,8 +165,10 @@ Rectangle {
     QbzIcon {
         visible: !root.loading
         name: root.name
-        width: root.largePrimary ? 19 : 15
-        height: root.largePrimary ? 19 : 15
+        width: root.diameterOverride > 0
+            ? Math.round(root.resolvedDiameter * 0.46)
+            : (root.largePrimary ? 19 : 15)
+        height: width
         // Whole-pixel centring, both axes — CircleAction.slint:67-68 rounds
         // them explicitly for the same reason: 44-19 and 32-15 are both ODD,
         // so `anchors.centerIn` lands the glyph on 12.5px / 8.5px and the

@@ -82,6 +82,7 @@ Row {
             height: Math.max(localAlbumTitle.implicitHeight, 32)
             Text {
                 id: localAlbumTitle
+                visible: !root.compact
                 anchors.left: parent.left
                 anchors.right: localHeaderModeButton.left
                 anchors.rightMargin: 12
@@ -92,13 +93,59 @@ Row {
                 font.weight: theme.weightBold
                 elide: Text.ElideRight
             }
+            Row {
+                id: compactHeading
+                visible: root.compact
+                anchors.left: parent.left
+                anchors.right: localHeaderModeButton.left
+                anchors.rightMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 0
+                Text {
+                    id: compactAlbumTitle
+                    width: !root.album || (root.album.artist || "") === ""
+                        ? compactHeading.width
+                        : Math.min(implicitWidth,
+                                   Math.max(80, compactHeading.width * 0.62))
+                    text: root.album ? (root.album.title || "") : ""
+                    color: theme.textPrimary
+                    font.pixelSize: theme.fontSection
+                    font.weight: theme.weightBold
+                    elide: Text.ElideRight
+                }
+                Text {
+                    id: compactTitleSeparator
+                    visible: root.album && (root.album.artist || "") !== ""
+                    text: "  •  "
+                    color: theme.textSecondary
+                    font.pixelSize: theme.fontSection
+                    font.weight: theme.weightBold
+                }
+                Text {
+                    width: Math.max(0, compactHeading.width
+                        - compactAlbumTitle.width - compactTitleSeparator.width)
+                    text: root.album ? (root.album.artist || "") : ""
+                    color: compactArtistArea.containsMouse
+                        ? theme.textPrimary : theme.textSecondary
+                    font.pixelSize: theme.fontSection
+                    font.weight: theme.weightBold
+                    elide: Text.ElideRight
+                    MouseArea {
+                        id: compactArtistArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: if (root.album) root.openArtist(root.album.artist)
+                    }
+                }
+            }
             QbzIconButton {
                 id: localHeaderModeButton
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.topMargin: -4
-                btnSize: 26
-                iconSize: 13
+                btnSize: root.compact ? 22 : 26
+                iconSize: root.compact ? 11 : 13
                 name: root.compact ? "maximize-2" : "minimize-2"
                 onClicked: root.compactToggled()
                 HoverHandler { id: localHeaderModeHover }
@@ -111,6 +158,7 @@ Row {
         }
         Item { width: 1; height: root.compact ? 2 : 4 }
         Row {
+            visible: !root.compact
             spacing: 8
             Text {
                 text: root.album ? (root.album.artist || "") : ""
@@ -181,7 +229,7 @@ Row {
             font.pixelSize: theme.fontBody
             elide: Text.ElideRight
         }
-        Item { width: 1; height: root.compact ? 4 : 20 }
+        Item { width: 1; height: root.compact ? 10 : 20 }
 
         // ---- Local action row ----
         Row {
@@ -190,26 +238,31 @@ Row {
                 name: "play-fill"
                 primary: true
                 compactPrimary: root.compact
+                diameterOverride: root.compact ? 28 : 0
                 onClicked: QbzLocal.albumSelectedAction("play", "")
             }
             QbzCircleAction {
                 name: "shuffle"
+                diameterOverride: root.compact ? 28 : 0
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzLocal.albumSelectedAction("shuffle", "")
             }
             // ASSET GAP: Slint uses `pencil`; the Qt set ships pen-line.
             QbzCircleAction {
                 name: "pen-line"
+                diameterOverride: root.compact ? 28 : 0
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzLocal.albumEditTags(root.album.id)
             }
             QbzCircleAction {
                 name: "list-plus"
+                diameterOverride: root.compact ? 28 : 0
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzLocal.albumAddToPlaylist(root.album.id)
             }
             QbzCircleAction {
                 name: "cassette-tape"
+                diameterOverride: root.compact ? 28 : 0
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzLocal.albumAddToMixtape(root.album.id)
             }

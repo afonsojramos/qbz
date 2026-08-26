@@ -130,6 +130,7 @@ Item {
     property bool headerRound: false
     property bool compactHeader: false
     property int actionCount: 0
+    property real actionSize: 32
     // "cardGrid" — cell pitch vs the card drawn inside it.
     property real cellW: 220
     property real cellH: 266
@@ -407,6 +408,7 @@ Item {
                     opacity: root.breathe
                 }
                 Rectangle {
+                    visible: !root.compactHeader
                     y: root.compactHeader ? 34 : 23
                     width: root.compactHeader ? Math.min(parent.width, 260)
                         : Math.min(parent.width, 420)
@@ -416,7 +418,7 @@ Item {
                     opacity: root.breathe
                 }
                 Rectangle {
-                    y: root.compactHeader ? 56 : 63
+                    y: root.compactHeader ? 40 : 63
                     width: Math.min(parent.width, 300)
                     height: 14
                     radius: root.blockRadius
@@ -436,11 +438,11 @@ Item {
                     model: root.actionCount
                     delegate: Rectangle {
                         required property int index
-                        x: index * 44
-                        y: root.compactHeader ? 80 : 110
-                        width: 32
-                        height: 32
-                        radius: 16
+                        x: index * (root.actionSize + 12)
+                        y: root.compactHeader ? 70 : 110
+                        width: root.actionSize
+                        height: root.actionSize
+                        radius: root.actionSize / 2
                         color: theme.surfaceElevated
                         opacity: root.breathe
                     }

@@ -433,6 +433,7 @@ Rectangle {
                 coverGap: root.compactHeaderPref ? 20 : 32
                 compactHeader: root.compactHeaderPref
                 actionCount: 5
+                actionSize: root.compactHeaderPref ? 28 : 32
                 phase: root.skelPhase
             }
             LocalAlbumHeader {
