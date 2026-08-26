@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScrobblerSettings {
     /// Master toggle. When false, the whole scrobblers section body is hidden.
     /// Default OFF — integrations are opt-in.
@@ -56,6 +56,26 @@ pub struct ScrobblerSettings {
     pub listenbrainz_token: String,
     /// ListenBrainz username (`UserInfo.user_name`).
     pub listenbrainz_username: String,
+
+    /// Keep the independent scrobblers active without a Qobuz session.
+    /// Default ON: Qobuz authentication is unrelated to Last.fm/LB auth.
+    pub allow_logged_out_scrobbling: bool,
+}
+
+impl Default for ScrobblerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ui_collapsed: false,
+            lastfm_enabled: false,
+            lastfm_session_key: String::new(),
+            lastfm_username: String::new(),
+            listenbrainz_enabled: false,
+            listenbrainz_token: String::new(),
+            listenbrainz_username: String::new(),
+            allow_logged_out_scrobbling: true,
+        }
+    }
 }
 
 impl ScrobblerSettings {
@@ -106,10 +126,19 @@ impl ScrobblerSettingsStore {
                 lastfm_username TEXT NOT NULL DEFAULT '',
                 listenbrainz_enabled INTEGER NOT NULL DEFAULT 0,
                 listenbrainz_token TEXT NOT NULL DEFAULT '',
-                listenbrainz_username TEXT NOT NULL DEFAULT ''
+                listenbrainz_username TEXT NOT NULL DEFAULT '',
+                allow_logged_out_scrobbling INTEGER NOT NULL DEFAULT 1
             );",
         )
         .map_err(|e| format!("Failed to create scrobbler settings table: {}", e))?;
+
+        // Existing Slint/Qt profiles predate logged-out mode. Additive and
+        // default-on, so their established scrobbler setup keeps working.
+        let _ = conn.execute(
+            "ALTER TABLE scrobbler_settings
+             ADD COLUMN allow_logged_out_scrobbling INTEGER NOT NULL DEFAULT 1",
+            [],
+        );
 
         conn.execute(
             "INSERT OR IGNORE INTO scrobbler_settings
@@ -135,7 +164,7 @@ impl ScrobblerSettingsStore {
             .query_row(
                 "SELECT enabled, ui_collapsed, lastfm_enabled, lastfm_session_key,
                         lastfm_username, listenbrainz_enabled, listenbrainz_token,
-                        listenbrainz_username
+                        listenbrainz_username, allow_logged_out_scrobbling
                  FROM scrobbler_settings WHERE id = 1",
                 [],
                 |row| {
@@ -147,6 +176,7 @@ impl ScrobblerSettingsStore {
                     let listenbrainz_enabled: i32 = row.get(5)?;
                     let listenbrainz_token: String = row.get(6)?;
                     let listenbrainz_username: String = row.get(7)?;
+                    let allow_logged_out_scrobbling: i32 = row.get(8)?;
                     Ok(ScrobblerSettings {
                         enabled: enabled != 0,
                         ui_collapsed: ui_collapsed != 0,
@@ -156,6 +186,7 @@ impl ScrobblerSettingsStore {
                         listenbrainz_enabled: listenbrainz_enabled != 0,
                         listenbrainz_token,
                         listenbrainz_username,
+                        allow_logged_out_scrobbling: allow_logged_out_scrobbling != 0,
                     })
                 },
             )
@@ -179,6 +210,17 @@ impl ScrobblerSettingsStore {
                 params![if value { 1 } else { 0 }],
             )
             .map_err(|e| format!("Failed to set scrobbler ui_collapsed: {}", e))?;
+        Ok(())
+    }
+
+    pub fn set_allow_logged_out_scrobbling(&self, value: bool) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE scrobbler_settings
+                 SET allow_logged_out_scrobbling = ?1 WHERE id = 1",
+                params![if value { 1 } else { 0 }],
+            )
+            .map_err(|e| format!("Failed to set logged-out scrobbling: {}", e))?;
         Ok(())
     }
 
@@ -315,6 +357,10 @@ impl ScrobblerSettingsState {
         self.with_store(|s| s.set_ui_collapsed(value))
     }
 
+    pub fn set_allow_logged_out_scrobbling(&self, value: bool) -> Result<(), String> {
+        self.with_store(|s| s.set_allow_logged_out_scrobbling(value))
+    }
+
     pub fn set_lastfm_enabled(&self, value: bool) -> Result<(), String> {
         self.with_store(|s| s.set_lastfm_enabled(value))
     }
@@ -363,6 +409,7 @@ mod tests {
         assert!(!s.listenbrainz_enabled);
         assert!(s.listenbrainz_token.is_empty());
         assert!(s.listenbrainz_username.is_empty());
+        assert!(s.allow_logged_out_scrobbling);
         assert!(!s.lastfm_is_authed());
         assert!(!s.listenbrainz_is_authed());
         assert!(!s.lastfm_active());
@@ -375,6 +422,7 @@ mod tests {
         let store = ScrobblerSettingsStore::new_at(&dir).expect("open store");
         let s = store.get_settings().expect("get settings");
         assert!(!s.enabled);
+        assert!(s.allow_logged_out_scrobbling);
         assert!(!s.lastfm_is_authed());
         assert!(!s.listenbrainz_is_authed());
         let _ = std::fs::remove_dir_all(dir);
@@ -387,6 +435,9 @@ mod tests {
             let store = ScrobblerSettingsStore::new_at(&dir).expect("open store");
             store.set_enabled(true).expect("enabled");
             store.set_ui_collapsed(true).expect("collapsed");
+            store
+                .set_allow_logged_out_scrobbling(false)
+                .expect("logged-out scrobbling");
             store.set_lastfm_enabled(true).expect("lfm enabled");
             store
                 .set_lastfm_session("  sk-123  ", "  alice  ")
@@ -400,6 +451,7 @@ mod tests {
         let s = reopened.get_settings().expect("get settings");
         assert!(s.enabled);
         assert!(s.ui_collapsed);
+        assert!(!s.allow_logged_out_scrobbling);
         assert!(s.lastfm_enabled);
         // set_lastfm_session trims whitespace.
         assert_eq!(s.lastfm_session_key, "sk-123");
@@ -409,6 +461,37 @@ mod tests {
         assert_eq!(s.listenbrainz_username, "bob");
         assert!(s.lastfm_active());
         assert!(s.listenbrainz_active());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn existing_database_migrates_logged_out_scrobbling_default_on() {
+        let dir = unique_test_dir("scrobbler-migrate-logged-out");
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let conn = Connection::open(dir.join("scrobbler_settings.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE scrobbler_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    ui_collapsed INTEGER NOT NULL DEFAULT 0,
+                    lastfm_enabled INTEGER NOT NULL DEFAULT 0,
+                    lastfm_session_key TEXT NOT NULL DEFAULT '',
+                    lastfm_username TEXT NOT NULL DEFAULT '',
+                    listenbrainz_enabled INTEGER NOT NULL DEFAULT 0,
+                    listenbrainz_token TEXT NOT NULL DEFAULT '',
+                    listenbrainz_username TEXT NOT NULL DEFAULT ''
+                );
+                INSERT INTO scrobbler_settings VALUES (1, 1, 0, 0, '', '', 0, '', '');",
+            )
+            .unwrap();
+        }
+
+        let store = ScrobblerSettingsStore::new_at(&dir).expect("migrate store");
+        let settings = store.get_settings().expect("get migrated settings");
+        assert!(settings.enabled);
+        assert!(settings.allow_logged_out_scrobbling);
+
         let _ = std::fs::remove_dir_all(dir);
     }
 

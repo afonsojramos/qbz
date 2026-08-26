@@ -1599,3 +1599,21 @@ msgstr "Show full album header"
 
 msgid "Show compact album header"
 msgstr "Show compact album header"
+
+msgid "Immediate scrobbling"
+msgstr "Immediate scrobbling"
+
+msgid "Send scrobbles immediately while manual offline mode is enabled."
+msgstr "Send scrobbles immediately while manual offline mode is enabled."
+
+msgid "Accumulated scrobbling"
+msgstr "Accumulated scrobbling"
+
+msgid "Queue scrobbles while the network is unavailable and send them when it returns. Last.fm accepts scrobbles up to 2 weeks old."
+msgstr "Queue scrobbles while the network is unavailable and send them when it returns. Last.fm accepts scrobbles up to 2 weeks old."
+
+msgid "Scrobble while logged out"
+msgstr "Scrobble while logged out"
+
+msgid "Continue sending plays to connected scrobblers without a Qobuz session."
+msgstr "Continue sending plays to connected scrobblers without a Qobuz session."

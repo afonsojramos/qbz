@@ -176,6 +176,29 @@ impl OfflineModeEngine {
         store.set_show_network_folders_in_manual_offline(enabled)
     }
 
+    /// Restore the Tauri manual-offline policy: submit scrobbles through the
+    /// network immediately even while the Qobuz offline gate is induced.
+    /// Enabling it atomically disables accumulated mode in the shared store.
+    pub fn set_allow_immediate_scrobbling(&self, enabled: bool) -> Result<(), String> {
+        let guard = self
+            .store
+            .lock()
+            .map_err(|e| format!("offline store lock poisoned: {}", e))?;
+        let store = guard.as_ref().ok_or("No active session")?;
+        store.set_allow_immediate_scrobbling(enabled)
+    }
+
+    /// Restore the Tauri physical-offline policy: retain scrobbles until the
+    /// network is usable. Enabling it atomically disables immediate mode.
+    pub fn set_allow_accumulated_scrobbling(&self, enabled: bool) -> Result<(), String> {
+        let guard = self
+            .store
+            .lock()
+            .map_err(|e| format!("offline store lock poisoned: {}", e))?;
+        let store = guard.as_ref().ok_or("No active session")?;
+        store.set_allow_accumulated_scrobbling(enabled)
+    }
+
     /// Flip induced offline (Settings toggle). Always succeeds in either
     /// direction; persists the flag, handles the #279 snapshot/restore, then
     /// recomputes the mode (which flips the Qobuz gate).

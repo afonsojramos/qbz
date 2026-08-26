@@ -5995,3 +5995,21 @@ msgstr "Mostrar cabeçalho completo do álbum"
 
 msgid "Show compact album header"
 msgstr "Mostrar cabeçalho compacto do álbum"
+
+msgid "Immediate scrobbling"
+msgstr "Scrobbling imediato"
+
+msgid "Send scrobbles immediately while manual offline mode is enabled."
+msgstr "Enviar scrobbles imediatamente enquanto o modo offline manual estiver ativado."
+
+msgid "Accumulated scrobbling"
+msgstr "Scrobbling acumulado"
+
+msgid "Queue scrobbles while the network is unavailable and send them when it returns. Last.fm accepts scrobbles up to 2 weeks old."
+msgstr "Colocar scrobbles na fila enquanto a rede estiver indisponível e enviá-los quando ela voltar. O Last.fm aceita scrobbles de até 2 semanas."
+
+msgid "Scrobble while logged out"
+msgstr "Scrobbling sem login"
+
+msgid "Continue sending plays to connected scrobblers without a Qobuz session."
+msgstr "Continuar enviando reproduções aos serviços conectados sem uma sessão do Qobuz."

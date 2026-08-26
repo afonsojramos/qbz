@@ -135,6 +135,19 @@ Column {
         width: parent.width
         spacing: 4
 
+        SettingRow {
+            label: QbzSession.tr("Scrobble while logged out", QbzSession.trRev)
+            description: QbzSession.tr("Continue sending plays to connected scrobblers without a Qobuz session.", QbzSession.trRev)
+            QbzToggle {
+                checked: root.doc.allowLoggedOutScrobbling !== false
+                onToggled: function (v) {
+                    QbzBridge.settingsBool("scrobble-logged-out", v)
+                }
+            }
+        }
+
+        SettingsSpacer { }
+
         // ------------------------- LAST.FM ------------------------------
         GroupHeader { text: QbzSession.tr("LAST.FM", QbzSession.trRev) }
         SettingRow {

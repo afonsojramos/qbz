@@ -61,6 +61,31 @@ Column {
             onToggled: function (v) { QbzBridge.settingsBool("offline-mode-enabled", v) }
         }
     }
+    // Restored from the Tauri offline settings. Immediate and accumulated
+    // modes are mutually exclusive in SQLite, so one settings republish keeps
+    // both toggles in lock-step even if the write originates elsewhere.
+    SettingRow {
+        visible: root.off.modeEnabled === true
+        label: QbzSession.tr("Immediate scrobbling", QbzSession.trRev)
+        description: QbzSession.tr("Send scrobbles immediately while manual offline mode is enabled.", QbzSession.trRev)
+        QbzToggle {
+            checked: root.off.allowImmediateScrobbling === true
+            onToggled: function (v) {
+                QbzBridge.settingsBool("offline-scrobble-immediate", v)
+            }
+        }
+    }
+    SettingRow {
+        visible: root.off.modeEnabled === true
+        label: QbzSession.tr("Accumulated scrobbling", QbzSession.trRev)
+        description: QbzSession.tr("Queue scrobbles while the network is unavailable and send them when it returns. Last.fm accepts scrobbles up to 2 weeks old.", QbzSession.trRev)
+        QbzToggle {
+            checked: root.off.allowAccumulatedScrobbling === true
+            onToggled: function (v) {
+                QbzBridge.settingsBool("offline-scrobble-accumulated", v)
+            }
+        }
+    }
     // Ask the connectivity actor for an immediate probe rather than waiting
     // for its next scheduled one. Disabled under MANUAL offline (mode 2),
     // where the answer is a user decision and not a network fact.

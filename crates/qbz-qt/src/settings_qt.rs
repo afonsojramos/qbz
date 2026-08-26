@@ -1813,6 +1813,8 @@ pub struct SettingsDoc {
     pub scrobble_enabled: bool,
     #[serde(rename = "scrobbleUiCollapsed")]
     pub scrobble_ui_collapsed: bool,
+    #[serde(rename = "allowLoggedOutScrobbling")]
+    pub allow_logged_out_scrobbling: bool,
     #[serde(rename = "lastfmEnabled")]
     pub lastfm_enabled: bool,
     #[serde(rename = "lastfmAuthed")]
@@ -2247,6 +2249,7 @@ pub async fn publish_snapshot() {
             musicbrainz_enabled: pref_bool("musicbrainz_enabled", true),
             scrobble_enabled: scrobble_snap.enabled,
             scrobble_ui_collapsed: scrobble_snap.ui_collapsed,
+            allow_logged_out_scrobbling: scrobble_snap.allow_logged_out_scrobbling,
             lastfm_enabled: scrobble_snap.lastfm_enabled,
             lastfm_authed: scrobble_snap.lastfm_is_authed(),
             lastfm_username: scrobble_snap.lastfm_username.clone(),
@@ -2583,6 +2586,9 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         "scrobble-collapse" => {
             crate::integrations_qt::set_scrobble_collapsed(value).map(|_| Apply::None)
         }
+        "scrobble-logged-out" => {
+            crate::integrations_qt::set_logged_out_scrobbling(value).map(|_| Apply::None)
+        }
         "lastfm-enable" => crate::integrations_qt::set_lastfm_enabled(value).map(|_| Apply::None),
         "listenbrainz-enable" => {
             crate::integrations_qt::set_listenbrainz_enabled(value).map(|_| Apply::None)
@@ -2592,6 +2598,12 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         // Induced offline. The engine takes the #279 stream-first snapshot,
         // so the audio settings can change under us -> Reload the player.
         "offline-mode-enabled" => offline::set_mode_enabled(value).map(|_| Apply::Reload),
+        "offline-scrobble-immediate" => {
+            offline::set_allow_immediate_scrobbling(value).map(|_| Apply::None)
+        }
+        "offline-scrobble-accumulated" => {
+            offline::set_allow_accumulated_scrobbling(value).map(|_| Apply::None)
+        }
         // --- Local Library > Plex -----------------------------------------
         "plex-metadata-write" => {
             library::set_metadata_write(value);

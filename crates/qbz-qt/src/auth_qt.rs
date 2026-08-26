@@ -209,6 +209,10 @@ where
 /// logs on failure, never blocks shell entry) — one entry point, so the caller
 /// cannot bind the uid and forget the schema.
 async fn bind_per_user_stores(dir: &std::path::Path, user_id: u64) {
+    // Independent Last.fm/ListenBrainz credentials + queues. This binding is
+    // retained across Qobuz logout by design (opt-out lives in that store),
+    // and is replaced atomically when another profile activates.
+    crate::integrations_qt::init_for_user(dir);
     // Invalidate any late media-server response before the registry moves to a
     // different profile. Epoch checks inside every page transaction then keep
     // the previous user's catalog out of this user's cache.

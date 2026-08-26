@@ -806,6 +806,7 @@ fn on_session_entered() {
 /// Post-login UI state: the shared session entry, then the session header,
 /// has-previous-session, cleared login errors/phase and the screen switch.
 fn enter_shell(session: auth_qt::SessionInfo) {
+    integrations_qt::set_qobuz_authenticated(true);
     on_session_entered();
     session_bridge::ui(move |mut b| {
         b.as_mut()
@@ -880,6 +881,7 @@ pub(crate) fn start_offline() {
     spawn(async move {
         match auth_qt::start_offline_session(&runtime).await {
             Ok(user_id) => {
+                integrations_qt::set_qobuz_authenticated(false);
                 let name = if user_id == 0 {
                     "Guest (offline)".to_string()
                 } else {
@@ -912,6 +914,9 @@ pub(crate) fn start_offline() {
 
 /// Shell logout: token + session teardown, then back to the login screen.
 pub(crate) fn do_logout() {
+    // Flip this before the async teardown: a delayed scrobble firing anywhere
+    // in that window must already obey the logged-out opt-out.
+    integrations_qt::set_qobuz_authenticated(false);
     let runtime = app();
     spawn(async move {
         // A connected renderer keeps playing after the session ends unless it

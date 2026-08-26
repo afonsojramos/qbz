@@ -5979,3 +5979,21 @@ msgstr "アルバムヘッダーをすべて表示"
 
 msgid "Show compact album header"
 msgstr "アルバムヘッダーをコンパクトに表示"
+
+msgid "Immediate scrobbling"
+msgstr "即時スクロブル"
+
+msgid "Send scrobbles immediately while manual offline mode is enabled."
+msgstr "手動オフラインモードが有効な間も、スクロブルをすぐに送信します。"
+
+msgid "Accumulated scrobbling"
+msgstr "蓄積スクロブル"
+
+msgid "Queue scrobbles while the network is unavailable and send them when it returns. Last.fm accepts scrobbles up to 2 weeks old."
+msgstr "ネットワークが利用できない間はスクロブルをキューに保存し、復旧後に送信します。Last.fm が受け付けるのは2週間以内のスクロブルです。"
+
+msgid "Scrobble while logged out"
+msgstr "ログアウト中もスクロブル"
+
+msgid "Continue sending plays to connected scrobblers without a Qobuz session."
+msgstr "Qobuzセッションがなくても、接続済みのスクロブルサービスに再生履歴を送信します。"

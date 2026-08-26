@@ -20,6 +20,12 @@ pub struct Snapshot {
     /// The persisted induced-offline flag (the "Enable Offline Mode" toggle).
     #[serde(rename = "modeEnabled")]
     pub mode_enabled: bool,
+    /// Tauri-era manual-offline network submission preference.
+    #[serde(rename = "allowImmediateScrobbling")]
+    pub allow_immediate_scrobbling: bool,
+    /// Tauri-era physical-offline retention preference.
+    #[serde(rename = "allowAccumulatedScrobbling")]
+    pub allow_accumulated_scrobbling: bool,
     /// False when there is no per-user lyrics cache yet — the stats line hides.
     #[serde(rename = "lyricsLoaded")]
     pub lyrics_loaded: bool,
@@ -59,10 +65,7 @@ fn human_size(bytes: u64) -> String {
 
 pub fn snapshot() -> Snapshot {
     let engine = crate::offline_fwd::engine();
-    let mode_enabled = engine
-        .settings()
-        .map(|s| s.manual_offline_mode)
-        .unwrap_or(false);
+    let settings = engine.settings().unwrap_or_default();
 
     let (lyrics_loaded, lyrics_entries, lyrics_size) = match lyrics_db_path() {
         Some(path) if path.exists() => match qbz_lyrics::LyricsCacheDb::new(&path) {
@@ -82,11 +85,29 @@ pub fn snapshot() -> Snapshot {
     };
 
     Snapshot {
-        mode_enabled,
+        mode_enabled: settings.manual_offline_mode,
+        allow_immediate_scrobbling: settings.allow_immediate_scrobbling,
+        allow_accumulated_scrobbling: settings.allow_accumulated_scrobbling,
         lyrics_loaded,
         lyrics_entries,
         lyrics_size,
     }
+}
+
+pub fn set_allow_immediate_scrobbling(value: bool) -> Result<(), String> {
+    let result = crate::offline_fwd::engine().set_allow_immediate_scrobbling(value);
+    if result.is_ok() {
+        crate::integrations_qt::scrobble_policy_changed();
+    }
+    result
+}
+
+pub fn set_allow_accumulated_scrobbling(value: bool) -> Result<(), String> {
+    let result = crate::offline_fwd::engine().set_allow_accumulated_scrobbling(value);
+    if result.is_ok() {
+        crate::integrations_qt::scrobble_policy_changed();
+    }
+    result
 }
 
 /// "Enable Offline Mode" — the persisted induced flag. `set_induced` also

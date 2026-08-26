@@ -27,12 +27,14 @@
 //! playback track-change + play/pause edges. See the "GLUE" notes on those
 //! functions.
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use qbz_app::offline_mode::OfflineModeStore;
+use qbz_app::offline_mode::{
+    Connectivity, OfflineMode, OfflineModeSettings, OfflineModeStore, OfflineStatus,
+};
 use qbz_app::scrobble_timing::scrobble_delay_secs;
 use qbz_app::settings::discover_prefs::DiscoverPrefsStore;
 use qbz_app::settings::scrobblers::{ScrobblerSettings, ScrobblerSettingsState};
@@ -52,17 +54,47 @@ use crate::settings_qt::{pref_bool, save_pref};
 // ---------------------------------------------------------------------------
 
 static SCROBBLE: OnceLock<ScrobblerSettingsState> = OnceLock::new();
+static SCROBBLE_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// Qobuz authentication is independent of a Last.fm/ListenBrainz session.
+/// False covers both the login screen and an explicitly started offline shell.
+static QOBUZ_AUTHENTICATED: AtomicBool = AtomicBool::new(false);
 
 fn scrobble() -> &'static ScrobblerSettingsState {
-    SCROBBLE.get_or_init(|| {
-        let state = ScrobblerSettingsState::new_empty();
-        if let Some(dir) = crate::sidebar_qt::user_dir() {
-            if let Err(e) = state.init_at(&dir) {
-                log::warn!("[qbz-qt] scrobbler settings store unavailable: {e}");
-            }
-        }
-        state
-    })
+    SCROBBLE.get_or_init(ScrobblerSettingsState::new_empty)
+}
+
+/// Bind the independent scrobbler credentials to the active/last Qobuz
+/// profile. Unlike the old sidebar-derived OnceLock, this can rebind on an
+/// account switch. Logout deliberately keeps the last binding: that is what
+/// allows opted-in local playback to scrobble without a Qobuz session.
+pub fn init_for_user(base_dir: &Path) {
+    if let Err(e) = scrobble().init_at(base_dir) {
+        log::warn!("[qbz-qt] scrobbler settings store unavailable: {e}");
+        return;
+    }
+    let changed = SCROBBLE_DIR
+        .lock()
+        .map(|mut dir| {
+            let changed = dir.as_deref() != Some(base_dir);
+            *dir = Some(base_dir.to_path_buf());
+            changed
+        })
+        .unwrap_or(false);
+    // A timer armed for account A must never submit through account B's newly
+    // rebound credentials. Re-entering the same offline profile keeps it.
+    if changed {
+        SCROBBLE_GEN.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+fn scrobble_user_dir() -> Option<PathBuf> {
+    SCROBBLE_DIR.lock().ok().and_then(|dir| dir.clone())
+}
+
+pub fn set_qobuz_authenticated(authenticated: bool) {
+    if QOBUZ_AUTHENTICATED.swap(authenticated, Ordering::SeqCst) != authenticated {
+        request_flush();
+    }
 }
 
 static DISCOVER: OnceLock<Mutex<Option<DiscoverPrefsStore>>> = OnceLock::new();
@@ -90,7 +122,7 @@ fn discord() -> &'static DiscordRpc {
 /// and Tauri builds open, so credentials AND the offline listen queue are
 /// shared across frontends (scrobble.rs `listenbrainz_cache_path`).
 fn listenbrainz_cache_path() -> Option<PathBuf> {
-    let dir = crate::sidebar_qt::user_dir()?.join("cache");
+    let dir = scrobble_user_dir()?.join("cache");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir.join("listenbrainz_v2.db"))
 }
@@ -174,8 +206,8 @@ pub fn discord_enabled() -> bool {
 /// One-shot guard for the offline-engine flush watcher (lives for the process).
 static FLUSH_WATCHER: OnceLock<()> = OnceLock::new();
 
-/// Per-user runtime start. GLUE: call from `enter_shell` (main.rs), AFTER the
-/// per-user stores bind (`sidebar_qt::init_pinned` sets the user dir).
+/// Per-user runtime start. GLUE: call from `enter_shell` (main.rs), AFTER
+/// [`init_for_user`] binds the scrobbler profile.
 ///
 /// Applies the three persisted opt-ins that would otherwise only take effect
 /// after the user re-toggled them:
@@ -186,11 +218,11 @@ static FLUSH_WATCHER: OnceLock<()> = OnceLock::new();
 ///   - ListenBrainz-> adopt the shared-cache credentials when this build has
 ///                    none (a Tauri/Slint sign-in carries over; enable flags
 ///                    are NOT touched, scrobbling stays opt-in).
-/// Then drains the offline scrobble queues and watches for offline->online
-/// edges to drain them again.
+/// Then drains the offline scrobble queues whenever the combined network /
+/// manual-offline / logged-out policy becomes sendable.
 pub fn start(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
-    // Bind the per-user scrobbler store now (lazy OnceLock) so the fire path
-    // never races the first Settings visit.
+    // The auth fan-out bound this before shell entry; touch it now so a missing
+    // binding degrades to the normal default snapshot rather than a later race.
     let _ = scrobble().get_settings();
 
     let rt = runtime.clone();
@@ -207,25 +239,25 @@ pub fn start(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
             discord_push(&rt);
         }
 
-        if !crate::offline_fwd::engine().is_offline() {
-            flush_offline_queues().await;
-        }
+        flush_if_allowed().await;
     });
 
     FLUSH_WATCHER.get_or_init(|| {
         crate::spawn(async move {
             let mut rx = crate::offline_fwd::engine().subscribe();
-            let mut was_offline = rx.borrow_and_update().is_offline();
+            let _ = *rx.borrow_and_update();
+            let mut could_send = can_send_now(&scrobble_settings()).await;
             loop {
                 if rx.changed().await.is_err() {
                     break;
                 }
-                let offline = rx.borrow_and_update().is_offline();
-                if was_offline && !offline {
-                    log::info!("[qbz-qt] scrobblers: back online, flushing queues");
+                let _ = *rx.borrow_and_update();
+                let can_send = can_send_now(&scrobble_settings()).await;
+                if !could_send && can_send {
+                    log::info!("[qbz-qt] scrobblers: network policy allows flush");
                     flush_offline_queues().await;
                 }
-                was_offline = offline;
+                could_send = can_send;
             }
         });
     });
@@ -269,19 +301,45 @@ pub fn set_show_recommendations(value: bool) -> Result<(), String> {
 }
 
 pub fn set_scrobble_enabled(value: bool) -> Result<(), String> {
-    scrobble().set_enabled(value)
+    let result = scrobble().set_enabled(value);
+    if result.is_ok() && value {
+        request_flush();
+    }
+    result
 }
 
 pub fn set_scrobble_collapsed(value: bool) -> Result<(), String> {
     scrobble().set_ui_collapsed(value)
 }
 
+pub fn set_logged_out_scrobbling(value: bool) -> Result<(), String> {
+    let result = scrobble().set_allow_logged_out_scrobbling(value);
+    if result.is_ok() && value {
+        request_flush();
+    }
+    result
+}
+
 pub fn set_lastfm_enabled(value: bool) -> Result<(), String> {
-    scrobble().set_lastfm_enabled(value)
+    let result = scrobble().set_lastfm_enabled(value);
+    if result.is_ok() && value {
+        request_flush();
+    }
+    result
 }
 
 pub fn set_listenbrainz_enabled(value: bool) -> Result<(), String> {
-    scrobble().set_listenbrainz_enabled(value)
+    let result = scrobble().set_listenbrainz_enabled(value);
+    if result.is_ok() && value {
+        request_flush();
+    }
+    result
+}
+
+/// Settings > Offline policy changed. A newly enabled immediate path may make
+/// queued listens deliverable without an offline-engine mode transition.
+pub fn scrobble_policy_changed() {
+    request_flush();
 }
 
 /// Discord toggle (discord_rpc::set_enabled): persist the opt-in, apply it to
@@ -411,6 +469,7 @@ pub async fn listenbrainz_set_token(token: &str) {
                 qbz_i18n::t_args("Connected as {}", &[info.user_name.as_str()]),
                 2,
             );
+            request_flush();
         }
         Err(e) => set_status(qbz_i18n::t_args("Error: {}", &[&e.to_string()]), 3),
     }
@@ -496,6 +555,7 @@ pub async fn handle_action(_runtime: &Arc<AppRuntime<LoggingAdapter>>, action: &
                         qbz_i18n::t_args("Connected as {}", &[session.name.as_str()]),
                         2,
                     );
+                    request_flush();
                 }
                 Err(e) => set_status(
                     qbz_i18n::t_args(
@@ -546,6 +606,110 @@ pub async fn handle_action(_runtime: &Arc<AppRuntime<LoggingAdapter>>, action: &
 // the normalized QueueTrack). scrobble.rs `on_track_changed` and below.
 // ===========================================================================
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScrobbleAction {
+    SendNow,
+    Queue,
+    Drop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScrobblePolicy {
+    action: ScrobbleAction,
+    /// A live network request can race a connectivity loss. Accumulated mode
+    /// decides whether that failed request is retained rather than discarded.
+    queue_on_failure: bool,
+}
+
+fn decide_scrobble_policy(
+    status: OfflineStatus,
+    offline: OfflineModeSettings,
+    qobuz_authenticated: bool,
+    allow_logged_out: bool,
+) -> ScrobblePolicy {
+    let queue_on_failure = offline.allow_accumulated_scrobbling;
+    let queued_or_dropped = if queue_on_failure {
+        ScrobbleAction::Queue
+    } else {
+        ScrobbleAction::Drop
+    };
+
+    // The new explicit privacy gate wins over every transport policy.
+    if !qobuz_authenticated && !allow_logged_out {
+        return ScrobblePolicy {
+            action: ScrobbleAction::Drop,
+            queue_on_failure: false,
+        };
+    }
+
+    let action = match status.mode {
+        OfflineMode::Online => ScrobbleAction::SendNow,
+        OfflineMode::InducedOffline => {
+            // Manual offline closes only Qobuz's gate. The independent
+            // scrobblers may still use a real network when the historical
+            // immediate preference says so.
+            if status.connectivity != Connectivity::Down && offline.allow_immediate_scrobbling {
+                ScrobbleAction::SendNow
+            } else {
+                queued_or_dropped
+            }
+        }
+        OfflineMode::RealOffline => {
+            // An unauthenticated offline shell is classified RealOffline even
+            // with working internet. Logged-out scrobbling is precisely the
+            // exception: independent service credentials remain usable.
+            if !qobuz_authenticated && status.connectivity != Connectivity::Down {
+                ScrobbleAction::SendNow
+            } else {
+                queued_or_dropped
+            }
+        }
+    };
+
+    ScrobblePolicy {
+        action,
+        queue_on_failure,
+    }
+}
+
+async fn offline_scrobble_settings() -> OfflineModeSettings {
+    if let Ok(settings) = crate::offline_fwd::engine().settings() {
+        return settings;
+    }
+    // `OfflineModeEngine::teardown` must drop its per-user store on logout,
+    // while this feature deliberately keeps the last scrobbler profile. Read
+    // the same DB through that retained binding for a track that continues on
+    // the login screen.
+    let Some(dir) = scrobble_user_dir() else {
+        return OfflineModeSettings::default();
+    };
+    tokio::task::spawn_blocking(move || {
+        OfflineModeStore::new_at(&dir).and_then(|store| store.get_settings())
+    })
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .unwrap_or_default()
+}
+
+async fn current_scrobble_policy(cfg: &ScrobblerSettings) -> ScrobblePolicy {
+    decide_scrobble_policy(
+        crate::offline_fwd::engine().status(),
+        offline_scrobble_settings().await,
+        QOBUZ_AUTHENTICATED.load(Ordering::SeqCst),
+        cfg.allow_logged_out_scrobbling,
+    )
+}
+
+async fn can_send_now(cfg: &ScrobblerSettings) -> bool {
+    (cfg.lastfm_active() || cfg.listenbrainz_active())
+        && current_scrobble_policy(cfg).await.action == ScrobbleAction::SendNow
+}
+
+fn request_flush() {
+    crate::spawn(async { flush_if_allowed().await });
+}
+
 /// Normalized track facts the fire path needs. The title is the
 /// version-enriched display title so remixes/editions scrobble correctly
 /// (issue #360 parity).
@@ -593,9 +757,9 @@ pub fn on_track_changed(meta: ScrobbleMeta) {
         return;
     }
     crate::spawn(async move {
-        // Now-playing immediately (skipped while offline — it needs network
-        // and is not worth queueing; matches the Svelte path).
-        if !crate::offline_fwd::engine().is_offline() {
+        // Now-playing is never queued. It may use the independent network in
+        // manual-offline immediate mode or an opted-in logged-out session.
+        if current_scrobble_policy(&cfg).await.action == ScrobbleAction::SendNow {
             send_now_playing(&meta, &cfg).await;
         }
 
@@ -713,81 +877,84 @@ async fn send_now_playing(meta: &ScrobbleMeta, cfg: &ScrobblerSettings) {
     }
 }
 
-/// Fire the actual scrobble for each enabled service. Engine offline OR call
-/// failure queues it — Last.fm to the shared `scrobble_queue`, ListenBrainz to
-/// the shared `listen_queue`. Settings are re-read in case the user
-/// disconnected while the timer waited.
+/// Fire, retain or drop the actual scrobble according to the restored offline
+/// policy plus the logged-out opt-out. Settings are re-read in case the user
+/// changed a policy or disconnected while the timer waited.
 async fn send_scrobble(meta: &ScrobbleMeta) {
     let cfg = scrobble_settings();
     let album = meta.album.as_deref();
     let timestamp = unix_now();
-    let offline = crate::offline_fwd::engine().is_offline();
+    let policy = current_scrobble_policy(&cfg).await;
 
     if cfg.lastfm_active() {
-        let sent = if offline {
-            false
-        } else {
-            let client = LastFmClient::with_session_key(cfg.lastfm_session_key.clone());
-            match client
-                .scrobble(&meta.artist, &meta.track, album, timestamp as u64)
-                .await
-            {
-                Ok(()) => {
-                    log::info!(
+        match policy.action {
+            ScrobbleAction::SendNow => {
+                let client = LastFmClient::with_session_key(cfg.lastfm_session_key.clone());
+                match client
+                    .scrobble(&meta.artist, &meta.track, album, timestamp as u64)
+                    .await
+                {
+                    Ok(()) => log::info!(
                         "[qbz-qt] Last.fm scrobbled: {} - {}",
                         meta.artist,
                         meta.track
-                    );
-                    true
-                }
-                Err(e) => {
-                    log::warn!("[qbz-qt] Last.fm scrobble failed ({e}); queueing for later");
-                    false
+                    ),
+                    Err(e) if policy.queue_on_failure => {
+                        log::warn!("[qbz-qt] Last.fm scrobble failed ({e}); queueing for later");
+                        queue_lastfm(meta, timestamp).await;
+                    }
+                    Err(e) => log::warn!(
+                        "[qbz-qt] Last.fm scrobble failed ({e}); accumulation disabled, dropping"
+                    ),
                 }
             }
-        };
-        if !sent {
-            queue_lastfm(meta, timestamp).await;
+            ScrobbleAction::Queue => queue_lastfm(meta, timestamp).await,
+            ScrobbleAction::Drop => {
+                log::debug!("[qbz-qt] Last.fm scrobble dropped by offline/logout policy")
+            }
         }
     }
 
     if cfg.listenbrainz_active() {
-        let sent = if offline {
-            false
-        } else {
-            let client = ListenBrainzClient::new();
-            client
-                .restore_token(
-                    cfg.listenbrainz_token.clone(),
-                    cfg.listenbrainz_username.clone(),
-                )
-                .await;
-            match client
-                .submit_listen(
-                    &meta.artist,
-                    &meta.track,
-                    album,
-                    timestamp,
-                    lb_info(meta.duration_secs),
-                )
-                .await
-            {
-                Ok(()) => {
-                    log::info!(
+        match policy.action {
+            ScrobbleAction::SendNow => {
+                let client = ListenBrainzClient::new();
+                client
+                    .restore_token(
+                        cfg.listenbrainz_token.clone(),
+                        cfg.listenbrainz_username.clone(),
+                    )
+                    .await;
+                match client
+                    .submit_listen(
+                        &meta.artist,
+                        &meta.track,
+                        album,
+                        timestamp,
+                        lb_info(meta.duration_secs),
+                    )
+                    .await
+                {
+                    Ok(()) => log::info!(
                         "[qbz-qt] ListenBrainz scrobbled: {} - {}",
                         meta.artist,
                         meta.track
-                    );
-                    true
-                }
-                Err(e) => {
-                    log::warn!("[qbz-qt] ListenBrainz scrobble failed ({e}); queueing for later");
-                    false
+                    ),
+                    Err(e) if policy.queue_on_failure => {
+                        log::warn!(
+                            "[qbz-qt] ListenBrainz scrobble failed ({e}); queueing for later"
+                        );
+                        queue_listenbrainz(meta, timestamp).await;
+                    }
+                    Err(e) => log::warn!(
+                        "[qbz-qt] ListenBrainz scrobble failed ({e}); accumulation disabled, dropping"
+                    ),
                 }
             }
-        };
-        if !sent {
-            queue_listenbrainz(meta, timestamp).await;
+            ScrobbleAction::Queue => queue_listenbrainz(meta, timestamp).await,
+            ScrobbleAction::Drop => {
+                log::debug!("[qbz-qt] ListenBrainz scrobble dropped by offline/logout policy")
+            }
         }
     }
 }
@@ -802,7 +969,7 @@ fn unix_now() -> i64 {
 /// Queue a Last.fm scrobble into the SHARED per-user `offline_settings.db`
 /// `scrobble_queue` (the table the other frontends queue into and flush from).
 async fn queue_lastfm(meta: &ScrobbleMeta, timestamp: i64) {
-    let Some(dir) = crate::sidebar_qt::user_dir() else {
+    let Some(dir) = scrobble_user_dir() else {
         return;
     };
     let artist = meta.artist.clone();
@@ -851,8 +1018,15 @@ async fn queue_listenbrainz(meta: &ScrobbleMeta, timestamp: i64) {
 }
 
 // ---------------------------------------------------------------------------
-// Offline flush — drain both queues (shell entry + every offline->online edge)
+// Offline flush — drain both queues whenever policy becomes sendable
 // ---------------------------------------------------------------------------
+
+async fn flush_if_allowed() {
+    let cfg = scrobble_settings();
+    if can_send_now(&cfg).await {
+        flush_offline_queues().await;
+    }
+}
 
 async fn flush_offline_queues() {
     flush_lastfm_queue().await;
@@ -865,10 +1039,10 @@ async fn flush_offline_queues() {
 /// next edge. Cleans up sent rows older than 7 days afterwards.
 async fn flush_lastfm_queue() {
     let cfg = scrobble_settings();
-    if !cfg.lastfm_is_authed() {
+    if !cfg.lastfm_active() {
         return;
     }
-    let Some(dir) = crate::sidebar_qt::user_dir() else {
+    let Some(dir) = scrobble_user_dir() else {
         return;
     };
     let pending = match tokio::task::spawn_blocking({
@@ -930,7 +1104,7 @@ async fn flush_lastfm_queue() {
 /// failure and retries on the next edge.
 async fn flush_listenbrainz_queue() {
     let cfg = scrobble_settings();
-    if !cfg.listenbrainz_is_authed() {
+    if !cfg.listenbrainz_active() {
         return;
     }
     let Some(path) = listenbrainz_cache_path() else {
@@ -989,5 +1163,106 @@ async fn flush_listenbrainz_queue() {
         })
         .await;
         log::info!("[qbz-qt] ListenBrainz flush: {count} listen(s) sent");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status(
+        mode: OfflineMode,
+        connectivity: Connectivity,
+        offline_session: bool,
+    ) -> OfflineStatus {
+        OfflineStatus {
+            mode,
+            connectivity,
+            captive_portal: false,
+            induced: mode == OfflineMode::InducedOffline,
+            offline_session,
+        }
+    }
+
+    #[test]
+    fn manual_offline_respects_immediate_and_accumulated_modes() {
+        let manual = status(OfflineMode::InducedOffline, Connectivity::Up, false);
+        let accumulated = OfflineModeSettings::default();
+        assert_eq!(
+            decide_scrobble_policy(manual, accumulated, true, true).action,
+            ScrobbleAction::Queue
+        );
+
+        let immediate = OfflineModeSettings {
+            allow_immediate_scrobbling: true,
+            allow_accumulated_scrobbling: false,
+            ..OfflineModeSettings::default()
+        };
+        assert_eq!(
+            decide_scrobble_policy(manual, immediate, true, true).action,
+            ScrobbleAction::SendNow
+        );
+    }
+
+    #[test]
+    fn physical_offline_only_retains_when_accumulation_is_enabled() {
+        let physical = status(OfflineMode::RealOffline, Connectivity::Down, false);
+        assert_eq!(
+            decide_scrobble_policy(physical, OfflineModeSettings::default(), true, true).action,
+            ScrobbleAction::Queue
+        );
+
+        let disabled = OfflineModeSettings {
+            allow_accumulated_scrobbling: false,
+            ..OfflineModeSettings::default()
+        };
+        assert_eq!(
+            decide_scrobble_policy(physical, disabled, true, true).action,
+            ScrobbleAction::Drop
+        );
+    }
+
+    #[test]
+    fn logged_out_gate_allows_independent_network_but_can_opt_out() {
+        // A regular logout tears the offline engine down, so it reports
+        // Online while the independent Qobuz-auth flag is false.
+        let login_screen = status(OfflineMode::Online, Connectivity::Up, false);
+        // Starting the unauthenticated offline shell keeps the explicit
+        // offline-session classification even when the network is usable.
+        let offline_shell = status(OfflineMode::RealOffline, Connectivity::Up, true);
+
+        for logged_out in [login_screen, offline_shell] {
+            assert_eq!(
+                decide_scrobble_policy(logged_out, OfflineModeSettings::default(), false, true)
+                    .action,
+                ScrobbleAction::SendNow
+            );
+            assert_eq!(
+                decide_scrobble_policy(logged_out, OfflineModeSettings::default(), false, false)
+                    .action,
+                ScrobbleAction::Drop
+            );
+        }
+    }
+
+    #[test]
+    fn live_send_failure_only_queues_in_accumulated_mode() {
+        let online = status(OfflineMode::Online, Connectivity::Up, false);
+        let accumulated =
+            decide_scrobble_policy(online, OfflineModeSettings::default(), true, true);
+        assert_eq!(accumulated.action, ScrobbleAction::SendNow);
+        assert!(accumulated.queue_on_failure);
+
+        let no_accumulation = decide_scrobble_policy(
+            online,
+            OfflineModeSettings {
+                allow_accumulated_scrobbling: false,
+                ..OfflineModeSettings::default()
+            },
+            true,
+            true,
+        );
+        assert_eq!(no_accumulation.action, ScrobbleAction::SendNow);
+        assert!(!no_accumulation.queue_on_failure);
     }
 }
