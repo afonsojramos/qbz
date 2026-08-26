@@ -44,6 +44,20 @@ Rectangle {
     readonly property var album: doc ? doc.album : null
     readonly property var tracks: doc ? doc.tracks : []
     readonly property var versions: album && album.versions ? album.versions : []
+    // Same global preference as the Qobuz AlbumView. The document value is
+    // only the cold-start fallback; settingsJson makes a toggle in any open
+    // album update every other album immediately.
+    readonly property bool compactHeaderPref: {
+        var raw = QbzBridge.settingsJson
+        if (raw && raw.length > 2) {
+            try {
+                var d = JSON.parse(raw)
+                if (d.compactAlbumHeader !== undefined)
+                    return d.compactAlbumHeader === true
+            } catch (e) { /* fall through to the document copy */ }
+        }
+        return doc && doc.compactHeader === true
+    }
     readonly property var allArtists: {
         if (!album) return []
         var raw = (album.allArtists || "").split(",")
@@ -64,6 +78,14 @@ Rectangle {
                    + QbzSession.tr("tracks", QbzSession.trRev))
         if ((album.duration || "") !== "") parts.push(album.duration)
         if ((album.format || "") !== "") parts.push(album.format.toUpperCase())
+        return parts.join("  •  ")
+    }
+    readonly property string compactInfoLine: {
+        if (!album) return ""
+        var parts = []
+        if ((album.year || "") !== "") parts.push(album.year)
+        parts.push((album.trackCount || 0) + " "
+                   + QbzSession.tr("tracks", QbzSession.trRev))
         return parts.join("  •  ")
     }
 
@@ -378,9 +400,9 @@ Rectangle {
                 visible: root.pageLoading && !root.album
                 variant: "header"
                 width: parent.width
-                height: 224
-                coverSize: 224
-                coverGap: 32
+                height: root.compactHeaderPref ? 128 : 224
+                coverSize: root.compactHeaderPref ? 128 : 224
+                coverGap: root.compactHeaderPref ? 20 : 32
                 actionCount: 5
                 phase: root.skelPhase
             }
@@ -390,12 +412,16 @@ Rectangle {
                 album: root.album
                 allArtists: root.allArtists
                 infoLine: root.infoLine
+                compactInfoLine: root.compactInfoLine
+                compact: root.compactHeaderPref
                 versions: root.versions
                 coverSource: root.album ? (root.artMap[root.album.artKey] || "") : ""
                 coverPending: root.coverPending
                 skelPhase: root.skelPhase
                 artSettleMs: root.artSettleMs
                 onOpenArtist: function (name) { root.openArtist(name) }
+                onCompactToggled: QbzBridge.settingsBool(
+                    "compact-album-header", !root.compactHeaderPref)
             }
 
             Item { width: 1; height: 20 }

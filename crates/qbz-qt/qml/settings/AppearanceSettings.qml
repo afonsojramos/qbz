@@ -118,6 +118,14 @@ Column {
         }
     }
     SettingRow {
+        label: QbzSession.tr("Compact header", QbzSession.trRev)
+        description: QbzSession.tr("Show less data in album headers.", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.compactAlbumHeader === true
+            onToggled: function (v) { QbzBridge.settingsBool("compact-album-header", v) }
+        }
+    }
+    SettingRow {
         label: QbzSession.tr("Dynamic background", QbzSession.trRev)
         description: QbzSession.tr("Animated album-art background behind the whole app. High resource use — GPU accelerated.", QbzSession.trRev)
         QbzSelect {

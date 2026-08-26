@@ -166,6 +166,10 @@ pub struct AlbumHeader {
     pub credits: Vec<(String, String, String)>,
     #[serde(rename = "infoLine")]
     pub info_line: String,
+    /// Compact header metadata: release date + track count only. Label,
+    /// genre and duration intentionally stay in the expanded header.
+    #[serde(rename = "compactInfoLine")]
+    pub compact_info_line: String,
     #[serde(rename = "metaPre")]
     pub meta_pre: String,
     #[serde(rename = "metaPost")]
@@ -234,6 +238,11 @@ pub struct AlbumHeader {
 pub struct AlbumViewData {
     pub header: AlbumHeader,
     pub tracks: Vec<TrackRow>,
+    /// Cold-start fallback for the live `settingsJson` preference consumed by
+    /// AlbumView.qml. The view switches to the settings document as soon as it
+    /// is published, so toggling one open album updates every other instance.
+    #[serde(rename = "compactHeader")]
+    pub compact_header: bool,
     #[serde(rename = "moreFromArtist")]
     pub more_from_artist: Vec<AlbumCardData>,
     pub suggestions: Vec<AlbumCardData>,
@@ -601,6 +610,11 @@ pub async fn load_album(
     }
     let meta_pre = pre_parts.join("   •   ");
     let meta_post = post_parts.join("   •   ");
+    let mut compact_parts = pre_parts.clone();
+    if let Some(tc) = &tracks_str {
+        compact_parts.push(tc.clone());
+    }
+    let compact_info_line = compact_parts.join("   •   ");
     let mut all_parts = pre_parts.clone();
     if let Some(l) = &label_name {
         all_parts.push(l.clone());
@@ -679,6 +693,7 @@ pub async fn load_album(
         artist_id,
         credits,
         info_line,
+        compact_info_line,
         meta_pre,
         meta_post,
         quality_tier: home_qt::quality_tier_from_depth(album.maximum_bit_depth).to_string(),
@@ -1229,6 +1244,7 @@ pub async fn load_album_view(
     // lands as a patch a moment later. `headerColor` stays "" until then and
     // the band simply does not paint — no colour pop.
     data.header_gradient = crate::settings_qt::pref_bool("album_header_gradient", true);
+    data.compact_header = crate::settings_qt::pref_bool("compact_album_header", false);
     let header_art = data.header.artwork_url.clone();
 
     let json = serde_json::to_string(&data).map_err(|e| e.to_string())?;

@@ -6003,3 +6003,15 @@ msgstr "Форма волны трека"
 
 msgid "Show the full-track waveform in the player seek bar."
 msgstr "Показывать форму волны всего трека на шкале воспроизведения."
+
+msgid "Compact header"
+msgstr "Компактный заголовок"
+
+msgid "Show less data in album headers."
+msgstr "Показывать меньше данных в заголовках альбомов."
+
+msgid "Show full album header"
+msgstr "Показать полный заголовок альбома"
+
+msgid "Show compact album header"
+msgstr "Показать компактный заголовок альбома"

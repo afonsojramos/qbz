@@ -48,7 +48,7 @@ Rectangle {
     /// twin and both text columns all measure off it — they drifted apart at
     /// five separate literals before. The Row has no explicit height, so the
     /// header grows with this on its own.
-    readonly property int coverPx: 260
+    readonly property int coverPx: compactHeaderPref ? 130 : 260
 
     /// How far past the header divider the artwork atmosphere reaches: the 8px
     /// spacer below the divider plus half of the 52px track toolbar band, so
@@ -106,6 +106,21 @@ Rectangle {
 
     readonly property var albumHeader: album.header || ({})
     readonly property var tracks: album.tracks || []
+    // One global opt-in for every album page. `settingsJson` is the live
+    // channel (including clicks made in another open AlbumView); the album
+    // document carries the persisted cold-start fallback until that snapshot
+    // arrives.
+    readonly property bool compactHeaderPref: {
+        var raw = QbzBridge.settingsJson
+        if (raw && raw.length > 2) {
+            try {
+                var d = JSON.parse(raw)
+                if (d.compactAlbumHeader !== undefined)
+                    return d.compactAlbumHeader === true
+            } catch (e) { /* fall through to the document copy */ }
+        }
+        return album.compactHeader === true
+    }
     // `header.awards`, NOT `album.awards`. It is a field of AlbumHeader
     // (src/album_qt.rs:171), not of AlbumViewData — read one level too high it
     // is `undefined`, `|| []` swallows that, and the AWARDS block simply never
@@ -785,13 +800,36 @@ Rectangle {
                     anchors.topMargin: 4
                     spacing: 0
 
-                    Text {
+                    Item {
                         width: parent.width
-                        text: albumHeader.title || ""
-                        color: root.hdrStrong
-                        font.pixelSize: theme.fontSection
-                        font.weight: theme.weightBold
-                        elide: Text.ElideRight
+                        height: Math.max(albumTitle.implicitHeight, 32)
+                        Text {
+                            id: albumTitle
+                            anchors.left: parent.left
+                            anchors.right: headerModeButton.left
+                            anchors.rightMargin: 12
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: albumHeader.title || ""
+                            color: root.hdrStrong
+                            font.pixelSize: theme.fontSection
+                            font.weight: theme.weightBold
+                            elide: Text.ElideRight
+                        }
+                        QbzCircleAction {
+                            id: headerModeButton
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            name: root.compactHeaderPref ? "maximize-2" : "minimize-2"
+                            overlay: root.hdrOverlay
+                            onClicked: QbzBridge.settingsBool(
+                                "compact-album-header", !root.compactHeaderPref)
+                            HoverHandler { id: headerModeHover }
+                            ToolTip.visible: headerModeHover.hovered
+                            ToolTip.text: root.compactHeaderPref
+                                ? QbzSession.tr("Show full album header", QbzSession.trRev)
+                                : QbzSession.tr("Show compact album header", QbzSession.trRev)
+                            ToolTip.delay: 350
+                        }
                     }
                     Item { width: 1; height: 4 }
                     // Credited-artist line (links + role suffixes).
@@ -799,7 +837,9 @@ Rectangle {
                         width: parent.width
                         spacing: 0
                         Repeater {
-                            model: albumHeader.credits || []
+                            model: root.compactHeaderPref
+                                ? [[albumHeader.artist || "", albumHeader.artistId || "", ""]]
+                                : (albumHeader.credits || [])
                             delegate: Row {
                                 required property var modelData
                                 required property int index
@@ -834,11 +874,13 @@ Rectangle {
                             }
                         }
                     }
-                    Item { width: 1; height: 10 }
+                    Item { width: 1; height: root.compactHeaderPref ? 4 : 10 }
                     // Meta line (label as a clickable link when navigable).
                     Row {
                         spacing: 0
-                        visible: (albumHeader.labelId || "") !== "" && (albumHeader.label || "") !== ""
+                        visible: !root.compactHeaderPref
+                                 && (albumHeader.labelId || "") !== ""
+                                 && (albumHeader.label || "") !== ""
                         Text {
                             visible: (albumHeader.metaPre || "") !== ""
                             text: (albumHeader.metaPre || "") + "   •   "
@@ -865,27 +907,51 @@ Rectangle {
                         }
                     }
                     Text {
-                        visible: (albumHeader.labelId || "") === "" || (albumHeader.label || "") === ""
+                        visible: !root.compactHeaderPref
+                                 && ((albumHeader.labelId || "") === ""
+                                     || (albumHeader.label || "") === "")
                         width: parent.width
                         text: albumHeader.infoLine || ""
                         color: root.hdrBody
                         font.pixelSize: theme.fontBody
                         elide: Text.ElideRight
                     }
+                    Text {
+                        visible: root.compactHeaderPref
+                        width: parent.width
+                        text: albumHeader.compactInfoLine || ""
+                        color: root.hdrBody
+                        font.pixelSize: theme.fontBody
+                        elide: Text.ElideRight
+                    }
 
                     // Editorial description + Read more.
-                    Item { visible: (albumHeader.description || "") !== ""; width: 1; height: 12 }
+                    Item {
+                        visible: !root.compactHeaderPref
+                                 && (albumHeader.description || "") !== ""
+                        width: 1
+                        height: 12
+                    }
                     Text {
-                        visible: (albumHeader.description || "") !== ""
+                        visible: !root.compactHeaderPref
+                                 && (albumHeader.description || "") !== ""
                         width: parent.width
                         text: albumHeader.descriptionShort || ""
                         color: root.hdrBody
                         font.pixelSize: theme.fontLegal
                         wrapMode: Text.WordWrap
                     }
-                    Item { visible: (albumHeader.description || "") !== (albumHeader.descriptionShort || ""); width: 1; height: 4 }
+                    Item {
+                        visible: !root.compactHeaderPref
+                                 && (albumHeader.description || "")
+                                    !== (albumHeader.descriptionShort || "")
+                        width: 1
+                        height: 4
+                    }
                     Text {
-                        visible: (albumHeader.description || "") !== (albumHeader.descriptionShort || "")
+                        visible: !root.compactHeaderPref
+                                 && (albumHeader.description || "")
+                                    !== (albumHeader.descriptionShort || "")
                         text: QbzSession.tr("Read more", QbzSession.trRev)
                         color: readMoreArea.containsMouse ? theme.accentHover : theme.accent
                         font.pixelSize: theme.fontLegal
@@ -902,7 +968,7 @@ Rectangle {
                         }
                     }
 
-                    Item { width: 1; height: 20 }
+                    Item { width: 1; height: root.compactHeaderPref ? 8 : 20 }
                     // Action row — AlbumPageView.slint:504-640. One shared
                     // CircleAction for every button including Play (the
                     // hand-rolled 44px disc it used to be drifted from the

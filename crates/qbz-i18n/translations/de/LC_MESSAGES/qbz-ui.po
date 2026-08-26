@@ -5985,3 +5985,15 @@ msgstr "Titel-Wellenform"
 
 msgid "Show the full-track waveform in the player seek bar."
 msgstr "Zeigt die Wellenform des gesamten Titels in der Suchleiste des Players an."
+
+msgid "Compact header"
+msgstr "Kompakter Kopfbereich"
+
+msgid "Show less data in album headers."
+msgstr "Weniger Daten in Albumkopfbereichen anzeigen."
+
+msgid "Show full album header"
+msgstr "Vollständigen Albumkopf anzeigen"
+
+msgid "Show compact album header"
+msgstr "Kompakten Albumkopf anzeigen"

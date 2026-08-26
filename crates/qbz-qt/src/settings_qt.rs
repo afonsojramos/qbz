@@ -1658,6 +1658,8 @@ pub struct SettingsDoc {
     // Appearance (phase 19; the ui_prefs defaults mirror ui_prefs.rs)
     #[serde(rename = "albumHeaderGradient")]
     pub album_header_gradient: bool,
+    #[serde(rename = "compactAlbumHeader")]
+    pub compact_album_header: bool,
     #[serde(rename = "appBackgroundModes")]
     pub app_background_modes: Vec<String>,
     #[serde(rename = "appBackgroundIndex")]
@@ -2111,6 +2113,7 @@ pub async fn publish_snapshot() {
             qconnect_device_name: qconnect_load_device_name().unwrap_or_default(),
             qconnect_device_name_default: qconnect_default_name(),
             album_header_gradient: pref_bool("album_header_gradient", true),
+            compact_album_header: pref_bool("compact_album_header", false),
             app_background_modes: APP_BACKGROUND_LABELS
                 .iter()
                 .map(|l| qbz_i18n::t(l))
@@ -2399,6 +2402,10 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         // side-effects where the POC already has the consumer).
         "album-header-gradient" => {
             save_pref("album_header_gradient", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "compact-album-header" => {
+            save_pref("compact_album_header", serde_json::json!(value));
             Ok(Apply::None)
         }
         "intelligent-search" => {

@@ -5967,3 +5967,15 @@ msgstr "トラック波形"
 
 msgid "Show the full-track waveform in the player seek bar."
 msgstr "プレーヤーのシークバーにトラック全体の波形を表示します。"
+
+msgid "Compact header"
+msgstr "コンパクトヘッダー"
+
+msgid "Show less data in album headers."
+msgstr "アルバムヘッダーに表示する情報を減らします。"
+
+msgid "Show full album header"
+msgstr "アルバムヘッダーをすべて表示"
+
+msgid "Show compact album header"
+msgstr "アルバムヘッダーをコンパクトに表示"

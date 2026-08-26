@@ -116,6 +116,10 @@ pub struct AlbumDetailDoc {
     /// EMPTY for a single-disc album. Present only so a multi-disc box can
     /// label and illustrate its dividers — see `DiscRow`.
     pub discs: Vec<DiscRow>,
+    /// Cold-start fallback for the global compact-header appearance pref.
+    /// LocalAlbumView switches to the live settings document once published.
+    #[serde(rename = "compactHeader")]
+    pub compact_header: bool,
 }
 
 /// The bounded payload consumed by one expanded row in the Genres browser.
@@ -346,6 +350,7 @@ pub fn version_doc(id: &str, index: usize) -> Option<AlbumDetailDoc> {
         },
         tracks: rows,
         discs,
+        compact_header: crate::settings_qt::pref_bool("compact_album_header", false),
     })
 }
 

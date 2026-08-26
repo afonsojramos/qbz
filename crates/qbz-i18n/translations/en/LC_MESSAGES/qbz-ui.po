@@ -1587,3 +1587,15 @@ msgstr "Show the full-track waveform in the player seek bar."
 
 msgid "The typeface used across the app. System follows your operating system; the other choices are bundled with QBZ (requires restart)"
 msgstr "The typeface used across the app. System follows your operating system; the other choices are bundled with QBZ (requires restart)"
+
+msgid "Compact header"
+msgstr "Compact header"
+
+msgid "Show less data in album headers."
+msgstr "Show less data in album headers."
+
+msgid "Show full album header"
+msgstr "Show full album header"
+
+msgid "Show compact album header"
+msgstr "Show compact album header"

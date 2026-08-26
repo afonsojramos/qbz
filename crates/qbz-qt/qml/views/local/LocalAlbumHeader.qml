@@ -7,6 +7,7 @@
 // Slint watches its own mirror property for exactly this (:156).
 
 import QtQuick
+import QtQuick.Controls
 import com.blitzfc.qbz
 import "../../controls"
 import "../../theme"
@@ -18,6 +19,8 @@ Row {
     /// De-duplicated contributor list (>1 turns the expander on).
     property var allArtists: []
     property string infoLine: ""
+    property string compactInfoLine: ""
+    property bool compact: false
     property var versions: []
     property string coverSource: ""
     /// Per-item cover state, owned by the page (LocalAlbumView).
@@ -33,17 +36,19 @@ Row {
     property bool skelPhase: false
     property int artSettleMs: 0
     signal openArtist(string name)
+    signal compactToggled()
 
     QbzTheme { id: theme }
 
     property bool artistsExpanded: false
     onAlbumChanged: artistsExpanded = false
 
-    spacing: 32
+    readonly property int coverPx: compact ? 128 : 224
+    spacing: compact ? 20 : 32
 
     Rectangle {
-        width: 224
-        height: 224
+        width: root.coverPx
+        height: root.coverPx
         radius: 12
         color: theme.surfaceElevated
         clip: true
@@ -68,17 +73,38 @@ Row {
     }
 
     Column {
-        width: parent.width - 224 - 32
+        width: parent.width - root.coverPx - root.spacing
         topPadding: 4
         spacing: 0
 
-        Text {
+        Item {
             width: parent.width
-            text: root.album ? (root.album.title || "") : ""
-            color: theme.textPrimary
-            font.pixelSize: theme.fontSection
-            font.weight: theme.weightBold
-            elide: Text.ElideRight
+            height: Math.max(localAlbumTitle.implicitHeight, 32)
+            Text {
+                id: localAlbumTitle
+                anchors.left: parent.left
+                anchors.right: localHeaderModeButton.left
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.album ? (root.album.title || "") : ""
+                color: theme.textPrimary
+                font.pixelSize: theme.fontSection
+                font.weight: theme.weightBold
+                elide: Text.ElideRight
+            }
+            QbzCircleAction {
+                id: localHeaderModeButton
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                name: root.compact ? "maximize-2" : "minimize-2"
+                onClicked: root.compactToggled()
+                HoverHandler { id: localHeaderModeHover }
+                ToolTip.visible: localHeaderModeHover.hovered
+                ToolTip.text: root.compact
+                    ? QbzSession.tr("Show full album header", QbzSession.trRev)
+                    : QbzSession.tr("Show compact album header", QbzSession.trRev)
+                ToolTip.delay: 350
+            }
         }
         Item { width: 1; height: 4 }
         Row {
@@ -99,7 +125,7 @@ Row {
             // Multi-artist album (compilations): "+N more artists" expands
             // the full track-artist list below.
             Text {
-                visible: root.allArtists.length > 1
+                visible: !root.compact && root.allArtists.length > 1
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.artistsExpanded
                     ? QbzSession.tr("Show less", QbzSession.trRev)
@@ -119,7 +145,8 @@ Row {
         // Expanded track-artist list — each entry routes to the Local
         // Library Artists tab (name-based).
         Column {
-            visible: root.artistsExpanded && root.allArtists.length > 1
+            visible: !root.compact && root.artistsExpanded
+                     && root.allArtists.length > 1
             width: parent.width
             topPadding: 6
             spacing: 0
@@ -143,15 +170,15 @@ Row {
                 }
             }
         }
-        Item { width: 1; height: 10 }
+        Item { width: 1; height: root.compact ? 4 : 10 }
         Text {
             width: parent.width
-            text: root.infoLine
+            text: root.compact ? root.compactInfoLine : root.infoLine
             color: theme.textSecondary
             font.pixelSize: theme.fontBody
             elide: Text.ElideRight
         }
-        Item { width: 1; height: 20 }
+        Item { width: 1; height: root.compact ? 8 : 20 }
 
         // ---- Local action row ----
         Row {
@@ -186,12 +213,12 @@ Row {
 
         // ---- Version picker (multiple physical copies only) ----
         Item {
-            visible: root.versions.length > 1
+            visible: !root.compact && root.versions.length > 1
             width: 1
             height: visible ? 16 : 0
         }
         Row {
-            visible: root.versions.length > 1
+            visible: !root.compact && root.versions.length > 1
             spacing: 8
             Text {
                 anchors.verticalCenter: parent.verticalCenter

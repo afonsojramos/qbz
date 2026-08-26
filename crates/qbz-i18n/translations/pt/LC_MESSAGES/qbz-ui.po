@@ -5983,3 +5983,15 @@ msgstr "Forma de onda da faixa"
 
 msgid "Show the full-track waveform in the player seek bar."
 msgstr "Mostra a forma de onda completa da faixa na barra de busca do player."
+
+msgid "Compact header"
+msgstr "Cabeçalho compacto"
+
+msgid "Show less data in album headers."
+msgstr "Mostrar menos dados nos cabeçalhos de álbuns."
+
+msgid "Show full album header"
+msgstr "Mostrar cabeçalho completo do álbum"
+
+msgid "Show compact album header"
+msgstr "Mostrar cabeçalho compacto do álbum"

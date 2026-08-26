@@ -5973,3 +5973,15 @@ msgstr "Golfvorm van nummer"
 
 msgid "Show the full-track waveform in the player seek bar."
 msgstr "Toon de golfvorm van het volledige nummer in de zoekbalk van de speler."
+
+msgid "Compact header"
+msgstr "Compacte kop"
+
+msgid "Show less data in album headers."
+msgstr "Toon minder gegevens in albumkoppen."
+
+msgid "Show full album header"
+msgstr "Volledige albumkop tonen"
+
+msgid "Show compact album header"
+msgstr "Compacte albumkop tonen"
