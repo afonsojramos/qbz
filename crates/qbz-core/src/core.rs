@@ -866,6 +866,12 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         queue.peek_upcoming(count)
     }
 
+    /// Inspect the previous queue row without changing the cursor/history.
+    pub async fn peek_previous_track(&self) -> Option<QueueTrack> {
+        let queue = self.queue.read().await;
+        queue.peek_previous()
+    }
+
     /// The current queue track, if any (source-aware playback routing).
     pub async fn current_track(&self) -> Option<QueueTrack> {
         let queue = self.queue.read().await;

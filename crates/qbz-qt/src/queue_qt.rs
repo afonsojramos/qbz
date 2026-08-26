@@ -21,9 +21,9 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
+use cxx_qt_lib::QString;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
-use cxx_qt_lib::QString;
 use qbz_models::QueueTrack;
 use serde::Serialize;
 use std::sync::Arc;
@@ -418,8 +418,7 @@ static LAST_MINI_QUEUE_JSON: Mutex<String> = Mutex::new(String::new());
 /// restored queue may contain thousands of tracks; the sidebar document stays
 /// paged at 40 and should not pay to serialize the full sequence in the normal
 /// shell path.
-static EXTENDED_OPEN: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static EXTENDED_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static LAST_EXTENDED_JSON: Mutex<String> = Mutex::new(String::new());
 
 fn extended_rows(
@@ -669,7 +668,10 @@ pub async fn publish(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         .iter()
         .map(|t| row_from(t, &favorites))
         .collect();
-    let current = state.current_track.as_ref().map(|t| row_from(t, &favorites));
+    let current = state
+        .current_track
+        .as_ref()
+        .map(|t| row_from(t, &favorites));
 
     // One core read for the marker (the reference reads it in the same pass,
     // `queue.rs:396`), so a row can compare its id without a second round trip.
@@ -768,6 +770,16 @@ pub async fn play_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index
         log::warn!("[qbz-qt] queue: play_upcoming {page_index} out of range");
         return;
     };
+    let state = runtime.core().get_queue_state_full().await;
+    let Some(candidate) = state.upcoming.get(upcoming_index) else {
+        return;
+    };
+    if crate::local_playback::preflight_queue_track(candidate)
+        .await
+        .is_err()
+    {
+        return;
+    }
     if let Some(track) = runtime.core().play_upcoming_at(upcoming_index).await {
         crate::playback_qt::play_queue_track_public(runtime, track.id).await;
     }
@@ -779,6 +791,15 @@ pub async fn play_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index
 /// so it resolves the right track even when the desktop panel was left
 /// filtered or paged (state.slint:4896-4900 `play-coverflow-upcoming`).
 pub async fn play_upcoming_flat(runtime: &Arc<AppRuntime<LoggingAdapter>>, upcoming_index: usize) {
+    let state = runtime.core().get_queue_state_full().await;
+    if let Some(candidate) = state.upcoming.get(upcoming_index) {
+        if crate::local_playback::preflight_queue_track(candidate)
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
     match runtime.core().play_upcoming_at(upcoming_index).await {
         Some(track) => crate::playback_qt::play_queue_track_public(runtime, track.id).await,
         None => log::warn!("[qbz-qt] queue: play_upcoming_flat {upcoming_index} out of range"),
@@ -846,14 +867,21 @@ pub async fn play_extended(
             if crate::qconnect_qt::publish::is_connected()
                 && !crate::qconnect_qt::is_qconnect_queue_track(&track)
             {
-                log::info!("[qbz-qt] queue: skipped QConnect-incompatible history row {}", track.id);
+                log::info!(
+                    "[qbz-qt] queue: skipped QConnect-incompatible history row {}",
+                    track.id
+                );
                 return;
             }
             match insert_queue_track_at(runtime, track.clone(), 0).await {
                 Ok(InsertOutcome::Remote) => {
                     if let Some(service) = crate::qconnect_qt::service() {
-                        if let Err(error) = service.play_remote_renderer_track_if_active(track.id).await {
-                            log::warn!("[qbz-qt] queue: requeued remote history play failed: {error}");
+                        if let Err(error) =
+                            service.play_remote_renderer_track_if_active(track.id).await
+                        {
+                            log::warn!(
+                                "[qbz-qt] queue: requeued remote history play failed: {error}"
+                            );
                         }
                     }
                 }
@@ -1099,7 +1127,10 @@ pub async fn drop_extended(
             if crate::qconnect_qt::publish::is_connected()
                 && !crate::qconnect_qt::is_qconnect_queue_track(&track)
             {
-                log::info!("[qbz-qt] queue: skipped QConnect-incompatible history drag {}", track.id);
+                log::info!(
+                    "[qbz-qt] queue: skipped QConnect-incompatible history drag {}",
+                    track.id
+                );
                 return;
             }
             if let Err(error) = insert_queue_track_at(runtime, track, to_slot).await {
@@ -1166,8 +1197,7 @@ pub async fn insert_dragged_track(
         vec![crate::playback_qt::queue_track_for(runtime, track_id).await?],
         None,
     )
-    .pop()
-    else {
+    .pop() else {
         log::info!("[qbz-qt] queue: dragged track {track_id} was filtered out");
         return Ok(());
     };
@@ -1365,11 +1395,7 @@ pub async fn add_to_playlist(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_ind
 /// documents the same gap), so the mutation is refused here AND the row
 /// publishes `isLocal` so the panel can drop the control instead of showing
 /// one that cannot work.
-pub async fn toggle_favorite(
-    runtime: &Arc<AppRuntime<LoggingAdapter>>,
-    kind: &str,
-    id: &str,
-) {
+pub async fn toggle_favorite(runtime: &Arc<AppRuntime<LoggingAdapter>>, kind: &str, id: &str) {
     if kind == "track" {
         let local = canonical_u64(id)
             .map(|tid| LOCAL_ROW_IDS.lock().unwrap().contains(&tid))
@@ -1543,8 +1569,7 @@ mod tests {
             stop_after_track_id: None,
             manual_next_count: 0,
         };
-        let (rows, current_index) =
-            extended_rows(&state, &HashSet::new(), "needle");
+        let (rows, current_index) = extended_rows(&state, &HashSet::new(), "needle");
 
         assert_eq!(current_index, -1);
         assert_eq!(rows.len(), 2);

@@ -129,7 +129,10 @@ pub(crate) async fn play_ticket(runtime: &Runtime, ticket: PlaybackTicket) -> bo
 
         PlaybackTicket::Bytes { bytes, play_id } => {
             let len = bytes.len();
-            qbz_audio::register_seek_waveform_key(play_id, qbz_audio::seek_waveform_content_key(&bytes));
+            qbz_audio::register_seek_waveform_key(
+                play_id,
+                qbz_audio::seek_waveform_content_key(&bytes),
+            );
             if let Err(e) = runtime.core().player().play_data(bytes, play_id) {
                 log::error!("[qbz-qt] audible: play_data {play_id} ({len} B) failed: {e}");
                 return false;
@@ -148,7 +151,19 @@ pub(crate) async fn play_ticket(runtime: &Runtime, ticket: PlaybackTicket) -> bo
             duration_secs,
             start_secs,
             log_tag,
-        } => play_stream(runtime, &url, play_id, duration_secs, start_secs, log_tag).await,
+            request_headers,
+        } => {
+            play_stream(
+                runtime,
+                &url,
+                play_id,
+                duration_secs,
+                start_secs,
+                log_tag,
+                &request_headers,
+            )
+            .await
+        }
 
         PlaybackTicket::SeekLoaded { play_id, secs } => {
             let _ = runtime.core().player().seek(secs as u64);
@@ -208,9 +223,14 @@ pub(crate) async fn queue_gapless_successor(
         | PlaybackTicket::CdTrack { .. }
         | PlaybackTicket::Catalog { .. } => return Ok(false),
         PlaybackTicket::Bytes { bytes, .. } => Some(bytes),
-        PlaybackTicket::Stream { url, log_tag, .. } => {
+        PlaybackTicket::Stream {
+            url,
+            log_tag,
+            request_headers,
+            ..
+        } => {
             let started = std::time::Instant::now();
-            let bytes = fetch_body(&url).await?;
+            let bytes = fetch_body(&url, &request_headers).await?;
             log::info!(
                 "[qbz-qt][GAPLESS] {log_tag} successor {next_id}: {} bytes in {:?}",
                 bytes.len(),
@@ -241,9 +261,7 @@ pub(crate) async fn queue_gapless_successor(
     if player.state.current_track_id() != predecessor_id
         || player.state.get_gapless_next_track_id() != 0
     {
-        log::debug!(
-            "[qbz-qt][GAPLESS] successor {next_id} arrived after its predecessor moved"
-        );
+        log::debug!("[qbz-qt][GAPLESS] successor {next_id} arrived after its predecessor moved");
         return Ok(false);
     }
     qbz_audio::register_seek_waveform_key(next_id, qbz_audio::seek_waveform_content_key(&bytes));
@@ -252,12 +270,7 @@ pub(crate) async fn queue_gapless_successor(
 
 /// Read a file and hand the bytes to the player, with the CUE fast path in
 /// front of it.
-async fn play_file(
-    runtime: &Runtime,
-    path: PathBuf,
-    play_id: u64,
-    seek_secs: Option<f64>,
-) -> bool {
+async fn play_file(runtime: &Runtime, path: PathBuf, play_id: u64, seek_secs: Option<f64>) -> bool {
     // CUE fast path — see the module header for why this test changed shape.
     if let Some(start) = seek_secs.filter(|s| *s > 0.0) {
         if container_is_loaded(runtime, &path) {
@@ -336,6 +349,7 @@ async fn play_stream(
     duration_secs: u64,
     start_secs: u64,
     log_tag: &'static str,
+    request_headers: &[(String, String)],
 ) -> bool {
     qbz_audio::register_seek_waveform_key(play_id, format!("remote:{log_tag}:{play_id}"));
     let t0 = std::time::Instant::now();
@@ -346,13 +360,14 @@ async fn play_stream(
     // big file" and "slow because it left the building".
     let origin = url.split('?').next().unwrap_or("").to_string();
 
-    match qbz_player::remote_stream::stream_remote_track_into_player(
+    match qbz_player::remote_stream::stream_remote_track_into_player_with_headers(
         &runtime.core().player(),
         play_id,
         duration_secs,
         start_secs,
         url,
         log_tag,
+        request_headers,
     )
     .await
     {
@@ -374,7 +389,7 @@ async fn play_stream(
         ),
     }
 
-    let bytes = match fetch_body(url).await {
+    let bytes = match fetch_body(url, request_headers).await {
         Ok(b) => b,
         Err(e) => {
             log::error!("[qbz-qt] {log_tag} play {play_id}: download failed ({e}) — {origin}");
@@ -406,12 +421,28 @@ async fn play_stream(
 /// Navidrome 0.63.2, 2026-08-20). Handing that to `play_data` would push a JSON
 /// blob into the decoder. So the body is also checked for a plausible audio
 /// length before it is allowed anywhere near the player.
-async fn fetch_body(url: &str) -> Result<Vec<u8>, String> {
-    let resp = reqwest::get(url)
+async fn fetch_body(url: &str, request_headers: &[(String, String)]) -> Result<Vec<u8>, String> {
+    use reqwest::header::{HeaderName, HeaderValue};
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| format!("create download client failed: {e}"))?;
+    let mut request = client.get(url);
+    for (name, value) in request_headers {
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| format!("invalid remote request header name {name:?}"))?;
+        let value = HeaderValue::from_str(value)
+            .map_err(|_| format!("invalid value for remote request header {name:?}"))?;
+        request = request.header(name, value);
+    }
+    let resp = request
+        .send()
         .await
-        .map_err(|e| format!("request failed: {e}"))?
+        .map_err(|e| format!("request failed: {}", safe_reqwest_error(&e)))?
         .error_for_status()
-        .map_err(|e| format!("status error: {e}"))?;
+        .map_err(|e| format!("status error: {}", safe_reqwest_error(&e)))?;
     let ctype = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -433,6 +464,21 @@ async fn fetch_body(url: &str) -> Result<Vec<u8>, String> {
         return Err(format!("body is only {} bytes — not a track", bytes.len()));
     }
     Ok(bytes)
+}
+
+/// Do not let a token-bearing media URL leak through reqwest's Display impl.
+fn safe_reqwest_error(error: &reqwest::Error) -> String {
+    if error.is_timeout() {
+        "request timed out".into()
+    } else if let Some(status) = error.status() {
+        format!("server returned HTTP {}", status.as_u16())
+    } else if error.is_connect() {
+        "connection failed".into()
+    } else if error.is_body() {
+        "response body failed".into()
+    } else {
+        "request failed".into()
+    }
 }
 
 #[cfg(test)]

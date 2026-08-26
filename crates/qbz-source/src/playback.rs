@@ -73,6 +73,14 @@ pub enum PlaybackTicket {
         /// Log prefix the feeder stamps its lines with (`"PLEX"`). Static
         /// because it names the SOURCE, never the item.
         log_tag: &'static str,
+        /// Source-owned HTTP request headers required by the media endpoint.
+        ///
+        /// These are transport facts, not audio policy. Plex, for example,
+        /// accepts the token in the URL but can reject a part request without
+        /// its `X-Plex-*` client identity. Carrying the headers on the ticket
+        /// keeps the shared player transport source-agnostic while preserving
+        /// the request contract the source used to fetch the same bytes.
+        request_headers: Vec<(String, String)>,
     },
     /// Let the core resolve + stream it: `core().play_track_resolved(track_id, …)`.
     Catalog { track_id: u64 },
@@ -142,6 +150,7 @@ impl std::fmt::Debug for PlaybackTicket {
                 duration_secs,
                 start_secs,
                 log_tag,
+                request_headers,
             } => f
                 .debug_struct("Stream")
                 .field("url", &redact_url(url))
@@ -149,6 +158,15 @@ impl std::fmt::Debug for PlaybackTicket {
                 .field("duration_secs", duration_secs)
                 .field("start_secs", start_secs)
                 .field("log_tag", log_tag)
+                // Header VALUES may become sensitive for a future source.
+                // Names are enough to diagnose a missing request profile.
+                .field(
+                    "request_headers",
+                    &request_headers
+                        .iter()
+                        .map(|(name, _)| name.as_str())
+                        .collect::<Vec<_>>(),
+                )
                 .finish(),
             PlaybackTicket::Catalog { track_id } => f
                 .debug_struct("Catalog")
@@ -215,9 +233,15 @@ mod tests {
             duration_secs: 188,
             start_secs: 0,
             log_tag: "PLEX",
+            request_headers: vec![("X-Plex-Product".into(), "secret-value".into())],
         };
         let s = format!("{t:?}");
         assert!(!s.contains("sekrit"), "the token leaked into Debug: {s}");
+        assert!(s.contains("X-Plex-Product"), "{s}");
+        assert!(
+            !s.contains("secret-value"),
+            "header value leaked into Debug: {s}"
+        );
         assert!(s.contains("/library/parts/1/f.flac?<redacted>"), "{s}");
         // The origin SURVIVES: telling a LAN address from a plex.tv relay is
         // the question those perf log lines exist to answer.
@@ -232,6 +256,7 @@ mod tests {
             duration_secs: 0,
             start_secs: 0,
             log_tag: "PLEX",
+            request_headers: Vec::new(),
         };
         assert!(format!("{t:?}").contains("http://nas.local/music/a.flac"));
     }
@@ -244,6 +269,7 @@ mod tests {
             duration_secs: 0,
             start_secs: 0,
             log_tag: "PLEX",
+            request_headers: Vec::new(),
         };
         assert_eq!(t.play_id(), Some(42));
         // `Catalog` is the one variant with no player-side id — the core mints

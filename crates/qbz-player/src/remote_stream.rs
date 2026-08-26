@@ -63,7 +63,35 @@ pub async fn stream_remote_track_into_player(
     url: &str,
     log_tag: &str,
 ) -> Result<(), String> {
-    let stream_info = probe_remote_stream_info(url).await?;
+    stream_remote_track_into_player_with_headers(
+        player,
+        track_id,
+        duration_secs,
+        start_position_secs,
+        url,
+        log_tag,
+        &[],
+    )
+    .await
+}
+
+/// Variant of [`stream_remote_track_into_player`] that preserves a source's
+/// HTTP request contract while keeping this transport source-agnostic.
+///
+/// Plex media parts are the motivating case: their token is in the URL, but
+/// some servers still reject the Range/body request unless the same
+/// `X-Plex-*` identity used for metadata is present. Header values are never
+/// included in errors or logs.
+pub async fn stream_remote_track_into_player_with_headers(
+    player: &Player,
+    track_id: u64,
+    duration_secs: u64,
+    start_position_secs: u64,
+    url: &str,
+    log_tag: &str,
+    request_headers: &[(String, String)],
+) -> Result<(), String> {
+    let stream_info = probe_remote_stream_info_with_headers(url, request_headers).await?;
     log::info!(
         "[{}/STREAMING] Track {} - {:.2} MB, {}Hz, {} ch, {}-bit {}, {:.1} MB/s",
         log_tag,
@@ -92,9 +120,17 @@ pub async fn stream_remote_track_into_player(
     let url = url.to_string();
     let content_length = stream_info.content_length;
     let log_tag = log_tag.to_string();
+    let request_headers = request_headers.to_vec();
     tokio::spawn(async move {
-        if let Err(err) =
-            download_and_stream_remote_track(&url, writer, track_id, content_length, &log_tag).await
+        if let Err(err) = download_and_stream_remote_track_with_headers(
+            &url,
+            writer,
+            track_id,
+            content_length,
+            &log_tag,
+            &request_headers,
+        )
+        .await
         {
             log::error!(
                 "[{}/STREAMING] Track {} failed while streaming: {}",
@@ -118,6 +154,13 @@ pub async fn stream_remote_track_into_player(
 /// than downloading the track once as a "probe" and then a second time into
 /// the player.
 pub async fn probe_remote_stream_info(url: &str) -> Result<RemoteStreamInfo, String> {
+    probe_remote_stream_info_with_headers(url, &[]).await
+}
+
+pub async fn probe_remote_stream_info_with_headers(
+    url: &str,
+    request_headers: &[(String, String)],
+) -> Result<RemoteStreamInfo, String> {
     use futures_util::StreamExt;
     use reqwest::header::{ACCEPT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE};
     use reqwest::StatusCode;
@@ -130,14 +173,20 @@ pub async fn probe_remote_stream_info(url: &str) -> Result<RemoteStreamInfo, Str
         .map_err(|err| format!("create stream probe client: {err}"))?;
 
     let start_time = Instant::now();
-    let range_response = client
+    let request = client
         .get(url)
         .header("User-Agent", "Mozilla/5.0")
         .header(ACCEPT_ENCODING, "identity")
-        .header("Range", "bytes=0-65535")
+        .header("Range", "bytes=0-65535");
+    let range_response = apply_request_headers(request, request_headers)?
         .send()
         .await
-        .map_err(|err| format!("probe range request failed: {}", describe_reqwest_error(&err)))?;
+        .map_err(|err| {
+            format!(
+                "probe range request failed: {}",
+                describe_reqwest_error(&err)
+            )
+        })?;
 
     if !range_response.status().is_success() {
         return Err(format!(
@@ -162,7 +211,9 @@ pub async fn probe_remote_stream_info(url: &str) -> Result<RemoteStreamInfo, Str
     let mut initial_bytes = Vec::with_capacity(PROBE_BYTES);
     let mut stream = range_response.bytes_stream();
     while initial_bytes.len() < PROBE_BYTES {
-        let Some(chunk) = stream.next().await else { break };
+        let Some(chunk) = stream.next().await else {
+            break;
+        };
         let chunk = chunk
             .map_err(|err| format!("read probe bytes failed: {}", describe_reqwest_error(&err)))?;
         let take = (PROBE_BYTES - initial_bytes.len()).min(chunk.len());
@@ -252,6 +303,25 @@ pub async fn download_and_stream_remote_track(
     content_length: u64,
     log_tag: &str,
 ) -> Result<(), String> {
+    download_and_stream_remote_track_with_headers(
+        url,
+        writer,
+        track_id,
+        content_length,
+        log_tag,
+        &[],
+    )
+    .await
+}
+
+pub async fn download_and_stream_remote_track_with_headers(
+    url: &str,
+    writer: BufferWriter,
+    track_id: u64,
+    content_length: u64,
+    log_tag: &str,
+    request_headers: &[(String, String)],
+) -> Result<(), String> {
     use futures_util::StreamExt;
     use reqwest::header::ACCEPT_ENCODING;
     use std::time::Instant;
@@ -281,10 +351,11 @@ pub async fn download_and_stream_remote_track(
         .build()
         .map_err(|err| format!("create remote streaming client: {err}"))?;
 
-    let response = client
+    let request = client
         .get(url)
         .header("User-Agent", "Mozilla/5.0")
-        .header(ACCEPT_ENCODING, "identity")
+        .header(ACCEPT_ENCODING, "identity");
+    let response = apply_request_headers(request, request_headers)?
         .send()
         .await
         .map_err(|err| {
@@ -307,8 +378,12 @@ pub async fn download_and_stream_remote_track(
     let mut last_log_time = Instant::now();
 
     while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result
-            .map_err(|err| format!("remote streaming chunk failed: {}", describe_reqwest_error(&err)))?;
+        let chunk = chunk_result.map_err(|err| {
+            format!(
+                "remote streaming chunk failed: {}",
+                describe_reqwest_error(&err)
+            )
+        })?;
         bytes_received += chunk.len() as u64;
 
         if let Err(err) = writer.push_chunk(&chunk) {
@@ -364,6 +439,29 @@ pub async fn download_and_stream_remote_track(
     Ok(())
 }
 
+fn apply_request_headers(
+    request: reqwest::RequestBuilder,
+    headers: &[(String, String)],
+) -> Result<reqwest::RequestBuilder, String> {
+    Ok(request.headers(parsed_request_headers(headers)?))
+}
+
+fn parsed_request_headers(
+    headers: &[(String, String)],
+) -> Result<reqwest::header::HeaderMap, String> {
+    use reqwest::header::{HeaderName, HeaderValue};
+
+    let mut parsed = reqwest::header::HeaderMap::new();
+    for (name, value) in headers {
+        let header_name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| format!("invalid remote request header name {name:?}"))?;
+        let header_value = HeaderValue::from_str(value)
+            .map_err(|_| format!("invalid value for remote request header {name:?}"))?;
+        parsed.insert(header_name, header_value);
+    }
+    Ok(parsed)
+}
+
 /// reqwest's `Display` hides the source chain — which is exactly where the
 /// diagnosis lives (Akamai's >100-header small-object flood surfaces as hyper's
 /// "message head is too large" two levels down). Walk `source()` and join the
@@ -392,7 +490,19 @@ pub fn is_header_flood_error(message: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{content_range_total, probe_content_length};
+    use super::{content_range_total, parsed_request_headers, probe_content_length};
+
+    #[test]
+    fn source_request_headers_are_parsed_for_the_http_request() {
+        let headers =
+            parsed_request_headers(&[("X-Plex-Product".to_string(), "QBZ".to_string())]).unwrap();
+        assert_eq!(
+            headers
+                .get("X-Plex-Product")
+                .and_then(|value| value.to_str().ok()),
+            Some("QBZ")
+        );
+    }
 
     #[test]
     fn content_range_uses_the_whole_object_length() {
@@ -406,11 +516,7 @@ mod tests {
     #[test]
     fn partial_content_length_is_never_mistaken_for_the_track_size() {
         assert_eq!(
-            probe_content_length(
-                true,
-                Some("bytes 0-65535/44790678"),
-                Some("65536")
-            ),
+            probe_content_length(true, Some("bytes 0-65535/44790678"), Some("65536")),
             Some(44_790_678)
         );
         assert_eq!(probe_content_length(true, None, Some("65536")), None);

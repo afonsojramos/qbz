@@ -52,9 +52,9 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
+use cxx_qt_lib::QString;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
-use cxx_qt_lib::QString;
 use qbz_models::{PageArtistTrack, Quality, QueueTrack, RepeatMode};
 
 /// The request tier for every play. Persisted in ui_prefs.json ("streaming_quality")
@@ -97,12 +97,18 @@ pub(crate) fn current_quality() -> Quality {
 /// probes hardware. That is what lets the play funnel own the decision
 /// instead of taking it as a parameter.
 pub(crate) fn local_playback_quality() -> (Quality, qbz_models::QualityLimit) {
-    reconcile_device_cap(current_quality(), qbz_app::device_cap::cap().map(|(t, _)| t))
+    reconcile_device_cap(
+        current_quality(),
+        qbz_app::device_cap::cap().map(|(t, _)| t),
+    )
 }
 
 /// The decision itself, lifted out of the two lock reads so it is testable.
 /// Port of the match in `crates/qbz/src/playback.rs local_playback_quality`.
-fn reconcile_device_cap(pref: Quality, cap: Option<Quality>) -> (Quality, qbz_models::QualityLimit) {
+fn reconcile_device_cap(
+    pref: Quality,
+    cap: Option<Quality>,
+) -> (Quality, qbz_models::QualityLimit) {
     use qbz_models::QualityLimit;
     match cap {
         Some(cap) if cap < pref => (cap, QualityLimit::LocalDeviceCap),
@@ -345,7 +351,10 @@ impl PlayContext {
         if kind.is_empty() || id.is_empty() {
             return None;
         }
-        Some(Self { kind: kind.to_string(), id: id.to_string() })
+        Some(Self {
+            kind: kind.to_string(),
+            id: id.to_string(),
+        })
     }
 
     pub fn album(id: &str) -> Option<Self> {
@@ -495,7 +504,8 @@ pub(crate) fn queue_track_unavailable(track: &QueueTrack) -> bool {
     // streamable — which is the owner's test case exactly, since `/album/get`
     // is honest but plenty of rows only fail at the stream-url step. The cache
     // exemption applies to both clauses: downloaded bytes play regardless.
-    let dead = !track.streamable || crate::track_replace_qt::session_unavailable::contains(track.id);
+    let dead =
+        !track.streamable || crate::track_replace_qt::session_unavailable::contains(track.id);
     dead && !crate::offline_qt::is_cached_id(track.id)
 }
 
@@ -646,26 +656,33 @@ pub(crate) struct QueueStart {
     pub track_id: u64,
 }
 
-/// The ONLY `core().set_queue` call in this module — every play path goes
-/// through it, so the origin can never be dropped on the floor, and neither can
-/// the blacklist (PARITY-DEBT #1) nor a track Qobuz pulled (contract §5.3 D5).
+/// A replacement queue after blacklist/availability filtering and context
+/// stamping, but before it is visible to the core or any UI surface.
 ///
-/// Returns the surviving anchor; see [`QueueStart`] for why no caller may
-/// compute it itself any more.
-pub(crate) async fn set_queue_stamped(
-    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+/// Source-owned playback can fail before the player accepts new audio (dead
+/// Plex part, unavailable NAS, server outage). Preparing first lets those
+/// callers prove the anchor is audible without making Queue, NPB and MPRIS
+/// announce it over the track that is still actually playing.
+pub(crate) struct PreparedQueue {
+    tracks: Vec<QueueTrack>,
+    start: Option<usize>,
+    anchor: Option<QueueStart>,
+    unavailable_dropped: usize,
+}
+
+impl PreparedQueue {
+    pub(crate) fn anchor_track(&self) -> Option<&QueueTrack> {
+        self.start.and_then(|index| self.tracks.get(index))
+    }
+}
+
+pub(crate) fn prepare_queue_stamped(
     tracks: Vec<QueueTrack>,
     start: Option<usize>,
     context: Option<PlayContext>,
-) -> Option<QueueStart> {
+) -> Option<PreparedQueue> {
     let asked = tracks.len();
-    // Filter BEFORE stamping: a dropped row needs no origin, and the start
-    // index has to be remapped against the list the core actually receives.
     let (mut tracks, start, dropped) = filter_unplayable_queue(tracks, start);
-    // Everything was filtered out of a non-empty build: do NOT publish an empty
-    // queue over whatever is playing (§5.3, last bullet). Say why and leave the
-    // core alone — wiping a working queue because the new one was all-dead is a
-    // second failure stacked on the first.
     if tracks.is_empty() && asked > 0 {
         log::info!(
             "[qbz-qt] set_queue: all {asked} track(s) filtered ({} blacklisted, {} unavailable) \
@@ -678,25 +695,52 @@ pub(crate) async fn set_queue_stamped(
     }
     stamp_context(&mut tracks, context);
     warn_dead_context(&tracks, "set_queue");
-    // Read the anchor off the list the CORE receives, not off the caller's —
-    // that difference IS F1. Computed before the move into `set_queue`.
     let anchor = start.and_then(|index| {
         tracks.get(index).map(|track| QueueStart {
             index,
             track_id: track.id,
         })
     });
+    Some(PreparedQueue {
+        tracks,
+        start,
+        anchor,
+        unavailable_dropped: dropped.unavailable,
+    })
+}
+
+pub(crate) async fn commit_prepared_queue(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    prepared: PreparedQueue,
+) -> Option<QueueStart> {
+    let PreparedQueue {
+        tracks,
+        start,
+        anchor,
+        unavailable_dropped,
+    } = prepared;
     runtime.core().set_queue(tracks, start).await;
-    toast_unavailable_dropped(dropped.unavailable);
-    // QConnect (contract §6.3, Slint playback.rs:3697-3703): when WE are the
-    // active renderer, push the new queue to the session immediately so a
-    // controller's UI reflects the freshly-built queue — covers infinite-play
-    // refills + album/radio plays. Self-gates to a no-op when not connected
-    // or when a peer owns playback.
+    toast_unavailable_dropped(unavailable_dropped);
     if let Some(svc) = crate::qconnect_qt::service() {
         svc.sync_local_queue_if_changed().await;
     }
     anchor
+}
+
+/// The ONLY `core().set_queue` call in this module — every play path goes
+/// through it, so the origin can never be dropped on the floor, and neither can
+/// the blacklist (PARITY-DEBT #1) nor a track Qobuz pulled (contract §5.3 D5).
+///
+/// Returns the surviving anchor; see [`QueueStart`] for why no caller may
+/// compute it itself any more.
+pub(crate) async fn set_queue_stamped(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    tracks: Vec<QueueTrack>,
+    start: Option<usize>,
+    context: Option<PlayContext>,
+) -> Option<QueueStart> {
+    let prepared = prepare_queue_stamped(tracks, start, context)?;
+    commit_prepared_queue(runtime, prepared).await
 }
 
 /// Same guarantee for the ADD paths (play-next / add-to-queue): appended tracks
@@ -765,7 +809,10 @@ pub(crate) fn batch_all_qconnect_castable(tracks: &[QueueTrack]) -> bool {
     tracks.iter().all(|qt| {
         qt.id > 0
             && !matches!(
-                qt.source.as_deref().map(|s| s.to_ascii_lowercase()).as_deref(),
+                qt.source
+                    .as_deref()
+                    .map(|s| s.to_ascii_lowercase())
+                    .as_deref(),
                 Some("local") | Some("plex")
             )
     })
@@ -800,10 +847,8 @@ pub(crate) async fn route_enqueue_to_peer(tracks: &[QueueTrack], mode: &str) -> 
     let Some(svc) = crate::qconnect_qt::service() else {
         return false;
     };
-    let routed: Vec<(u64, Option<String>)> = tracks
-        .iter()
-        .map(|qt| (qt.id, qt.source.clone()))
-        .collect();
+    let routed: Vec<(u64, Option<String>)> =
+        tracks.iter().map(|qt| (qt.id, qt.source.clone())).collect();
     match mode {
         "next" => svc.play_next_batch_on_peer_if_active(&routed).await,
         "later" => svc.play_later_batch_on_peer_if_active(&routed).await,
@@ -818,9 +863,18 @@ pub(crate) async fn route_track_to_peer(track: &QueueTrack, mode: &str) -> bool 
         return false;
     };
     match mode {
-        "next" => svc.play_next_on_peer_if_active(track.id, track.source.as_deref()).await,
-        "later" => svc.play_later_on_peer_if_active(track.id, track.source.as_deref()).await,
-        _ => svc.add_to_queue_on_peer_if_active(track.id, track.source.as_deref()).await,
+        "next" => {
+            svc.play_next_on_peer_if_active(track.id, track.source.as_deref())
+                .await
+        }
+        "later" => {
+            svc.play_later_on_peer_if_active(track.id, track.source.as_deref())
+                .await
+        }
+        _ => {
+            svc.add_to_queue_on_peer_if_active(track.id, track.source.as_deref())
+                .await
+        }
     }
 }
 
@@ -896,9 +950,7 @@ pub(crate) async fn play_resolved_offline_aware(
                     // `is_terminal_unavailable` routes it into the SAME bounded
                     // skip walk a pulled Qobuz track takes — to the user the two
                     // failures are the same one.
-                    Ok(false) => Err(format!(
-                        "local file no longer available (track {track_id})"
-                    )),
+                    Ok(false) => Err(format!("local file no longer available (track {track_id})")),
                     Err(e) => Err(e.to_string()),
                 };
             }
@@ -1010,9 +1062,9 @@ pub(crate) async fn fetch_album_queue(
                     return Ok(tracks);
                 }
                 Ok(_) => {}
-                Err(e) => log::debug!(
-                    "[qbz-qt] play_album {album_id}: offline fallback unavailable: {e}"
-                ),
+                Err(e) => {
+                    log::debug!("[qbz-qt] play_album {album_id}: offline fallback unavailable: {e}")
+                }
             }
             return Err(format!("get_album {album_id} failed: {catalog_error}"));
         }
@@ -1142,7 +1194,9 @@ async fn offline_album_queue(album_id: &str) -> Result<Vec<QueueTrack>, String> 
             let sample_rate = cached
                 .sample_rate
                 .or_else(|| local.map(|row| row.sample_rate).filter(|rate| *rate > 0.0));
-            let bit_depth = cached.bit_depth.or_else(|| local.and_then(|row| row.bit_depth));
+            let bit_depth = cached
+                .bit_depth
+                .or_else(|| local.and_then(|row| row.bit_depth));
             QueueTrack {
                 id: cached.track_id,
                 title: cached.title,
@@ -1192,7 +1246,9 @@ fn artist_top_queue_tracks(
             // full variant (best()) — the thumbnail down-tier was reverted
             // after the 2026-08-15 owner smoke; register the full set so the
             // immersive large-art feed can re-resolve (D2).
-            if let (Some(id), Some(img)) = (album_id.as_deref(), album.and_then(|a| a.image.as_ref())) {
+            if let (Some(id), Some(img)) =
+                (album_id.as_deref(), album.and_then(|a| a.image.as_ref()))
+            {
                 crate::artwork_qt::note_np_variants(id, img);
             }
             QueueTrack {
@@ -1241,7 +1297,10 @@ fn artist_top_queue_tracks(
 /// buckets album/epSingle/ep/single in page order, deduped), concatenating
 /// each album's tracks and skipping albums that fail (a bulk play must not
 /// abort on one unavailable album).
-pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &str) -> Result<(), String> {
+pub async fn play_artist(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    artist_id: &str,
+) -> Result<(), String> {
     const STUDIO_TYPES: &[&str] = &["album", "epSingle", "ep", "single"];
     let id: u64 = artist_id
         .parse()
@@ -1254,8 +1313,11 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
     let artist_name = page.name.display.clone();
 
     // 1) Popular tracks — the primary behavior.
-    let top: Vec<QueueTrack> =
-        artist_top_queue_tracks(page.top_tracks.as_deref().unwrap_or(&[]), artist_id, &artist_name);
+    let top: Vec<QueueTrack> = artist_top_queue_tracks(
+        page.top_tracks.as_deref().unwrap_or(&[]),
+        artist_id,
+        &artist_name,
+    );
     if !top.is_empty() {
         // F1: the anchor comes back from the seam, never from `top` — the
         // filter may have dropped `top[0]`.
@@ -1297,7 +1359,9 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
         }
     }
     if album_ids.is_empty() {
-        return Err(format!("artist {artist_id} has no top tracks and no studio releases"));
+        return Err(format!(
+            "artist {artist_id} has no top tracks and no studio releases"
+        ));
     }
     let mut queue: Vec<QueueTrack> = Vec::new();
     for aid in &album_ids {
@@ -1307,9 +1371,14 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
         }
     }
     if queue.is_empty() {
-        return Err(format!("artist {artist_id} studio discography produced no playable tracks"));
+        return Err(format!(
+            "artist {artist_id} studio discography produced no playable tracks"
+        ));
     }
-    log::info!("[qbz-qt] artist-play {artist_id}: discography fallback, {} tracks", queue.len());
+    log::info!(
+        "[qbz-qt] artist-play {artist_id}: discography fallback, {} tracks",
+        queue.len()
+    );
     // The discography queue arrives pre-stamped per ALBUM (fetch_album_queue);
     // the artist origin is what the user launched, so it wins here — the
     // explicit context overrides the per-album stamp for the whole queue.
@@ -1378,7 +1447,10 @@ pub async fn enqueue_album(
         log::info!("[qbz-qt] enqueue_album {album_id}: every track was filtered");
         return Ok(());
     }
-    log::info!("[qbz-qt] enqueue_album {album_id} ({mode}): {} tracks", tracks.len());
+    log::info!(
+        "[qbz-qt] enqueue_album {album_id} ({mode}): {} tracks",
+        tracks.len()
+    );
     // QConnect CONTROLLER mode (contract §7): route the add to the peer's
     // queue — early-returns when handled, so the local insert + sync tail
     // below only run in local/renderer mode. The mode is normalized to what
@@ -1657,9 +1729,7 @@ async fn try_infinite_refill(
         Ok(track) => match track.performer.as_ref().map(|p| p.id) {
             Some(id) => id,
             None => {
-                log::warn!(
-                    "[qbz-qt] infinite radio: seed track {seed_track_id} has no performer"
-                );
+                log::warn!("[qbz-qt] infinite radio: seed track {seed_track_id} has no performer");
                 return false;
             }
         },
@@ -1670,8 +1740,10 @@ async fn try_infinite_refill(
     };
     match runtime.core().create_smart_artist_radio(artist_id).await {
         Ok(tracks) if !tracks.is_empty() => {
-            let queue: Vec<QueueTrack> =
-                tracks.iter().map(crate::foryou_qt::to_queue_track).collect();
+            let queue: Vec<QueueTrack> = tracks
+                .iter()
+                .map(crate::foryou_qt::to_queue_track)
+                .collect();
             match play_track_list(runtime, queue, 0, false).await {
                 Ok(()) => {
                     log::info!(
@@ -1906,8 +1978,15 @@ fn feed_queue_track(track_id: u64) -> Result<QueueTrack, String> {
     }
     let duration_secs = {
         let mut parts = item.duration.split(':');
-        parts.next().and_then(|m| m.parse::<u64>().ok()).unwrap_or(0) * 60
-            + parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0)
+        parts
+            .next()
+            .and_then(|m| m.parse::<u64>().ok())
+            .unwrap_or(0)
+            * 60
+            + parts
+                .next()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0)
     };
     Ok(QueueTrack {
         id: track_id,
@@ -2198,13 +2277,9 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
                 // release the latch. The poll loop's track-change edge clears
                 // it too — whichever runs first wins, and both are idempotent.
                 // Leaving it set on failure is precisely the Tauri scar.
-                PENDING_PLAY_ID.compare_exchange(
-                    track.id,
-                    0,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                )
-                .ok();
+                PENDING_PLAY_ID
+                    .compare_exchange(track.id, 0, Ordering::Relaxed, Ordering::Relaxed)
+                    .ok();
             }
             None => {
                 log::info!("[qbz-qt] toggle-play ignored: no loaded audio and an empty queue");
@@ -2246,6 +2321,17 @@ pub async fn next(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
             }
         }
     }
+    // Prove a local file still exists before advancing the cursor. The player
+    // keeps the old stream alive until a replacement starts, so advancing
+    // first would make queue, NPB and MPRIS lie about what is audible.
+    if let Some(candidate) = runtime.core().peek_upcoming(1).await.into_iter().next() {
+        if crate::local_playback::preflight_queue_track(&candidate)
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
     if let Some(track) = runtime.core().next_track().await {
         play_queue_track(runtime, track.id, 0).await;
     }
@@ -2263,12 +2349,26 @@ pub async fn previous(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
             }
         }
     }
+    // `previous_track` consumes history and publishes QueueUpdated. Validate
+    // a physical local target first so a missing/moved file cannot leave the
+    // cursor, NPB and MPRIS one row behind the audio the user still hears.
+    if let Some(candidate) = runtime.core().peek_previous_track().await {
+        if crate::local_playback::preflight_queue_track(&candidate)
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
     if let Some(track) = runtime.core().previous_track().await {
         play_queue_track(runtime, track.id, 0).await;
     }
 }
 
-pub(crate) async fn play_queue_track_public(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u64) {
+pub(crate) async fn play_queue_track_public(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track_id: u64,
+) {
     play_queue_track(runtime, track_id, 0).await;
 }
 
@@ -2324,10 +2424,7 @@ async fn play_queue_track(
         }
         crate::local_playback::LocalPlay::NotLocal => {}
     }
-    if let Err(e) =
-        play_resolved_offline_aware(runtime, track_id, start_position_secs)
-        .await
-    {
+    if let Err(e) = play_resolved_offline_aware(runtime, track_id, start_position_secs).await {
         log::error!("[qbz-qt] playback: play_track {track_id} failed: {e}");
         // The bar must not keep showing the PREVIOUS track while the cursor has
         // already moved. The old early `return` skipped both refreshes, which is
@@ -2439,7 +2536,10 @@ fn auto_skip_unavailable<'a>(
 }
 
 pub async fn seek_frac(runtime: &Arc<AppRuntime<LoggingAdapter>>, frac: f32) {
-    match crate::cast_qt::service().seek_fraction_if_cast(frac as f64).await {
+    match crate::cast_qt::service()
+        .seek_fraction_if_cast(frac as f64)
+        .await
+    {
         Ok(true) => return,
         Ok(false) => {}
         Err(e) => {
@@ -2454,8 +2554,7 @@ pub async fn seek_frac(runtime: &Arc<AppRuntime<LoggingAdapter>>, frac: f32) {
     if let Some(svc) = crate::qconnect_qt::service() {
         let fraction = frac.clamp(0.0, 1.0);
         let duration_secs = runtime.core().get_playback_state().duration;
-        let position_ms =
-            (fraction as f64 * duration_secs as f64 * 1000.0).round() as i64;
+        let position_ms = (fraction as f64 * duration_secs as f64 * 1000.0).round() as i64;
         match svc.set_position_if_remote(position_ms).await {
             Ok(true) => return,
             Ok(false) => {}
@@ -2523,7 +2622,10 @@ pub async fn seek_frac(runtime: &Arc<AppRuntime<LoggingAdapter>>, frac: f32) {
 }
 
 pub async fn set_volume(runtime: &Arc<AppRuntime<LoggingAdapter>>, volume: f32) {
-    if matches!(crate::cast_qt::service().set_volume_if_cast(volume).await, Ok(true)) {
+    if matches!(
+        crate::cast_qt::service().set_volume_if_cast(volume).await,
+        Ok(true)
+    ) {
         return;
     }
     // QConnect CONTROLLER mode (Slint main.rs:14378-14389): set the REMOTE
@@ -2543,7 +2645,10 @@ pub async fn set_volume(runtime: &Arc<AppRuntime<LoggingAdapter>>, volume: f32) 
         }
     }
     let _ = runtime.core().set_volume(volume.clamp(0.0, 1.0));
-    MUTED.store(volume <= 0.0 && PREMUTE_VOLUME.load(Ordering::Relaxed) != 0, Ordering::Relaxed);
+    MUTED.store(
+        volume <= 0.0 && PREMUTE_VOLUME.load(Ordering::Relaxed) != 0,
+        Ordering::Relaxed,
+    );
 }
 
 pub async fn toggle_mute(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
@@ -2684,7 +2789,8 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
             String::new()
         };
     crate::player_bridge::ui(move |mut b| {
-        b.as_mut().set_np_track_id(QString::from(track_id_str.as_str()));
+        b.as_mut()
+            .set_np_track_id(QString::from(track_id_str.as_str()));
         b.as_mut()
             .set_np_local_track_id(QString::from(local_track_id_str.as_str()));
     });
@@ -2750,14 +2856,11 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
         _ => ("album".to_string(), album_id.clone()),
     };
     crate::now_playing::set_track(crate::now_playing::TrackMeta {
-        title,
+        title: title.clone(),
         artist: track.artist.clone(),
-        album: album_display,
+        album: album_display.clone(),
         album_id,
-        artist_id: track
-            .artist_id
-            .map(|id| id.to_string())
-            .unwrap_or_default(),
+        artist_id: track.artist_id.map(|id| id.to_string()).unwrap_or_default(),
         track_id: track.id,
         source: track.source.clone().unwrap_or_default(),
         context_kind,
@@ -2788,7 +2891,7 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
     crate::now_playing::set_catalog_quality(track.bit_depth, track.sample_rate, governed);
     // Artwork through the same cache pipeline as Home (attach + background
     // download + republish — single url here).
-    crate::artwork_qt::attach_now_playing(&track.artwork_url.clone().unwrap_or_default());
+    crate::artwork_qt::attach_now_playing(&track, &title, &album_display);
     // Ambient background triad (phase 14): recompute from the new track's
     // cover (no-op until the cover lands on disk — the previous palette
     // stays, like the Slint's default-until-resolved).
@@ -2853,8 +2956,7 @@ fn quality_badge_from(
     let sample_rate = track
         .sample_rate
         .or_else(|| source_hint.and_then(|hint| hint.sample_rate_khz));
-    let is_mp3 = source_hint
-        .is_some_and(|hint| hint.format.eq_ignore_ascii_case("mp3"));
+    let is_mp3 = source_hint.is_some_and(|hint| hint.format.eq_ignore_ascii_case("mp3"));
     if is_mp3 {
         let label = sample_rate
             .filter(|rate| *rate > 0.0)
@@ -3043,8 +3145,8 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 // Extrapolate position while playing; clamp to the track length.
                 let mut position_ms = remote.position_ms;
                 if remote.playing && remote.updated_at_ms > 0 {
-                    position_ms = position_ms
-                        .saturating_add(now_ms().saturating_sub(remote.updated_at_ms));
+                    position_ms =
+                        position_ms.saturating_add(now_ms().saturating_sub(remote.updated_at_ms));
                 }
                 if duration_ms > 0 && position_ms > duration_ms {
                     position_ms = duration_ms;
@@ -3176,7 +3278,10 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // has downloaded; a fully-available track (None) seeks freely.
             // `cache` above is the DECORATIVE overlay of the same fill — this
             // is the value the seek bars must enforce.
-            let seekable_max = event.buffer_progress.map(|p| p.clamp(0.0, 1.0)).unwrap_or(1.0);
+            let seekable_max = event
+                .buffer_progress
+                .map(|p| p.clamp(0.0, 1.0))
+                .unwrap_or(1.0);
 
             // This observation is cheap and happens each tick; the work does
             // not. Only a NEW non-zero engine track — including a gapless
@@ -3305,8 +3410,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                             let quality = local_playback_quality().0;
                             let streaming_only =
                                 crate::settings_qt::audio_settings().streaming_only;
-                            let player_cached =
-                                runtime.core().player().is_track_cached(next_id);
+                            let player_cached = runtime.core().player().is_track_cached(next_id);
                             let offline_cached = crate::offline_qt::is_cached_id(next_id);
 
                             if streaming_only && !player_cached && !offline_cached {
@@ -3403,9 +3507,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                         tokio::spawn(async move {
                             let next_id = next.id;
                             match crate::audible_qt::queue_gapless_successor(
-                                &runtime,
-                                track_id,
-                                &next,
+                                &runtime, track_id, &next,
                             )
                             .await
                             {
@@ -3450,8 +3552,13 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                         };
                         let position_ms = (position as i64) * 1000;
                         let duration_ms = (duration as i64) * 1000;
-                        svc.report_playback_state(playing_state, position_ms, duration_ms, track_id)
-                            .await;
+                        svc.report_playback_state(
+                            playing_state,
+                            position_ms,
+                            duration_ms,
+                            track_id,
+                        )
+                        .await;
                         // On a track change, also reconcile the session queue:
                         // if the user started a new album/playlist on QBZ,
                         // push it so the controller follows. Self-gates +
@@ -3489,8 +3596,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 // marker), and this runs AHEAD of repeat/shuffle exactly as
                 // the reference does (playback.rs:5749-5772) — behind them the
                 // marker would lose to a repeat-one and never fire.
-                if ended_track_id != 0
-                    && runtime.core().consume_stop_after_if(ended_track_id).await
+                if ended_track_id != 0 && runtime.core().consume_stop_after_if(ended_track_id).await
                 {
                     if let Err(e) = runtime.core().pause() {
                         log::warn!("[qbz-qt] stop-after: pause failed: {e}");
@@ -3845,7 +3951,9 @@ mod tests {
                     // Skip the definition, doc comments and ordinary comments —
                     // this audits CALLS, not prose about them.
                     let t = line.trim_start();
-                    if t.starts_with("//") || t.starts_with("fn ") || t.starts_with("pub(crate) fn ")
+                    if t.starts_with("//")
+                        || t.starts_with("fn ")
+                        || t.starts_with("pub(crate) fn ")
                     {
                         continue;
                     }
@@ -4005,8 +4113,7 @@ mod tests {
     /// Everything blocked: an empty queue carries NO start index.
     #[test]
     fn everything_blocked_yields_no_start() {
-        let (kept, start, _) =
-            filter_queue_with(vec![1, 3, 5], Some(1), |n| n % 2 == 1, |_| false);
+        let (kept, start, _) = filter_queue_with(vec![1, 3, 5], Some(1), |n| n % 2 == 1, |_| false);
         assert!(kept.is_empty());
         assert_eq!(start, None);
     }
@@ -4060,5 +4167,17 @@ mod tests {
         assert_eq!(kept, vec![0]);
         assert_eq!(dropped.blacklisted, 1);
         assert_eq!(dropped.unavailable, 0);
+    }
+
+    #[test]
+    fn song_card_near_fit_keeps_the_final_glyphs_instead_of_an_ellipsis() {
+        // TextMetrics.width is a painted bounding box, while the line layout
+        // consumes advanceWidth. Budgeting the former exactly turned
+        // "Metallica" into "Metalli…" in a runway with visible spare space.
+        let qml = include_str!("../qml/shell/SongCard.qml");
+        assert!(qml.contains("artistMetrics.advanceWidth"));
+        assert!(qml.contains("albumMetrics.advanceWidth"));
+        assert!(qml.contains("a - qa <= near"));
+        assert!(qml.contains("b - qb <= near"));
     }
 }

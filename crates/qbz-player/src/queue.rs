@@ -777,6 +777,39 @@ impl QueueManager {
         result
     }
 
+    /// Inspect the track [`Self::previous`] would select without consuming
+    /// history or changing either queue cursor. Frontends use this before a
+    /// fallible physical-file handoff: publishing the previous row first can
+    /// leave metadata claiming a moved file while the old stream is audible.
+    pub fn peek_previous(&self) -> Option<QueueTrack> {
+        let state = self.state.lock().unwrap();
+        if state.tracks.is_empty() {
+            return None;
+        }
+        if let Some(&prev_idx) = state.history.back() {
+            return state.tracks.get(prev_idx).cloned();
+        }
+        let prev_idx = if state.shuffle {
+            if state.shuffle_position > 0 {
+                state.shuffle_order.get(state.shuffle_position - 1).copied()
+            } else if state.repeat == RepeatMode::All {
+                state.shuffle_order.last().copied()
+            } else {
+                state.shuffle_order.first().copied()
+            }
+        } else {
+            let curr_idx = state.current_index.unwrap_or(0);
+            if curr_idx > 0 {
+                Some(curr_idx - 1)
+            } else if state.repeat == RepeatMode::All {
+                Some(state.tracks.len().saturating_sub(1))
+            } else {
+                Some(0)
+            }
+        };
+        prev_idx.and_then(|idx| state.tracks.get(idx).cloned())
+    }
+
     /// Advance to next track and return it
     pub fn next(&self) -> Option<QueueTrack> {
         let mut state = self.state.lock().unwrap();
@@ -1814,6 +1847,21 @@ mod tests {
         // upcoming list is [3, 4, 5]; clicking position 1 must play id 4
         let track = queue.play_upcoming_at(1).expect("track");
         assert_eq!(track.id, 4);
+    }
+
+    #[test]
+    fn peek_previous_matches_previous_without_consuming_history() {
+        let queue = QueueManager::new();
+        for i in 1..=4 {
+            queue.add_track(create_test_track(i));
+        }
+        queue.play_index(0);
+        assert_eq!(queue.next().expect("next").id, 2);
+        assert_eq!(queue.next().expect("next").id, 3);
+
+        assert_eq!(queue.peek_previous().expect("peek").id, 2);
+        assert_eq!(queue.peek_previous().expect("second peek").id, 2);
+        assert_eq!(queue.previous().expect("previous").id, 2);
     }
 
     #[test]
