@@ -120,6 +120,16 @@ pub mod qbz_playlist_edit_bridge {
             offline_only: bool,
         );
 
+        /// Open the native image picker for the playlist held by the Rust
+        /// editor state. The id is intentionally not accepted from QML: cover
+        /// edits follow the same stale-document protection as Save/Delete.
+        #[qinvokable]
+        fn choose_cover(self: Pin<&mut QbzPlaylistEdit>);
+
+        /// Remove the custom cover from the playlist currently being edited.
+        #[qinvokable]
+        fn remove_cover(self: Pin<&mut QbzPlaylistEdit>);
+
         /// Delete the open playlist. `delete` is a C++ keyword, hence the
         /// name. A Qobuz playlist re-derives ownership first and a FOLLOWED
         /// one is unsubscribed instead (§5.1); the back-navigation is
@@ -214,6 +224,14 @@ impl qbz_playlist_edit_bridge::QbzPlaylistEdit {
 
     pub fn save(self: Pin<&mut Self>, name: QString, description: QString, offline_only: bool) {
         crate::playlist_edit_qt::save(&name.to_string(), &description.to_string(), offline_only);
+    }
+
+    pub fn choose_cover(self: Pin<&mut Self>) {
+        crate::playlist_edit_qt::choose_cover();
+    }
+
+    pub fn remove_cover(self: Pin<&mut Self>) {
+        crate::playlist_edit_qt::remove_cover();
     }
 
     pub fn delete_playlist(self: Pin<&mut Self>) {

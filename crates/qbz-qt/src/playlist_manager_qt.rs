@@ -599,17 +599,27 @@ async fn load(runtime: &Runtime) -> PmData {
             // opens the DB per call.
             let locals: Vec<PmLocalPlaylist> = crate::local_playlist_qt::list_blocking()
                 .into_iter()
-                .map(|p| PmLocalPlaylist {
-                    cover_urls: crate::sidebar_qt::local_covers(&p.id).unwrap_or_else(|| {
-                        crate::local_playlist_qt::resolve_cover_urls_blocking(&p.id, 4)
-                    }),
-                    id: p.id,
-                    name: p.name,
-                    offline_only: p.offline_only,
-                    track_count: p.track_count,
-                    is_favorite: p.favorite,
-                    is_hidden: p.hidden,
-                    folder_id: p.folder_id,
+                .map(|p| {
+                    // The editor/header writes the Qt-owned override store.
+                    // Read it BEFORE the sidebar cache so concurrent surface
+                    // refreshes cannot republish the old mosaic here.
+                    let custom = crate::cover_artwork_qt::playlist_cover(&p.id)
+                        .filter(|path| std::path::Path::new(path).is_file());
+                    let cover_urls = custom.map(|path| vec![path]).unwrap_or_else(|| {
+                        crate::sidebar_qt::local_covers(&p.id).unwrap_or_else(|| {
+                            crate::local_playlist_qt::resolve_cover_urls_blocking(&p.id, 4)
+                        })
+                    });
+                    PmLocalPlaylist {
+                        cover_urls,
+                        id: p.id,
+                        name: p.name,
+                        offline_only: p.offline_only,
+                        track_count: p.track_count,
+                        is_favorite: p.favorite,
+                        is_hidden: p.hidden,
+                        folder_id: p.folder_id,
+                    }
                 })
                 .collect();
             (
@@ -758,6 +768,13 @@ async fn load(runtime: &Runtime) -> PmData {
 /// "images150 > images300" and is wrong about its own code; this matches the
 /// code, and `sidebar_qt.rs:186-188`.
 fn cover_urls(p: &qbz_models::Playlist) -> Vec<String> {
+    // A user override is one full-bleed tile and must win in the manager just
+    // as it already does in PlaylistView, Library and the sidebar.
+    if let Some(path) = crate::cover_artwork_qt::playlist_cover(&p.id.to_string()) {
+        if std::path::Path::new(&path).is_file() {
+            return vec![path];
+        }
+    }
     let source = [&p.images300, &p.images150, &p.images]
         .into_iter()
         .flatten()

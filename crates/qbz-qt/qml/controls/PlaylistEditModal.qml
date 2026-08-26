@@ -251,6 +251,43 @@ Item {
                     }
                 }
 
+                // ================= Cover ================================
+                // The shared editor is reached from the manager, sidebar and
+                // detail header, so cover editing belongs here too. Actions
+                // stay on the trailing modal grid; the native picker owns its
+                // own preview and the playlist surfaces repaint after write.
+                Item {
+                    width: parent.width
+                    height: 34
+                    Text {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: root.t("Cover")
+                        color: theme.textMuted
+                        font.pixelSize: theme.fontLegal
+                    }
+                    Row {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 8
+                        SettingsButton {
+                            minWidth: 0
+                            text: root.t("Change cover")
+                            iconName: "image-plus"
+                            enabled: !root.busy
+                            onClicked: QbzPlaylistEdit.chooseCover()
+                        }
+                        SettingsButton {
+                            minWidth: 0
+                            text: root.t("Remove cover")
+                            iconName: "trash-2"
+                            danger: true
+                            enabled: !root.busy
+                            onClicked: QbzPlaylistEdit.removeCover()
+                        }
+                    }
+                }
+
                 // ================= Description ==========================
                 // Rendered ONLY when Rust resolved the real one. A Column
                 // skips invisible children, so this leaves no gap.

@@ -1709,6 +1709,48 @@ pub(crate) fn open_playlist(playlist_id: String) {
     });
 }
 
+/// Reload the currently visible playlist without recording another
+/// navigation entry or search interaction. Cover edits can originate from the
+/// detail header, the shared editor in Playlist Manager, or the sidebar; only
+/// the first case should refresh this page, and none should look like a fresh
+/// user navigation.
+pub(crate) fn reload_playlist_if_showing(playlist_id: String) {
+    if nav_qt::current_view() != "playlist"
+        || playlist_qt::open_doc_id().as_deref() != Some(playlist_id.as_str())
+    {
+        return;
+    }
+
+    if local_playlist_qt::is_local_id(&playlist_id) {
+        let runtime = app();
+        spawn(async move {
+            if !local_playlist_qt::load(&runtime, &playlist_id).await {
+                log::warn!("[qbz-qt] local playlist {playlist_id} reload failed");
+            }
+        });
+        return;
+    }
+
+    let Ok(pid) = playlist_id.parse::<u64>() else {
+        return;
+    };
+    if offline_fwd::engine().status().is_offline() {
+        spawn(async move {
+            if !local_playlist_qt::load_qobuz_offline(pid).await {
+                log::warn!("[qbz-qt] offline playlist {pid} reload failed");
+            }
+        });
+        return;
+    }
+
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playlist_qt::load(&runtime, pid).await {
+            log::warn!("[qbz-qt] playlist reload failed: {e}");
+        }
+    });
+}
+
 // ======================= MyQBZ (crate-level forwards) =====================
 //
 // W6: the ONLY crate-root forward the MyQBZ domain needs. Everything else the

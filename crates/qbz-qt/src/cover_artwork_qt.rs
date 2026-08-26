@@ -449,14 +449,26 @@ pub fn playlist_cover(playlist_id: &str) -> Option<String> {
     load_playlist_store().playlists.get(playlist_id).cloned()
 }
 
+/// Refresh every live surface that owns playlist artwork after the override
+/// store changes. Re-opening through the public router would navigate from the
+/// Playlist Manager/sidebar into the playlist and would duplicate Back-stack
+/// entries when already on the detail page, so the detail refresh is
+/// explicitly conditional and navigation-free.
+fn refresh_playlist_cover_surfaces(playlist_id: String) {
+    crate::reload_playlist_if_showing(playlist_id.clone());
+    crate::playlist_manager_qt::reload_if_loaded();
+    crate::reload_sidebar_including_local();
+}
+
 // No `prefer_playlist_cover` twin of `prefer_album_cover`: the one consumer
 // that would want it (`library_qt::playlist_cover_urls`) returns a Vec of
 // cover refs, not a single fallback string, so it applies the same
 // override-then-is_file rule itself over the mosaic. A wrapper nothing can
 // call is the shape the album twin has six real call sites for.
 
-/// Playlist header "Add/Change cover": native picker, persist, re-open the
-/// playlist so every surface repaints from the override.
+/// Playlist header/editor "Add/Change cover": native picker, persist, then
+/// refresh the detail (only when visible), manager and sidebar without
+/// navigating away from the surface that opened the picker.
 pub fn add_custom_playlist_cover(playlist_id: String) {
     if playlist_id.is_empty() {
         return;
@@ -479,13 +491,13 @@ pub fn add_custom_playlist_cover(playlist_id: String) {
         .await
         .is_ok()
         {
-            crate::open_playlist(playlist_id);
+            refresh_playlist_cover_surfaces(playlist_id);
         }
     });
 }
 
-/// "Remove cover": drop the override and re-open so the header reverts to
-/// the own-art/mosaic rule.
+/// "Remove cover": drop the override and refresh the live playlist surfaces
+/// so they revert to the own-art/mosaic rule.
 pub fn remove_custom_playlist_cover(playlist_id: String) {
     if playlist_id.is_empty() {
         return;
@@ -506,7 +518,7 @@ pub fn remove_custom_playlist_cover(playlist_id: String) {
             }
         })
         .await;
-        crate::open_playlist(playlist_id);
+        refresh_playlist_cover_surfaces(playlist_id);
     });
 }
 

@@ -332,6 +332,38 @@ pub(crate) fn save(name: &str, description: &str, offline_only: bool) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Cover actions
+// ---------------------------------------------------------------------------
+
+/// Open the native cover picker for the playlist currently held by the
+/// editor. QML deliberately supplies no id: a stale modal document must not
+/// be able to redirect a cover write to another playlist.
+pub(crate) fn choose_cover() {
+    let id = {
+        let st = state();
+        if !st.open || st.busy || st.id.is_empty() {
+            return;
+        }
+        st.id.clone()
+    };
+    crate::cover_artwork_qt::add_custom_playlist_cover(id);
+}
+
+/// Remove the custom cover from the playlist currently held by the editor.
+/// This is harmless when no override exists and also clears the legacy local
+/// playlist artwork column through `cover_artwork_qt`.
+pub(crate) fn remove_cover() {
+    let id = {
+        let st = state();
+        if !st.open || st.busy || st.id.is_empty() {
+            return;
+        }
+        st.id.clone()
+    };
+    crate::cover_artwork_qt::remove_custom_playlist_cover(id);
+}
+
 async fn save_local(id: &str, name: &str, desc: Option<String>, offline_only: bool) -> bool {
     let id = id.to_string();
     let name = name.to_string();

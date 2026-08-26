@@ -275,6 +275,20 @@ Rectangle {
     // playlist's own cover lands, independently of the track rows.
     readonly property bool coverPending: root.hasOwnArt
         && (doc.coverPath || "") === ""
+    // Keep the popup model declarative. The old builder lived on the header
+    // Row but the popup called it through `root`, so the right-click reached
+    // an undefined JS method and opened a correctly positioned EMPTY panel.
+    readonly property var playlistCoverMenuModel: doc.hasCustomCover === true
+        ? [
+            { "label": QbzSession.tr("Change cover", QbzSession.trRev),
+              "icon": "image-plus", "action": "add" },
+            { "label": QbzSession.tr("Remove cover", QbzSession.trRev),
+              "icon": "trash-2", "action": "remove" }
+          ]
+        : [
+            { "label": QbzSession.tr("Add cover", QbzSession.trRev),
+              "icon": "image-plus", "action": "add" }
+          ]
     // The header has no data at all until the first document lands
     // (playlist_qt.rs publishes `{ loading: true }` with empty fields).
     readonly property bool headerPending: root.loading && (doc.name || "") === ""
@@ -469,29 +483,17 @@ Rectangle {
                 Item { id: plCoverAnchor; anchors.fill: parent }
             }
 
-            // The playlist cover menu's rows, rebuilt per open (Add vs
-            // Change+Remove flips on hasCustomCover). The store is Qt-first
+            // The playlist cover menu's rows (Add vs Change+Remove flips on
+            // hasCustomCover). The store is Qt-first
             // (custom_playlist_covers.json — a `playlists` key inside the
             // shared custom_artwork.json would be dropped on the Slint
             // app's next write).
-            function buildPlCoverMenuModel() {
-                var rows = []
-                if (doc.hasCustomCover === true) {
-                    rows.push({ "label": QbzSession.tr("Change cover", QbzSession.trRev), "icon": "image-plus", "action": "add" })
-                    rows.push({ "label": QbzSession.tr("Remove cover", QbzSession.trRev), "icon": "trash-2", "action": "remove" })
-                } else {
-                    rows.push({ "label": QbzSession.tr("Add cover", QbzSession.trRev), "icon": "image-plus", "action": "add" })
-                }
-                return rows
-            }
-
             QbzContextMenu {
                 id: plCoverMenu
                 menuWidth: 196
-                onAboutToShow: plCoverRepeater.model = root.buildPlCoverMenuModel()
                 Repeater {
                     id: plCoverRepeater
-                    model: []
+                    model: root.playlistCoverMenuModel
                     delegate: Rectangle {
                         required property var modelData
                         width: parent ? parent.width : 0
