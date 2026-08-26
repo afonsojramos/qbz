@@ -638,7 +638,7 @@ Rectangle {
     // the sidebar: "N tracks" for a group, or title + "artist · album" for
     // one. Visual only (never blocks the pointer).
     Rectangle {
-        visible: QbzShell.dragActive
+        visible: QbzShell.dragActive && !QbzShell.dragInlineVisual
         x: QbzShell.dragX + 10
         y: QbzShell.dragY + 14
         width: ghostCol.width + 28

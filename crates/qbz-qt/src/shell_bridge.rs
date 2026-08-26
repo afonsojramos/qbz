@@ -379,6 +379,11 @@ pub mod qbz_shell {
         #[qproperty(QString, drag_subtitle)]
         #[qproperty(f32, drag_x)]
         #[qproperty(f32, drag_y)]
+        // True while the drag source supplies a full-size inline visual. The
+        // window-level compact pill stands down in that region; if the row
+        // leaves it (for example toward a sidebar playlist), the source flips
+        // this off and the portable ghost resumes.
+        #[qproperty(bool, drag_inline_visual)]
         #[qproperty(QString, drag_over_playlist_id)]
         // The QUEUE drop target: the upcoming-list SLOT the dragged row would
         // be inserted at, or -1 when the pointer is not over the queue. Two
@@ -684,6 +689,7 @@ pub mod qbz_shell {
             subtitle: QString,
             x: f32,
             y: f32,
+            inline_visual: bool,
         );
         #[qinvokable]
         fn drag_move(self: Pin<&mut QbzShell>, x: f32, y: f32);
@@ -815,6 +821,7 @@ pub struct QbzShellRust {
     drag_subtitle: QString,
     drag_x: f32,
     drag_y: f32,
+    drag_inline_visual: bool,
     drag_over_playlist_id: QString,
     drag_over_queue_index: i32,
     filter_tip_json: QString,
@@ -930,6 +937,7 @@ impl Default for QbzShellRust {
             drag_subtitle: QString::default(),
             drag_x: 0.0,
             drag_y: 0.0,
+            drag_inline_visual: false,
             drag_over_playlist_id: QString::default(),
             // -1 = the pointer is not over the queue. NOT 0, which is a valid
             // slot (drop at the very top of upcoming).
@@ -1341,6 +1349,7 @@ impl qbz_shell::QbzShell {
         subtitle: QString,
         x: f32,
         y: f32,
+        inline_visual: bool,
     ) {
         crate::drag_start(
             track_id.to_string(),
@@ -1348,6 +1357,7 @@ impl qbz_shell::QbzShell {
             subtitle.to_string(),
             x,
             y,
+            inline_visual,
         );
     }
 

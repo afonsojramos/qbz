@@ -39,7 +39,10 @@ Rectangle {
         QbzQueue.queueExtendedOpened()
         root.scheduleVisibleCovers()
     }
-    Component.onDestruction: QbzQueue.queueExtendedClosed()
+    Component.onDestruction: {
+        QbzShell.dragInlineVisual = false
+        QbzQueue.queueExtendedClosed()
+    }
     onDocChanged: root.scheduleVisibleCovers()
 
     // ----------------------------- artwork ------------------------------
@@ -205,36 +208,63 @@ Rectangle {
             QbzPlaylistPicker.openForTrack(row.id)
     }
 
+    // The chevrons and the pointer drop share the same queue-wide insertion
+    // contract. Moving down inserts after the following row (`from + 2`),
+    // because `queueExtendedDrop` consumes a SLOT rather than a destination
+    // row index.
+    function moveQueueRow(row, delta) {
+        if (!row || row.phase !== "upcoming" || root.searchActive
+                || root.rowBlocked(row))
+            return
+        var from = row.phaseIndex
+        var count = root.doc.upcomingCount || 0
+        if ((delta < 0 && from <= 0) || (delta > 0 && from >= count - 1))
+            return
+        var slot = delta < 0 ? from - 1 : from + 2
+        QbzQueue.queueExtendedDrop("upcoming", from, row.id, slot)
+    }
+
     // -------------------------- local reorder ----------------------------
 
     property string dragPhase: ""
     property int dragPhaseIndex: -1
     property string dragTrackId: ""
+    property var dragRow: null
+    property int dragRowNumber: 0
     property int dropSlot: -1
     property real dropLineY: -1
     property bool dropHot: false
+    readonly property var dragDisplayItem: root.dragRow
+        ? Object.assign({}, root.dragRow, { "artPath": root.coverPath(root.dragRow) })
+        : ({})
 
-    function beginQueueDrag(row) {
+    function beginQueueDrag(row, visualIndex) {
         root.dragPhase = row.phase
         root.dragPhaseIndex = row.phaseIndex
         root.dragTrackId = row.id
+        root.dragRow = row
+        root.dragRowNumber = visualIndex + 1
         root.dropSlot = -1
         root.dropHot = false
     }
 
+    function clearInlineDrop() {
+        root.dropHot = false
+        root.dropSlot = -1
+        QbzShell.dragInlineVisual = false
+    }
+
     function recomputeDrop() {
         if (!QbzShell.dragActive || root.dragTrackId === "" || root.searchActive) {
-            root.dropHot = false
-            root.dropSlot = -1
-            return
-        }
-        var p = listHost.mapFromItem(null, QbzShell.dragX, QbzShell.dragY)
-        if (p.x < 0 || p.x > queueList.width || p.y < 0 || p.y > listHost.height) {
-            root.dropHot = false
-            root.dropSlot = -1
+            root.clearInlineDrop()
             return
         }
         var contentPoint = queueList.mapFromItem(null, QbzShell.dragX, QbzShell.dragY)
+        if (contentPoint.x < 0 || contentPoint.x > queueList.width
+                || contentPoint.y < 0 || contentPoint.y > queueList.height) {
+            root.clearInlineDrop()
+            return
+        }
         var cy = queueList.contentY + contentPoint.y
         var index = queueList.indexAt(Math.max(1, queueList.width / 2), cy)
         var insertion
@@ -248,6 +278,7 @@ Rectangle {
         root.dropSlot = Math.max(0, Math.min(root.doc.upcomingCount || 0,
                                              insertion - root.firstUpcoming))
         root.dropHot = true
+        QbzShell.dragInlineVisual = true
 
         var fullIndex = root.firstUpcoming + root.dropSlot
         var lineItem = fullIndex < root.rows.length ? queueList.itemAtIndex(fullIndex) : null
@@ -270,10 +301,19 @@ Rectangle {
         root.dragPhase = ""
         root.dragPhaseIndex = -1
         root.dragTrackId = ""
+        root.dragRow = null
+        root.dragRowNumber = 0
         root.dropSlot = -1
         root.dropHot = false
+        QbzShell.dragInlineVisual = false
         if (shouldCommit)
             QbzQueue.queueExtendedDrop(phase, phaseIndex, trackId, slot)
+    }
+
+    function dragProxyY() {
+        var p = listHost.mapFromItem(null, QbzShell.dragX, QbzShell.dragY)
+        return Math.max(queueList.y, Math.min(queueList.y + queueList.height - 50,
+                                              p.y - 25))
     }
 
     Connections {
@@ -538,6 +578,9 @@ Rectangle {
                     readonly property var displayItem: Object.assign({}, modelData, {
                         "artPath": root.coverPath(modelData)
                     })
+                    readonly property bool isDragSource: root.dragTrackId !== ""
+                        && root.dragPhase === modelData.phase
+                        && root.dragPhaseIndex === modelData.phaseIndex
 
                     width: queueList.width
                     height: (heading !== "" ? 24 : 0) + 50
@@ -573,10 +616,17 @@ Rectangle {
                         showFavorite: false
                         showDownload: false
                         showMenu: true
+                        showReorder: !root.searchActive
+                            && rowHost.modelData.phase === "upcoming"
+                            && !root.rowBlocked(rowHost.modelData)
+                        canMoveUp: rowHost.modelData.phaseIndex > 0
+                        canMoveDown: rowHost.modelData.phaseIndex
+                            < (root.doc.upcomingCount || 0) - 1
                         zebra: true
                         artistLink: true
                         draggable: root.dragAllowed(rowHost.modelData)
                         reorderDrag: true
+                        inlineDragVisual: true
                         playBlocked: root.rowBlocked(rowHost.modelData)
                         activeBackground: true
                         overrideActiveMatch: true
@@ -588,9 +638,14 @@ Rectangle {
                             && root.coverPath(rowHost.modelData) === ""
                         skelPhase: (Math.floor(Math.abs(QbzShell.pulseMs) / 900) % 2) === 1
                         artSettleMs: 2500
+                        // Keep the MouseArea alive until release while the
+                        // complete visual row is carried by `dragProxy`.
+                        opacity: rowHost.isDragSource ? 0 : 1
 
                         onPlayRequested: root.rowPlay(rowHost.modelData)
-                        onBodyDragStarted: root.beginQueueDrag(rowHost.modelData)
+                        onMoveUpRequested: root.moveQueueRow(rowHost.modelData, -1)
+                        onMoveDownRequested: root.moveQueueRow(rowHost.modelData, 1)
+                        onBodyDragStarted: root.beginQueueDrag(rowHost.modelData, rowHost.index)
                         onMenuActionRequested: function (action) {
                             root.menuAction(rowHost.modelData, action)
                         }
@@ -606,8 +661,56 @@ Rectangle {
                 target: queueList
             }
 
+            // QueueView's drag visual is the row itself, not the generic
+            // title/subtitle pill. The source delegate stays alive but fully
+            // transparent so it retains the mouse grab; this identical row
+            // follows the pointer over the list. Leaving the list hides it and
+            // re-enables AppShell's compact ghost for sidebar playlist drops.
+            TrackRow {
+                id: dragProxy
+                visible: QbzShell.dragActive && root.dropHot && root.dragRow !== null
+                enabled: false
+                z: 20
+                x: queueList.x
+                y: root.dragProxyY()
+                width: queueList.width
+                item: root.dragDisplayItem
+                number: root.dragRowNumber
+                showArtwork: true
+                showAlbum: root.width >= 720
+                showFavorite: false
+                showDownload: false
+                showMenu: true
+                showReorder: root.dragRow !== null
+                    && root.dragRow.phase === "upcoming"
+                    && !root.searchActive
+                    && !root.rowBlocked(root.dragRow)
+                canMoveUp: root.dragRow !== null && root.dragRow.phaseIndex > 0
+                canMoveDown: root.dragRow !== null && root.dragRow.phaseIndex
+                    < (root.doc.upcomingCount || 0) - 1
+                zebra: true
+                artistLink: true
+                draggable: false
+                reorderDrag: false
+                playBlocked: root.dragRow !== null && root.rowBlocked(root.dragRow)
+                activeBackground: true
+                overrideActiveMatch: true
+                activeMatch: root.dragRow !== null && root.dragRow.phase === "current"
+                leadingMarkerIcon: root.dragRow !== null
+                    && root.dragRow.id === (root.doc.stopAfterId || "")
+                    ? "circle-stop" : ""
+                menuEntriesOverride: root.dragRow !== null
+                    ? root.queueMenu(root.dragRow) : []
+                artPending: root.dragRow !== null
+                    && (root.dragRow.artUrl || "") !== ""
+                    && root.coverPath(root.dragRow) === ""
+                skelPhase: (Math.floor(Math.abs(QbzShell.pulseMs) / 900) % 2) === 1
+                artSettleMs: 2500
+            }
+
             Rectangle {
                 visible: root.dropHot && root.dropLineY >= 0
+                z: 30
                 x: queueList.x + theme.spacingSm
                 y: Math.max(0, Math.min(parent.height - height, root.dropLineY))
                 width: queueList.width - 2 * theme.spacingSm

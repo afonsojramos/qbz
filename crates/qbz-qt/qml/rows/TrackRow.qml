@@ -124,6 +124,10 @@ Rectangle {
     /// and consumes the shared drag coordinates; all existing rows inherit
     /// `showReorder` and therefore keep their current gesture policy.
     property bool reorderDrag: root.showReorder
+    /// QueueView replaces the compact window-level drag pill with a complete
+    /// TrackRow while the pointer remains over its list. Other surfaces keep
+    /// the portable pill because their target may live outside the view.
+    property bool inlineDragVisual: false
     /// Ends of the list: the reference dims nothing, but a chevron that
     /// renders and no-ops is the defect class this round is fixing, so the
     /// first row's ↑ and the last row's ↓ are drawn disabled instead.
@@ -1535,7 +1539,8 @@ Rectangle {
                 root.dragging = true
                 root.bodyDragStarted(root.number)
                 QbzShell.dragStart(root.item.id, root.item.title || "",
-                    (root.item.artist || "") + " · " + (root.item.album || ""), g.x, g.y)
+                    (root.item.artist || "") + " · " + (root.item.album || ""),
+                    g.x, g.y, root.inlineDragVisual)
             }
             if (root.dragging) QbzShell.dragMove(g.x, g.y)
         }

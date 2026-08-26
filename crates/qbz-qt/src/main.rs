@@ -1901,7 +1901,14 @@ static DRAG_OVER: Mutex<String> = Mutex::new(String::new());
 /// is — `drag_end` runs off the Qt thread and must not read the bridge.
 static DRAG_OVER_QUEUE: Mutex<i32> = Mutex::new(-1);
 
-pub(crate) fn drag_start(track_id: String, title: String, subtitle: String, x: f32, y: f32) {
+pub(crate) fn drag_start(
+    track_id: String,
+    title: String,
+    subtitle: String,
+    x: f32,
+    y: f32,
+    inline_visual: bool,
+) {
     let id = track_id.parse::<u64>().unwrap_or(0);
     *DRAGGED.lock().unwrap() = if id > 0 { vec![id] } else { Vec::new() };
     log::info!("[qbz-qt][drag] start {track_id} ({title})");
@@ -1912,6 +1919,7 @@ pub(crate) fn drag_start(track_id: String, title: String, subtitle: String, x: f
             .set_drag_subtitle(QString::from(subtitle.as_str()));
         b.as_mut().set_drag_x(x);
         b.as_mut().set_drag_y(y);
+        b.as_mut().set_drag_inline_visual(inline_visual);
         b.as_mut().set_drag_over_playlist_id(QString::default());
         b.as_mut().set_drag_over_queue_index(-1);
         b.as_mut().set_drag_active(true);
@@ -1945,6 +1953,7 @@ pub(crate) fn drag_end() {
     let queue_slot = std::mem::replace(&mut *DRAG_OVER_QUEUE.lock().unwrap(), -1);
     shell_bridge::ui(|mut b| {
         b.as_mut().set_drag_active(false);
+        b.as_mut().set_drag_inline_visual(false);
         b.as_mut().set_drag_over_playlist_id(QString::default());
         b.as_mut().set_drag_over_queue_index(-1);
     });
