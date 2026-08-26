@@ -820,7 +820,7 @@ pub async fn enqueue_album_filtered(
     enqueue_rows(runtime, tracks, mode).await;
 }
 
-async fn enqueue_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, mode: String) {
+pub(crate) async fn enqueue_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, mode: String) {
     if tracks.is_empty() {
         return;
     }

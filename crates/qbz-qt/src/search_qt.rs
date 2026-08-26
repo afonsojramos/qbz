@@ -558,6 +558,10 @@ pub struct CortRow {
     pub source: String,
     pub title: String,
     pub subtitle: String,
+    /// Bare exact quality for the compact third row ("24-bit / 96 kHz").
+    /// Empty for entity kinds without an audio-quality contract.
+    #[serde(rename = "qualityDetail")]
+    pub quality_detail: String,
     #[serde(rename = "artUrl")]
     pub art_url: String,
     #[serde(rename = "artPath")]
@@ -608,24 +612,39 @@ fn map_search_all_to_cortinilla(query: &str, results: &SearchAllResults) -> Cort
     };
     let to_album_row = |al: &Album| {
         let m = map_album(al);
+        let (bit_depth, sample_rate) = crate::home_qt::album_audio_parts(al);
+        let quality_detail = if bit_depth.is_some() && sample_rate.is_some() {
+            crate::home_qt::quality_detail_from_parts(bit_depth, sample_rate)
+        } else {
+            String::new()
+        };
         CortRow {
             kind: "album".into(),
             id: m.id,
             source: "qobuz".into(),
             title: m.title,
             subtitle: m.artist,
+            quality_detail,
             art_url: m.art_url,
             ..Default::default()
         }
     };
     let to_track_row = |t: &Track| {
         let m = map_track(t);
+        let quality_detail = if t.maximum_bit_depth.is_some()
+            && t.maximum_sampling_rate.is_some()
+        {
+            m.quality_detail.clone()
+        } else {
+            String::new()
+        };
         CortRow {
             kind: "track".into(),
             id: m.id,
             source: "qobuz".into(),
             title: m.title,
             subtitle: m.artist,
+            quality_detail,
             art_url: m.art_url,
             ..Default::default()
         }
@@ -1074,8 +1093,8 @@ pub fn move_selection(delta: i32) {
     };
     // Content-space top-y of the selected row (the QML scrolls it into
     // view). Layout mirrors the QML cortinilla: 6px top padding; the
-    // top-result block is 4 + 22 + 56; each section is 4 + 24 header +
-    // 56/row.
+    // top-result block is 4 + 22 + 68; each section is 4 + 24 header +
+    // 68/row.
     let scroll_y = flat_index_content_y(&data, new_index);
     set_selected(new_index, scroll_y);
 }
@@ -1093,7 +1112,7 @@ fn flat_index_content_y(data: &CortinillaData, flat_index: i32) -> f64 {
         if top.flat_index == flat_index {
             return y + 4.0 + 22.0;
         }
-        y += 4.0 + 22.0 + 56.0;
+        y += 4.0 + 22.0 + 68.0;
     }
     for section in &data.sections {
         y += 4.0 + 24.0;
@@ -1101,7 +1120,7 @@ fn flat_index_content_y(data: &CortinillaData, flat_index: i32) -> f64 {
             if row.flat_index == flat_index {
                 return y;
             }
-            y += 56.0;
+            y += 68.0;
         }
     }
     0.0
@@ -1207,6 +1226,131 @@ pub fn row_clicked(flat_index: i32) {
     }
 }
 
+/// One ⋯-menu action against the exact cortinilla snapshot on screen.
+/// Navigation delegates to [`row_clicked`] so its attribution and local
+/// routing stay single-owned; playback/queue actions mirror the canonical
+/// card menus without making QML guess whether an id belongs to Qobuz or the
+/// Local Library.
+pub fn row_menu_action(flat_index: i32, action: &str) {
+    if action == "open" {
+        row_clicked(flat_index);
+        return;
+    }
+    if !matches!(
+        action,
+        "play" | "next" | "later" | "queue" | "add-to-playlist"
+    ) {
+        log::warn!("[qbz-qt] cortinilla menu: unknown action {action:?}");
+        return;
+    }
+
+    let snap = LAST_CORT.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let Some(data) = snap else {
+        log::warn!("[qbz-qt] cortinilla menu {flat_index}/{action}: no snapshot");
+        return;
+    };
+    let row = data
+        .top
+        .iter()
+        .chain(data.sections.iter().flat_map(|section| section.rows.iter()))
+        .find(|row| row.flat_index == flat_index)
+        .cloned();
+    let Some(row) = row else {
+        log::warn!("[qbz-qt] cortinilla menu {flat_index}/{action}: stale row");
+        return;
+    };
+
+    log::info!(
+        "[qbz-qt] cortinilla menu {action}: kind={} source={} id={}",
+        row.kind,
+        row.source,
+        row.id,
+    );
+    if action == "add-to-playlist" {
+        set_cortinilla_open(false);
+        if row.kind != "track" {
+            log::warn!(
+                "[qbz-qt] cortinilla menu add-to-playlist: {} is not a track",
+                row.kind
+            );
+        } else if row.source == "local" {
+            open_local_cort_row_in_playlist_picker(&row.id);
+        } else {
+            crate::playlist_picker_qt::open_for_ids(&crate::app(), vec![row.id]);
+        }
+        return;
+    }
+    if action == "play" {
+        set_cortinilla_open(false);
+        if row.source != "local" {
+            record(
+                &attribution_query(&data.query),
+                &row.kind,
+                &row.id,
+                InteractionAction::Play,
+            );
+        }
+        if row.source == "local" {
+            match row.kind.as_str() {
+                "album" => {
+                    let runtime = crate::app();
+                    crate::spawn(async move {
+                        crate::local_playback::play_album(&runtime, row.id, None, false).await;
+                    });
+                }
+                "track" => play_local_row(&row.id),
+                other => log::warn!(
+                    "[qbz-qt] cortinilla menu play: local {other:?} is not playable"
+                ),
+            }
+            return;
+        }
+        match row.kind.as_str() {
+            "album" => crate::play_album(row.id),
+            "artist" => crate::play_artist_card(row.id),
+            "track" => match row.id.parse::<u64>() {
+                Ok(id) => crate::play_track(id),
+                Err(_) => log::warn!("[qbz-qt] cortinilla menu play: invalid track id"),
+            },
+            "playlist" => match row.id.parse::<u64>() {
+                Ok(id) => crate::play_playlist_by_id(id),
+                Err(_) => log::warn!("[qbz-qt] cortinilla menu play: invalid playlist id"),
+            },
+            other => log::warn!("[qbz-qt] cortinilla menu play: unknown kind {other:?}"),
+        }
+        return;
+    }
+
+    let mode = action.to_string();
+    if row.source == "local" {
+        match row.kind.as_str() {
+            "album" => {
+                let runtime = crate::app();
+                crate::spawn(async move {
+                    crate::local_playback::enqueue(&runtime, "album".into(), row.id, mode).await;
+                });
+            }
+            "track" => enqueue_local_cort_row(&row.id, mode),
+            other => log::warn!(
+                "[qbz-qt] cortinilla menu enqueue: local {other:?} is not queueable"
+            ),
+        }
+        return;
+    }
+    match row.kind.as_str() {
+        "album" => crate::enqueue_album(row.id, mode),
+        "track" => match row.id.parse::<u64>() {
+            Ok(id) => crate::enqueue_track(id, mode),
+            Err(_) => log::warn!("[qbz-qt] cortinilla menu enqueue: invalid track id"),
+        },
+        "playlist" => match row.id.parse::<u64>() {
+            Ok(id) => crate::enqueue_playlist_by_id(id, mode),
+            Err(_) => log::warn!("[qbz-qt] cortinilla menu enqueue: invalid playlist id"),
+        },
+        other => log::warn!("[qbz-qt] cortinilla menu enqueue: {other:?} is not queueable"),
+    }
+}
+
 /// Record an interaction made on the SEARCH RESULTS PAGE.
 ///
 /// The port had exactly ONE record site — the cortinilla row click — so
@@ -1305,6 +1449,47 @@ fn play_local_row(row_id: &str) {
     crate::spawn(async move {
         crate::local_playback::play_rows(&runtime, rows, start, false).await;
     });
+}
+
+/// Queue one local result from the same raw snapshot that produced the row.
+/// In particular this preserves Plex/media-server rows that cannot be looked
+/// back up in `library.db` by their synthetic id.
+fn enqueue_local_cort_row(row_id: &str, mode: String) {
+    let track = LAST_CORT_LOCAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|track| track.id.to_string() == row_id)
+        .cloned();
+    let Some(track) = track else {
+        log::warn!("[qbz-qt] cortinilla: local row {row_id} not in snapshot — enqueue ignored");
+        return;
+    };
+    let runtime = crate::app();
+    crate::spawn(async move {
+        crate::local_playback::enqueue_rows(&runtime, vec![track], mode).await;
+    });
+}
+
+/// Open the playlist picker for the exact local row rendered by search.
+/// `QbzPlaylistPicker.openForLocalRow` serves a different identity space: an
+/// already-open local-playlist detail. Search owns a `LocalTrack` snapshot, so
+/// it must derive the source-aware local/Plex ref from that track instead.
+fn open_local_cort_row_in_playlist_picker(row_id: &str) {
+    let track = LAST_CORT_LOCAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|track| track.id.to_string() == row_id)
+        .cloned();
+    let Some(track) = track else {
+        log::warn!(
+            "[qbz-qt] cortinilla: local row {row_id} not in snapshot — playlist picker ignored"
+        );
+        return;
+    };
+    let reference = crate::local_playlist_qt::local_picker_ref_for_track(&track);
+    crate::playlist_picker_qt::open_for_local_refs(&crate::app(), vec![reference]);
 }
 
 /// "View more" on a section: full search page on the matching tab
@@ -1430,12 +1615,19 @@ fn map_search_all_to_immersive(query: &str, results: &SearchAllResults) -> Corti
     };
     let to_album_row = |al: &Album| {
         let m = map_album(al);
+        let (bit_depth, sample_rate) = crate::home_qt::album_audio_parts(al);
+        let quality_detail = if bit_depth.is_some() && sample_rate.is_some() {
+            crate::home_qt::quality_detail_from_parts(bit_depth, sample_rate)
+        } else {
+            String::new()
+        };
         CortRow {
             kind: "album".into(),
             id: m.id,
             source: "qobuz".into(),
             title: m.title,
             subtitle: m.artist,
+            quality_detail,
             art_url: m.art_url,
             ..Default::default()
         }
@@ -2894,14 +3086,14 @@ mod tests {
         );
         assert_eq!(
             flat_index_content_y(&data, 1),
-            110.0,
-            "first section row: 82 (top block) + 28 (section head)"
+            122.0,
+            "first section row: 94 (top block) + 28 (section head)"
         );
-        assert_eq!(flat_index_content_y(&data, 2), 166.0, "110 + one 56px row");
+        assert_eq!(flat_index_content_y(&data, 2), 190.0, "122 + one 68px row");
         assert_eq!(
             flat_index_content_y(&data, 3),
-            250.0,
-            "82 + 28 + 2*56 + the second section's 28"
+            286.0,
+            "94 + 28 + 2*68 + the second section's 28"
         );
         assert_eq!(
             flat_index_content_y(&data, 99),

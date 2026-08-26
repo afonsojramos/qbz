@@ -95,6 +95,15 @@ pub mod qbz_search {
         /// Row click or Enter on the keyboard-selected row.
         #[qinvokable]
         fn cortinilla_row_clicked(self: Pin<&mut QbzSearch>, index: i32);
+        /// Context-menu action for the row currently identified by its flat
+        /// index. Rust resolves it against the same guarded snapshot as a
+        /// normal click, including local-library ids.
+        #[qinvokable]
+        fn cortinilla_menu_action(
+            self: Pin<&mut QbzSearch>,
+            index: i32,
+            action: QString,
+        );
         /// Section "View more" (kind: album | track | artist | playlist).
         #[qinvokable]
         fn cortinilla_view_more(self: Pin<&mut QbzSearch>, kind: QString);
@@ -217,6 +226,14 @@ impl qbz_search::QbzSearch {
 
     pub fn cortinilla_row_clicked(self: Pin<&mut Self>, index: i32) {
         crate::search_qt::row_clicked(index);
+    }
+
+    pub fn cortinilla_menu_action(
+        self: Pin<&mut Self>,
+        index: i32,
+        action: QString,
+    ) {
+        crate::search_qt::row_menu_action(index, &action.to_string());
     }
 
     pub fn cortinilla_view_more(self: Pin<&mut Self>, kind: QString) {

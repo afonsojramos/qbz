@@ -156,6 +156,19 @@ fn group_matches(needle: &str, fields: &[&str]) -> bool {
     fields.iter().any(|f| f.to_lowercase().contains(needle))
 }
 
+/// Exact third-line quality only when the source actually supplied enough
+/// information to make the claim. `quality_detail_from_parts` deliberately
+/// has playback defaults; search must not turn missing metadata into an
+/// invented 16-bit / 44.1 kHz label.
+fn local_quality_detail(t: &qbz_library::LocalTrack) -> String {
+    if (t.bit_depth.is_none() || t.sample_rate <= 0.0)
+        && !matches!(t.format, qbz_library::AudioFormat::Dsd)
+    {
+        return String::new();
+    }
+    crate::local_rows::detail_of(&t.format, t.bit_depth, t.sample_rate)
+}
+
 /// Group local TRACK rows into local ALBUM rows (`source = "local"`,
 /// `kind = "album"`).
 ///
@@ -206,6 +219,7 @@ pub(crate) fn derive_local_album_rows(
             source: "local".into(),
             title,
             subtitle: local_album_artist(t),
+            quality_detail: local_quality_detail(t),
             art_url,
             art_path,
             flat_index: 0,
@@ -257,6 +271,7 @@ pub(crate) fn derive_local_artist_rows(
             source: "local".into(),
             title: name,
             subtitle: String::new(),
+            quality_detail: String::new(),
             art_url,
             art_path,
             flat_index: 0,
@@ -287,6 +302,7 @@ pub(crate) fn map_local_track_to_cort_row(t: &qbz_library::LocalTrack) -> CortRo
         source: "local".into(),
         title: t.title.clone(),
         subtitle,
+        quality_detail: local_quality_detail(t),
         art_url,
         art_path,
         flat_index: 0,
@@ -536,11 +552,15 @@ mod tests {
     /// exactly what that section is for.
     #[test]
     fn track_rows_are_not_filtered_by_the_group_rule() {
-        let t = track("Iroquois Dawn", "Cynic", "Uroboric Forms");
+        let mut t = track("Iroquois Dawn", "Cynic", "Uroboric Forms");
+        t.format = qbz_library::AudioFormat::Flac;
+        t.bit_depth = Some(24);
+        t.sample_rate = 96_000.0;
         let row = map_local_track_to_cort_row(&t);
         assert_eq!(row.title, "Iroquois Dawn");
         assert_eq!(row.kind, "track");
         assert_eq!(row.source, "local");
+        assert_eq!(row.quality_detail, "24-bit / 96 kHz");
     }
 
     /// has_more must describe the MATCHING set. Counting rejected groups

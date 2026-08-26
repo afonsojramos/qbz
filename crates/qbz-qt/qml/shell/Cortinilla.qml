@@ -15,6 +15,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import com.blitzfc.qbz
+import "../controls"
 import "../theme"
 
 Item {
@@ -70,6 +71,64 @@ Item {
         bodyFlick.contentY = Math.max(0, Math.min(root._restoreY, maxY))
     }
 
+    function activateRow(row) {
+        var fi = row.flatIndex
+        if (fi === undefined || fi === null) {
+            console.warn("cortinilla: row has no flatIndex, action dropped —",
+                         JSON.stringify(row))
+            return
+        }
+        // Dispatch first: clearing the field can invalidate the snapshot the
+        // controller resolves this index against.
+        QbzSearch.cortinillaRowClicked(fi)
+        if (root.headerBar) root.headerBar.clearSearch()
+    }
+
+    function menuEntries(row) {
+        var t = QbzSession.tr
+        var r = QbzSession.trRev
+        if (row.kind === "album") return [
+            { "label": t("Open album", r), "icon": "library-big", "action": "open" },
+            { "label": t("Play", r), "icon": "play-fill", "action": "play" },
+            { "label": t("Play next", r), "icon": "list-start", "action": "next" },
+            { "label": t("Play later", r), "icon": "list-plus", "action": "later" },
+            { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" }
+        ]
+        if (row.kind === "artist") {
+            var artistRows = [
+                { "label": t("Open artist", r), "icon": "user", "action": "open" }
+            ]
+            if (row.source !== "local")
+                artistRows.push({ "label": t("Play", r), "icon": "play-fill", "action": "play" })
+            return artistRows
+        }
+        if (row.kind === "track") return [
+            { "label": t("Play", r), "icon": "play-fill", "action": "play" },
+            { "label": t("Play next", r), "icon": "list-start", "action": "next" },
+            { "label": t("Play later", r), "icon": "list-plus", "action": "later" },
+            { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" },
+            { "label": t("Add to playlist", r), "icon": "list-music", "action": "add-to-playlist" }
+        ]
+        if (row.kind === "playlist") return [
+            { "label": t("Open playlist", r), "icon": "list-music", "action": "open" },
+            { "label": t("Play", r), "icon": "play-fill", "action": "play" },
+            { "label": t("Play next", r), "icon": "list-start", "action": "next" },
+            { "label": t("Play later", r), "icon": "list-plus", "action": "later" },
+            { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" }
+        ]
+        return []
+    }
+
+    function menuAction(row, action) {
+        var fi = row.flatIndex
+        if (fi === undefined || fi === null)
+            return
+        QbzSearch.cortinillaMenuAction(fi, action)
+        if ((action === "open" || action === "play" || action === "add-to-playlist")
+                && root.headerBar)
+            root.headerBar.clearSearch()
+    }
+
     Component.onCompleted: root.applyDoc()
 
     // The centered header search box width (HeaderBar's responsive rule) —
@@ -81,7 +140,7 @@ Item {
     // panel nor reaches the input.
     readonly property int searchBoxWidth:
         (root.width < 960 ? 179 : 256) - (QbzShell.navInSidebar ? 0 : 60)
-    readonly property int panelWidth: 320
+    readonly property int panelWidth: Math.min(440, Math.max(0, root.width - 24))
     // Cap so the panel NEVER covers the now-playing bar
     // (Cortinilla.slint:263-275). The bar term is NPB-MODE AWARE: mode 2 is
     // the small bar, every other mode is the large one. A hardcoded 42 here
@@ -131,8 +190,8 @@ Item {
             var y = QbzSearch.cortinillaScrollY
             if (y < bodyFlick.contentY) {
                 bodyFlick.contentY = Math.max(0, y)
-            } else if (y + 56 > bodyFlick.contentY + bodyFlick.height) {
-                bodyFlick.contentY = y + 56 - bodyFlick.height
+            } else if (y + 68 > bodyFlick.contentY + bodyFlick.height) {
+                bodyFlick.contentY = y + 68 - bodyFlick.height
             }
         }
     }
@@ -276,21 +335,21 @@ Item {
                         model: 5
                         delegate: Item {
                             width: bodyColumn.width
-                            height: 56
+                            height: 68
                             Rectangle {
                                 x: 10
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: 40
-                                height: 40
+                                width: 48
+                                height: 48
                                 radius: 4
                                 color: theme.surfaceElevated
                                 opacity: skeleton.pulse ? 0.48 : 0.16
                                 Behavior on opacity { NumberAnimation { duration: 650; easing.type: Easing.InOutQuad } }
                             }
                             Column {
-                                x: 62
+                                x: 70
                                 anchors.verticalCenter: parent.verticalCenter
-                                spacing: 8
+                                spacing: 5
                                 Rectangle {
                                     width: 150
                                     height: 11
@@ -302,6 +361,14 @@ Item {
                                 Rectangle {
                                     width: 96
                                     height: 9
+                                    radius: 3
+                                    color: theme.surfaceElevated
+                                    opacity: skeleton.pulse ? 0.48 : 0.16
+                                    Behavior on opacity { NumberAnimation { duration: 650; easing.type: Easing.InOutQuad } }
+                                }
+                                Rectangle {
+                                    width: 72
+                                    height: 8
                                     radius: 3
                                     color: theme.surfaceElevated
                                     opacity: skeleton.pulse ? 0.48 : 0.16
@@ -434,6 +501,7 @@ Item {
 
     // --- One result row (CortinillaResultRow) ------------------------------
     component CortRow: Rectangle {
+        id: cortRow
         property var row: ({})
         // A QML Column's padding does NOT size its children, so a plain
         // `parent.width` made every row 12px wider than its block: clip hid
@@ -448,7 +516,7 @@ Item {
         // this port.
         property int blockPadding: 0
         width: parent ? parent.width - 2 * blockPadding : 0
-        height: 56
+        height: 68
         radius: theme.radiusSm
         readonly property bool active: QbzSearch.cortinillaSelectedIndex === (row.flatIndex ?? -2)
         color: (active || rowArea.containsMouse) ? theme.surfaceHover : "transparent"
@@ -466,23 +534,25 @@ Item {
         Rectangle {
             x: 10
             anchors.verticalCenter: parent.verticalCenter
-            width: 40
-            height: 40
+            width: 48
+            height: 48
             // Artists read better as a circle; everything else is a tile.
-            radius: row.kind === "artist" ? 20 : 4
+            radius: row.kind === "artist" ? 24 : 5
             color: theme.surfaceElevated
             clip: true
             RoundedImage {
                 anchors.fill: parent
                 source: row.artPath || ""
-                radius: row.kind === "artist" ? 20 : 4
+                radius: row.kind === "artist" ? 24 : 5
             }
         }
         Column {
-            x: 62
-            width: parent.width - 62 - 10
+            anchors.left: parent.left
+            anchors.leftMargin: 70
+            anchors.right: menuButton.left
+            anchors.rightMargin: 8
             anchors.verticalCenter: parent.verticalCenter
-            spacing: 2
+            spacing: 1
             Text {
                 width: parent.width
                 text: row.title || ""
@@ -498,35 +568,60 @@ Item {
                 font.pixelSize: 12
                 elide: Text.ElideRight
             }
+            Text {
+                visible: (row.qualityDetail || "") !== ""
+                width: parent.width
+                text: row.qualityDetail || ""
+                color: theme.textSecondary
+                font.pixelSize: 9
+                font.weight: Font.DemiBold
+                elide: Text.ElideRight
+            }
         }
         MouseArea {
             id: rowArea
-            anchors.fill: parent
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.right: menuButton.left
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: {
-                // Guard the i32 boundary: an undefined flatIndex coerces to
-                // 0 on the way into Rust, which is the TOP RESULT's index —
-                // a malformed row would activate the wrong thing instead of
-                // doing nothing. The highlight above already guards with
-                // `?? -2`; this is the same guard on the action.
-                var fi = row.flatIndex
-                if (fi === undefined || fi === null) {
-                    // Was a bare `return`: the one failure mode that leaves NO
-                    // trace anywhere, which is exactly what a dead click looks
-                    // like from the outside.
-                    console.warn("cortinilla: row has no flatIndex, click dropped —",
-                                 JSON.stringify(row))
+            onClicked: function (mouse) {
+                if (mouse.button === Qt.RightButton) {
+                    rowMenuLoader.active = true
+                    rowMenuLoader.item.openAtCursor(rowArea, mouse.x, mouse.y)
                     return
                 }
-                // ORDER MATTERS. clearSearch() empties the header field, which
-                // drives the live-search path; if that reaches Rust before the
-                // click does, it can replace or clear the very snapshot the
-                // router is about to look the row up in — and the router then
-                // returns silently. The click goes FIRST now; the field is
-                // cleared after, which is the visible behaviour either way.
-                QbzSearch.cortinillaRowClicked(fi)
-                if (root.headerBar) root.headerBar.clearSearch()
+                root.activateRow(row)
+            }
+        }
+        QbzIconButton {
+            id: menuButton
+            anchors.right: parent.right
+            anchors.rightMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            btnSize: 28
+            iconSize: 14
+            name: "ellipsis"
+            onClicked: {
+                rowMenuLoader.active = true
+                rowMenuLoader.item.openBelowRight(menuButton)
+            }
+            HoverHandler { id: menuHover }
+            ToolTip.visible: menuHover.hovered
+            ToolTip.text: QbzSession.tr("More options", QbzSession.trRev)
+            ToolTip.delay: 350
+        }
+        Loader {
+            id: rowMenuLoader
+            active: false
+            sourceComponent: CardMenu {
+                menuWidth: 196
+                entries: root.menuEntries(cortRow.row)
+                onPicked: function (action) {
+                    root.menuAction(cortRow.row, action)
+                }
             }
         }
     }
