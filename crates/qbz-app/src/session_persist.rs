@@ -8,12 +8,7 @@
 //! for no structural reason at all. ADR-006.
 //!
 //! The crash-chain level is injected by the host rather than read from a
-//! frontend-local static: both binaries keep their own probe file, and this
-//! module only needs the NUMBER.
-//!
-//! DEBT: the Slint copy is still there, untouched on purpose — moving it forces
-//! a rebuild of the Slint binary, which pulls `qbz-ui` and its ~30 GB compile
-//! that this box cannot verify. Collapse the two the next time Slint is built.
+//! frontend-local static; this module only needs the numeric level.
 
 //! What it is: the glue for the `persist_session` /
 //! `resume_playback_position` playback preferences.

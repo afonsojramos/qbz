@@ -2,26 +2,12 @@
 //!
 //! # Why this crate exists
 //!
-//! The wizard shipped as `qbz-dac-wizard`, whose every public function takes a
-//! `&AppWindow` and writes straight into Slint globals — so the Qt port could
-//! not reach any of it. This crate is that logic, lifted out and returning
-//! plain data: `qbz-qt` drives it through `dac_wizard_qt.rs`. ADR-006,
-//! frontend-agnostic core.
+//! The retired Slint wizard wrote directly into frontend globals. This crate is
+//! the surviving logic, returning plain data: `qbz-qt` drives it through
+//! `dac_wizard_qt.rs`. ADR-006, frontend-agnostic core.
 //!
-//! # Its relationship to `qbz-dac-wizard` — read before "deduplicating"
-//!
-//! `qbz-dac-wizard` still holds its own copy of this logic and is NOT wired to
-//! this crate. That is deliberate: the Slint tree is FROZEN (owner,
-//! 2026-08-11 — "ya no hacemos cambios para Slint"), so rewiring it would have
-//! been an unverifiable change to a tree nobody compiles or tests any more,
-//! bought for a deduplication that a frozen tree cannot benefit from.
-//!
-//! The usual objection to two copies is drift. It does not apply while the
-//! other copy never changes — and if Slint is ever unfrozen, the merge is the
-//! diff of one file. Fixes land HERE; nothing needs porting back.
-//!
-//! `qbzd` duplicates parts of this again in `tui/wizard_core.rs`. THAT one is
-//! live code and is a genuine candidate to fold onto this crate.
+//! `qbzd` duplicates parts of this in `tui/wizard_core.rs`. That one is live
+//! code and remains a genuine candidate to fold onto this crate.
 //!
 //! # What is guaranteed
 //!

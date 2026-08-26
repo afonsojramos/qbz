@@ -11,7 +11,7 @@ name = "qbz_dac_wizard_core"
 path = "src/lib.rs"
 
 # Deliberately NO frontend dependency (no slint, no qbz-ui, no cxx-qt). ADR-006:
-# the core is frontend-agnostic so Slint, Qt and qbzd consume the SAME logic.
+# The core is frontend-agnostic so Qt and future non-GUI consumers can share it.
 # Everything here returns plain data; pushing it into a UI is the frontend's job.
 [dependencies]
 qbz-audio = { path = "../qbz-audio" }

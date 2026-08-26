@@ -1,21 +1,13 @@
 [package]
 name = "qbz-qt"
-description = "Qt/QML frontend POC for QBZ (cxx-qt bridge over the UI-agnostic backend)"
+description = "Qt/QML frontend for QBZ (cxx-qt bridge over the UI-agnostic backend)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-# The SHIPPED name is `qbz` (owner, 2026-08-04). The package stays
-# `qbz-qt`, so `cargo build -p qbz-qt` is unchanged; only the artifact
-# moves to target/<profile>/qbz.
-#
-# ⚠ `crates/qbz` (the Slint binary) declares the SAME bin name and
-# shares this workspace's target dir, so both write
-# target/<profile>/qbz and the last build wins. That is survivable only
-# because the Slint binary is never built in this worktree (the qbz-ui
-# 20-30 GB wall). If it ever is, whoever built last owns the file — and
-# a smoke against "the wrong qbz" is silent.
+# The shipped executable remains `qbz`; the package name stays `qbz-qt` so
+# package-scoped Cargo commands remain unambiguous.
 name = "qbz"
 path = "src/main.rs"
 
@@ -41,12 +33,11 @@ urlencoding = "2"
 open = "5"
 dirs = "5"
 
-# Share links (src/share_qt.rs, the port of crates/qbz/src/share.rs:32-70).
+# Share links (src/share_qt.rs).
 # Rust owns the clipboard on this side because the toast does: cxx-qt-lib 0.7
 # ships no QClipboard binding, and QML cannot publish QbzShell.toastJson, so
 # splitting the copy and its confirmation across the boundary would buy
-# nothing. Same pin as the reference (crates/qbz/Cargo.toml:68), comment
-# included:
+# nothing.
 #
 # wayland-data-control: Wayland-native clipboard via the data-control
 # protocols (GNOME/KDE/sway/niri/Hyprland), falling back to X11 when Wayland
@@ -57,9 +48,7 @@ arboard = { version = "3", features = ["wayland-data-control"] }
 qbz-core = { path = "../qbz-core" }
 qbz-app = { path = "../qbz-app" }
 qbz-audio = { path = "../qbz-audio" }
-# The HiFi Wizard's frontend-agnostic core. NOT `qbz-dac-wizard` — that one is
-# the Slint adapter and pulls in qbz-ui + slint, the ~1.6 M-line generated
-# module this whole track exists to stay out of.
+# The HiFi Wizard's frontend-agnostic core; Qt owns the presentation adapter.
 qbz-dac-wizard-core = { path = "../qbz-dac-wizard-core" }
 # Vulkan enumeration for the Preferred-GPU row — real adapter NAMES, MODELS and
 # types, in the exact order `QT_VK_PHYSICAL_DEVICE_INDEX` counts them (both are
@@ -67,10 +56,12 @@ qbz-dac-wizard-core = { path = "../qbz-dac-wizard-core" }
 # does with `wgpu::Instance::enumerate_adapters`.
 #
 # `ash` is a thin FFI binding that dlopens libvulkan at RUNTIME: no Vulkan SDK
-# at build time, and a box without libvulkan simply enumerates nothing. It was
-# already in the workspace lock (wgpu pulls it), so it costs no new compile.
+# at build time, and a box without libvulkan simply enumerates nothing.
 ash = "0.38"
 qbz-qobuz = { path = "../qbz-qobuz" }
+# Cross-provider "Open Music Link" resolver. The crate is frontend-agnostic;
+# src/link_resolver_qt.rs supplies the live Qobuz search + Qt navigation seams.
+qbz-music-link = { path = "../qbz-music-link" }
 qbz-models = { path = "../qbz-models" }
 qbz-cache = { path = "../qbz-cache" }
 qbz-offline-cache = { path = "../qbz-offline-cache" }
@@ -79,9 +70,8 @@ qbz-library = { path = "../qbz-library" }
 # its background bootstrap here; no Qt type crosses into the catalog crate.
 qbz-local-catalog = { path = "../qbz-local-catalog" }
 # MyQBZ: Mixtapes & Collections backend (schema + migrations, repo, shuffle,
-# enqueue). Headless and frontend-agnostic (ADR-006) — the same crate the
-# Slint app uses (crates/qbz/Cargo.toml:96), so the two frontends share
-# library.db's mixtape tables rather than each growing their own.
+# enqueue). Headless and frontend-agnostic (ADR-006), with the persistent
+# library.db schema owned outside the Qt presentation layer.
 qbz-mixtape = { path = "../qbz-mixtape" }
 qbz-source = { path = "../qbz-source" }
 # The media-server protocol crates. `qbz-qt` needs them directly for the SYNC
@@ -96,10 +86,8 @@ qbz-cast = { path = "../qbz-cast" }
 qbz-plex = { path = "../qbz-plex" }
 qbz-lyrics = { path = "../qbz-lyrics" }
 # Playlist Importer: the provider scrapers (Spotify / Apple Music / Tidal /
-# Deezer), the Qobuz matcher and the playlist creation. Headless and
-# frontend-agnostic (ADR-006) — the same crate the Slint app uses
-# (crates/qbz/Cargo.toml), so the two frontends share one importer instead of
-# each growing its own. src/playlist_import_qt.rs drives it.
+# Deezer), the Qobuz matcher and playlist creation. The implementation stays
+# frontend-agnostic (ADR-006); src/playlist_import_qt.rs drives it.
 qbz-playlist-import = { path = "../qbz-playlist-import" }
 qbz-text-utils = { path = "../qbz-text-utils" }
 qbz-credentials = { path = "../qbz-credentials" }
@@ -113,11 +101,8 @@ qbz-external-reco = { path = "../qbz-external-reco" }
 # now-playing widget and the hardware media keys see QBZ), SMTC/MediaRemote
 # elsewhere. Driven by src/media_controls_qt.rs.
 #
-# Plain, NOT target-gated, and with no features — the same line both other
-# consumers use (crates/qbz/Cargo.toml:80, crates/qbzd/Cargo.toml:22). The
-# crate carries its own cfg arms internally (qbz-media-controls/src/lib.rs:36-53)
-# and is already a workspace member (crates/Cargo.toml:32), so this adds no
-# lock entry.
+# Plain, NOT target-gated, and with no features. The crate carries its own cfg
+# arms internally and is already a workspace member.
 #
 # Its Linux backend rides mpris-server -> zbus 4 with its own current-thread
 # tokio runtime, which is a DIFFERENT major from the zbus 5 that ksni / ashpd /
@@ -125,21 +110,19 @@ qbz-external-reco = { path = "../qbz-external-reco" }
 # process; the rule in the ksni comment below applies here too — never enable a
 # `tokio` feature on any D-Bus dependency.
 qbz-media-controls = { path = "../qbz-media-controls" }
-# Qobuz Connect (2026-08-01 Qt-port contract): the shared session/renderer
-# orchestration and the WS transport, consumed VERBATIM — backend untouchable,
-# same edges as the Slint crate (crates/qbz/Cargo.toml:87-88). Driven by
-# src/qconnect_transport_qt.rs + src/qconnect_engine_qt.rs (+ the B3/B4 facade
-# and sink).
+# Qobuz Connect: shared session/renderer orchestration and WS transport,
+# consumed without a frontend fork. Driven by src/qconnect_transport_qt.rs,
+# src/qconnect_engine_qt.rs and the facade/event sink.
 qconnect-app = { path = "../qconnect-app" }
 qconnect-transport-ws = { path = "../qconnect-transport-ws" }
 # Type-level edge only, sanctioned by contract §1.1: the QConnect renderer
 # engine trait names `qbz_player::PlaybackState`, and the engine's feeder
 # reaches the protected player seams THROUGH `runtime.core().player()` — the
-# same edge the Slint crate has (crates/qbz/Cargo.toml:85). No
-# qbz-player/qbz-audio internals are touched (TRACK-RULES §7).
+# shared engine trait. No qbz-player/qbz-audio internals are touched
+# (TRACK-RULES §7).
 qbz-player = { path = "../qbz-player" }
-# QConnect: uuid v4 for controller action ids (the B3 facade / B4 sink — same
-# as crates/qbz/Cargo.toml:90); futures-util for the engine's HTTP feeder
+# QConnect: uuid v4 for controller action ids (the B3 facade / B4 sink);
+# futures-util for the engine's HTTP feeder
 # (StreamExt over the response byte stream).
 uuid = { version = "1", features = ["v4"] }
 futures-util = { workspace = true }
@@ -152,32 +135,25 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 # cover upload (src/myqbz_cover_qt.rs) and the My-QBZ branding icon picker
 # (src/myqbz_prefs_qt.rs).
 #
-# The feature set is NOT negotiable and is copied verbatim from the reference
-# (crates/qbz/Cargo.toml:72): "async-std" is rfd's name for the
-# async-io/ashpd backend. NEVER enable rfd's "tokio" feature — zbus 5's
-# tokio feature unifies graph-wide and breaks the accesskit/atspi/ksni
-# threads. `default-features = false` keeps the GTK3 backend out; the
-# xdg-portal path is the Wayland-correct one and needs no extra system libs.
+# "async-std" is rfd's name for the async-io/ashpd backend. NEVER enable
+# rfd's "tokio" feature: it would switch the shared zbus 5 executor choice.
+# `default-features = false` keeps the GTK3 backend out; the xdg-portal path
+# is the Wayland-correct one and needs no extra system libs.
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 
-# Linux system tray via StatusNotifierItem (src/tray_linux.rs). Linux only —
-# owner ruling K2: `crates/qbz/src/tray/macos.rs` exists because Slint's winit
-# backend already bundles `muda`; under Qt that premise is gone, so macOS would
-# be a NEW implementation, not a port. Windows has no tray in either tree.
-#
-# The comment below is copied verbatim from the reference
-# (crates/qbz/Cargo.toml:139-143) because the feature set is not negotiable:
+# Linux system tray via StatusNotifierItem (src/tray_linux.rs). macOS uses the
+# native implementation in src/tray_macos.rs; Windows currently has no tray.
 #
 # default-features = false: ksni's default is "tokio", which flips the shared
-# zbus 5 executor to tokio graph-wide (breaks accesskit/atspi plain-thread
-# connections — see the rfd comment above). We only use the blocking API on
+# zbus 5 executor to tokio graph-wide. We only use the blocking API on
 # worker threads; async-io self-drives the connection from any context.
-#
-# ksni 0.3.4 is already in the workspace lock (pulled by crates/qbz), so this
-# adds no new lock entry. Feature unification is per-crate-graph, not
-# per-target: ANY dependency that turns on zbus/tokio poisons the whole binary.
+# Feature unification is per-crate-graph, not per-target: any dependency that
+# turns on zbus/tokio changes the whole binary.
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+# Session-bus single-instance guard. Keep the same async-io executor as ksni;
+# enabling zbus/tokio would poison the graph-wide executor choice.
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [build-dependencies]
 cxx-qt-build = "0.7"
@@ -193,11 +169,9 @@ cc = "1"
 # closed to menu bar" setting (Spotify behaviour — close puts the app in the
 # menu bar and drops the Dock icon; minimize still goes to the Dock).
 #
-# objc2 0.5 / objc2-app-kit 0.2 are pinned to the SAME generation the Slint
-# crate uses (crates/qbz/Cargo.toml:166-172). That matters even though this
-# crate has no winit: mixing objc2 generations in one binary registers
-# duplicate objc classes, which is the failure the reference documents at
-# length. Only the two items `set_mac_dock_hidden` names are enabled.
+# objc2 0.5 / objc2-app-kit 0.2 stay on one internally consistent generation;
+# mixing objc2 generations in one binary can register duplicate Objective-C
+# classes. Only the items used by the native tray/Dock integration are enabled.
 #
 # ⚠ NOT COMPILED OR TESTED HERE. This tree builds on Linux; the macOS arm is
 # behind cfg, so `cargo build` cannot see it. First real check is a macOS
@@ -205,15 +179,12 @@ cc = "1"
 [target.'cfg(target_os = "macos")'.dependencies]
 # DIRECT objc2, added 2026-08-05 for the menu-bar tray: `declare_class!`,
 # `msg_send_id!`, `sel!`, `ClassType`, `DeclaredClass`, `mutability` and
-# `rc::Retained` all live at the objc2 root. Pinned to 0.5, the SAME
-# generation objc2-app-kit 0.2 targets — mixing generations in one binary
-# registers duplicate objc classes, which is the failure the reference
-# documents at length (qbz/Cargo.toml:150-156).
+# `rc::Retained` all live at the objc2 root. Pinned to the generation targeted
+# by objc2-app-kit 0.2.
 objc2 = "0.5"
 # `MainThreadMarker` — in THIS generation it is exported by objc2-foundation,
 # not by the objc2 root (objc2-foundation-0.2.2/src/lib.rs:152, ungated). The
-# reference imports it from the same place. There is no direct `objc2`
-# dependency because nothing here names a type from it.
+# native integration imports it from here.
 objc2-foundation = { version = "0.2", default-features = false, features = [
     "std",
     # NSThread gates `MainThreadMarker::new()` itself
