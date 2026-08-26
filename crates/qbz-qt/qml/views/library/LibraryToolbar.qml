@@ -24,6 +24,11 @@ Item {
     QbzTheme { id: theme }
 
     height: 56
+    // The width here is the REAL content pane after the navigation and
+    // Queue/Lyrics columns have taken their space.  At this breakpoint the
+    // six-tab strip and the All controls fit in one row without either side
+    // eating the other.
+    readonly property bool compactChrome: width < 1040
 
     // Small toolbar toggle button (ToggleButton sm): 30px, active = accent.
     component ToolToggle: Rectangle {
@@ -57,17 +62,18 @@ Item {
     component GenreToolButton: Rectangle {
         id: gtb
         readonly property bool active: root.view.genreCount > 0
-        width: gtbRow.width
+        width: root.compactChrome ? 30 : gtbRow.implicitWidth
         height: 30
         radius: 6
         color: gtb.active ? theme.accent
              : gtbArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
         Row {
             id: gtbRow
+            anchors.centerIn: parent
             height: parent.height
-            leftPadding: 10
-            rightPadding: 12
-            spacing: 7
+            leftPadding: root.compactChrome ? 0 : 10
+            rightPadding: root.compactChrome ? 0 : 12
+            spacing: root.compactChrome ? 0 : 7
             QbzIcon {
                 name: "list-filter"
                 width: 13
@@ -85,6 +91,7 @@ Item {
                 tintName: gtb.active ? theme.accentGlyphTint : "secondary"
             }
             Text {
+                visible: !root.compactChrome
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.view.genreCount === 0
                     ? QbzSession.tr("Filter by genre", QbzSession.trRev)
@@ -226,7 +233,7 @@ Item {
             padding: 3
             spacing: 4
             QbzTabBar {
-                counts: true
+                counts: !root.compactChrome
                 underline: true
                 activeId: root.view.activeTab
                 tabs: [
@@ -387,19 +394,21 @@ Item {
             }
             // Sort menu (PlaylistView-style: field + direction caret).
             Rectangle {
-                width: allSortRow.width
+                width: root.compactChrome ? 40 : allSortRow.implicitWidth
                 height: 30
                 radius: 6
                 color: allSortArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
                 Row {
                     id: allSortRow
+                    anchors.centerIn: parent
                     height: parent.height
-                    leftPadding: 10
-                    rightPadding: 10
-                    spacing: 6
+                    leftPadding: root.compactChrome ? 8 : 10
+                    rightPadding: root.compactChrome ? 8 : 10
+                    spacing: root.compactChrome ? 0 : 6
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: QbzSession.tr("Sort", QbzSession.trRev) + ": " + (
+                        text: root.compactChrome ? "A-Z"
+                            : QbzSession.tr("Sort", QbzSession.trRev) + ": " + (
                             root.view.sortBy === "title" ? QbzSession.tr("Title", QbzSession.trRev)
                             : root.view.sortBy === "artist" ? QbzSession.tr("Artist", QbzSession.trRev)
                             : QbzSession.tr("Date added", QbzSession.trRev))
@@ -407,6 +416,7 @@ Item {
                         font.pixelSize: 12
                     }
                     QbzIcon {
+                        visible: !root.compactChrome
                         name: root.view.sortAsc ? "chevron-up" : "chevron-down"
                         width: 12
                         height: 12
