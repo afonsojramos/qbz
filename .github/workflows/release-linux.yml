@@ -1,17 +1,23 @@
-# Linux x86_64 release — Slint binary (crates/ workspace).
+# Linux x86_64 release — Qt frontend (crates/ workspace, package `qbz-qt`,
+# binary `qbz`).
 #
-# Rewritten 2026-07-02 for the Tauri -> Slint migration (v2.0). Pattern:
-# build once, package many. The build job produces the binary with the
-# proven public-runner recipe from build-slint.yml (16 GB RAM + 18 GB extra
-# swap covers the ~30 GB qbz_ui rustc peak, MIN memory tier, mold, pinned
-# nightly); the package job turns it into deb/rpm (nfpm), AppImage, and the
-# AUR/Gentoo/APT tarball, then creates the GitHub Release.
+# Rewritten 2026-08-25 for the Slint -> Qt frontend switch. Pattern is still
+# build once, package many — but the build is the shared build-qt-linux.yml
+# (workflow_call) and it yields TWO payloads:
+#   * the bare binary  -> qbz_${VERSION}_amd64.tar.gz (AUR / Gentoo / Flathub
+#     repack: ecosystems that provide Qt >= 6.8 themselves)
+#   * the AppDir (Qt bundled, self-contained) -> deb / rpm / AppImage, so
+#     distros without a usable Qt (Ubuntu 24.04 = Qt 6.4) keep working.
 #
 # CONTRACT (do not break): the release must keep publishing
 #   qbz_${VERSION}_amd64.tar.gz   (dir qbz_${VERSION}_amd64/{qbz, qbz.desktop, icons/hicolor/...})
 #   QBZ_${VERSION}_amd64.deb / QBZ-${VERSION}-1.x86_64.rpm / QBZ_${VERSION}_amd64.AppImage
-# — release-aur.yml, release-gentoo.yml, qbz-apt and the website consume
-# these names.
+#   qbzd_${VERSION}_amd64.deb / qbzd-${VERSION}-1.x86_64.rpm / qbzd-${VERSION}-linux-amd64.tar.gz
+# — release-aur.yml, release-gentoo.yml, qbz-apt, qbz-rpm, the updater
+# manifest and the website consume these names.
+#
+# release-linux-aarch64.yml is this file with the four ARCH_* values changed.
+# Keep them structurally identical.
 #
 # Triggers: version tags (cut from main — enforced by the ancestry guard)
 # + manual dispatch (guard skipped, for testing on any branch).
@@ -22,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Optional release tag to build (e.g. v2.0.0). Empty = build HEAD with the Cargo.toml version, no Release publish."
+        description: "Optional release tag to build (e.g. v2.1.0). Empty = build HEAD with the Cargo.toml version, no Release publish."
         required: false
         type: string
   push:
@@ -33,16 +39,21 @@ concurrency:
   group: release-linux-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  ARCH: x86_64          # build-qt-linux input + artifact suffix
+  DEB_ARCH: amd64       # QBZ_${V}_amd64.deb, qbz_${V}_amd64.tar.gz
+  RPM_ARCH: x86_64      # QBZ-${V}-1.x86_64.rpm
+  APPIMAGE_ARCH: amd64  # QBZ_${V}_amd64.AppImage
+
 jobs:
-  build:
+  # Release bookkeeping first so a bad tag fails in seconds, not after a build.
+  version:
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
     outputs:
       version: ${{ steps.release.outputs.version }}
       prerelease: ${{ steps.release.outputs.prerelease }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -69,8 +80,7 @@ jobs:
 
       # Release tags must be cut from main. A tag on any other commit fires
       # this workflow too (tags are not branch-scoped in Actions), so verify
-      # ancestry instead of trusting convention. Manual dispatch skips this
-      # (that is the testing path).
+      # ancestry instead of trusting convention. Manual dispatch skips this.
       - name: Verify tag is on main
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -80,9 +90,8 @@ jobs:
             exit 1
           fi
 
-      # Fail fast if the version bump was forgotten: the binary embeds the
-      # workspace version (About dialog, diagnostics), so a mismatched tag
-      # would ship a binary that reports the wrong version.
+      # The binary embeds the workspace version (About, diagnostics); a
+      # mismatched tag would ship a binary that reports the wrong version.
       - name: Assert Cargo.toml version matches tag
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -94,94 +103,24 @@ jobs:
             exit 1
           fi
 
-      # The qbz_ui rustc needs ~30 GB (RSS+swap). Public runner: 16 GB RAM
-      # + ~4 GB stock swap; free disk by dropping preinstalled toolchains,
-      # then add 18 GB swap -> ~38 GB total. Same recipe as build-slint.yml.
-      - name: Free disk space and add swap
+      # No workflow may build the frozen Slint binary: same bin name, same
+      # target dir, last build wins the file — a smoke against "the wrong
+      # qbz" is silent.
+      - name: Gate — no workflow builds `-p qbz`
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
-            /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift \
-            /usr/local/lib/node_modules || true
-          sudo docker system prune -af || true
-          if sudo fallocate -l 18G /swap_extra; then
-            sudo chmod 600 /swap_extra
-            sudo mkswap /swap_extra
-            sudo swapon /swap_extra
-          else
-            echo "::warning::could not allocate extra swap; build may OOM"
-          fi
-          free -h
+          set -euo pipefail
+          hits=$(grep -rnE 'cargo (build|check|test|run|install).* -p qbz([^-a-z]|$)' .github/workflows/ || true)
+          [ -z "$hits" ] || { echo "::error::a workflow still builds the Slint crate:"; echo "$hits"; exit 1; }
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            mold nasm \
-            libasound2-dev libjack-jackd2-dev \
-            libfontconfig1-dev libfreetype-dev \
-            libxkbcommon-dev libwayland-dev libxcb1-dev \
-            libgl1-mesa-dev libegl1-mesa-dev \
-            libdbus-1-dev libssl-dev \
-            libharfbuzz-dev libjbig2dec0-dev libopenjp2-7-dev \
-            libjpeg-dev zlib1g-dev libgumbo-dev
+  build:
+    needs: version
+    uses: ./.github/workflows/build-qt-linux.yml
+    with:
+      arch: x86_64
 
-      # Pinned nightly: matches build-slint.yml (same measured memory
-      # behavior, -Z threads support). Bump both files together.
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-06-23
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: crates -> target
-          shared-key: slint-linux
-          cache-on-failure: true
-          # Own the amd64 `slint-linux` cache: save on main so pre-flights warm
-          # it and tag/PR runs restore it. build-slint.yml no longer runs, so
-          # deferring to it (save-if: false) left the amd64 dep cache EMPTY and
-          # every release/snap amd64 build fully cold. Mirrors release-linux-aarch64.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build (release, MIN memory tier)
-        env:
-          CARGO_INCREMENTAL: "0"
-          CARGO_BUILD_JOBS: "1"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
-          CARGO_PROFILE_RELEASE_OPT_LEVEL: "2"
-          # Keep symbols in this build: the unstripped binary is archived for
-          # crash symbolication, then stripped for every shipped artifact.
-          CARGO_PROFILE_RELEASE_STRIP: "none"
-          RUSTFLAGS: "-C link-arg=-fuse-ld=mold -Z threads=1"
-        run: |
-          cargo build --release --manifest-path crates/Cargo.toml -p qbz
-          cp crates/target/release/qbz qbz-unstripped
-          strip -o qbz crates/target/release/qbz
-          ls -la qbz qbz-unstripped
-
-      - name: Upload binary
-        uses: actions/upload-artifact@v7
-        with:
-          name: qbz-linux-x86_64
-          path: qbz
-          if-no-files-found: error
-
-      # Symbolication artifact: panic backtraces in shipped binaries are
-      # address-only (profile strips symbols); this copy resolves them.
-      - name: Upload unstripped binary (symbolication)
-        uses: actions/upload-artifact@v7
-        with:
-          name: qbz-linux-x86_64-unstripped
-          path: qbz-unstripped
-          retention-days: 90
-
-  # T15: qbzd is minutes-class (no qbz_ui compilation unit), so none of the
-  # desktop build's swap/tier ceremony applies. Runs on ubuntu-22.04 (not
-  # 24.04 like the desktop `build` job above) so the shipped binary's glibc
-  # floor stays <= Pi OS bookworm's 2.36 (D13, the honest-Pi-story gate) —
-  # the objdump step below verifies that empirically rather than trusting
-  # the runner's advertised glibc version.
+  # qbzd is minutes-class and Slint-free. Runs on ubuntu-22.04 so the shipped
+  # binary's glibc floor stays <= Pi OS bookworm's 2.36 (the honest-Pi-story
+  # gate); the objdump step verifies that empirically.
   build-qbzd:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
@@ -206,40 +145,40 @@ jobs:
           echo "glibc floor: $floor"
           highest=$(printf '%s\n' "$floor" "GLIBC_2.35" | sort -V | tail -1)
           [ "$highest" = "GLIBC_2.35" ] || { echo "::error::floor $floor exceeds 2.35"; exit 1; }
-      # NOTE: the T15 brief's literal YAML names this artifact
-      # `qbzd-linux-amd64`, but T14 (39eb12fc, already merged into this
-      # branch) wired the package job's Download-qbzd step below to expect
-      # `qbzd-linux-x86_64` — matching what already landed wins over the
-      # brief text (see task-15-report.md for the full note).
       - uses: actions/upload-artifact@v7
         with: { name: qbzd-linux-x86_64, path: crates/target/release/qbzd }
 
   package:
-    needs: [build, build-qbzd]
+    needs: [version, build, build-qbzd]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
-      VERSION: ${{ needs.build.outputs.version }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Download binary
+      - name: Download bare binary
         uses: actions/download-artifact@v8
         with:
-          name: qbz-linux-x86_64
+          name: qbz-linux-${{ env.ARCH }}
 
-      # T14: the slint-free qbzd binary, produced by T15's build-qbzd job
-      # (a separate ubuntu-22.04 job, not an extension of `build` above —
-      # see that job for the glibc-floor rationale). This ONE artifact is
-      # consumed for deb/rpm (nfpm), the main AUR/Gentoo tarball below, AND
-      # the standalone qbzd tarball (T15 Step 2b) further down — all three
-      # ship the same 2.35-glibc-floor binary.
+      - name: Download AppDir
+        uses: actions/download-artifact@v8
+        with:
+          name: qbz-appdir-${{ env.ARCH }}
+
       - name: Download qbzd binary
         uses: actions/download-artifact@v8
         with:
-          name: qbzd-linux-x86_64
+          name: qbzd-linux-${{ env.ARCH }}
+
+      - name: Unpack AppDir
+        run: |
+          tar -xf appdir.tar
+          chmod +x qbz qbzd
+          ls AppDir; ls AppDir/usr/plugins/platforms
 
       - name: Install nfpm
         run: |
@@ -249,52 +188,42 @@ jobs:
           sudo apt-get install -y nfpm
           nfpm --version
 
+      # deb/rpm carry the AppDir tree under /opt/qbz (bin, lib, plugins, qml,
+      # qt.conf) and a /usr/bin/qbz symlink. RPATH ($ORIGIN/../lib, patched by
+      # linuxdeploy) resolves through /proc/self/exe, so the symlink needs no
+      # wrapper — and a wrapper exporting LD_LIBRARY_PATH would leak our Qt
+      # into every process qbz spawns (the login browser, xdg-open).
       - name: Build deb + rpm (nfpm)
         env:
           QBZ_VERSION: ${{ env.VERSION }}
-          QBZ_ARCH: amd64
-          QBZ_BINARY: ./qbz
+          QBZ_ARCH: ${{ env.DEB_ARCH }}
         run: |
-          chmod +x qbz
-          chmod +x qbzd
           mkdir -p dist
           nfpm package -f packaging/nfpm/nfpm.yaml -p deb \
-            -t "dist/QBZ_${VERSION}_amd64.deb"
+            -t "dist/QBZ_${VERSION}_${DEB_ARCH}.deb"
           nfpm package -f packaging/nfpm/nfpm.yaml -p rpm \
-            -t "dist/QBZ-${VERSION}-1.x86_64.rpm"
-          # Standalone qbzd packages (daemon-only — the independent deb/rpm
-          # the owner asked for; rides the same staged ./qbzd).
+            -t "dist/QBZ-${VERSION}-1.${RPM_ARCH}.rpm"
+          # Standalone qbzd packages (daemon-only), same staged ./qbzd.
           nfpm package -f packaging/nfpm/nfpm-qbzd.yaml -p deb \
-            -t "dist/qbzd_${VERSION}_amd64.deb"
+            -t "dist/qbzd_${VERSION}_${DEB_ARCH}.deb"
           nfpm package -f packaging/nfpm/nfpm-qbzd.yaml -p rpm \
-            -t "dist/qbzd-${VERSION}-1.x86_64.rpm"
+            -t "dist/qbzd-${VERSION}-1.${RPM_ARCH}.rpm"
+          ls -la dist
 
       - name: Build AppImage
         run: |
-          # Minimal AppDir: the measured runtime deps (alsa/fontconfig/
-          # freetype/png/bz2/expat/zlib) are base-system libraries on every
-          # target distro, so nothing is bundled beyond the binary.
-          APPDIR="QBZ.AppDir"
-          mkdir -p "$APPDIR/usr/bin"
-          cp qbz "$APPDIR/usr/bin/qbz"
-          cp packaging/linux/qbz.desktop "$APPDIR/qbz.desktop"
-          cp packaging/icons/256x256.png "$APPDIR/qbz.png"
-          cp packaging/icons/256x256.png "$APPDIR/.DirIcon"
-          ln -s usr/bin/qbz "$APPDIR/AppRun"
-
           curl -fsSL -o appimagetool \
-            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage"
           chmod +x appimagetool
-          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$APPDIR" \
-            "dist/QBZ_${VERSION}_amd64.AppImage"
+          ARCH="${ARCH}" ./appimagetool --appimage-extract-and-run AppDir \
+            "dist/QBZ_${VERSION}_${APPIMAGE_ARCH}.AppImage"
+          ls -la dist
 
       # Tauri-updater bridge: v1.2.x AppImage installs poll latest.json and
       # verify artifacts with the Tauri minisign pubkey baked into the old
-      # binaries. Signing the Slint AppImage with the SAME private key lets
-      # them auto-update straight into v2 (the updater just swaps the
-      # AppImage file). release-updater-manifest.yml collects the .sig into
-      # latest.json. The Slint app itself has no auto-updater — this exists
-      # only to migrate old installs.
+      # binaries. Signing with the SAME private key lets them auto-update
+      # straight into this AppImage. release-updater-manifest.yml collects
+      # the .sig. The app itself has no auto-updater.
       - name: Sign AppImage (Tauri-updater bridge)
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -304,14 +233,15 @@ jobs:
           npx --yes @tauri-apps/cli@^2 signer sign \
             --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
             --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
-            "dist/QBZ_${VERSION}_amd64.AppImage"
+            "dist/QBZ_${VERSION}_${APPIMAGE_ARCH}.AppImage"
           ls -la dist
 
+      # The BARE binary. Its consumers (AUR, Gentoo, Flathub) provide Qt.
       - name: Build AUR/Gentoo tarball
         run: |
           # CONTRACT: release-aur.yml, the Gentoo binary ebuild, qbz-apt and
           # the website hard-code this name and internal layout.
-          TARBALL_DIR="qbz_${VERSION}_amd64"
+          TARBALL_DIR="qbz_${VERSION}_${DEB_ARCH}"
           mkdir -p "tarball-staging/${TARBALL_DIR}/icons/hicolor"/{32x32,48x48,64x64,128x128,256x256}/apps
           cp qbz "tarball-staging/${TARBALL_DIR}/qbz"
           chmod +x "tarball-staging/${TARBALL_DIR}/qbz"
@@ -321,11 +251,6 @@ jobs:
           cp packaging/icons/128x128.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/128x128/apps/qbz.png"
           cp packaging/icons/256x256.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/256x256/apps/qbz.png"
           cp packaging/linux/qbz.desktop "tarball-staging/${TARBALL_DIR}/qbz.desktop"
-          # Additive (T14): qbzd + its user unit + shell completions. Every
-          # entry above is untouched — the layout contract (header lines
-          # 10-14) forbids renaming/moving existing entries. AUR/Gentoo/flake
-          # install-line updates to pick these up are P1 (T22, per D13); the
-          # files are inert there until then.
           cp qbzd "tarball-staging/${TARBALL_DIR}/qbzd"
           chmod +x "tarball-staging/${TARBALL_DIR}/qbzd"
           cp crates/qbzd/service/qbzd.service "tarball-staging/${TARBALL_DIR}/qbzd.service"
@@ -333,18 +258,12 @@ jobs:
           ./qbzd completions bash > "tarball-staging/${TARBALL_DIR}/completions/qbzd.bash"
           ./qbzd completions zsh  > "tarball-staging/${TARBALL_DIR}/completions/qbzd.zsh"
           ./qbzd completions fish > "tarball-staging/${TARBALL_DIR}/completions/qbzd.fish"
-          tar -czvf "dist/qbz_${VERSION}_amd64.tar.gz" -C tarball-staging "${TARBALL_DIR}"
+          tar -czvf "dist/qbz_${VERSION}_${DEB_ARCH}.tar.gz" -C tarball-staging "${TARBALL_DIR}"
           ls -la dist
 
-      # T15 Step 2b (OD3, G0): the standalone qbzd tarball — the independent
-      # daemon download the owner asked for, separate from the main qbz
-      # tarball above. Never touches snap/Flathub/AppImage/dmg (owner
-      # constraint) — this only adds one more file into dist/, which the
-      # existing Upload-artifacts and Publish-Release-Assets steps below
-      # already pick up unmodified via their dist/* globs.
       - name: qbzd-tarball
         run: |
-          QBZD_DIR="qbzd-${VERSION}-linux-amd64"
+          QBZD_DIR="qbzd-${VERSION}-linux-${DEB_ARCH}"
           mkdir -p "qbzd-tarball-staging/${QBZD_DIR}/completions"
           cp qbzd "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
           chmod +x "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
@@ -353,13 +272,13 @@ jobs:
           ./qbzd completions zsh  > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.zsh"
           ./qbzd completions fish > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.fish"
           cp packaging/linux/qbzd-standalone-README.md "qbzd-tarball-staging/${QBZD_DIR}/README.md"
-          tar -czvf "dist/qbzd-${VERSION}-linux-amd64.tar.gz" -C qbzd-tarball-staging "${QBZD_DIR}"
+          tar -czvf "dist/qbzd-${VERSION}-linux-${DEB_ARCH}.tar.gz" -C qbzd-tarball-staging "${QBZD_DIR}"
           ls -la dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: qbz-linux-packages
+          name: qbz-linux-packages-${{ env.ARCH }}
           path: dist/*
 
       - name: Publish GitHub Release Assets
@@ -367,8 +286,8 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: dist/*
-          prerelease: ${{ needs.build.outputs.prerelease }}
-          make_latest: ${{ needs.build.outputs.prerelease == 'true' && 'false' || 'true' }}
+          prerelease: ${{ needs.version.outputs.prerelease }}
+          make_latest: ${{ needs.version.outputs.prerelease == 'true' && 'false' || 'true' }}
 
       - name: Trigger APT repo update
         if: startsWith(github.ref, 'refs/tags/')
@@ -380,8 +299,7 @@ jobs:
           client-payload: '{"tag": "${{ github.ref_name }}"}'
 
       # Our own RPM repo (qbz-rpm — mirrors qbz-apt's flow with createrepo).
-      # continue-on-error until the token scope covers the new repo (the PAT
-      # was minted for qbz-apt only).
+      # continue-on-error until the token scope covers the new repo.
       - name: Trigger RPM repo update
         if: startsWith(github.ref, 'refs/tags/')
         continue-on-error: true

@@ -1,14 +1,26 @@
-# Linux aarch64 release — Slint binary (crates/ workspace).
+# Linux aarch64 release — Qt frontend (crates/ workspace, package `qbz-qt`,
+# binary `qbz`).
 #
-# Rewritten 2026-07-02 for the Tauri -> Slint migration (v2.0). Same
-# build-once-package-many shape as release-linux.yml (read that file's
-# header); differences: native arm64 runner, no x86 target-features, its
-# own rust-cache key (this workflow is the only writer), and it ATTACHES
-# to the Release that release-linux.yml creates.
+# Rewritten 2026-08-25 for the Slint -> Qt frontend switch. Pattern is still
+# build once, package many — but the build is the shared build-qt-linux.yml
+# (workflow_call) and it yields TWO payloads:
+#   * the bare binary  -> qbz_${VERSION}_arm64.tar.gz (AUR / Gentoo / Flathub
+#     repack: ecosystems that provide Qt >= 6.8 themselves)
+#   * the AppDir (Qt bundled, self-contained) -> deb / rpm / AppImage, so
+#     distros without a usable Qt (Ubuntu 24.04 = Qt 6.4) keep working.
 #
-# CONTRACT: keeps publishing qbz_${VERSION}_aarch64.tar.gz,
-# QBZ_${VERSION}_arm64.deb, QBZ-${VERSION}-1.aarch64.rpm,
-# QBZ_${VERSION}_aarch64.AppImage — AUR/Gentoo/APT/website names.
+# CONTRACT (do not break): the release must keep publishing
+#   qbz_${VERSION}_arm64.tar.gz   (dir qbz_${VERSION}_arm64/{qbz, qbz.desktop, icons/hicolor/...})
+#   QBZ_${VERSION}_arm64.deb / QBZ-${VERSION}-1.aarch64.rpm / QBZ_${VERSION}_arm64.AppImage
+#   qbzd_${VERSION}_arm64.deb / qbzd-${VERSION}-1.aarch64.rpm / qbzd-${VERSION}-linux-arm64.tar.gz
+# — release-aur.yml, release-gentoo.yml, qbz-apt, qbz-rpm, the updater
+# manifest and the website consume these names.
+#
+# release-linux.yml is this file with the four ARCH_* values changed.
+# Keep them structurally identical.
+#
+# Triggers: version tags (cut from main — enforced by the ancestry guard)
+# + manual dispatch (guard skipped, for testing on any branch).
 
 name: "Linux ARM64 (aarch64) Build"
 
@@ -16,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Optional release tag to build (e.g. v2.0.0). Empty = build HEAD with the Cargo.toml version, no Release publish."
+        description: "Optional release tag to build (e.g. v2.1.0). Empty = build HEAD with the Cargo.toml version, no Release publish."
         required: false
         type: string
   push:
@@ -27,17 +39,21 @@ concurrency:
   group: release-linux-aarch64-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  ARCH: aarch64         # build-qt-linux input + artifact suffix
+  DEB_ARCH: arm64       # QBZ_${V}_arm64.deb, qbz_${V}_arm64.tar.gz
+  RPM_ARCH: aarch64     # QBZ-${V}-1.aarch64.rpm
+  APPIMAGE_ARCH: aarch64 # QBZ_${V}_aarch64.AppImage
+
 jobs:
-  build:
+  # Release bookkeeping first so a bad tag fails in seconds, not after a build.
+  version:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 300
-    continue-on-error: true
     outputs:
       version: ${{ steps.release.outputs.version }}
       prerelease: ${{ steps.release.outputs.prerelease }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -51,6 +67,7 @@ jobs:
             VERSION="${{ inputs.tag }}"
             VERSION="${VERSION#v}"
           else
+            # Manual dispatch without a tag: test build at the Cargo.toml version.
             VERSION="$(grep -m1 '^version = ' crates/Cargo.toml | sed 's/version = \"\(.*\)\"/\1/')"
           fi
           PRERELEASE=false
@@ -59,97 +76,51 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Building version $VERSION (prerelease=$PRERELEASE)"
 
+      # Release tags must be cut from main. A tag on any other commit fires
+      # this workflow too (tags are not branch-scoped in Actions), so verify
+      # ancestry instead of trusting convention. Manual dispatch skips this.
       - name: Verify tag is on main
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           git fetch origin main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::Tag ${GITHUB_REF#refs/tags/} is not on main. Releases are cut from main only."
+            echo "::error::Tag ${GITHUB_REF#refs/tags/} points to a commit that is NOT on main. Releases are cut from main only."
             exit 1
           fi
 
-      - name: Free disk space and add swap
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
-            /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift \
-            /usr/local/lib/node_modules || true
-          sudo docker system prune -af || true
-          if sudo fallocate -l 18G /swap_extra; then
-            sudo chmod 600 /swap_extra
-            sudo mkswap /swap_extra
-            sudo swapon /swap_extra
-          else
-            echo "::warning::could not allocate extra swap; build may OOM"
-          fi
-          free -h
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            mold nasm \
-            libasound2-dev libjack-jackd2-dev \
-            libfontconfig1-dev libfreetype-dev \
-            libxkbcommon-dev libwayland-dev libxcb1-dev \
-            libgl1-mesa-dev libegl1-mesa-dev \
-            libdbus-1-dev libssl-dev \
-            libharfbuzz-dev libjbig2dec0-dev libopenjp2-7-dev \
-            libjpeg-dev zlib1g-dev libgumbo-dev
-
-      # Pinned nightly: matches build-slint.yml / release-linux.yml.
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-06-23
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: crates -> target
-          shared-key: slint-linux-aarch64
-          cache-on-failure: true
-          # This workflow is the only aarch64 builder, so it owns its cache.
-          save-if: true
-
-      - name: Build (release, MIN memory tier)
+      # The binary embeds the workspace version (About, diagnostics); a
+      # mismatched tag would ship a binary that reports the wrong version.
+      - name: Assert Cargo.toml version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
         env:
-          CARGO_INCREMENTAL: "0"
-          CARGO_BUILD_JOBS: "1"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
-          CARGO_PROFILE_RELEASE_OPT_LEVEL: "2"
-          CARGO_PROFILE_RELEASE_STRIP: "none"
-          # No x86 target-features here (aarch64 baseline has NEON).
-          RUSTFLAGS: "-C link-arg=-fuse-ld=mold -Z threads=1"
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
-          cargo build --release --manifest-path crates/Cargo.toml -p qbz
-          cp crates/target/release/qbz qbz-unstripped
-          strip -o qbz crates/target/release/qbz
-          ls -la qbz qbz-unstripped
+          CARGO_VERSION="$(grep -m1 '^version = ' crates/Cargo.toml | sed 's/version = \"\(.*\)\"/\1/')"
+          if [[ "$CARGO_VERSION" != "$VERSION" ]]; then
+            echo "::error::crates/Cargo.toml workspace version ($CARGO_VERSION) != tag version ($VERSION). Bump it before tagging (see RELEASE_CHECKLIST)."
+            exit 1
+          fi
 
-      - name: Upload binary
-        uses: actions/upload-artifact@v7
-        with:
-          name: qbz-linux-aarch64
-          path: qbz
-          if-no-files-found: error
+      # No workflow may build the frozen Slint binary: same bin name, same
+      # target dir, last build wins the file — a smoke against "the wrong
+      # qbz" is silent.
+      - name: Gate — no workflow builds `-p qbz`
+        run: |
+          set -euo pipefail
+          hits=$(grep -rnE 'cargo (build|check|test|run|install).* -p qbz([^-a-z]|$)' .github/workflows/ || true)
+          [ -z "$hits" ] || { echo "::error::a workflow still builds the Slint crate:"; echo "$hits"; exit 1; }
 
-      - name: Upload unstripped binary (symbolication)
-        uses: actions/upload-artifact@v7
-        with:
-          name: qbz-linux-aarch64-unstripped
-          path: qbz-unstripped
-          retention-days: 90
+  build:
+    needs: version
+    uses: ./.github/workflows/build-qt-linux.yml
+    with:
+      arch: aarch64
 
-  # T15: aarch64 mirror of release-linux.yml's build-qbzd job — see that
-  # file's header comment for the glibc-floor rationale. Uses the native
-  # ubuntu-22.04-arm runner label rather than cross-compiling.
-  #
-  # Fallback note (NOT implemented — flagged for pre-flight per the T15
-  # brief): if ubuntu-22.04-arm is ever unavailable to this repo, cross-build
-  # instead via the existing Cross.toml pattern (crates/Cross.toml,
-  # scripts/build-aarch64-linux.sh's CROSS mode) targeting a 2.35-floor
-  # image; the objdump gate below stays the acceptance test either way.
+  # qbzd is minutes-class and Slint-free. Runs on ubuntu-22.04 so the shipped
+  # binary's glibc floor stays <= Pi OS bookworm's 2.36 (the honest-Pi-story
+  # gate); the objdump step verifies that empirically.
   build-qbzd:
     runs-on: ubuntu-22.04-arm
     timeout-minutes: 30
@@ -174,37 +145,40 @@ jobs:
           echo "glibc floor: $floor"
           highest=$(printf '%s\n' "$floor" "GLIBC_2.35" | sort -V | tail -1)
           [ "$highest" = "GLIBC_2.35" ] || { echo "::error::floor $floor exceeds 2.35"; exit 1; }
-      # NOTE: the T15 brief's literal YAML names this artifact
-      # `qbzd-linux-arm64`, but T14 (39eb12fc, already merged into this
-      # branch) wired the package job's Download-qbzd step below to expect
-      # `qbzd-linux-aarch64` — matching what already landed wins over the
-      # brief text (see task-15-report.md for the full note).
       - uses: actions/upload-artifact@v7
         with: { name: qbzd-linux-aarch64, path: crates/target/release/qbzd }
 
   package:
-    needs: [build, build-qbzd]
+    needs: [version, build, build-qbzd]
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: write
     env:
-      VERSION: ${{ needs.build.outputs.version }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Download binary
+      - name: Download bare binary
         uses: actions/download-artifact@v8
         with:
-          name: qbz-linux-aarch64
+          name: qbz-linux-${{ env.ARCH }}
 
-      # T14: the slint-free qbzd binary, produced by T15's build-qbzd job — see
-      # release-linux.yml's matching step for the full rationale (one
-      # artifact feeds nfpm, the main tarball, and the standalone tarball).
+      - name: Download AppDir
+        uses: actions/download-artifact@v8
+        with:
+          name: qbz-appdir-${{ env.ARCH }}
+
       - name: Download qbzd binary
         uses: actions/download-artifact@v8
         with:
-          name: qbzd-linux-aarch64
+          name: qbzd-linux-${{ env.ARCH }}
+
+      - name: Unpack AppDir
+        run: |
+          tar -xf appdir.tar
+          chmod +x qbz qbzd
+          ls AppDir; ls AppDir/usr/plugins/platforms
 
       - name: Install nfpm
         run: |
@@ -214,42 +188,42 @@ jobs:
           sudo apt-get install -y nfpm
           nfpm --version
 
+      # deb/rpm carry the AppDir tree under /opt/qbz (bin, lib, plugins, qml,
+      # qt.conf) and a /usr/bin/qbz symlink. RPATH ($ORIGIN/../lib, patched by
+      # linuxdeploy) resolves through /proc/self/exe, so the symlink needs no
+      # wrapper — and a wrapper exporting LD_LIBRARY_PATH would leak our Qt
+      # into every process qbz spawns (the login browser, xdg-open).
       - name: Build deb + rpm (nfpm)
         env:
           QBZ_VERSION: ${{ env.VERSION }}
-          QBZ_ARCH: arm64
-          QBZ_BINARY: ./qbz
+          QBZ_ARCH: ${{ env.DEB_ARCH }}
         run: |
-          chmod +x qbz
-          chmod +x qbzd
           mkdir -p dist
           nfpm package -f packaging/nfpm/nfpm.yaml -p deb \
-            -t "dist/QBZ_${VERSION}_arm64.deb"
+            -t "dist/QBZ_${VERSION}_${DEB_ARCH}.deb"
           nfpm package -f packaging/nfpm/nfpm.yaml -p rpm \
-            -t "dist/QBZ-${VERSION}-1.aarch64.rpm"
-          # Standalone qbzd packages (daemon-only, mirrors the amd64 job).
+            -t "dist/QBZ-${VERSION}-1.${RPM_ARCH}.rpm"
+          # Standalone qbzd packages (daemon-only), same staged ./qbzd.
           nfpm package -f packaging/nfpm/nfpm-qbzd.yaml -p deb \
-            -t "dist/qbzd_${VERSION}_arm64.deb"
+            -t "dist/qbzd_${VERSION}_${DEB_ARCH}.deb"
           nfpm package -f packaging/nfpm/nfpm-qbzd.yaml -p rpm \
-            -t "dist/qbzd-${VERSION}-1.aarch64.rpm"
+            -t "dist/qbzd-${VERSION}-1.${RPM_ARCH}.rpm"
+          ls -la dist
 
       - name: Build AppImage
         run: |
-          APPDIR="QBZ.AppDir"
-          mkdir -p "$APPDIR/usr/bin"
-          cp qbz "$APPDIR/usr/bin/qbz"
-          cp packaging/linux/qbz.desktop "$APPDIR/qbz.desktop"
-          cp packaging/icons/256x256.png "$APPDIR/qbz.png"
-          cp packaging/icons/256x256.png "$APPDIR/.DirIcon"
-          ln -s usr/bin/qbz "$APPDIR/AppRun"
-
           curl -fsSL -o appimagetool \
-            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage"
           chmod +x appimagetool
-          ARCH=aarch64 ./appimagetool --appimage-extract-and-run "$APPDIR" \
-            "dist/QBZ_${VERSION}_aarch64.AppImage"
+          ARCH="${ARCH}" ./appimagetool --appimage-extract-and-run AppDir \
+            "dist/QBZ_${VERSION}_${APPIMAGE_ARCH}.AppImage"
+          ls -la dist
 
-      # Tauri-updater bridge — see release-linux.yml for the rationale.
+      # Tauri-updater bridge: v1.2.x AppImage installs poll latest.json and
+      # verify artifacts with the Tauri minisign pubkey baked into the old
+      # binaries. Signing with the SAME private key lets them auto-update
+      # straight into this AppImage. release-updater-manifest.yml collects
+      # the .sig. The app itself has no auto-updater.
       - name: Sign AppImage (Tauri-updater bridge)
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -259,13 +233,15 @@ jobs:
           npx --yes @tauri-apps/cli@^2 signer sign \
             --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
             --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
-            "dist/QBZ_${VERSION}_aarch64.AppImage"
+            "dist/QBZ_${VERSION}_${APPIMAGE_ARCH}.AppImage"
           ls -la dist
 
+      # The BARE binary. Its consumers (AUR, Gentoo, Flathub) provide Qt.
       - name: Build AUR/Gentoo tarball
         run: |
-          # CONTRACT: same name + internal layout as the Tauri-era tarball.
-          TARBALL_DIR="qbz_${VERSION}_aarch64"
+          # CONTRACT: release-aur.yml, the Gentoo binary ebuild, qbz-apt and
+          # the website hard-code this name and internal layout.
+          TARBALL_DIR="qbz_${VERSION}_${DEB_ARCH}"
           mkdir -p "tarball-staging/${TARBALL_DIR}/icons/hicolor"/{32x32,48x48,64x64,128x128,256x256}/apps
           cp qbz "tarball-staging/${TARBALL_DIR}/qbz"
           chmod +x "tarball-staging/${TARBALL_DIR}/qbz"
@@ -275,8 +251,6 @@ jobs:
           cp packaging/icons/128x128.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/128x128/apps/qbz.png"
           cp packaging/icons/256x256.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/256x256/apps/qbz.png"
           cp packaging/linux/qbz.desktop "tarball-staging/${TARBALL_DIR}/qbz.desktop"
-          # Additive (T14) — see release-linux.yml's matching block for the
-          # layout-contract rationale.
           cp qbzd "tarball-staging/${TARBALL_DIR}/qbzd"
           chmod +x "tarball-staging/${TARBALL_DIR}/qbzd"
           cp crates/qbzd/service/qbzd.service "tarball-staging/${TARBALL_DIR}/qbzd.service"
@@ -284,14 +258,12 @@ jobs:
           ./qbzd completions bash > "tarball-staging/${TARBALL_DIR}/completions/qbzd.bash"
           ./qbzd completions zsh  > "tarball-staging/${TARBALL_DIR}/completions/qbzd.zsh"
           ./qbzd completions fish > "tarball-staging/${TARBALL_DIR}/completions/qbzd.fish"
-          tar -czvf "dist/qbz_${VERSION}_aarch64.tar.gz" -C tarball-staging "${TARBALL_DIR}"
+          tar -czvf "dist/qbz_${VERSION}_${DEB_ARCH}.tar.gz" -C tarball-staging "${TARBALL_DIR}"
           ls -la dist
 
-      # T15 Step 2b (OD3, G0) — see release-linux.yml's matching step for
-      # the rationale. Never touches snap/Flathub/AppImage/dmg.
       - name: qbzd-tarball
         run: |
-          QBZD_DIR="qbzd-${VERSION}-linux-aarch64"
+          QBZD_DIR="qbzd-${VERSION}-linux-${DEB_ARCH}"
           mkdir -p "qbzd-tarball-staging/${QBZD_DIR}/completions"
           cp qbzd "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
           chmod +x "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
@@ -300,31 +272,23 @@ jobs:
           ./qbzd completions zsh  > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.zsh"
           ./qbzd completions fish > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.fish"
           cp packaging/linux/qbzd-standalone-README.md "qbzd-tarball-staging/${QBZD_DIR}/README.md"
-          tar -czvf "dist/qbzd-${VERSION}-linux-aarch64.tar.gz" -C qbzd-tarball-staging "${QBZD_DIR}"
+          tar -czvf "dist/qbzd-${VERSION}-linux-${DEB_ARCH}.tar.gz" -C qbzd-tarball-staging "${QBZD_DIR}"
           ls -la dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: qbz-linux-aarch64-packages
+          name: qbz-linux-packages-${{ env.ARCH }}
           path: dist/*
 
-      # Attaches to the Release created by release-linux.yml.
       - name: Publish GitHub Release Assets
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
           files: dist/*
-          prerelease: ${{ needs.build.outputs.prerelease }}
-          make_latest: ${{ needs.build.outputs.prerelease == 'true' && 'false' || 'true' }}
+          prerelease: ${{ needs.version.outputs.prerelease }}
+          make_latest: ${{ needs.version.outputs.prerelease == 'true' && 'false' || 'true' }}
 
-      # #648: the apt dispatch MUST also fire from here — this workflow is the
-      # slow one (native arm64 build), so release-linux.yml's dispatch ran
-      # hours earlier, when the Release still held only the x86_64 .deb; the
-      # arm64 .deb landed after and nothing re-indexed (apt arm64 stuck at
-      # 1.2.15). update-repo.yml is idempotent (re-downloads every *.deb,
-      # overwrites the pool, rebuilds both indices), so a second run simply
-      # completes whichever arch the first one missed.
       - name: Trigger APT repo update
         if: startsWith(github.ref, 'refs/tags/')
         uses: peter-evans/repository-dispatch@v4
@@ -334,8 +298,7 @@ jobs:
           event-type: new-release
           client-payload: '{"tag": "${{ github.ref_name }}"}'
 
-      # RPM repo (qbz-rpm) — same dual-dispatch rule as #648 above: the arm64
-      # .rpms land hours after x86_64's, and update-repo.yml is idempotent.
+      # Our own RPM repo (qbz-rpm — mirrors qbz-apt's flow with createrepo).
       # continue-on-error until the token scope covers the new repo.
       - name: Trigger RPM repo update
         if: startsWith(github.ref, 'refs/tags/')
