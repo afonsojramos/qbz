@@ -4,13 +4,14 @@
 # e.g. for a Raspberry Pi 4 + HiFiBerry/USB DAC streamer.
 #
 # ── Why this is NOT build-aarch64-linux.sh ───────────────────────────────────
-# That script builds the Slint desktop `qbz`, whose generated `qbz_ui` crate is
-# ONE ~1.6M-line module needing ~30 GB for a single rustc. `qbzd` is the
-# slint-free column of the workspace: no UI crate, no fonts, no GPU libs. It
-# builds in minutes and fits on modest hardware, so:
-#   • a 4 GB Pi CAN build it natively (unlike the desktop binary);
-#   • the container caps here are small — no 48 GB swap headroom needed;
-#   • the `static/` fonts mount the desktop script needs is irrelevant.
+# That script builds the Qt desktop `qbz`, which needs a Qt >= 6.8 with private
+# headers on the build host and cannot be cross-compiled with cross-rs (the
+# target Qt's qmake has to run during the build). `qbzd` is the Qt-free and
+# Slint-free column of the workspace: no UI crate, no fonts, no GPU libs. It
+# builds in minutes on modest hardware and cross-compiles cleanly, so:
+#   • a 4 GB Pi CAN build it natively;
+#   • CROSS mode via cross-rs + crates/Cross.toml still works here;
+#   • the container caps are small.
 #
 # Two modes, auto-selected by host arch (same shape as the desktop script):
 #
@@ -62,9 +63,8 @@ case "$arch" in
     # the same as the desktop script's — a runaway gets killed instead of
     # swap-thrashing this box (30 GB, no hibernation) into a hard freeze.
     export CROSS_CONTAINER_OPTS="${CROSS_CONTAINER_OPTS:---memory=8g --memory-swap=12g}"
-    # crates/Cross.toml injects the arm64 dev libs into the image. It installs
-    # the desktop's superset (GUI libs included) because it is keyed by TARGET,
-    # not by crate — harmless here, and not worth forking a second image.
+    # crates/Cross.toml injects the arm64 dev libs into the image (the daemon's
+    # set; the Qt desktop is not cross-built, see build-aarch64-linux.sh).
     ( cd crates && cross build --release --target "$TARGET" -p qbzd )
     install -Dm755 "crates/target/$TARGET/release/qbzd" "$OUT"
     ;;
