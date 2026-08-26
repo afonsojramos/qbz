@@ -60,6 +60,35 @@ impl ArtistFamilyAliases {
     }
 }
 
+/// Canonical display names credited by one album. This is the presentation
+/// companion to [`album_matches_artist_with_aliases`]: fold repeated
+/// `collection • contributor` families to their corpus-backed root and
+/// deduplicate by normalized identity while preserving first display
+/// spelling. Deliberately do not split `AC/DC` or `Simon & Garfunkel`: the
+/// artist rail treats those full display names as acts, and this facet must
+/// expose the same identities rather than manufacture phantom contributors.
+pub fn album_credit_names(
+    artist: &str,
+    all_artists: &str,
+    aliases: &ArtistFamilyAliases,
+) -> Vec<String> {
+    let mut out = Vec::<String>::new();
+    let mut seen = HashSet::<String>::new();
+    let raw = all_artists.split(',').chain(std::iter::once(artist));
+    for value in raw {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let display = aliases.canonical_display(value).unwrap_or(value);
+        let key = normalize_artist(display);
+        if !key.is_empty() && seen.insert(key) {
+            out.push(display.to_string());
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Normalization
 // ---------------------------------------------------------------------------
@@ -365,7 +394,11 @@ pub fn merge_artists(
                 sources.push(variant.source);
             }
         }
-        let source = if sources.len() == 1 { sources[0] } else { "mixed" };
+        let source = if sources.len() == 1 {
+            sources[0]
+        } else {
+            "mixed"
+        };
         // If no album-credit document is available (notably a server-only
         // profile without library.db), counts from distinct sources are
         // disjoint because their album ids are namespaced. Within one source,
@@ -495,7 +528,10 @@ mod tests {
 
     #[test]
     fn normalize_preserves_non_ascii_scripts() {
-        assert_eq!(normalize_artist("新世紀エヴァンゲリオン"), "新世紀エヴァンゲリオン");
+        assert_eq!(
+            normalize_artist("新世紀エヴァンゲリオン"),
+            "新世紀エヴァンゲリオン"
+        );
         assert_eq!(normalize_artist("林原めぐみ"), "林原めぐみ");
     }
 
@@ -749,6 +785,11 @@ mod tests {
             &normalize_artist(family),
             &aliases,
         ));
+        assert_eq!(album_credit_names(&shiro, &megumi, &aliases), [family]);
+        assert_eq!(
+            album_credit_names("AC/DC", "Simon & Garfunkel", &aliases),
+            ["Simon & Garfunkel", "AC/DC"]
+        );
         assert!(!album_matches_artist_with_aliases(
             "Alice • Bob",
             "",

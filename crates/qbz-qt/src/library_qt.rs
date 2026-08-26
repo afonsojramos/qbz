@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
-use qbz_app::settings::local_favorites::{LocalFavoritesService, DB_FILE_NAME};
+use qbz_app::settings::local_favorites::{LocalFavItem, LocalFavoritesService, DB_FILE_NAME};
 use qbz_app::shell::AppRuntime;
 use qbz_app::user_data::UserDataPaths;
 use qbz_core::LoggingAdapter;
@@ -103,11 +103,7 @@ pub struct FeedItem {
     /// Liveable exception to `not_streamable`: a complete offline copy still
     /// plays after Qobuz withdraws the catalog row. Zero is omitted so the
     /// high-cardinality feed only pays for tracks that actually carry state.
-    #[serde(
-        default,
-        rename = "cacheStatus",
-        skip_serializing_if = "is_zero_i32"
-    )]
+    #[serde(default, rename = "cacheStatus", skip_serializing_if = "is_zero_i32")]
     pub cache_status: i32,
     pub genre: String,
     pub year: String,
@@ -130,11 +126,7 @@ pub struct FeedItem {
     /// (`image_rectangle`) instead of a member-track cover. The card then
     /// renders it CONTAIN — those graphics are landscape and cropping
     /// butchers them (Tauri `QobuzPlaylistCard`: `object-fit: contain`).
-    #[serde(
-        rename = "playlistOwnImage",
-        default,
-        skip_serializing_if = "is_false"
-    )]
+    #[serde(rename = "playlistOwnImage", default, skip_serializing_if = "is_false")]
     pub playlist_own_image: bool,
     /// Recency proxy in [0,1]; 0 = most-recently added (per source).
     pub added_rank: f32,
@@ -231,6 +223,46 @@ fn local_favorites_list() -> Vec<qbz_app::settings::local_favorites::LocalFavIte
         .unwrap_or_default()
 }
 
+/// O(1) heart lookup shared by the Local Library row mappers. Keeping this
+/// against the same service as the mixed Library feed means a heart never
+/// disagrees between those two surfaces after navigation or restart.
+pub(crate) fn is_local_favorite(kind: &str, id: &str) -> bool {
+    LOCAL_FAVS
+        .get()
+        .and_then(|service| service.lock().ok())
+        .is_some_and(|service| service.is_favorite(kind, id))
+}
+
+/// Toggle a fully described Local Library item. Unlike [`toggle_local`], this
+/// does not try to rediscover the snapshot in the mixed Library feed: the
+/// Local Library card itself is authoritative for logical album ids that the
+/// feed may not currently contain.
+pub(crate) fn toggle_local_favorite_snapshot(item: LocalFavItem) -> Option<bool> {
+    let service = LOCAL_FAVS.get()?.lock().ok()?;
+    let current = service.is_favorite(&item.kind, &item.id);
+    if current {
+        if let Err(error) = service.unfavorite(&item.kind, &item.id) {
+            log::error!(
+                "[qbz-qt] local unfavorite ({}:{}) failed: {error}",
+                item.kind,
+                item.id
+            );
+            return Some(current);
+        }
+        Some(false)
+    } else {
+        if let Err(error) = service.favorite(&item) {
+            log::error!(
+                "[qbz-qt] local favorite ({}:{}) failed: {error}",
+                item.kind,
+                item.id
+            );
+            return Some(current);
+        }
+        Some(true)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Fetch
 // ---------------------------------------------------------------------------
@@ -299,7 +331,8 @@ pub async fn warm_favorites_cache(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
                 })
                 .collect();
             let n = ids.len();
-            let _ = tokio::task::spawn_blocking(move || crate::fav_cache_qt::set_all_albums(ids)).await;
+            let _ =
+                tokio::task::spawn_blocking(move || crate::fav_cache_qt::set_all_albums(ids)).await;
             log::info!("[qbz-qt] favorites cache warmed: {n} albums");
         }
         Err(e) => log::warn!("[qbz-qt] favorites cache album warm failed: {e}"),
@@ -333,7 +366,10 @@ async fn warm_numeric(
     }
 }
 
-fn parse_items<T: serde::de::DeserializeOwned>(items: Vec<serde_json::Value>, what: &str) -> Vec<T> {
+fn parse_items<T: serde::de::DeserializeOwned>(
+    items: Vec<serde_json::Value>,
+    what: &str,
+) -> Vec<T> {
     items
         .into_iter()
         .filter_map(|v| match serde_json::from_value::<T>(v) {
@@ -380,7 +416,11 @@ fn map_track(track: Track) -> FeedItem {
         .as_ref()
         .map(|a| a.title.clone())
         .unwrap_or_default();
-    let album_id = track.album.as_ref().map(|a| a.id.clone()).unwrap_or_default();
+    let album_id = track
+        .album
+        .as_ref()
+        .map(|a| a.id.clone())
+        .unwrap_or_default();
     let genre = track
         .album
         .as_ref()
@@ -443,7 +483,12 @@ fn map_album(album: Album, ready_offline_tracks: usize) -> FeedItem {
     let date = album
         .dates
         .as_ref()
-        .and_then(|d| d.original.clone().or(d.download.clone()).or(d.stream.clone()))
+        .and_then(|d| {
+            d.original
+                .clone()
+                .or(d.download.clone())
+                .or(d.stream.clone())
+        })
         .or(album.release_date_original.clone());
     let artist = if !album.artist.name.is_empty() {
         album.artist.name
@@ -591,7 +636,12 @@ fn map_playlist_row(playlist: &Playlist, is_following: bool) -> FeedItem {
         // Pin badge state from the per-user store (see `map_artist`).
         is_pinned: crate::sidebar_qt::is_pinned("playlist", &playlist.id.to_string()),
         kind: "playlist".into(),
-        group: if is_following { "following" } else { "favorites" }.into(),
+        group: if is_following {
+            "following"
+        } else {
+            "favorites"
+        }
+        .into(),
         source: "qobuz".into(),
         id: playlist.id.to_string(),
         title: playlist.name.clone(),
@@ -654,16 +704,32 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
     // individually for the perf report.
     let t = Instant::now();
     let (raw_tracks, tracks_total) = fetch_favorites(runtime, "tracks").await?;
-    log::info!("[qbz-qt][perf] favorites tracks fetch: {:?} ({} items)", t.elapsed(), raw_tracks.len());
+    log::info!(
+        "[qbz-qt][perf] favorites tracks fetch: {:?} ({} items)",
+        t.elapsed(),
+        raw_tracks.len()
+    );
     let t = Instant::now();
     let (raw_albums, albums_total) = fetch_favorites(runtime, "albums").await?;
-    log::info!("[qbz-qt][perf] favorites albums fetch: {:?} ({} items)", t.elapsed(), raw_albums.len());
+    log::info!(
+        "[qbz-qt][perf] favorites albums fetch: {:?} ({} items)",
+        t.elapsed(),
+        raw_albums.len()
+    );
     let t = Instant::now();
     let (raw_artists, artists_total) = fetch_favorites(runtime, "artists").await?;
-    log::info!("[qbz-qt][perf] favorites artists fetch: {:?} ({} items)", t.elapsed(), raw_artists.len());
+    log::info!(
+        "[qbz-qt][perf] favorites artists fetch: {:?} ({} items)",
+        t.elapsed(),
+        raw_artists.len()
+    );
     let t = Instant::now();
     let (raw_labels, labels_total) = fetch_favorites(runtime, "labels").await?;
-    log::info!("[qbz-qt][perf] favorites labels fetch: {:?} ({} items)", t.elapsed(), raw_labels.len());
+    log::info!(
+        "[qbz-qt][perf] favorites labels fetch: {:?} ({} items)",
+        t.elapsed(),
+        raw_labels.len()
+    );
 
     // Playlists (owned + followed + locally hearted).
     let t = Instant::now();
@@ -715,13 +781,23 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
         }
     }
     let playlists_total = pl_favorites.len() as i64;
-    log::info!("[qbz-qt][perf] playlists fetch: {:?} ({} fav / {} following)", t.elapsed(), pl_favorites.len(), following.len());
+    log::info!(
+        "[qbz-qt][perf] playlists fetch: {:?} ({} fav / {} following)",
+        t.elapsed(),
+        pl_favorites.len(),
+        following.len()
+    );
 
     // Purchases (group "purchases") — best-effort: a purchase-less account
     // returns empty; a failure must not sink the library.
     let t = Instant::now();
     let (purchase_albums, purchase_tracks) = fetch_purchases(runtime).await;
-    log::info!("[qbz-qt][perf] purchases fetch: {:?} ({} albums / {} tracks)", t.elapsed(), purchase_albums.len(), purchase_tracks.len());
+    log::info!(
+        "[qbz-qt][perf] purchases fetch: {:?} ({} albums / {} tracks)",
+        t.elapsed(),
+        purchase_albums.len(),
+        purchase_tracks.len()
+    );
 
     log::info!("[qbz-qt][perf] total fetch wall: {:?}", t_fetch.elapsed());
 
@@ -791,22 +867,24 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
     let labels: Vec<FavLabel> = parse_items(raw_labels, "label");
     let n = labels.len();
     for (i, l) in labels.into_iter().enumerate() {
-        feed.push(FeedItem {
-            kind: "label".into(),
-            group: "following".into(),
-            source: "qobuz".into(),
-            subtitle: match l.albums_count {
-                Some(c) if c > 0 => format!("{c} albums"),
-                _ => String::new(),
-            },
-            id: l.id.to_string(),
-            title: l.name,
-            image_url: extract_label_image(l.image.as_ref()),
-            is_favorite: true,
-            added_rank: rank(i, n),
-            ..Default::default()
-        }
-        .keyed());
+        feed.push(
+            FeedItem {
+                kind: "label".into(),
+                group: "following".into(),
+                source: "qobuz".into(),
+                subtitle: match l.albums_count {
+                    Some(c) if c > 0 => format!("{c} albums"),
+                    _ => String::new(),
+                },
+                id: l.id.to_string(),
+                title: l.name,
+                image_url: extract_label_image(l.image.as_ref()),
+                is_favorite: true,
+                added_rank: rank(i, n),
+                ..Default::default()
+            }
+            .keyed(),
+        );
     }
 
     // Local + Plex layer (show-local default ON; it bypasses the three Qobuz
@@ -828,20 +906,22 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
         let locals = local_favorites_list();
         let n = locals.len();
         for (i, lf) in locals.into_iter().enumerate() {
-            feed.push(FeedItem {
-                kind: lf.kind,
-                group: "local".into(),
-                source: lf.source,
-                subtitle: lf.subtitle,
-                artist: lf.artist.clone(),
-                image_url: lf.artwork_url,
-                is_favorite: true,
-                added_rank: rank(i, n),
-                id: lf.id,
-                title: lf.title,
-                ..Default::default()
-            }
-            .keyed());
+            feed.push(
+                FeedItem {
+                    kind: lf.kind,
+                    group: "local".into(),
+                    source: lf.source,
+                    subtitle: lf.subtitle,
+                    artist: lf.artist.clone(),
+                    image_url: lf.artwork_url,
+                    is_favorite: true,
+                    added_rank: rank(i, n),
+                    id: lf.id,
+                    title: lf.title,
+                    ..Default::default()
+                }
+                .keyed(),
+            );
         }
     }
 
@@ -1003,8 +1083,7 @@ fn all_local_feed_blocking() -> Vec<FeedItem> {
     // wins (it is the one with albums behind it). ---
     let local_names: Vec<String> = with_db(|db| {
         db.get_artists_with_filter(
-            /* include_qobuz_downloads */ true,
-            /* exclude_network_folders */ false,
+            /* include_qobuz_downloads */ true, /* exclude_network_folders */ false,
         )
     })
     .unwrap_or_default()
@@ -1148,8 +1227,7 @@ async fn fetch_purchases(
     else {
         return (Vec::new(), Vec::new());
     };
-    let filtered =
-        qbz_offline_cache::purchases_service::filter_purchase_response(response, "");
+    let filtered = qbz_offline_cache::purchases_service::filter_purchase_response(response, "");
     let albums = filtered
         .albums
         .items
@@ -1191,7 +1269,13 @@ async fn fetch_purchases(
             let (img, alb, aid) = t
                 .album
                 .as_ref()
-                .map(|a| (a.image.best().cloned().unwrap_or_default(), a.title.clone(), a.id.clone()))
+                .map(|a| {
+                    (
+                        a.image.best().cloned().unwrap_or_default(),
+                        a.title.clone(),
+                        a.id.clone(),
+                    )
+                })
                 .unwrap_or_default();
             let tier = if t.hires { "hires" } else { "cd" };
             FeedItem {
@@ -1814,8 +1898,15 @@ pub(crate) fn feed_track_to_queue(item: &FeedItem) -> Option<QueueTrack> {
 /// re-reports the real duration once the track resolves).
 fn duration_secs(mmss: &str) -> u64 {
     let mut parts = mmss.split(':');
-    parts.next().and_then(|m| m.parse::<u64>().ok()).unwrap_or(0) * 60
-        + parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0)
+    parts
+        .next()
+        .and_then(|m| m.parse::<u64>().ok())
+        .unwrap_or(0)
+        * 60
+        + parts
+            .next()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0)
 }
 
 /// `playback.rs::order_by_visible` (:3408-3428), ported: build the queue in
@@ -1840,7 +1931,9 @@ fn order_by_visible(
         .filter_map(|id| by_id.get(id.as_str()).copied())
         .filter_map(feed_track_to_queue)
         .collect();
-    let idx = ordered.iter().position(|t| t.id.to_string() == clicked_id)?;
+    let idx = ordered
+        .iter()
+        .position(|t| t.id.to_string() == clicked_id)?;
     Some((ordered, idx))
 }
 
@@ -2043,7 +2136,9 @@ mod tests {
         // starting the queue at the wrong row.
         assert!(order_by_visible(&feed, &visible, "2").is_none());
         // A local row is unresolvable even when it IS visible.
-        assert!(order_by_visible(&feed, &["/home/u/x.flac".to_string()], "/home/u/x.flac").is_none());
+        assert!(
+            order_by_visible(&feed, &["/home/u/x.flac".to_string()], "/home/u/x.flac").is_none()
+        );
         // Nothing visible at all.
         assert!(order_by_visible(&feed, &[], "1").is_none());
     }

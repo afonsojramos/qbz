@@ -575,6 +575,19 @@ Item {
         }
     }
 
+    // Opening ad-hoc media is a GLOBAL navigation action. The old listener
+    // lived only inside LocalLibraryView, so opening a folder/disc from
+    // Settings or another section completed successfully but left the user on
+    // the old page. The sequence changes only for an explicit user open (not
+    // boot rehydrate); navigateToTab avoids duplicate history when Local
+    // Library is already mounted and applies the tab after a fresh mount.
+    Connections {
+        target: QbzLocal
+        function onLocalEphemeralOpenSeqChanged() {
+            QbzShell.navigateToTab("local", "ephemeral")
+        }
+    }
+
     Binding {
         target: viewLoader.item
         property: "activeTab"

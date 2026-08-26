@@ -254,29 +254,35 @@ Rectangle {
                 return root.discRows[i]
         return null
     }
+    function discArt(disc) {
+        if (!disc) return ""
+        return (disc.artKey && root.artMap[disc.artKey])
+            || disc.cover || ""
+    }
     /// TRUE when the discs genuinely have DIFFERENT covers.
     ///
-    /// `DiscRow.cover` is resolved in Rust from each disc's OWN folder, on
-    /// purpose: the scan-time artwork path is biased to the album ROOT, so a
-    /// box always reports one shared image and a thumbnail drawn from it would
-    /// be N copies of the same picture. This still guards the honest case — a
-    /// box that really does ship one cover for every disc — where drawing them
-    /// is noise rather than information.
+    /// The id-keyed path handles embedded and remote art; `DiscRow.cover` is
+    /// the direct local-file fallback. This still guards the honest case — a
+    /// box that really ships one shared cover — where drawing N copies is noise.
     readonly property bool discArtDistinct: {
         var seen = {}
         for (var i = 0; i < root.discRows.length; i++) {
-            var p = root.discRows[i].cover || ""
+            var p = root.discArt(root.discRows[i])
             if (p === "") return false
             if (seen[p]) return false
             seen[p] = true
         }
         return root.discRows.length > 1
     }
-    onAlbumChanged: {
-        if (album && album.artKey) {
-            QbzLocal.artworkWindow(JSON.stringify([album.artKey]))
-        }
+    function requestHeaderArtwork() {
+        var keys = []
+        if (album && album.artKey) keys.push(album.artKey)
+        for (var i = 0; i < discRows.length; i++)
+            if (discRows[i].artKey) keys.push(discRows[i].artKey)
+        if (keys.length > 0) QbzLocal.artworkWindow(JSON.stringify(keys))
     }
+    onAlbumChanged: requestHeaderArtwork()
+    onDiscRowsChanged: requestHeaderArtwork()
 
     // ------------------------- skeleton pulse ----------------------------
     // ONE 900ms Timer for the whole page. GATING RULE: freeze on NOT VISIBLE
@@ -634,7 +640,7 @@ Rectangle {
                                 // folder names contain '#'.
                                 source: {
                                     var d = root.discInfo(root.discHeader(trackBlock.index))
-                                    return d ? (d.cover || "") : ""
+                                    return root.discArt(d)
                                 }
                             }
                             Text {
@@ -732,8 +738,8 @@ Rectangle {
                                     // no new component (rule 5).
                                     selectMode: root.multiSelect
                                     checked: root.selected[trackBlock.modelData.id] === true
-                                    onPlayRequested: QbzLocal.playAlbumTrack(
-                                        root.album.id, trackBlock.modelData.id)
+                                    onPlayRequested: QbzLocal.albumSelectedAction(
+                                        "play", trackBlock.modelData.id)
                                     onEnqueueRequested: function (m) {
                                         QbzLocal.enqueue("track", trackBlock.modelData.id, m)
                                     }

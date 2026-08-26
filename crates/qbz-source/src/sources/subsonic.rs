@@ -191,9 +191,11 @@ impl Source for SubsonicSource {
                         .and_then(|r| r.ok())
                         .flatten()
                     {
-                        Some(t) => {
-                            Ok(MediaRef::new(SourceId::SUBSONIC, ItemKind::Track, &t.item_id))
-                        }
+                        Some(t) => Ok(MediaRef::new(
+                            SourceId::SUBSONIC,
+                            ItemKind::Track,
+                            &t.item_id,
+                        )),
                         None => Err(SourceError::NotFound {
                             by: SourceId::SUBSONIC,
                             kind: ItemKind::Track,
@@ -238,11 +240,23 @@ impl Source for SubsonicSource {
     }
 
     fn artwork(&self, item: &MediaRef, size: ArtSize) -> ArtRef {
-        match self
-            .rows(item)
-            .iter()
-            .find_map(|t| t.artwork_token.clone().filter(|s| !s.is_empty()))
-        {
+        let rows = self.rows(item);
+        let collection_first = item.kind == ItemKind::Album;
+        let find = |collection: bool| {
+            rows.iter().find_map(|track| {
+                let token = if collection {
+                    &track.collection_artwork_token
+                } else {
+                    &track.artwork_token
+                };
+                token.clone().filter(|value| !value.is_empty())
+            })
+        };
+        match if collection_first {
+            find(true).or_else(|| find(false))
+        } else {
+            find(false).or_else(|| find(true))
+        } {
             Some(token) => self.artwork_token(&token, size),
             None => ArtRef::None,
         }
@@ -298,6 +312,7 @@ impl Source for SubsonicSource {
             duration_secs: track.duration_secs,
             start_secs: 0,
             log_tag: "SUBSONIC",
+            request_headers: Vec::new(),
         })
     }
 
@@ -385,10 +400,10 @@ mod tests {
     #[test]
     fn it_never_claims_another_sources_id() {
         for foreign in [
-            (1i64 << 40) | 44_440,                 // Plex
-            RemoteSource::Jellyfin.namespace(7),   // the neighbour
-            (1i64 << 48) + 10,                     // ephemeral
-            2954,                                  // a local rowid
+            (1i64 << 40) | 44_440,               // Plex
+            RemoteSource::Jellyfin.namespace(7), // the neighbour
+            (1i64 << 48) + 10,                   // ephemeral
+            2954,                                // a local rowid
         ] {
             assert!(
                 !recognises(&RawRef {
@@ -413,7 +428,10 @@ mod tests {
             id: "subsonic:al-abc".into(),
             ..Default::default()
         };
-        assert!(recognises(&raw), "an unlabelled prefixed key was not recognised");
+        assert!(
+            recognises(&raw),
+            "an unlabelled prefixed key was not recognised"
+        );
         let m = s.claim(&raw).unwrap().unwrap();
         assert_eq!(m.id(), "al-abc", "the prefix was carried inward");
         // A bare id with the source word still works.
@@ -436,7 +454,13 @@ mod tests {
             })
             .unwrap()
             .unwrap_err();
-        assert!(matches!(err, SourceError::BadIdShape { by: SourceId::SUBSONIC, .. }));
+        assert!(matches!(
+            err,
+            SourceError::BadIdShape {
+                by: SourceId::SUBSONIC,
+                ..
+            }
+        ));
     }
 
     /// ...and it must not answer for the NEIGHBOUR's prefix.
@@ -480,9 +504,15 @@ mod tests {
             ArtRef::Fetch { url, cache_key } => {
                 assert_ne!(url, cache_key, "the url must not be the cache key here");
                 assert_eq!(cache_key, "subsonic:al-abc_59fec8ff");
-                assert!(!cache_key.contains("t="), "a credential reached the cache key");
+                assert!(
+                    !cache_key.contains("t="),
+                    "a credential reached the cache key"
+                );
                 assert!(url.contains("getCoverArt.view"));
-                assert!(url.contains("t="), "an unauthenticated cover request is refused");
+                assert!(
+                    url.contains("t="),
+                    "an unauthenticated cover request is refused"
+                );
                 assert!(url.contains("size=256"));
             }
             other => panic!("expected Fetch, got {other:?}"),
@@ -507,7 +537,10 @@ mod tests {
             SubsonicSource::new().artwork_token("al-x", ArtSize::Card),
             ArtRef::Unavailable(_)
         ));
-        assert!(matches!(connected().artwork_token("", ArtSize::Card), ArtRef::None));
+        assert!(matches!(
+            connected().artwork_token("", ArtSize::Card),
+            ArtRef::None
+        ));
     }
 
     #[tokio::test]
@@ -541,7 +574,13 @@ mod tests {
         let s = SubsonicSource::new();
         let item = MediaRef::new(SourceId::SUBSONIC, ItemKind::Track, "x");
         let err = s.playback(&item, &qt(0, 0)).await.unwrap_err();
-        assert!(matches!(err, SourceError::NotConfigured { by: SourceId::SUBSONIC, .. }));
+        assert!(matches!(
+            err,
+            SourceError::NotConfigured {
+                by: SourceId::SUBSONIC,
+                ..
+            }
+        ));
     }
 
     /// THE BARCODE THAT BROKE FOUR ALBUMS AT ONCE (2026-08-22).

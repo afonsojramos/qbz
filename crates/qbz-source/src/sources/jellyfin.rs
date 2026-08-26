@@ -194,9 +194,11 @@ impl Source for JellyfinSource {
                         .and_then(|r| r.ok())
                         .flatten()
                     {
-                        Some(t) => {
-                            Ok(MediaRef::new(SourceId::JELLYFIN, ItemKind::Track, &t.item_id))
-                        }
+                        Some(t) => Ok(MediaRef::new(
+                            SourceId::JELLYFIN,
+                            ItemKind::Track,
+                            &t.item_id,
+                        )),
                         // The row is gone from the cache: a named error at the
                         // moment of the mistake, not a 404 from the server two
                         // layers down.
@@ -245,20 +247,26 @@ impl Source for JellyfinSource {
     }
 
     fn artwork(&self, item: &MediaRef, size: ArtSize) -> ArtRef {
-        let Some(token) = self
-            .rows(item)
-            .iter()
-            .find_map(|t| t.artwork_token.clone().filter(|s| !s.is_empty()))
-        else {
+        let rows = self.rows(item);
+        let collection_first = item.kind == ItemKind::Album;
+        let find = |collection: bool| {
+            rows.iter().find_map(|track| {
+                let token = if collection {
+                    &track.collection_artwork_token
+                } else {
+                    &track.artwork_token
+                };
+                token.clone().filter(|value| !value.is_empty())
+            })
+        };
+        let Some(token) = (if collection_first {
+            find(true).or_else(|| find(false))
+        } else {
+            find(false).or_else(|| find(true))
+        }) else {
             return ArtRef::None;
         };
-        // The album id is what the image hangs off; the token only versions it.
-        let album_id = self
-            .rows(item)
-            .first()
-            .map(|t| t.album_id.clone())
-            .unwrap_or_default();
-        self.image_ref(&album_id, Some(&token), size)
+        self.artwork_token(&token, size)
     }
 
     fn artwork_token(&self, token: &str, size: ArtSize) -> ArtRef {
@@ -267,14 +275,17 @@ impl Source for JellyfinSource {
         // has both; this arm exists so a producer that only kept the tag gets
         // an honest `None` rather than a broken URL.
         //
-        // A producer that stamped `"<albumId>/<tag>"` — which is what the Local
-        // Library row mapper will do — is addressable, so that shape resolves.
+        // A producer that stamped `"<itemId>/<tag>"` — where item may be the
+        // audio row for disc art or its MusicAlbum for collection art — is
+        // addressable. An empty tag is valid and means "do not cache-bust".
         let token = token.trim();
         if token.is_empty() {
             return ArtRef::None;
         }
         match token.split_once('/') {
-            Some((album_id, tag)) => self.image_ref(album_id, Some(tag), size),
+            Some((item_id, tag)) => {
+                self.image_ref(item_id, (!tag.trim().is_empty()).then_some(tag), size)
+            }
             None => ArtRef::None,
         }
     }
@@ -307,6 +318,7 @@ impl Source for JellyfinSource {
             duration_secs: track.duration_secs,
             start_secs: 0,
             log_tag: "JELLYFIN",
+            request_headers: Vec::new(),
         })
     }
 
@@ -443,10 +455,10 @@ mod tests {
     #[test]
     fn it_never_claims_another_sources_id() {
         for foreign in [
-            (1i64 << 40) | 44_440,      // Plex
+            (1i64 << 40) | 44_440, // Plex
             RemoteSource::Subsonic.namespace(7),
-            (1i64 << 48) + 10,          // ephemeral
-            2954,                       // a local_tracks rowid
+            (1i64 << 48) + 10, // ephemeral
+            2954,              // a local_tracks rowid
         ] {
             assert!(
                 !recognises(&RawRef {
@@ -458,7 +470,11 @@ mod tests {
             );
         }
         // A Qobuz album id, and a local group key.
-        assert!(!recognises(&RawRef::new("qobuz", ItemKind::Album, "0060254702523")));
+        assert!(!recognises(&RawRef::new(
+            "qobuz",
+            ItemKind::Album,
+            "0060254702523"
+        )));
         assert!(!recognises(&RawRef {
             kind: Some(ItemKind::Album),
             id: "HIT ME HARD AND SOFT|Billie Eilish".into(),
@@ -478,7 +494,10 @@ mod tests {
             id: "jellyfin:alb-1".into(),
             ..Default::default()
         };
-        assert!(recognises(&raw), "an unlabelled prefixed key was not recognised");
+        assert!(
+            recognises(&raw),
+            "an unlabelled prefixed key was not recognised"
+        );
         let m = s.claim(&raw).unwrap().unwrap();
         assert_eq!(m.id(), "alb-1", "the prefix was carried inward");
         // A bare id with the source word still works.
@@ -501,7 +520,13 @@ mod tests {
             })
             .unwrap()
             .unwrap_err();
-        assert!(matches!(err, SourceError::BadIdShape { by: SourceId::JELLYFIN, .. }));
+        assert!(matches!(
+            err,
+            SourceError::BadIdShape {
+                by: SourceId::JELLYFIN,
+                ..
+            }
+        ));
     }
 
     /// ...and it must not answer for the NEIGHBOUR's prefix.
@@ -531,7 +556,13 @@ mod tests {
             })
             .unwrap()
             .unwrap_err();
-        assert!(matches!(err, SourceError::BadIdShape { by: SourceId::JELLYFIN, .. }));
+        assert!(matches!(
+            err,
+            SourceError::BadIdShape {
+                by: SourceId::JELLYFIN,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -546,7 +577,13 @@ mod tests {
             })
             .unwrap()
             .unwrap_err();
-        assert!(matches!(err, SourceError::Unsupported { by: SourceId::JELLYFIN, .. }));
+        assert!(matches!(
+            err,
+            SourceError::Unsupported {
+                by: SourceId::JELLYFIN,
+                ..
+            }
+        ));
     }
 
     // ── artwork ────────────────────────────────────────────────────────────
@@ -559,7 +596,10 @@ mod tests {
         match s.artwork_token("alb-1/deadbeef", ArtSize::Card) {
             ArtRef::Fetch { url, cache_key } => {
                 assert_eq!(url, cache_key, "a stable url should key on itself");
-                assert!(!url.contains("tok"), "the access token leaked into a cover url");
+                assert!(
+                    !url.contains("tok"),
+                    "the access token leaked into a cover url"
+                );
                 assert!(url.contains("/Items/alb-1/Images/Primary"));
                 assert!(url.contains("tag=deadbeef"));
                 assert!(url.contains("maxWidth=256"));
@@ -570,6 +610,13 @@ mod tests {
         match s.artwork_token("alb-1/deadbeef", ArtSize::Full) {
             ArtRef::Fetch { url, .. } => assert!(url.contains("maxWidth=1024")),
             other => panic!("expected Fetch, got {other:?}"),
+        }
+        match s.artwork_token("alb-1/", ArtSize::Card) {
+            ArtRef::Fetch { url, .. } => {
+                assert!(url.contains("/Items/alb-1/Images/Primary"));
+                assert!(!url.contains("tag="));
+            }
+            other => panic!("expected tagless Fetch, got {other:?}"),
         }
     }
 
@@ -587,7 +634,10 @@ mod tests {
             connected().artwork_token("bare-tag", ArtSize::Card),
             ArtRef::None
         ));
-        assert!(matches!(connected().artwork_token("", ArtSize::Card), ArtRef::None));
+        assert!(matches!(
+            connected().artwork_token("", ArtSize::Card),
+            ArtRef::None
+        ));
     }
 
     // ── playback ───────────────────────────────────────────────────────────
@@ -606,7 +656,10 @@ mod tests {
                 ..
             } => {
                 assert!(url.contains("/Audio/srv-abc/stream?static=true"));
-                assert!(!url.contains("audioCodec"), "a codec parameter IS a transcode");
+                assert!(
+                    !url.contains("audioCodec"),
+                    "a codec parameter IS a transcode"
+                );
                 assert_eq!(play_id, 42);
                 assert_eq!(duration_secs, 188);
                 assert_eq!(log_tag, "JELLYFIN");
@@ -620,7 +673,13 @@ mod tests {
         let s = JellyfinSource::new();
         let item = MediaRef::new(SourceId::JELLYFIN, ItemKind::Track, "x");
         let err = s.playback(&item, &qt(0, 0)).await.unwrap_err();
-        assert!(matches!(err, SourceError::NotConfigured { by: SourceId::JELLYFIN, .. }));
+        assert!(matches!(
+            err,
+            SourceError::NotConfigured {
+                by: SourceId::JELLYFIN,
+                ..
+            }
+        ));
     }
 
     /// An ALBUM cannot be played directly — the caller expands it to tracks
@@ -630,7 +689,13 @@ mod tests {
         let s = connected();
         let item = MediaRef::new(SourceId::JELLYFIN, ItemKind::Album, "alb");
         let err = s.playback(&item, &qt(0, 0)).await.unwrap_err();
-        assert!(matches!(err, SourceError::Unsupported { by: SourceId::JELLYFIN, .. }));
+        assert!(matches!(
+            err,
+            SourceError::Unsupported {
+                by: SourceId::JELLYFIN,
+                ..
+            }
+        ));
     }
 
     /// A disabled toggle is the same as no credentials — the source must not

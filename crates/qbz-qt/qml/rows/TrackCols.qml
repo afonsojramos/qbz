@@ -61,6 +61,8 @@ QtObject {
     readonly property int colNumber: 32
     /// Artwork thumbnail (TrackRow.slint:336, show-artwork arm).
     readonly property int colArt: 36
+    /// Origin mark for mixed/offline playlist rows.
+    readonly property int colSource: 22
     /// Album link column (TrackRow.slint:540, show-album arm).
     readonly property int colAlbum: 220
     /// Duration (TrackRow.slint:569).
@@ -79,11 +81,12 @@ QtObject {
     /// `reorder` is TRAILING and optional on all three functions: it landed
     /// after the call sites did, and `undefined` is falsy, so a caller that
     /// does not know about the gutter keeps its old answer exactly.
-    function fixedWidth(artwork, albumCol, favorite, download, menu, reorder) {
+    function fixedWidth(artwork, albumCol, favorite, download, menu, reorder, source) {
         return colNumber + (artwork ? colArt : 0) + (albumCol ? colAlbum : 0)
             + colDuration + colQuality
             + (favorite ? colFavorite : 0) + (download ? colDownload : 0)
             + (menu ? colMenu : 0) + (reorder ? colReorder : 0)
+            + (source ? colSource : 0)
     }
 
     /// Sum of the inter-column gaps. The unconditional cells are number,
@@ -91,17 +94,18 @@ QtObject {
     /// (QML's Row skips invisible children entirely — no cell, no gap — and
     /// so does Slint's `if` in a HorizontalLayout, which is why the count is
     /// arm-dependent on both sides.)
-    function gapWidth(artwork, albumCol, favorite, download, menu, reorder) {
+    function gapWidth(artwork, albumCol, favorite, download, menu, reorder, source) {
         return (3 + (artwork ? 1 : 0) + (albumCol ? 1 : 0) + (favorite ? 1 : 0)
-            + (download ? 1 : 0) + (menu ? 1 : 0) + (reorder ? 1 : 0)) * gap
+            + (download ? 1 : 0) + (menu ? 1 : 0) + (reorder ? 1 : 0)
+            + (source ? 1 : 0)) * gap
     }
 
     /// The stretch column. `rowWidth` is the OUTER width of the row (the
     /// padding is subtracted here), so a header and a row that are the same
     /// width place every column at the same x.
-    function titleWidth(rowWidth, artwork, albumCol, favorite, download, menu, reorder) {
+    function titleWidth(rowWidth, artwork, albumCol, favorite, download, menu, reorder, source) {
         return Math.max(0, rowWidth - 2 * padH
-            - fixedWidth(artwork, albumCol, favorite, download, menu, reorder)
-            - gapWidth(artwork, albumCol, favorite, download, menu, reorder))
+            - fixedWidth(artwork, albumCol, favorite, download, menu, reorder, source)
+            - gapWidth(artwork, albumCol, favorite, download, menu, reorder, source))
     }
 }

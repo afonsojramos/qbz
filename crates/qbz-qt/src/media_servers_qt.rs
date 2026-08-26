@@ -226,7 +226,8 @@ pub async fn probe(kind: MediaServerKind, url: &str) -> Result<String, String> {
             // proves a Subsonic server answered at this address, and that is
             // exactly what the test is for.
             let creds = qbz_subsonic::Credentials::new("", "", "probe");
-            let client = qbz_subsonic::SubsonicClient::new(url, creds).map_err(|e| e.to_string())?;
+            let client =
+                qbz_subsonic::SubsonicClient::new(url, creds).map_err(|e| e.to_string())?;
             match client.ping().await {
                 Ok(i) => Ok(format!("{} {}", i.kind, i.version)),
                 // A protocol-level error means a Subsonic server IS there.
@@ -257,10 +258,9 @@ pub async fn connect(
             // The DeviceId must be the PERSISTED one: authenticating under a
             // fresh id every time revokes the previous token and litters the
             // server's device list. `init_for_user` minted it.
-            let session =
-                qbz_jellyfin::authenticate(url, &cfg.device_id, username, password)
-                    .await
-                    .map_err(|e| e.to_string())?;
+            let session = qbz_jellyfin::authenticate(url, &cfg.device_id, username, password)
+                .await
+                .map_err(|e| e.to_string())?;
             let info = qbz_jellyfin::probe(url).await.ok();
             cfg.base_url = qbz_jellyfin::normalize_base_url(url);
             cfg.token = session.access_token;
@@ -274,7 +274,8 @@ pub async fn connect(
         }
         MediaServerKind::Subsonic => {
             let creds = qbz_subsonic::Credentials::new(username, password, &cfg.salt);
-            let client = qbz_subsonic::SubsonicClient::new(url, creds).map_err(|e| e.to_string())?;
+            let client =
+                qbz_subsonic::SubsonicClient::new(url, creds).map_err(|e| e.to_string())?;
             let info = client.ping().await.map_err(|e| e.to_string())?;
             if !info.open_subsonic {
                 // Not fatal: the library still lists and still plays. But
@@ -357,6 +358,7 @@ pub fn cached_to_local_track(t: qbz_media_cache::CachedTrack) -> qbz_library::Lo
         sample_rate: t.sample_rate_hz.unwrap_or(0) as f64,
         year: t.year,
         artwork_path: t.artwork_token,
+        collection_artwork_path: t.collection_artwork_token,
         source: Some(t.source),
         ..Default::default()
     }
@@ -442,7 +444,10 @@ pub fn cached_track_counts() -> (i64, i64) {
             .with(|c| qbz_media_cache::count(c, source).unwrap_or(0) as i64)
             .unwrap_or(0)
     };
-    (count(MediaServerKind::Jellyfin), count(MediaServerKind::Subsonic))
+    (
+        count(MediaServerKind::Jellyfin),
+        count(MediaServerKind::Subsonic),
+    )
 }
 
 pub fn cached_track_count() -> i64 {
@@ -467,8 +472,7 @@ pub fn cached_artists() -> Vec<(&'static str, qbz_media_cache::CachedArtist)> {
                 qbz_source::registry().subsonic().cache(),
             ),
         };
-        if let Some(rows) =
-            handle.with(|c| qbz_media_cache::artists(c, source).unwrap_or_default())
+        if let Some(rows) = handle.with(|c| qbz_media_cache::artists(c, source).unwrap_or_default())
         {
             out.extend(rows.into_iter().map(|row| (kind.as_str(), row)));
         }
@@ -483,6 +487,9 @@ pub fn search_tracks_page(
     offset: u64,
     limit: u64,
     sort: &str,
+    formats: &[String],
+    other_formats: bool,
+    quality_tiers: &[String],
 ) -> Vec<qbz_library::LocalTrack> {
     let Some(kind) = MediaServerKind::from_word(source_word) else {
         return Vec::new();
@@ -502,8 +509,18 @@ pub fn search_tracks_page(
     };
     let rows = handle
         .with(|c| {
-            qbz_media_cache::search_page(c, source, query, offset, limit, sort)
-                .unwrap_or_default()
+            qbz_media_cache::search_page_filtered(
+                c,
+                source,
+                query,
+                offset,
+                limit,
+                sort,
+                formats,
+                other_formats,
+                quality_tiers,
+            )
+            .unwrap_or_default()
         })
         .unwrap_or_default();
     if source == qbz_media_cache::RemoteSource::Jellyfin {
@@ -532,8 +549,8 @@ pub fn search_tracks(query: &str, limit: Option<u32>) -> Vec<qbz_library::LocalT
                 qbz_source::registry().subsonic().cache(),
             ),
         };
-        if let Some(rows) = handle
-            .with(|c| qbz_media_cache::search(c, source, query, limit).unwrap_or_default())
+        if let Some(rows) =
+            handle.with(|c| qbz_media_cache::search(c, source, query, limit).unwrap_or_default())
         {
             out.extend(rows.into_iter().map(cached_to_local_track));
         }
@@ -555,7 +572,10 @@ mod tests {
         let b = random_hex(16);
         assert_eq!(a.len(), 16);
         assert_eq!(random_hex(8).len(), 8);
-        assert_ne!(a, b, "two draws collided — every install would share a session");
+        assert_ne!(
+            a, b,
+            "two draws collided — every install would share a session"
+        );
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }

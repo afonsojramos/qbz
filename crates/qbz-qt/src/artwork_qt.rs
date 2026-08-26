@@ -184,10 +184,15 @@ pub fn classify(url: &str) -> ArtUrl {
     // sniffing.
     if let Some((word, token)) = url.split_once(':') {
         if let Some(id) = qbz_source::SourceId::from_word(word) {
-            if matches!(id, qbz_source::SourceId::JELLYFIN | qbz_source::SourceId::SUBSONIC) {
-                return match qbz_source::registry()
-                    .artwork_token(id, token, qbz_source::ArtSize::Card)
-                {
+            if matches!(
+                id,
+                qbz_source::SourceId::JELLYFIN | qbz_source::SourceId::SUBSONIC
+            ) {
+                return match qbz_source::registry().artwork_token(
+                    id,
+                    token,
+                    qbz_source::ArtSize::Card,
+                ) {
                     qbz_source::ArtRef::Fetch { url, .. } => ArtUrl::Http(url),
                     // The server is not connected. Reuse the Plex arm's answer:
                     // "the art exists, it cannot be resolved right now", so the
@@ -563,18 +568,18 @@ fn np_feed_url(url: &str) -> String {
 
 /// Attach the current track's artwork to the NowPlayingModel: a disk hit (or
 /// a local file, which is always a hit) applies immediately; a miss downloads
-/// in the background and then republishes.
-pub fn attach_now_playing(url: &str) {
+/// in the background and then republishes both Qt and MPRIS metadata.
+pub fn attach_now_playing(track: &qbz_models::QueueTrack, title: &str, album: &str) {
     // D2 track edge: the size-aware large feed belongs to the track that just
     // ended. Clear it, and re-resolve at the pending bucket when a panel has
     // one outstanding (the QML side only calls `requestNpArtworkSize` on
     // bucket/visibility changes, so without this kick a track change with a
     // settled window would leave the immersive art on the small feed).
     restart_now_playing_large();
-    if url.is_empty() {
+    let Some(url) = track.artwork_url.as_deref().filter(|url| !url.is_empty()) else {
         crate::now_playing::set_artwork_path(String::new());
         return;
-    }
+    };
     let feed = np_feed_url(url);
     let hit = cached_path(&feed);
     if !hit.is_empty() {
@@ -590,12 +595,21 @@ pub fn attach_now_playing(url: &str) {
         crate::now_playing::set_artwork_path(String::new());
         return;
     }
+    let expected_track_id = track.id;
+    let track = track.clone();
+    let title = title.to_string();
+    let album = album.to_string();
     crate::spawn(async move {
         download_missing(vec![feed.clone()]).await;
         let path = cached_path(&feed);
-        if !path.is_empty() {
-            crate::now_playing::set_artwork_path(path);
+        // Downloads can outlive their track. Publishing an old completion
+        // would paint the next song with the previous cover and would also
+        // overwrite its MPRIS metadata, so both consumers share this guard.
+        if path.is_empty() || crate::now_playing::art_seed().track_id != expected_track_id {
+            return;
         }
+        crate::now_playing::set_artwork_path(path);
+        crate::media_controls_qt::refresh_now_playing_artwork(&track, &title, &album);
     });
 }
 
@@ -755,7 +769,11 @@ async fn resolve_large(seed: &crate::now_playing::ArtSeed, bucket: u32) -> Strin
             return String::new();
         }
         if let Some(upgraded) = qbz_models::qobuz_cover_at_px(&seed.url, bucket) {
-            if NP_LARGE_NEG.read().ok().is_some_and(|n| n.contains(&upgraded)) {
+            if NP_LARGE_NEG
+                .read()
+                .ok()
+                .is_some_and(|n| n.contains(&upgraded))
+            {
                 return String::new();
             }
             let hit = cached_path(&upgraded);
@@ -794,11 +812,12 @@ async fn resolve_large(seed: &crate::now_playing::ArtSeed, bucket: u32) -> Strin
     // when smaller). Blocking — off the async executor.
     if let ArtUrl::LocalFile(path) = classify(&seed.url) {
         let track_id = (seed.source == "local").then_some(seed.track_id);
-        let resolved =
-            tokio::task::spawn_blocking(move || crate::local_artwork::large_art_blocking(&path, track_id))
-                .await
-                .ok()
-                .flatten();
+        let resolved = tokio::task::spawn_blocking(move || {
+            crate::local_artwork::large_art_blocking(&path, track_id)
+        })
+        .await
+        .ok()
+        .flatten();
         return resolved
             .map(|p| file_url(&p.to_string_lossy()))
             .unwrap_or_default();
@@ -889,8 +908,14 @@ mod tests {
         // connected in a unit test, so that is what this asserts — the
         // CONNECTED shape is covered where the credentials live
         // (`JellyfinSource::artwork_token`).
-        assert_eq!(classify("jellyfin:alb-1/deadbeef"), ArtUrl::PlexUnconfigured);
-        assert_eq!(classify("subsonic:al-abc_59fec8ff"), ArtUrl::PlexUnconfigured);
+        assert_eq!(
+            classify("jellyfin:alb-1/deadbeef"),
+            ArtUrl::PlexUnconfigured
+        );
+        assert_eq!(
+            classify("subsonic:al-abc_59fec8ff"),
+            ArtUrl::PlexUnconfigured
+        );
         // A brand spelling folds the same way the source words do.
         assert_eq!(classify("navidrome:al-abc"), ArtUrl::PlexUnconfigured);
         // A Subsonic track cover id contains its own colon; only the FIRST

@@ -186,7 +186,10 @@ fn parse_url(normalized: &str) -> Option<(String, String, Option<String>)> {
             if !authority[idx + 1..].is_empty()
                 && authority[idx + 1..].chars().all(|c| c.is_ascii_digit()) =>
         {
-            (authority[..idx].to_string(), Some(authority[idx + 1..].to_string()))
+            (
+                authority[..idx].to_string(),
+                Some(authority[idx + 1..].to_string()),
+            )
         }
         _ => (authority.to_string(), None),
     };
@@ -244,7 +247,10 @@ pub fn resolve_base_url(server_url: &str) -> String {
     if scheme != "http" && scheme != "https" {
         return String::new();
     }
-    format!("{scheme}://{host}:{}", port.unwrap_or_else(|| "32400".into()))
+    format!(
+        "{scheme}://{host}:{}",
+        port.unwrap_or_else(|| "32400".into())
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +358,7 @@ pub fn map_cached_to_local_track(t: qbz_plex::PlexCachedTrack) -> LocalTrack {
         bit_depth: t.bit_depth,
         sample_rate: t.sample_rate as f64,
         artwork_path: t.artwork_path,
+        collection_artwork_path: t.collection_artwork_path,
         source: Some("plex".to_string()),
         ..Default::default()
     }
@@ -372,12 +379,23 @@ pub fn search_tracks_page(
     offset: u64,
     limit: u64,
     sort: &str,
+    formats: &[String],
+    other_formats: bool,
+    quality_tiers: &[String],
 ) -> Vec<LocalTrack> {
-    qbz_plex::plex_cache_search_tracks_page(query.trim().to_string(), offset, limit, sort)
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_cached_to_local_track)
-        .collect()
+    qbz_plex::plex_cache_search_tracks_page_filtered(
+        query.trim().to_string(),
+        offset,
+        limit,
+        sort,
+        formats,
+        other_formats,
+        quality_tiers,
+    )
+    .unwrap_or_default()
+    .into_iter()
+    .map(map_cached_to_local_track)
+    .collect()
 }
 
 /// One Plex album's tracks, by the legacy content hash (`plex:<hash>`) or the
@@ -575,9 +593,10 @@ async fn sync_inner() -> Result<usize, String> {
     let base = cfg.base_url.clone();
     let token = cfg.token.clone();
 
-    let sections = qbz_plex::plex_get_music_sections(base.trim().to_string(), token.trim().to_string())
-        .await
-        .map_err(|e| e.to_string())?;
+    let sections =
+        qbz_plex::plex_get_music_sections(base.trim().to_string(), token.trim().to_string())
+            .await
+            .map_err(|e| e.to_string())?;
 
     let machine_id = settings().machine_id;
     let server_id = (!machine_id.is_empty()).then_some(machine_id);
@@ -719,6 +738,9 @@ async fn sync_inner() -> Result<usize, String> {
             break;
         }
     }
-    log::info!("[qbz-qt] plex sync: {total} tracks across {} sections", selected.len());
+    log::info!(
+        "[qbz-qt] plex sync: {total} tracks across {} sections",
+        selected.len()
+    );
     Ok(total)
 }

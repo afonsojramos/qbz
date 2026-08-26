@@ -165,6 +165,9 @@ pub struct CachedTrack {
     pub disc_number: Option<u32>,
     pub duration_ms: u64,
     pub year: Option<u32>,
+    /// Complete genre set when the protocol exposes one. The singular field
+    /// remains the compatibility primary value and migration fallback.
+    pub genres: Vec<String>,
     pub genre: Option<String>,
     pub container: String,
     pub codec: Option<String>,
@@ -178,6 +181,10 @@ pub struct CachedTrack {
     /// Subsonic `coverArt` id. Never a URL: a URL embeds credentials and a
     /// size, and both change while the token does not.
     pub artwork_token: Option<String>,
+    /// Album/collection artwork kept separately from the item token. Servers
+    /// can expose a box cover and different artwork for each disc; combining
+    /// those layers makes one overwrite the other during synchronization.
+    pub collection_artwork_token: Option<String>,
     pub size_bytes: Option<u64>,
 }
 
@@ -282,6 +289,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             duration_ms     INTEGER NOT NULL DEFAULT 0,
             year            INTEGER,
             genre           TEXT,
+            genres_json     TEXT NOT NULL DEFAULT '[]',
             container       TEXT NOT NULL DEFAULT '',
             codec           TEXT,
             bit_depth       INTEGER,
@@ -289,6 +297,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             channels        INTEGER,
             bitrate_kbps    INTEGER,
             artwork_token   TEXT,
+            collection_artwork_token TEXT,
             size_bytes      INTEGER,
             observed_generation INTEGER NOT NULL DEFAULT 0,
             quality_hydrated INTEGER NOT NULL DEFAULT 0,
@@ -320,9 +329,11 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     // Forward-only additive migration for caches created before incremental
     // source generations and deferred Jellyfin quality existed.
     for column in [
+        "genres_json TEXT NOT NULL DEFAULT '[]'",
         "observed_generation INTEGER NOT NULL DEFAULT 0",
         "quality_hydrated INTEGER NOT NULL DEFAULT 0",
         "quality_retry_at INTEGER NOT NULL DEFAULT 0",
+        "collection_artwork_token TEXT",
     ] {
         let statement = format!("ALTER TABLE remote_cache_tracks ADD COLUMN {column}");
         let _ = conn.execute(&statement, []);
@@ -354,6 +365,14 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<CachedTrack> {
     let id = RemoteSource::from_word(&source)
         .map(|s| s.namespace(rowid))
         .unwrap_or(rowid);
+    let genre: Option<String> = row.get("genre")?;
+    let mut genres = serde_json::from_str::<Vec<String>>(&row.get::<_, String>("genres_json")?)
+        .unwrap_or_default();
+    if genres.is_empty() {
+        if let Some(value) = genre.as_ref().filter(|value| !value.trim().is_empty()) {
+            genres.push(value.trim().to_string());
+        }
+    }
     Ok(CachedTrack {
         id,
         source,
@@ -369,7 +388,8 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<CachedTrack> {
         disc_number: row.get::<_, Option<i64>>("disc_number")?.map(|v| v as u32),
         duration_ms: row.get::<_, i64>("duration_ms")? as u64,
         year: row.get::<_, Option<i64>>("year")?.map(|v| v as u32),
-        genre: row.get("genre")?,
+        genres,
+        genre,
         container: row.get("container")?,
         codec: row.get("codec")?,
         bit_depth: row.get::<_, Option<i64>>("bit_depth")?.map(|v| v as u32),
@@ -379,14 +399,30 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<CachedTrack> {
         channels: row.get::<_, Option<i64>>("channels")?.map(|v| v as u32),
         bitrate_kbps: row.get::<_, Option<i64>>("bitrate_kbps")?.map(|v| v as u32),
         artwork_token: row.get("artwork_token")?,
+        collection_artwork_token: row.get("collection_artwork_token")?,
         size_bytes: row.get::<_, Option<i64>>("size_bytes")?.map(|v| v as u64),
     })
 }
 
 const SELECT: &str = "SELECT id, source, item_id, server_id, library_id, title, artist, \
-     album_artist, album, album_id, track_number, disc_number, duration_ms, year, genre, \
+     album_artist, album, album_id, track_number, disc_number, duration_ms, year, genre, genres_json, \
      container, codec, bit_depth, sample_rate_hz, channels, bitrate_kbps, artwork_token, \
-     size_bytes FROM remote_cache_tracks";
+     collection_artwork_token, size_bytes FROM remote_cache_tracks";
+
+fn genres_json(track: &CachedTrack) -> String {
+    let mut genres = Vec::<String>::new();
+    for value in track.genres.iter().chain(track.genre.iter()) {
+        let value = value.trim();
+        if !value.is_empty()
+            && !genres
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(value))
+        {
+            genres.push(value.to_string());
+        }
+    }
+    serde_json::to_string(&genres).unwrap_or_else(|_| "[]".to_string())
+}
 
 /// UPSERT a batch of tracks in ONE transaction.
 ///
@@ -411,25 +447,28 @@ pub fn save_tracks(
             .prepare(
                 "INSERT INTO remote_cache_tracks
                    (source, item_id, server_id, library_id, title, artist, album_artist, album,
-                    album_id, track_number, disc_number, duration_ms, year, genre, container,
+                    album_id, track_number, disc_number, duration_ms, year, genre, genres_json, container,
                     codec, bit_depth, sample_rate_hz, channels, bitrate_kbps, artwork_token,
-                    size_bytes, quality_hydrated, quality_retry_at, updated_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,1,0,?23)
+                    collection_artwork_token, size_bytes, quality_hydrated, quality_retry_at, updated_at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,1,0,?25)
                  ON CONFLICT(source, item_id) DO UPDATE SET
                     server_id=excluded.server_id, library_id=excluded.library_id,
                     title=excluded.title, artist=excluded.artist,
                     album_artist=excluded.album_artist, album=excluded.album,
                     album_id=excluded.album_id, track_number=excluded.track_number,
                     disc_number=excluded.disc_number, duration_ms=excluded.duration_ms,
-                    year=excluded.year, genre=excluded.genre, container=excluded.container,
+                    year=excluded.year, genre=excluded.genre,
+                    genres_json=excluded.genres_json, container=excluded.container,
                     codec=excluded.codec, bit_depth=excluded.bit_depth,
                     sample_rate_hz=excluded.sample_rate_hz, channels=excluded.channels,
                     bitrate_kbps=excluded.bitrate_kbps, artwork_token=excluded.artwork_token,
+                    collection_artwork_token=excluded.collection_artwork_token,
                     size_bytes=excluded.size_bytes, quality_hydrated=1,
                     quality_retry_at=0, updated_at=excluded.updated_at",
             )
             .map_err(map_err("prepare insert"))?;
         for t in tracks {
+            let genres_json = genres_json(t);
             stmt.execute(params![
                 source.as_str(),
                 t.item_id,
@@ -445,6 +484,7 @@ pub fn save_tracks(
                 t.duration_ms as i64,
                 t.year.map(|v| v as i64),
                 t.genre,
+                genres_json,
                 t.container,
                 t.codec,
                 t.bit_depth.map(|v| v as i64),
@@ -452,6 +492,7 @@ pub fn save_tracks(
                 t.channels.map(|v| v as i64),
                 t.bitrate_kbps.map(|v| v as i64),
                 t.artwork_token,
+                t.collection_artwork_token,
                 t.size_bytes.map(|v| v as i64),
                 ts,
             ])
@@ -574,11 +615,11 @@ fn save_source_generation_page(
             .prepare(
                 "INSERT INTO remote_cache_tracks
                    (source,item_id,server_id,library_id,title,artist,album_artist,album,
-                    album_id,track_number,disc_number,duration_ms,year,genre,container,
+                    album_id,track_number,disc_number,duration_ms,year,genre,genres_json,container,
                     codec,bit_depth,sample_rate_hz,channels,bitrate_kbps,artwork_token,
-                    size_bytes,observed_generation,quality_hydrated,quality_retry_at,updated_at)
+                    collection_artwork_token,size_bytes,observed_generation,quality_hydrated,quality_retry_at,updated_at)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,
-                         ?16,?17,?18,?19,?20,?21,?22,?23,?24,0,?25)
+                         ?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,0,?27)
                  ON CONFLICT(source,item_id) DO UPDATE SET
                     server_id=excluded.server_id,library_id=excluded.library_id,
                     title=excluded.title,artist=excluded.artist,
@@ -586,6 +627,7 @@ fn save_source_generation_page(
                     album_id=excluded.album_id,track_number=excluded.track_number,
                     disc_number=excluded.disc_number,duration_ms=excluded.duration_ms,
                     year=excluded.year,genre=excluded.genre,
+                    genres_json=excluded.genres_json,
                     container=CASE WHEN excluded.quality_hydrated=1
                         THEN excluded.container
                         ELSE COALESCE(NULLIF(excluded.container,''),remote_cache_tracks.container)
@@ -600,13 +642,16 @@ fn save_source_generation_page(
                         THEN excluded.channels ELSE remote_cache_tracks.channels END,
                     bitrate_kbps=CASE WHEN excluded.quality_hydrated=1
                         THEN excluded.bitrate_kbps ELSE remote_cache_tracks.bitrate_kbps END,
-                    artwork_token=excluded.artwork_token,size_bytes=excluded.size_bytes,
+                    artwork_token=excluded.artwork_token,
+                    collection_artwork_token=excluded.collection_artwork_token,
+                    size_bytes=excluded.size_bytes,
                     observed_generation=excluded.observed_generation,
                     quality_hydrated=excluded.quality_hydrated,
                     quality_retry_at=0,updated_at=excluded.updated_at",
             )
             .map_err(map_err("prepare essential page"))?;
         for track in tracks {
+            let genres_json = genres_json(track);
             stmt.execute(params![
                 source.as_str(),
                 track.item_id,
@@ -622,6 +667,7 @@ fn save_source_generation_page(
                 track.duration_ms.min(i64::MAX as u64) as i64,
                 track.year.map(|value| value as i64),
                 track.genre,
+                genres_json,
                 track.container,
                 track.codec,
                 track.bit_depth.map(|value| value as i64),
@@ -629,6 +675,7 @@ fn save_source_generation_page(
                 track.channels.map(|value| value as i64),
                 track.bitrate_kbps.map(|value| value as i64),
                 track.artwork_token,
+                track.collection_artwork_token,
                 track
                     .size_bytes
                     .map(|value| value.min(i64::MAX as u64) as i64),
@@ -1006,6 +1053,20 @@ pub fn search_page(
     limit: u64,
     sort: &str,
 ) -> Result<Vec<CachedTrack>> {
+    search_page_filtered(conn, source, needle, offset, limit, sort, &[], false, &[])
+}
+
+pub fn search_page_filtered(
+    conn: &Connection,
+    source: RemoteSource,
+    needle: &str,
+    offset: u64,
+    limit: u64,
+    sort: &str,
+    formats: &[String],
+    other_formats: bool,
+    quality_tiers: &[String],
+) -> Result<Vec<CachedTrack>> {
     let like = format!("%{}%", needle.trim());
     let order = match sort {
         "title-asc" => "title COLLATE NOCASE, artist COLLATE NOCASE, id",
@@ -1019,10 +1080,18 @@ pub fn search_page(
         "added-desc" => "album COLLATE NOCASE, disc_number, track_number, id",
         _ => "album COLLATE NOCASE, COALESCE(NULLIF(album_artist, ''), artist) COLLATE NOCASE, disc_number, track_number, title COLLATE NOCASE, id",
     };
+    let media_filter = cached_track_media_filter_sql(
+        "container",
+        "bit_depth",
+        "sample_rate_hz",
+        formats,
+        other_formats,
+        quality_tiers,
+    );
     let mut stmt = conn
         .prepare(&format!(
             "{SELECT} WHERE source = ?1 AND (?2 = '' OR title LIKE ?3 OR artist LIKE ?3 \
-             OR album LIKE ?3 OR album_artist LIKE ?3) \
+             OR album LIKE ?3 OR album_artist LIKE ?3) {media_filter} \
              ORDER BY {order} LIMIT ?4 OFFSET ?5"
         ))
         .map_err(map_err("prepare search"))?;
@@ -1040,6 +1109,63 @@ pub fn search_page(
         .map_err(map_err("query search"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(map_err("read search"))
+}
+
+fn cached_track_media_filter_sql(
+    format_col: &str,
+    depth_col: &str,
+    rate_col: &str,
+    formats: &[String],
+    other_formats: bool,
+    quality_tiers: &[String],
+) -> String {
+    let known = ["flac", "alac", "ape", "wav", "mp3", "aac"];
+    let selected = known
+        .iter()
+        .copied()
+        .filter(|value| {
+            formats
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(value))
+        })
+        .collect::<Vec<_>>();
+    let mut clauses = Vec::new();
+    if !selected.is_empty() || other_formats {
+        let mut values = selected
+            .into_iter()
+            .map(|value| format!("LOWER(COALESCE({format_col},''))='{value}'"))
+            .collect::<Vec<_>>();
+        if other_formats {
+            values.push(format!(
+                "LOWER(COALESCE({format_col},'')) NOT IN ('flac','alac','ape','wav','mp3','aac')"
+            ));
+        }
+        clauses.push(format!("AND ({})", values.join(" OR ")));
+    }
+    let hires = quality_tiers.iter().any(|value| value == "hires");
+    let cd = quality_tiers.iter().any(|value| value == "cd");
+    let lossy = quality_tiers.iter().any(|value| value == "lossy");
+    if hires || cd || lossy {
+        let khz = format!(
+            "CASE WHEN COALESCE({rate_col},0)>=1000 THEN COALESCE({rate_col},0)/1000.0 ELSE COALESCE({rate_col},0) END"
+        );
+        let mut values = Vec::new();
+        if hires {
+            values.push(format!(
+                "(LOWER(COALESCE({format_col},'')) IN ('dsd','dsf','dff') OR COALESCE({depth_col},0)>=24)"
+            ));
+        }
+        if cd {
+            values.push(format!(
+                "(LOWER(COALESCE({format_col},'')) NOT IN ('mp3','dsd','dsf','dff') AND (({depth_col} IS NOT NULL AND {depth_col}<24) OR ({depth_col} IS NULL AND {khz}>=44.1)))"
+            ));
+        }
+        if lossy {
+            values.push(format!("LOWER(COALESCE({format_col},''))='mp3'"));
+        }
+        clauses.push(format!("AND ({})", values.join(" OR ")));
+    }
+    clauses.join(" ")
 }
 
 /// Artist aggregates for one remote source, including track credits and
@@ -1202,19 +1328,42 @@ mod tests {
     // ── Storage ────────────────────────────────────────────────────────────
 
     #[test]
-    fn a_saved_track_round_trips_by_both_of_its_ids() {
-        let mut c = db();
-        save_tracks(
-            &mut c,
-            RemoteSource::Jellyfin,
-            &[track("srv-1", "alb", Some(1), Some(3))],
+    fn existing_cache_adds_the_collection_artwork_layer_in_place() {
+        let c = db();
+        c.execute(
+            "ALTER TABLE remote_cache_tracks DROP COLUMN collection_artwork_token",
+            [],
         )
         .unwrap();
+
+        init_schema(&c).unwrap();
+        let present = c
+            .prepare("PRAGMA table_info(remote_cache_tracks)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|row| row.ok())
+            .any(|column| column == "collection_artwork_token");
+        assert!(present);
+    }
+
+    #[test]
+    fn a_saved_track_round_trips_by_both_of_its_ids() {
+        let mut c = db();
+        let mut row = track("srv-1", "alb", Some(1), Some(3));
+        row.artwork_token = Some("disc-cover".into());
+        row.collection_artwork_token = Some("box-cover".into());
+        save_tracks(&mut c, RemoteSource::Jellyfin, &[row]).unwrap();
         let by_item = track_by_item_id(&c, RemoteSource::Jellyfin, "srv-1")
             .unwrap()
             .expect("by item id");
         assert_eq!(by_item.title, "t-srv-1");
         assert_eq!(by_item.bit_depth, Some(24));
+        assert_eq!(by_item.artwork_token.as_deref(), Some("disc-cover"));
+        assert_eq!(
+            by_item.collection_artwork_token.as_deref(),
+            Some("box-cover")
+        );
         assert_eq!(
             RemoteSource::of_id(by_item.id),
             Some(RemoteSource::Jellyfin)
@@ -1224,6 +1373,27 @@ mod tests {
             .unwrap()
             .expect("by namespaced id");
         assert_eq!(by_id, by_item);
+    }
+
+    #[test]
+    fn every_remote_genre_round_trips_in_server_order() {
+        let mut c = db();
+        let mut row = track("genres", "album", Some(1), Some(1));
+        row.genre = Some("Progressive Rock".into());
+        row.genres = vec![
+            "Progressive Rock".into(),
+            "Art Rock".into(),
+            "Psychedelic".into(),
+        ];
+        save_tracks(&mut c, RemoteSource::Jellyfin, &[row]).unwrap();
+        let stored = track_by_item_id(&c, RemoteSource::Jellyfin, "genres")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.genres,
+            ["Progressive Rock", "Art Rock", "Psychedelic"]
+        );
+        assert_eq!(stored.genre.as_deref(), Some("Progressive Rock"));
     }
 
     /// THE reason this is an UPSERT. A published row id lives inside queue
@@ -1383,6 +1553,53 @@ mod tests {
     }
 
     #[test]
+    fn filtered_remote_pages_are_stable_and_do_not_leak_other_formats() {
+        let mut c = db();
+        let rows = (0..41)
+            .map(|i| {
+                let mut row = track(&format!("fmt-{i:02}"), "Album", Some(1), Some(i + 1));
+                row.title = format!("Track {i:02}");
+                if i % 2 == 0 {
+                    row.container = "mp3".into();
+                    row.codec = Some("mp3".into());
+                    row.bit_depth = None;
+                    row.sample_rate_hz = Some(44_100);
+                }
+                row
+            })
+            .collect::<Vec<_>>();
+        save_tracks(&mut c, RemoteSource::Subsonic, &rows).unwrap();
+
+        let formats = vec!["mp3".to_string()];
+        let qualities = vec!["lossy".to_string()];
+        let mut offset = 0;
+        let mut ids = std::collections::HashSet::new();
+        loop {
+            let page = search_page_filtered(
+                &c,
+                RemoteSource::Subsonic,
+                "",
+                offset,
+                7,
+                "title-asc",
+                &formats,
+                false,
+                &qualities,
+            )
+            .unwrap();
+            if page.is_empty() {
+                break;
+            }
+            for row in &page {
+                assert_eq!(row.container, "mp3");
+                assert!(ids.insert(row.id), "duplicate filtered id {}", row.id);
+            }
+            offset += page.len() as u64;
+        }
+        assert_eq!(ids.len(), 21);
+    }
+
+    #[test]
     fn remote_artist_group_uses_the_performing_artist() {
         let mut c = db();
         let mut zed = track("zed", "A Album", Some(1), Some(1));
@@ -1393,15 +1610,7 @@ mod tests {
         alpha.album_artist = "Zed Album Artist".into();
         save_tracks(&mut c, RemoteSource::Jellyfin, &[zed, alpha]).unwrap();
 
-        let grouped = search_page(
-            &c,
-            RemoteSource::Jellyfin,
-            "",
-            0,
-            10,
-            "group-artist",
-        )
-        .unwrap();
+        let grouped = search_page(&c, RemoteSource::Jellyfin, "", 0, 10, "group-artist").unwrap();
         assert_eq!(grouped[0].artist, "Alpha Performer");
 
         let album_artist_sorted =

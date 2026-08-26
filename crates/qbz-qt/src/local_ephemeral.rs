@@ -94,7 +94,11 @@ pub fn session_is_cd() -> bool {
 
 /// Where to put a rip. A folder chooser, and the answer is never guessed.
 pub(crate) async fn pick_folder_for_rip() -> Option<String> {
-    pick_dir(&qbz_i18n::t("Where should the ripped album go?"), dirs::audio_dir()).await
+    pick_dir(
+        &qbz_i18n::t("Where should the ripped album go?"),
+        dirs::audio_dir(),
+    )
+    .await
 }
 
 /// The one folder chooser, for every caller that needs one.
@@ -116,7 +120,9 @@ pub(crate) async fn pick_folder_for_rip() -> Option<String> {
 /// thread on macOS, and every caller here is on a worker. The async one posts
 /// itself to the right thread, which is also what the Settings path does.
 async fn pick_dir(title: &str, start: Option<PathBuf>) -> Option<String> {
-    let start = start.or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("/"));
+    let start = start
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("/"));
     let handle = rfd::AsyncFileDialog::new()
         .set_title(title)
         .set_directory(&start)
@@ -211,9 +217,9 @@ pub(crate) fn apply_editor_update(
         .replace_tracks_for_session(expected_session, edited)
         .map_err(|error| qbz_library::LibraryError::Metadata(error.to_string()))?
         .ok_or_else(|| {
-            qbz_library::LibraryError::Metadata(
-                qbz_i18n::t("The ephemeral session changed; reopen the metadata editor."),
-            )
+            qbz_library::LibraryError::Metadata(qbz_i18n::t(
+                "The ephemeral session changed; reopen the metadata editor.",
+            ))
         })?;
     let name = if Path::new(expected_session).is_dir() {
         folder_display_name(expected_session)
@@ -240,7 +246,14 @@ fn album_tracks(group_key: &str) -> Vec<LocalTrack> {
 /// publish, exactly like every other Local Library surface.
 #[derive(Serialize)]
 struct EphemeralDoc {
+    /// Folder/device name retained as the medium identity.
     name: String,
+    /// Consistent tagged album/collection title, else `name`.
+    title: String,
+    /// `name` when `title` came from track metadata and adds useful context;
+    /// empty for a mixed folder or when both strings are effectively equal.
+    #[serde(rename = "folderContext")]
+    folder_context: String,
     path: String,
     #[serde(rename = "trackCount")]
     track_count: usize,
@@ -289,12 +302,61 @@ fn folder_display_name(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+fn normalized_title(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn consistent_title(values: impl Iterator<Item = String>) -> Option<String> {
+    let mut first: Option<(String, String)> = None;
+    for value in values {
+        let display = value.trim();
+        if display.is_empty() || display.eq_ignore_ascii_case("Unknown Album") {
+            return None;
+        }
+        let normalized = normalized_title(display);
+        match first.as_ref() {
+            Some((_, expected)) if expected != &normalized => return None,
+            Some(_) => {}
+            None => first = Some((display.to_string(), normalized)),
+        }
+    }
+    first.map(|(display, _)| display)
+}
+
+/// Infer a real collection title only when every playable row agrees. The
+/// group title is preferred because it intentionally removes bare "Disc N"
+/// suffixes; the raw album tag is a conservative fallback. A user's folder of
+/// unrelated tracks therefore keeps the folder name instead of inventing an
+/// album from the first row.
+fn consistent_collection_title(tracks: &[LocalTrack]) -> Option<String> {
+    if tracks.is_empty() {
+        return None;
+    }
+    consistent_title(tracks.iter().map(|track| track.album_group_title.clone())).or_else(|| {
+        consistent_title(
+            tracks.iter().map(|track| {
+                qbz_library::MetadataExtractor::strip_disc_suffix_public(&track.album)
+            }),
+        )
+    })
+}
+
 /// Group the scanned rows into album blocks (sorted by title) and register
 /// every cover in the shared art index, so the pane's covers ride the SAME
 /// windowed `artworkWindow` -> `localArtworkReady` path as the grids.
 /// Cheap (no I/O) but it takes the local-state lock — never call it on the Qt
 /// thread.
 fn build_doc(name: &str, path: &str, tracks: &[LocalTrack]) -> EphemeralDoc {
+    let collection_title = consistent_collection_title(tracks);
+    let title = collection_title.clone().unwrap_or_else(|| name.to_string());
+    let folder_context = collection_title
+        .filter(|album| normalized_title(album) != normalized_title(name))
+        .map(|_| name.to_string())
+        .unwrap_or_default();
     // BTreeMap keeps a deterministic key order; scan order is preserved
     // inside each group (the scanner already sorted album/disc/track/title).
     let mut groups: BTreeMap<String, Vec<&LocalTrack>> = BTreeMap::new();
@@ -430,6 +492,8 @@ fn build_doc(name: &str, path: &str, tracks: &[LocalTrack]) -> EphemeralDoc {
     });
     EphemeralDoc {
         name: name.to_string(),
+        title,
+        folder_context,
         path: path.to_string(),
         track_count: tracks.len(),
         total_duration: crate::local_rows::total_duration(
@@ -460,11 +524,7 @@ const LABEL_MAX: usize = 24;
 /// multi-album folder, or one whose tags gave no title, falls back to the
 /// medium's display name, which is exactly what the pane's own header shows.
 fn display_label(doc: &EphemeralDoc) -> String {
-    let raw = if !doc.multi_album && doc.albums.len() == 1 && !doc.albums[0].title.is_empty() {
-        doc.albums[0].title.as_str()
-    } else {
-        doc.name.as_str()
-    };
+    let raw = doc.title.as_str();
     if raw.is_empty() {
         return qbz_i18n::t("Media");
     }
@@ -642,7 +702,12 @@ pub fn adopt_tracks(label: &str, tracks: Vec<LocalTrack>) {
 /// different track count than the disc in the drive (a hidden track, a
 /// mixed-mode disc), and pairing by position without checking is how track 5
 /// gets track 6's name.
-pub fn apply_naming(album: &str, album_artist: &str, year: Option<u32>, titles: &[(String, String)]) {
+pub fn apply_naming(
+    album: &str,
+    album_artist: &str,
+    year: Option<u32>,
+    titles: &[(String, String)],
+) {
     let Some(label) = STATE.current_folder_path() else {
         return;
     };
@@ -676,7 +741,11 @@ pub fn apply_naming(album: &str, album_artist: &str, year: Option<u32>, titles: 
     // The LABEL follows the album — it is what the tab, the nav flyout and the
     // pane header all read, and leaving it on the old name would make the
     // correction look like it half-applied.
-    let name = if album.is_empty() { label.as_str() } else { album };
+    let name = if album.is_empty() {
+        label.as_str()
+    } else {
+        album
+    };
     log::info!("[qbz-qt] ephemeral: renamed to {name:?}");
     publish_doc(&build_doc(name, name, &tracks), false);
 }
@@ -785,6 +854,8 @@ async fn scan(runtime: Option<Runtime>, path: String) {
     publish_doc(
         &EphemeralDoc {
             name: name.clone(),
+            title: name.clone(),
+            folder_context: String::new(),
             path: path.clone(),
             track_count: 0,
             total_duration: String::new(),
@@ -794,7 +865,8 @@ async fn scan(runtime: Option<Runtime>, path: String) {
         true,
     );
     let scan_path = path.clone();
-    let result = tokio::task::spawn_blocking(move || STATE.open_folder(Path::new(&scan_path))).await;
+    let result =
+        tokio::task::spawn_blocking(move || STATE.open_folder(Path::new(&scan_path))).await;
     match result {
         Ok(Ok(res)) => {
             log::info!(
@@ -926,7 +998,11 @@ mod shuffle_tests {
             shuffle_in_place(&mut v);
             let mut seen = v.clone();
             seen.sort_unstable();
-            assert_eq!(seen, (0..10).collect::<Vec<_>>(), "shuffle lost or duplicated items");
+            assert_eq!(
+                seen,
+                (0..10).collect::<Vec<_>>(),
+                "shuffle lost or duplicated items"
+            );
             firsts[v[0]] += 1;
         }
         // Generous bounds: this guards against a PINNED position, not against
@@ -1007,7 +1083,10 @@ async fn play_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, start: usize) {
     // the seam resolves these rows with no arm of their own, and `audible_qt`
     // keeps the path comparison for every source.
     if let Err(e) = crate::audible_qt::play_queue_track(runtime, &first).await {
-        log::error!("[qbz-qt] ephemeral play: track {} not playable: {e}", first.id);
+        log::error!(
+            "[qbz-qt] ephemeral play: track {} not playable: {e}",
+            first.id
+        );
     }
     crate::playback_qt::refresh_now_playing(runtime).await;
 }
@@ -1017,8 +1096,15 @@ mod display_label_tests {
     use super::*;
 
     fn doc(name: &str, albums: Vec<(&str, &str)>, multi: bool) -> EphemeralDoc {
+        let title = if !multi && albums.len() == 1 && !albums[0].0.is_empty() {
+            albums[0].0.to_string()
+        } else {
+            name.to_string()
+        };
         EphemeralDoc {
             name: name.to_string(),
+            title,
+            folder_context: String::new(),
             path: "/tmp/x".to_string(),
             track_count: 0,
             total_duration: String::new(),
@@ -1044,7 +1130,11 @@ mod display_label_tests {
     fn one_album_is_named_by_its_album() {
         // The usual case, and the reason the chain starts here: a folder IS
         // an album, and so is a disc.
-        let d = doc("Pink Floyd London Live 8 Reunion 2005", vec![("Live 8", "Pink Floyd")], false);
+        let d = doc(
+            "Pink Floyd London Live 8 Reunion 2005",
+            vec![("Live 8", "Pink Floyd")],
+            false,
+        );
         assert_eq!(display_label(&d), "Live 8");
     }
 
@@ -1068,7 +1158,7 @@ mod display_label_tests {
     }
 
     #[test]
-    fn a_long_name_is_elided_by_CHARACTERS_not_bytes() {
+    fn a_long_name_is_elided_by_characters_not_bytes() {
         // The elision exists because QbzTabBar sizes a segment to its text.
         let long = "Symphony No. 9 in D minor, Op. 125 — Choral";
         let out = display_label(&doc(long, vec![], false));
@@ -1081,6 +1171,24 @@ mod display_label_tests {
         assert!(jp.chars().count() > LABEL_MAX);
         let out = display_label(&doc(jp, vec![], false));
         assert_eq!(out.chars().count(), LABEL_MAX);
+    }
+
+    #[test]
+    fn consistent_collection_title_requires_every_track_to_agree() {
+        let track = |album: &str| LocalTrack {
+            album: album.to_string(),
+            album_group_title: album.to_string(),
+            ..Default::default()
+        };
+        let one_album = vec![track("Sorceress"), track("  Sorceress ")];
+        assert_eq!(
+            consistent_collection_title(&one_album).as_deref(),
+            Some("Sorceress")
+        );
+
+        let mix = vec![track("Sorceress"), track("Death Magnetic")];
+        assert!(consistent_collection_title(&mix).is_none());
+        assert!(consistent_collection_title(&[LocalTrack::default()]).is_none());
     }
 
     #[test]

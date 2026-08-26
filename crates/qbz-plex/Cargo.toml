@@ -14,6 +14,7 @@ reqwest = { workspace = true }
 
 # DTO serialization (camelCase envelopes shared with the frontend)
 serde = { workspace = true }
+serde_json.workspace = true
 
 # Platform data dir (plex_cache.db location)
 dirs = "6"

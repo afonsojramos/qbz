@@ -133,7 +133,11 @@ pub struct HomeCard {
     /// Playlist rows: the artwork IS the playlist's own graphic (or a custom
     /// cover), so the card contain-fits it instead of building a mosaic. Those
     /// images are landscape and cropping butchers them.
-    #[serde(default, rename = "playlistOwnImage", skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        default,
+        rename = "playlistOwnImage",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub playlist_own_image: bool,
     /// Playlist rows: ALL of the playlist's tag SLUGS — the material the
     /// client-side category filter matches against (home.rs
@@ -264,9 +268,15 @@ fn pinned_cards() -> Vec<HomeCard> {
             // routed by the row's own stored kind rather than by the rail's.
             is_favorite: crate::fav_cache_qt::is_favorite(&p.kind, &p.id),
             playlist_owned: p.kind == "playlist"
-                && p.id.parse::<u64>().map(crate::playlist_qt::is_owned).unwrap_or(false),
+                && p.id
+                    .parse::<u64>()
+                    .map(crate::playlist_qt::is_owned)
+                    .unwrap_or(false),
             playlist_following: p.kind == "playlist"
-                && p.id.parse::<u64>().map(crate::playlist_qt::is_following).unwrap_or(false),
+                && p.id
+                    .parse::<u64>()
+                    .map(crate::playlist_qt::is_following)
+                    .unwrap_or(false),
             id: p.id,
             title: p.title,
             artist: p.subtitle.clone(),
@@ -325,7 +335,11 @@ pub(crate) fn publish_pinned() {
 fn build_recent_sections() -> Vec<HomeSection> {
     let mut out = Vec::with_capacity(3);
 
-    let recent_albums: Vec<HomeCard> = crate::recently_qt::load_albums()
+    let mut stored_albums = crate::recently_qt::load_albums();
+    let mut stored_tracks = crate::recently_qt::load_tracks();
+    backfill_recent_artwork(&mut stored_albums, &mut stored_tracks);
+
+    let recent_albums: Vec<HomeCard> = stored_albums
         .into_iter()
         .map(map_recent_album)
         .collect();
@@ -376,7 +390,7 @@ fn build_recent_sections() -> Vec<HomeSection> {
         });
     }
 
-    let recent_tracks: Vec<HomeCard> = crate::recently_qt::load_tracks()
+    let recent_tracks: Vec<HomeCard> = stored_tracks
         .into_iter()
         .take(24)
         .map(map_recent_track)
@@ -404,6 +418,82 @@ fn build_recent_sections() -> Vec<HomeSection> {
     out
 }
 
+/// Repair artwork snapshots written by older builds from the authoritative
+/// per-source cache before the short recent rails are mapped. History is not
+/// rewritten: a disconnected server merely leaves its old placeholder, while
+/// a later connected publish gets another chance.
+///
+/// Rows are memoized per physical album, so a 24-track recent window costs at
+/// most one bounded album lookup per distinct source/version. The exact played
+/// row wins for a track card (therefore its disc cover); an album card falls
+/// back to the first available disc/collection cover in that physical copy.
+fn backfill_recent_artwork(
+    albums: &mut [crate::recently_qt::RecentAlbum],
+    tracks: &mut [crate::recently_qt::RecentTrack],
+) {
+    use std::collections::HashMap;
+
+    let mut cache: HashMap<(String, String), Vec<qbz_library::LocalTrack>> = HashMap::new();
+    let mut rows_for = |source: &str, album_id: &str| -> Vec<qbz_library::LocalTrack> {
+        let source = match source {
+            "" if album_id.starts_with("plex:") => "plex",
+            "" if album_id.starts_with("jellyfin:") => "jellyfin",
+            "" if album_id.starts_with("subsonic:") => "subsonic",
+            other => other,
+        };
+        cache.entry((source.to_string(), album_id.to_string())).or_insert_with(|| {
+            let mut rows = match source {
+                "local" => crate::local_albums::fetch_album_tracks_blocking(album_id),
+                "plex" => crate::local_plex::album_tracks(album_id),
+                "jellyfin" | "subsonic" => {
+                    crate::media_servers_qt::album_tracks(album_id).unwrap_or_default()
+                }
+                _ => Vec::new(),
+            };
+            crate::local_playback::fill_missing_covers(&mut rows);
+            rows
+        }).clone()
+    };
+    let queue_art = |row: &qbz_library::LocalTrack| {
+        crate::local_playback::local_queue_track(row)
+            .artwork_url
+            .unwrap_or_default()
+    };
+
+    for track in tracks.iter_mut() {
+        if !track.artwork_url.is_empty() && !track.album_artwork_url.is_empty() {
+            continue;
+        }
+        let rows = rows_for(&track.source, &track.album_id);
+        let row_id = track.id.parse::<u64>().ok().map(|id| id as i64);
+        let exact = row_id.and_then(|id| rows.iter().find(|row| row.id == id));
+        let candidate = exact
+            .filter(|row| row.artwork_path.as_deref().is_some_and(|art| !art.is_empty()))
+            .or_else(|| {
+                rows.iter()
+                    .find(|row| row.artwork_path.as_deref().is_some_and(|art| !art.is_empty()))
+            });
+        if let Some(row) = candidate {
+            let art = queue_art(row);
+            if track.artwork_url.is_empty() {
+                track.artwork_url = art.clone();
+            }
+            if track.album_artwork_url.is_empty() {
+                track.album_artwork_url = art;
+            }
+        }
+    }
+    for album in albums.iter_mut().filter(|album| album.artwork_url.is_empty()) {
+        let rows = rows_for(&album.source, &album.id);
+        if let Some(row) = rows
+            .iter()
+            .find(|row| row.artwork_path.as_deref().is_some_and(|art| !art.is_empty()))
+        {
+            album.artwork_url = queue_art(row);
+        }
+    }
+}
+
 /// All sections any Discover tab can render, in construction order (the
 /// per-tab assembly clones from here). Ids are the DiscoverySectionId keys;
 /// "mostStreamed#album" is the EDITOR-tab variant (album carousel — the
@@ -423,8 +513,20 @@ fn build_candidates(
     } = p;
     let mut out: Vec<HomeSection> = Vec::new();
 
-    push_albums(&mut out, "newReleases", qbz_i18n::t("New Releases"), "/discover/newReleases", containers.new_releases);
-    push_albums(&mut out, "pressAwards", qbz_i18n::t("Press Accolades"), "/discover/pressAward", containers.press_awards);
+    push_albums(
+        &mut out,
+        "newReleases",
+        qbz_i18n::t("New Releases"),
+        "/discover/newReleases",
+        containers.new_releases,
+    );
+    push_albums(
+        &mut out,
+        "pressAwards",
+        qbz_i18n::t("Press Accolades"),
+        "/discover/pressAward",
+        containers.press_awards,
+    );
 
     // Pinned rail (phase 11) — the ORDERING SLOT only: the rows travel on
     // `pinnedJson` (see `publish_pinned`), so the section is pushed
@@ -604,7 +706,13 @@ fn build_candidates(
         "/discover/albumOfTheWeek",
         containers.album_of_the_week,
     );
-    push_albums(&mut out, "qobuzissimes", qbz_i18n::t("Qobuzissimes"), "/discover/qobuzissims", containers.qobuzissims);
+    push_albums(
+        &mut out,
+        "qobuzissimes",
+        qbz_i18n::t("Qobuzissimes"),
+        "/discover/qobuzissims",
+        containers.qobuzissims,
+    );
 
     // Personalized rails (self-hide while empty, 1:1 Slint).
     if !favorite_albums.is_empty() {
@@ -744,7 +852,10 @@ fn order_by_prefs(
         .flat_map(|t| prefs.tab(t).iter().map(|p| p.id.as_str()))
         .collect();
         for s in candidates {
-            if !s.id.contains('#') && !known.contains(s.id.as_str()) && !gated.iter().any(|g| g.id == s.id) {
+            if !s.id.contains('#')
+                && !known.contains(s.id.as_str())
+                && !gated.iter().any(|g| g.id == s.id)
+            {
                 gated.push(s.clone());
             }
         }
@@ -802,7 +913,10 @@ fn set_playlist_tag_catalog(tags: Vec<PlaylistTagRow>) {
 fn publish_playlist_tags() {
     let doc = PlaylistTagDoc {
         tags: PLAYLIST_TAGS.lock().map(|t| t.clone()).unwrap_or_default(),
-        selected: PLAYLIST_TAG_SEL.lock().map(|s| s.clone()).unwrap_or_default(),
+        selected: PLAYLIST_TAG_SEL
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default(),
     };
     let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".to_string());
     crate::home_bridge::ui(move |mut b| {
@@ -842,9 +956,7 @@ pub(crate) fn republish_playlist_tags() {
 /// Discover configurator mutates (`discover_config_qt`).
 pub(crate) fn load_prefs() -> qbz_app::settings::discover_prefs::DiscoverPrefs {
     crate::sidebar_qt::user_dir()
-        .and_then(|dir| {
-            qbz_app::settings::discover_prefs::DiscoverPrefsStore::new_at(&dir).ok()
-        })
+        .and_then(|dir| qbz_app::settings::discover_prefs::DiscoverPrefsStore::new_at(&dir).ok())
         .map(|store| store.load())
         .unwrap_or_else(qbz_app::settings::discover_prefs::default_prefs)
 }
@@ -865,13 +977,34 @@ fn assemble(
     // was this port's simplification and it lost the point of the feature). One
     // store read for all three tabs.
     let sizes = crate::discover_config_qt::rail_sizes();
-    let home = order_by_prefs(candidates, prefs, DiscoveryTab::Home, "mostStreamed", true, &sizes);
-    let editor = order_by_prefs(candidates, prefs, DiscoveryTab::EditorPicks, "mostStreamed#album", false, &sizes);
+    let home = order_by_prefs(
+        candidates,
+        prefs,
+        DiscoveryTab::Home,
+        "mostStreamed",
+        true,
+        &sizes,
+    );
+    let editor = order_by_prefs(
+        candidates,
+        prefs,
+        DiscoveryTab::EditorPicks,
+        "mostStreamed#album",
+        false,
+        &sizes,
+    );
     // Keep empty recent-history ordering slots in For You. QML self-hides the
     // placeholder, matching the reference, but retaining the descriptor lets
     // a targeted recent-rails update reveal it after the first play without a
     // full Home document republish.
-    let for_you = order_by_prefs(candidates, prefs, DiscoveryTab::ForYou, "mostStreamed", false, &sizes);
+    let for_you = order_by_prefs(
+        candidates,
+        prefs,
+        DiscoveryTab::ForYou,
+        "mostStreamed",
+        false,
+        &sizes,
+    );
     DiscoverSections {
         home,
         editor,
@@ -938,7 +1071,8 @@ pub(crate) fn attach_card_art(cards: &mut Vec<HomeCard>) -> Vec<String> {
 pub(crate) fn publish(sections: &DiscoverSections) {
     let home_json = serde_json::to_string(&sections.home).unwrap_or_else(|_| "[]".to_string());
     let editor_json = serde_json::to_string(&sections.editor).unwrap_or_else(|_| "[]".to_string());
-    let for_you_json = serde_json::to_string(&sections.for_you).unwrap_or_else(|_| "[]".to_string());
+    let for_you_json =
+        serde_json::to_string(&sections.for_you).unwrap_or_else(|_| "[]".to_string());
     crate::home_bridge::ui(move |mut b| {
         b.as_mut()
             .set_home_sections_json(QString::from(home_json.as_str()));
@@ -980,7 +1114,8 @@ fn push_recent_sections(sections: &[HomeSection]) {
     }
     let json = recent_sections_json(sections);
     crate::home_bridge::ui(move |mut b| {
-        b.as_mut().set_recent_rails_json(QString::from(json.as_str()));
+        b.as_mut()
+            .set_recent_rails_json(QString::from(json.as_str()));
     });
 }
 
@@ -1258,9 +1393,19 @@ where
         .collect();
 
     let personalized = Personalized {
-        favorite_albums: fav_albums.iter().take(18).cloned().map(map_flat_album).collect(),
+        favorite_albums: fav_albums
+            .iter()
+            .take(18)
+            .cloned()
+            .map(map_flat_album)
+            .collect(),
         release_watch,
-        top_artists: fav_artists.iter().take(18).cloned().map(map_fav_artist).collect(),
+        top_artists: fav_artists
+            .iter()
+            .take(18)
+            .cloned()
+            .map(map_fav_artist)
+            .collect(),
         rediscover,
         to_follow,
         similar_title: match seed.as_ref() {
@@ -1318,7 +1463,12 @@ pub(crate) fn map_album(album: DiscoverAlbum) -> HomeCard {
         album
             .dates
             .as_ref()
-            .and_then(|d| d.original.as_ref().or(d.download.as_ref()).or(d.stream.as_ref()))
+            .and_then(|d| {
+                d.original
+                    .as_ref()
+                    .or(d.download.as_ref())
+                    .or(d.stream.as_ref())
+            })
             .map(|s| s.as_str()),
     );
     let (ribbon, ribbon_kind) = pick_ribbon(album.awards.as_deref());
@@ -1517,7 +1667,10 @@ pub(crate) fn quality_tier_from_depth(bit_depth: Option<u32>) -> &'static str {
 
 /// Bare exact-quality detail from parts, Hz- or kHz-tolerant (quality.rs
 /// `detail`): "24-bit / 96 kHz".
-pub(crate) fn quality_detail_from_parts(bit_depth: Option<u32>, sample_rate: Option<f64>) -> String {
+pub(crate) fn quality_detail_from_parts(
+    bit_depth: Option<u32>,
+    sample_rate: Option<f64>,
+) -> String {
     let hi_res = matches!(bit_depth, Some(depth) if depth >= 24);
     let depth = bit_depth.unwrap_or(if hi_res { 24 } else { 16 });
     let rate = sample_rate.unwrap_or(if hi_res { 96.0 } else { 44.1 });
@@ -1721,7 +1874,11 @@ fn map_recent_track(t: crate::recently_qt::RecentTrack) -> HomeCard {
     HomeCard {
         // TRACK ids here, not album ids — the `slimTracks` rail is the one
         // place a HomeCard row is a track.
-        is_favorite: t.id.parse::<u64>().map(crate::fav_cache_qt::contains_track).unwrap_or(false),
+        is_favorite: t
+            .id
+            .parse::<u64>()
+            .map(crate::fav_cache_qt::contains_track)
+            .unwrap_or(false),
         id: t.id,
         title: t.title,
         artist: t.subtitle,
@@ -1827,7 +1984,11 @@ where
     let Some(id) = seed else {
         return Vec::new();
     };
-    match runtime.core().get_similar_artists(id, SIMILAR_PER_SEED, 0).await {
+    match runtime
+        .core()
+        .get_similar_artists(id, SIMILAR_PER_SEED, 0)
+        .await
+    {
         Ok(page) => page.items,
         Err(e) => {
             log::warn!("[qbz-qt] similar artists fetch failed (seed {id}): {e}");
@@ -1845,7 +2006,11 @@ async fn fetch_to_follow<A>(runtime: &Arc<AppRuntime<A>>, fav_artists: &[Artist]
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
-    let seeds: Vec<u64> = fav_artists.iter().take(ARTIST_SEEDS).map(|a| a.id).collect();
+    let seeds: Vec<u64> = fav_artists
+        .iter()
+        .take(ARTIST_SEEDS)
+        .map(|a| a.id)
+        .collect();
     if seeds.is_empty() {
         return Vec::new();
     }
@@ -1944,8 +2109,14 @@ mod tests {
             "24-bit / 192 kHz"
         );
         // Missing fields fall back per tier (hi-res: 24/96, cd: 16/44.1).
-        assert_eq!(quality_label(Some(&audio(Some(24), None))), "Hi-Res: 24-bit / 96 kHz");
-        assert_eq!(quality_detail(Some(&audio(None, Some(44.1)))), "16-bit / 44.1 kHz");
+        assert_eq!(
+            quality_label(Some(&audio(Some(24), None))),
+            "Hi-Res: 24-bit / 96 kHz"
+        );
+        assert_eq!(
+            quality_detail(Some(&audio(None, Some(44.1)))),
+            "16-bit / 44.1 kHz"
+        );
     }
 
     #[test]
@@ -1960,12 +2131,18 @@ mod tests {
         assert_eq!(pick_ribbon(Some(&[])), (String::new(), String::new()));
         // 151 wins over everything.
         assert_eq!(
-            pick_ribbon(Some(&[award(Some("88"), "Qobuzissime"), award(Some("151"), "AOTW")])),
+            pick_ribbon(Some(&[
+                award(Some("88"), "Qobuzissime"),
+                award(Some("151"), "AOTW")
+            ])),
             ("AOTW".to_string(), "albumOfTheWeek".to_string())
         );
         // 88 wins over a generic press award.
         assert_eq!(
-            pick_ribbon(Some(&[award(Some("1"), "Press X"), award(Some("88"), "Qobuzissime")])),
+            pick_ribbon(Some(&[
+                award(Some("1"), "Press X"),
+                award(Some("88"), "Qobuzissime")
+            ])),
             ("Qobuzissime".to_string(), "qobuzissime".to_string())
         );
         // Otherwise the LAST award is the press ribbon.

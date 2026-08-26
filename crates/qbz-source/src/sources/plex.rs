@@ -205,11 +205,23 @@ impl PlexSource {
         }
     }
 
+    fn preferred_art(item: &MediaRef, rows: &[PlexCachedTrack]) -> Option<String> {
+        rows.iter().find_map(|track| {
+            let item_art = track.artwork_path.clone().filter(|path| !path.is_empty());
+            let collection_art = track
+                .collection_artwork_path
+                .clone()
+                .filter(|path| !path.is_empty());
+            if item.kind() == ItemKind::Track {
+                item_art.or(collection_art)
+            } else {
+                collection_art.or(item_art)
+            }
+        })
+    }
+
     fn memoize_art(&self, item: &MediaRef, rows: &[PlexCachedTrack]) {
-        let Some(path) = rows
-            .iter()
-            .find_map(|t| t.artwork_path.clone().filter(|p| !p.is_empty()))
-        else {
+        let Some(path) = Self::preferred_art(item, rows) else {
             return;
         };
         if let Ok(mut memo) = self.art.write() {
@@ -394,8 +406,7 @@ impl Source for PlexSource {
                 None => {
                     let rows = Self::cached_rows(item);
                     self.memoize_art(item, &rows);
-                    rows.iter()
-                        .find_map(|t| t.artwork_path.clone().filter(|p| !p.is_empty()))
+                    Self::preferred_art(item, &rows)
                 }
             }
         };
@@ -483,6 +494,7 @@ impl Source for PlexSource {
                 duration_secs: track.duration_secs,
                 start_secs: 0,
                 log_tag: "PLEX",
+                request_headers: loc.request_headers,
             }),
             Err(e) => Err(SourceError::Backend {
                 by: SourceId::PLEX,
@@ -511,6 +523,58 @@ impl Source for PlexSource {
 mod tests {
     use super::*;
     use crate::meta::SourceBadge;
+
+    fn cached_art_row(item_art: Option<&str>, collection_art: Option<&str>) -> PlexCachedTrack {
+        PlexCachedTrack {
+            id: 1,
+            rating_key: "1".into(),
+            title: "Track".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            duration_secs: 1,
+            format: "flac".into(),
+            bit_depth: Some(16),
+            sample_rate: 44_100,
+            artwork_path: item_art.map(str::to_string),
+            collection_artwork_path: collection_art.map(str::to_string),
+            source: "plex".into(),
+            album_key: "plex:album".into(),
+            track_number: Some(1),
+            disc_number: Some(1),
+            year: Some(2026),
+            parent_rating_key: Some("album".into()),
+        }
+    }
+
+    #[test]
+    fn track_art_prefers_the_disc_then_falls_back_to_the_collection() {
+        let item = MediaRef::new(SourceId::PLEX, ItemKind::Track, "1");
+        let row = cached_art_row(Some("/disc/thumb"), Some("/collection/thumb"));
+        assert_eq!(
+            PlexSource::preferred_art(&item, std::slice::from_ref(&row)).as_deref(),
+            Some("/disc/thumb")
+        );
+        let row = cached_art_row(None, Some("/collection/thumb"));
+        assert_eq!(
+            PlexSource::preferred_art(&item, &[row]).as_deref(),
+            Some("/collection/thumb")
+        );
+    }
+
+    #[test]
+    fn album_art_prefers_the_collection_then_falls_back_to_an_item() {
+        let item = MediaRef::new(SourceId::PLEX, ItemKind::Album, "plex:album");
+        let row = cached_art_row(Some("/disc/thumb"), Some("/collection/thumb"));
+        assert_eq!(
+            PlexSource::preferred_art(&item, std::slice::from_ref(&row)).as_deref(),
+            Some("/collection/thumb")
+        );
+        let row = cached_art_row(Some("/disc/thumb"), None);
+        assert_eq!(
+            PlexSource::preferred_art(&item, &[row]).as_deref(),
+            Some("/disc/thumb")
+        );
+    }
 
     /// The stub stands in for the Plex cache, so the pure ladder is testable
     /// with no `plex_cache.db` on disk.
@@ -541,11 +605,8 @@ mod tests {
         );
         // Non-numeric server keys are legal and must survive untouched.
         assert_eq!(
-            PlexSource::rating_key_with(
-                &track_ref("999", Some("/library/metadata/771")),
-                no_cache
-            )
-            .unwrap(),
+            PlexSource::rating_key_with(&track_ref("999", Some("/library/metadata/771")), no_cache)
+                .unwrap(),
             "/library/metadata/771"
         );
     }

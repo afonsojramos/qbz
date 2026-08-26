@@ -1,7 +1,7 @@
 //! Metadata extraction for audio files
 
-use lofty::prelude::*;
 use lofty::config::ParseOptions;
+use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use std::fs;
@@ -43,11 +43,28 @@ impl MetadataExtractor {
     /// First non-empty string for `key` across all of the file's tags
     /// (primary first). When several tags disagree, the primary tag wins —
     /// deterministic, and matches what other players show.
-    fn string_across_tags(
-        tagged_file: &lofty::file::TaggedFile,
-        key: &ItemKey,
-    ) -> Option<String> {
+    fn string_across_tags(tagged_file: &lofty::file::TaggedFile, key: &ItemKey) -> Option<String> {
         Self::string_from_tags(Self::tags_primary_first(tagged_file), key)
+    }
+
+    /// Every non-empty value for `key` across all tags, preserving primary-tag
+    /// order and deduplicating case-insensitively. This is intentionally
+    /// separate from the first-value fallback used by scalar metadata.
+    fn strings_across_tags(tagged_file: &lofty::file::TaggedFile, key: &ItemKey) -> Vec<String> {
+        let mut values = Vec::<String>::new();
+        for tag in Self::tags_primary_first(tagged_file) {
+            for value in tag.get_strings(key.clone()) {
+                let value = value.trim();
+                if !value.is_empty()
+                    && !values
+                        .iter()
+                        .any(|existing| existing.eq_ignore_ascii_case(value))
+                {
+                    values.push(value.to_string());
+                }
+            }
+        }
+        values
     }
 
     /// Pure core of [`Self::string_across_tags`]: first non-empty, trimmed
@@ -675,6 +692,7 @@ impl MetadataExtractor {
                 .unwrap_or_else(|| "Unknown Album".to_string());
             let (album_group_key, album_group_title) =
                 Self::album_group_info(file_path, Some(album_title.as_str()));
+            let genres = Self::strings_across_tags(&tagged_file, &ItemKey::Genre);
 
             LocalTrack {
                 id: 0,
@@ -694,7 +712,8 @@ impl MetadataExtractor {
                     .and_then(|d| if d > 0 { Some(d) } else { None })
                     .or(inferred_disc),
                 year: Self::year_across_tags(&tagged_file),
-                genre: Self::string_across_tags(&tagged_file, &ItemKey::Genre),
+                genre: genres.first().cloned(),
+                genres,
                 catalog_number: Self::string_across_tags(&tagged_file, &ItemKey::CatalogNumber),
                 duration_secs,
                 format,
@@ -706,6 +725,7 @@ impl MetadataExtractor {
                 cue_start_secs: None,
                 cue_end_secs: None,
                 artwork_path: None,
+                collection_artwork_path: None,
                 last_modified,
                 indexed_at: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -736,6 +756,7 @@ impl MetadataExtractor {
                 disc_number: inferred_disc,
                 year: None,
                 genre: None,
+                genres: Vec::new(),
                 catalog_number: None,
                 duration_secs,
                 format,
@@ -747,6 +768,7 @@ impl MetadataExtractor {
                 cue_start_secs: None,
                 cue_end_secs: None,
                 artwork_path: None,
+                collection_artwork_path: None,
                 last_modified,
                 indexed_at: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -795,6 +817,7 @@ impl MetadataExtractor {
             .unwrap_or_else(|| "Unknown Album".to_string());
         let (album_group_key, album_group_title) =
             Self::album_group_info(file_path, Some(album_title.as_str()));
+        let genres = tags.genre.iter().cloned().collect();
 
         Ok(LocalTrack {
             id: 0,
@@ -813,6 +836,7 @@ impl MetadataExtractor {
             disc_number: tags.disc_number.filter(|d| *d > 0).or(inferred_disc),
             year: tags.year.and_then(|y| u32::try_from(y).ok()),
             genre: tags.genre.clone(),
+            genres,
             catalog_number: None,
             duration_secs: info.duration_secs(),
             format: AudioFormat::Dsd,
@@ -826,6 +850,7 @@ impl MetadataExtractor {
             cue_start_secs: None,
             cue_end_secs: None,
             artwork_path: None,
+            collection_artwork_path: None,
             last_modified,
             indexed_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -992,6 +1017,7 @@ impl MetadataExtractor {
     /// path and changes no stored value.
     pub fn folder_artwork_in_dir(dir: &Path) -> Option<String> {
         let mut best: Option<(u32, PathBuf)> = None;
+        let mut candidates = Vec::new();
         for entry in std::fs::read_dir(dir).ok()?.flatten() {
             let path = entry.path();
             if !path.is_file() {
@@ -1005,14 +1031,14 @@ impl MetadataExtractor {
             if !Self::is_supported_artwork_ext(&ext) {
                 continue;
             }
+            candidates.push(path.clone());
             let stem = path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .map(|s| s.to_lowercase())
                 .unwrap_or_default();
             // Same vocabulary the scanner scores with, simplified: an exact
-            // well-known name wins, a name that merely contains one is a
-            // fallback, anything else is ignored.
+            // well-known name wins and a name containing one is a fallback.
             const EXACT: &[&str] = &["cover", "folder", "front", "album", "artwork", "art"];
             let score = if EXACT.contains(&stem.as_str()) {
                 2
@@ -1026,6 +1052,12 @@ impl MetadataExtractor {
             }
         }
         best.map(|(_, p)| p.to_string_lossy().to_string())
+            .or_else(|| {
+                // A single image in a disc directory is unambiguous even when
+                // it is named after the movement rather than `cover.jpg`.
+                (candidates.len() == 1)
+                    .then(|| candidates[0].to_string_lossy().to_string())
+            })
     }
 
     pub fn find_folder_artwork(

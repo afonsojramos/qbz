@@ -54,20 +54,23 @@
 
 // --- rows ------------------------------------------------------------------
 pub use crate::local_rows::{
-    album_key, artist_key, badge_source, folder_key, tier_of, to_json, track_key,     AlbumRow, ArtistRow, FolderDetail, LocalCounts, SubfolderRow, TrackRow, TreeNode,
+    album_key, artist_key, badge_source, folder_key, tier_of, to_json, track_key, AlbumRow,
+    ArtistRow, FolderDetail, LocalCounts, SubfolderRow, TrackRow, TreeNode,
 };
 
 // --- state / prefs ---------------------------------------------------------
 pub use crate::local_state::{
     album_mode, begin_tracks_load, commit_tracks_page, counts, has_library, set_album_mode,
-    set_tracks_group, set_tracks_query, set_tracks_sort, state, tracks_generation, tracks_group,
-    tracks_has_more, tracks_sort, with_db, TrackSourceOffsets, TracksLoadRequest,
+    set_tracks_filter, set_tracks_group, set_tracks_query, set_tracks_sort, state, tracks_filter,
+    tracks_generation, tracks_group, tracks_has_more, tracks_sort, with_db, TrackSourceOffsets,
+    TracksLoadRequest,
 };
 
 // --- queries ---------------------------------------------------------------
 pub use crate::local_albums::{
-    fetch_album_tracks_blocking, load_album_detail_blocking, load_albums_blocking,
-    load_artists_blocking, load_counts_blocking, load_folders_blocking, load_tracks_page_blocking,
+    fetch_album_tracks_blocking, load_album_detail_filtered_blocking,
+    load_albums_blocking, load_artists_blocking, load_counts_blocking, load_folders_blocking,
+    load_tracks_page_blocking,
 };
 
 // --- folder tree -----------------------------------------------------------
@@ -81,8 +84,8 @@ pub use crate::local_artwork::{fetch_plex_misses, resolve_window_blocking, Artwo
 
 // --- playback --------------------------------------------------------------
 pub use crate::local_playback::{
-    enqueue, local_queue_track, play_album, play_current_if_local, LocalPlay, play_folder, play_folder_track,
-    play_tracks_visible,
+    enqueue, enqueue_album_filtered, local_queue_track, play_album, play_album_filtered,
+    play_current_if_local, play_folder, play_folder_track, play_tracks_visible, LocalPlay,
 };
 
 // --- plex ------------------------------------------------------------------

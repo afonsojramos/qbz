@@ -79,6 +79,7 @@ Rectangle {
     property var item: ({})
     property int number: 0
     property bool showArtwork: false
+    property bool showSource: false
     property bool showAlbum: false
     property bool showFavorite: true
     property bool showDownload: false
@@ -493,10 +494,11 @@ Rectangle {
     // The animated eq bars carry the playing state in the play cell when the
     // pref is ON (TrackPlayCell.slint:99-100 `show-bars`): only while this
     // row's track is actually PLAYING, at rest (hover reveals the pause
-    // affordance instead), and never in select mode. The bars tick on the
-    // shared shell pulse, so they cost ZERO extra presents (EqualizerBars
-    // rides QbzShell.pulseMs) — that is what makes the indicator affordable
-    // here, where a display-rate animation was not.
+    // affordance instead), and never in select mode. The Loader is part of
+    // the performance contract: an expanded multidisc album may contain
+    // hundreds of non-virtualized rows, and each eager EqualizerBars would
+    // otherwise receive the shared 30 Hz pulse even while hidden. Exactly
+    // one indicator exists: the active row while it is visible at rest.
     readonly property bool showBars: root.playIndicatorAnim
         && root.recycleActive && root.isActive && QbzPlayer.npPlaying && !root.hovered
         && !root.selectMode
@@ -559,7 +561,7 @@ Rectangle {
 
     readonly property int titleColWidth: cols.titleWidth(root.width,
         root.showArtwork, root.showAlbum, root.showFavorite,
-        root.showDownload, root.showMenu, root.showReorder)
+        root.showDownload, root.showMenu, root.showReorder, root.showSource)
 
     // Static now-playing mark: 3px accent pill on the left edge. With the
     // animation pref ON the eq bars in the play cell carry the state instead
@@ -671,12 +673,15 @@ Rectangle {
             readonly property bool accentRing: !root.playIndicatorAnim
                 && root.isActive && QbzPlayer.npPlaying
             // `show-bars` (TrackPlayCell.slint:184-187): the animated eq bars
-            // replace the disc at rest on the playing row. Pulse-driven, so
-            // they ride the shell's frame instead of owning one.
-            EqualizerBars {
-                visible: root.showBars
-                active: root.recycleActive && root.isActive && QbzPlayer.npPlaying
+            // replace the disc at rest on the playing row. The Loader avoids
+            // constructing a pulse receiver in every inactive track row.
+            Loader {
+                active: root.showBars
                 anchors.centerIn: parent
+                sourceComponent: EqualizerBars {
+                    active: true
+                    tint: theme.accent
+                }
             }
             // Selection checkbox — TrackRow.slint:392-419: a 13px disc, accent
             // when selected, muted/text-primary ring when not. It REPLACES the
@@ -843,6 +848,20 @@ Rectangle {
                 visible: root.artPending
                 phase: root.skelPhase
                 settleMs: root.artSettleMs
+            }
+        }
+        Item {
+            visible: root.showSource
+            width: cols.colSource
+            height: parent.height
+            SourceIcon {
+                anchors.centerIn: parent
+                kind: root.item.source || "qobuz"
+                mono: true
+                glyphSize: 15
+                plexSize: 16
+                qobuzSize: 16
+                localTint: "muted"
             }
         }
         // Title (+ explicit) / artist.

@@ -104,10 +104,7 @@ impl CacheHandle {
 
     /// Run `f` against the cache with WRITE access. Same handle — SQLite
     /// serialises writers itself and this one is behind a mutex anyway.
-    pub fn with_mut<R>(
-        &self,
-        f: impl FnOnce(&mut rusqlite::Connection) -> R,
-    ) -> Option<R> {
+    pub fn with_mut<R>(&self, f: impl FnOnce(&mut rusqlite::Connection) -> R) -> Option<R> {
         let mut guard = self.conn.lock().ok()?;
         if guard.is_none() {
             let path = self.path.lock().ok()?.clone()?;
@@ -145,11 +142,17 @@ pub(crate) fn cached_to_queue_track(t: &CachedTrack, source: SourceId) -> QueueT
         album: t.album.clone(),
         album_version: None,
         duration_secs: t.duration_ms / 1000,
-        // The RAW artwork token, not a URL. A URL embeds credentials and a
-        // size; the token is stable, and `artwork_token` is what turns it into
-        // something fetchable at the moment it is needed. Storing the URL here
-        // is how a queue row ends up with a stale token in it.
-        artwork_url: t.artwork_token.clone(),
+        // A source-tagged RAW token, not a URL. The vendor token is stable,
+        // while credentials and requested size are resolved only when a
+        // consumer needs bytes. The source tag is load-bearing: recent-track
+        // playback reaches this mapper directly, with no LocalTrack adapter
+        // available to add it later, and an untagged opaque token would be
+        // misclassified as a local filesystem path by NPB/MPRIS artwork.
+        artwork_url: t
+            .artwork_token
+            .clone()
+            .or_else(|| t.collection_artwork_token.clone())
+            .map(|token| format!("{}:{token}", source.as_str())),
         hires: t.bit_depth.map(|d| d > 16).unwrap_or(false),
         bit_depth: t.bit_depth,
         // kHz — the `QueueTrack` convention, NOT Hz.
@@ -208,7 +211,9 @@ pub(crate) fn meta_of_rows(
                     // The tier only needs to know whether it is lossy; the
                     // container name itself is display data.
                     if f.container.eq_ignore_ascii_case("mp3")
-                        || f.codec.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("mp3"))
+                        || f.codec
+                            .as_deref()
+                            .is_some_and(|c| c.eq_ignore_ascii_case("mp3"))
                     {
                         "MP3"
                     } else {
@@ -267,7 +272,10 @@ mod tests {
         assert!(qt.hires);
         assert_eq!(qt.source.as_deref(), Some("jellyfin"));
         assert!(qt.is_local, "a remote row must skip the Qobuz tier walk");
-        assert!(qt.streamable, "an unstreamable row is dropped from the queue");
+        assert!(
+            qt.streamable,
+            "an unstreamable row is dropped from the queue"
+        );
     }
 
     /// The queue carries the NAMESPACED id and the SERVER's id, not one or the
@@ -281,13 +289,35 @@ mod tests {
         assert_eq!(qt.source_item_id_hint.as_deref(), Some("srv-abc"));
     }
 
-    /// The RAW token, never a URL: a URL embeds credentials and a size, and a
-    /// queue row outlives both.
+    /// The source-tagged RAW token, never a URL: a URL embeds credentials and
+    /// a size, and a queue row outlives both. The tag keeps an opaque server
+    /// id from being mistaken for a local path by consumers outside this crate.
     #[test]
     fn the_queue_row_holds_the_art_token_not_a_url() {
         let qt = cached_to_queue_track(&row(), SourceId::JELLYFIN);
-        assert_eq!(qt.artwork_url.as_deref(), Some("748607df"));
+        assert_eq!(qt.artwork_url.as_deref(), Some("jellyfin:748607df"));
         assert!(!qt.artwork_url.unwrap().contains("http"));
+    }
+
+    #[test]
+    fn the_queue_prefers_disc_art_then_falls_back_to_collection_art() {
+        let mut with_disc = row();
+        with_disc.artwork_token = Some("disc-02".into());
+        with_disc.collection_artwork_token = Some("box-cover".into());
+        assert_eq!(
+            cached_to_queue_track(&with_disc, SourceId::JELLYFIN)
+                .artwork_url
+                .as_deref(),
+            Some("jellyfin:disc-02")
+        );
+
+        with_disc.artwork_token = None;
+        assert_eq!(
+            cached_to_queue_track(&with_disc, SourceId::JELLYFIN)
+                .artwork_url
+                .as_deref(),
+            Some("jellyfin:box-cover")
+        );
     }
 
     #[test]

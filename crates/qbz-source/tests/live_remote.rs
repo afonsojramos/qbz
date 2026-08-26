@@ -161,6 +161,7 @@ async fn jellyfin_walks_from_a_sweep_to_real_audio() {
             disc_number: t.disc_number,
             duration_ms: t.duration_ms,
             year: t.year,
+            genres: t.genres.clone(),
             genre: t.genre.clone(),
             container: t.container.clone(),
             codec: t.codec.clone(),
@@ -168,12 +169,19 @@ async fn jellyfin_walks_from_a_sweep_to_real_audio() {
             sample_rate_hz: t.sample_rate_hz,
             channels: t.channels,
             bitrate_kbps: t.bitrate_bps.map(|b| b / 1000),
-            // The Local Library row mapper stamps `<albumId>/<tag>` so the tag
-            // has something to hang off — see `JellyfinSource::artwork_token`.
+            // Item art preserves a disc-specific cover. The album endpoint is
+            // still addressable without its optional cache-busting tag.
             artwork_token: t
-                .album_image_tag
+                .item_image_tag
                 .as_ref()
-                .map(|tag| format!("{}/{}", t.album_id, tag)),
+                .map(|tag| format!("{}/{}", t.id, tag)),
+            collection_artwork_token: (!t.album_id.is_empty()).then(|| {
+                format!(
+                    "{}/{}",
+                    t.album_id,
+                    t.album_image_tag.as_deref().unwrap_or_default()
+                )
+            }),
             size_bytes: None,
         })
         .collect();
@@ -330,6 +338,7 @@ async fn subsonic_walks_from_a_sweep_to_real_audio() {
             disc_number: t.disc_number,
             duration_ms: t.duration_ms,
             year: t.year,
+            genres: t.genres.clone(),
             genre: t.genre.clone(),
             container: t.suffix.clone(),
             codec: t.content_type.clone(),
@@ -339,6 +348,7 @@ async fn subsonic_walks_from_a_sweep_to_real_audio() {
             bitrate_kbps: t.bitrate_kbps,
             // The OPAQUE coverArt id, verbatim.
             artwork_token: t.cover_art.clone(),
+            collection_artwork_token: None,
             size_bytes: t.size,
         })
         .collect();

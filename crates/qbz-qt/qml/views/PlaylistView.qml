@@ -849,6 +849,7 @@ Rectangle {
             visible: root.tracks.length > 0
             width: parent.width - 14
             showArtwork: true
+            showSource: root.isLocal || !root.online
             showAlbum: true
             showDownload: true
             // MIRROR the delegate's arm, or the labels slide by 22 + 14 the
@@ -894,6 +895,7 @@ Rectangle {
                     item: modelData
                     number: index + 1
                     showArtwork: true
+                    showSource: root.isLocal || !root.online
                     showAlbum: true
                     showDownload: true
                     // Alternating row tint, like the local album page

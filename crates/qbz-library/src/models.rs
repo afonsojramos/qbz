@@ -53,6 +53,10 @@ pub struct LocalTrack {
     pub disc_number: Option<u32>,
     pub year: Option<u32>,
     pub genre: Option<String>,
+    /// Complete ordered genre set. `genre` remains the compatibility primary
+    /// value for old databases and single-value tag writers.
+    #[serde(default)]
+    pub genres: Vec<String>,
     pub catalog_number: Option<String>,
 
     // Audio properties
@@ -70,6 +74,10 @@ pub struct LocalTrack {
 
     // Artwork
     pub artwork_path: Option<String>,
+    /// Album/collection artwork kept apart from a track or disc cover.
+    /// Consumers resolve artwork from the most specific layer outward.
+    #[serde(default)]
+    pub collection_artwork_path: Option<String>,
 
     // Indexing
     pub last_modified: i64,
@@ -104,6 +112,7 @@ impl Default for LocalTrack {
             disc_number: None,
             year: None,
             genre: None,
+            genres: Vec::new(),
             catalog_number: None,
             duration_secs: 0,
             format: AudioFormat::Unknown,
@@ -115,6 +124,7 @@ impl Default for LocalTrack {
             cue_start_secs: None,
             cue_end_secs: None,
             artwork_path: None,
+            collection_artwork_path: None,
             last_modified: 0,
             indexed_at: 0,
             source: None,
@@ -154,7 +164,16 @@ pub struct LocalAlbum {
     pub all_artists: String,
     pub year: Option<u32>,
     pub catalog_number: Option<String>,
+    /// Union of every track/version genre represented by this album.
+    #[serde(default)]
+    pub genres: Vec<String>,
     pub artwork_path: Option<String>,
+    /// Authoritative source that owns `artwork_path` when an album row is a
+    /// frontend-side logical group. It may differ from `source`: the
+    /// best-audio copy can be coverless while another physical copy supplies
+    /// the group's representative artwork.
+    #[serde(default)]
+    pub artwork_source: Option<String>,
     pub track_count: u32,
     pub total_duration_secs: u64,
     pub format: AudioFormat,

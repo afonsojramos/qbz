@@ -159,12 +159,12 @@ Row {
             QbzCircleAction {
                 name: "play-fill"
                 primary: true
-                onClicked: QbzLocal.playAlbum(root.album.id, false)
+                onClicked: QbzLocal.albumSelectedAction("play", "")
             }
             QbzCircleAction {
                 name: "shuffle"
                 anchors.verticalCenter: parent.verticalCenter
-                onClicked: QbzLocal.playAlbum(root.album.id, true)
+                onClicked: QbzLocal.albumSelectedAction("shuffle", "")
             }
             // ASSET GAP: Slint uses `pencil`; the Qt set ships pen-line.
             QbzCircleAction {

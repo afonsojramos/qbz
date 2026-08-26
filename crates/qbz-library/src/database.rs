@@ -78,8 +78,9 @@ impl LibraryDatabase {
             .map_err(|e| LibraryError::Database(format!("local_playlists schema: {}", e)))?;
         // Qobuz playlist snapshot (offline-mode B7/B8) — names + membership
         // captured opportunistically while online. Idempotent.
-        crate::qobuz_playlist_snapshot::init_schema(&db.conn)
-            .map_err(|e| LibraryError::Database(format!("qobuz_playlist_snapshot schema: {}", e)))?;
+        crate::qobuz_playlist_snapshot::init_schema(&db.conn).map_err(|e| {
+            LibraryError::Database(format!("qobuz_playlist_snapshot schema: {}", e))
+        })?;
         Ok(db)
     }
 
@@ -106,6 +107,7 @@ impl LibraryDatabase {
                 disc_number INTEGER,
                 year INTEGER,
                 genre TEXT,
+                genres_json TEXT NOT NULL DEFAULT '[]',
                 duration_secs INTEGER NOT NULL,
                 format TEXT NOT NULL,
                 bit_depth INTEGER,
@@ -814,6 +816,26 @@ impl LibraryDatabase {
                 .map_err(|e| LibraryError::Database(format!("Migration failed: {}", e)))?;
         }
 
+        // Multi-genre metadata is additive: old rows keep their singular
+        // `genre`, and readers use it whenever this JSON array is empty.
+        let has_genres_json: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('local_tracks') WHERE name = 'genres_json'",
+                [],
+                |row| row.get::<_, i32>(0),
+            )
+            .map(|count| count > 0)
+            .unwrap_or(false);
+        if !has_genres_json {
+            log::info!("Running migration: adding genres_json to local_tracks");
+            self.conn
+                .execute_batch(
+                    "ALTER TABLE local_tracks ADD COLUMN genres_json TEXT NOT NULL DEFAULT '[]';",
+                )
+                .map_err(|e| LibraryError::Database(format!("Migration failed: {}", e)))?;
+        }
+
         // Migration: Add canonical_name column to artist_images for artist name normalization
         let has_canonical_name: bool = self.conn
             .query_row(
@@ -994,13 +1016,22 @@ impl LibraryDatabase {
             .map_err(|e| LibraryError::Database(e.to_string()))?;
         if let Some(root_id) = root_id {
             self.conn
-                .execute("DELETE FROM local_scan_files WHERE root_id = ?", params![root_id])
+                .execute(
+                    "DELETE FROM local_scan_files WHERE root_id = ?",
+                    params![root_id],
+                )
                 .map_err(|e| LibraryError::Database(e.to_string()))?;
             self.conn
-                .execute("DELETE FROM local_scan_cue_refs WHERE root_id = ?", params![root_id])
+                .execute(
+                    "DELETE FROM local_scan_cue_refs WHERE root_id = ?",
+                    params![root_id],
+                )
                 .map_err(|e| LibraryError::Database(e.to_string()))?;
             self.conn
-                .execute("DELETE FROM local_scan_roots WHERE root_id = ?", params![root_id])
+                .execute(
+                    "DELETE FROM local_scan_roots WHERE root_id = ?",
+                    params![root_id],
+                )
                 .map_err(|e| LibraryError::Database(e.to_string()))?;
         }
         self.conn
@@ -1174,13 +1205,22 @@ impl LibraryDatabase {
             )
             .map_err(|e| LibraryError::Database(e.to_string()))?;
         self.conn
-            .execute("DELETE FROM local_scan_files WHERE root_id = ?", params![id])
+            .execute(
+                "DELETE FROM local_scan_files WHERE root_id = ?",
+                params![id],
+            )
             .map_err(|e| LibraryError::Database(e.to_string()))?;
         self.conn
-            .execute("DELETE FROM local_scan_cue_refs WHERE root_id = ?", params![id])
+            .execute(
+                "DELETE FROM local_scan_cue_refs WHERE root_id = ?",
+                params![id],
+            )
             .map_err(|e| LibraryError::Database(e.to_string()))?;
         self.conn
-            .execute("DELETE FROM local_scan_roots WHERE root_id = ?", params![id])
+            .execute(
+                "DELETE FROM local_scan_roots WHERE root_id = ?",
+                params![id],
+            )
             .map_err(|e| LibraryError::Database(e.to_string()))?;
         Ok(())
     }
@@ -1254,6 +1294,7 @@ impl LibraryDatabase {
         } else {
             "user"
         };
+        let genres_json = Self::track_genres_json(track);
 
         // Re-indexing an already-known file must KEEP ITS ROWID.
         //
@@ -1304,13 +1345,13 @@ impl LibraryDatabase {
                     r#"UPDATE local_tracks SET
                         title = ?1, artist = ?2, album = ?3, album_artist = ?4,
                         track_number = ?5, disc_number = ?6, year = ?7, genre = ?8,
-                        catalog_number = ?9, duration_secs = ?10, format = ?11,
-                        bit_depth = ?12, sample_rate = ?13, channels = ?14,
-                        file_size_bytes = ?15, cue_file_path = ?16, cue_start_secs = ?17,
-                        cue_end_secs = ?18, artwork_path = ?19, last_modified = ?20,
-                        indexed_at = ?21, album_group_key = ?22, album_group_title = ?23,
-                        source = ?24, is_network_mount = ?25
-                       WHERE id = ?26"#,
+                        genres_json = ?9, catalog_number = ?10, duration_secs = ?11, format = ?12,
+                        bit_depth = ?13, sample_rate = ?14, channels = ?15,
+                        file_size_bytes = ?16, cue_file_path = ?17, cue_start_secs = ?18,
+                        cue_end_secs = ?19, artwork_path = ?20, last_modified = ?21,
+                        indexed_at = ?22, album_group_key = ?23, album_group_title = ?24,
+                        source = ?25, is_network_mount = ?26
+                       WHERE id = ?27"#,
                     params![
                         track.title,
                         track.artist,
@@ -1320,6 +1361,7 @@ impl LibraryDatabase {
                         track.disc_number,
                         track.year,
                         track.genre,
+                        genres_json,
                         track.catalog_number,
                         track.duration_secs,
                         track.format.to_string(),
@@ -1348,11 +1390,11 @@ impl LibraryDatabase {
             .execute(
                 r#"INSERT OR REPLACE INTO local_tracks
                (file_path, title, artist, album, album_artist, track_number,
-                disc_number, year, genre, catalog_number, duration_secs, format, bit_depth,
+                disc_number, year, genre, genres_json, catalog_number, duration_secs, format, bit_depth,
                 sample_rate, channels, file_size_bytes, cue_file_path,
                 cue_start_secs, cue_end_secs, artwork_path, last_modified, indexed_at,
                 album_group_key, album_group_title, source, is_network_mount)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
                 params![
                     track.file_path,
                     track.title,
@@ -1363,6 +1405,7 @@ impl LibraryDatabase {
                     track.disc_number,
                     track.year,
                     track.genre,
+                    genres_json,
                     track.catalog_number,
                     track.duration_secs,
                     track.format.to_string(),
@@ -1599,6 +1642,7 @@ impl LibraryDatabase {
                 MAX(format) as format,
                 MAX(bit_depth) as bit_depth,
                 MAX(sample_rate) as sample_rate,
+                json_group_array(json(genres_json)) as genre_sets,
                 MAX(group_key) as directory_path,
                 MAX(source) as source
             FROM (
@@ -1613,6 +1657,11 @@ impl LibraryDatabase {
                     format,
                     bit_depth,
                     sample_rate,
+                    COALESCE(
+                        NULLIF(genres_json, '[]'),
+                        CASE WHEN genre IS NULL OR TRIM(genre) = ''
+                             THEN '[]' ELSE json_array(TRIM(genre)) END
+                    ) AS genres_json,
                     COALESCE(source, 'user') as source
                 FROM local_tracks
                 WHERE 1=1 {} {}
@@ -1641,6 +1690,7 @@ impl LibraryDatabase {
                 MAX(format) as format,
                 MAX(bit_depth) as bit_depth,
                 MAX(sample_rate) as sample_rate,
+                json_group_array(json(genres_json)) as genre_sets,
                 MAX(group_key) as directory_path,
                 MAX(source) as source
             FROM (
@@ -1655,6 +1705,11 @@ impl LibraryDatabase {
                     format,
                     bit_depth,
                     sample_rate,
+                    COALESCE(
+                        NULLIF(genres_json, '[]'),
+                        CASE WHEN genre IS NULL OR TRIM(genre) = ''
+                             THEN '[]' ELSE json_array(TRIM(genre)) END
+                    ) AS genres_json,
                     COALESCE(source, 'user') as source
                 FROM local_tracks
                 WHERE 1=1 {} {}
@@ -1696,7 +1751,11 @@ impl LibraryDatabase {
                     all_artists,
                     year: row.get(4)?,
                     catalog_number: row.get(5)?,
+                    genres: Self::genres_from_sets_json(
+                        row.get::<_, Option<String>>(12)?.as_deref(),
+                    ),
                     artwork_path,
+                    artwork_source: None,
                     track_count: row.get(7)?,
                     total_duration_secs: row.get(8)?,
                     format: Self::parse_format(
@@ -1705,11 +1764,11 @@ impl LibraryDatabase {
                     bit_depth: row.get(10)?,
                     sample_rate: row.get::<_, Option<f64>>(11)?.unwrap_or(44100.0),
                     directory_path: row
-                        .get::<_, Option<String>>(12)?
+                        .get::<_, Option<String>>(13)?
                         .unwrap_or_else(|| group_key.clone()),
                     source_folders: None,
                     source: row
-                        .get::<_, Option<String>>(13)?
+                        .get::<_, Option<String>>(14)?
                         .unwrap_or_else(|| "user".to_string()),
                     sources: Vec::new(),
                     identity_tracks: Vec::new(),
@@ -1864,8 +1923,8 @@ impl LibraryDatabase {
                 "track" => {
                     // Use the actual file_path so paths with edge-case
                     // characters round-trip exactly as stored.
-                    let path = one_file_path
-                        .unwrap_or_else(|| format!("{}/{}", parent_path, segment));
+                    let path =
+                        one_file_path.unwrap_or_else(|| format!("{}/{}", parent_path, segment));
                     entries.push(FolderTreeEntry::Track { path, segment });
                 }
                 _ => {
@@ -2128,6 +2187,11 @@ impl LibraryDatabase {
                     format,
                     bit_depth,
                     sample_rate,
+                    COALESCE(
+                        NULLIF(genres_json, '[]'),
+                        CASE WHEN genre IS NULL OR TRIM(genre) = ''
+                             THEN '[]' ELSE json_array(TRIM(genre)) END
+                    ) AS genres_json,
                     album_group_key AS source_folder,
                     COALESCE(source, 'user') AS source
                 FROM local_tracks
@@ -2152,6 +2216,7 @@ impl LibraryDatabase {
                 MAX(format) AS format,
                 MAX(bit_depth) AS bit_depth,
                 MAX(sample_rate) AS sample_rate,
+                json_group_array(json(genres_json)) AS genre_sets,
                 GROUP_CONCAT(DISTINCT source_folder) AS source_folders,
                 MAX(source) AS source
             FROM grouped
@@ -2173,10 +2238,9 @@ impl LibraryDatabase {
                 let group_key: String = row.get(0)?;
                 let album: String = row.get(1)?;
                 let artist: String = row.get(2)?;
-                let all_artists: String =
-                    row.get::<_, Option<String>>(3)?.unwrap_or_default();
+                let all_artists: String = row.get::<_, Option<String>>(3)?.unwrap_or_default();
                 let artwork_path: Option<String> = row.get(6)?;
-                let source_folders: Option<String> = row.get(12)?;
+                let source_folders: Option<String> = row.get(13)?;
 
                 Ok(LocalAlbum {
                     id: group_key.clone(),
@@ -2185,7 +2249,11 @@ impl LibraryDatabase {
                     all_artists,
                     year: row.get(4)?,
                     catalog_number: row.get(5)?,
+                    genres: Self::genres_from_sets_json(
+                        row.get::<_, Option<String>>(12)?.as_deref(),
+                    ),
                     artwork_path,
+                    artwork_source: None,
                     track_count: row.get(7)?,
                     total_duration_secs: row.get(8)?,
                     format: Self::parse_format(
@@ -2196,7 +2264,7 @@ impl LibraryDatabase {
                     directory_path: String::new(),
                     source_folders,
                     source: row
-                        .get::<_, Option<String>>(13)?
+                        .get::<_, Option<String>>(14)?
                         .unwrap_or_else(|| "user".to_string()),
                     sources: Vec::new(),
                     identity_tracks: Vec::new(),
@@ -2264,6 +2332,10 @@ impl LibraryDatabase {
         let remote_filter = remote_source_filter(remote_sources);
         let remote_attached = !remote_sources.is_empty()
             && self.attach_best_effort("remote_cache", remote_cache_path);
+        let plex_has_genres_json = plex_attached
+            && self.attached_has_column("plex_cache", "plex_cache_tracks", "genres_json");
+        let remote_has_genres_json = remote_attached
+            && self.attached_has_column("remote_cache", "remote_cache_tracks", "genres_json");
         let result = self.get_albums_metadata_page_inner(
             offset,
             limit,
@@ -2274,6 +2346,8 @@ impl LibraryDatabase {
             exclude_network_folders,
             plex_attached,
             remote_attached,
+            plex_has_genres_json,
+            remote_has_genres_json,
             &remote_filter,
             group_mode,
         );
@@ -2299,13 +2373,23 @@ impl LibraryDatabase {
         let Some(path) = path.filter(|p| p.exists()) else {
             return false;
         };
-        let _ = self
-            .conn
-            .execute(&format!("DETACH DATABASE {alias}"), []);
+        let _ = self.conn.execute(&format!("DETACH DATABASE {alias}"), []);
         let path_str = path.to_string_lossy().replace('\'', "''");
         self.conn
             .execute(&format!("ATTACH DATABASE '{path_str}' AS {alias}"), [])
             .is_ok()
+    }
+
+    fn attached_has_column(&self, schema: &str, table: &str, column: &str) -> bool {
+        let sql = format!("PRAGMA {schema}.table_info({table})");
+        let Ok(mut stmt) = self.conn.prepare(&sql) else {
+            return false;
+        };
+        let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) else {
+            return false;
+        };
+        let found = rows.filter_map(Result::ok).any(|name| name == column);
+        found
     }
 
     /// Resolve a folder cover for an album that has no `artwork_path` in the
@@ -2355,7 +2439,10 @@ impl LibraryDatabase {
             };
             // Check the folder and its parent (covers multi-disc layouts where
             // the art sits one level up).
-            let dirs = [Some(folder.clone()), folder.parent().map(|x| x.to_path_buf())];
+            let dirs = [
+                Some(folder.clone()),
+                folder.parent().map(|x| x.to_path_buf()),
+            ];
             for dir in dirs.into_iter().flatten() {
                 for name in NAMES {
                     let cover = dir.join(name);
@@ -2379,6 +2466,8 @@ impl LibraryDatabase {
         exclude_network_folders: bool,
         plex_attached: bool,
         remote_attached: bool,
+        plex_has_genres_json: bool,
+        remote_has_genres_json: bool,
         remote_filter: &str,
         group_mode: crate::album_grouping::AlbumGroupMode,
     ) -> Result<crate::models::AlbumsMetadataPage, LibraryError> {
@@ -2424,8 +2513,14 @@ impl LibraryDatabase {
         // arm (plex stores duration_ms / sampling_rate_hz as INTEGER
         // while local uses REAL for sample_rate and seconds-INTEGER
         // for duration).
+        let plex_genres_expr = if plex_has_genres_json {
+            "genres_json"
+        } else {
+            "'[]'"
+        };
         let plex_cte = if plex_attached {
-            r#",
+            format!(
+                r#",
             plex_aggregated AS (
                 SELECT
                     -- `album_key` is populated by plex/mod.rs::plex_album_key()
@@ -2480,13 +2575,19 @@ impl LibraryDatabase {
                         CAST(COALESCE(duration_ms, 0) / 1000 AS INTEGER)
                     )) AS identity_tracks,
                     json_array('plex') AS source_words,
+                    json_group_array(json(COALESCE(
+                        NULLIF({plex_genres_expr}, '[]'),
+                        CASE WHEN genre IS NULL OR TRIM(genre) = ''
+                             THEN '[]' ELSE json_array(TRIM(genre)) END
+                    ))) AS genre_sets,
                     CAST(NULL AS TEXT) AS source_folders,
                     'plex' AS source
                 FROM plex_cache.plex_cache_tracks
                 GROUP BY COALESCE(album_key, 'plex:' || rating_key)
             )"#
+            )
         } else {
-            ""
+            String::new()
         };
 
         // The SHARED remote mirror: Jellyfin, Subsonic, and whatever comes
@@ -2504,8 +2605,14 @@ impl LibraryDatabase {
         // field — and the mappers already fold "not applicable" (Jellyfin's
         // null, Subsonic's 0) to NULL. Inventing 16 for a lossless CD-rate row
         // would be guessing where the server answered.
+        let remote_genres_expr = if remote_has_genres_json {
+            "genres_json"
+        } else {
+            "'[]'"
+        };
         let remote_cte = if remote_attached {
-            format!(r#",
+            format!(
+                r#",
             remote_aggregated AS (
                 SELECT
                     source || ':' || album_id AS group_key,
@@ -2517,7 +2624,14 @@ impl LibraryDatabase {
                     GROUP_CONCAT(DISTINCT artist) AS all_artists,
                     MIN(year) AS year,
                     CAST(NULL AS TEXT) AS catalog_number,
-                    MAX(CASE WHEN artwork_token IS NOT NULL THEN artwork_token END) AS artwork,
+                    COALESCE(
+                        MAX(CASE WHEN collection_artwork_token IS NOT NULL
+                                      AND TRIM(collection_artwork_token) != ''
+                                 THEN collection_artwork_token END),
+                        MAX(CASE WHEN artwork_token IS NOT NULL
+                                      AND TRIM(artwork_token) != ''
+                                 THEN artwork_token END)
+                    ) AS artwork,
                     COUNT(*) AS track_count,
                     CAST(SUM(COALESCE(duration_ms, 0)) / 1000 AS INTEGER) AS total_duration,
                     COALESCE(MAX(container), MAX(codec)) AS format,
@@ -2528,12 +2642,18 @@ impl LibraryDatabase {
                         CAST(COALESCE(duration_ms, 0) / 1000 AS INTEGER)
                     )) AS identity_tracks,
                     json_group_array(DISTINCT source) AS source_words,
+                    json_group_array(json(COALESCE(
+                        NULLIF({remote_genres_expr}, '[]'),
+                        CASE WHEN genre IS NULL OR TRIM(genre) = ''
+                             THEN '[]' ELSE json_array(TRIM(genre)) END
+                    ))) AS genre_sets,
                     CAST(NULL AS TEXT) AS source_folders,
                     source AS source
                 FROM remote_cache.remote_cache_tracks
                 WHERE album_id != '' AND {remote_filter}
                 GROUP BY source, album_id
-            )"#)
+            )"#
+            )
         } else {
             String::new()
         };
@@ -2576,7 +2696,12 @@ impl LibraryDatabase {
                     album_group_key AS source_folder,
                     COALESCE(source, 'user') AS source,
                     artist AS track_artist,
-                    COALESCE(title, '') AS track_title
+                    COALESCE(title, '') AS track_title,
+                    COALESCE(
+                        NULLIF(genres_json, '[]'),
+                        CASE WHEN genre IS NULL OR TRIM(genre) = ''
+                             THEN '[]' ELSE json_array(TRIM(genre)) END
+                    ) AS genres_json
                 FROM local_tracks
                 WHERE 1=1 {source_filter} {network_filter}
             ),
@@ -2605,6 +2730,7 @@ impl LibraryDatabase {
                         CAST(COALESCE(duration_secs, 0) AS INTEGER)
                     )) AS identity_tracks,
                     json_group_array(DISTINCT source) AS source_words,
+                    json_group_array(json(genres_json)) AS genre_sets,
                     GROUP_CONCAT(DISTINCT source_folder) AS source_folders,
                     MAX(source) AS source
                 FROM grouped
@@ -2617,7 +2743,7 @@ impl LibraryDatabase {
             SELECT
                 group_key, title, artist, all_artists, year, catalog_number,
                 artwork, track_count, total_duration, format, bit_depth,
-                sample_rate, identity_tracks, source_words, source_folders, source,
+                sample_rate, identity_tracks, source_words, genre_sets, source_folders, source,
                 COUNT(*) OVER () AS total
             FROM filtered
             ORDER BY {order_clause}
@@ -2643,32 +2769,32 @@ impl LibraryDatabase {
                     let group_key: String = row.get(0)?;
                     let title: String = row.get(1)?;
                     let artist: String = row.get(2)?;
-                    let all_artists: String =
-                        row.get::<_, Option<String>>(3)?.unwrap_or_default();
+                    let all_artists: String = row.get::<_, Option<String>>(3)?.unwrap_or_default();
                     let artwork_path: Option<String> = row.get(6)?;
                     let identity_json = row
                         .get::<_, Option<String>>(12)?
                         .unwrap_or_else(|| "[]".to_string());
-                    let identity_tracks = serde_json::from_str::<Vec<(String, u64)>>(
-                        &identity_json,
-                    )
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(title, duration_secs)| crate::models::AlbumTrackEvidence {
-                        title,
-                        duration_secs,
-                    })
-                    .collect();
+                    let identity_tracks =
+                        serde_json::from_str::<Vec<(String, u64)>>(&identity_json)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|(title, duration_secs)| crate::models::AlbumTrackEvidence {
+                                title,
+                                duration_secs,
+                            })
+                            .collect();
                     let sources = serde_json::from_str::<Vec<String>>(
                         &row.get::<_, Option<String>>(13)?
                             .unwrap_or_else(|| "[]".to_string()),
                     )
                     .unwrap_or_default();
-                    let source_folders: Option<String> = row.get(14)?;
+                    let genres =
+                        Self::genres_from_sets_json(row.get::<_, Option<String>>(14)?.as_deref());
+                    let source_folders: Option<String> = row.get(15)?;
                     let source = row
-                        .get::<_, Option<String>>(15)?
+                        .get::<_, Option<String>>(16)?
                         .unwrap_or_else(|| "user".to_string());
-                    let total: u64 = row.get::<_, i64>(16)? as u64;
+                    let total: u64 = row.get::<_, i64>(17)? as u64;
 
                     Ok((
                         LocalAlbum {
@@ -2678,7 +2804,9 @@ impl LibraryDatabase {
                             all_artists,
                             year: row.get(4)?,
                             catalog_number: row.get(5)?,
+                            genres,
                             artwork_path,
+                            artwork_source: None,
                             track_count: row.get(7)?,
                             total_duration_secs: row.get(8)?,
                             format: Self::parse_format(
@@ -2783,7 +2911,8 @@ impl LibraryDatabase {
         // with the page it counts is worse than no count: the grid renders a
         // scrollbar for rows that are not there.
         let remote_cte = if remote_attached {
-            format!(r#",
+            format!(
+                r#",
             remote_aggregated AS (
                 SELECT
                     source || ':' || album_id AS group_key,
@@ -2792,7 +2921,8 @@ impl LibraryDatabase {
                 FROM remote_cache.remote_cache_tracks
                 WHERE album_id != '' AND {remote_filter}
                 GROUP BY source, album_id
-            )"#)
+            )"#
+            )
         } else {
             String::new()
         };
@@ -2856,11 +2986,9 @@ impl LibraryDatabase {
 
         let total: i64 = self
             .conn
-            .query_row(
-                &query,
-                rusqlite::params![has_search, search_like],
-                |row| row.get(0),
-            )
+            .query_row(&query, rusqlite::params![has_search, search_like], |row| {
+                row.get(0)
+            })
             .map_err(|e| LibraryError::Database(e.to_string()))?;
         Ok(total as u64)
     }
@@ -3036,7 +3164,9 @@ impl LibraryDatabase {
     /// per-track embedded covers. Per-track artwork is now resolved
     /// individually at scan time. Kept compilable for any caller that
     /// might still exist; do not introduce new callers.
-    #[deprecated(note = "Was destructive in scan loop; per-track artwork is resolved during scan instead")]
+    #[deprecated(
+        note = "Was destructive in scan loop; per-track artwork is resolved during scan instead"
+    )]
     pub fn update_album_group_artwork(
         &self,
         group_key: &str,
@@ -3436,6 +3566,33 @@ impl LibraryDatabase {
         exclude_network_folders: bool,
         sort: &str,
     ) -> Result<Vec<LocalTrack>, LibraryError> {
+        self.search_with_filter_page_faceted(
+            query,
+            offset,
+            limit,
+            include_qobuz_downloads,
+            exclude_network_folders,
+            sort,
+            &[],
+            false,
+            &[],
+            &[],
+        )
+    }
+
+    pub fn search_with_filter_page_faceted(
+        &self,
+        query: &str,
+        offset: u64,
+        limit: u64,
+        include_qobuz_downloads: bool,
+        exclude_network_folders: bool,
+        sort: &str,
+        formats: &[String],
+        other_formats: bool,
+        quality_tiers: &[String],
+        source_buckets: &[String],
+    ) -> Result<Vec<LocalTrack>, LibraryError> {
         let pattern = format!("%{}%", query);
         let source_filter = if include_qobuz_downloads {
             ""
@@ -3450,6 +3607,30 @@ impl LibraryDatabase {
             )"
         } else {
             ""
+        };
+        let media_filter = track_media_filter_sql(
+            "format",
+            "bit_depth",
+            "sample_rate",
+            formats,
+            other_formats,
+            quality_tiers,
+        );
+        let source_bucket_filter = if source_buckets.is_empty() {
+            String::new()
+        } else {
+            let mut values = Vec::new();
+            if source_buckets.iter().any(|value| value == "local") {
+                values.push("COALESCE(source,'local') NOT IN ('qobuz_download','qobuz_purchase')");
+            }
+            if source_buckets.iter().any(|value| value == "offline") {
+                values.push("source IN ('qobuz_download','qobuz_purchase')");
+            }
+            if values.is_empty() {
+                "AND 0".to_string()
+            } else {
+                format!("AND ({})", values.join(" OR "))
+            }
         };
         // ORDER BY clause is built from a validated allowlist so user
         // input never reaches the SQL string directly. NULL years always
@@ -3480,12 +3661,14 @@ impl LibraryDatabase {
         let sql = format!(
             "SELECT {} FROM local_tracks \
              WHERE (title LIKE ?1 OR artist LIKE ?1 OR album LIKE ?1) \
-             {} {} \
+             {} {} {} {} \
              ORDER BY {} \
              LIMIT ?2 OFFSET ?3",
             Self::TRACK_COLUMNS,
             source_filter,
             network_filter,
+            media_filter,
+            source_bucket_filter,
             order_clause,
         );
         let mut stmt = self
@@ -3560,43 +3743,96 @@ impl LibraryDatabase {
     /// Convert a database row to LocalTrack
     /// Column list for SELECT queries (avoids fragile SELECT * with positional indices)
     const TRACK_COLUMNS: &'static str = "id, file_path, title, artist, album, album_artist, \
-         track_number, disc_number, year, genre, duration_secs, format, \
+         track_number, disc_number, year, genre, genres_json, duration_secs, format, \
          bit_depth, sample_rate, channels, file_size_bytes, \
          cue_file_path, cue_start_secs, cue_end_secs, artwork_path, \
          last_modified, indexed_at, album_group_key, album_group_title, \
          source, qobuz_track_id, catalog_number, is_network_mount";
 
+    fn track_genres_json(track: &LocalTrack) -> String {
+        let mut genres = Vec::<String>::new();
+        for value in track.genres.iter().chain(track.genre.iter()) {
+            let value = value.trim();
+            if !value.is_empty()
+                && !genres
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(value))
+            {
+                genres.push(value.to_string());
+            }
+        }
+        serde_json::to_string(&genres).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    fn genres_from_json(raw: Option<&str>, primary: Option<&str>) -> Vec<String> {
+        let mut genres = raw
+            .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+            .unwrap_or_default();
+        if genres.is_empty() {
+            if let Some(value) = primary.filter(|value| !value.trim().is_empty()) {
+                genres.push(value.trim().to_string());
+            }
+        }
+        genres
+    }
+
+    fn genres_from_sets_json(raw: Option<&str>) -> Vec<String> {
+        let sets = raw
+            .and_then(|value| serde_json::from_str::<Vec<Vec<String>>>(value).ok())
+            .unwrap_or_default();
+        let mut genres = Vec::<String>::new();
+        for value in sets.into_iter().flatten() {
+            let value = value.trim();
+            if !value.is_empty()
+                && !genres
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(value))
+            {
+                genres.push(value.to_string());
+            }
+        }
+        genres.sort_by_key(|value| value.to_lowercase());
+        genres
+    }
+
     fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<LocalTrack> {
+        let genre: Option<String> = row.get(9)?;
+        let genres = Self::genres_from_json(
+            row.get::<_, Option<String>>(10)?.as_deref(),
+            genre.as_deref(),
+        );
         Ok(LocalTrack {
-            id: row.get(0)?,                                                          // id
-            file_path: row.get(1)?,                                                   // file_path
-            title: row.get(2)?,                                                       // title
-            artist: row.get(3)?,                                                      // artist
-            album: row.get(4)?,                                                       // album
-            album_artist: row.get(5)?,   // album_artist
-            track_number: row.get(6)?,   // track_number
-            disc_number: row.get(7)?,    // disc_number
-            year: row.get(8)?,           // year
-            genre: row.get(9)?,          // genre
-            duration_secs: row.get(10)?, // duration_secs
-            format: Self::parse_format(&row.get::<_, String>(11)?), // format
-            bit_depth: row.get(12)?,     // bit_depth
-            sample_rate: row.get::<_, f64>(13)?, // sample_rate
-            channels: row.get(14)?,      // channels
-            file_size_bytes: row.get(15)?, // file_size_bytes
-            cue_file_path: row.get(16)?, // cue_file_path
-            cue_start_secs: row.get(17)?, // cue_start_secs
-            cue_end_secs: row.get(18)?,  // cue_end_secs
-            artwork_path: row.get(19)?,  // artwork_path
-            last_modified: row.get(20)?, // last_modified
-            indexed_at: row.get(21)?,    // indexed_at
-            album_group_key: row.get::<_, Option<String>>(22)?.unwrap_or_default(), // album_group_key
-            album_group_title: row.get::<_, Option<String>>(23)?.unwrap_or_default(), // album_group_title
-            source: row.get(24).ok().flatten(),                                       // source
-            qobuz_track_id: row.get(25).ok().flatten(), // qobuz_track_id
-            catalog_number: row.get(26).ok().flatten(), // catalog_number
+            id: row.get(0)?,           // id
+            file_path: row.get(1)?,    // file_path
+            title: row.get(2)?,        // title
+            artist: row.get(3)?,       // artist
+            album: row.get(4)?,        // album
+            album_artist: row.get(5)?, // album_artist
+            track_number: row.get(6)?, // track_number
+            disc_number: row.get(7)?,  // disc_number
+            year: row.get(8)?,         // year
+            genre,
+            genres,
+            duration_secs: row.get(11)?, // duration_secs
+            format: Self::parse_format(&row.get::<_, String>(12)?), // format
+            bit_depth: row.get(13)?,     // bit_depth
+            sample_rate: row.get::<_, f64>(14)?, // sample_rate
+            channels: row.get(15)?,      // channels
+            file_size_bytes: row.get(16)?, // file_size_bytes
+            cue_file_path: row.get(17)?, // cue_file_path
+            cue_start_secs: row.get(18)?, // cue_start_secs
+            cue_end_secs: row.get(19)?,  // cue_end_secs
+            artwork_path: row.get(20)?,  // artwork_path
+            collection_artwork_path: None,
+            last_modified: row.get(21)?, // last_modified
+            indexed_at: row.get(22)?,    // indexed_at
+            album_group_key: row.get::<_, Option<String>>(23)?.unwrap_or_default(), // album_group_key
+            album_group_title: row.get::<_, Option<String>>(24)?.unwrap_or_default(), // album_group_title
+            source: row.get(25).ok().flatten(),                                       // source
+            qobuz_track_id: row.get(26).ok().flatten(), // qobuz_track_id
+            catalog_number: row.get(27).ok().flatten(), // catalog_number
             is_network_mount: row
-                .get::<_, Option<i64>>(27)
+                .get::<_, Option<i64>>(28)
                 .ok()
                 .flatten()
                 .map(|v| v != 0)
@@ -3629,6 +3865,65 @@ impl LibraryDatabase {
             _ => AudioFormat::Unknown,
         }
     }
+}
+
+/// Allowlisted SQL for the Local Library quality/format funnel. Values never
+/// enter SQL; callers can only turn these fixed predicates on or off.
+fn track_media_filter_sql(
+    format_col: &str,
+    depth_col: &str,
+    rate_col: &str,
+    formats: &[String],
+    other_formats: bool,
+    quality_tiers: &[String],
+) -> String {
+    let known = ["flac", "alac", "ape", "wav", "mp3", "aac"];
+    let selected = known
+        .iter()
+        .copied()
+        .filter(|value| {
+            formats
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(value))
+        })
+        .collect::<Vec<_>>();
+    let mut clauses = Vec::new();
+    if !selected.is_empty() || other_formats {
+        let mut formats_sql = selected
+            .into_iter()
+            .map(|value| format!("LOWER({format_col})='{value}'"))
+            .collect::<Vec<_>>();
+        if other_formats {
+            formats_sql.push(format!(
+                "LOWER({format_col}) NOT IN ('flac','alac','ape','wav','mp3','aac')"
+            ));
+        }
+        clauses.push(format!("AND ({})", formats_sql.join(" OR ")));
+    }
+    let hires = quality_tiers.iter().any(|value| value == "hires");
+    let cd = quality_tiers.iter().any(|value| value == "cd");
+    let lossy = quality_tiers.iter().any(|value| value == "lossy");
+    if hires || cd || lossy {
+        let khz = format!(
+            "CASE WHEN COALESCE({rate_col},0)>=1000 THEN COALESCE({rate_col},0)/1000.0 ELSE COALESCE({rate_col},0) END"
+        );
+        let mut quality = Vec::new();
+        if hires {
+            quality.push(format!(
+                "(LOWER({format_col}) IN ('dsd','dsf','dff') OR COALESCE({depth_col},0)>=24)"
+            ));
+        }
+        if cd {
+            quality.push(format!(
+                "(LOWER({format_col}) NOT IN ('mp3','dsd','dsf','dff') AND (({depth_col} IS NOT NULL AND {depth_col}<24) OR ({depth_col} IS NULL AND {khz}>=44.1)))"
+            ));
+        }
+        if lossy {
+            quality.push(format!("LOWER({format_col})='mp3'"));
+        }
+        clauses.push(format!("AND ({})", quality.join(" OR ")));
+    }
+    clauses.join(" ")
 }
 
 /// Escape `%`, `_` and `\` characters so the input can be embedded as a
@@ -4686,10 +4981,7 @@ impl LibraryDatabase {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
             })
             .map_err(|e| {
-                LibraryError::Database(format!(
-                    "Failed to query playlist plex tracks: {}",
-                    e
-                ))
+                LibraryError::Database(format!("Failed to query playlist plex tracks: {}", e))
             })?;
 
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
@@ -4726,7 +5018,7 @@ impl LibraryDatabase {
             .prepare(
                 "SELECT t.id, t.file_path, t.title, t.artist, t.album, t.album_artist,
                     t.album_group_key, t.album_group_title, t.track_number, t.disc_number,
-                    t.year, t.genre, t.duration_secs, t.format, t.bit_depth, t.sample_rate,
+                    t.year, t.genre, t.genres_json, t.duration_secs, t.format, t.bit_depth, t.sample_rate,
                     t.channels, t.file_size_bytes, t.cue_file_path, t.cue_start_secs,
                     t.cue_end_secs, t.artwork_path, t.last_modified, t.indexed_at, t.source,
                     t.qobuz_track_id, t.is_network_mount, plt.position
@@ -4752,22 +5044,27 @@ impl LibraryDatabase {
                     disc_number: row.get(9)?,
                     year: row.get(10)?,
                     genre: row.get(11)?,
+                    genres: Self::genres_from_json(
+                        row.get::<_, Option<String>>(12)?.as_deref(),
+                        row.get::<_, Option<String>>(11)?.as_deref(),
+                    ),
                     catalog_number: None,
-                    duration_secs: row.get(12)?,
-                    format: Self::parse_format(&row.get::<_, String>(13)?),
-                    bit_depth: row.get(14)?,
-                    sample_rate: row.get::<_, f64>(15)?,
-                    channels: row.get(16)?,
-                    file_size_bytes: row.get(17)?,
-                    cue_file_path: row.get(18)?,
-                    cue_start_secs: row.get(19)?,
-                    cue_end_secs: row.get(20)?,
-                    artwork_path: row.get(21)?,
-                    last_modified: row.get(22)?,
-                    indexed_at: row.get(23)?,
-                    source: row.get(24)?,
-                    qobuz_track_id: row.get(25)?,
-                    is_network_mount: row.get::<_, i64>(26)? != 0,
+                    duration_secs: row.get(13)?,
+                    format: Self::parse_format(&row.get::<_, String>(14)?),
+                    bit_depth: row.get(15)?,
+                    sample_rate: row.get::<_, f64>(16)?,
+                    channels: row.get(17)?,
+                    file_size_bytes: row.get(18)?,
+                    cue_file_path: row.get(19)?,
+                    cue_start_secs: row.get(20)?,
+                    cue_end_secs: row.get(21)?,
+                    artwork_path: row.get(22)?,
+                    collection_artwork_path: None,
+                    last_modified: row.get(23)?,
+                    indexed_at: row.get(24)?,
+                    source: row.get(25)?,
+                    qobuz_track_id: row.get(26)?,
+                    is_network_mount: row.get::<_, i64>(27)? != 0,
                 })
             })
             .map_err(|e| {
@@ -4789,7 +5086,7 @@ impl LibraryDatabase {
             .prepare(
                 "SELECT t.id, t.file_path, t.title, t.artist, t.album, t.album_artist,
                     t.album_group_key, t.album_group_title, t.track_number, t.disc_number,
-                    t.year, t.genre, t.duration_secs, t.format, t.bit_depth, t.sample_rate,
+                    t.year, t.genre, t.genres_json, t.duration_secs, t.format, t.bit_depth, t.sample_rate,
                     t.channels, t.file_size_bytes, t.cue_file_path, t.cue_start_secs,
                     t.cue_end_secs, t.artwork_path, t.last_modified, t.indexed_at, t.source,
                     t.qobuz_track_id, t.is_network_mount, plt.position
@@ -4816,24 +5113,29 @@ impl LibraryDatabase {
                         disc_number: row.get(9)?,
                         year: row.get(10)?,
                         genre: row.get(11)?,
+                        genres: Self::genres_from_json(
+                            row.get::<_, Option<String>>(12)?.as_deref(),
+                            row.get::<_, Option<String>>(11)?.as_deref(),
+                        ),
                         catalog_number: None,
-                        duration_secs: row.get(12)?,
-                        format: Self::parse_format(&row.get::<_, String>(13)?),
-                        bit_depth: row.get(14)?,
-                        sample_rate: row.get::<_, f64>(15)?,
-                        channels: row.get(16)?,
-                        file_size_bytes: row.get(17)?,
-                        cue_file_path: row.get(18)?,
-                        cue_start_secs: row.get(19)?,
-                        cue_end_secs: row.get(20)?,
-                        artwork_path: row.get(21)?,
-                        last_modified: row.get(22)?,
-                        indexed_at: row.get(23)?,
-                        source: row.get(24)?,
-                        qobuz_track_id: row.get(25)?,
-                        is_network_mount: row.get::<_, i64>(26)? != 0,
+                        duration_secs: row.get(13)?,
+                        format: Self::parse_format(&row.get::<_, String>(14)?),
+                        bit_depth: row.get(15)?,
+                        sample_rate: row.get::<_, f64>(16)?,
+                        channels: row.get(17)?,
+                        file_size_bytes: row.get(18)?,
+                        cue_file_path: row.get(19)?,
+                        cue_start_secs: row.get(20)?,
+                        cue_end_secs: row.get(21)?,
+                        artwork_path: row.get(22)?,
+                        collection_artwork_path: None,
+                        last_modified: row.get(23)?,
+                        indexed_at: row.get(24)?,
+                        source: row.get(25)?,
+                        qobuz_track_id: row.get(26)?,
+                        is_network_mount: row.get::<_, i64>(27)? != 0,
                     },
-                    playlist_position: row.get(27)?,
+                    playlist_position: row.get(28)?,
                 })
             })
             .map_err(|e| {
@@ -5101,8 +5403,7 @@ impl LibraryDatabase {
         if moves.is_empty() {
             return Ok(Vec::new());
         }
-        let mut next =
-            ((qobuz_track_count as i32) + sidecar_total as i32).max(max_pos + 1);
+        let mut next = ((qobuz_track_count as i32) + sidecar_total as i32).max(max_pos + 1);
         let mut healed = Vec::with_capacity(moves.len());
         for (kind, rowid, reference, old) in moves {
             let sql = if kind == "local" {
@@ -5767,9 +6068,7 @@ impl LibraryDatabase {
                 let url: Option<String> = row.get(2)?;
                 Ok((row.get::<_, String>(0)?, custom.or(url)))
             })
-            .map_err(|e| {
-                LibraryError::Database(format!("Failed to query artist images: {}", e))
-            })?;
+            .map_err(|e| LibraryError::Database(format!("Failed to query artist images: {}", e)))?;
 
         let mut map = std::collections::HashMap::new();
         for row in rows.flatten() {
@@ -6258,7 +6557,9 @@ impl LibraryDatabase {
                 LibraryError::Database(format!("Failed to query purchase album counts: {}", e))
             })?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| LibraryError::Database(format!("Failed to collect album counts: {}", e)))?;
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to collect album counts: {}", e))
+            })?;
 
         // DISTINCT over (album_id, track_id) is done here rather than in SQL so
         // the existence check can drop a row before it is counted.
@@ -6351,8 +6652,20 @@ mod track_page_order_tests {
         let tmp = TempDir::new().unwrap();
         let db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
         for (path, title, artist, album_artist, album) in [
-            ("/music/zed.flac", "First", "Zed Performer", "Alpha Album Artist", "A Album"),
-            ("/music/alpha.flac", "Second", "Alpha Performer", "Zed Album Artist", "Z Album"),
+            (
+                "/music/zed.flac",
+                "First",
+                "Zed Performer",
+                "Alpha Album Artist",
+                "A Album",
+            ),
+            (
+                "/music/alpha.flac",
+                "Second",
+                "Alpha Performer",
+                "Zed Album Artist",
+                "Z Album",
+            ),
         ] {
             let track = LocalTrack {
                 file_path: path.to_string(),
@@ -6376,6 +6689,93 @@ mod track_page_order_tests {
             .search_with_filter_page("", 0, 10, true, false, "artist-asc")
             .unwrap();
         assert_eq!(album_artist_sorted[0].artist, "Zed Performer");
+    }
+}
+
+#[cfg(test)]
+mod local_genre_and_filter_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn fixture() -> (TempDir, LibraryDatabase) {
+        let tmp = TempDir::new().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
+        (tmp, db)
+    }
+
+    fn insert(
+        db: &LibraryDatabase,
+        name: &str,
+        format: AudioFormat,
+        depth: Option<u32>,
+        genres: &[&str],
+    ) {
+        let row = LocalTrack {
+            file_path: format!("/music/Album/{name}"),
+            title: name.to_string(),
+            artist: "Fixture Artist".into(),
+            album_artist: Some("Fixture Artist".into()),
+            album: "Fixture Album".into(),
+            album_group_key: "/music/Album".into(),
+            album_group_title: "Fixture Album".into(),
+            track_number: Some(if name.starts_with('a') { 1 } else { 2 }),
+            genre: genres.first().map(|value| value.to_string()),
+            genres: genres.iter().map(|value| value.to_string()).collect(),
+            format,
+            bit_depth: depth,
+            sample_rate: 44_100.0,
+            ..Default::default()
+        };
+        db.insert_track(&row).unwrap();
+    }
+
+    #[test]
+    fn folder_album_unions_all_track_genres_case_insensitively() {
+        let (_tmp, db) = fixture();
+        insert(
+            &db,
+            "a.flac",
+            AudioFormat::Flac,
+            Some(24),
+            &["Progressive Rock", "Art Rock"],
+        );
+        insert(
+            &db,
+            "b.mp3",
+            AudioFormat::Mp3,
+            None,
+            &["art rock", "Psychedelic"],
+        );
+        let albums = db.get_albums_with_full_filter(false, true, false).unwrap();
+        assert_eq!(albums.len(), 1);
+        assert_eq!(
+            albums[0].genres,
+            ["Art Rock", "Progressive Rock", "Psychedelic"]
+        );
+    }
+
+    #[test]
+    fn local_format_and_quality_filters_run_before_page_limits() {
+        let (_tmp, db) = fixture();
+        insert(&db, "a.flac", AudioFormat::Flac, Some(24), &["Rock"]);
+        insert(&db, "b.mp3", AudioFormat::Mp3, None, &["Rock"]);
+        let rows = db
+            .search_with_filter_page_faceted(
+                "",
+                0,
+                1,
+                true,
+                false,
+                "title-asc",
+                &["mp3".to_string()],
+                false,
+                &["lossy".to_string()],
+                &["local".to_string()],
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "b.mp3");
+        assert_eq!(rows[0].genres, ["Rock"]);
     }
 }
 
@@ -6439,7 +6839,14 @@ mod metadata_grouping_tests {
             "/m/mix/cd",
         );
 
-        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
+        let albums = db
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
+            .unwrap();
         let vespertine = albums
             .iter()
             .find(|a| a.title == "Vespertine")
@@ -6454,7 +6861,14 @@ mod metadata_grouping_tests {
         insert_track_for_test(&db, "/m/folder/01.flac", None, None, "A", "/m/folder");
         insert_track_for_test(&db, "/m/folder/02.flac", None, None, "B", "/m/folder");
 
-        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
+        let albums = db
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
+            .unwrap();
         assert_eq!(albums.len(), 1, "single folder fallback group");
         assert_eq!(albums[0].track_count, 2);
         assert_eq!(albums[0].artist, "Various Artists");
@@ -6467,7 +6881,14 @@ mod metadata_grouping_tests {
         insert_track_for_test(&db, "/m/ghost/01.flac", None, None, "X", "");
         insert_track_for_test(&db, "/m/ghost/02.flac", None, None, "Y", "");
 
-        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
+        let albums = db
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
+            .unwrap();
         let unknown = albums
             .iter()
             .find(|a| a.title == "Unknown Album")
@@ -6496,7 +6917,14 @@ mod metadata_grouping_tests {
             "/m/comp",
         );
 
-        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
+        let albums = db
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
+            .unwrap();
         let comp = albums
             .iter()
             .find(|a| a.title == "Comp")
@@ -6513,8 +6941,16 @@ mod metadata_grouping_tests {
         // album_artist. Metadata mode splits per track artist; Folder mode
         // keeps ONE card.
         for (i, artist) in [
-            "MAKE-UP", "MAKE-UP PROJECT", "Horie", "Kageyama", "Furuya",
-            "Trooper", "Matsuzawa", "Marina", "Broadway", "Oren",
+            "MAKE-UP",
+            "MAKE-UP PROJECT",
+            "Horie",
+            "Kageyama",
+            "Furuya",
+            "Trooper",
+            "Matsuzawa",
+            "Marina",
+            "Broadway",
+            "Oren",
         ]
         .iter()
         .enumerate()
@@ -6530,11 +6966,25 @@ mod metadata_grouping_tests {
         }
 
         // Metadata mode: one group per album|artist pair (the #411 split).
-        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
+        let albums = db
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
+            .unwrap();
         assert_eq!(albums.len(), 10, "metadata mode splits per track artist");
 
         // Folder mode: ONE album, Various Artists, everyone in all_artists.
-        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Folder).unwrap();
+        let albums = db
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Folder,
+            )
+            .unwrap();
         assert_eq!(albums.len(), 1, "folder mode keeps the compilation whole");
         let comp = &albums[0];
         assert_eq!(comp.title, "Saint Seiya Best");
@@ -6563,7 +7013,14 @@ mod metadata_grouping_tests {
             "EELS",
             "/m/eels",
         );
-        let albums = db2.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Folder).unwrap();
+        let albums = db2
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Folder,
+            )
+            .unwrap();
         assert_eq!(albums.len(), 1);
         assert_eq!(albums[0].artist, "EELS");
 
@@ -6571,7 +7028,14 @@ mod metadata_grouping_tests {
         let (_tmp3, db3) = fresh_db();
         insert_track_for_test(&db3, "/m/ghost/01.flac", None, None, "X", "");
         insert_track_for_test(&db3, "/m/ghost/02.flac", None, None, "Y", "");
-        let albums = db3.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Folder).unwrap();
+        let albums = db3
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Folder,
+            )
+            .unwrap();
         let unknown = albums
             .iter()
             .find(|a| a.title == "Unknown Album")
@@ -6675,7 +7139,12 @@ mod metadata_grouping_tests {
         );
 
         let albums = db
-            .get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata)
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
             .unwrap();
         let mix = albums
             .iter()
@@ -6701,7 +7170,12 @@ mod metadata_grouping_tests {
         );
 
         let albums = db
-            .get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata)
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
             .unwrap();
         let a = albums
             .iter()
@@ -6748,7 +7222,12 @@ mod metadata_grouping_tests {
         );
 
         let albums = db
-            .get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata)
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
             .unwrap();
         let old = albums
             .iter()
@@ -6864,7 +7343,13 @@ mod folder_tree_tests {
         let tmp = tempfile::tempdir().unwrap();
         let db = LibraryDatabase::open(&tmp.path().join("lib.db")).unwrap();
 
-        insert_at(&db, "/music/Other/Album/01 - Song.flac", Some(1), Some(1), "Song");
+        insert_at(
+            &db,
+            "/music/Other/Album/01 - Song.flac",
+            Some(1),
+            Some(1),
+            "Song",
+        );
 
         let source: String = db
             .with_connection(|conn| {
@@ -6927,7 +7412,8 @@ mod folder_tree_tests {
         insert_at(&db, path, Some(1), Some(1), "Late");
 
         // The download registers afterwards, then the folder is scanned again.
-        db.mark_purchase_downloaded(1003, Some("alb-3"), path, 6).unwrap();
+        db.mark_purchase_downloaded(1003, Some("alb-3"), path, 6)
+            .unwrap();
         insert_at(&db, path, Some(1), Some(1), "Late");
 
         let source: String = db
@@ -7060,7 +7546,13 @@ mod folder_tree_tests {
         // Folder containing a literal '%' in the filename. Without
         // escape_like_pattern, the '%' would behave as a wildcard and
         // either over-match or fail to match.
-        insert_at(&db, "/m/percent_test/100%.flac", Some(1), Some(1), "Hundred");
+        insert_at(
+            &db,
+            "/m/percent_test/100%.flac",
+            Some(1),
+            Some(1),
+            "Hundred",
+        );
         // A second literal-percent path that should NOT show up under
         // /m/percent_test (different parent).
         insert_at(
@@ -7126,7 +7618,13 @@ mod folder_tree_tests {
         // Expected sort: disc ASC, track ASC, title ASC (NOCASE).
         insert_at(&db, "/m/order/disc2-track1.flac", Some(2), Some(1), "D2T1");
         insert_at(&db, "/m/order/disc1-track2.flac", Some(1), Some(2), "D1T2");
-        insert_at(&db, "/m/order/disc1-track1-bee.flac", Some(1), Some(1), "Bee");
+        insert_at(
+            &db,
+            "/m/order/disc1-track1-bee.flac",
+            Some(1),
+            Some(1),
+            "Bee",
+        );
         insert_at(
             &db,
             "/m/order/disc1-track1-ant.flac",
@@ -7148,9 +7646,15 @@ mod folder_tree_tests {
         // /m/A/album1 has direct tracks t1.flac, t2.flac AND a deeper
         // file at /m/A/album1/Disc 1/t3.flac. The recursive listing
         // must return all three.
-        let tracks = db.list_folder_tracks_recursive("/m/A/album1", false).unwrap();
+        let tracks = db
+            .list_folder_tracks_recursive("/m/A/album1", false)
+            .unwrap();
         let titles: Vec<_> = tracks.iter().map(|track| track.title.clone()).collect();
-        assert_eq!(tracks.len(), 3, "recursive listing must include subfolder tracks");
+        assert_eq!(
+            tracks.len(),
+            3,
+            "recursive listing must include subfolder tracks"
+        );
         assert!(titles.contains(&"Alpha".to_string()));
         assert!(titles.contains(&"Beta".to_string()));
         assert!(titles.contains(&"Gamma".to_string()));
@@ -7189,11 +7693,25 @@ mod folder_tree_tests {
         // Folder containing literal '_' that LIKE would otherwise treat
         // as a single-character wildcard. With escape_like_pattern, the
         // sibling /m/percentXtest must not contaminate the result set.
-        insert_at(&db, "/m/percent_test/100%.flac", Some(1), Some(1), "Hundred");
-        insert_at(&db, "/m/percent_test/inner/200.flac", Some(1), Some(1), "TwoHundred");
+        insert_at(
+            &db,
+            "/m/percent_test/100%.flac",
+            Some(1),
+            Some(1),
+            "Hundred",
+        );
+        insert_at(
+            &db,
+            "/m/percent_test/inner/200.flac",
+            Some(1),
+            Some(1),
+            "TwoHundred",
+        );
         insert_at(&db, "/m/percentXtest/decoy.flac", Some(1), Some(1), "Decoy");
 
-        let tracks = db.list_folder_tracks_recursive("/m/percent_test", false).unwrap();
+        let tracks = db
+            .list_folder_tracks_recursive("/m/percent_test", false)
+            .unwrap();
         let titles: Vec<_> = tracks.iter().map(|track| track.title.clone()).collect();
         assert_eq!(tracks.len(), 2, "underscore in parent path must be escaped");
         assert!(titles.contains(&"Hundred".to_string()));
@@ -7207,7 +7725,9 @@ mod folder_tree_tests {
         // Vec rather than an error — frontend treats empty as "nothing
         // to play/queue" and skips the toast.
         let (_tmp, db) = fresh_db();
-        let tracks = db.list_folder_tracks_recursive("/m/does/not/exist", false).unwrap();
+        let tracks = db
+            .list_folder_tracks_recursive("/m/does/not/exist", false)
+            .unwrap();
         assert!(tracks.is_empty());
     }
 
@@ -7267,7 +7787,11 @@ mod folder_tree_tests {
 
         // --- list_folder_tracks (direct children) ------------------
         let direct_all = db.list_folder_tracks("/m/net/album", false).unwrap();
-        assert_eq!(direct_all.len(), 1, "net1.flac must appear when exclude=false");
+        assert_eq!(
+            direct_all.len(),
+            1,
+            "net1.flac must appear when exclude=false"
+        );
 
         let direct_filtered = db.list_folder_tracks("/m/net/album", true).unwrap();
         assert!(
@@ -7281,11 +7805,13 @@ mod folder_tree_tests {
 
         // --- list_folder_tracks_recursive --------------------------
         let recursive_all = db.list_folder_tracks_recursive("/m/net", false).unwrap();
-        assert_eq!(recursive_all.len(), 2, "both net tracks visible when exclude=false");
+        assert_eq!(
+            recursive_all.len(),
+            2,
+            "both net tracks visible when exclude=false"
+        );
 
-        let recursive_filtered = db
-            .list_folder_tracks_recursive("/m/net", true)
-            .unwrap();
+        let recursive_filtered = db.list_folder_tracks_recursive("/m/net", true).unwrap();
         assert!(
             recursive_filtered.is_empty(),
             "network tracks leaked into recursive listing when exclude=true"
@@ -7293,9 +7819,7 @@ mod folder_tree_tests {
 
         // Recursive listing on a non-network root still returns its
         // tracks even when exclude=true.
-        let recursive_local = db
-            .list_folder_tracks_recursive("/m/local", true)
-            .unwrap();
+        let recursive_local = db.list_folder_tracks_recursive("/m/local", true).unwrap();
         assert_eq!(recursive_local.len(), 2);
     }
 
@@ -7610,17 +8134,26 @@ mod remote_union_tests {
                 duration_ms INTEGER NOT NULL DEFAULT 0, year INTEGER, genre TEXT,
                 container TEXT NOT NULL DEFAULT '', codec TEXT, bit_depth INTEGER,
                 sample_rate_hz INTEGER, channels INTEGER, bitrate_kbps INTEGER,
-                artwork_token TEXT, size_bytes INTEGER, updated_at INTEGER NOT NULL,
+                artwork_token TEXT, collection_artwork_token TEXT,
+                size_bytes INTEGER, updated_at INTEGER NOT NULL,
                 UNIQUE (source, item_id));",
         )
         .unwrap();
-        let mut add = |source: &str, item: &str, album: &str, album_id: &str, depth: i64| {
+        let add = |source: &str, item: &str, album: &str, album_id: &str, depth: i64| {
             conn.execute(
                 "INSERT INTO remote_cache_tracks
                    (source,item_id,title,artist,album_artist,album,album_id,
                     duration_ms,container,bit_depth,sample_rate_hz,updated_at)
                  VALUES (?1,?2,?3,?4,?4,?5,?6,120000,'flac',?7,96000,1)",
-                rusqlite::params![source, item, format!("{item} title"), "Remote Artist", album, album_id, depth],
+                rusqlite::params![
+                    source,
+                    item,
+                    format!("{item} title"),
+                    "Remote Artist",
+                    album,
+                    album_id,
+                    depth
+                ],
             )
             .unwrap();
         };
@@ -7630,7 +8163,11 @@ mod remote_union_tests {
         (tmp, db, remote)
     }
 
-    fn titles(db: &LibraryDatabase, remote: Option<&std::path::Path>, sources: &[&str]) -> Vec<String> {
+    fn titles(
+        db: &LibraryDatabase,
+        remote: Option<&std::path::Path>,
+        sources: &[&str],
+    ) -> Vec<String> {
         let page = db
             .get_albums_metadata_page(
                 0,
@@ -7687,7 +8224,10 @@ mod remote_union_tests {
         assert_eq!(titles(&db, Some(&remote), &[]), vec!["Local Album"]);
         assert_eq!(titles(&db, None, &["jellyfin"]), vec!["Local Album"]);
         let missing = std::path::PathBuf::from("/nonexistent/remote_cache.db");
-        assert_eq!(titles(&db, Some(&missing), &["jellyfin"]), vec!["Local Album"]);
+        assert_eq!(
+            titles(&db, Some(&missing), &["jellyfin"]),
+            vec!["Local Album"]
+        );
     }
 
     /// The two tracks of the Jellyfin album collapse into ONE card, and the
@@ -7716,7 +8256,10 @@ mod remote_union_tests {
             .iter()
             .find(|a| a.title == "Jellyfin Album")
             .expect("the jellyfin album");
-        assert_eq!(jf.track_count, 2, "the two tracks did not group into one card");
+        assert_eq!(
+            jf.track_count, 2,
+            "the two tracks did not group into one card"
+        );
         assert_eq!(jf.bit_depth, Some(24));
         assert_eq!(jf.sample_rate, 96000.0);
         assert_eq!(jf.source, "jellyfin", "the row lost its source word");
@@ -7737,13 +8280,19 @@ mod remote_union_tests {
     /// than everything — the safe direction for a predicate that reaches SQL.
     #[test]
     fn the_source_filter_rejects_anything_that_is_not_a_source_word() {
-        assert_eq!(remote_source_filter(&["jellyfin"]), "source IN ('jellyfin')");
+        assert_eq!(
+            remote_source_filter(&["jellyfin"]),
+            "source IN ('jellyfin')"
+        );
         assert_eq!(
             remote_source_filter(&["jellyfin", "subsonic"]),
             "source IN ('jellyfin', 'subsonic')"
         );
         assert_eq!(remote_source_filter(&[]), "0");
-        assert_eq!(remote_source_filter(&["x'; DROP TABLE local_tracks; --"]), "0");
+        assert_eq!(
+            remote_source_filter(&["x'; DROP TABLE local_tracks; --"]),
+            "0"
+        );
         assert_eq!(remote_source_filter(&["Jellyfin"]), "0");
         assert_eq!(remote_source_filter(&[""]), "0");
         // One bad entry does not smuggle itself in beside a good one.

@@ -100,7 +100,10 @@ pub enum SubsonicError {
     /// `code 70`.
     NotFound(String),
     /// Any other `<error code=…>` the server returned, WITH the 200 it came in.
-    Api { code: i64, message: String },
+    Api {
+        code: i64,
+        message: String,
+    },
     /// The body was neither a JSON envelope nor an XML one this client
     /// understands.
     Decode(String),
@@ -332,6 +335,15 @@ pub struct MusicFolder {
     pub name: String,
 }
 
+/// One album-list row. Its `coverArt` token is the collection cover and must
+/// not be inferred from a song token: Navidrome can expose a separate cover
+/// for every disc inside the same album.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubsonicAlbum {
+    pub id: String,
+    pub cover_art: Option<String>,
+}
+
 /// One song, flattened into the shape the cache stores. Field names are QBZ's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubsonicTrack {
@@ -346,6 +358,9 @@ pub struct SubsonicTrack {
     pub disc_number: Option<u32>,
     pub duration_ms: u64,
     pub year: Option<u32>,
+    /// The OpenSubsonic song payload currently exposes one genre. Keep it as
+    /// a collection so downstream models do not collapse multi-genre sources.
+    pub genres: Vec<String>,
     pub genre: Option<String>,
     /// `flac`, `mp3`, … as the server names it.
     pub suffix: String,
@@ -412,6 +427,8 @@ impl From<SongDto> for SubsonicTrack {
     fn from(s: SongDto) -> Self {
         let artist = s.artist.unwrap_or_default();
         let album_artist = s.display_album_artist.unwrap_or_else(|| artist.clone());
+        let genre = s.genre.filter(|genre| !genre.trim().is_empty());
+        let genres = genre.iter().cloned().collect();
         SubsonicTrack {
             id: s.id,
             title: s.title,
@@ -427,7 +444,8 @@ impl From<SongDto> for SubsonicTrack {
             disc_number: s.disc_number,
             duration_ms: s.duration.unwrap_or(0) * 1000,
             year: s.year,
-            genre: s.genre,
+            genre,
+            genres,
             suffix: s.suffix.unwrap_or_default(),
             content_type: s.content_type,
             // 0 means "not applicable" on this wire, not "zero bits".
@@ -624,33 +642,25 @@ impl SubsonicClient {
         songs_of(r.get("searchResult3"))
     }
 
-    /// One page of album ids, for the PORTABLE sweep.
+    /// One page of albums, including their collection artwork tokens.
     ///
     /// `size` is capped at 500 by the server whatever is asked, so this always
     /// pages.
-    pub async fn album_ids(&self, offset: u32) -> Result<Vec<String>> {
+    pub async fn album_page(&self, offset: u32) -> Result<Vec<SubsonicAlbum>> {
         let r = self
             .get(
                 "getAlbumList2.view",
                 &format!("&type=alphabeticalByName&size={PAGE_SIZE}&offset={offset}"),
             )
             .await?;
-        let Some(albums) = r
-            .get("albumList2")
-            .and_then(|a| a.get("album"))
-            .and_then(|a| a.as_array())
-        else {
-            return Ok(Vec::new());
-        };
-        albums
-            .iter()
-            .map(|album| {
-                album
-                    .get("id")
-                    .map(json_id)
-                    .ok_or_else(|| SubsonicError::Decode("album row has no id".to_string()))
-            })
-            .collect()
+        albums_of(r.get("albumList2"))
+    }
+
+    /// Compatibility projection for callers that only need identifiers.
+    pub async fn album_ids(&self, offset: u32) -> Result<Vec<String>> {
+        self.album_page(offset)
+            .await
+            .map(|albums| albums.into_iter().map(|album| album.id).collect())
     }
 
     /// The tracks of one album (`getAlbum.view`).
@@ -751,16 +761,46 @@ fn songs_of(container: Option<&serde_json::Value>) -> Result<Vec<SubsonicTrack>>
         .collect()
 }
 
+fn albums_of(container: Option<&serde_json::Value>) -> Result<Vec<SubsonicAlbum>> {
+    let Some(albums) = container
+        .and_then(|album_list| album_list.get("album"))
+        .and_then(|albums| albums.as_array())
+    else {
+        return Ok(Vec::new());
+    };
+    albums
+        .iter()
+        .map(|album| {
+            let id = album
+                .get("id")
+                .map(json_id)
+                .ok_or_else(|| SubsonicError::Decode("album row has no id".to_string()))?;
+            let cover_art = album
+                .get("coverArt")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            Ok(SubsonicAlbum { id, cover_art })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn base_urls_get_a_scheme_and_the_rest_segment() {
-        assert_eq!(normalize_base_url("192.168.0.69:4533"), "http://192.168.0.69:4533/rest");
+        assert_eq!(
+            normalize_base_url("192.168.0.69:4533"),
+            "http://192.168.0.69:4533/rest"
+        );
         assert_eq!(normalize_base_url("http://h:4533/"), "http://h:4533/rest");
         // Already pointed at the API: not doubled.
-        assert_eq!(normalize_base_url("http://h:4533/rest"), "http://h:4533/rest");
+        assert_eq!(
+            normalize_base_url("http://h:4533/rest"),
+            "http://h:4533/rest"
+        );
         assert_eq!(normalize_base_url(""), "");
     }
 
@@ -823,7 +863,10 @@ mod tests {
         let body = br#"{"subsonic-response":{"status":"failed","error":{"code":40,"message":"Wrong username or password"}}}"#;
         assert_eq!(parse_envelope(body), Err(SubsonicError::Unauthorized));
         let missing = br#"{"subsonic-response":{"status":"failed","error":{"code":70,"message":"Song not found"}}}"#;
-        assert!(matches!(parse_envelope(missing), Err(SubsonicError::NotFound(_))));
+        assert!(matches!(
+            parse_envelope(missing),
+            Err(SubsonicError::NotFound(_))
+        ));
     }
 
     #[test]
@@ -857,6 +900,21 @@ mod tests {
 
     // ── Mapping ────────────────────────────────────────────────────────────
 
+    #[test]
+    fn album_listing_keeps_collection_art_separate_from_song_art() {
+        let payload = serde_json::json!({
+            "album": [
+                {"id": "box", "coverArt": "al-box-cover"},
+                {"id": 42}
+            ]
+        });
+        let albums = albums_of(Some(&payload)).unwrap();
+        assert_eq!(albums[0].id, "box");
+        assert_eq!(albums[0].cover_art.as_deref(), Some("al-box-cover"));
+        assert_eq!(albums[1].id, "42");
+        assert_eq!(albums[1].cover_art, None);
+    }
+
     /// The measured hi-res row. `duration` is SECONDS on the wire and
     /// milliseconds in QBZ, which is exactly the kind of unit slip that shows
     /// up as a progress bar running 1000× too fast.
@@ -870,6 +928,7 @@ mod tests {
             "albumId": "alb1",
             "displayAlbumArtist": "Pink Floyd",
             "track": 3, "discNumber": 1, "duration": 188, "year": 1967,
+            "genre": "Psychedelic Rock",
             "suffix": "flac", "contentType": "audio/flac",
             "bitDepth": 24, "samplingRate": 192000, "channelCount": 2,
             "coverArt": "al-alb1_59fec8ff", "size": 137389889u64
@@ -880,6 +939,8 @@ mod tests {
         assert_eq!(t.duration_ms, 188_000, "seconds were not converted to ms");
         assert_eq!(t.cover_art.as_deref(), Some("al-alb1_59fec8ff"));
         assert_eq!(t.size, Some(137_389_889));
+        assert_eq!(t.genres, ["Psychedelic Rock"]);
+        assert_eq!(t.genre.as_deref(), Some("Psychedelic Rock"));
     }
 
     /// The wire reports **0** for a lossy track's bit depth (Jellyfin reports
@@ -997,7 +1058,10 @@ mod tests {
         let c = Credentials::new("admin", "pw", "abc");
         let u = cover_url("http://h:4533", &c, "al-abc_1:2", IMAGE_PX);
         assert!(u.contains("getCoverArt.view"));
-        assert!(u.contains("t="), "an unauthenticated cover request is refused");
+        assert!(
+            u.contains("t="),
+            "an unauthenticated cover request is refused"
+        );
         assert!(u.contains("size=256"));
         // The id is opaque and can contain `:` — it must be encoded, not pasted.
         assert!(u.contains("id=al-abc_1%3A2"), "{u}");

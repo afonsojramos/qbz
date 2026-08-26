@@ -143,6 +143,10 @@ enum PreparedAction {
     Reuse,
     Extract(ExtractTask),
     Preserve(String),
+    /// A valid CUE with several FILE directives describes already-split
+    /// audio. Keep the CUE scan record but publish no virtual tracks and
+    /// retire rows produced by older single-file-only parsing.
+    IgnoreMultiFileCue,
     SkipCueAudio,
 }
 
@@ -339,31 +343,44 @@ fn apply_sidecar_override(
 fn decorate_tracks(tracks: &mut [LocalTrack], artwork_cache: &Path, caches: &mut PassCaches) {
     for track in tracks {
         apply_sidecar_override(track, &mut caches.sidecars);
-        let album_key = if track.album_group_key.trim().is_empty() {
-            Path::new(&track.file_path)
-                .parent()
-                .unwrap_or_else(|| Path::new(&track.file_path))
-                .to_string_lossy()
-                .into_owned()
+        let audio_path = PathBuf::from(&track.file_path);
+        let own_dir = audio_path.parent().unwrap_or(audio_path.as_path());
+        let collection_key = if track.album_group_key.trim().is_empty() {
+            own_dir.to_string_lossy().into_owned()
         } else {
             track.album_group_key.clone()
         };
-        let audio_path = PathBuf::from(&track.file_path);
         let album_hint = if track.album_group_title.trim().is_empty() {
             track.album.as_str()
         } else {
             track.album_group_title.as_str()
         };
-        let artwork = caches.artwork.get_or_insert_with(album_key, || {
-            let embedded = MetadataExtractor::extract_artwork(&audio_path, artwork_cache);
-            embedded.or_else(|| {
+
+        // Artwork is track/disc metadata, not merely an album-card property.
+        // Resolve from the narrowest scope outwards so a box set cannot stamp
+        // Disc 01's cover onto every queue row and media-control surface:
+        // embedded tag -> this disc's folder -> collection root -> none.
+        let embedded_key = format!("embedded:{}", audio_path.to_string_lossy());
+        let embedded = caches.artwork.get_or_insert_with(embedded_key, || {
+            MetadataExtractor::extract_artwork(&audio_path, artwork_cache)
+        });
+        let disc_key = format!("disc-folder:{}", own_dir.to_string_lossy());
+        let disc_file = caches.artwork.get_or_insert_with(disc_key, || {
+            MetadataExtractor::folder_artwork_in_dir(own_dir).and_then(|path| {
+                MetadataExtractor::cache_artwork_file(Path::new(&path), artwork_cache)
+            })
+        });
+        let collection_art_key = format!("collection:{collection_key}");
+        let collection = caches
+            .artwork
+            .get_or_insert_with(collection_art_key, || {
                 MetadataExtractor::find_folder_artwork(&audio_path, Some(album_hint)).and_then(
                     |folder_art| {
                         MetadataExtractor::cache_artwork_file(Path::new(&folder_art), artwork_cache)
                     },
                 )
-            })
-        });
+            });
+        let artwork = embedded.or(disc_file).or(collection);
         track.artwork_path = artwork;
     }
 }
@@ -735,10 +752,15 @@ fn commit_batch(
                     file_path: file.prepared.canonical_path.clone(),
                     error: error.clone(),
                 }),
+                PreparedAction::IgnoreMultiFileCue => {
+                    remove_obsolete_cue_tracks(db, &file.prepared.canonical_path, &[])?;
+                    metrics.extracted = metrics.extracted.saturating_add(1);
+                }
                 PreparedAction::SkipCueAudio => {}
             }
 
             let successful = matches!(file.prepared.action, PreparedAction::Reuse)
+                || matches!(file.prepared.action, PreparedAction::IgnoreMultiFileCue)
                 || matches!(file.tracks.as_ref(), Some(Ok(_)));
             if let Some(value) = file.prepared.fingerprint.as_ref() {
                 // A present but unreadable file receives a negative scan row.
@@ -902,6 +924,39 @@ fn prepare_file(
             let (action, dependency, current_cue_audio_path) = match parsed {
                 Ok(mut cue) => {
                     cue.file_path = canonical_path.clone();
+                    if !cue.is_single_file_image() {
+                        // Multi-file sheets are useful metadata sidecars but
+                        // the referenced split audio files are the playable,
+                        // independently tagged sources. Marking this as a
+                        // successful observation also clears any virtual CUE
+                        // rows left by the old parser while allowing the audio
+                        // phase to index every real file normally.
+                        let dependency =
+                            format!("multi-file-sidecar-v1|files={}", cue.audio_file_count());
+                        let action = if previous_cue_audio_path.is_none()
+                            && scan_file_matches(
+                                db,
+                                folder.id,
+                                &canonical_path,
+                                ScanFileKind::Cue,
+                                &value,
+                                &dependency,
+                            )? {
+                            PreparedAction::Reuse
+                        } else {
+                            PreparedAction::IgnoreMultiFileCue
+                        };
+                        return Ok(PreparedFile {
+                            traversal_path: traversal_path.to_string_lossy().into_owned(),
+                            canonical_path,
+                            kind: ScanFileKind::Cue,
+                            fingerprint: Some(value),
+                            dependency,
+                            current_cue_audio_path: None,
+                            previous_cue_audio_path,
+                            action,
+                        });
+                    }
                     let audio = normalize_path(Path::new(&cue.audio_file));
                     cue.audio_file = audio.to_string_lossy().into_owned();
                     let audio_path = cue.audio_file.clone();
@@ -1717,6 +1772,65 @@ mod tests {
         fs::write(path, contents).unwrap();
     }
 
+    fn write_multi_file_cue(path: &Path, tracks: &[(&str, &str)]) {
+        let mut contents = String::from("PERFORMER \"Fixture Artist\"\nTITLE \"Fixture Album\"\n");
+        for (number, (file, title)) in tracks.iter().enumerate() {
+            contents.push_str(&format!(
+                "FILE \"{}\" WAVE\n  TRACK {:02} AUDIO\n    TITLE \"{}\"\n    INDEX 01 00:00:00\n",
+                file,
+                number + 1,
+                title
+            ));
+        }
+        fs::write(path, contents).unwrap();
+    }
+
+    fn write_artwork(path: &Path, rgb: [u8; 3]) {
+        image::RgbImage::from_pixel(2, 2, image::Rgb(rgb))
+            .save(path)
+            .unwrap();
+    }
+
+    #[test]
+    fn artwork_resolution_prefers_each_disc_then_collection() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Box Set");
+        let disc_one = root.join("Disc 01 - First");
+        let disc_two = root.join("Disc 02 - Second");
+        let disc_three = root.join("Disc 03 - No Own Art");
+        for directory in [&disc_one, &disc_two, &disc_three] {
+            fs::create_dir_all(directory).unwrap();
+            fs::write(directory.join("01.flac"), b"not-a-real-audio-file").unwrap();
+        }
+        write_artwork(&root.join("cover.png"), [10, 10, 10]);
+        write_artwork(&disc_one.join("cover.png"), [200, 10, 10]);
+        // A uniquely named image is still authoritative for its own disc.
+        write_artwork(&disc_two.join("TV Series Soundtrack 02.png"), [10, 200, 10]);
+
+        let track = |disc: u32, directory: &Path| LocalTrack {
+            file_path: directory.join("01.flac").to_string_lossy().into_owned(),
+            album: "Box Set".to_string(),
+            album_group_key: root.to_string_lossy().into_owned(),
+            album_group_title: "Box Set".to_string(),
+            disc_number: Some(disc),
+            ..Default::default()
+        };
+        let mut tracks = vec![
+            track(1, &disc_one),
+            track(2, &disc_two),
+            track(3, &disc_three),
+        ];
+        let mut caches = PassCaches::default();
+        decorate_tracks(&mut tracks, temp.path(), &mut caches);
+
+        let one = tracks[0].artwork_path.as_deref().unwrap();
+        let two = tracks[1].artwork_path.as_deref().unwrap();
+        let three = tracks[2].artwork_path.as_deref().unwrap();
+        assert_ne!(one, two, "two distinct disc covers collapsed");
+        assert_ne!(one, three, "disc 1 leaked into the collection fallback");
+        assert_ne!(two, three, "disc 2 leaked into the collection fallback");
+    }
+
     #[test]
     fn unchanged_files_skip_extraction_and_changed_file_keeps_its_id() {
         let (temp, db, root_id, root) = fixture();
@@ -1832,6 +1946,53 @@ mod tests {
         assert_eq!(cue_removed.calls.load(AtomicOrdering::SeqCst), 1);
         assert_eq!(plain.len(), 1);
         assert!(plain[0].2.is_none());
+    }
+
+    #[test]
+    fn multi_file_cue_retires_virtual_rows_and_indexes_only_split_audio() {
+        let (temp, db, root_id, root) = fixture();
+        let first_path = root.join("01. First.flac");
+        let second_path = root.join("02. Second.flac");
+        fs::write(&first_path, b"fixture first audio").unwrap();
+        fs::write(&second_path, b"fixture second audio").unwrap();
+        let cue_path = root.join("leftover.cue");
+        write_multi_file_cue(
+            &cue_path,
+            &[("01. First.flac", "First"), ("02. Second.flac", "Second")],
+        );
+
+        // Simulate rows produced by the legacy parser, which attached every
+        // virtual entry to one arbitrary FILE from the sheet.
+        for (index, title) in ["Legacy First", "Legacy Second"].iter().enumerate() {
+            let mut stale = LocalTrack::default();
+            stale.file_path = second_path.to_string_lossy().into_owned();
+            stale.title = (*title).to_string();
+            stale.artist = "Fixture Artist".to_string();
+            stale.album = "Fixture Album".to_string();
+            stale.album_group_key = root.to_string_lossy().into_owned();
+            stale.album_group_title = stale.album.clone();
+            stale.cue_file_path = Some(cue_path.to_string_lossy().into_owned());
+            stale.cue_start_secs = Some(index as f64);
+            db.insert_track(&stale).unwrap();
+        }
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let extraction = FakeExtraction::new(Arc::clone(&cancel));
+        run_fake(&db, root_id, &temp, &cancel, &extraction);
+
+        // Only the two real files require extraction; the valid multi-file
+        // CUE is observed as a sidecar and never reaches the CUE backend.
+        assert_eq!(extraction.calls.load(AtomicOrdering::SeqCst), 2);
+        let rows = cue_rows(&db);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|(_, _, cue)| cue.is_none()));
+        let paths = track_rows(&db)
+            .into_iter()
+            .map(|(_, path)| path)
+            .collect::<HashSet<_>>();
+        assert_eq!(paths.len(), 2);
+        assert!(paths.contains(&first_path.to_string_lossy().into_owned()));
+        assert!(paths.contains(&second_path.to_string_lossy().into_owned()));
     }
 
     #[test]

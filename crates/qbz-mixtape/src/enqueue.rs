@@ -93,7 +93,10 @@ pub fn shuffle_items(mut items: Vec<MixtapeCollectionItem>) -> Vec<MixtapeCollec
 pub fn next_item_index(queue: &[CoreQueueTrack], current: usize) -> Option<usize> {
     let boundary_of = |i: usize| -> Option<&str> {
         queue.get(i).and_then(|track| {
-            track.source_item_id_hint.as_deref().or(track.album_id.as_deref())
+            track
+                .source_item_id_hint
+                .as_deref()
+                .or(track.album_id.as_deref())
         })
     };
     let current_boundary = boundary_of(current)?;
@@ -127,9 +130,7 @@ pub fn previous_item_index(
     let current_boundary = boundary_of(current)?;
 
     let mut item_start = current;
-    while item_start > 0
-        && boundary_of(item_start - 1) == Some(current_boundary.clone())
-    {
+    while item_start > 0 && boundary_of(item_start - 1) == Some(current_boundary.clone()) {
         item_start -= 1;
     }
 
@@ -236,7 +237,10 @@ pub async fn resolve_qobuz_album(
     // Build QueueTrack from each track. We have the parent Album in scope so
     // we can fill artwork / album title / album artist even when the track's
     // own `album` field is absent (shallow responses inside albums/get).
-    let album_artwork = album.image.large.clone()
+    let album_artwork = album
+        .image
+        .large
+        .clone()
         .or_else(|| album.image.extralarge.clone())
         .or_else(|| album.image.thumbnail.clone());
     let album_title = album.title.clone();
@@ -376,7 +380,10 @@ pub fn resolve_plex_album_tracks(group_key: &str) -> Result<Vec<CoreQueueTrack>,
             group_key
         ));
     }
-    Ok(tracks.iter().map(plex_cached_track_to_queue_track).collect())
+    Ok(tracks
+        .iter()
+        .map(plex_cached_track_to_queue_track)
+        .collect())
 }
 
 // ── Local track (synchronous) ──
@@ -436,7 +443,12 @@ pub fn track_to_queue_track_from_api(track: &ApiTrack) -> CoreQueueTrack {
         .as_ref()
         .and_then(|a| a.image.large.clone())
         .or_else(|| track.album.as_ref().and_then(|a| a.image.thumbnail.clone()))
-        .or_else(|| track.album.as_ref().and_then(|a| a.image.extralarge.clone()));
+        .or_else(|| {
+            track
+                .album
+                .as_ref()
+                .and_then(|a| a.image.extralarge.clone())
+        });
     let artist = track
         .performer
         .as_ref()
@@ -495,7 +507,10 @@ pub fn plex_cached_track_to_queue_track(track: &qbz_plex::PlexCachedTrack) -> Co
         album: track.album.clone(),
         album_version: None,
         duration_secs: track.duration_secs,
-        artwork_url: track.artwork_path.clone(),
+        artwork_url: track
+            .artwork_path
+            .clone()
+            .or_else(|| track.collection_artwork_path.clone()),
         hires: track.bit_depth.map(|d| d > 16).unwrap_or(false),
         bit_depth: track.bit_depth,
         sample_rate: sample_rate_khz,
@@ -657,7 +672,10 @@ mod tests {
         assert_eq!(tracks[0].source_item_id_hint.as_deref(), Some("a-1"));
         assert_eq!(tracks[2].source_item_id_hint.as_deref(), Some("a-1"));
         assert_eq!(tracks[3].source_item_id_hint.as_deref(), Some("t-99"));
-        assert_eq!(tracks[4].source_item_id_hint.as_deref(), Some("al-local-xyz"));
+        assert_eq!(
+            tracks[4].source_item_id_hint.as_deref(),
+            Some("al-local-xyz")
+        );
     }
 
     #[tokio::test]
@@ -668,8 +686,7 @@ mod tests {
             item(2, ItemType::Album, AlbumSource::Qobuz, "a-3", 3),
         ];
         let tracks =
-            resolve_collection_tracks(items, CollectionPlayMode::AlbumShuffle, &MockResolver)
-                .await;
+            resolve_collection_tracks(items, CollectionPlayMode::AlbumShuffle, &MockResolver).await;
         assert_eq!(tracks.len(), 9);
         // Each album's tracks must be contiguous (no interleaving).
         let mut i = 0;
@@ -682,9 +699,7 @@ mod tests {
                 h
             );
             seen.insert(h.clone());
-            while i < tracks.len()
-                && tracks[i].source_item_id_hint.as_deref() == Some(&h)
-            {
+            while i < tracks.len() && tracks[i].source_item_id_hint.as_deref() == Some(&h) {
                 i += 1;
             }
         }

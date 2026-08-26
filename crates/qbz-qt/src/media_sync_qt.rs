@@ -34,7 +34,7 @@
 //!    flipped: it deliberately does not see unchanged rows, so every one of
 //!    them looks stale.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
@@ -410,6 +410,22 @@ async fn sync_jellyfin_inner(cfg: MediaServerSettings, full: bool) -> Result<Syn
 }
 
 fn jellyfin_row(t: &qbz_jellyfin::JellyfinTrack, server_id: &str, library_id: &str) -> CachedTrack {
+    // Preserve the addressable ITEM together with the optional cache-busting
+    // tag. Per-item art is the disc/track layer and therefore outranks the
+    // MusicAlbum image. A missing album tag is not a missing cover: Jellyfin
+    // serves `/Items/{albumId}/Images/Primary` without one.
+    let artwork_token = t
+        .item_image_tag
+        .as_ref()
+        .filter(|_| !t.id.is_empty())
+        .map(|tag| format!("{}/{}", t.id, tag));
+    let collection_artwork_token = (!t.album_id.is_empty()).then(|| {
+        format!(
+            "{}/{}",
+            t.album_id,
+            t.album_image_tag.as_deref().unwrap_or_default()
+        )
+    });
     CachedTrack {
         id: 0,
         source: "jellyfin".into(),
@@ -425,6 +441,7 @@ fn jellyfin_row(t: &qbz_jellyfin::JellyfinTrack, server_id: &str, library_id: &s
         disc_number: t.disc_number,
         duration_ms: t.duration_ms,
         year: t.year,
+        genres: t.genres.clone(),
         genre: t.genre.clone(),
         container: t.container.clone(),
         codec: t.codec.clone(),
@@ -432,14 +449,8 @@ fn jellyfin_row(t: &qbz_jellyfin::JellyfinTrack, server_id: &str, library_id: &s
         sample_rate_hz: t.sample_rate_hz,
         channels: t.channels,
         bitrate_kbps: t.bitrate_bps.map(|b| b / 1000),
-        // `<albumId>/<tag>`, because a Jellyfin image tag alone is not
-        // addressable — the url hangs off the ITEM and the tag only versions
-        // it. `JellyfinSource::artwork_token` splits it back apart.
-        artwork_token: t
-            .album_image_tag
-            .as_ref()
-            .filter(|_| !t.album_id.is_empty())
-            .map(|tag| format!("{}/{}", t.album_id, tag)),
+        artwork_token,
+        collection_artwork_token,
         size_bytes: None,
     }
 }
@@ -775,6 +786,37 @@ async fn sync_subsonic_inner(
     let pass = async {
         match mode {
             qbz_subsonic::SweepMode::Search3 => {
+                // `search3` returns song/disc coverArt tokens. Fetch the small
+                // album listing as enrichment so collection art survives as a
+                // separate fallback instead of being guessed from disc one.
+                let mut collection_art = HashMap::<String, String>::new();
+                let mut album_offset = 0u32;
+                loop {
+                    match client.album_page(album_offset).await {
+                        Ok(albums) => {
+                            let page_len = albums.len() as u32;
+                            for album in albums {
+                                if let Some(token) = album.cover_art {
+                                    collection_art.insert(album.id, token);
+                                }
+                            }
+                            album_offset = album_offset.saturating_add(page_len);
+                            if page_len < qbz_subsonic::PAGE_SIZE {
+                                break;
+                            }
+                        }
+                        Err(error) => {
+                            // Collection art is enrichment; a server that can
+                            // enumerate songs must not lose its usable catalog
+                            // merely because getAlbumList2 is unavailable.
+                            log::warn!(
+                                "[media-sync] source=subsonic collection artwork unavailable: {error}"
+                            );
+                            collection_art.clear();
+                            break;
+                        }
+                    }
+                }
                 let mut offset = 0u32;
                 let mut page_number = 0u64;
                 loop {
@@ -796,7 +838,15 @@ async fn sync_subsonic_inner(
                     }
                     let page_len = u32::try_from(page.len())
                         .map_err(|_| "subsonic page length overflow".to_string())?;
-                    let rows: Vec<CachedTrack> = page.iter().map(subsonic_row).collect();
+                    let rows: Vec<CachedTrack> = page
+                        .iter()
+                        .map(|track| {
+                            subsonic_row(
+                                track,
+                                collection_art.get(&track.album_id).map(String::as_str),
+                            )
+                        })
+                        .collect();
                     saved += write_generation_rows(
                         RemoteSource::Subsonic,
                         generation,
@@ -825,7 +875,7 @@ async fn sync_subsonic_inner(
                         return Err("subsonic sync cancelled".to_string());
                     }
                     let album_page = client
-                        .album_ids(album_offset)
+                        .album_page(album_offset)
                         .await
                         .map_err(|e| e.to_string())?;
                     if album_page.is_empty() {
@@ -833,7 +883,7 @@ async fn sync_subsonic_inner(
                     }
                     let page_len = u32::try_from(album_page.len())
                         .map_err(|_| "subsonic album page length overflow".to_string())?;
-                    for album_id in album_page {
+                    for album in album_page {
                         if !source_epoch_is_current(RemoteSource::Subsonic, sync_epoch) {
                             return Err("subsonic sync cancelled".to_string());
                         }
@@ -841,10 +891,13 @@ async fn sync_subsonic_inner(
                         // Skipping it and pruning would reinterpret a server
                         // outage as deletion of every track in that album.
                         let tracks = client
-                            .album_tracks(&album_id)
+                            .album_tracks(&album.id)
                             .await
                             .map_err(|e| e.to_string())?;
-                        let rows: Vec<CachedTrack> = tracks.iter().map(subsonic_row).collect();
+                        let rows: Vec<CachedTrack> = tracks
+                            .iter()
+                            .map(|track| subsonic_row(track, album.cover_art.as_deref()))
+                            .collect();
                         saved += write_generation_rows(
                             RemoteSource::Subsonic,
                             generation,
@@ -900,7 +953,10 @@ async fn sync_subsonic_inner(
     finish_subsonic(cfg, saved, pruned, sync_epoch)
 }
 
-fn subsonic_row(t: &qbz_subsonic::SubsonicTrack) -> CachedTrack {
+fn subsonic_row(
+    t: &qbz_subsonic::SubsonicTrack,
+    collection_artwork_token: Option<&str>,
+) -> CachedTrack {
     CachedTrack {
         id: 0,
         source: "subsonic".into(),
@@ -916,6 +972,7 @@ fn subsonic_row(t: &qbz_subsonic::SubsonicTrack) -> CachedTrack {
         disc_number: t.disc_number,
         duration_ms: t.duration_ms,
         year: t.year,
+        genres: t.genres.clone(),
         genre: t.genre.clone(),
         container: t.suffix.clone(),
         codec: t.content_type.clone(),
@@ -925,6 +982,7 @@ fn subsonic_row(t: &qbz_subsonic::SubsonicTrack) -> CachedTrack {
         bitrate_kbps: t.bitrate_kbps,
         // The OPAQUE coverArt id, verbatim. Never parsed, never built.
         artwork_token: t.cover_art.clone(),
+        collection_artwork_token: collection_artwork_token.map(str::to_string),
         size_bytes: t.size,
     }
 }
@@ -1157,10 +1215,10 @@ mod tests {
         assert!(!source_epoch_is_current(RemoteSource::Subsonic, epoch));
     }
 
-    /// A Jellyfin art token is only useful with the item it hangs off, so a row
-    /// with a tag and no album id must carry NO token rather than a broken one.
+    /// An item image wins over album art. Album art remains addressable by id
+    /// when Jellyfin omits its optional cache-busting tag.
     #[test]
-    fn a_jellyfin_art_token_needs_its_album_id() {
+    fn jellyfin_art_tokens_keep_item_and_tagless_album_fallbacks() {
         let mut t = qbz_jellyfin::JellyfinTrack {
             id: "i".into(),
             title: String::new(),
@@ -1172,6 +1230,7 @@ mod tests {
             disc_number: None,
             duration_ms: 0,
             year: None,
+            genres: Vec::new(),
             genre: None,
             container: String::new(),
             codec: None,
@@ -1180,17 +1239,28 @@ mod tests {
             channels: None,
             bitrate_bps: None,
             album_image_tag: Some("tag".into()),
+            item_image_tag: None,
             server_path: None,
         };
-        assert_eq!(
-            jellyfin_row(&t, "srv", "lib").artwork_token.as_deref(),
-            Some("alb/tag")
-        );
+        let row = jellyfin_row(&t, "srv", "lib");
+        assert_eq!(row.artwork_token, None);
+        assert_eq!(row.collection_artwork_token.as_deref(), Some("alb/tag"));
         t.album_id = String::new();
-        assert_eq!(jellyfin_row(&t, "srv", "lib").artwork_token, None);
+        let row = jellyfin_row(&t, "srv", "lib");
+        assert_eq!(row.artwork_token, None);
+        assert_eq!(row.collection_artwork_token, None);
         t.album_id = "alb".into();
         t.album_image_tag = None;
-        assert_eq!(jellyfin_row(&t, "srv", "lib").artwork_token, None);
+        assert_eq!(
+            jellyfin_row(&t, "srv", "lib")
+                .collection_artwork_token
+                .as_deref(),
+            Some("alb/")
+        );
+        t.item_image_tag = Some("disc-tag".into());
+        let row = jellyfin_row(&t, "srv", "lib");
+        assert_eq!(row.artwork_token.as_deref(), Some("i/disc-tag"));
+        assert_eq!(row.collection_artwork_token.as_deref(), Some("alb/"));
     }
 
     /// Bitrate crosses the boundary in different units: Jellyfin reports bits
@@ -1208,6 +1278,7 @@ mod tests {
             disc_number: None,
             duration_ms: 0,
             year: None,
+            genres: Vec::new(),
             genre: None,
             container: String::new(),
             codec: None,
@@ -1216,6 +1287,7 @@ mod tests {
             channels: None,
             bitrate_bps: Some(3_120_281),
             album_image_tag: None,
+            item_image_tag: None,
             server_path: None,
         };
         assert_eq!(jellyfin_row(&jf, "s", "l").bitrate_kbps, Some(3120));

@@ -139,6 +139,31 @@ pub(crate) fn push_now_playing(track: &qbz_models::QueueTrack, title: &str, albu
     // return here would have made the switch dead all over again, just for a
     // smaller set of users.
     maybe_notify(track, title, album);
+    push_metadata(track, title, album);
+    let Some(mc) = handle() else {
+        return;
+    };
+    mc.set_playback(
+        qbz_media_controls::PlaybackStatus::Playing,
+        Some(Duration::ZERO),
+    );
+}
+
+/// Republish only the metadata after an asynchronous cover download lands.
+///
+/// The normal track-edge publisher also raises a notification and resets the
+/// optimistic MPRIS position to zero. Neither belongs to an artwork completion:
+/// this narrower seam lets the de-duplication key observe the newly resolved
+/// local cover without altering playback state or notifying twice.
+pub(crate) fn refresh_now_playing_artwork(
+    track: &qbz_models::QueueTrack,
+    title: &str,
+    album: &str,
+) {
+    push_metadata(track, title, album);
+}
+
+fn push_metadata(track: &qbz_models::QueueTrack, title: &str, album: &str) {
     let Some(mc) = handle() else {
         return;
     };
@@ -151,8 +176,7 @@ pub(crate) fn push_now_playing(track: &qbz_models::QueueTrack, title: &str, albu
             title: title.to_string(),
             artist: track.artist.clone(),
             album: album.to_string(),
-            duration: (track.duration_secs > 0)
-                .then(|| Duration::from_secs(track.duration_secs)),
+            duration: (track.duration_secs > 0).then(|| Duration::from_secs(track.duration_secs)),
             art_url: art,
             // `xesam:url` (#658): the public Qobuz link for catalog rows, None
             // for local/plex (`qbz-media-controls/src/types.rs:30-36`).
@@ -171,10 +195,6 @@ pub(crate) fn push_now_playing(track: &qbz_models::QueueTrack, title: &str, albu
             track.duration_secs
         );
     }
-    mc.set_playback(
-        qbz_media_controls::PlaybackStatus::Playing,
-        Some(Duration::ZERO),
-    );
 }
 
 /// The no-track arm: reset the de-dupe (so replaying the SAME track after a
@@ -337,9 +357,9 @@ fn artwork_ref_for(track: &qbz_models::QueueTrack) -> qbz_models::ArtworkRef {
     // (and the offline cache lookup below then hits the very file the
     // now-playing feed already downloaded at that tier).
     match artwork {
-        qbz_models::ArtworkRef::Remote(u) => qbz_models::ArtworkRef::Remote(
-            qbz_models::qobuz_cover_at_px(&u, 600).unwrap_or(u),
-        ),
+        qbz_models::ArtworkRef::Remote(u) => {
+            qbz_models::ArtworkRef::Remote(qbz_models::qobuz_cover_at_px(&u, 600).unwrap_or(u))
+        }
         other => other,
     }
 }

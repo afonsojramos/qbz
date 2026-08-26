@@ -38,6 +38,10 @@ use crate::{
 };
 use serde::Serialize;
 
+fn should_expand_cue(cue: &crate::CueSheet) -> bool {
+    cue.is_single_file_image()
+}
+
 fn apply_sidecar_override(
     track: &mut LocalTrack,
     cache: &mut HashMap<PathBuf, Option<AlbumTagSidecar>>,
@@ -179,6 +183,20 @@ impl EphemeralLibraryState {
         for cue_path in &scan.cue_files {
             match CueParser::parse(cue_path) {
                 Ok(mut cue) => {
+                    // A multi-file CUE is a sidecar for audio that has
+                    // already been split (usually one FILE per TRACK). The
+                    // regular audio loop below is authoritative in that
+                    // layout. Expanding it as though it were one image would
+                    // duplicate every row and bind the virtual entries to an
+                    // arbitrary backing file.
+                    if !should_expand_cue(&cue) {
+                        log::info!(
+                            "[ephemeral] treating multi-file CUE as sidecar ({} files): {}",
+                            cue.audio_file_count(),
+                            cue_path.display()
+                        );
+                        continue;
+                    }
                     let audio_path_raw = Path::new(&cue.audio_file).to_path_buf();
                     let canonical = std::fs::canonicalize(&audio_path_raw)
                         .unwrap_or_else(|_| audio_path_raw.clone());
@@ -258,9 +276,10 @@ impl EphemeralLibraryState {
                         let mut found =
                             MetadataExtractor::extract_artwork(&canonical, &artwork_cache);
                         if found.is_none() {
-                            if let Some(folder_art) =
-                                MetadataExtractor::find_folder_artwork(&canonical, cue.title.as_deref())
-                            {
+                            if let Some(folder_art) = MetadataExtractor::find_folder_artwork(
+                                &canonical,
+                                cue.title.as_deref(),
+                            ) {
                                 found = MetadataExtractor::cache_artwork_file(
                                     Path::new(&folder_art),
                                     &artwork_cache,
@@ -323,8 +342,8 @@ impl EphemeralLibraryState {
                         sc.spawn(move || {
                             part.iter()
                                 .map(|f| {
-                                    let canonical = std::fs::canonicalize(f)
-                                        .unwrap_or_else(|_| f.clone());
+                                    let canonical =
+                                        std::fs::canonicalize(f).unwrap_or_else(|_| f.clone());
                                     (canonical, MetadataExtractor::extract(f))
                                 })
                                 .collect::<Vec<_>>()
@@ -613,8 +632,9 @@ impl Default for EphemeralLibraryState {
 }
 
 #[cfg(test)]
-mod editor_tests {
+mod tests {
     use super::*;
+    use std::fs;
 
     fn track_at(path: &Path) -> LocalTrack {
         LocalTrack {
@@ -625,6 +645,35 @@ mod editor_tests {
             artist: "Artist".to_string(),
             ..LocalTrack::default()
         }
+    }
+
+    #[test]
+    fn ephemeral_loader_only_expands_single_image_cues() {
+        let temp = tempfile::tempdir().unwrap();
+        let single_path = temp.path().join("single.cue");
+        fs::write(
+            &single_path,
+            "FILE \"album.flac\" WAVE\n\
+               TRACK 01 AUDIO\n\
+                 INDEX 01 00:00:00\n\
+               TRACK 02 AUDIO\n\
+                 INDEX 01 03:00:00\n",
+        )
+        .unwrap();
+        let multi_path = temp.path().join("split.cue");
+        fs::write(
+            &multi_path,
+            "FILE \"01. First.flac\" WAVE\n\
+               TRACK 01 AUDIO\n\
+                 INDEX 01 00:00:00\n\
+             FILE \"02. Second.flac\" WAVE\n\
+               TRACK 02 AUDIO\n\
+                 INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+
+        assert!(should_expand_cue(&CueParser::parse(&single_path).unwrap()));
+        assert!(!should_expand_cue(&CueParser::parse(&multi_path).unwrap()));
     }
 
     #[test]

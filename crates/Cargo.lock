@@ -6638,6 +6638,7 @@ name = "qbz-media-cache"
 version = "2.0.2"
 dependencies = [
  "rusqlite",
+ "serde_json",
  "tempfile",
 ]
 
@@ -6777,6 +6778,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

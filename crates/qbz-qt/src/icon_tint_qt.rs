@@ -246,6 +246,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("move", include_str!("../qml/assets/icons/primary/move.svg")),
     ("mp3", include_str!("../qml/assets/icons/primary/mp3.svg")),
     ("music-library-2", include_str!("../qml/assets/icons/primary/music-library-2.svg")),
+    ("music-note-slider", include_str!("../qml/assets/icons/primary/music-note-slider.svg")),
     ("music", include_str!("../qml/assets/icons/primary/music.svg")),
     ("network", include_str!("../qml/assets/icons/primary/network.svg")),
     ("panel-left", include_str!("../qml/assets/icons/primary/panel-left.svg")),

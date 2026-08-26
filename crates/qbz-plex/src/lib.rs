@@ -38,7 +38,12 @@ pub struct PlexTrack {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub duration_ms: Option<u64>,
+    /// Track/item thumb. Plex may expose a disc-specific cover here.
     pub artwork_path: Option<String>,
+    /// Parent album thumb, kept separately so item art can win without losing
+    /// a stable collection fallback.
+    #[serde(default)]
+    pub collection_artwork_path: Option<String>,
     pub part_key: Option<String>,
     pub container: Option<String>,
     pub codec: Option<String>,
@@ -49,6 +54,9 @@ pub struct PlexTrack {
     pub track_number: Option<u32>,
     pub disc_number: Option<u32>,
     pub year: Option<u32>,
+    /// Every `<Genre>` Plex supplied. `genre` remains the compatibility
+    /// primary value for older callers and cache rows.
+    pub genres: Vec<String>,
     pub genre: Option<String>,
     /// `parentRatingKey` — the Plex album this track belongs to. Distinct per
     /// physical album/edition, so it separates two albums that share the same
@@ -159,6 +167,7 @@ pub struct PlexCachedTrack {
     pub bit_depth: Option<u32>,
     pub sample_rate: u32,
     pub artwork_path: Option<String>,
+    pub collection_artwork_path: Option<String>,
     pub source: String,
     pub album_key: String,
     pub track_number: Option<u32>,
@@ -211,6 +220,7 @@ struct TrackBuilder {
     album: Option<String>,
     duration_ms: Option<u64>,
     artwork_path: Option<String>,
+    collection_artwork_path: Option<String>,
     part_key: Option<String>,
     container: Option<String>,
     codec: Option<String>,
@@ -221,6 +231,7 @@ struct TrackBuilder {
     track_number: Option<u32>,
     disc_number: Option<u32>,
     year: Option<u32>,
+    genres: Vec<String>,
     genre: Option<String>,
     parent_rating_key: Option<String>,
 }
@@ -234,6 +245,33 @@ fn now_epoch_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn plex_genres_json(track: &PlexTrack) -> String {
+    let mut genres = Vec::<String>::new();
+    for value in track.genres.iter().chain(track.genre.iter()) {
+        let value = value.trim();
+        if !value.is_empty()
+            && !genres
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(value))
+        {
+            genres.push(value.to_string());
+        }
+    }
+    serde_json::to_string(&genres).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn plex_genres_from_json(raw: Option<&str>, primary: Option<&str>) -> Vec<String> {
+    let mut genres = raw
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+        .unwrap_or_default();
+    if genres.is_empty() {
+        if let Some(value) = primary.filter(|value| !value.trim().is_empty()) {
+            genres.push(value.trim().to_string());
+        }
+    }
+    genres
 }
 
 fn open_plex_cache_db() -> Result<Connection, String> {
@@ -271,6 +309,7 @@ fn open_plex_cache_db() -> Result<Connection, String> {
             album TEXT,
             duration_ms INTEGER,
             artwork_path TEXT,
+            collection_artwork_path TEXT,
             part_key TEXT,
             container TEXT,
             codec TEXT,
@@ -278,6 +317,7 @@ fn open_plex_cache_db() -> Result<Connection, String> {
             bitrate_kbps INTEGER,
             sampling_rate_hz INTEGER,
             bit_depth INTEGER,
+            genres_json TEXT NOT NULL DEFAULT '[]',
             updated_at INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_plex_cache_tracks_section ON plex_cache_tracks(section_key);
@@ -305,6 +345,8 @@ fn open_plex_cache_db() -> Result<Connection, String> {
         "album_key TEXT",
         "year INTEGER",
         "genre TEXT",
+        "genres_json TEXT NOT NULL DEFAULT '[]'",
+        "collection_artwork_path TEXT",
         // parent_rating_key (2026-06-08): the Plex album a track belongs to, so
         // two same-title albums no longer interleave in the album view. NULL on
         // pre-migration rows (and rows synced before this column) — a re-sync
@@ -399,6 +441,23 @@ fn build_plex_client() -> Result<reqwest::Client, String> {
     PLEX_CLIENT
         .get_or_init(|| build_plex_client_with_timeout(Duration::from_secs(120)))
         .clone()
+}
+
+/// Non-secret client identity Plex expects on media-part requests.
+///
+/// Metadata and full-body playback already use [`build_plex_client`], which
+/// installs this profile as default headers. Progressive playback resolves the
+/// URL here but performs the byte transfer in the shared player transport, so
+/// it must carry the same profile with the resolved location. The token stays
+/// in the redacted query URL; none of these values is a credential.
+pub fn plex_media_request_headers() -> Vec<(String, String)> {
+    vec![
+        ("X-Plex-Product".into(), "QBZ".into()),
+        ("X-Plex-Version".into(), "0.1-poc".into()),
+        ("X-Plex-Device".into(), "QBZ Desktop".into()),
+        ("X-Plex-Platform".into(), std::env::consts::OS.into()),
+        ("X-Plex-Client-Identifier".into(), "qbz-plex-lan-poc".into()),
+    ]
 }
 
 /// Build the LAN Plex client with a caller-chosen request timeout. Quality
@@ -711,12 +770,27 @@ fn parse_track_block(start_tag: &str, inner_xml: &str) -> Option<PlexTrack> {
             parse_u32(iso.and_then(|s| s.get(..4).map(|s| s.to_string())))
         });
 
-    // Genre may appear either as an attribute or as a nested <Genre tag="..."/>.
-    let genre_inline = get_attr(start_tag, "genre");
-    let genre_nested = collect_start_tags(inner_xml, "Genre")
-        .into_iter()
-        .find_map(|tag| get_attr(&tag, "tag"));
-    let genre = genre_inline.or(genre_nested);
+    // Genre may appear either as an attribute or as several nested
+    // `<Genre tag="..."/>` rows. Preserve all of them; the old singular field
+    // remains the first value for compatibility.
+    let mut genres = Vec::<String>::new();
+    if let Some(value) = get_attr(start_tag, "genre") {
+        if !value.trim().is_empty() {
+            genres.push(value.trim().to_string());
+        }
+    }
+    for tag in collect_start_tags(inner_xml, "Genre") {
+        if let Some(value) = get_attr(&tag, "tag").filter(|value| !value.trim().is_empty()) {
+            let value = value.trim().to_string();
+            if !genres
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(&value))
+            {
+                genres.push(value);
+            }
+        }
+    }
+    let genre = genres.first().cloned();
 
     let mut t = TrackBuilder {
         rating_key: get_attr(start_tag, "ratingKey"),
@@ -725,12 +799,16 @@ fn parse_track_block(start_tag: &str, inner_xml: &str) -> Option<PlexTrack> {
             .or_else(|| get_attr(start_tag, "originalTitle")),
         album: get_attr(start_tag, "parentTitle"),
         duration_ms: parse_u64(get_attr(start_tag, "duration")),
-        artwork_path: get_attr(start_tag, "thumb")
-            .or_else(|| get_attr(start_tag, "parentThumb"))
-            .or_else(|| get_attr(start_tag, "grandparentThumb")),
+        // Preserve the specificity hierarchy instead of flattening it here.
+        // A track/disc thumb may differ from the parent album cover; callers
+        // choose item -> collection -> placeholder for playback, while album
+        // aggregation chooses collection -> item.
+        artwork_path: get_attr(start_tag, "thumb"),
+        collection_artwork_path: get_attr(start_tag, "parentThumb"),
         track_number: parse_u32(get_attr(start_tag, "index")),
         disc_number: parse_u32(get_attr(start_tag, "parentIndex")),
         year,
+        genres,
         genre,
         parent_rating_key: get_attr(start_tag, "parentRatingKey"),
         ..Default::default()
@@ -810,6 +888,7 @@ fn parse_track_block(start_tag: &str, inner_xml: &str) -> Option<PlexTrack> {
         album: t.album,
         duration_ms: t.duration_ms,
         artwork_path: t.artwork_path,
+        collection_artwork_path: t.collection_artwork_path,
         part_key: t.part_key,
         container: t.container,
         codec: t.codec,
@@ -820,6 +899,7 @@ fn parse_track_block(start_tag: &str, inner_xml: &str) -> Option<PlexTrack> {
         track_number: t.track_number,
         disc_number: t.disc_number,
         year: t.year,
+        genres: t.genres,
         genre: t.genre,
         parent_rating_key: t.parent_rating_key,
     })
@@ -1270,7 +1350,7 @@ pub fn plex_cache_get_tracks(
             .prepare(
                 "SELECT rating_key, title, artist, album, duration_ms, artwork_path, part_key, container,
                         codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth, track_number, disc_number,
-                        year, genre, parent_rating_key
+                        year, genre, genres_json, parent_rating_key, collection_artwork_path
                  FROM plex_cache_tracks
                  WHERE section_key = ?1
                  ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number, title COLLATE NOCASE
@@ -1290,6 +1370,7 @@ pub fn plex_cache_get_tracks(
                         .map(|v| decode_xml_entities(v.trim())),
                     duration_ms: row.get(4)?,
                     artwork_path: row.get(5)?,
+                    collection_artwork_path: row.get(19)?,
                     part_key: row.get(6)?,
                     container: row.get(7)?,
                     codec: row.get(8)?,
@@ -1300,8 +1381,12 @@ pub fn plex_cache_get_tracks(
                     track_number: row.get(13)?,
                     disc_number: row.get(14)?,
                     year: row.get::<_, Option<i64>>(15)?.map(|v| v as u32),
+                    genres: plex_genres_from_json(
+                        row.get::<_, Option<String>>(17)?.as_deref(),
+                        row.get::<_, Option<String>>(16)?.as_deref(),
+                    ),
                     genre: row.get(16)?,
-                    parent_rating_key: row.get(17)?,
+                    parent_rating_key: row.get(18)?,
                 })
             })
             .map_err(|e| format!("Failed to query Plex cache tracks: {}", e))?;
@@ -1313,7 +1398,7 @@ pub fn plex_cache_get_tracks(
             .prepare(
                 "SELECT rating_key, title, artist, album, duration_ms, artwork_path, part_key, container,
                         codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth, track_number, disc_number,
-                        year, genre, parent_rating_key
+                        year, genre, genres_json, parent_rating_key, collection_artwork_path
                  FROM plex_cache_tracks
                  ORDER BY updated_at DESC
                  LIMIT ?1",
@@ -1332,6 +1417,7 @@ pub fn plex_cache_get_tracks(
                         .map(|v| decode_xml_entities(v.trim())),
                     duration_ms: row.get(4)?,
                     artwork_path: row.get(5)?,
+                    collection_artwork_path: row.get(19)?,
                     part_key: row.get(6)?,
                     container: row.get(7)?,
                     codec: row.get(8)?,
@@ -1342,8 +1428,12 @@ pub fn plex_cache_get_tracks(
                     track_number: row.get(13)?,
                     disc_number: row.get(14)?,
                     year: row.get::<_, Option<i64>>(15)?.map(|v| v as u32),
+                    genres: plex_genres_from_json(
+                        row.get::<_, Option<String>>(17)?.as_deref(),
+                        row.get::<_, Option<String>>(16)?.as_deref(),
+                    ),
                     genre: row.get(16)?,
-                    parent_rating_key: row.get(17)?,
+                    parent_rating_key: row.get(18)?,
                 })
             })
             .map_err(|e| format!("Failed to query Plex cache tracks: {}", e))?;
@@ -1374,7 +1464,7 @@ pub fn plex_cache_get_tracks_by_keys(rating_keys: &[String]) -> Result<Vec<PlexT
     let sql = format!(
         "SELECT rating_key, title, artist, album, duration_ms, artwork_path, part_key, container,
                 codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth, track_number, disc_number,
-                year, genre, parent_rating_key
+                year, genre, genres_json, parent_rating_key, collection_artwork_path
          FROM plex_cache_tracks
          WHERE rating_key IN ({})",
         placeholders
@@ -1396,6 +1486,7 @@ pub fn plex_cache_get_tracks_by_keys(rating_keys: &[String]) -> Result<Vec<PlexT
                     .map(|v| decode_xml_entities(v.trim())),
                 duration_ms: row.get(4)?,
                 artwork_path: row.get(5)?,
+                collection_artwork_path: row.get(19)?,
                 part_key: row.get(6)?,
                 container: row.get(7)?,
                 codec: row.get(8)?,
@@ -1406,8 +1497,12 @@ pub fn plex_cache_get_tracks_by_keys(rating_keys: &[String]) -> Result<Vec<PlexT
                 track_number: row.get(13)?,
                 disc_number: row.get(14)?,
                 year: row.get::<_, Option<i64>>(15)?.map(|v| v as u32),
+                genres: plex_genres_from_json(
+                    row.get::<_, Option<String>>(17)?.as_deref(),
+                    row.get::<_, Option<String>>(16)?.as_deref(),
+                ),
                 genre: row.get(16)?,
-                parent_rating_key: row.get(17)?,
+                parent_rating_key: row.get(18)?,
             })
         })
         .map_err(|e| format!("Failed to query Plex cache tracks by keys: {}", e))?;
@@ -1422,10 +1517,16 @@ pub fn plex_cache_get_albums() -> Result<Vec<PlexCachedAlbum>, String> {
     let conn = open_plex_cache_db()?;
     let mut stmt = conn
         .prepare(
-            "SELECT artist, album, duration_ms, artwork_path, container, sampling_rate_hz, bit_depth, year, genre
+            "SELECT artist, album, duration_ms, artwork_path, collection_artwork_path,
+                    container, sampling_rate_hz, bit_depth, year, genre
              FROM plex_cache_tracks",
         )
-        .map_err(|e| format!("Failed to prepare Plex cache album aggregation query: {}", e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to prepare Plex cache album aggregation query: {}",
+                e
+            )
+        })?;
 
     let rows = stmt
         .query_map([], |row| {
@@ -1435,10 +1536,11 @@ pub fn plex_cache_get_albums() -> Result<Vec<PlexCachedAlbum>, String> {
                 row.get::<_, Option<i64>>(2)?,
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, Option<String>>(5)?,
                 row.get::<_, Option<i64>>(6)?,
                 row.get::<_, Option<i64>>(7)?,
-                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<i64>>(8)?,
+                row.get::<_, Option<String>>(9)?,
             ))
         })
         .map_err(|e| {
@@ -1456,6 +1558,7 @@ pub fn plex_cache_get_albums() -> Result<Vec<PlexCachedAlbum>, String> {
             album_opt,
             duration_ms_opt,
             artwork_path,
+            collection_artwork_path,
             container,
             sampling_rate_hz_opt,
             bit_depth_opt,
@@ -1472,6 +1575,9 @@ pub fn plex_cache_get_albums() -> Result<Vec<PlexCachedAlbum>, String> {
             .unwrap_or_else(|| "Unknown Album".to_string());
         let album = normalize_album_title(Some(&artist), &album_raw);
         let album_key = plex_album_key(&artist, &album);
+        let representative_artwork = collection_artwork_path
+            .filter(|path| !path.is_empty())
+            .or_else(|| artwork_path.clone().filter(|path| !path.is_empty()));
 
         let entry = grouped
             .entry(album_key.clone())
@@ -1479,7 +1585,7 @@ pub fn plex_cache_get_albums() -> Result<Vec<PlexCachedAlbum>, String> {
                 id: album_key.clone(),
                 title: album.clone(),
                 artist: artist.clone(),
-                artwork_path: artwork_path.clone(),
+                artwork_path: representative_artwork.clone(),
                 track_count: 0,
                 total_duration_secs: 0,
                 format: container.clone().unwrap_or_else(|| "flac".to_string()),
@@ -1502,8 +1608,8 @@ pub fn plex_cache_get_albums() -> Result<Vec<PlexCachedAlbum>, String> {
         if let Some(duration_ms) = duration_ms_opt {
             entry.total_duration_secs += (duration_ms as u64) / 1000;
         }
-        if entry.artwork_path.is_none() && artwork_path.is_some() {
-            entry.artwork_path = artwork_path;
+        if entry.artwork_path.is_none() {
+            entry.artwork_path = representative_artwork;
         }
         if let Some(container_value) = container {
             if entry.format == "flac" || entry.format.is_empty() {
@@ -1565,7 +1671,9 @@ pub fn plex_cache_count_tracks() -> Result<usize, String> {
 pub fn plex_cache_get_artists() -> Result<Vec<PlexCachedArtist>, String> {
     let conn = open_plex_cache_db()?;
     let mut stmt = conn
-        .prepare("SELECT artist, album, artwork_path FROM plex_cache_tracks")
+        .prepare(
+            "SELECT artist, album, artwork_path, collection_artwork_path FROM plex_cache_tracks",
+        )
         .map_err(|e| {
             format!(
                 "Failed to prepare Plex cache artist aggregation query: {}",
@@ -1579,6 +1687,7 @@ pub fn plex_cache_get_artists() -> Result<Vec<PlexCachedArtist>, String> {
                 row.get::<_, Option<String>>(0)?,
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })
         .map_err(|e| {
@@ -1599,7 +1708,7 @@ pub fn plex_cache_get_artists() -> Result<Vec<PlexCachedArtist>, String> {
     let mut grouped: HashMap<String, Acc> = HashMap::new();
 
     for row in rows {
-        let (artist_opt, album_opt, artwork_path) =
+        let (artist_opt, album_opt, artwork_path, collection_artwork_path) =
             row.map_err(|e| format!("Failed to read Plex cache artist row: {}", e))?;
         let artist = artist_opt
             .map(|v| decode_xml_entities(v.trim()))
@@ -1621,7 +1730,10 @@ pub fn plex_cache_get_artists() -> Result<Vec<PlexCachedArtist>, String> {
         entry.albums.insert(album_key);
         entry.track_count += 1;
         if entry.artwork_path.is_none() {
-            if let Some(p) = artwork_path.filter(|p| !p.is_empty()) {
+            if let Some(p) = artwork_path
+                .filter(|p| !p.is_empty())
+                .or_else(|| collection_artwork_path.filter(|p| !p.is_empty()))
+            {
                 entry.artwork_path = Some(p);
             }
         }
@@ -1659,7 +1771,8 @@ fn plex_cache_get_album_tracks_in(
         .unwrap_or(("album_key", album_key));
     let sql = format!(
         "SELECT rating_key, title, artist, album, duration_ms, container, bit_depth,
-                sampling_rate_hz, artwork_path, track_number, disc_number, parent_rating_key
+                sampling_rate_hz, artwork_path, track_number, disc_number, parent_rating_key,
+                collection_artwork_path
            FROM plex_cache_tracks
           WHERE {column} = ?1
           ORDER BY disc_number, track_number, title COLLATE NOCASE"
@@ -1683,6 +1796,7 @@ fn plex_cache_get_album_tracks_in(
                 row.get::<_, Option<i64>>(9)?,
                 row.get::<_, Option<i64>>(10)?,
                 row.get::<_, Option<String>>(11)?,
+                row.get::<_, Option<String>>(12)?,
             ))
         })
         .map_err(|e| format!("Failed to query Plex cache album tracks: {}", e))?;
@@ -1702,6 +1816,7 @@ fn plex_cache_get_album_tracks_in(
             track_number_opt,
             disc_number_opt,
             parent_rating_key,
+            collection_artwork_path,
         ) = row.map_err(|e| format!("Failed to read Plex cache album track row: {}", e))?;
         let artist = artist_opt
             .map(|v| decode_xml_entities(v.trim()))
@@ -1723,6 +1838,7 @@ fn plex_cache_get_album_tracks_in(
             bit_depth: bit_depth_opt.map(|v| v as u32),
             sample_rate: sampling_rate_opt.map(|v| v as u32).unwrap_or(44100),
             artwork_path,
+            collection_artwork_path,
             source: "plex".to_string(),
             album_key: album_key.to_string(),
             track_number: track_number_opt.map(|v| v as u32),
@@ -1750,16 +1866,51 @@ pub fn plex_cache_search_tracks_page(
     limit: u64,
     sort: &str,
 ) -> Result<Vec<PlexCachedTrack>, String> {
-    let conn = open_plex_cache_db()?;
-    plex_cache_search_tracks_page_in(&conn, &query, offset, limit, sort)
+    plex_cache_search_tracks_page_filtered(query, offset, limit, sort, &[], false, &[])
 }
 
+pub fn plex_cache_search_tracks_page_filtered(
+    query: String,
+    offset: u64,
+    limit: u64,
+    sort: &str,
+    formats: &[String],
+    other_formats: bool,
+    quality_tiers: &[String],
+) -> Result<Vec<PlexCachedTrack>, String> {
+    let conn = open_plex_cache_db()?;
+    plex_cache_search_tracks_page_filtered_in(
+        &conn,
+        &query,
+        offset,
+        limit,
+        sort,
+        formats,
+        other_formats,
+        quality_tiers,
+    )
+}
+
+#[cfg(test)]
 fn plex_cache_search_tracks_page_in(
     conn: &Connection,
     query: &str,
     offset: u64,
     limit: u64,
     sort: &str,
+) -> Result<Vec<PlexCachedTrack>, String> {
+    plex_cache_search_tracks_page_filtered_in(conn, query, offset, limit, sort, &[], false, &[])
+}
+
+fn plex_cache_search_tracks_page_filtered_in(
+    conn: &Connection,
+    query: &str,
+    offset: u64,
+    limit: u64,
+    sort: &str,
+    formats: &[String],
+    other_formats: bool,
+    quality_tiers: &[String],
 ) -> Result<Vec<PlexCachedTrack>, String> {
     let order = match sort {
         "title-asc" => "sort_title COLLATE NOCASE, sort_artist COLLATE NOCASE, rating_key",
@@ -1772,11 +1923,20 @@ fn plex_cache_search_tracks_page_in(
         "added-desc" => "sort_album COLLATE NOCASE, disc_number, track_number, rating_key",
         _ => "sort_album COLLATE NOCASE, sort_artist COLLATE NOCASE, disc_number, track_number, sort_title COLLATE NOCASE, rating_key",
     };
+    let media_filter = cached_track_media_filter_sql(
+        "container",
+        "bit_depth",
+        "sampling_rate_hz",
+        formats,
+        other_formats,
+        quality_tiers,
+    );
     let needle = format!("%{}%", query.to_lowercase());
     let mut stmt = conn
         .prepare(&format!(
             "SELECT rating_key, title, artist, album, duration_ms, container, bit_depth,
                     sampling_rate_hz, artwork_path, track_number, disc_number, year,
+                    collection_artwork_path,
                     TRIM(title) AS sort_title,
                     COALESCE(NULLIF(TRIM(artist), ''), 'Unknown Artist') AS sort_artist,
                     CASE
@@ -1799,10 +1959,11 @@ fn plex_cache_search_tracks_page_in(
                       ELSE COALESCE(NULLIF(TRIM(album), ''), 'Unknown Album')
                     END AS sort_album
              FROM plex_cache_tracks
-             WHERE ?1 = '' OR
+             WHERE (?1 = '' OR
                    lower(title) LIKE ?2 OR
                    lower(COALESCE(artist, '')) LIKE ?2 OR
-                   lower(COALESCE(album, '')) LIKE ?2
+                   lower(COALESCE(album, '')) LIKE ?2) \
+             {media_filter}
              ORDER BY {order}
              LIMIT ?3 OFFSET ?4"
         ))
@@ -1825,6 +1986,7 @@ fn plex_cache_search_tracks_page_in(
                     row.get::<_, Option<i64>>(9)?,
                     row.get::<_, Option<i64>>(10)?,
                     row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
                 ))
             },
         )
@@ -1845,6 +2007,7 @@ fn plex_cache_search_tracks_page_in(
             track_number_opt,
             disc_number_opt,
             year_opt,
+            collection_artwork_path,
         ) = row.map_err(|e| format!("Failed to read Plex cache search row: {}", e))?;
         let artist = artist_opt
             .map(|v| decode_xml_entities(v.trim()))
@@ -1866,6 +2029,7 @@ fn plex_cache_search_tracks_page_in(
             bit_depth: bit_depth_opt.map(|v| v as u32),
             sample_rate: sampling_rate_opt.map(|v| v as u32).unwrap_or(44100),
             artwork_path,
+            collection_artwork_path,
             source: "plex".to_string(),
             album_key: plex_album_key(&artist, &album),
             track_number: track_number_opt.map(|v| v as u32),
@@ -1876,6 +2040,63 @@ fn plex_cache_search_tracks_page_in(
         });
     }
     Ok(tracks)
+}
+
+fn cached_track_media_filter_sql(
+    format_col: &str,
+    depth_col: &str,
+    rate_col: &str,
+    formats: &[String],
+    other_formats: bool,
+    quality_tiers: &[String],
+) -> String {
+    let known = ["flac", "alac", "ape", "wav", "mp3", "aac"];
+    let selected = known
+        .iter()
+        .copied()
+        .filter(|value| {
+            formats
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(value))
+        })
+        .collect::<Vec<_>>();
+    let mut clauses = Vec::new();
+    if !selected.is_empty() || other_formats {
+        let mut values = selected
+            .into_iter()
+            .map(|value| format!("LOWER(COALESCE({format_col},''))='{value}'"))
+            .collect::<Vec<_>>();
+        if other_formats {
+            values.push(format!(
+                "LOWER(COALESCE({format_col},'')) NOT IN ('flac','alac','ape','wav','mp3','aac')"
+            ));
+        }
+        clauses.push(format!("AND ({})", values.join(" OR ")));
+    }
+    let hires = quality_tiers.iter().any(|value| value == "hires");
+    let cd = quality_tiers.iter().any(|value| value == "cd");
+    let lossy = quality_tiers.iter().any(|value| value == "lossy");
+    if hires || cd || lossy {
+        let khz = format!(
+            "CASE WHEN COALESCE({rate_col},0)>=1000 THEN COALESCE({rate_col},0)/1000.0 ELSE COALESCE({rate_col},0) END"
+        );
+        let mut values = Vec::new();
+        if hires {
+            values.push(format!(
+                "(LOWER(COALESCE({format_col},'')) IN ('dsd','dsf','dff') OR COALESCE({depth_col},0)>=24)"
+            ));
+        }
+        if cd {
+            values.push(format!(
+                "(LOWER(COALESCE({format_col},'')) NOT IN ('mp3','dsd','dsf','dff') AND (({depth_col} IS NOT NULL AND {depth_col}<24) OR ({depth_col} IS NULL AND {khz}>=44.1)))"
+            ));
+        }
+        if lossy {
+            values.push(format!("LOWER(COALESCE({format_col},''))='mp3'"));
+        }
+        clauses.push(format!("AND ({})", values.join(" OR ")));
+    }
+    clauses.join(" ")
 }
 
 /// Bulk by-rating-key lookup in the `PlexCachedTrack` shape (synthetic
@@ -1898,7 +2119,8 @@ pub fn plex_cache_get_cached_tracks_by_keys(
         .join(",");
     let sql = format!(
         "SELECT rating_key, title, artist, album, duration_ms, container, bit_depth,
-                sampling_rate_hz, artwork_path, track_number, disc_number, parent_rating_key
+                sampling_rate_hz, artwork_path, track_number, disc_number, parent_rating_key,
+                collection_artwork_path
          FROM plex_cache_tracks
          WHERE rating_key IN ({})",
         placeholders
@@ -1921,6 +2143,7 @@ pub fn plex_cache_get_cached_tracks_by_keys(
                 row.get::<_, Option<i64>>(9)?,
                 row.get::<_, Option<i64>>(10)?,
                 row.get::<_, Option<String>>(11)?,
+                row.get::<_, Option<String>>(12)?,
             ))
         })
         .map_err(|e| format!("Failed to query Plex cache tracks by keys: {}", e))?;
@@ -1939,6 +2162,7 @@ pub fn plex_cache_get_cached_tracks_by_keys(
             track_number_opt,
             disc_number_opt,
             parent_rating_key,
+            collection_artwork_path,
         ) = row.map_err(|e| format!("Failed to read Plex cache by-keys row: {}", e))?;
         let artist = artist_opt
             .map(|v| decode_xml_entities(v.trim()))
@@ -1960,6 +2184,7 @@ pub fn plex_cache_get_cached_tracks_by_keys(
             bit_depth: bit_depth_opt.map(|v| v as u32),
             sample_rate: sampling_rate_opt.map(|v| v as u32).unwrap_or(44100),
             artwork_path,
+            collection_artwork_path,
             source: "plex".to_string(),
             album_key: plex_album_key(&artist, &album),
             track_number: track_number_opt.map(|v| v as u32),
@@ -2112,17 +2337,19 @@ fn apply_section_page_in(
         .prepare_cached(
             "INSERT INTO plex_cache_tracks(
                  rating_key,section_key,server_id,title,artist,album,duration_ms,artwork_path,
-                 part_key,container,codec,channels,bitrate_kbps,sampling_rate_hz,bit_depth,
-                 track_number,disc_number,album_key,year,genre,parent_rating_key,updated_at,
+                 collection_artwork_path,part_key,container,codec,channels,bitrate_kbps,
+                 sampling_rate_hz,bit_depth,
+                 track_number,disc_number,album_key,year,genre,genres_json,parent_rating_key,updated_at,
                  sync_generation
              ) VALUES (
                  ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,
-                 ?19,?20,?21,?22,?23
+                 ?19,?20,?21,?22,?23,?24,?25
              )
              ON CONFLICT(rating_key) DO UPDATE SET
                  section_key=excluded.section_key,server_id=excluded.server_id,
                  title=excluded.title,artist=excluded.artist,album=excluded.album,
                  duration_ms=excluded.duration_ms,artwork_path=excluded.artwork_path,
+                 collection_artwork_path=excluded.collection_artwork_path,
                  part_key=excluded.part_key,
                  container=COALESCE(excluded.container,plex_cache_tracks.container),
                  codec=COALESCE(excluded.codec,plex_cache_tracks.codec),
@@ -2134,11 +2361,13 @@ fn apply_section_page_in(
                  bit_depth=COALESCE(excluded.bit_depth,plex_cache_tracks.bit_depth),
                  track_number=excluded.track_number,disc_number=excluded.disc_number,
                  album_key=excluded.album_key,year=excluded.year,genre=excluded.genre,
+                 genres_json=excluded.genres_json,
                  parent_rating_key=excluded.parent_rating_key,updated_at=excluded.updated_at,
                  sync_generation=excluded.sync_generation",
         )
         .map_err(|e| format!("Failed to prepare Plex page upsert: {}", e))?;
     for track in &page.tracks {
+        let genres_json = plex_genres_json(track);
         let artist = track
             .artist
             .as_deref()
@@ -2162,6 +2391,7 @@ fn apply_section_page_in(
                 track.album,
                 track.duration_ms.map(|value| value as i64),
                 track.artwork_path,
+                track.collection_artwork_path,
                 track.part_key,
                 track.container,
                 track.codec,
@@ -2174,6 +2404,7 @@ fn apply_section_page_in(
                 plex_album_key(artist, &album),
                 track.year.map(|value| value as i64),
                 track.genre,
+                genres_json,
                 track.parent_rating_key,
                 now,
                 generation_i64,
@@ -2406,9 +2637,10 @@ pub fn plex_cache_save_tracks(
         tx.execute(
             "INSERT INTO plex_cache_tracks
              (rating_key, section_key, server_id, title, artist, album, duration_ms, artwork_path,
-              part_key, container, codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth,
-              track_number, disc_number, album_key, year, genre, parent_rating_key, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+              collection_artwork_path, part_key, container, codec, channels, bitrate_kbps,
+              sampling_rate_hz, bit_depth,
+              track_number, disc_number, album_key, year, genre, genres_json, parent_rating_key, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
             params![
                 track.rating_key,
                 section_key,
@@ -2418,6 +2650,7 @@ pub fn plex_cache_save_tracks(
                 track.album,
                 track.duration_ms.map(|v| v as i64),
                 track.artwork_path,
+                track.collection_artwork_path,
                 track.part_key,
                 container,
                 track.codec,
@@ -2430,6 +2663,7 @@ pub fn plex_cache_save_tracks(
                 track_album_key,
                 track.year.map(|v| v as i64),
                 track.genre.clone(),
+                plex_genres_json(track),
                 track.parent_rating_key.clone(),
                 now,
             ],
@@ -2646,6 +2880,9 @@ pub struct PlexPartLocation {
     pub content_type: Option<String>,
     pub sampling_rate_hz: Option<u32>,
     pub bit_depth: Option<u32>,
+    /// The non-secret request identity required when another crate fetches
+    /// `part_url` instead of using qbz-plex's preconfigured client.
+    pub request_headers: Vec<(String, String)>,
 }
 
 /// Resolve the direct-play part URL for a Plex track WITHOUT downloading the
@@ -2697,6 +2934,7 @@ pub async fn plex_resolve_part_url(
         content_type: track.container.clone(),
         sampling_rate_hz: track.sampling_rate_hz,
         bit_depth: track.bit_depth,
+        request_headers: plex_media_request_headers(),
     })
 }
 
@@ -2733,7 +2971,8 @@ mod tests {
             "CREATE TABLE plex_cache_tracks (
                 rating_key TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT,
                 album TEXT, duration_ms INTEGER, container TEXT, bit_depth INTEGER,
-                sampling_rate_hz INTEGER, artwork_path TEXT, track_number INTEGER,
+                sampling_rate_hz INTEGER, artwork_path TEXT, collection_artwork_path TEXT,
+                track_number INTEGER,
                 disc_number INTEGER, year INTEGER
             );",
         )
@@ -2775,6 +3014,7 @@ mod tests {
                  album TEXT,
                  duration_ms INTEGER,
                  artwork_path TEXT,
+                 collection_artwork_path TEXT,
                  part_key TEXT,
                  container TEXT,
                  codec TEXT,
@@ -2787,6 +3027,7 @@ mod tests {
                  album_key TEXT,
                  year INTEGER,
                  genre TEXT,
+                 genres_json TEXT NOT NULL DEFAULT '[]',
                  parent_rating_key TEXT,
                  updated_at INTEGER NOT NULL,
                  sync_generation INTEGER NOT NULL DEFAULT 0
@@ -2815,6 +3056,7 @@ mod tests {
             album: Some(format!("Album {:04}", index / 10)),
             duration_ms: Some(180_000),
             artwork_path: Some(format!("/library/metadata/{}/thumb", index + 1)),
+            collection_artwork_path: Some(format!("/library/metadata/album-{}/thumb", index / 10)),
             part_key: Some(format!("/library/parts/{}/file.flac", index + 1)),
             container: with_quality.then(|| "flac".to_string()),
             codec: with_quality.then(|| "flac".to_string()),
@@ -2825,6 +3067,7 @@ mod tests {
             track_number: Some((index % 10 + 1) as u32),
             disc_number: Some(1),
             year: Some(2026),
+            genres: vec!["Fixture".to_string()],
             genre: Some("Fixture".to_string()),
             parent_rating_key: Some(format!("album-{}", index / 10)),
         }
@@ -2870,11 +3113,13 @@ mod tests {
     #[test]
     fn parses_tracks_with_stream_audio_metadata() {
         let xml = r#"<MediaContainer>
-            <Track ratingKey="42" title="Song" grandparentTitle="Artist" parentTitle="Album" duration="123000" thumb="/library/metadata/42/thumb/1">
+            <Track ratingKey="42" title="Song" grandparentTitle="Artist" parentTitle="Album" duration="123000" thumb="/library/metadata/42/thumb/1" parentThumb="/library/metadata/album-9/thumb/1" genre="Progressive Rock">
                 <Media container="flac">
                     <Part key="/library/parts/999/file.flac"/>
                     <Stream streamType="2" codecType="audio" codec="flac" channels="2" samplingRate="96000" bitDepth="24" bitrate="3120"/>
                 </Media>
+                <Genre tag="Art Rock"/>
+                <Genre tag="progressive rock"/>
             </Track>
         </MediaContainer>"#;
         let tracks = parse_tracks(xml, Some(10));
@@ -2888,8 +3133,56 @@ mod tests {
             tracks[0].artwork_path.as_deref(),
             Some("/library/metadata/42/thumb/1")
         );
+        assert_eq!(
+            tracks[0].collection_artwork_path.as_deref(),
+            Some("/library/metadata/album-9/thumb/1")
+        );
         assert_eq!(tracks[0].sampling_rate_hz, Some(96000));
         assert_eq!(tracks[0].bit_depth, Some(24));
+        assert_eq!(tracks[0].genres, ["Progressive Rock", "Art Rock"]);
+        assert_eq!(tracks[0].genre.as_deref(), Some("Progressive Rock"));
+    }
+
+    #[test]
+    fn plex_filtered_query_applies_format_and_quality_before_pagination() {
+        let conn = search_db(17);
+        conn.execute(
+            "UPDATE plex_cache_tracks SET container='mp3',bit_depth=NULL,sampling_rate_hz=44100
+             WHERE CAST(rating_key AS INTEGER) % 2 = 1",
+            [],
+        )
+        .unwrap();
+        let formats = vec!["mp3".to_string()];
+        let qualities = vec!["lossy".to_string()];
+        let first = plex_cache_search_tracks_page_filtered_in(
+            &conn,
+            "",
+            0,
+            4,
+            "title-asc",
+            &formats,
+            false,
+            &qualities,
+        )
+        .unwrap();
+        let second = plex_cache_search_tracks_page_filtered_in(
+            &conn,
+            "",
+            4,
+            8,
+            "title-asc",
+            &formats,
+            false,
+            &qualities,
+        )
+        .unwrap();
+        let ids = first
+            .iter()
+            .chain(&second)
+            .map(|row| row.rating_key.clone())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(ids.len(), 9);
+        assert!(first.iter().chain(&second).all(|row| row.format == "mp3"));
     }
 
     #[test]
@@ -3169,8 +3462,7 @@ mod tests {
         )
         .unwrap();
 
-        let grouped =
-            plex_cache_search_tracks_page_in(&conn, "", 0, 10, "group-artist").unwrap();
+        let grouped = plex_cache_search_tracks_page_in(&conn, "", 0, 10, "group-artist").unwrap();
         assert_eq!(grouped[0].artist, "Alpha Performer");
         assert_eq!(grouped[1].artist, "Zed Performer");
     }
@@ -3182,7 +3474,8 @@ mod tests {
             "CREATE TABLE plex_cache_tracks (
                 rating_key TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT,
                 album TEXT, duration_ms INTEGER, container TEXT, bit_depth INTEGER,
-                sampling_rate_hz INTEGER, artwork_path TEXT, track_number INTEGER,
+                sampling_rate_hz INTEGER, artwork_path TEXT, collection_artwork_path TEXT,
+                track_number INTEGER,
                 disc_number INTEGER, album_key TEXT, parent_rating_key TEXT
             );
             INSERT INTO plex_cache_tracks

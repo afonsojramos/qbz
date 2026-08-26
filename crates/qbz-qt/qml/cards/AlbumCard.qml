@@ -134,6 +134,12 @@ Rectangle {
     // album page agree. Do NOT let a host paint its own heart on top of the
     // card — see the `selectMode` note below for the same mistake's other half.
     property bool catalogAffordances: !root.localMode
+    // A Local Library album uses the separate LocalFavoritesService rather
+    // than the Qobuz catalog seam. This additive flag exposes the same heart
+    // geometry/menu row while handing the write back to that host.
+    property bool hostFavorite: false
+    readonly property bool favoriteAffordance: root.catalogAffordances || root.hostFavorite
+    signal favoriteRequested()
 
     // --- Multi-select mode — discover/AlbumCard.slint:83, :179-197, :207,
     // :239, :465. NOT an invention of this port and NOT a host concern: the
@@ -230,7 +236,10 @@ Rectangle {
 
     function toggleFavorite() {
         root.isFavorite = !root.isFavorite
-        QbzLibrary.libraryToggleFavorite("album", root.albumId)
+        if (root.hostFavorite)
+            root.favoriteRequested()
+        else
+            QbzLibrary.libraryToggleFavorite("album", root.albumId)
     }
     function togglePin() {
         root.isPinned = !root.isPinned
@@ -262,7 +271,15 @@ Rectangle {
         // success, the UNCHANGED one on failure — so this is both the
         // cross-surface walk and the rollback.
         function onLibraryFavoriteChanged(key, value) {
-            if (root.albumId !== "" && key === "album:" + root.albumId)
+            if (!root.hostFavorite && root.albumId !== ""
+                    && key === "album:" + root.albumId)
+                root.isFavorite = value
+        }
+    }
+    Connections {
+        target: root.hostFavorite ? QbzLocal : null
+        function onLocalAlbumFavoriteChanged(id, value) {
+            if (root.hostFavorite && root.albumId !== "" && id === root.albumId)
                 root.isFavorite = value
         }
     }
@@ -284,10 +301,12 @@ Rectangle {
             m.push({ "label": t("Play later", r), "icon": "list-plus", "action": "later" })
             m.push({ "label": t("Add to queue", r), "icon": "list-end", "action": "queue" })
         }
-        if (root.catalogAffordances) {
+        if (root.favoriteAffordance) {
             // Keep removal reachable even after Qobuz withdraws the old id.
             m.push({ "label": root.isFavorite ? t("Remove from Library", r) : t("Add to Library", r),
                      "icon": root.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
+        }
+        if (root.catalogAffordances) {
             // .slint gates this on a non-local/plex source as well — and the
             // rule is "not a Qobuz catalog album", so every server source is
             // in the same class as Plex. Blocking a Jellyfin album would write
@@ -531,7 +550,7 @@ Rectangle {
                     // ABSENT, not present-and-dead, when `albumId` is not a
                     // catalog album id — the same gate as the menu's heart row
                     // and the pin badge.
-                    visible: root.catalogAffordances
+                    visible: root.favoriteAffordance
                     name: root.isFavorite ? "heart-filled" : "heart"
                     active: root.isFavorite
                     anchors.verticalCenter: parent.verticalCenter

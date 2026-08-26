@@ -170,7 +170,7 @@ Item {
 
                     Text {
                         width: parent.width
-                        text: root.eph ? (root.eph.name || "") : ""
+                        text: root.eph ? (root.eph.title || root.eph.name || "") : ""
                         color: theme.textPrimary
                         font.pixelSize: theme.fontSection
                         font.weight: theme.weightBold
@@ -198,17 +198,20 @@ Item {
                         font.weight: theme.weightBold
                         elide: Text.ElideRight
                     }
-                    // "10 tracks · 42 min". The PATH used to live here and no
-                    // longer does: the medium's name is already the line above
-                    // and the tab, and the duration is what a listener actually
-                    // wants before pressing play.
+                    // "10 tracks · 42 min · Folder name". Folder context is
+                    // appended only when Rust inferred one consistent tagged
+                    // album/collection title; a mixed folder already uses its
+                    // own name as the title and does not repeat it here.
                     Text {
                         width: parent.width
                         text: {
                             var n = root.eph ? (root.eph.trackCount || 0) : 0
                             var d = root.eph ? (root.eph.totalDuration || "") : ""
+                            var folder = root.eph ? (root.eph.folderContext || "") : ""
                             var t = n + " " + QbzSession.tr("tracks", QbzSession.trRev)
-                            return d === "" ? t : t + " · " + d
+                            if (d !== "") t += " · " + d
+                            if (folder !== "") t += " · " + folder
+                            return t
                         }
                         color: theme.textMuted
                         font.pixelSize: theme.fontLegal

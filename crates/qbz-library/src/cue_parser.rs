@@ -12,12 +12,33 @@ pub struct CueSheet {
     pub file_path: String,
     /// Referenced audio file (resolved to absolute path)
     pub audio_file: String,
+    /// Distinct audio files named by FILE directives. QBZ only expands a
+    /// sheet into virtual tracks when this contains exactly one entry; a
+    /// multi-file CUE describes files that are already split and is treated
+    /// as a sidecar instead of a second copy of the album.
+    audio_files: Vec<String>,
     /// Album title
     pub title: Option<String>,
     /// Album performer/artist
     pub performer: Option<String>,
     /// Tracks in the CUE sheet
     pub tracks: Vec<CueTrack>,
+}
+
+impl CueSheet {
+    /// Whether every track in this sheet addresses one shared audio image.
+    ///
+    /// `cue_to_tracks` models virtual ranges inside a single decoder source.
+    /// A CUE with several distinct FILE directives is a metadata sidecar for
+    /// already-split files and must not enter that path.
+    pub fn is_single_file_image(&self) -> bool {
+        self.audio_files.len() == 1
+    }
+
+    /// Number of distinct audio files referenced by the sheet.
+    pub fn audio_file_count(&self) -> usize {
+        self.audio_files.len()
+    }
 }
 
 /// A track within a CUE sheet
@@ -83,6 +104,7 @@ impl CueParser {
         let mut sheet = CueSheet {
             file_path: cue_path.to_string_lossy().to_string(),
             audio_file: String::new(),
+            audio_files: Vec::new(),
             title: None,
             performer: None,
             tracks: Vec::new(),
@@ -103,11 +125,16 @@ impl CueParser {
             if line.to_uppercase().starts_with("FILE ") {
                 if let Some(filename) = Self::extract_quoted(line) {
                     // Resolve path relative to CUE file
-                    if let Some(parent) = cue_path.parent() {
-                        let audio_path = parent.join(&filename);
-                        sheet.audio_file = audio_path.to_string_lossy().to_string();
+                    let resolved = if let Some(parent) = cue_path.parent() {
+                        parent.join(&filename).to_string_lossy().into_owned()
                     } else {
-                        sheet.audio_file = filename;
+                        filename
+                    };
+                    if sheet.audio_file.is_empty() {
+                        sheet.audio_file.clone_from(&resolved);
+                    }
+                    if !sheet.audio_files.contains(&resolved) {
+                        sheet.audio_files.push(resolved);
                     }
                 }
             }
@@ -180,7 +207,11 @@ impl CueParser {
             ));
         }
 
-        log::info!("Parsed CUE: {} tracks", sheet.tracks.len());
+        log::info!(
+            "Parsed CUE: {} tracks, {} audio file(s)",
+            sheet.tracks.len(),
+            sheet.audio_file_count()
+        );
 
         Ok(sheet)
     }
@@ -212,6 +243,13 @@ pub fn cue_to_tracks(
     format: AudioFormat,
     properties: &AudioProperties,
 ) -> Vec<LocalTrack> {
+    // This converter expresses every row as a time range in one decoder
+    // source. Feeding it a multi-file CUE used to bind all rows to the last
+    // FILE directive and publish zero-duration duplicates of the split files.
+    if !cue.is_single_file_image() || audio_duration_secs == 0 {
+        return Vec::new();
+    }
+
     let mut tracks = Vec::new();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -225,13 +263,27 @@ pub fn cue_to_tracks(
 
     for (i, cue_track) in cue.tracks.iter().enumerate() {
         // Calculate end time (next track's start or audio end)
-        let end_secs = if i + 1 < cue.tracks.len() {
+        let requested_end = if i + 1 < cue.tracks.len() {
             cue.tracks[i + 1].start_secs
         } else {
             audio_duration_secs as f64
         };
+        let end_secs = requested_end.min(audio_duration_secs as f64);
 
-        let duration = (end_secs - cue_track.start_secs).max(0.0) as u64;
+        let range_secs = end_secs - cue_track.start_secs;
+        if !range_secs.is_finite() || range_secs <= 0.0 {
+            log::warn!(
+                "Ignoring unplayable CUE track {}: start={} end={} file={}",
+                cue_track.number,
+                cue_track.start_secs,
+                end_secs,
+                cue.audio_file
+            );
+            continue;
+        }
+        // A valid sub-second range is still playable; keep its visible
+        // duration non-zero while cue_start/end retain frame precision.
+        let duration = range_secs.ceil().max(1.0) as u64;
 
         tracks.push(LocalTrack {
             id: 0,
@@ -253,6 +305,7 @@ pub fn cue_to_tracks(
             disc_number: inferred_disc,
             year: None,
             genre: None,
+            genres: Vec::new(),
             catalog_number: None,
             duration_secs: duration,
             format: format.clone(),
@@ -264,6 +317,7 @@ pub fn cue_to_tracks(
             cue_start_secs: Some(cue_track.start_secs),
             cue_end_secs: Some(end_secs),
             artwork_path: None,
+            collection_artwork_path: None,
             last_modified: 0,
             indexed_at: now,
             source: None,
@@ -306,5 +360,49 @@ mod tests {
     fn test_extract_track_number() {
         assert_eq!(CueParser::extract_track_number("TRACK 01 AUDIO"), Some(1));
         assert_eq!(CueParser::extract_track_number("TRACK 12 AUDIO"), Some(12));
+    }
+
+    #[test]
+    fn multi_file_cue_is_a_split_file_sidecar_not_an_image() {
+        let cue = CueParser::parse_content(
+            "PERFORMER \"Opeth\"\n\
+             TITLE \"Sorceress\"\n\
+             FILE \"01. Persephone.flac\" WAVE\n\
+               TRACK 01 AUDIO\n\
+                 TITLE \"Persephone\"\n\
+                 INDEX 01 00:00:00\n\
+             FILE \"02. Sorceress.flac\" WAVE\n\
+               TRACK 02 AUDIO\n\
+                 TITLE \"Sorceress\"\n\
+                 INDEX 01 00:00:00\n",
+            Path::new("/music/Sorceress/disc.cue"),
+        )
+        .unwrap();
+
+        assert_eq!(cue.audio_file_count(), 2);
+        assert!(!cue.is_single_file_image());
+        assert!(
+            cue_to_tracks(&cue, 240, AudioFormat::Flac, &AudioProperties::default()).is_empty()
+        );
+    }
+
+    #[test]
+    fn invalid_or_out_of_bounds_ranges_are_not_published() {
+        let cue = CueParser::parse_content(
+            "FILE \"album.flac\" WAVE\n\
+               TRACK 01 AUDIO\n\
+                 TITLE \"Playable\"\n\
+                 INDEX 01 00:00:00\n\
+               TRACK 02 AUDIO\n\
+                 TITLE \"Past EOF\"\n\
+                 INDEX 01 10:00:00\n",
+            Path::new("/music/album.cue"),
+        )
+        .unwrap();
+
+        let tracks = cue_to_tracks(&cue, 300, AudioFormat::Flac, &AudioProperties::default());
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].title, "Playable");
+        assert_eq!(tracks[0].duration_secs, 300);
     }
 }

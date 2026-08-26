@@ -28,7 +28,10 @@
 //! - **Plex rows are PREPENDED and the track section is a plain `take(cap)`,**
 //!   so three Plex matches can starve the local-file tracks out of the section
 //!   entirely.
-//! - **No folder-cover fallback.** Row builders read `artwork_path` only.
+//! - **Artwork is resolved before mapping.** Current scans persist
+//!   embedded/disc/collection art in that order; this bounded search window
+//!   also runs the queue-time folder resolver so rows indexed by an older
+//!   build get the same per-disc result without requiring a rescan.
 
 use std::collections::HashSet;
 
@@ -52,13 +55,25 @@ pub(crate) struct LocalCaps {
 
 impl LocalCaps {
     /// Normal profile (Qobuz present): compact on-device block.
-    pub const NORMAL: LocalCaps = LocalCaps { albums: 3, artists: 2, tracks: 3 };
+    pub const NORMAL: LocalCaps = LocalCaps {
+        albums: 3,
+        artists: 2,
+        tracks: 3,
+    };
     /// Expanded profile (offline / not signed in → wider on-device block).
-    pub const EXPANDED: LocalCaps = LocalCaps { albums: 8, artists: 4, tracks: 8 };
+    pub const EXPANDED: LocalCaps = LocalCaps {
+        albums: 8,
+        artists: 4,
+        tracks: 8,
+    };
 
     /// `expand` is offline OR an unauthenticated session.
     pub fn for_session(expand: bool) -> LocalCaps {
-        if expand { Self::EXPANDED } else { Self::NORMAL }
+        if expand {
+            Self::EXPANDED
+        } else {
+            Self::NORMAL
+        }
     }
 
     /// How many raw local TRACK rows to fetch so the grouped album section can
@@ -384,8 +399,7 @@ pub(crate) fn append_immersive_local_albums(
 /// reference on the surface being ported is this contract's job; sweeping the
 /// rest is not.
 fn exclude_network_folders_now() -> bool {
-    crate::offline_fwd::engine().status().connectivity
-        == qbz_app::offline_mode::Connectivity::Down
+    crate::offline_fwd::engine().status().connectivity == qbz_app::offline_mode::Connectivity::Down
 }
 
 /// Fetch up to `limit` local-library tracks matching `query`, off the calling
@@ -439,11 +453,20 @@ pub(crate) async fn load_cortinilla_local(
         // it always was; a media-server mirror can hold 50k rows and this runs
         // on every keystroke of the cortinilla, so it takes the same limit the
         // caller asked the local query for.
-        merged.extend(crate::media_servers_qt::search_tracks(q.trim(), Some(limit as u32)));
+        merged.extend(crate::media_servers_qt::search_tracks(
+            q.trim(),
+            Some(limit as u32),
+        ));
         if !merged.is_empty() {
             merged.append(&mut rows);
             rows = merged;
         }
+        // Search is an artwork-bearing surface too. Keep the result consistent
+        // with Library Explorer and playback for pre-migration rows: a cover
+        // in the track's disc directory wins over a stale collection cover,
+        // while collection art remains the fallback. The window is bounded by
+        // `limit`, and this closure is already off the async/UI threads.
+        crate::local_playback::fill_missing_covers(&mut rows);
         rows
     })
     .await
@@ -495,8 +518,14 @@ mod tests {
             !album_titles.contains(&"Uroboric Forms"),
             "a track-title match must not pull its album in: {album_titles:?}"
         );
-        assert!(album_titles.contains(&"The Number of the Beast"), "album-artist match");
-        assert!(album_titles.contains(&"Iron Canciones"), "album-title match");
+        assert!(
+            album_titles.contains(&"The Number of the Beast"),
+            "album-artist match"
+        );
+        assert!(
+            album_titles.contains(&"Iron Canciones"),
+            "album-title match"
+        );
 
         let (artists, _) = derive_local_artist_rows(&rows, 10, "Iro");
         let names: Vec<&str> = artists.iter().map(|r| r.title.as_str()).collect();
@@ -542,6 +571,10 @@ mod tests {
     fn an_empty_query_filters_nothing() {
         let rows = vec![track("A", "B", "C")];
         let (albums, _) = derive_local_album_rows(&rows, 10, "");
-        assert_eq!(albums.len(), 1, "an empty needle must not empty the section");
+        assert_eq!(
+            albums.len(),
+            1,
+            "an empty needle must not empty the section"
+        );
     }
 }

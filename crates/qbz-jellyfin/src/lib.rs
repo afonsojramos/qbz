@@ -42,6 +42,7 @@
 //! is the 2.1 scope; both are supported by the server and neither is exercised
 //! by anything today, so shipping them untested would be inventing surface.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -164,6 +165,9 @@ pub struct JellyfinTrack {
     pub disc_number: Option<u32>,
     pub duration_ms: u64,
     pub year: Option<u32>,
+    /// Every genre Jellyfin supplied, in server order. `genre` remains the
+    /// compatibility primary value for older cache readers.
+    pub genres: Vec<String>,
     pub genre: Option<String>,
     /// Container as the server names it (`flac`, `mp3`, `ape`).
     pub container: String,
@@ -175,8 +179,13 @@ pub struct JellyfinTrack {
     pub channels: Option<u32>,
     pub bitrate_bps: Option<u32>,
     /// The album's primary-image tag. Absent on 1053 of 4924 measured rows
-    /// (21 %) — a blank cover is the common case here, not an edge case.
+    /// (21 %). Its absence does not mean the album has no image: Jellyfin's
+    /// primary-image endpoint remains addressable by `album_id` without a tag.
     pub album_image_tag: Option<String>,
+    /// This audio item's own primary-image tag. Jellyfin/Navidrome can expose
+    /// a different embedded or folder cover for each disc while still grouping
+    /// every row under one `MusicAlbum`; this must outrank the collection art.
+    pub item_image_tag: Option<String>,
     /// The server's own path. Real, unlike Subsonic's synthesised one, but QBZ
     /// never opens it: the file lives on the server. Kept for diagnostics only.
     pub server_path: Option<String>,
@@ -267,6 +276,8 @@ struct AudioDto {
     #[serde(default)]
     album_primary_image_tag: Option<String>,
     #[serde(default)]
+    image_tags: HashMap<String, String>,
+    #[serde(default)]
     media_sources: Vec<MediaSourceDto>,
 }
 
@@ -343,6 +354,23 @@ impl AudioDto {
             .find(|s| s.kind == "Audio");
         let artist = self.artists.first().cloned().unwrap_or_default();
         let album_artist = self.album_artist.clone().unwrap_or_else(|| artist.clone());
+        let genres = self
+            .genres
+            .into_iter()
+            .map(|genre| genre.trim().to_string())
+            .filter(|genre| !genre.is_empty())
+            .fold(Vec::<String>::new(), |mut out, genre| {
+                if !out.iter().any(|value| value.eq_ignore_ascii_case(&genre)) {
+                    out.push(genre);
+                }
+                out
+            });
+        let item_image_tag = self
+            .image_tags
+            .iter()
+            .find(|(kind, _)| kind.eq_ignore_ascii_case("primary"))
+            .map(|(_, tag)| tag.trim().to_string())
+            .filter(|tag| !tag.is_empty());
         JellyfinTrack {
             id: self.id,
             title: self.name,
@@ -358,7 +386,8 @@ impl AudioDto {
             disc_number: self.parent_index_number,
             duration_ms: JellyfinTrack::ticks_to_ms(self.run_time_ticks.unwrap_or(0)),
             year: self.production_year,
-            genre: self.genres.into_iter().next(),
+            genre: genres.first().cloned(),
+            genres,
             container: self.container.unwrap_or_default(),
             codec: audio.as_ref().and_then(|a| a.codec.clone()),
             // A lossy codec reports no bit depth. Preserved as `None` rather
@@ -368,6 +397,7 @@ impl AudioDto {
             channels: audio.as_ref().and_then(|a| a.channels),
             bitrate_bps: audio.as_ref().and_then(|a| a.bit_rate),
             album_image_tag: self.album_primary_image_tag,
+            item_image_tag,
             server_path: self.path,
         }
     }
@@ -829,8 +859,10 @@ mod tests {
             "ParentIndexNumber": 1,
             "RunTimeTicks": 3484800000i64,
             "ProductionYear": 1988,
+            "Genres": ["Thrash Metal", "Heavy Metal", "thrash metal"],
             "Container": "flac",
             "AlbumPrimaryImageTag": "748607df",
+            "ImageTags": { "Primary": "disc-specific" },
             "MediaSources": [{
                 "MediaStreams": [
                     { "Type": "EmbeddedImage", "Codec": "mjpeg", "BitDepth": 8 },
@@ -853,6 +885,9 @@ mod tests {
         assert_eq!(t.duration_ms, 348_480);
         assert_eq!(t.track_number, Some(6));
         assert_eq!(t.disc_number, Some(1));
+        assert_eq!(t.genres, ["Thrash Metal", "Heavy Metal"]);
+        assert_eq!(t.genre.as_deref(), Some("Thrash Metal"));
+        assert_eq!(t.item_image_tag.as_deref(), Some("disc-specific"));
     }
 
     #[test]
@@ -989,6 +1024,7 @@ mod tests {
         assert_eq!(t.track_number, None);
         assert_eq!(t.duration_ms, 0);
         assert_eq!(t.album_image_tag, None);
+        assert_eq!(t.item_image_tag, None);
     }
 
     /// An artist-less row falls back to the ALBUM artist rather than rendering

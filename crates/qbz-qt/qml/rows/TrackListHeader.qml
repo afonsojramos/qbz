@@ -37,6 +37,7 @@ Item {
     // Defaults are TrackRow's own defaults, so a host that sets nothing gets
     // a header for a row that sets nothing.
     property bool showArtwork: false
+    property bool showSource: false
     property bool showAlbum: false
     property bool showFavorite: true
     property bool showDownload: false
@@ -122,10 +123,15 @@ Item {
             width: cols.colArt
             height: root.bandH
         }
+        Item {
+            visible: root.showSource
+            width: cols.colSource
+            height: root.bandH
+        }
         ColLabel {
             width: cols.titleWidth(root.innerWidth, root.showArtwork, root.showAlbum,
                                    root.showFavorite, root.showDownload, root.showMenu,
-                                   root.showReorder)
+                                   root.showReorder, root.showSource)
             text: QbzSession.tr("Title", QbzSession.trRev)
         }
         ColLabel {
