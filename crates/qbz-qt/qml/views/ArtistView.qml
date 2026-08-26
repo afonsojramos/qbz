@@ -2948,13 +2948,16 @@ Rectangle {
         // mid-page it is surrounded by content and a notch there would be worse
         // than the square corner it fixes.
         topRadius: y <= 0 ? theme.radiusMd : 0
-        // surface-main @ bar-alpha (0.3) under the dynamic background, NOT
+        // surface-main @ 0.6 under the dynamic background, NOT
         // transparent: pinned, it overlays the page content scrolling beneath
         // it, so it needs SOME fill to stay readable — the reference gives thin
         // bars their own lighter tier for exactly that
         // (ArtistPageView.slint:1108). This mattered less when the bar scrolled
         // with the page; now it is load-bearing.
-        barBg: root.ambientOn ? theme.surfaceMainA30 : theme.surfaceMain
+        barBg: root.ambientOn
+            ? Qt.rgba(theme.surfaceMain.r, theme.surfaceMain.g,
+                      theme.surfaceMain.b, 0.60)
+            : theme.surfaceMain
         tabs: root.jumpTabs
         activeTabId: root.activeJumpTab
         visible: root.jumpTabs.length > 0
