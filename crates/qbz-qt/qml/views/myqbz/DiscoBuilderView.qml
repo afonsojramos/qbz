@@ -41,13 +41,40 @@ Rectangle {
 
     QbzTheme { id: theme }
 
-    readonly property var doc: parseDoc()
+    property var doc: ({})
     function parseDoc() {
         try {
             return JSON.parse(QbzDisco.discoJson)
         } catch (e) {
             return ({})
         }
+    }
+
+    // `rows` is a plain JS array, so every Rust publish assigns a brand-new
+    // ListView model. Capture the viewport BEFORE assigning `doc`; trying to
+    // recover it from onRowsChanged is already too late because Qt may have
+    // reset contentY during the binding update.
+    property int documentEpoch: 0
+    function applyDocument() {
+        var next = root.parseDoc()
+        var currentArtist = root.doc.artistId || ""
+        var nextArtist = next.artistId || ""
+        var preserve = nextArtist !== "" && nextArtist === currentArtist
+            && next.loading !== true
+        var savedY = preserve ? rowList.contentY : 0
+        root.documentEpoch += 1
+        var epoch = root.documentEpoch
+        root.doc = next
+        Qt.callLater(function () {
+            if (epoch !== root.documentEpoch)
+                return
+            rowList.forceLayout()
+            var minY = rowList.originY
+            var maxY = minY + Math.max(0,
+                rowList.contentHeight - rowList.height)
+            rowList.contentY = preserve
+                ? Math.max(minY, Math.min(savedY, maxY)) : minY
+        })
     }
     function t(s) { return QbzSession.tr(s, QbzSession.trRev) }
 
@@ -95,14 +122,12 @@ Rectangle {
     onLoadingChanged: if (root.loading) {
         root.nameEdited = false
         root.collectionName = ""
-        // A fresh load is a fresh table: without this the preserved offset
-        // (below) survives into the NEXT artist and `restoreScroll` opens his
-        // discography already scrolled to the previous one's row. Slint's
-        // Flickable lands at the top because `reset` empties the viewport.
-        root.keepY = 0
     }
-    Component.onCompleted: if (!root.nameEdited && root.collectionName === "")
-        root.collectionName = root.defaultName
+    Component.onCompleted: {
+        root.applyDocument()
+        if (!root.nameEdited && root.collectionName === "")
+            root.collectionName = root.defaultName
+    }
 
     // Footer count. Rust pre-renders the ONE true plural in this domain with
     // `qbz_i18n::tf` and publishes it as `footerCount` (spec 01 §4/§8.7) —
@@ -141,21 +166,6 @@ Rectangle {
             { "id": "title", "label": QbzSession.tr("Title", rev) },
             { "id": "manual", "label": QbzSession.tr("Manual", rev) }
         ]
-    }
-
-    // --- Scroll preservation ----------------------------------------------
-    // Every mutation (a checkbox, an override, a re-sort) republishes the whole
-    // DiscoDoc, so `groups` is a NEW array and QQuickItemView::setModel()
-    // resets contentY to 0 — one checkbox click would throw the user from row
-    // 40 to the top. Slint's Flickable keeps its viewport-y across the same
-    // republish, so restoring it IS the parity behaviour.
-    property real keepY: 0
-    onRowsChanged: Qt.callLater(root.restoreScroll)
-    function restoreScroll() {
-        if (root.keepY <= 0 || rowList.contentY > 0)
-            return
-        rowList.contentY = Math.min(
-            root.keepY, Math.max(0, rowList.contentHeight - rowList.height))
     }
 
     // --- Everything above the table (the ListView header) ------------------
@@ -409,7 +419,6 @@ Rectangle {
         model: root.populated ? root.rows : []
         header: pageHead
         footer: bottomPad
-        onContentYChanged: if (contentY > 0) root.keepY = contentY
 
         // ONE row — a group's primary, or one of its alternates (:705-722).
         // Every field comes off the Rust row descriptor: `restOpacity` is
@@ -425,6 +434,11 @@ Rectangle {
             restOpacity: modelData.restOpacity !== undefined
                 ? modelData.restOpacity : 1.0
         }
+    }
+
+    Connections {
+        target: QbzDisco
+        function onDiscoJsonChanged() { root.applyDocument() }
     }
 
     // Back/forward scroll memory (controls/ScrollMemory.qml): reports
