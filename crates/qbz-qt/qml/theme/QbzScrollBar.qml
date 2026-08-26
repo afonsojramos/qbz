@@ -9,6 +9,9 @@ import QtQuick
 Item {
     id: root
     required property Flickable target
+    /// Emitted only for a physical wheel/touchpad gesture or a press on this
+    /// gutter, never when the target is positioned from code.
+    signal userScrollStarted()
 
     width: 14
     visible: maxScroll > 0
@@ -42,6 +45,7 @@ Item {
     // while this observer supplies only a missing touchpad tail.
     QbzKineticScroll {
         target: root.target
+        onUserScrollStarted: root.userScrollStarted()
     }
 
     // Track.
@@ -85,6 +89,7 @@ Item {
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
         onPressed: {
+            root.userScrollStarted();
             // Public Flickable semantics already cancel on a contentY write;
             // make the takeover explicit so scrollbar drag remains exact even
             // if the first pressed position equals the current one.

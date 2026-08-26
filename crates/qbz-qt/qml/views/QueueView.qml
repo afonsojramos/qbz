@@ -34,6 +34,46 @@ Rectangle {
         + (root.doc.currentIndex >= 0 ? 1 : 0)
     readonly property var currentRow: root.doc.currentIndex >= 0
         ? root.rows[root.doc.currentIndex] : null
+    readonly property bool hasPlayingRow: root.doc.currentIndex >= 0
+        && root.doc.currentIndex < root.rows.length
+    readonly property int actionRailWidth: 52
+
+    // Opt-in follow mode. It survives playback-driven document updates but
+    // yields immediately to any user scroll or queue-ordering gesture, so a
+    // track transition can never yank the viewport away while the user is
+    // arranging another part of the list.
+    property bool followPlaying: false
+    property bool programmaticListPosition: false
+
+    function cancelPlayingFollow() {
+        root.followPlaying = false
+    }
+
+    function positionListAt(index, mode) {
+        if (index < 0 || index >= root.rows.length)
+            return
+        root.programmaticListPosition = true
+        queueList.positionViewAtIndex(index, mode)
+        Qt.callLater(function () { root.programmaticListPosition = false })
+    }
+
+    function focusOnPlaying() {
+        if (!root.hasPlayingRow)
+            return
+        root.followPlaying = true
+        root.positionListAt(root.doc.currentIndex, ListView.Center)
+    }
+
+    function followPlayingRow() {
+        if (root.followPlaying && root.hasPlayingRow)
+            root.positionListAt(root.doc.currentIndex, ListView.Center)
+    }
+
+    function goToTop() {
+        root.cancelPlayingFollow()
+        if (root.rows.length > 0)
+            root.positionListAt(0, ListView.Beginning)
+    }
 
     Component.onCompleted: {
         QbzQueue.queueExtendedOpened()
@@ -43,7 +83,14 @@ Rectangle {
         QbzShell.dragInlineVisual = false
         QbzQueue.queueExtendedClosed()
     }
-    onDocChanged: root.scheduleVisibleCovers()
+    onDocChanged: {
+        root.scheduleVisibleCovers()
+        if (!root.hasPlayingRow)
+            root.cancelPlayingFollow()
+        else if (root.followPlaying)
+            Qt.callLater(function () { root.followPlayingRow() })
+    }
+    onSearchActiveChanged: if (root.searchActive) root.cancelPlayingFollow()
 
     // ----------------------------- artwork ------------------------------
 
@@ -219,6 +266,7 @@ Rectangle {
     function moveQueueRow(row, delta) {
         if (!row || root.searchActive || root.rowBlocked(row))
             return
+        root.cancelPlayingFollow()
         var from
         var count
         var targetPhase = row.phase
@@ -254,6 +302,7 @@ Rectangle {
         : ({})
 
     function beginQueueDrag(row, visualIndex) {
+        root.cancelPlayingFollow()
         root.dragPhase = row.phase
         root.dragPhaseIndex = row.phaseIndex
         root.dragTrackId = row.id
@@ -588,6 +637,9 @@ Rectangle {
                 id: queueList
                 anchors.left: parent.left
                 anchors.right: queueScroll.left
+                // Reserve a narrow action rail so the two always-visible
+                // floating buttons never cover a row or the scrollbar.
+                anchors.rightMargin: root.actionRailWidth
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 anchors.leftMargin: theme.spacingMd
@@ -599,6 +651,10 @@ Rectangle {
                 reuseItems: true
                 model: root.rows
                 onContentYChanged: root.scheduleVisibleCovers()
+                onMovementStarted: {
+                    if (!root.programmaticListPosition)
+                        root.cancelPlayingFollow()
+                }
 
                 delegate: Item {
                     id: rowHost
@@ -698,6 +754,63 @@ Rectangle {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 target: queueList
+                onUserScrollStarted: root.cancelPlayingFollow()
+            }
+
+            // Always-visible viewport actions. They occupy the reserved rail,
+            // while QbzContextMenu reparents to Overlay.overlay and therefore
+            // remains above them when opened near the lower-right corner.
+            Column {
+                id: viewportActions
+                z: 15
+                anchors.right: queueScroll.left
+                anchors.rightMargin: 8
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: theme.spacingMd
+                spacing: 8
+
+                Rectangle {
+                    width: 36
+                    height: 36
+                    radius: theme.radiusSm
+                    color: theme.surfaceCard
+                    border.width: 1
+                    border.color: root.followPlaying ? theme.accent
+                                                     : theme.borderSubtle
+                    QbzIconButton {
+                        anchors.centerIn: parent
+                        btnSize: 34
+                        iconSize: 16
+                        name: "disc-3"
+                        active: root.followPlaying
+                        btnEnabled: root.hasPlayingRow
+                        tooltip: tips
+                        tooltipKey: "queue-focus-playing"
+                        tooltipText: QbzSession.tr("Focus on playing",
+                                                   QbzSession.trRev)
+                        onClicked: root.focusOnPlaying()
+                    }
+                }
+
+                Rectangle {
+                    width: 36
+                    height: 36
+                    radius: theme.radiusSm
+                    color: theme.surfaceCard
+                    border.width: 1
+                    border.color: theme.borderSubtle
+                    QbzIconButton {
+                        anchors.centerIn: parent
+                        btnSize: 34
+                        iconSize: 16
+                        name: "chevron-up"
+                        btnEnabled: root.rows.length > 0
+                        tooltip: tips
+                        tooltipKey: "queue-go-top"
+                        tooltipText: QbzSession.tr("Go to top", QbzSession.trRev)
+                        onClicked: root.goToTop()
+                    }
+                }
             }
 
             // QueueView's drag visual is the row itself, not the generic

@@ -975,13 +975,15 @@ Rectangle {
                         readonly property string cSourceKind: root.patchRev >= 0 ? (gcell.live.sourceKind || "") : ""
                         readonly property bool cSelected: root.patchRev >= 0 && gcell.live.selected === true
                         readonly property bool cFavorite: root.patchRev >= 0 && gcell.live.isFavorite === true
-                        readonly property bool cPinned: root.patchRev >= 0 && gcell.live.isPinned === true
+                        readonly property string cCardIdentity:
+                            gcell.cItemType + ":" + gcell.cItemId
                         /// Is THIS cell's `sourceItemId` a Qobuz catalog album
                         /// id? The per-item gate for the card's catalog-only
-                        /// affordances (heart, pin, "Block this album"), and the
+                        /// affordances (heart and "Block this album"), and the
                         /// QML twin of `myqbz_detail_qt::is_catalog_album` — the
-                        /// two must agree, because Rust seeds `isFavorite` /
-                        /// `isPinned` behind the same predicate.
+                        /// two must agree for the favorite seed. Pinning has a
+                        /// separate string-key gate below so local albums can
+                        /// participate too.
                         ///
                         /// The STORED source (`source`, "qobuz" | "local"), not
                         /// the resolved `sourceKind`: the stored word is what
@@ -1021,9 +1023,9 @@ Rectangle {
                         /// `rows/TrackRow.qml:233`, `views/library/FeedListRow.qml:39`);
                         /// AlbumCard takes flat properties instead of an `item`,
                         /// so the restore belongs to the recycling HOST. Keyed
-                        /// on `cItemId`, which is derived from `index` and
-                        /// therefore changes on every reuse.
-                        onCItemIdChanged: gcell.rebindCardState()
+                        /// on the type + id pair, which is derived from
+                        /// `index` and therefore changes on every reuse.
+                        onCCardIdentityChanged: gcell.rebindCardState()
                         function rebindCardState() {
                             // The change signal can fire while the delegate is
                             // still being built, before the child below exists;
@@ -1032,7 +1034,11 @@ Rectangle {
                             if (!gcard)
                                 return
                             gcard.isFavorite = Qt.binding(function () { return gcell.cFavorite })
-                            gcard.isPinned = Qt.binding(function () { return gcell.cPinned })
+                            gcard.isPinned = Qt.binding(function () {
+                                return gcell.cItemType === "album"
+                                    ? QbzLibrary.pinState("album", gcell.cItemId)
+                                    : false
+                            })
                         }
 
                         AlbumCard {
@@ -1048,10 +1054,16 @@ Rectangle {
                             // AlbumCard's `catalogAffordances`). A My QBZ
                             // container is multi-source per ROW: a Qobuz album
                             // cell's id IS a catalog album id and its heart /
-                            // pin / block are perfectly valid; a track, a
-                            // playlist, a local or a Plex cell's is not, and
-                            // there the three are ABSENT rather than dead.
+                            // pin / block are perfectly valid. Local/server
+                            // albums below opt back into pin independently;
+                            // tracks/playlists still keep album affordances
+                            // absent rather than dead.
                             catalogAffordances: gcell.cCatalogAlbum
+                            // The heterogeneous grid also uses AlbumCard for
+                            // tracks/playlists. Quick View belongs only to its
+                            // real album rows, including local/server albums.
+                            quickViewAffordance: gcell.cItemType === "album"
+                            pinAffordance: gcell.cItemType === "album"
                             // Seeded by Rust behind the SAME predicate, then
                             // settled by the card itself on
                             // `QbzLibrary.libraryFavoriteChanged` / `pinChanged`
@@ -1059,7 +1071,8 @@ Rectangle {
                             // on a Home rail agrees everywhere, and no toggle
                             // republishes this document.
                             isFavorite: gcell.cFavorite
-                            isPinned: gcell.cPinned
+                            isPinned: pinAffordance
+                                ? QbzLibrary.pinState("album", gcell.cItemId) : false
                             albumId: gcell.cItemId
                             title: gcell.cTitle
                             artist: gcell.cSubtitle
@@ -1076,6 +1089,7 @@ Rectangle {
                             // `cArtUrl`). Without it a pinned My QBZ album
                             // lands in the Pinned rail as a placeholder.
                             artworkUrl: gcell.cArtUrl
+                            pinArtworkUrl: artworkUrl !== "" ? artworkUrl : artSource
                             // Badge ON: a My QBZ container is multi-source BY
                             // DEFINITION and the sibling LIST arm gives every
                             // row a Source column (col 4, the same

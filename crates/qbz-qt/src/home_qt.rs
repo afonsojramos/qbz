@@ -118,6 +118,14 @@ pub struct HomeCard {
     /// "playlist") — the mixed PinnedCarousel slot dispatch.
     #[serde(rename = "itemKind", default)]
     pub item_kind: String,
+    /// Pinned rail only: route an album snapshot back through QbzLocal instead
+    /// of handing its physical group/server key to the Qobuz catalog.
+    #[serde(
+        rename = "isLocalAlbum",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub is_local_album: bool,
     /// Playlist rows: the UPPERCASE first-tag category subtag.
     pub category: String,
     /// Playlist rows: up to four MEMBER covers for the card's mosaic arm, when
@@ -260,28 +268,32 @@ pub struct Personalized {
 fn pinned_cards() -> Vec<HomeCard> {
     crate::sidebar_qt::list_pinned()
         .into_iter()
-        .map(|p| HomeCard {
-            // The pinned rail is MIXED, so the heart / tri-state seeds are
-            // routed by the row's own stored kind rather than by the rail's.
-            is_favorite: crate::fav_cache_qt::is_favorite(&p.kind, &p.id),
-            playlist_owned: p.kind == "playlist"
-                && p.id
-                    .parse::<u64>()
-                    .map(crate::playlist_qt::is_owned)
-                    .unwrap_or(false),
-            playlist_following: p.kind == "playlist"
-                && p.id
-                    .parse::<u64>()
-                    .map(crate::playlist_qt::is_following)
-                    .unwrap_or(false),
-            id: p.id,
-            title: p.title,
-            artist: p.subtitle.clone(),
-            subtitle: p.subtitle,
-            art_url: p.artwork_url,
-            item_kind: p.kind,
-            is_pinned: true,
-            ..Default::default()
+        .map(|p| {
+            let is_local_album = p.kind == "album" && crate::library_qt::is_local_album_key(&p.id);
+            HomeCard {
+                // The pinned rail is MIXED, so the heart / tri-state seeds are
+                // routed by the row's own stored kind rather than by the rail's.
+                is_favorite: crate::fav_cache_qt::is_favorite(&p.kind, &p.id),
+                playlist_owned: p.kind == "playlist"
+                    && p.id
+                        .parse::<u64>()
+                        .map(crate::playlist_qt::is_owned)
+                        .unwrap_or(false),
+                playlist_following: p.kind == "playlist"
+                    && p.id
+                        .parse::<u64>()
+                        .map(crate::playlist_qt::is_following)
+                        .unwrap_or(false),
+                id: p.id,
+                title: p.title,
+                artist: p.subtitle.clone(),
+                subtitle: p.subtitle,
+                art_url: p.artwork_url,
+                item_kind: p.kind,
+                is_local_album,
+                is_pinned: true,
+                ..Default::default()
+            }
         })
         .collect()
 }

@@ -6003,3 +6003,18 @@ msgstr "Scrobblen wanneer afgemeld"
 
 msgid "Continue sending plays to connected scrobblers without a Qobuz session."
 msgstr "Luisterbeurten naar verbonden scrobblediensten blijven sturen zonder Qobuz-sessie."
+
+msgid "Focus on playing"
+msgstr "Afspelen volgen"
+
+msgid "Go to top"
+msgstr "Naar boven"
+
+msgid "Quick view"
+msgstr "Snelweergave"
+
+msgid "Could not load album"
+msgstr "Album kon niet worden geladen"
+
+msgid "This album has no tracks."
+msgstr "Dit album bevat geen nummers."

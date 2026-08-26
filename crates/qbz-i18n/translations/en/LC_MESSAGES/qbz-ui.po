@@ -1617,3 +1617,21 @@ msgstr "Scrobble while logged out"
 
 msgid "Continue sending plays to connected scrobblers without a Qobuz session."
 msgstr "Continue sending plays to connected scrobblers without a Qobuz session."
+
+msgid "Focus on playing"
+msgstr "Focus on playing"
+
+msgid "Go to top"
+msgstr "Go to top"
+
+msgid "Quick view"
+msgstr "Quick view"
+
+msgid "Loading album…"
+msgstr "Loading album…"
+
+msgid "Could not load album"
+msgstr "Could not load album"
+
+msgid "This album has no tracks."
+msgstr "This album has no tracks."

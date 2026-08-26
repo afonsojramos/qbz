@@ -3,8 +3,8 @@
 // same component in both places).
 //
 // 200x246: 200px artwork (Radius.sm) + placeholder, hover scrim with
-// genre/year meta, pin badge (top-right), favorite / play / more overlay
-// buttons, award ribbon, source badge (opt-in), then the title/artist
+// genre/year meta, Quick View + pin group (top-right), favorite / play / more
+// overlay buttons, award ribbon, source badge (opt-in), then the title/artist
 // lines with the icon-only quality badge.
 //
 // Live wiring: play (art click + overlay play), favorite heart (optimistic
@@ -107,18 +107,17 @@ Rectangle {
     // surfaces stay pixel-identical.
     //
     // ROUTING ONLY, since the My QBZ round (2026-08-01). It used to ALSO hide
-    // the heart, the pin badge and "Block this album" — see
-    // `catalogAffordances` for why that turned out to be two different
-    // questions wearing one flag.
+    // the card affordances — see the independent gates below for why routing,
+    // catalog actions, Quick View and pinning are different questions.
     property bool localMode: false
 
-    // --- Catalog-only affordances: heart, pin badge, "Block this album" -----
+    // --- Catalog-only affordances: heart + "Block this album" --------------
     //
     // Split out of `localMode` because a host can need one answer and not the
     // other, and My QBZ is that host. Its grid routes EVERY action through
     // `QbzMyQbz` (only it knows how to open a Plex album, a track or a
     // playlist), so it needs `localMode: true` — but a Qobuz ALBUM cell's
-    // `albumId` IS a catalog album id, and its heart / pin / block are the same
+    // `albumId` IS a catalog album id, and its heart / block are the same
     // entity every other AlbumCard in the app talks about. The blanket flag
     // hid the heart on those cells, which is the owner's report ("al overlay le
     // falta el botón de favorite"): a container that is multi-source PER ITEM
@@ -134,6 +133,17 @@ Rectangle {
     // album page agree. Do NOT let a host paint its own heart on top of the
     // card — see the `selectMode` note below for the same mistake's other half.
     property bool catalogAffordances: !root.localMode
+    // Quick View is broader than the catalog-only heart/block family.
+    // Catalog cards keep it by default; local and heterogeneous hosts opt in
+    // only for rows whose id is genuinely an album key.
+    property bool quickViewAffordance: root.catalogAffordances
+    // Pin storage accepts string album keys too. Kept independent from the
+    // catalog family so a local album can be pinned without accidentally
+    // gaining the Qobuz heart or blacklist actions.
+    property bool pinAffordance: root.catalogAffordances
+    // Catalog hosts persist the remote snapshot URL. Local hosts override this
+    // with their resolved file/server artwork so Pinned does not draw blank.
+    property string pinArtworkUrl: root.artworkUrl
     // A Local Library album uses the separate LocalFavoritesService rather
     // than the Qobuz catalog seam. This additive flag exposes the same heart
     // geometry/menu row while handing the write back to that host.
@@ -231,7 +241,8 @@ Rectangle {
     height: 246 + (root.plays > 0 ? 20 : 0)
     color: "transparent"
 
-    readonly property bool overlayOn: artArea.containsMouse || pinArea.containsMouse
+    readonly property bool overlayOn: artArea.containsMouse
+        || quickViewArea.containsMouse || pinArea.containsMouse
         || favBtn.hovered || playBtn.hovered || moreBtn.hovered
 
     function toggleFavorite() {
@@ -244,7 +255,7 @@ Rectangle {
     function togglePin() {
         root.isPinned = !root.isPinned
         QbzLibrary.togglePin("album", root.albumId, root.title, root.artist,
-            root.artworkUrl)
+            root.pinArtworkUrl)
     }
 
     // Pin fan-out. The pinned store has no change-notify, so `pinChanged`
@@ -412,10 +423,11 @@ Rectangle {
                 Text {
                     visible: root.genre !== ""
                     text: root.genre
-                    // Bounded because the tile's clip is gone: genre is
-                    // unbounded catalog data and was the ONLY thing that could
-                    // escape the 200px tile. 200 - 2*12 (the Column's x).
-                    width: 176
+                    // Bounded because the tile's clip is gone. When the joined
+                    // top-right group is present, stop 8px before it instead
+                    // of letting a long genre run under both buttons.
+                    width: root.quickViewAffordance && !root.selectMode
+                        && !root.pulledDead ? 118 : 176
                     elide: Text.ElideRight
                     height: 20
                     color: "#ebffffff"
@@ -426,7 +438,8 @@ Rectangle {
                 Text {
                     visible: root.year !== ""
                     text: root.year
-                    width: 176
+                    width: root.quickViewAffordance && !root.selectMode
+                        && !root.pulledDead ? 118 : 176
                     elide: Text.ElideRight
                     height: 17
                     color: "#ccffffff"
@@ -499,38 +512,81 @@ Rectangle {
                 }
             }
 
-            // Pin badge — top-right. Hover-revealed like the overlay
-            // buttons (AlbumCard.slint: opacity follows overlay-on even
-            // when pinned — the pinned state reads in the icon swap only:
-            // filled accent pin vs outline). Always-mounted (opacity) so
-            // its hover joins overlayOn.
+            // Quick View + optional pin — one joined group in the old pin
+            // badge's top-right slot. Local album grids opt into BOTH without
+            // opting into unrelated catalog heart/block actions; a host that
+            // cannot pin may still expose Quick View alone. Always mounted
+            // (opacity), so either half's hover joins overlayOn and reveals it.
             Rectangle {
-                // …and hidden in select mode too (.slint:207 — the checkbox
-                // owns this corner). Pinning writes `album:{albumId}` into the
-                // pinned store, so it needs a catalog id, not a routing mode.
-                visible: root.catalogAffordances && !root.selectMode && !root.pulledDead
+                id: cardTopGroup
+                // Hidden in select mode too: the checkbox owns this corner.
+                // The Quick View controller uses the id router to load
+                // local/server keys from their physical source instead of the
+                // Qobuz endpoint.
+                visible: root.quickViewAffordance && !root.selectMode && !root.pulledDead
                 x: parent.width - width - 8
                 y: 8
-                width: 26
+                width: root.pinAffordance ? 54 : 27
                 height: 26
                 radius: 13
-                color: pinArea.containsMouse ? "#cc000000" : "#99000000"
+                color: (quickViewArea.containsMouse || pinArea.containsMouse)
+                    ? "#cc000000" : "#99000000"
                 opacity: root.overlayOn ? 1.0 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 150 } }
+
                 QbzIcon {
+                    name: "picture-in-picture-2"
+                    width: 14
+                    height: 14
+                    x: Math.round((27 - width) / 2)
+                    anchors.verticalCenter: parent.verticalCenter
+                    tintName: quickViewArea.containsMouse ? "accent" : "white"
+                }
+                Rectangle {
+                    visible: root.pinAffordance
+                    x: 27
+                    y: 5
+                    width: 1
+                    height: 16
+                    color: "#45ffffff"
+                }
+                QbzIcon {
+                    visible: root.pinAffordance
                     name: root.isPinned ? "pin-filled" : "pin"
                     width: 14
                     height: 14
-                    anchors.centerIn: parent
+                    x: 27 + Math.round((27 - width) / 2)
+                    anchors.verticalCenter: parent.verticalCenter
                     // On a #99000000/#cc000000 scrim — dark under every theme.
                     tintName: root.isPinned ? "accent" : "white"
                 }
                 MouseArea {
+                    id: quickViewArea
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 27
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: QbzAlbum.openQuickView(root.albumId)
+                    ToolTip.visible: containsMouse
+                    ToolTip.text: QbzSession.tr("Quick view", QbzSession.trRev)
+                    ToolTip.delay: 350
+                }
+                MouseArea {
                     id: pinArea
-                    anchors.fill: parent
+                    visible: root.pinAffordance
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 27
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.togglePin()
+                    ToolTip.visible: containsMouse
+                    ToolTip.text: QbzSession.tr(root.isPinned ? "Unpin" : "Pin",
+                                                QbzSession.trRev)
+                    ToolTip.delay: 350
                 }
             }
 
@@ -548,8 +604,7 @@ Rectangle {
                 CardOverlayButton {
                     id: favBtn
                     // ABSENT, not present-and-dead, when `albumId` is not a
-                    // catalog album id — the same gate as the menu's heart row
-                    // and the pin badge.
+                    // catalog album id — the same gate as the menu's heart row.
                     visible: root.favoriteAffordance
                     name: root.isFavorite ? "heart-filled" : "heart"
                     active: root.isFavorite

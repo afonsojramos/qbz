@@ -6013,3 +6013,18 @@ msgstr "Scrobbling sem login"
 
 msgid "Continue sending plays to connected scrobblers without a Qobuz session."
 msgstr "Continuar enviando reproduções aos serviços conectados sem uma sessão do Qobuz."
+
+msgid "Focus on playing"
+msgstr "Focar na reprodução"
+
+msgid "Go to top"
+msgstr "Ir para o topo"
+
+msgid "Quick view"
+msgstr "Vista rápida"
+
+msgid "Could not load album"
+msgstr "Não foi possível carregar o álbum"
+
+msgid "This album has no tracks."
+msgstr "Este álbum não tem faixas."

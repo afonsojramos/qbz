@@ -436,9 +436,40 @@ Item {
                             width: 200
                             height: 246
 
+                            // AlbumCard updates these two properties
+                            // optimistically, which intentionally replaces the
+                            // bindings below. The card instances in this fixed
+                            // Repeater survive ListView row reuse, so restore
+                            // the bindings whenever a different slot object is
+                            // installed; otherwise the next album could inherit
+                            // the previous card's heart/pin state.
+                            function restoreMutableBindings() {
+                                albumCard.isFavorite = Qt.binding(function () {
+                                    return root.view
+                                        ? root.view.albumFavorite(cardCell.slot)
+                                        : cardCell.slot.isFavorite === true
+                                })
+                                albumCard.isPinned = Qt.binding(function () {
+                                    return QbzLibrary.pinState(
+                                        "album", cardCell.slot.id)
+                                })
+                            }
+                            function scheduleMutableRestore() {
+                                var expected = cardCell.slot
+                                Qt.callLater(function () {
+                                    if (cardCell.slot === expected)
+                                        cardCell.restoreMutableBindings()
+                                })
+                            }
+                            onSlotChanged: cardCell.scheduleMutableRestore()
+                            Component.onCompleted:
+                                cardCell.scheduleMutableRestore()
+
                             AlbumCard {
                                 id: albumCard
                                 localMode: true
+                                quickViewAffordance: true
+                                pinAffordance: true
                                 albumId: cardCell.slot.id
                                 title: cardCell.slot.title
                                 artist: cardCell.slot.artist
@@ -448,6 +479,8 @@ Item {
                                 qualityTier: cardCell.slot.qualityTier
                                 artSource: cardCell.slot.artPath || (root.view
                                     ? (root.view.artMap[cardCell.slot.artKey] || "") : "")
+                                pinArtworkUrl: artSource
+                                isPinned: QbzLibrary.pinState("album", albumId)
                                 // LocalLibraryView.slint:1267 `show-source-badge`
                                 // — the card takes the raw source word and the
                                 // BADGE is what the flag switches (blanking

@@ -39,6 +39,10 @@ pub mod qbz_album_bridge {
         // ONE JSON document (album_qt.rs AlbumViewData: header + track rows
         // + works/goodies/related buckets); QML JSON.parse()s it once.
         #[qproperty(QString, album_json)]
+        // App-wide Album Quick View. This is deliberately separate from
+        // `album_json`: opening a card preview must not replace the document
+        // owned by AlbumView or mutate navigation state.
+        #[qproperty(QString, quick_view_json)]
         // --- Track Info modal (qml/shell/TrackInfoModal.qml) --------------
         #[qproperty(bool, track_info_loading)]
         #[qproperty(QString, track_info_json)]
@@ -58,6 +62,19 @@ pub mod qbz_album_bridge {
         /// Open the album detail view (pushes "album" on the nav stack).
         #[qinvokable]
         fn open_album(self: Pin<&mut QbzAlbum>, album_id: QString);
+        /// AlbumCard's picture-in-picture action. Fetches the compact album
+        /// document without navigating or touching `album_json`.
+        #[qinvokable]
+        fn open_quick_view(self: Pin<&mut QbzAlbum>, album_id: QString);
+        /// Every Quick View dismissal path (Escape, backdrop, close button,
+        /// or a handoff into another global modal).
+        #[qinvokable]
+        fn close_quick_view(self: Pin<&mut QbzAlbum>);
+        /// Playback/queue action over the exact physical rows shown by a
+        /// local/Plex/Jellyfin/Subsonic Quick View. Catalog previews keep
+        /// using QbzPlayer's album-context actions.
+        #[qinvokable]
+        fn quick_view_local_action(self: Pin<&mut QbzAlbum>, action: QString, track_id: QString);
         /// Info button on either now-playing bar: fetch + publish the Track
         /// Info document (track_info_qt.rs).
         #[qinvokable]
@@ -125,6 +142,7 @@ use qbz_album_bridge::QbzAlbum;
 pub struct QbzAlbumRust {
     album_loading: bool,
     album_json: QString,
+    quick_view_json: QString,
     track_info_loading: bool,
     track_info_json: QString,
     album_info_loading: bool,
@@ -137,6 +155,7 @@ impl Default for QbzAlbumRust {
         Self {
             album_loading: false,
             album_json: QString::from("{}"),
+            quick_view_json: QString::from("{}"),
             track_info_loading: false,
             track_info_json: QString::from("{}"),
             album_info_loading: false,
@@ -169,6 +188,15 @@ impl qbz_album_bridge::QbzAlbum {
 
     pub fn open_album(self: Pin<&mut Self>, album_id: QString) {
         crate::open_album(album_id.to_string());
+    }
+    pub fn open_quick_view(self: Pin<&mut Self>, album_id: QString) {
+        crate::album_quick_view_qt::open(album_id.to_string());
+    }
+    pub fn close_quick_view(self: Pin<&mut Self>) {
+        crate::album_quick_view_qt::close();
+    }
+    pub fn quick_view_local_action(self: Pin<&mut Self>, action: QString, track_id: QString) {
+        crate::album_quick_view_qt::local_action(action.to_string(), track_id.to_string());
     }
     pub fn open_track_info(self: Pin<&mut Self>, track_id: QString) {
         crate::track_info_qt::open(track_id.to_string());

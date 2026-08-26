@@ -5997,3 +5997,18 @@ msgstr "ログアウト中もスクロブル"
 
 msgid "Continue sending plays to connected scrobblers without a Qobuz session."
 msgstr "Qobuzセッションがなくても、接続済みのスクロブルサービスに再生履歴を送信します。"
+
+msgid "Focus on playing"
+msgstr "再生中の曲を追従"
+
+msgid "Go to top"
+msgstr "一番上へ"
+
+msgid "Quick view"
+msgstr "クイックビュー"
+
+msgid "Could not load album"
+msgstr "アルバムを読み込めませんでした"
+
+msgid "This album has no tracks."
+msgstr "このアルバムには曲がありません。"

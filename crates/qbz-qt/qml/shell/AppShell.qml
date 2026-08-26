@@ -720,6 +720,16 @@ Rectangle {
     LinkResolverModal {
         anchors.fill: parent
     }
+    // Album Quick View — one navigation-free preview shared by every eligible
+    // AlbumCard. It owns no page lifetime: a card can live in Home, Search,
+    // Library or an artist rail, and Library's local/media-server ids are
+    // source-routed by its controller rather than sent to Qobuz. The preview
+    // always renders at shell level from its generation-guarded document.
+    // Self-gated on `quickViewJson.open`, so the closed state is an invisible,
+    // non-interactive Item.
+    AlbumQuickView {
+        anchors.fill: parent
+    }
     // TrackReplacementModal — "Find available version" for a track Qobuz
     // pulled from the catalogue (2026-08-17 unavailable-tracks contract §6),
     // opened from the playlist row's context menu.

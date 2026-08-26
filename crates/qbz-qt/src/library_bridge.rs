@@ -134,6 +134,10 @@ pub mod qbz_library_bridge {
             subtitle: QString,
             artwork_url: QString,
         );
+        /// Warm in-memory lookup for recycled card delegates. Unlike the pin
+        /// mutation, this performs no SQLite query and publishes nothing.
+        #[qinvokable]
+        fn pin_state(self: &QbzLibrary, kind: QString, id: QString) -> bool;
         /// Emitted after a pin toggle (`{kind}:{id}` key like artKey).
         #[qsignal]
         fn pin_changed(self: Pin<&mut QbzLibrary>, key: QString, value: bool);
@@ -271,5 +275,9 @@ impl qbz_library_bridge::QbzLibrary {
             subtitle.to_string(),
             artwork_url.to_string(),
         );
+    }
+
+    pub fn pin_state(&self, kind: QString, id: QString) -> bool {
+        crate::sidebar_qt::is_pinned(&kind.to_string(), &id.to_string())
     }
 }

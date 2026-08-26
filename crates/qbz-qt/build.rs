@@ -575,6 +575,7 @@ fn main() {
                 "qml/shell/SidebarRowMenu.qml",
                 "qml/shell/SidebarNowPlayingDock.qml",
                 "qml/shell/AudioSettingsMenu.qml",
+                "qml/shell/AlbumQuickView.qml",
                 "qml/shell/ViewModeMenu.qml",
                 // Hotkeys (2026-08-03 hotkeys-port contract §4.4/§4.5, block
                 // B3): the read-only cheatsheet + the editable customize
@@ -731,6 +732,7 @@ fn main() {
                 "qml/views/local/LocalIconSelect.qml",
                 "qml/views/local/LocalTip.qml",
                 "qml/controls/QualityBadgeFull.qml",
+                "qml/controls/QualityInline.qml",
                 "qml/shell/AudioStamp.qml",
                 "qml/shell/SongCardStamp.qml",
                 "qml/shell/SpectrumBand.qml",

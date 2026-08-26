@@ -6033,3 +6033,18 @@ msgstr "Скробблинг без входа"
 
 msgid "Continue sending plays to connected scrobblers without a Qobuz session."
 msgstr "Продолжать отправлять прослушивания в подключённые сервисы без сеанса Qobuz."
+
+msgid "Focus on playing"
+msgstr "Следовать за воспроизведением"
+
+msgid "Go to top"
+msgstr "Наверх"
+
+msgid "Quick view"
+msgstr "Быстрый просмотр"
+
+msgid "Could not load album"
+msgstr "Не удалось загрузить альбом"
+
+msgid "This album has no tracks."
+msgstr "В этом альбоме нет треков."

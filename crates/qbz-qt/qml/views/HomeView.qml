@@ -878,6 +878,11 @@ Rectangle {
                     Component {
                         id: pAlbum
                         AlbumCard {
+                            readonly property bool localPinned:
+                                modelData.isLocalAlbum === true
+                            localMode: localPinned
+                            quickViewAffordance: true
+                            pinAffordance: true
                             albumId: modelData.id
                             title: modelData.title
                             artist: modelData.artist
@@ -891,6 +896,12 @@ Rectangle {
                             // the user just dropped must restore the same
                             // snapshot url, not blank it.
                             artworkUrl: modelData.artUrl || ""
+                            pinArtworkUrl: artworkUrl !== "" ? artworkUrl : artSource
+                            onOpenRequested: QbzLocal.openAlbum(modelData.id)
+                            onPlayRequested: QbzLocal.playAlbum(modelData.id, false)
+                            onEnqueueRequested: function (mode) {
+                                QbzLocal.enqueue("album", modelData.id, mode)
+                            }
                         }
                     }
                     Component {

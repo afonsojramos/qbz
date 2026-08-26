@@ -284,6 +284,9 @@ mod offline_qt;
 // Shared multi-select bulk actions for Qobuz track listings (playlist,
 // artist, label — the album page has its own album-ordered variant).
 mod album_qt;
+// Lightweight, navigation-free AlbumCard preview. It owns a generation-
+// guarded document separate from the full AlbumView domain.
+mod album_quick_view_qt;
 mod award_qt;
 mod bulk_tracks_qt;
 mod track_info_qt;

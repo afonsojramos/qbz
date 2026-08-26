@@ -18,6 +18,10 @@ Item {
     id: root
 
     required property Flickable target
+    /// User-originated wheel/touchpad takeover. Consumers with an opt-in
+    /// auto-follow mode use this to yield immediately; programmatic
+    /// `positionViewAtIndex` calls never emit it.
+    signal userScrollStarted()
 
     // QbzScrollBar declares us beside the view. Reparent to the Flickable
     // explicitly so this observer covers its whole VIEWPORT, including child
@@ -106,6 +110,7 @@ Item {
             event.accepted = false;
 
             if (event.phase === Qt.ScrollBegin) {
+                root.userScrollStarted();
                 root._resetGesture();
                 return;
             }
@@ -120,11 +125,20 @@ Item {
                 return;
             }
             if (event.phase !== Qt.ScrollUpdate)
+            {
+                // Physical mouse wheels usually carry NoScrollPhase rather
+                // than Begin/Update/End. They still represent an explicit
+                // user takeover and must cancel a consumer's auto-follow.
+                if (event.angleDelta.x !== 0 || event.angleDelta.y !== 0
+                        || event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0)
+                    root.userScrollStarted();
                 return;
+            }
 
             // A physical wheel normally has angleDelta only and is handled by
             // Qt's process-wide wheel-deceleration path (main.rs). This half is
             // deliberately limited to high-resolution pixel gestures.
+            root.userScrollStarted();
             const dx = event.pixelDelta.x;
             const dy = event.pixelDelta.y;
             if (dx !== 0 || dy !== 0)

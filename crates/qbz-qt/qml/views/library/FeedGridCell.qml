@@ -94,6 +94,9 @@ Item {
             // landed in the Home Pinned rail as a permanent grey placeholder,
             // across restarts.
             artworkUrl: cell.item.imageUrl || ""
+            // Local/server rows have no portable catalog URL; retain their
+            // resolved artwork snapshot for the per-machine Pinned rail.
+            pinArtworkUrl: artworkUrl !== "" ? artworkUrl : artSource
             // The source word is ALWAYS passed (the "Block this album" menu
             // gate reads it); the toolbar's show-local toggle only decides
             // whether the BADGE is drawn — FavoritesView.slint:1097
