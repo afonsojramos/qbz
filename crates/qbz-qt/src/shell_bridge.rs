@@ -30,7 +30,6 @@ pub mod qbz_shell {
         // (1:1 Slint: persist-sidebar-state).
         #[qproperty(i32, sidebar_state)]
         #[qproperty(bool, queue_open)]
-
         // --- Section-nav placement (Slint ShellState) ---------------------
         // ON  = the Discover / Library / Local Library / My QBZ rows live in
         //       the SIDEBAR (with a hairline under them); the header shows the
@@ -66,6 +65,10 @@ pub mod qbz_shell {
         // Slint uses (`NavState.restore-scope = ""` at the apply site).
         #[qproperty(QString, restore_scope)]
         #[qproperty(f32, scroll_restore)]
+        // Opaque view-state companion: a routed view reports one JSON
+        // snapshot and consumes it on back/forward before it mounts data.
+        #[qproperty(QString, restore_state_scope)]
+        #[qproperty(QString, state_restore)]
         // --- Flyout landing tab (NavFlyout rows carry view + tab) ----------
         // The tab a nav-flyout click must land on: Discover > For You is
         // nav_tab_view="home" + nav_tab="forYou". Written by
@@ -76,11 +79,9 @@ pub mod qbz_shell {
         #[qproperty(QString, nav_tab)]
         #[qproperty(QString, nav_tab_view)]
         #[qproperty(i32, nav_tab_seq)]
-
         // Now-playing bar mode (phase 18): 0 New / 1 Classic / 2 Small /
         // 3 Large — the ui_prefs npb_mode key, live-switchable.
         #[qproperty(i32, npb_mode)]
-
         // One persisted toggle shared by Appearance, the view-mode flyout and
         // both seekbar mounts.
         #[qproperty(bool, seekbar_waveform)]
@@ -98,7 +99,6 @@ pub mod qbz_shell {
         // `height - largeDockHeight`. Both consumers read THIS — never a
         // literal (Sidebar.slint:1145 is the same contract).
         #[qproperty(f32, large_dock_height)]
-
         // --- Theme (phase 19) --------------------------------------------
         // ONE JSON token document (theme_qt.rs ThemeTokens: 30 colors + 24
         // alpha tiers + ambient derivations + isDark) — QbzTheme.qml binds
@@ -136,7 +136,6 @@ pub mod qbz_shell {
         // which swatch has the picker open is pure view state and lives in
         // CustomThemeEditor.qml.
         #[qproperty(QString, custom_theme_json)]
-
         // --- Log viewer (log_viewer_qt.rs) --------------------------------
         // ONE document: {open, rows[], total, shown, filterLevel, search,
         // autoTail, uploading, uploadedUrl}. The ring can hold thousands of
@@ -147,13 +146,11 @@ pub mod qbz_shell {
         /// the pre-publish frame.
         #[qproperty(QString, diagnostics_json)]
         #[qproperty(QString, log_viewer_json)]
-
         // --- Lyrics panel (phase 9) ----------------------------------------
         #[qproperty(bool, lyrics_open)]
         // One JSON document (lyrics_qt.rs LyricsDoc: status/lines/synced/
         // provider/error).
         #[qproperty(QString, lyrics_json)]
-
         // --- Sidebar playlist tree ---------------------------------------
         // One JSON document: the flattened entries (folders + playlists,
         // expand/sort/search applied Rust-side — sidebar_qt.rs).
@@ -168,7 +165,6 @@ pub mod qbz_shell {
         // reference does not have. The default is the FULL SHAPE, never "{}":
         // `JSON.parse("{}").rows.length` throws in the pre-publish frame.
         #[qproperty(QString, sidebar_folder_popup_json)]
-
         // --- Window chrome (phase 12) --------------------------------------
         // The APPLIED titlebar mode (the ui_prefs `use_system_title_bar`
         // value read at startup — drives the window flags; never mutated at
@@ -210,7 +206,6 @@ pub mod qbz_shell {
         // `cfg!`, and AppearanceSettings.slint:1011-1043 gates the whole
         // group AND the Preferred-GPU row on it).
         #[qproperty(bool, is_linux)]
-
         // --- Main-window geometry -----------------------------------------
         // The restored LOGICAL size + maximized flag from the shared
         // ui_prefs.json (settings_qt::window_size / window_maximized; the
@@ -227,7 +222,6 @@ pub mod qbz_shell {
         // save gate that use it in settings_qt.
         #[qproperty(f32, window_min_width)]
         #[qproperty(f32, window_min_height)]
-
         // --- Ambient background (phase 14) --------------------------------
         // 0 = off, 1 = on (the ambient look; the owner's store carries
         // "ambient"). Live — toggling applies immediately (pure QML
@@ -352,7 +346,6 @@ pub mod qbz_shell {
         #[qproperty(i32, pulse_ms)]
         #[qproperty(f32, ambient_surface_alpha)]
         #[qproperty(f32, ambient_bar_alpha)]
-
         // --- Rounded-cover render arm (manual override) --------------------
         // `RoundedImage` masks covers with a MultiEffect layer and falls back
         // to its CPU Canvas raster automatically when `GraphicsInfo.api`
@@ -363,7 +356,6 @@ pub mod qbz_shell {
         // instantiate lazily and the first access is a `RoundedImage`
         // `_useCanvas` read, which can precede `QbzShell.boot()`.
         #[qproperty(bool, force_canvas_art)]
-
         // --- In-app toasts (shared) ---------------------------------------
         // ONE JSON document (toast_qt.rs ToastDoc: seq / kind / message /
         // persistent), rendered by the single `controls/QbzToast.qml` host
@@ -377,7 +369,6 @@ pub mod qbz_shell {
         // overlay. Rust owns no timer — the auto-hide delay is keyed off `seq`
         // in QML, so a toast never needs a hide round-trip.
         #[qproperty(QString, toast_json)]
-
         // --- Drag & drop (phase 17) ----------------------------------------
         // The shared drag state (DragState in state.slint): the ghost reads
         // count/title/subtitle + the window-coord pointer; sidebar playlist
@@ -425,7 +416,6 @@ pub mod qbz_shell {
         #[qproperty(bool, art_preview_show)]
         #[qproperty(f32, art_preview_x)]
         #[qproperty(f32, art_preview_y)]
-
         // --- Multi-select seam (2026-08-03 hotkeys-port contract §4.6) ----
         // QML-REPORTED — selection state is in-view QML JS
         // (`library_bulk.rs:8`: "select-all / clear never reach Rust"), so the
@@ -439,7 +429,6 @@ pub mod qbz_shell {
         // properties.
         #[qproperty(bool, multi_select_active, READ, WRITE = set_multi_select_active, NOTIFY)]
         #[qproperty(bool, multi_select_capable, READ, WRITE = set_multi_select_capable, NOTIFY)]
-
         type QbzShell = super::QbzShellRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -499,6 +488,8 @@ pub mod qbz_shell {
         /// from the route here the way Slint derives it from the entry.)
         #[qinvokable]
         fn report_scroll(self: Pin<&mut QbzShell>, scope: QString, y: f32);
+        #[qinvokable]
+        fn report_nav_state(self: Pin<&mut QbzShell>, scope: QString, state: QString);
 
         /// Sidebar navigation: record a content view ("home" | "library")
         /// and lazy-load its data on first visit.
@@ -686,7 +677,14 @@ pub mod qbz_shell {
         // --- Drag & drop (phase 17) ----------------------------------------
         /// Track-row press-drag start (row id, ghost texts, window coords).
         #[qinvokable]
-        fn drag_start(self: Pin<&mut QbzShell>, track_id: QString, title: QString, subtitle: QString, x: f32, y: f32);
+        fn drag_start(
+            self: Pin<&mut QbzShell>,
+            track_id: QString,
+            title: QString,
+            subtitle: QString,
+            x: f32,
+            y: f32,
+        );
         #[qinvokable]
         fn drag_move(self: Pin<&mut QbzShell>, x: f32, y: f32);
         /// A sidebar playlist row claims / releases the drop target.
@@ -753,6 +751,8 @@ pub struct QbzShellRust {
     can_forward: bool,
     restore_scope: QString,
     scroll_restore: f32,
+    restore_state_scope: QString,
+    state_restore: QString,
     nav_tab: QString,
     nav_tab_view: QString,
     nav_tab_seq: i32,
@@ -848,6 +848,8 @@ impl Default for QbzShellRust {
             can_back: false,
             restore_scope: QString::default(),
             scroll_restore: 0.0,
+            restore_state_scope: QString::default(),
+            state_restore: QString::default(),
             nav_tab: QString::default(),
             nav_tab_view: QString::default(),
             nav_tab_seq: 0,
@@ -861,13 +863,9 @@ impl Default for QbzShellRust {
             theme_slug: QString::from(crate::theme_qt::current_slug().as_str()),
             theme_list_json: QString::from(crate::theme_qt::theme_list_json().as_str()),
             theme_filter: crate::theme_qt::theme_filter(),
-            app_font_family: QString::from(
-                crate::settings_qt::app_font_family().as_str(),
-            ),
+            app_font_family: QString::from(crate::settings_qt::app_font_family().as_str()),
             custom_theme_json: QString::from(crate::custom_theme_qt::state_json().as_str()),
-            diagnostics_json: QString::from(
-                crate::diagnostics_qt::empty_doc_json().as_str(),
-            ),
+            diagnostics_json: QString::from(crate::diagnostics_qt::empty_doc_json().as_str()),
             log_viewer_json: QString::from("{}"),
             lyrics_open: false,
             lyrics_json: QString::from("{}"),
@@ -1164,6 +1162,10 @@ impl qbz_shell::QbzShell {
         crate::nav_qt::set_live_scroll(&scope.to_string(), y);
     }
 
+    pub fn report_nav_state(self: Pin<&mut Self>, scope: QString, state: QString) {
+        crate::nav_qt::set_live_state(&scope.to_string(), &state.to_string());
+    }
+
     pub fn navigate_to(self: Pin<&mut Self>, view: QString) {
         crate::navigate_to(&view.to_string());
     }
@@ -1229,7 +1231,9 @@ impl qbz_shell::QbzShell {
     pub fn report_issue_open(self: Pin<&mut Self>) {
         // Same URL the reference opens (crates/qbz/src/main.rs:14619-14624):
         // the repo's bug-report template, no prefilled body.
-        if let Err(e) = open::that("https://github.com/vicrodh/qbz/issues/new?template=bug_report.yml") {
+        if let Err(e) =
+            open::that("https://github.com/vicrodh/qbz/issues/new?template=bug_report.yml")
+        {
             log::warn!("[qbz-qt] could not open the issue template: {e}");
         }
     }
@@ -1314,8 +1318,21 @@ impl qbz_shell::QbzShell {
         crate::sidebar_artwork_window(urls_json.to_string());
     }
 
-    pub fn drag_start(self: Pin<&mut Self>, track_id: QString, title: QString, subtitle: QString, x: f32, y: f32) {
-        crate::drag_start(track_id.to_string(), title.to_string(), subtitle.to_string(), x, y);
+    pub fn drag_start(
+        self: Pin<&mut Self>,
+        track_id: QString,
+        title: QString,
+        subtitle: QString,
+        x: f32,
+        y: f32,
+    ) {
+        crate::drag_start(
+            track_id.to_string(),
+            title.to_string(),
+            subtitle.to_string(),
+            x,
+            y,
+        );
     }
 
     pub fn drag_move(self: Pin<&mut Self>, x: f32, y: f32) {
@@ -1375,5 +1392,4 @@ impl qbz_shell::QbzShell {
             log::warn!("[qbz-qt] failed to open '{url}': {e}");
         }
     }
-
 }

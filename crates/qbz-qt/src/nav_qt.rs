@@ -78,6 +78,10 @@ struct Entry {
     /// `viewport-y`; nothing crosses between the two, so this side keeps the
     /// sign its own Flickables use.)
     scroll: f32,
+    /// Opaque view-owned state (tab, query, sort, filters, view mode). Like the
+    /// scroll scope, Rust stores and returns it without interpreting it.
+    state_scope: String,
+    state_json: String,
 }
 
 struct NavHistory {
@@ -98,6 +102,7 @@ static HISTORY: Mutex<Option<NavHistory>> = Mutex::new(None);
 /// reused in place rather than reassigned, so a scroll frame allocates nothing
 /// once the page has reported once.
 static LIVE: Mutex<(String, f32)> = Mutex::new((String::new(), 0.0));
+static LIVE_STATE: Mutex<(String, String)> = Mutex::new((String::new(), String::new()));
 
 /// Record the on-screen scroll container's current `contentY` under its scope.
 pub fn set_live_scroll(scope: &str, y: f32) {
@@ -120,6 +125,25 @@ fn reset_live_scroll() {
     live.1 = 0.0;
 }
 
+pub fn set_live_state(scope: &str, json: &str) {
+    let mut live = LIVE_STATE.lock().unwrap();
+    live.0.clear();
+    live.0.push_str(scope);
+    live.1.clear();
+    live.1.push_str(json);
+}
+
+fn live_state() -> (String, String) {
+    let live = LIVE_STATE.lock().unwrap();
+    (live.0.clone(), live.1.clone())
+}
+
+fn reset_live_state() {
+    let mut live = LIVE_STATE.lock().unwrap();
+    live.0.clear();
+    live.1.clear();
+}
+
 fn with_history<R>(f: impl FnOnce(&mut NavHistory) -> R) -> R {
     let mut guard = HISTORY.lock().unwrap();
     let history = guard.get_or_insert_with(|| NavHistory {
@@ -130,6 +154,8 @@ fn with_history<R>(f: impl FnOnce(&mut NavHistory) -> R) -> R {
             view: startup_view(),
             scope: String::new(),
             scroll: 0.0,
+            state_scope: String::new(),
+            state_json: String::new(),
         }],
         index: 0,
     });
@@ -176,7 +202,10 @@ const VIEW_TO_PREF: &[(&str, &str)] = &[
 ];
 
 fn pref_for_view(view: &str) -> Option<&'static str> {
-    VIEW_TO_PREF.iter().find(|(v, _)| *v == view).map(|(_, p)| *p)
+    VIEW_TO_PREF
+        .iter()
+        .find(|(v, _)| *v == view)
+        .map(|(_, p)| *p)
 }
 
 fn view_for_pref(pref: &str) -> Option<&'static str> {
@@ -187,7 +216,11 @@ fn view_for_pref(pref: &str) -> Option<&'static str> {
         // The reference's `discover` has no separate route here: this port's
         // Discover IS `home`. Accept it on READ so a prefs file written by the
         // Slint build restores somewhere sensible instead of falling to Home.
-        .or(if pref == "discover" { Some("home") } else { None })
+        .or(if pref == "discover" {
+            Some("home")
+        } else {
+            None
+        })
 }
 
 /// Crash-chain guard for the restore paths.
@@ -241,7 +274,9 @@ pub fn mark_startup_healthy() {
 
 /// This boot's chain level (1 = the previous shutdown was clean).
 pub fn crash_level() -> u8 {
-    CRASH_LEVEL.load(std::sync::atomic::Ordering::Relaxed).max(1)
+    CRASH_LEVEL
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .max(1)
 }
 
 /// The view to open on: `startup_page` = "home" always Home, "remember" the last
@@ -304,11 +339,16 @@ pub fn record(view: &str) {
             );
             h.entries[h.index].scope = scope;
             h.entries[h.index].scroll = y;
+            let (state_scope, state_json) = live_state();
+            h.entries[h.index].state_scope = state_scope;
+            h.entries[h.index].state_json = state_json;
             h.entries.truncate(h.index + 1);
             h.entries.push(Entry {
                 view: view.to_string(),
                 scope: String::new(),
                 scroll: 0.0,
+                state_scope: String::new(),
+                state_json: String::new(),
             });
             h.index += 1;
             pushed = true;
@@ -320,12 +360,21 @@ pub fn record(view: &str) {
     // the user moves it.
     if pushed {
         reset_live_scroll();
+        reset_live_state();
     }
     // A FORWARD navigation never restores — and it must actively DISARM, or a
     // scope armed by a back() that its destination never consumed (a page
     // whose list stayed shorter than the viewport, so the guard never passed)
     // would fire on whatever mounts next.
-    publish(can_back, can_forward, current, String::new(), 0.0);
+    publish(
+        can_back,
+        can_forward,
+        current,
+        String::new(),
+        0.0,
+        String::new(),
+        String::new(),
+    );
 }
 
 /// The id of the entry the user is standing on.
@@ -355,23 +404,36 @@ pub fn forward() {
 /// move the cursor, and hand the destination's saved position to the shell so
 /// its scroll container can pick it up when it lays out.
 fn step(delta: isize) {
-    let (can_back, can_forward, current, scope, scroll) = with_history(|h| {
-        let next = h.index as isize + delta;
-        if next >= 0 && (next as usize) < h.entries.len() {
-            // Stamp the page we are leaving before stepping away.
-            let (scope, y) = live_scroll();
-            h.entries[h.index].scope = scope;
-            h.entries[h.index].scroll = y;
-            h.index = next as usize;
-        }
-        let (b, f, c) = snapshot(h);
-        let e = &h.entries[h.index];
-        (b, f, c, e.scope.clone(), e.scroll)
-    });
+    let (can_back, can_forward, current, scope, scroll, state_scope, state_json) =
+        with_history(|h| {
+            let next = h.index as isize + delta;
+            if next >= 0 && (next as usize) < h.entries.len() {
+                // Stamp the page we are leaving before stepping away.
+                let (scope, y) = live_scroll();
+                h.entries[h.index].scope = scope;
+                h.entries[h.index].scroll = y;
+                let (state_scope, state_json) = live_state();
+                h.entries[h.index].state_scope = state_scope;
+                h.entries[h.index].state_json = state_json;
+                h.index = next as usize;
+            }
+            let (b, f, c) = snapshot(h);
+            let e = &h.entries[h.index];
+            (
+                b,
+                f,
+                c,
+                e.scope.clone(),
+                e.scroll,
+                e.state_scope.clone(),
+                e.state_json.clone(),
+            )
+        });
     // The destination is now the live page: seed the live pair with what it is
     // about to restore to, so leaving it again before it has reported anything
     // does not stamp the OUTGOING page's offset onto it.
     set_live_scroll(&scope, scroll);
+    set_live_state(&state_scope, &state_json);
     // Arm only for a position worth restoring. A page that was at the top
     // needs no restore, and arming for 0 would leave a scope standing until
     // some container happened to clear it.
@@ -381,7 +443,15 @@ fn step(delta: isize) {
         String::new()
     };
     log::debug!("[qbz-qt] scroll: {current:?} arms scope {armed:?} y={scroll}");
-    publish(can_back, can_forward, current, armed, scroll);
+    publish(
+        can_back,
+        can_forward,
+        current,
+        armed,
+        scroll,
+        state_scope,
+        state_json,
+    );
 }
 
 fn snapshot(h: &NavHistory) -> (bool, bool, String) {
@@ -403,6 +473,8 @@ fn publish(
     current: String,
     restore_scope: String,
     scroll_restore: f32,
+    restore_state_scope: String,
+    state_restore: String,
 ) {
     crate::shell_bridge::ui(move |mut b| {
         b.as_mut().set_can_back(can_back);
@@ -410,19 +482,34 @@ fn publish(
         b.as_mut()
             .set_restore_scope(QString::from(restore_scope.as_str()));
         b.as_mut().set_scroll_restore(scroll_restore);
+        b.as_mut()
+            .set_restore_state_scope(QString::from(restore_state_scope.as_str()));
+        b.as_mut()
+            .set_state_restore(QString::from(state_restore.as_str()));
         b.as_mut().set_current_view(QString::from(current.as_str()));
     });
 }
 
 #[cfg(test)]
 mod tests {
-    // The history logic is exercised through the Mutex global; these tests
-    // run serially within one process, so drive it through the public API
-    // and re-derive expectations from fresh state each time. (The bridge
-    // publish hop is a no-op off the Qt thread — QT_THREAD unset.)
+    use std::sync::Mutex;
+
+    // Rust's test runner is parallel by default. These tests intentionally
+    // exercise the process-global history, so serialize them and clear every
+    // global seam first. (The bridge publish hop is a no-op off the Qt thread
+    // — QT_THREAD unset.)
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn reset() {
+        *super::HISTORY.lock().unwrap() = None;
+        super::reset_live_scroll();
+        super::reset_live_state();
+    }
 
     #[test]
     fn record_back_forward_cycle() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset();
         super::record("home");
         super::record("album");
         super::record("artist");
@@ -443,6 +530,8 @@ mod tests {
     /// does not inherit it.
     #[test]
     fn scroll_is_stamped_on_leave_and_returned_on_back() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset();
         super::record("home");
         super::set_live_scroll("home:home", 1234.0);
         super::record("album");
@@ -457,5 +546,33 @@ mod tests {
         super::forward();
         assert_eq!(super::current_view(), "album");
         assert_eq!(super::live_scroll(), ("album".to_string(), 88.0));
+    }
+
+    #[test]
+    fn opaque_view_state_is_stamped_and_restored_in_both_directions() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset();
+        super::record("local");
+        let local = r#"{"activeTab":"albums","albumsSearch":"beatles","albumsSort":"year-desc"}"#;
+        super::set_live_state("local", local);
+
+        super::record("album");
+        assert_eq!(super::live_state(), (String::new(), String::new()));
+        let detail = r#"{"version":2}"#;
+        super::set_live_state("localalbum", detail);
+
+        super::back();
+        assert_eq!(super::current_view(), "local");
+        assert_eq!(
+            super::live_state(),
+            ("local".to_string(), local.to_string())
+        );
+
+        super::forward();
+        assert_eq!(super::current_view(), "album");
+        assert_eq!(
+            super::live_state(),
+            ("localalbum".to_string(), detail.to_string())
+        );
     }
 }
