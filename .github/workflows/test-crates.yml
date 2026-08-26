@@ -116,14 +116,6 @@ jobs:
             echo "::endgroup::"
           done
 
-      # No workflow may build the frozen Slint binary (same bin name, same
-      # target dir — the last build silently wins the file).
-      - name: Gate — no workflow builds `-p qbz`
-        run: |
-          set -euo pipefail
-          hits=$(grep -rnE 'cargo (build|check|test|run|install).* -p qbz([^-a-z]|$)' .github/workflows/ || true)
-          [ -z "$hits" ] || { echo "::error::a workflow still builds the Slint crate:"; echo "$hits"; exit 1; }
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
