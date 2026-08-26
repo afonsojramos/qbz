@@ -47,7 +47,11 @@ set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
 
 QT_CRATE="crates/qbz-qt"
-AUDIT_DIR="$HOME/Personal/qbz/qbz-nix-docs/qt-frontend/tools"
+# The five QML audits ship IN the repo (scripts/qml-audits, 2026-08-25) so CI
+# runs the same gate as this script; AUDIT_DIR still overrides, and the docs
+# checkout is the fallback for a tree that predates the move.
+AUDIT_DIR="${AUDIT_DIR:-scripts/qml-audits}"
+[[ -d "$AUDIT_DIR" ]] || AUDIT_DIR="$HOME/Personal/qbz/qbz-nix-docs/qt-frontend/tools"
 
 # --- Portability shims (this runs on the Mac mini too) -----------------------
 # Everything below that differs between GNU/Linux and BSD/macOS lives here, so

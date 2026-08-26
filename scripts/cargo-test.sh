@@ -24,5 +24,6 @@ exec cargo test \
   --exclude qbz-ui \
   --exclude qbz-dac-wizard \
   --exclude qbz-slint-common \
+  --exclude qbz-qt \
   --no-fail-fast \
   "$@"
