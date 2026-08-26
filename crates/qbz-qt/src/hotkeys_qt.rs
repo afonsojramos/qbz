@@ -223,7 +223,7 @@ pub const ACTIONS: &[ActionDef] = &[
     },
     ActionDef {
         id: "ui.openLink",
-        label_en: "Open Qobuz Link",
+        label_en: "Open Music Link",
         category: Category::Ui,
         default: "Ctrl+l",
         context: Context::None,

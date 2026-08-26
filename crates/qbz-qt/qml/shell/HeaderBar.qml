@@ -1306,7 +1306,7 @@ Rectangle {
             // Link, Keyboard Shortcuts, Documentation…
             AppMenuItem {
                 name: "link"
-                label: QbzSession.tr("Open Qobuz Link", QbzSession.trRev)
+                label: QbzSession.tr("Open Music Link", QbzSession.trRev)
                 onClicked: {
                     appMenu.close()
                     QbzLink.show()

@@ -58,7 +58,7 @@ Item {
                     anchors.left: parent.left
                     anchors.right: closeButton.left
                     anchors.verticalCenter: parent.verticalCenter
-                    text: QbzSession.tr("Open Qobuz Link", QbzSession.trRev)
+                    text: QbzSession.tr("Open Music Link", QbzSession.trRev)
                     color: theme.textPrimary
                     font.pixelSize: theme.fontHeading
                     font.weight: theme.weightSemibold
