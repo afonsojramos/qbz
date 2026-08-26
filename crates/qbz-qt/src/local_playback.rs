@@ -966,7 +966,10 @@ mod tests {
             .as_nanos();
         let box_dir =
             std::env::temp_dir().join(format!("qbz-queue-disc-art-{}-{nonce}", std::process::id()));
-        let disc_one = box_dir.join("Disc 01 - Sanctuary");
+        // `#` is the exact seam this fixture protects: QueueTrack carries a
+        // file URI (`%23`), while the NPB/queue resolver must stat the decoded
+        // filesystem path and MPRIS must not publish a double-escaped `%2523`.
+        let disc_one = box_dir.join("Disc 01 - TV Series Soundtrack #01");
         let disc_five = box_dir.join("Disc 05 - Movie OST");
         std::fs::create_dir_all(&disc_one).unwrap();
         std::fs::create_dir_all(&disc_five).unwrap();
@@ -998,6 +1001,11 @@ mod tests {
         assert_ne!(one.artwork_url, five.artwork_url);
         assert!(one.artwork_url.as_deref().unwrap().contains("Disc 01"));
         assert!(five.artwork_url.as_deref().unwrap().contains("Disc 05"));
+        let one_resolved = crate::artwork_qt::cached_path(one.artwork_url.as_deref().unwrap());
+        assert_eq!(
+            crate::artwork_qt::local_path(&one_resolved),
+            disc_one.join("cover.jpg").to_string_lossy()
+        );
 
         std::fs::remove_dir_all(&box_dir).unwrap();
     }

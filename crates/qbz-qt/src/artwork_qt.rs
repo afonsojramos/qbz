@@ -162,8 +162,12 @@ pub fn classify(url: &str) -> ArtUrl {
     }
     // A `file://` url is ALREADY on disk — reqwest cannot even build a
     // request for it ("builder error for url"), so it must never be fetched.
-    if let Some(path) = url.strip_prefix("file://") {
-        return ArtUrl::LocalFile(path.to_string());
+    if url.starts_with("file://") {
+        // `local_queue_track` escapes `%`, `#` and `?` before this value
+        // reaches QML. The filesystem probe needs the inverse, otherwise a
+        // real `Disc 01 - Soundtrack #01/cover.jpg` is stat'ed as a literal
+        // `...%2301/cover.jpg` and every queue-owned surface gets a miss.
+        return ArtUrl::LocalFile(local_path(url));
     }
     // A SOURCE-TAGGED token (`jellyfin:<albumId>/<tag>`,
     // `subsonic:al-<id>_<hash>`), stamped by `local_queue_track` for a media
@@ -892,6 +896,8 @@ mod tests {
             classify("/home/u/Music/Album/cover.jpg"),
             ArtUrl::LocalFile("/home/u/Music/Album/cover.jpg".into())
         );
+        let raw = "/mnt/music/Disc 01 - Soundtrack #01/100%? cover.jpg";
+        assert_eq!(classify(&file_url(raw)), ArtUrl::LocalFile(raw.into()));
     }
 
     #[test]
