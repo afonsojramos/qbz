@@ -573,7 +573,7 @@ Item {
                 width: parent.width
                 text: row.qualityDetail || ""
                 color: theme.textSecondary
-                font.pixelSize: 9
+                font.pixelSize: 10
                 font.weight: Font.DemiBold
                 elide: Text.ElideRight
             }
