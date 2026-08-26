@@ -22,6 +22,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import Qt.labs.qmlmodels
 import com.blitzfc.qbz
 import "../controls"
@@ -474,18 +475,22 @@ Rectangle {
     // Track list row (TrackRow.slint replica: number cell, no artwork,
     // Sidebar label/award card (SidebarCard).
     component SidebarCard: Rectangle {
+        id: sidebarCard
         property string name: ""
         property color gradA: "#6366f1"
         property color gradB: "#8b5cf6"
         property string iconName: "disc"
+        property bool compact: false
         signal clicked()
         width: parent ? parent.width : 0
         height: 48
         radius: theme.radiusSm
         color: scArea.containsMouse ? theme.surfaceHover : "transparent"
         Row {
-            anchors.fill: parent
-            anchors.margins: 6
+            x: sidebarCard.compact ? Math.round((sidebarCard.width - width) / 2) : 6
+            anchors.verticalCenter: parent.verticalCenter
+            width: sidebarCard.compact ? 28 : parent.width - 12
+            height: parent.height - 12
             spacing: 10
             Rectangle {
                 width: 28
@@ -508,6 +513,7 @@ Rectangle {
                 }
             }
             Text {
+                visible: !sidebarCard.compact
                 width: parent.width - 38
                 anchors.verticalCenter: parent.verticalCenter
                 text: name
@@ -523,13 +529,21 @@ Rectangle {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: parent.clicked()
+            ToolTip.visible: sidebarCard.compact && containsMouse
+                                 && sidebarCard.name !== ""
+            ToolTip.text: sidebarCard.name
+            ToolTip.delay: 350
         }
     }
     component SidebarHeading: Text {
+        property bool compact: false
+        width: parent ? parent.width : implicitWidth
         color: theme.textMuted
         font.pixelSize: 10
         font.weight: theme.weightSemibold
         font.letterSpacing: 1
+        horizontalAlignment: compact ? Text.AlignHCenter : Text.AlignLeft
+        wrapMode: compact ? Text.WordWrap : Text.NoWrap
     }
 
     // Placeholder for a bottom rail that has not resolved yet: the SAME 28px
@@ -625,6 +639,16 @@ Rectangle {
     readonly property bool hasSidebar: (albumHeader.label || "") !== ""
                                        || awards.length > 0
                                        || albumHeader.showExternalLinks === true
+    // Same contract as ShellState.content-constrained in the Slint view: the
+    // album sidebar gives the track table priority only when a right panel is
+    // consuming a sub-1366px window. In that state it becomes the 56px icon
+    // rail from AlbumPageView.slint; names remain available as tooltips.
+    readonly property bool contentConstrained:
+        Window.width > 0 && Window.width < 1366
+        && (QbzShell.queueOpen || QbzShell.lyricsOpen)
+    readonly property bool sidebarCompact: contentConstrained
+    readonly property int sidebarPx: sidebarCompact ? 56 : 200
+    readonly property int sidebarReservePx: hasSidebar ? sidebarPx + 32 : 0
 
     // ============================ the page ================================
     ListView {
@@ -985,7 +1009,7 @@ Rectangle {
 
                 Column {
                     id: trackChrome
-                    width: parent.width - (root.hasSidebar ? 232 : 0)
+                    width: parent.width - root.sidebarReservePx
                     spacing: 0
 
                     // Track-list placeholder — same flag the spinner used,
@@ -1200,17 +1224,21 @@ Rectangle {
                 Column {
                     id: albumSidebar
                     visible: root.hasSidebar
-                    width: 200
+                    width: root.sidebarPx
                     spacing: 24
 
                     Column {
                         visible: (albumHeader.label || "") !== ""
                         width: parent.width
                         spacing: 8
-                        SidebarHeading { text: QbzSession.tr("LABEL", QbzSession.trRev) }
+                        SidebarHeading {
+                            compact: root.sidebarCompact
+                            text: QbzSession.tr("LABEL", QbzSession.trRev)
+                        }
                         SidebarCard {
                             name: albumHeader.label || ""
                             iconName: "disc"
+                            compact: root.sidebarCompact
                             gradA: "#6366f1"
                             gradB: "#8b5cf6"
                             // The label page HAS existed for a long time — the
@@ -1226,13 +1254,17 @@ Rectangle {
                         visible: awards.length > 0
                         width: parent.width
                         spacing: 8
-                        SidebarHeading { text: QbzSession.tr("AWARDS", QbzSession.trRev) }
+                        SidebarHeading {
+                            compact: root.sidebarCompact
+                            text: QbzSession.tr("AWARDS", QbzSession.trRev)
+                        }
                         Repeater {
                             model: awards
                             delegate: SidebarCard {
                                 required property var modelData
                                 name: modelData[1]
                                 iconName: "award"
+                                compact: root.sidebarCompact
                                 gradA: "#b45309"
                                 gradB: "#eab308"
                                 // `modelData` is the (id, name) pair
@@ -1260,8 +1292,12 @@ Rectangle {
                         visible: albumHeader.showExternalLinks === true
                         width: parent.width
                         spacing: 8
-                        SidebarHeading { text: QbzSession.tr("EXTERNAL LINKS", QbzSession.trRev) }
+                        SidebarHeading {
+                            compact: root.sidebarCompact
+                            text: QbzSession.tr("EXTERNAL LINKS", QbzSession.trRev)
+                        }
                         Row {
+                            visible: !root.sidebarCompact
                             spacing: 8
                             BrandLink {
                                 visible: (albumHeader.lastfmUrl || "") !== ""
@@ -1277,6 +1313,32 @@ Rectangle {
                             }
                             BrandLink {
                                 visible: (albumHeader.musicbrainzUrl || "") !== ""
+                                iconSource: root.brandDir + "brand-musicbrainz.svg"
+                                name: "MusicBrainz"
+                                url: albumHeader.musicbrainzUrl || ""
+                            }
+                        }
+                        Column {
+                            visible: root.sidebarCompact
+                            width: parent.width
+                            spacing: 8
+                            BrandLink {
+                                visible: (albumHeader.lastfmUrl || "") !== ""
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                iconSource: root.brandDir + "brand-lastfm.svg"
+                                name: "Last.fm"
+                                url: albumHeader.lastfmUrl || ""
+                            }
+                            BrandLink {
+                                visible: (albumHeader.discogsUrl || "") !== ""
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                iconSource: root.brandDir + "brand-discogs.svg"
+                                name: "Discogs"
+                                url: albumHeader.discogsUrl || ""
+                            }
+                            BrandLink {
+                                visible: (albumHeader.musicbrainzUrl || "") !== ""
+                                anchors.horizontalCenter: parent.horizontalCenter
                                 iconSource: root.brandDir + "brand-musicbrainz.svg"
                                 name: "MusicBrainz"
                                 url: albumHeader.musicbrainzUrl || ""
@@ -1312,7 +1374,7 @@ Rectangle {
                     height: root.listCellPx
                     Rectangle {
                         x: 32
-                        width: parent.width - 64 - (root.hasSidebar ? 232 : 0)
+                        width: parent.width - 64 - root.sidebarReservePx
                         height: root.trackHeaderPx
                         color: "transparent"
                         Text {
@@ -1339,7 +1401,7 @@ Rectangle {
                     height: root.listCellPx
                     Row {
                         x: 32
-                        width: parent.width - 64 - (root.hasSidebar ? 232 : 0)
+                        width: parent.width - 64 - root.sidebarReservePx
                         height: root.trackHeaderPx
                         leftPadding: 12
                         rightPadding: 12
@@ -1400,7 +1462,7 @@ Rectangle {
                     TrackRow {
                         id: trackDelegate
                         x: 32
-                        width: parent.width - 64 - (root.hasSidebar ? 232 : 0)
+                        width: parent.width - 64 - root.sidebarReservePx
                         item: trackCell.modelData.track
                         number: trackCell.modelData.trackNumber
                         zebra: true
