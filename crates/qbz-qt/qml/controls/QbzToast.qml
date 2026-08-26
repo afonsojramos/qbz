@@ -1,19 +1,13 @@
-// QbzToast — the app's in-app toast host (primitives/Toast.slint), mounted
-// ONCE in AppShell.qml as a sibling of the content frame. Until this file the
-// port had NO toast seam at all: TrackRow.qml:597-600, LabelView.qml:25,
-// LyricsPanel.qml:16, PlayerBar.qml:515-517, NowPlayingBarSmall.qml:461-463
-// and local_bulk.rs:190-193 each document the same gap and fall back to
-// silence. Silence is not 1:1 — "Already in {name}" is the ONLY signal that a
-// duplicate add did nothing, and MyQBZ alone routes 26 distinct messages
-// through crate::toast.
+// QbzToast — the app's in-app toast host, mounted once in AppShell.qml as a
+// sibling of the content frame. Rust owns publication and the settings gate;
+// this component owns presentation and lifetime.
 //
 // CONTRACT. Rust publishes `QbzShell.toastJson`
-// (`{ seq, kind, message, persistent }`, ToastDoc): ONE toast at a time, a new
+// (`{ seq, kind, message }`, ToastDoc): ONE toast at a time, a new
 // one replaces the current, and Rust has ALREADY applied the `in_app_toasts`
 // settings gate (errors always pass) — this file must not re-read the setting.
 // The auto-hide timer lives HERE, keyed off `seq`, so Rust never owns a timer
-// nor needs a hide round-trip: success/info 3000ms, warning 4000, error 5000,
-// buffering persistent (qbz-slint-common/src/toast.rs:31-40).
+// nor needs a hide round-trip: success/info 3000ms, warning 4000, error 5000.
 //
 // The component is ALWAYS in the tree (never `if`-gated) so the entry
 // animation runs; the close button's MouseArea is live only while a toast is
@@ -32,12 +26,6 @@
 // NavFlyout.qml:30-33 and every modal drop it). The 44px elevated fill on a
 // dark scene carries the separation.
 //
-// ASSET + TINT PREREQUISITE (wiring items W21/W22): `circle-check-big`,
-// `circle-alert` and `triangle-alert` are NOT in qml/assets/icons/* yet, and
-// icon_tint_qt.rs's TOKENS has no `success` / `danger` tint. QbzIcon takes a
-// tint NAME, never a colour, so both halves must land or the success/error
-// glyphs render NOTHING with nothing logged.
-
 import QtQuick
 import com.blitzfc.qbz
 import "../theme"
@@ -60,8 +48,6 @@ Item {
     readonly property int seq: root.doc.seq || 0
     readonly property string kind: root.doc.kind || "info"
     readonly property string message: root.doc.message || ""
-    readonly property bool persistent: root.doc.persistent === true
-
     property bool showing: false
 
     readonly property int autoHideMs: root.kind === "error" ? 5000
@@ -70,7 +56,6 @@ Item {
     readonly property string iconName: root.kind === "success" ? "circle-check-big"
         : root.kind === "error" ? "circle-alert"
         : root.kind === "warning" ? "triangle-alert"
-        : root.kind === "buffering" ? "loader-circle"
         : "info"
     readonly property string iconTint: root.kind === "success" ? "success"
         : root.kind === "error" ? "danger"
@@ -84,8 +69,7 @@ Item {
             return
         root.showing = true
         hideTimer.stop()
-        if (!root.persistent)
-            hideTimer.restart()
+        hideTimer.restart()
     }
 
     Timer {

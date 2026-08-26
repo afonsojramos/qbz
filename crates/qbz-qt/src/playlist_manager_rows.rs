@@ -87,10 +87,6 @@ impl PmPlaylist {
 pub(crate) struct PmLocalPlaylist {
     pub id: String,
     pub name: String,
-    /// From `repo::LocalPlaylist.description` (§5.2). Same story as the Qobuz
-    /// row's: written here, read by block 3's editor.
-    #[allow(dead_code)]
-    pub description: Option<String>,
     pub offline_only: bool,
     pub track_count: u32,
     pub is_favorite: bool,

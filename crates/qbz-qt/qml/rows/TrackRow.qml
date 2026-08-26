@@ -1339,30 +1339,9 @@ Rectangle {
         else if (a === "cache") QbzPlayer.cacheTrack(root.item.id)
         else if (a === "uncache") QbzPlayer.uncacheTrack(root.item.id)
         else if (a === "recache") QbzPlayer.recacheTrack(root.item.id)
-        else if (a === "share-qobuz") root.copyToClipboard(
-            "https://open.qobuz.com/track/" + (root.item.id || ""))
+        else if (a === "share-qobuz") QbzAlbum.shareTrackQobuz(root.item.id || "")
+        else if (a === "share-songlink") QbzAlbum.shareTrackLink(root.item.id || "")
         else if (a === "track-info") root.openTrackInfo()
-    }
-
-    // --- Share (share.rs::qobuz_track_url + copy_to_clipboard) -----------
-    // The .slint arm copies the link and raises a toast; the Qt port has no
-    // toast seam yet (GLUE NEEDED), so the copy is silent — but it IS a real
-    // clipboard write. QtQuick exposes no Clipboard type; TextEdit.copy() is
-    // the supported route, kept in an INACTIVE Loader so a 16K-row list does
-    // not carry one TextEdit per row.
-    Loader {
-        id: clipLoader
-        active: false
-        sourceComponent: TextEdit { visible: false }
-    }
-    function copyToClipboard(text) {
-        if (!text || text === "")
-            return
-        clipLoader.active = true
-        clipLoader.item.text = text
-        clipLoader.item.selectAll()
-        clipLoader.item.copy()
-        clipLoader.active = false
     }
 
     // --- Track info (QbzAlbum.openTrackInfo + shell/TrackInfoModal) ------

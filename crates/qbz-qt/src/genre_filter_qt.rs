@@ -22,15 +22,15 @@
 //! - "library-all" -> `names.library-all` feeds the QML feed derive
 //!                    (`library_all.rs::derive`'s genre arm, 1:1).
 //!
-//! POC-NOTEs vs the Slint controller:
+//! Qt adaptation vs the Slint controller:
 //! - The parent list loads LAZILY (first popup open) instead of at shell
-//!   entry: the port has no shell-entry hook it may edit. The persisted
+//!   entry, avoiding an eager catalog request. The persisted
 //!   SELECTION is read eagerly (no network), so a remembered filter applies
 //!   to the very first discover fetch exactly like Slint.
 //! - The "favorites" context does not exist here: the Slint FavoritesView
 //!   draws its genre button only on the Library "All" tab
 //!   (FavoritesView.slint:864, `context: "library-all"`), and so does this
-//!   port. The per-context store handles it the day a favorites button lands.
+//!   frontend. The per-context store can support another context if one lands.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;

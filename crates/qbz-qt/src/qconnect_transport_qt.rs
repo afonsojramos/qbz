@@ -8,12 +8,10 @@
 //! `None` before the API is initialized) — instead of Tauri's always-present
 //! `AppState.client`. The device-uuid + settings-DB path delegate to the shared
 //! `qbz_app::qconnect_identity` so the Qt and Slint builds resolve the SAME
-//! identity (one device, one identity, across frontends).
+//! identity (one device, one identity across upgrades).
 //!
-//! Wired by the QConnect facade (block B3); unused until then, so the module
-//! keeps the reference's `#![allow(dead_code)]` (same convention as
-//! `toast_qt.rs`).
-#![allow(dead_code)]
+//! Wired by the QConnect facade. The module intentionally has no blanket
+//! dead-code suppression: an orphaned transport seam must warn.
 
 use std::sync::Arc;
 
@@ -198,11 +196,6 @@ pub struct QconnectSetVolumeRequest {
 pub struct QconnectMuteVolumeRequest {
     pub renderer_id: Option<i32>,
     pub value: bool,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct QconnectSetActiveRendererRequest {
-    pub renderer_id: Option<i32>,
 }
 
 /// Build a `CtrlSrvrSetPlayerState` request that seeks the remote renderer to

@@ -7,14 +7,12 @@
 //! the same store the Blacklist Manager view mutates, so the row cannot go
 //! stale behind it.
 //!
-//! Deltas vs the Slint (reported, not hidden):
-//! - Developer > "Connect diagnostics" is not shipped: the port has no live
-//!   Qobuz Connect service, so `QconnectDevState` has nothing to show.
-//! - Developer > logs opens the log FILE (the port has no log-viewer overlay
-//!   with copy/upload); same for the sub-nav's "Share logs" entry.
-//! - Developer > export writes the bundle straight to disk with auth
-//!   EXCLUDED. The Slint's `SettingsExportModal` (the include-auth gate,
-//!   default OFF) is not ported, so the safe default is the only behaviour.
+//! Qt adaptations:
+//! - QConnect diagnostics and the in-app log viewer are live; this module
+//!   supplies the settings actions while their documents live in
+//!   `diagnostics_qt` and `log_viewer_qt`.
+//! - The settings export keeps the reference's include-auth gate, defaulting
+//!   to OFF, as an inline toggle instead of a separate modal.
 
 use qbz_app::settings::bundle::{self, ExportOptions, ExportSource};
 use serde::Serialize;

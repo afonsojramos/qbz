@@ -13,12 +13,12 @@
 // M 13/15 · L 16/19 · XL 20/24) and handed to the shared lines view together
 // with the persisted display prefs.
 //
-// The Qt port has no toast host, so translation failures and the copy
-// confirmation surface as an inline notice strip instead of vanishing.
+// Translation failures and copy confirmation stay panel-local as an inline
+// notice strip; the shared toast host is reserved for app-wide actions.
 //
-// NOT hosted here (no such surface exists in the Qt port yet): the immersive
-// lyrics-focus panel and the miniplayer lyrics surface. LyricsLinesView and
-// LyricsSyncEngine are written host-agnostic so both can mount them later.
+// LyricsLinesView and LyricsSyncEngine are host-agnostic: Immersive focus /
+// split modes and the miniplayer mount the same document and sync math with
+// their own layout knobs.
 
 import QtQuick
 import QtQuick.Controls
@@ -306,7 +306,7 @@ Rectangle {
             }
         }
 
-        // --- Inline notice (this shell has no toast host) -----------------
+        // --- Panel-local inline notice ------------------------------------
         Rectangle {
             id: noticeStrip
             width: parent.width

@@ -19,14 +19,9 @@
 //! an empty result produces. Late replies are generation-guarded, so a slow
 //! Last.fm answer for album A can never paint onto album B.
 //!
-//! POC-NOTEs:
-//! - Multi-select + bulk bar and the offline download column: out of scope
-//!   (inert stubs where visible).
-//! - Blacklist filtering on carousels: skipped (store not open).
-//! - The album-header-gradient atmosphere: not wired (appearance pref).
-//! - The Last.fm "similar albums" second suggestions row needs the
-//!   `qbz-external-reco` engine, which is not a dependency of this crate —
-//!   see the GLUE note in the handoff report. NOT faked here.
+//! Known parity delta: artist/album blacklist filtering is not yet applied to
+//! the three recommendation carousels. Multi-select, offline actions, the
+//! header atmosphere and the Last.fm similar-albums row are all live.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};

@@ -2,9 +2,8 @@
 // crates/qbz-ui/ui/shell/LyricsLinesView.slint.
 //
 // Everything arrives through properties; nothing here references the sidebar
-// or window geometry, so a future miniplayer / immersive host can mount it
-// with its own padding, gap and type scale (neither host exists in the Qt
-// port yet).
+// or window geometry, so the miniplayer and Immersive hosts mount it with
+// their own padding, gap and type scale.
 //
 // What it owns:
 //  - the scrolling body: top/bottom spacers (so the first/last SYNCED line

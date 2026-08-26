@@ -9,8 +9,8 @@
 //! (`<data_dir>/qbz/custom_theme.json`, the SAME file the Slint custom-theme
 //! editor writes — the editor and the write path live in `custom_theme_qt`,
 //! which also owns the path and the in-memory base this module reads). The
-//! "system" registry theme resolves via the OS palette in Slint; the POC
-//! maps it to the Dark palette (POC-NOTE).
+//! "system" registry theme resolves via the OS palette in Slint; Qt currently
+//! maps that one slug to the Dark palette, a documented parity gap.
 
 use cxx_qt_lib::QString;
 use qbz_theme::{Rgba, ThemeColors, ThemeId};
@@ -112,8 +112,8 @@ pub fn colors_for_slug(slug: &str) -> ThemeColors {
     match slug {
         "auto" => auto_colors(),
         "custom" => custom_colors(),
-        // POC-NOTE: "system" reads the OS palette in Slint; the POC maps it
-        // to the Dark registry palette.
+        // "system" reads the OS palette in Slint; Qt currently maps it to the
+        // Dark registry palette.
         "system" => qbz_theme::palette(ThemeId::Dark),
         other => ThemeId::from_slug(other)
             .map(qbz_theme::palette)

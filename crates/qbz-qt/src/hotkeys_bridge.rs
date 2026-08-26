@@ -321,9 +321,7 @@ impl qbz_hotkeys::QbzHotkeys {
     }
 
     /// The §2 dispatch table (keybindings.rs:502-531 `run_action`). true =
-    /// consumed. ONE no-op seam is left and it is CONTRACTUAL (K3, trap 10):
-    /// ui.openLink (LinkResolver not ported, HeaderBar.qml:23 — activates when
-    /// it lands). The mini.* rows still no-op here — they belong to the mini
+    /// consumed. The mini.* rows still no-op here — they belong to the mini
     /// window's own dispatcher (mini_bridge::key_pressed) and are kept in this
     /// table for binding-file compat + the cheatsheet. **ui.miniPlayer is no
     /// longer a seam**: it toggles the Qt miniplayer (2026-08-03
@@ -347,11 +345,7 @@ impl qbz_hotkeys::QbzHotkeys {
                 self.as_mut().set_cheatsheet_open(true);
                 publish_groups(self.as_mut());
             }
-            "ui.openLink" => {
-                log::debug!(
-                    "[qbz-qt] hotkeys: ui.openLink — no-op seam, LinkResolver not ported (K3)"
-                );
-            }
+            "ui.openLink" => crate::link_resolver_bridge::open_modal(),
             // Shift+M — the reference's `toggle_miniplayer()`
             // (keybindings.rs:547-558). Its gamescope guard is NOT repeated
             // here: it lives in `QbzMini::enter`, so this hotkey and the view
@@ -375,9 +369,7 @@ impl qbz_hotkeys::QbzHotkeys {
     /// any fired action, keybindings.rs:498-499).
     fn handle_escape(mut self: Pin<&mut Self>) -> bool {
         let state = EscapeState {
-            // ABSENT-BY-GAP (§1.2.1): the LinkResolver is not ported
-            // (HeaderBar.qml:23) — the arm stays in the ORDER, never taken.
-            link_resolver_open: false,
+            link_resolver_open: crate::link_resolver_bridge::is_open(),
             customize_open: *self.customize_open(),
             cheatsheet_open: *self.cheatsheet_open(),
             // Sampled from the OWNER of the state, like cortinilla/immersive
@@ -402,7 +394,8 @@ impl qbz_hotkeys::QbzHotkeys {
                 crate::shell_bridge::ui(|s| s.exit_multi_select());
             }
             EscapeTarget::Queue => crate::shell_bridge::ui(|s| s.toggle_queue()),
-            EscapeTarget::LinkResolver | EscapeTarget::None => {}
+            EscapeTarget::LinkResolver => crate::link_resolver_bridge::close_modal(),
+            EscapeTarget::None => {}
         }
         true
     }

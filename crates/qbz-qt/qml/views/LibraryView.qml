@@ -17,14 +17,10 @@
 //   library/LibraryArtistsPanel.qml Artists in SIDEPANEL mode
 // Each takes `view: root`, the seam views/local/*.qml already uses.
 //
-// Still out of scope, and named rather than implied:
-// - Offline: the generic OfflinePlaceholder replica mounts (the Slint
-//   offline RAIL of playable cached favorites needs the offline cache —
-//   not wired; PARITY-DEBT #17).
-// - The Library "All" local SCOPE ("favorites" vs the whole local library)
-//   is PARITY-DEBT #6: the pref is read and PRESERVED on disk by
-//   library_prefs.rs, but neither the Settings row nor the `all` branch of
-//   the feed exists here yet.
+// Remaining delta: while offline, the generic placeholder mounts instead of
+// Slint's rail of playable cached favourites. The offline cache itself and
+// the Library "All" local scope (favourites vs the whole local library) are
+// both live; this is a missing Library presentation, not a missing engine.
 //
 // Filter by genre IS wired, on the All / Tracks / Albums toolbars — the three
 // places the Slint FavoritesView draws it (FavoritesView.slint:609, :652,
@@ -1402,9 +1398,9 @@ Rectangle {
                 anchors.rightMargin: 32
                 selectedCount: root.tracksSelectedCount
                 // The reference's inventory MINUS "Make available offline":
-                // this port brings up no offline cache at all (src/
-                // library_bulk.rs names the check), and a bulk bar must not
-                // render a control that no-ops. Everything else is wired.
+                // the cache engine is live, but the Library bulk-download
+                // action has no bridge seam yet. A bulk bar must not render a
+                // control that no-ops. Everything else is wired.
                 // "heart-crack" is likewise not in this port's icon set, so
                 // "Remove from Library" uses the same heart + danger pair
                 // views/local/LocalTracksTab.qml already ships.

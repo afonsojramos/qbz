@@ -347,9 +347,7 @@ pub fn retry() {
 /// same reason `myqbz_qt::republish_all` is called unconditionally from
 /// `apply_language`. A no-op on an empty document (nothing has been opened).
 ///
-/// This is wired (main.rs `apply_language`), unlike
-/// `label_qt::republish_for_language`, which is `#[allow(dead_code)]` and whose
-/// own doc comment says "GLUE NEEDED: nothing calls this yet".
+/// Wired from `main.rs::apply_language` alongside Browse and Label republish.
 pub fn republish() {
     let has_page = with_state(|s| {
         if s.artist_id.is_empty() {

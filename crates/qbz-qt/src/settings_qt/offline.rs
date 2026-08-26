@@ -6,12 +6,9 @@
 //! `qbz_lyrics::LyricsCacheDb` opened at the SAME per-user path
 //! `lyrics_qt.rs` binds the service to.
 //!
-//! Deltas vs `settings/OfflineSettings.slint` (reported, not hidden):
-//! - The OFFLINE CACHE group (manager / open folder / clear all) is not
-//!   shipped — the MANAGER VIEW behind it has no Qt counterpart yet. The old
-//!   reason given here ("the port never brings up OfflineCacheState") is no
-//!   longer true: `offline_cache_qt.rs` runs the downloads from the album
-//!   page and the track row. It is the view that is missing, not the engine.
+//! The offline-cache group is live too (manager, open folder and clear-all),
+//! but its controller lives in `offline_manager_qt`; this module only owns the
+//! mode and lyrics rows serialized into the Settings document.
 
 use serde::Serialize;
 

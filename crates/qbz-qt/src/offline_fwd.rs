@@ -7,12 +7,9 @@
 //! only the process globals, the per-user binding, and the status -> QML
 //! forwarder (`engine().subscribe()` watch -> `CxxQtThread::queue`).
 //!
-//! POC-NOTE (skipped vs the Slint glue): `check_now` / `seed_settings` /
-//! `request_recheck` (Settings > Offline UI — no settings views in the
-//! POC), `offline_playback_allowed` (no playback yet), and the
-//! subscription purge consumer (`spawn_subscription_purge_check` — needs
-//! the offline cache, which this phase does not bring up; TODO when the
-//! offline cache is wired).
+//! Remaining parity debt: the subscription-expiry purge consumer is not
+//! spawned. Connectivity recheck, Settings wiring, the download cache and the
+//! offline-playback eligibility gate are live.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
@@ -38,6 +35,13 @@ static SUBSCRIPTION: Mutex<Option<SubscriptionStateStore>> = Mutex::new(None);
 
 pub fn engine() -> Arc<OfflineModeEngine> {
     Arc::clone(&ENGINE)
+}
+
+/// Exclude registered network folders only when connectivity is confirmed
+/// down. Manual offline mode with a live LAN intentionally keeps NAS content
+/// visible; `Unknown` also fails open to avoid hiding it during boot probes.
+pub fn exclude_network_folders_now() -> bool {
+    engine().status().connectivity == Connectivity::Down
 }
 
 /// Spawn the connectivity actor and attach it to the engine. Called once
@@ -84,9 +88,19 @@ pub fn start_ui_forwarder() {
 
     crate::spawn(async move {
         let mut rx = engine().subscribe();
+        let mut previous_connectivity = None;
         loop {
             let status = *rx.borrow_and_update();
+            let network_visibility_changed = previous_connectivity
+                .map(|previous| {
+                    (previous == Connectivity::Down) != (status.connectivity == Connectivity::Down)
+                })
+                .unwrap_or(false);
+            previous_connectivity = Some(status.connectivity);
             crate::session_bridge::ui(move |b| apply_status(b, status));
+            if network_visibility_changed && crate::local_state::has_library() {
+                crate::local_bridge_ops::reload_browse();
+            }
             if rx.changed().await.is_err() {
                 break;
             }
@@ -135,8 +149,8 @@ pub fn user_data_dir(user_id: u64) -> Option<PathBuf> {
 /// Called on every session activation (login, restore, offline entry).
 /// Best-effort: failures are logged, never block entry.
 ///
-/// POC-NOTE: the Slint version also spawns the subscription purge check
-/// here — omitted (needs the offline cache; see module docs).
+/// The Slint version also spawns the subscription purge check here; that
+/// consumer remains the module's one documented parity gap.
 pub fn init_for_user(base_dir: &Path) {
     if let Err(e) = engine().init_for_user(base_dir) {
         log::error!("[qbz-qt] offline mode engine init failed: {e}");

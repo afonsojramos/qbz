@@ -151,12 +151,8 @@ pub fn fetch_local_and_plex(artist_name: &str) -> Vec<Candidate> {
             "artist",
             "asc",
             /* include_qobuz_downloads */ true,
-            // GAP: the reference passes `local_library::exclude_network_folders_now()`
-            // (qbz/src/local_library.rs). This port has no equivalent and every
-            // other call site hardcodes `false` (local_albums.rs:42,70,94,173);
-            // the builder must see the SAME set the Albums tab shows.
             /* exclude_network_folders */
-            false,
+            crate::offline_fwd::exclude_network_folders_now(),
             plex_path.as_deref(),
             remote_path.as_deref(),
             &remote_words,

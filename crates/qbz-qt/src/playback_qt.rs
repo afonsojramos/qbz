@@ -5,22 +5,7 @@
 //! and the poll loop (PlaybackEvent -> UI state, track-change meta refresh,
 //! end-of-track advance).
 //!
-//! OWED PORTS vs playback.rs. These are DEBT, not scope decisions: a fix that
-//! lived in the frontend is not inherited and has to be replicated (TRACK-RULES
-//! rule 8, whose title is "los fixes de backend deben llegar al Qt"). Each one
-//! is tracked in `qbz-nix-docs/qt-frontend/2026-07-30-parity-debt/PARITY-DEBT.md`
-//! — add there, not here, so a note cannot outlive its gap unnoticed. That is
-//! exactly how gapless stayed broken: this header advertised it for weeks.
-//!
-//! - Session persist / resume-position: both prefs are persisted by settings
-//!   and read by nobody.
-//! - Streaming quality: seeded from ui_prefs ("streaming_quality") and
-//!   live-updated by Settings > Audio (settings_qt). The #638 device-cap clamp
-//!   lives in the Slint glue and is NOT ported.
-//! - Offline-cache tier (offline bytes), QConnect branches.
-//!
-//! DONE, previously listed here — kept as one line each so the list above
-//! only ever names REAL gaps:
+//! Frontend-owned playback responsibilities implemented here include:
 //! - Stop-after-this-song (#35) — the end-of-track arm consumes the marker and
 //!   pauses AHEAD of repeat/shuffle, and the gapless pre-queue guard that was
 //!   already here now defends a marker the UI can actually place.
@@ -59,7 +44,7 @@ use qbz_models::{PageArtistTrack, Quality, QueueTrack, RepeatMode};
 
 /// The request tier for every play. Persisted in ui_prefs.json ("streaming_quality")
 /// and applied here from Settings > Audio (settings_qt). Default "hires_plus".
-static POC_QUALITY: RwLock<Quality> = RwLock::new(Quality::UltraHiRes);
+static STREAMING_QUALITY: RwLock<Quality> = RwLock::new(Quality::UltraHiRes);
 
 /// Map a ui_prefs quality key to the request tier (settings.rs STREAMING_QUALITIES).
 fn quality_for_key(key: &str) -> Quality {
@@ -74,7 +59,7 @@ fn quality_for_key(key: &str) -> Quality {
 /// Settings > Audio > Streaming quality writes through here (also used at
 /// startup to seed from the persisted prefs).
 pub fn set_streaming_quality(key: &str) {
-    *POC_QUALITY.write().unwrap() = quality_for_key(key);
+    *STREAMING_QUALITY.write().unwrap() = quality_for_key(key);
 }
 
 /// The raw streaming-quality PREFERENCE, uncapped.
@@ -85,14 +70,14 @@ pub fn set_streaming_quality(key: &str) {
 /// LOCAL play goes through `local_playback_quality` instead — reach for this
 /// one only if you can say why a cap must not apply.
 pub(crate) fn current_quality() -> Quality {
-    *POC_QUALITY.read().unwrap()
+    *STREAMING_QUALITY.read().unwrap()
 }
 
 /// The request tier for LOCAL playback + the cause that shaped it — the one
 /// place the preference and the detected device cap (#638 fix 3) are
 /// reconciled. Port of `crates/qbz/src/playback.rs local_playback_quality`.
 ///
-/// Costs two uncontended `RwLock` reads (`POC_QUALITY` + the device-cap
+/// Costs two uncontended `RwLock` reads (`STREAMING_QUALITY` + the device-cap
 /// cache), so it is safe to resolve per play; nothing here reads a file or
 /// probes hardware. That is what lets the play funnel own the decision
 /// instead of taking it as a parameter.

@@ -262,6 +262,7 @@ ApplicationWindow {
         // after QbzSession like every domain singleton. The B2 dispatcher
         // (AppShell-root Keys.onPressed) is the only other QML side.
         QbzHotkeys.boot()
+        QbzLink.boot()
         // Search (2026-08-03 cortinilla-parity contract, commit C0): the
         // domain extracted from QbzBridge. Its position among the other
         // domain singletons is not load-bearing — every boot() here runs
@@ -740,9 +741,11 @@ ApplicationWindow {
         // Both reference close arms flush the session BEFORE hiding, "even when
         // only hiding — the process may be killed from the tray / shell without
         // a real quit afterwards" (crates/qbz/src/main.rs:23255-23256). The Qt
-        // port has no session_persist module, so the geometry flush is the
-        // whole of what is owed. On a miniplayer enter it is harmless: it
-        // writes the size the exit is about to restore.
+        // session persistence itself is flushed by the Rust exit path; this
+        // early geometry flush is still owed before a hide because the
+        // process may later be killed without a QML close event. On a
+        // miniplayer enter it is harmless: it writes the size the exit is
+        // about to restore.
         window.persistWindowGeometryOnExit()
         window.hide()
         QbzTray.setWindowShown(false)

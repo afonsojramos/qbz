@@ -165,9 +165,7 @@ struct CastInner {
     media_server: Option<MediaServer>,
     // Playback mirror. `current_track_id` is session bookkeeping (which track
     // the renderer currently holds) kept 1:1 with the Slint service; nothing
-    // reads it yet, and the allow keeps that honest instead of dropping a
-    // field the transport work will want.
-    #[allow(dead_code)]
+    // reads it yet; it is transport session bookkeeping.
     current_track_id: Option<u64>,
     is_playing: bool,
     // Track-end one-shot latch (reset on PLAYING).
@@ -758,7 +756,6 @@ impl CastService {
     // Ok(true) = handled. Call sites live on the playback path — see the
     // report's GLUE NEEDED for `playback_qt.rs`.
 
-    #[allow(dead_code)] // wired by playback_qt::toggle_play — see GLUE
     pub(crate) async fn toggle_play_if_cast(&self) -> Result<bool, String> {
         let (proto, playing) = {
             let inner = self.inner.lock().await;
@@ -781,7 +778,6 @@ impl CastService {
     /// derive the absolute position from the local engine while casting (it
     /// is stopped, so its duration reads 0 and every drag would restart the
     /// track) — resolve the duration from the catalog metadata instead.
-    #[allow(dead_code)] // wired by playback_qt::seek_frac — see GLUE
     pub(crate) async fn seek_fraction_if_cast(&self, fraction: f64) -> Result<bool, String> {
         if !self.is_casting().await {
             return Ok(false);
@@ -802,7 +798,6 @@ impl CastService {
         Ok(true)
     }
 
-    #[allow(dead_code)] // wired by playback_qt::set_volume — see GLUE
     pub(crate) async fn set_volume_if_cast(&self, volume: f32) -> Result<bool, String> {
         let proto = {
             let inner = self.inner.lock().await;
@@ -864,7 +859,6 @@ impl CastService {
         Ok(())
     }
 
-    #[allow(dead_code)] // only reached through toggle_play_if_cast — see GLUE
     async fn play_renderer(&self, proto: CastProtocol) -> Result<(), String> {
         match proto {
             CastProtocol::Chromecast => {
@@ -883,7 +877,6 @@ impl CastService {
         Ok(())
     }
 
-    #[allow(dead_code)] // only reached through toggle_play_if_cast — see GLUE
     async fn pause_renderer(&self, proto: CastProtocol) -> Result<(), String> {
         match proto {
             CastProtocol::Chromecast => {
@@ -1147,7 +1140,6 @@ impl CastService {
     /// Tear everything down: stop the renderer, abort the poll, drop discovery
     /// and the media server, so a cast device does not keep playing after
     /// logout or exit (Tauri parity, #32/#33).
-    #[allow(dead_code)] // wired by do_logout / the close handler — see GLUE
     pub(crate) async fn shutdown(&self) {
         let _ = self.stop_renderer().await;
         let mut inner = self.inner.lock().await;
@@ -1473,14 +1465,12 @@ pub(crate) fn push_cap_options() {
 // ---------------------------------------------------------------------------
 
 /// True while a renderer owns transport.
-#[allow(dead_code)] // wired by playback_qt / the poll pump — see GLUE
 pub(crate) async fn is_casting() -> bool {
     service().is_casting().await
 }
 
 /// Route the queue's CURRENT track to the connected renderer instead of
 /// opening a local stream. Ok(false) = not casting, take the local path.
-#[allow(dead_code)] // wired by playback_qt::play_queue_track — see GLUE
 pub(crate) async fn play_current_if_cast(runtime: &Runtime) -> bool {
     let svc = service();
     if !svc.is_casting().await {

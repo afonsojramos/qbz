@@ -9,11 +9,8 @@
 //!
 //! ADR-006 (frontend-agnostic core) is the rule this restores.
 //!
-//! DEBT: the Slint copy is still there and untouched, deliberately — moving it
-//! would force a rebuild of the Slint binary, which pulls `qbz-ui` and its
-//! ~30 GB compile that this box cannot verify. Collapse the two the next time
-//! the Slint side is built: `crates/qbz/src/remote_stream.rs` becomes
-//! `pub use qbz_player::remote_stream::*;`.
+//! This shared extraction is now the sole implementation used by the
+//! application frontends and renderer paths.
 
 //! Shared HTTP streaming feeder.
 //!

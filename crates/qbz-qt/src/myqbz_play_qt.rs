@@ -244,14 +244,6 @@ pub(crate) async fn fetch_item_tracks(
 /// Resolve the selected items' QOBUZ track ids for the bulk "Add to playlist"
 /// flow: Qobuz playlists only accept Qobuz track ids, so local/Plex tracks are
 /// skipped. Ids in resolution order.
-///
-/// UNCALLED ON PURPOSE — its only caller would be
-/// `myqbz_detail_qt::bulk_action`'s `"add-to-playlist"` arm, which cannot be
-/// implemented in this port: there is no global playlist picker
-/// (`playlist_picker::open_multi`, `main.rs:6476-6500` in the reference), the
-/// same gap `LabelView.qml:18` and `MixView.qml:32` already record. Kept
-/// verbatim so wiring the picker is a one-line call, not a re-port.
-#[allow(dead_code)]
 pub(crate) async fn resolve_bulk_qobuz_track_ids(
     _runtime: &Runtime,
     items: &[MixtapeCollectionItem],

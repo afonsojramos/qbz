@@ -35,7 +35,7 @@ pub mod qbz_home {
         // --- Discover > Home ---------------------------------------------
         #[qproperty(bool, home_loading)]
         #[qproperty(QString, home_error)]
-        // POC-NOTE: the brief's QVariantList-of-QVariantMap shape is not
+        // Transport note: QVariantList-of-QVariantMap is not
         // expressible in cxx-qt-lib 0.7.3 (no QVariantValue impls for
         // QMap/QList — a QVariant can't hold a nested map/list), so the
         // sections travel as ONE JSON document; QML JSON.parse()s it into

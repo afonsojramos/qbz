@@ -89,6 +89,12 @@ pub mod qbz_album_bridge {
         fn share_qobuz_link(self: Pin<&mut QbzAlbum>, album_id: QString);
         #[qinvokable]
         fn share_album_link(self: Pin<&mut QbzAlbum>, album_id: QString);
+        /// Track context-menu Share rows. The universal-link arm fetches the
+        /// track's ISRC before resolving it through Deezer/Song.link.
+        #[qinvokable]
+        fn share_track_qobuz(self: Pin<&mut QbzAlbum>, track_id: QString);
+        #[qinvokable]
+        fn share_track_link(self: Pin<&mut QbzAlbum>, track_id: QString);
         /// Header info button: fetch + publish the Album Info (credits /
         /// review) document (album_info_qt.rs).
         #[qinvokable]
@@ -196,6 +202,12 @@ impl qbz_album_bridge::QbzAlbum {
     }
     pub fn share_album_link(self: Pin<&mut Self>, album_id: QString) {
         crate::share_qt::share_album_link(album_id.to_string());
+    }
+    pub fn share_track_qobuz(self: Pin<&mut Self>, track_id: QString) {
+        crate::share_qt::share_track_qobuz(track_id.to_string());
+    }
+    pub fn share_track_link(self: Pin<&mut Self>, track_id: QString) {
+        crate::share_qt::share_track_link(track_id.to_string());
     }
     pub fn open_album_info(self: Pin<&mut Self>, album_id: QString) {
         crate::album_info_qt::open(album_id.to_string());

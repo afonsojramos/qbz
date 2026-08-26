@@ -18,12 +18,8 @@
 //! ── WHERE THE CODE LIVES, AND WHY IT IS NOT SHARED ────────────────────────
 //!
 //! The producers below (`gather`, the row builders, `collect_output_sinks`,
-//! `active_sink_format`, `redact_id_like`) DUPLICATE their twins in
-//! `crates/qbz/src/diagnostics.rs`. That is deliberate, not an oversight: that
-//! crate is the frozen Slint frontend and it pulls `qbz-ui`, a single ~1.6 M-line
-//! compilation unit that peaks 20-30 GB — so moving the functions there into a
-//! shared crate could not be compile-checked without a build that freezes this
-//! machine. The Slint copy dies with that tree in 2.1. Everything that ALREADY
+//! `active_sink_format`, `redact_id_like`) originated in the retired frontend
+//! but are now the sole application implementation. Everything that already
 //! lives in a shared crate is called, not copied: `qbz_app::diagnostics`
 //! (`runtime_diagnostics` / `system_info` / `detect_graphics_runtime`),
 //! `qbz_audio::output_sinks::list_output_sinks`, and Qt's own `renderer_qt` /

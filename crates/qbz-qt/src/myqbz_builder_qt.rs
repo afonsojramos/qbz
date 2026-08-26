@@ -26,12 +26,8 @@
 //!   fetch produced no `plex` row (`qbz/src/main.rs:2889-2905`).
 //!
 //! PORT NOTES (divergences from the reference, all deliberate):
-//! - `exclude_network_folders` is **`false`**. GAP: the reference reads
-//!   `qbz/src/local_library.rs::exclude_network_folders_now()`; this port has no
-//!   equivalent and all four existing `get_albums_metadata_page` call sites
-//!   hardcode `false` (`local_albums.rs:42,70,94,173`). The builder must see the
-//!   SAME candidate set the Albums tab shows, and here that set is the
-//!   unfiltered one (spec 02 §6.8 / open question #15).
+//! - Network-folder exclusion uses the shared live offline/connectivity gate,
+//!   so the builder sees the same candidate set as Local Library.
 //! - The reference DECODES the avatar into a `slint::Image`; here the avatar is
 //!   a `file://` path resolved through `artwork_qt` (`artistAvatarPath`).
 //! - Candidate covers are NOT downloaded: no `DiscoCandidateRow` cell renders

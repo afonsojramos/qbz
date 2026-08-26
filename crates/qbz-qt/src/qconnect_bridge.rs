@@ -169,9 +169,9 @@ impl qbz_qconnect::QbzQConnect {
                         // connect() (qconnect_qt.rs, the D5 msgid) — don't
                         // stack a second toast with the same text. Every other
                         // failure is silent in the reference: it only lands in
-                        // the service's `last_error`, whose sole reader (the
-                        // diagnostics snapshot) is §9-D10-skipped — so surface
-                        // it here instead.
+                        // the service's `last_error`. Qt also retains that in
+                        // diagnostics, but the immediate toast keeps a failed
+                        // click from appearing inert.
                         if err != "Qobuz Connect is unavailable while offline" {
                             crate::toast_qt::error(err);
                         }

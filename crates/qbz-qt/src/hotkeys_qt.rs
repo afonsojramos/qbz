@@ -476,14 +476,6 @@ pub fn active_bindings_with(overrides: &BTreeMap<String, String>) -> BTreeMap<St
     map
 }
 
-/// The live active map (defaults + the persisted overrides). Part of the
-/// contract §3.2 named API; the bridge resolves keys through
-/// `action_for_key` (which overlays internally), so nothing calls this yet.
-#[allow(dead_code)]
-pub fn active_bindings() -> BTreeMap<String, String> {
-    active_bindings_with(&load_overrides())
-}
-
 fn action_for_shortcut<'a>(
     shortcut: &str,
     bindings: &'a BTreeMap<String, String>,
@@ -765,9 +757,7 @@ pub fn is_ctrl_a(key: i32, modifiers: i32, text: &str) -> bool {
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct EscapeState {
-    /// ABSENT-BY-GAP (contract §1.2.1): the LinkResolver is not ported
-    /// (`HeaderBar.qml:23`) — always false; the arm is kept so the ORDER is
-    /// the Slint one when the surface lands.
+    /// App-wide Open Music Link modal; first in the Escape priority stack.
     pub link_resolver_open: bool,
     pub customize_open: bool,
     pub cheatsheet_open: bool,

@@ -21,18 +21,18 @@
 //! is ONE `download_missing` pass followed by ONE republish, and the toolbar
 //! setters are pure in-memory rebuilds off the per-grid cache — no refetch.
 //!
-//! D11.c GAP: the Slint drops items that are unavailable offline and then drops
-//! collections left with zero items (`myqbz.rs:231 retain_available_offline`).
-//! This port opens no offline-cache index at all (`auth_qt.rs:7-18`), so
-//! nothing is hidden — the grids load from SQLite normally, which is always
-//! available. Add the call in `load_grid` when the offline index lands.
+//! Offline loads filter against one availability snapshot: local items remain,
+//! Plex is allowed only in induced offline mode, and Qobuz items require a
+//! ready cache entry plus a valid subscription grace verdict.
 
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use cxx_qt_lib::QString;
-use qbz_models::mixtape::{AlbumSource, CollectionKind, MixtapeCollection};
+use qbz_models::mixtape::{
+    AlbumSource, CollectionKind, ItemType, MixtapeCollection, MixtapeCollectionItem,
+};
 use serde::Serialize;
 
 /// The grid-card mosaic renders at 184px (spec 01 §5.2), which is what the
@@ -73,6 +73,138 @@ pub(crate) fn kind_from_str(s: &str) -> CollectionKind {
         "artist_collection" => CollectionKind::ArtistCollection,
         _ => CollectionKind::Mixtape,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Offline availability
+// ---------------------------------------------------------------------------
+
+/// One batch snapshot used by both the My QBZ grids and detail view. Building
+/// it once prevents a database/index read for every card.
+pub(crate) struct OfflineAvailability {
+    cached_track_ids: HashSet<u64>,
+    cached_album_ids: HashSet<String>,
+    plex_local_rows: HashSet<i64>,
+    qobuz_allowed: bool,
+    plex_allowed: bool,
+}
+
+impl OfflineAvailability {
+    pub(crate) fn item_available(&self, item: &MixtapeCollectionItem) -> bool {
+        match item.source {
+            AlbumSource::Qobuz => {
+                if !self.qobuz_allowed {
+                    return false;
+                }
+                match item.item_type {
+                    ItemType::Album => self.cached_album_ids.contains(&item.source_item_id),
+                    ItemType::Track => item
+                        .source_item_id
+                        .parse::<u64>()
+                        .map(|id| self.cached_track_ids.contains(&id))
+                        .unwrap_or(false),
+                    ItemType::Playlist => false,
+                }
+            }
+            AlbumSource::Local => {
+                if item.source_item_id.starts_with("plex:") {
+                    return self.plex_allowed;
+                }
+                match item.item_type {
+                    ItemType::Track => match item.source_item_id.parse::<i64>() {
+                        Ok(id) if self.plex_local_rows.contains(&id) => self.plex_allowed,
+                        Ok(_) => true,
+                        Err(_) => false,
+                    },
+                    ItemType::Playlist => false,
+                    ItemType::Album => true,
+                }
+            }
+        }
+    }
+}
+
+/// Build the offline availability snapshot for a set of collection items.
+pub(crate) async fn offline_availability(
+    items: &[&MixtapeCollectionItem],
+) -> OfflineAvailability {
+    let (cached_track_ids, cached_album_ids) = match crate::offline_qt::get().await {
+        Some(offline) => {
+            let guard = offline.db.lock().await;
+            match guard.as_ref().map(|db| db.get_all_tracks()) {
+                Some(Ok(tracks)) => {
+                    let mut ids = HashSet::new();
+                    let mut albums = HashSet::new();
+                    for track in tracks {
+                        if matches!(
+                            track.status,
+                            qbz_offline_cache::OfflineCacheStatus::Ready
+                        ) {
+                            ids.insert(track.track_id);
+                            if let Some(album_id) = track.album_id {
+                                albums.insert(album_id);
+                            }
+                        }
+                    }
+                    (ids, albums)
+                }
+                _ => (HashSet::new(), HashSet::new()),
+            }
+        }
+        None => (HashSet::new(), HashSet::new()),
+    };
+
+    let local_track_ids: Vec<i64> = items
+        .iter()
+        .filter(|item| item.source == AlbumSource::Local && item.item_type == ItemType::Track)
+        .filter_map(|item| item.source_item_id.parse::<i64>().ok())
+        .collect();
+    let plex_local_rows = if local_track_ids.is_empty() {
+        HashSet::new()
+    } else {
+        tokio::task::spawn_blocking(move || {
+            crate::library_db_qt::with_db(false, |db| {
+                let mut plex = HashSet::new();
+                for id in local_track_ids {
+                    if let Some(track) = db.get_track(id)? {
+                        if track.source.as_deref() == Some("plex") {
+                            plex.insert(id);
+                        }
+                    }
+                }
+                Ok(plex)
+            })
+            .unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default()
+    };
+
+    OfflineAvailability {
+        cached_track_ids,
+        cached_album_ids,
+        plex_local_rows,
+        qobuz_allowed: crate::offline_fwd::offline_playback_allowed(),
+        plex_allowed: crate::offline_fwd::engine().status().mode
+            == qbz_app::offline_mode::OfflineMode::InducedOffline,
+    }
+}
+
+pub(crate) async fn retain_available_offline(
+    rows: Vec<MixtapeCollection>,
+) -> Vec<MixtapeCollection> {
+    let items: Vec<&MixtapeCollectionItem> =
+        rows.iter().flat_map(|collection| collection.items.iter()).collect();
+    let availability = offline_availability(&items).await;
+    drop(items);
+    rows.into_iter()
+        .filter_map(|mut collection| {
+            collection
+                .items
+                .retain(|item| availability.item_available(item));
+            (!collection.items.is_empty()).then_some(collection)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -651,16 +783,16 @@ pub(crate) fn load_grid(grid: Grid) {
         let rows = tokio::task::spawn_blocking(move || list_collections(kind_arg))
             .await
             .unwrap_or_default();
-        let rows: Vec<MixtapeCollection> = match grid {
+        let mut rows: Vec<MixtapeCollection> = match grid {
             Grid::Mixtapes => rows,
             Grid::Collections => rows
                 .into_iter()
                 .filter(|c| c.kind != CollectionKind::Mixtape)
                 .collect(),
         };
-        // D11.c GAP: while offline the Slint would drop unavailable items here
-        // (`myqbz.rs:231 retain_available_offline`). No offline index in this
-        // port — nothing is hidden. See the module header.
+        if crate::offline_fwd::engine().status().is_offline() {
+            rows = retain_available_offline(rows).await;
+        }
         apply(grid, rows);
         artwork_pass(grid).await;
     });

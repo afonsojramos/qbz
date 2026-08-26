@@ -452,17 +452,18 @@ pub(crate) fn genre_detail_doc(
     }
 }
 
-/// Change one Genres album's selected physical copy. This cache is keyed by
-/// album id because several expanded rows coexist; the routed AlbumView's
-/// singleton `album_version_index` would make the last opened album win.
-pub(crate) fn genre_select_version(album_id: &str, index: i32) -> Option<GenreAlbumDetailDoc> {
+/// Resolve one Genres album's selected physical copy without mutating the
+/// cache. The caller publishes both values only after its generation check;
+/// changing the cache here would let a superseded async request win.
+pub(crate) fn genre_version_selection(
+    album_id: &str,
+    index: i32,
+) -> Option<(GenreAlbumDetailDoc, Vec<LocalTrack>)> {
     let index = usize::try_from(index).ok()?;
     let versions = state(|s| s.genre_detail_versions.get(album_id).cloned())?;
     let selected = versions.get(index)?.1.clone();
-    state(|s| {
-        s.genre_detail_raw.insert(album_id.to_string(), selected);
-    });
-    Some(genre_detail_doc(album_id, versions.as_slice(), index))
+    let doc = genre_detail_doc(album_id, versions.as_slice(), index);
+    Some((doc, selected))
 }
 
 /// The header for ONE version — recomputed per version (the Slint recomputes
@@ -1159,7 +1160,7 @@ mod version_tests {
     }
 
     #[test]
-    fn genres_version_selection_is_scoped_to_one_expanded_album() {
+    fn genres_version_selection_returns_one_expanded_albums_copy() {
         let album = "test:genres-version-picker";
         let mut cd = copy("genres-cd", "plex", "Album", 2, 16);
         let mut hires = copy("genres-hires", "jellyfin", "Album (Remastered)", 3, 24);
@@ -1175,40 +1176,32 @@ mod version_tests {
         ];
         state(|s| {
             s.genre_detail_raw.insert(album.to_string(), hires);
-            s.genre_detail_versions.insert(
-                album.to_string(),
-                std::sync::Arc::new(versions.clone()),
-            );
+            s.genre_detail_versions
+                .insert(album.to_string(), std::sync::Arc::new(versions.clone()));
         });
 
-        let doc = genre_select_version(album, 1).expect("second version");
+        let (doc, selected) = genre_version_selection(album, 1).expect("second version");
         assert_eq!(doc.version_index, 1);
         assert_eq!(doc.versions.len(), 2);
         assert_eq!(doc.tracks.len(), 2);
         assert_eq!(
-            state(|s| s.genre_detail_raw[album]
-                .iter()
-                .map(|track| track.id)
-                .collect::<Vec<_>>()),
+            selected.iter().map(|track| track.id).collect::<Vec<_>>(),
             cd.iter().map(|track| track.id).collect::<Vec<_>>()
         );
 
-        let back = genre_select_version(album, 0).expect("first version again");
+        let (back, selected) = genre_version_selection(album, 0).expect("first version again");
         assert_eq!(back.version_index, 0);
         assert_eq!(back.versions.len(), 2);
         assert_eq!(back.tracks.len(), 3);
         assert_eq!(
-            state(|s| s.genre_detail_raw[album]
-                .iter()
-                .map(|track| track.id)
-                .collect::<Vec<_>>()),
+            selected.iter().map(|track| track.id).collect::<Vec<_>>(),
             versions[0]
                 .1
                 .iter()
                 .map(|track| track.id)
                 .collect::<Vec<_>>()
         );
-        assert!(genre_select_version(album, 2).is_none());
+        assert!(genre_version_selection(album, 2).is_none());
 
         state(|s| {
             s.genre_detail_raw.remove(album);

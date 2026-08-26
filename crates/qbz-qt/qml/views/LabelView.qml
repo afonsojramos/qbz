@@ -26,9 +26,8 @@
 // - NO "In library" tab. The Qt library feed carries no label id, so
 //   `libraryCount` is always 0 and the SegmentedTabBar never mounts (see
 //   src/label_qt.rs). A toggle that switches to an empty tab is worse.
-// - Share copies the Qobuz link with no toast: there is no Rust clipboard
-//   bridge and no toast seam (TrackRow.qml:538-558 documents both).
-// - No scroll restore (the port has no NavState.restore-scope counterpart).
+// - Share is live through the Rust clipboard bridge and shared toast host.
+// - Back/forward scroll restore is handled by ScrollMemory below.
 //
 // LOGO FIT — a CONSCIOUS deviation: both .slint label views draw the logo
 // `image-fit: cover` (LabelPageView.slint:116). This port draws it CONTAIN,

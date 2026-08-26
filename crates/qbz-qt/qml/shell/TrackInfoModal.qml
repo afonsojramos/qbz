@@ -24,8 +24,7 @@
 // The shadow is still not added: it is a visual change owing its own parity
 // pass against Slint's blur, not a perf fix.
 //
-// DATA — see the report's GLUE NEEDED; the Qt port has no track-info bridge
-// yet. Contract: QbzAlbum.openTrackInfo(trackId) fetches and publishes
+// DATA: QbzAlbum.openTrackInfo(trackId) fetches and publishes
 // QbzAlbum.trackInfoJson while QbzAlbum.trackInfoLoading is true. Document
 // shape (1:1 with crates/qbz/src/info_modals.rs `TrackInfoData`):
 //   { "error": "", "title": "", "album": "", "artist": "", "artistId": "",
@@ -36,9 +35,7 @@
 // Every read is guarded, so while the glue is missing the modal degrades to
 // its (already 1:1) loading state instead of throwing.
 //
-// Inert, matching the existing port precedent (cards/LabelCard.qml): the label
-// and musician links render and hover exactly like the Slint but have no Qt
-// invokable to call. The artist link IS live (QbzArtist.openArtist).
+// Artist, label and musician links all route through their live Qt bridges.
 //
 // Split (project size rule): the scrolling content is TrackInfoBody.qml and
 // the two cell primitives are InfoMetaCell.qml / InfoCreditCell.qml — the
@@ -96,13 +93,7 @@ Popup {
     function openFor(trackId) {
         if (!trackId || trackId === "")
             return
-        try {
-            QbzAlbum.openTrackInfo(trackId)
-        } catch (e) {
-            // TODO(glue): no openTrackInfo on the Qt bridge yet — the modal
-            // still opens and shows its loading state.
-            console.warn("[qbz-qt] track info: no bridge invokable yet")
-        }
+        QbzAlbum.openTrackInfo(trackId)
         open()
     }
 
@@ -112,9 +103,12 @@ Popup {
         close()
         QbzArtist.openArtist(artistId)
     }
-    // TODO(qt-bridge): no label view in the Qt port (cards/LabelCard.qml has
-    // the same hole) — the link is rendered 1:1 and inert.
-    function openLabel(labelId) {}
+    function openLabel(labelId) {
+        if (!labelId || labelId === "")
+            return
+        close()
+        QbzHome.openLabel(labelId)
+    }
     // Musician click — consumer #5 of six (contract §2.2). This was an empty
     // stub: the name hovered like a link and did nothing.
     //

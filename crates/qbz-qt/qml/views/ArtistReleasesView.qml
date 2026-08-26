@@ -37,16 +37,13 @@
 // have — QbzOfflinePlaceholder over a hidden body — and `artist_releases_qt::
 // open` refuses to navigate here offline in the first place.
 //
-// POC-NOTEs (pre-existing and port-wide, NOT deferrals introduced here):
-//  - no scroll restore. The .slint restores NavState.scroll-restore under the
-//    "artist-releases" scope (:110-119); this port has no counterpart to
-//    NavState.report-scroll / restore-scope on ANY page (DiscoverBrowseView.qml
-//    :20-21 records the same gap). Half a mechanism would be worse than none.
+// Known navigation constraint:
 //  - back/forward re-mounts this view against whatever document is still on
 //    QbzArtist.artistReleasesJson rather than re-fetching, because the port's
 //    nav stack stores no payload (nav_qt.rs:9-23). That is exactly how
 //    `labelreleases` already behaves; the Rust generation guard is what keeps a
 //    late page from painting into the wrong bucket.
+// Scroll position itself is restored by the shared ScrollMemory below.
 
 import QtQuick
 import QtQuick.Window

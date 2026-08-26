@@ -37,40 +37,28 @@
 //! - Playback: Plex rows carry their `rating_key` in `source_item_id_hint`
 //!   and resolve their direct-play part at play time.
 //!
-//! Remaining POC-NOTEs (deliberate cuts, named for the effort report):
-//! - Ephemeral folders, the tag editor, bulk multi-select bars, mixtapes and
-//!   the A-Z alpha strips are out of scope.
-//! - Network-folder exclusion is always `false` here (the Slint keys it on
-//!   live connectivity); the index stays the source of truth.
-//! - Plex playback downloads the whole part instead of Range-streaming it
-//!   (the Slint's own documented fallback — the streaming feeder lives inside
-//!   the Slint binary).
+//! Network-folder visibility follows live connectivity through
+//! `offline_fwd::exclude_network_folders_now`; source playback is delegated to
+//! the shared registry/audible seams.
 
-// The stable facade over the local_* modules: `local_bridge_ops` imports this
-// module as `lib` and reaches everything through it, so the re-exports are
-// load-bearing even where a plain grep for `local_library_qt::` misses them.
-// (An earlier trim based on such a grep broke 47 call sites.)
-#![allow(unused_imports)]
+// The stable facade over the local_* modules. Keep this list equal to the
+// symbols consumed through the `lib::` aliases in the bridge/ops/bulk modules
+// plus the direct playback and diagnostics callers.
 
 // --- rows ------------------------------------------------------------------
-pub use crate::local_rows::{
-    album_key, artist_key, badge_source, folder_key, tier_of, to_json, track_key, AlbumRow,
-    ArtistRow, FolderDetail, LocalCounts, SubfolderRow, TrackRow, TreeNode,
-};
+pub use crate::local_rows::to_json;
 
 // --- state / prefs ---------------------------------------------------------
 pub use crate::local_state::{
-    album_mode, begin_tracks_load, commit_tracks_page, counts, has_library, set_album_mode,
-    set_tracks_filter, set_tracks_group, set_tracks_query, set_tracks_sort, state, tracks_filter,
-    tracks_generation, tracks_group, tracks_has_more, tracks_sort, with_db, TrackSourceOffsets,
-    TracksLoadRequest,
+    album_mode, begin_tracks_load, counts, has_library, set_album_mode, set_tracks_filter,
+    set_tracks_group, set_tracks_query, set_tracks_sort, state, tracks_filter, tracks_generation,
+    tracks_group, tracks_has_more, tracks_sort,
 };
 
 // --- queries ---------------------------------------------------------------
 pub use crate::local_albums::{
-    fetch_album_tracks_blocking, load_album_detail_filtered_blocking,
-    load_albums_blocking, load_artists_blocking, load_counts_blocking, load_folders_blocking,
-    load_tracks_page_blocking,
+    load_album_detail_filtered_blocking, load_albums_blocking, load_artists_blocking,
+    load_counts_blocking, load_folders_blocking, load_tracks_page_blocking,
 };
 
 // --- folder tree -----------------------------------------------------------
@@ -80,18 +68,12 @@ pub use crate::local_tree::{
 };
 
 // --- artwork ---------------------------------------------------------------
-pub use crate::local_artwork::{fetch_plex_misses, resolve_window_blocking, ArtworkWindow};
+pub use crate::local_artwork::{fetch_plex_misses, resolve_window_blocking};
 
 // --- playback --------------------------------------------------------------
 pub use crate::local_playback::{
-    enqueue, enqueue_album_filtered, local_queue_track, play_album, play_album_filtered,
-    play_current_if_local, play_folder, play_folder_track, play_tracks_visible, LocalPlay,
-};
-
-// --- plex ------------------------------------------------------------------
-pub use crate::local_plex::{
-    is_configured as plex_configured, is_enabled as plex_enabled, is_syncing as plex_syncing,
-    sync_now as plex_sync_now,
+    enqueue, enqueue_album_filtered, play_album, play_album_filtered, play_current_if_local,
+    play_folder, play_folder_track, play_tracks_visible,
 };
 
 /// Drop every cached document AND unbind the Plex store (logout / user

@@ -3,16 +3,12 @@
 //! `AudioSettingsStore` (get/set + `Player::reload_settings` /
 //! `Player::reinit_device` apply — the audio backend is PROTECTED: only
 //! these public calls), `PlaybackPreferencesStore`, the shared
-//! `ui_prefs.json` (streaming quality), and the QConnect key/value DB
-//! (rusqlite, same file as the Slint app).
+//! `ui_prefs.json` (streaming quality), and the shared QConnect settings seam.
 //!
 //! Also owns device enumeration (`BackendManager::create_backend(type)
 //! .enumerate_devices()` — public) with the Tauri ALSA section grouping,
 //! and the cross-setting cascades from settings.rs (dac-passthrough,
 //! streaming-only, backend switch).
-//!
-//! Not wired yet:
-//! - The bit-perfect force-100 volume cascade.
 //!
 //! The Detected device limit row (#638 fix 3) IS wired (2026-08-17): the probe
 //! and its cache moved out of the Slint binary crate into
@@ -22,9 +18,9 @@
 //! (The HiFi Wizard, the JACK banner and settings export/import were on this
 //! list and are all shipped now — `qml/settings/DacWizardModal.qml`,
 //! `AudioSettings.qml:70-78` and `settings_qt/devtools.rs`.)
-//! - qconnect startup/device-name persist to the SAME qconnect_settings.db
-//!   (wired) but do NOT drive a live QConnect service (none in the POC) —
-//!   they take effect on the next connection, like upstream.
+//! - QConnect startup/device-name values use the transport module's one DB
+//!   implementation; device-name edits also update the live service cache and
+//!   take effect on the next connection, like upstream.
 
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -2059,7 +2055,9 @@ pub async fn publish_snapshot() {
             .iter()
             .position(|v| *v == audio_settings.quality_fallback_behavior)
             .unwrap_or(0);
-        let qconnect_startup = qconnect_load_startup_mode();
+        let qconnect_startup = crate::qconnect_transport_qt::load_startup_mode()
+            .as_str()
+            .to_string();
         let scrobble_snap = crate::integrations_qt::scrobble_settings();
         let integ_ui = crate::integrations_qt::ui_snapshot();
         let qconnect_startup_index = QCONNECT_STARTUP_VALUES
@@ -2128,8 +2126,10 @@ pub async fn publish_snapshot() {
                 .map(|l| qbz_i18n::t(l))
                 .collect(),
             qconnect_startup_index: qconnect_startup_index as i32,
-            qconnect_device_name: qconnect_load_device_name().unwrap_or_default(),
-            qconnect_device_name_default: qconnect_default_name(),
+            qconnect_device_name: crate::qconnect_transport_qt::load_persisted_device_name()
+                .unwrap_or_default(),
+            qconnect_device_name_default:
+                crate::qconnect_transport_qt::resolve_qconnect_friendly_name(None),
             album_header_gradient: pref_bool("album_header_gradient", true),
             compact_album_header: pref_bool("compact_album_header", false),
             app_background_modes: APP_BACKGROUND_LABELS
@@ -2332,6 +2332,43 @@ fn apply_audio(runtime: &Arc<AppRuntime<LoggingAdapter>>, apply: Apply) {
     // it opened — which is why both bars had grown local shadow state instead.
     // Cheap: one serialize + one Qt hop, and only on an actual audio apply.
     crate::publish_settings();
+}
+
+fn uses_alsa_direct_hw(audio: &qbz_audio::settings::AudioSettings) -> bool {
+    audio.backend_type.unwrap_or_default() == AudioBackendType::Alsa
+        && audio.alsa_plugin.unwrap_or(AlsaPlugin::Hw) == AlsaPlugin::Hw
+}
+
+/// Keep software gain at unity for ALSA-direct `hw` output. The public core
+/// volume seam does not reconfigure the protected device/backend; the DAC owns
+/// level in this mode. A QConnect peer is deliberately exempt because its
+/// remote volume is the active control.
+pub(crate) async fn maybe_force_bitperfect_volume(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+) {
+    let audio = match with_audio(|store| store.get_settings()) {
+        Ok(audio) => audio,
+        Err(error) => {
+            log::error!("[qbz-qt] re-read audio for force-100 failed: {error}");
+            return;
+        }
+    };
+    if !uses_alsa_direct_hw(&audio) {
+        return;
+    }
+    let controlling_peer = match crate::qconnect_qt::service() {
+        Some(service) => service.is_peer_active().await,
+        None => false,
+    };
+    if controlling_peer {
+        return;
+    }
+    if let Err(error) = runtime.core().set_volume(1.0) {
+        log::error!("[qbz-qt] force bit-perfect volume to 100 failed: {error}");
+        return;
+    }
+    log::info!("[qbz-qt] bit-perfect: forced local volume to 100%");
+    crate::now_playing::set_volume(1.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -2746,6 +2783,7 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             // that resolves that default.
             refresh_device_cap(runtime).await;
             apply_audio(runtime, Apply::Reinit);
+            maybe_force_bitperfect_volume(runtime).await;
         }
         "device" => {
             let id = {
@@ -2787,6 +2825,7 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
                 return;
             }
             apply_audio(runtime, Apply::Reinit);
+            maybe_force_bitperfect_volume(runtime).await;
         }
         "retry-behavior" => {
             let Some(behavior) = RETRY_BEHAVIOR_VALUES.get(index) else {
@@ -2802,7 +2841,9 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             let Some(mode) = QCONNECT_STARTUP_VALUES.get(index) else {
                 return;
             };
-            qconnect_persist_startup_mode(mode);
+            if let Some(mode) = qconnect_app::QconnectStartupMode::from_str(mode) {
+                crate::qconnect_transport_qt::save_startup_mode(mode);
+            }
         }
         // --- Appearance (phase 19) ----------------------------------------
         "app-background" => {
@@ -2978,8 +3019,11 @@ pub async fn settings_string(key: &str, value: String) {
     match key {
         "qconnect-device-name" => {
             let trimmed = value.trim().to_string();
-            let stored = (!trimmed.is_empty()).then_some(trimmed.as_str());
-            qconnect_persist_device_name(stored);
+            let stored = (!trimmed.is_empty()).then_some(trimmed);
+            crate::qconnect_transport_qt::persist_device_name(stored.as_deref());
+            if let Some(service) = crate::qconnect_qt::service() {
+                service.set_custom_device_name(stored).await;
+            }
         }
         "myqbz-label" => save_myqbz_label(&value),
         "listenbrainz-token" => {
@@ -3188,93 +3232,6 @@ pub async fn refresh_devices(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     publish_snapshot().await;
 }
 
-// ---------------------------------------------------------------------------
-// QConnect key/value DB (same file as the Slint app)
-// ---------------------------------------------------------------------------
-
-fn qconnect_conn() -> Option<rusqlite::Connection> {
-    let db_path = qbz_app::qconnect_identity::qconnect_settings_db_path()?;
-    let conn = rusqlite::Connection::open(&db_path).ok()?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
-        .ok()?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )",
-    )
-    .ok()?;
-    Some(conn)
-}
-
-fn qconnect_load_startup_mode() -> String {
-    qconnect_conn()
-        .and_then(|conn| {
-            conn.query_row(
-                "SELECT value FROM settings WHERE key = 'startup_mode'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .ok()
-        })
-        .unwrap_or_else(|| "off".to_string())
-}
-
-fn qconnect_persist_startup_mode(mode: &str) {
-    if let Some(conn) = qconnect_conn() {
-        let _ = conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('startup_mode', ?1)",
-            rusqlite::params![mode],
-        );
-    }
-}
-
-fn qconnect_load_device_name() -> Option<String> {
-    qconnect_conn().and_then(|conn| {
-        conn.query_row(
-            "SELECT value FROM settings WHERE key = 'device_name'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .ok()
-        .filter(|v: &String| !v.trim().is_empty())
-    })
-}
-
-fn qconnect_persist_device_name(name: Option<&str>) {
-    if let Some(conn) = qconnect_conn() {
-        match name {
-            Some(n) => {
-                let _ = conn.execute(
-                    "INSERT OR REPLACE INTO settings (key, value) VALUES ('device_name', ?1)",
-                    rusqlite::params![n],
-                );
-            }
-            None => {
-                let _ = conn.execute("DELETE FROM settings WHERE key = 'device_name'", []);
-            }
-        }
-    }
-}
-
-fn qconnect_default_name() -> String {
-    // qconnect_transport::resolve_qconnect_friendly_name(None): env var, else
-    // "Qbz - {hostname}".
-    std::env::var("QBZ_QCONNECT_DEVICE_NAME").unwrap_or_else(|_| {
-        let host = std::env::var("HOSTNAME")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                std::fs::read_to_string("/etc/hostname")
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-            })
-            .unwrap_or_else(|| "device".to_string());
-        format!("Qbz - {host}")
-    })
-}
-
 #[cfg(test)]
 mod local_tab_order_tests {
     use super::*;
@@ -3328,5 +3285,21 @@ mod local_tab_order_tests {
         assert_eq!(large_spectrum_mode_for_tier(4, false), 0);
         assert_eq!(large_spectrum_mode_for_tier(3, true), 3);
         assert_eq!(large_spectrum_mode_for_tier(4, true), 4);
+    }
+
+    #[test]
+    fn only_alsa_hw_requires_unity_software_volume() {
+        let mut audio = qbz_audio::settings::AudioSettings::default();
+        assert!(!uses_alsa_direct_hw(&audio));
+
+        audio.backend_type = Some(AudioBackendType::Alsa);
+        audio.alsa_plugin = Some(AlsaPlugin::Hw);
+        assert!(uses_alsa_direct_hw(&audio));
+
+        audio.alsa_plugin = Some(AlsaPlugin::PlugHw);
+        assert!(!uses_alsa_direct_hw(&audio));
+        audio.backend_type = Some(AudioBackendType::PipeWire);
+        audio.alsa_plugin = Some(AlsaPlugin::Hw);
+        assert!(!uses_alsa_direct_hw(&audio));
     }
 }

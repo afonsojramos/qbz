@@ -1,12 +1,9 @@
 //! Share links + system clipboard — the Qt port of `crates/qbz/src/share.rs`
-//! (lines 1-70: the URL builders and the clipboard). Driven by the artist
-//! header's ⋯ → Share (`qml/views/ArtistView.qml`, the overflow menu) and,
-//! since 2026-08-10, the album page's ⋯ → Share rows.
+//! (lines 1-70: the URL builders and the clipboard). Driven by the artist,
+//! album, label, playlist and track Share actions.
 //!
-//! The Album.link resolver half (`share.rs:72-184`) is ported for the ALBUM
-//! arm only (`albumlink_for_album` + `deezer_lookup` + the Odesli fallback);
-//! `songlink_for_track` still has no Qt call site — port it with the track
-//! menu that needs it.
+//! Both universal-link resolvers are live: album UPC -> Album.link and track
+//! ISRC -> Song.link, with the Odesli URL path as their last-resort fallback.
 //!
 //! **The `open.` vs `play.` split is deliberate, not a typo.** Track and album
 //! moved to `open.qobuz.com` for #514 (`share.rs:4`, `:14-16`, which records
@@ -23,14 +20,11 @@
 //! the whole action is one Rust seam. The four existing QML clipboard sites
 //! keep their idiom — this does not replace them.
 
-// The five builders are ported as a set on purpose: they are the reference's
-// complete URL surface and the album / track / label / playlist Share arms
-// will reuse them verbatim when those menus are wired. Keeping the set intact
+// The five builders stay together on purpose: they are the application's
+// complete URL surface. Keeping the set intact
 // (rather than growing it one host at a time) is what stops a later arm from
 // re-deriving a URL and reintroducing the `open.`/`play.` mix-up that
-// `qml/views/LabelView.qml` already shipped once. Same allowance the toast
-// publisher takes for its unused kinds (`toast_qt.rs:27`).
-#![allow(dead_code)]
+// `qml/views/LabelView.qml` already shipped once.
 
 /// Canonical Qobuz track URL — the `open.qobuz.com` share form (#514).
 /// `share.rs:4-7`.
@@ -140,8 +134,7 @@ pub(crate) fn share_artist(artist_id: String) {
         return;
     }
     copy_to_clipboard(qobuz_artist_url(&artist_id));
-    // "Link copied" is an EXISTING msgid, present in all eight catalogues
-    // (crates/qbz-ui/translations/*/LC_MESSAGES/qbz-ui.po) — no new string.
+    // "Link copied" is an existing msgid in all eight qbz-i18n catalogues.
     crate::toast_qt::success(qbz_i18n::t("Link copied"));
 }
 
@@ -209,6 +202,56 @@ pub(crate) fn share_album_link(album_id: String) {
     });
 }
 
+/// Track context menu -> "Share Qobuz link": copy + success toast.
+pub(crate) fn share_track_qobuz(track_id: String) {
+    if track_id.is_empty() {
+        return;
+    }
+    copy_to_clipboard(qobuz_track_url(&track_id));
+    crate::toast_qt::success(qbz_i18n::t("Link copied"));
+}
+
+/// Track context menu -> "Share Song.link": fetch the ISRC, resolve it
+/// through Deezer, and copy the universal URL.
+pub(crate) fn share_track_link(track_id: String) {
+    if track_id.is_empty() {
+        return;
+    }
+    crate::toast_qt::info(qbz_i18n::t("Fetching Song.link..."));
+    crate::spawn(async move {
+        let isrc = match track_id.parse::<u64>() {
+            Ok(id) => crate::app()
+                .core()
+                .get_track(id)
+                .await
+                .ok()
+                .and_then(|track| track.isrc),
+            Err(_) => None,
+        };
+        match songlink_for_track(&track_id, isrc.as_deref()).await {
+            Some(url) => {
+                copy_to_clipboard(url);
+                crate::toast_qt::success(qbz_i18n::t("Link copied"));
+            }
+            None => {
+                log::warn!("[qbz-qt] Song.link resolution failed for {track_id}");
+                crate::toast_qt::error(qbz_i18n::t("Failed to copy link"));
+            }
+        }
+    });
+}
+
+/// Playlist header Share action. Local playlists have no public Qobuz URL and
+/// hide the action in QML; mixed playlists remain Qobuz playlists and share
+/// their catalog id normally.
+pub(crate) fn share_playlist(playlist_id: String) {
+    if playlist_id.is_empty() || playlist_id.starts_with("local:") {
+        return;
+    }
+    copy_to_clipboard(qobuz_playlist_url(&playlist_id));
+    crate::toast_qt::success(qbz_i18n::t("Link copied"));
+}
+
 /// Shared HTTP client settings for the share resolvers (Tauri parity:
 /// 10 s request / 5 s connect timeouts).
 fn share_http_client() -> reqwest::Client {
@@ -247,6 +290,21 @@ async fn deezer_lookup(path: &str) -> Option<u64> {
         return None;
     }
     body.get("id").and_then(|v| v.as_u64())
+}
+
+/// Song.link page URL for a track — ISRC-first via Deezer. Odesli does not
+/// accept Qobuz URLs as input, so the URL route is only a last resort when the
+/// catalog response has no usable ISRC.
+pub async fn songlink_for_track(track_id: &str, isrc: Option<&str>) -> Option<String> {
+    if let Some(code) = isrc.map(str::trim).filter(|code| !code.is_empty()) {
+        if let Some(deezer_id) = deezer_lookup(&format!("track/isrc:{code}")).await {
+            log::info!("[qbz-qt] song.link via ISRC {code} -> deezer track {deezer_id}");
+            return Some(format!("https://song.link/d/{deezer_id}"));
+        }
+    } else {
+        log::info!("[qbz-qt] track {track_id} has no ISRC; trying Odesli URL fallback");
+    }
+    songlink_url(&qobuz_track_url(track_id)).await
 }
 
 /// Album.link page URL for an album — UPC-first via Deezer (#514). Qobuz

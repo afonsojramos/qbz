@@ -51,6 +51,7 @@ pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
     // server's rows from the grid (the mirror holds them all).
     let remote_path = crate::media_servers_qt::remote_cache_path();
     let remote_words = crate::media_servers_qt::configured_words();
+    let exclude_network = crate::offline_fwd::exclude_network_folders_now();
     let page = with_db(|db| {
         db.get_albums_metadata_page(
             0,
@@ -59,7 +60,7 @@ pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
             "artist",
             "asc",
             /* include_qobuz_downloads */ true,
-            /* exclude_network_folders */ false,
+            exclude_network,
             plex_path.as_deref(),
             remote_path.as_deref(),
             &remote_words,
@@ -471,10 +472,11 @@ fn strip_edition_suffix(value: &str) -> &str {
 /// Folders tab, FLAT mode: the album grid grouped by DIRECTORY. Local-only
 /// by definition — Plex rows have no filesystem folder.
 pub fn load_folders_blocking() -> Result<Vec<AlbumRow>, String> {
+    let exclude_network = crate::offline_fwd::exclude_network_folders_now();
     let albums = with_db(|db| {
         db.get_albums_with_full_filter(
             /* include_hidden */ false, /* include_qobuz_downloads */ true,
-            /* exclude_network_folders */ false,
+            exclude_network,
         )
     })
     .ok_or_else(|| "local library not available".to_string())?;
@@ -515,13 +517,15 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
     let remote_path = crate::media_servers_qt::remote_cache_path();
     let remote_words = crate::media_servers_qt::configured_words();
     let remote_on = !remote_words.is_empty();
+    let exclude_network = crate::offline_fwd::exclude_network_folders_now();
 
     // ONE db open for the three reads the merge needs. The album set is the
     // SAME query the Albums tab runs (Plex-aware union when the toggle is on),
     // so an artist's album count matches the grid the user sees.
     let (artists, albums, custom) = with_db(|db| {
         let artists = db.get_artists_with_filter(
-            /* include_qobuz_downloads */ true, /* exclude_network_folders */ false,
+            /* include_qobuz_downloads */ true,
+            exclude_network,
         )?;
         let albums = if plex_on || remote_on {
             db.get_albums_metadata_page(
@@ -531,7 +535,7 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
                 "artist",
                 "asc",
                 /* include_qobuz_downloads */ true,
-                /* exclude_network_folders */ false,
+                exclude_network,
                 plex_path.as_deref(),
                 remote_path.as_deref(),
                 &remote_words,
@@ -541,7 +545,7 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
         } else {
             db.get_albums_with_full_filter(
                 /* include_hidden */ false, /* include_qobuz_downloads */ true,
-                /* exclude_network_folders */ false,
+                exclude_network,
             )?
         };
         // Custom AND previously-cached (Qobuz-fetched) portraits. A missing
@@ -814,6 +818,7 @@ pub fn load_tracks_page_blocking(
     let candidate_limit = TRACKS_PAGE + 1;
     let effective_sort = effective_tracks_sort(&request.sort, &request.group);
     let query_started = std::time::Instant::now();
+    let exclude_network = crate::offline_fwd::exclude_network_folders_now();
     // No library.db is valid for a remote-only installation.
     let local =
         if request.filter.source_enabled("local") || request.filter.source_enabled("offline") {
@@ -823,7 +828,7 @@ pub fn load_tracks_page_blocking(
                     request.offsets.local,
                     candidate_limit,
                     true,
-                    false,
+                    exclude_network,
                     effective_sort,
                     &request.filter.formats,
                     request.filter.other_formats,

@@ -15,9 +15,8 @@
 //! all and the Origin / Relationships / You-may-also-like sections are simply
 //! absent from the sidebar (never an error, never an empty frame).
 //!
-//! POC-NOTEs:
-//! - Blacklist banner/filter, "In library" PLAYLISTS sub-lists, jump-tab
-//!   scroll-tracking: out of scope.
+//! Known delta: the "In library" tab has album/track content but not the
+//! reference's playlist sub-list.
 //! - `is_following` seeds from `library_qt::is_favorite` — the favourite-id
 //!   cache first (the reference's `fav_cache`, now ported as `fav_cache_qt`),
 //!   the phase-5 library feed second. It used to read the feed ALONE, which is
@@ -25,12 +24,11 @@
 //!   artists the user follows, and the toggle then re-ADDED the follow.
 //! - Discovery runs with EMPTY `dismissed_per_tag` / `known_artists`
 //!   callbacks: the Slint app feeds those from `discovery_dismiss` +
-//!   `play_history` + `reco`, none of which this POC brings up. That is the
+//!   `play_history` + `reco`; this path still uses empty callbacks. That is the
 //!   same default a first-run Slint profile lands on (no exclusion applied),
 //!   not a fabricated one.
-//! - MB Origin location is rendered as plain text: the clickable form opens
-//!   ArtistsByLocationView, which this POC has no port of, so the affordance
-//!   is left out rather than dead.
+//! - The blacklist banner, Artist Scene/location navigation, collection
+//!   builder and jump-scroll tracking are live in `ArtistView.qml`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1800,7 +1798,7 @@ fn format_period(begin: Option<&str>, end: Option<&str>) -> String {
 ///
 /// The `dismissed_per_tag` / `known_artists` callbacks are EMPTY here: the
 /// Slint app feeds them from its `discovery_dismiss`, `play_history` and
-/// `reco` stores, none of which this POC opens. Empty = no exclusion, which
+/// `reco` stores; this path does not consult them yet. Empty = no exclusion, which
 /// is exactly what a first-run Slint profile does.
 async fn load_mb_discovery(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,

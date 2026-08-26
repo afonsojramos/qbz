@@ -42,11 +42,11 @@
 //! sink's badge refresh and the facade's disconnect tail, which the cast
 //! suspend also rides).
 //!
-//! # Not ported (no seam in this shell — see the effort report)
-//! - Immersive / miniplayer lyrics surfaces: neither host exists here.
-//! - The "Lyrics copied" / "translation unavailable" TOASTS: the Qt port has
-//!   no toast host, so both surface as an inline notice line in the panel
-//!   ([`notice`]) instead of silently doing nothing.
+//! # Host surfaces
+//! The desktop panel, Immersive focus/split modes and miniplayer all consume
+//! this same document and sync math. "Lyrics copied" / "translation
+//! unavailable" remain panel-local inline [`notice`] messages rather than
+//! app-wide toasts.
 
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU64, Ordering};
@@ -97,8 +97,8 @@ pub mod qbz_lyrics_bridge {
         #[qproperty(bool, show_translation)]
         // A translation refetch is in flight (the toggle shows a busy tint).
         #[qproperty(bool, translation_busy)]
-        // Inline notice line (this shell has no toast host): translation
-        // failures and the copy confirmation land here. "" = hidden.
+        // Panel-local notice line: translation failures and the copy
+        // confirmation land here. "" = hidden.
         #[qproperty(QString, notice)]
         // --- Display prefs (Slint LyricsState S5 block) -------------------
         // Persisted per user in <data_dir>/qbz/users/<id>/lyrics_prefs.json —
@@ -982,7 +982,7 @@ async fn resolve_target_language(runtime: &Runtime, pref: &str) -> Option<String
 }
 
 /// Toggle ON. Fails SOFT everywhere: any gap leaves the current lyrics view
-/// untouched and reports through the inline notice (this shell has no toast).
+/// untouched and reports through the panel-local inline notice.
 async fn enable_translation(pref: String) {
     let unavailable = || {
         set_translation_session(false, None);

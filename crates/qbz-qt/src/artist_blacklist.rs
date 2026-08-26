@@ -120,7 +120,6 @@ pub fn is_album_blacklisted(album_id: &str) -> bool {
 /// grids that map an `AlbumCard`-like row rather than a typed `Album`.
 // Consumed by the data-layer filter slice (spec 03 §9.2, items F5/F9/F11/F14),
 // which lands separately from the manager.
-#[allow(dead_code)]
 pub fn card_blacklisted(album_id: &str, artist_id: &str) -> bool {
     is_album_blacklisted(album_id) || is_blacklisted_id_str(artist_id)
 }
@@ -148,7 +147,6 @@ pub fn card_blacklisted(album_id: &str, artist_id: &str) -> bool {
 /// mutation, the mutation site re-runs that controller's existing reload path.
 /// There is intentionally no global listener/observer.
 // Consumed by the data-layer filter slice (spec 03 §9.2, items F7/F12/F15-F18).
-#[allow(dead_code)]
 pub fn stamp_row(source: &str, artist_ids: &[&str], album_id: Option<&str>) -> bool {
     // Local / Plex / ephemeral rows are protected — never blacklisted.
     if source != "qobuz" {
@@ -174,7 +172,6 @@ pub fn stamp_row(source: &str, artist_ids: &[&str], album_id: Option<&str>) -> b
 ///   blacklisted drops the track.
 /// - Missing / `None` ids => fail-open (`false`), so id-less tracks always play.
 // Consumed by the data-layer filter slice (spec 03 §9.2, item F18 — playback).
-#[allow(dead_code)]
 pub fn is_track_blacklisted(
     source: &str,
     performer_id: Option<u64>,
@@ -201,7 +198,6 @@ pub fn is_enabled() -> bool {
 /// reflects the persisted rows (ignores the enabled flag — callers gate on
 /// [`is_enabled`] separately).
 // Consumed by the data-layer filter slice (spec 03 §9.2, items F1/F3/F6/F8...).
-#[allow(dead_code)]
 pub fn ids_snapshot() -> HashSet<u64> {
     with_service(HashSet::new(), |s| {
         s.get_all()
@@ -226,7 +222,6 @@ pub fn count() -> usize {
 /// filtering. Empty when no session is bound. Reflects persisted rows (ignores
 /// the enabled flag — callers gate on [`is_enabled`] separately).
 // Consumed by the data-layer filter slice (spec 03 §9.2, items F1/F3/F6/F8...).
-#[allow(dead_code)]
 pub fn album_ids_snapshot() -> HashSet<String> {
     with_service(HashSet::new(), |s| {
         s.get_all_albums()

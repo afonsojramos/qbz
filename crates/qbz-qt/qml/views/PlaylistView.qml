@@ -36,9 +36,8 @@
 // is coming (the Slint mounts a bare LoadingSpinner), plus a per-item cover
 // placeholder that clears when the playlist's own cover lands.
 //
-// POC-NOTEs (playlist_qt.rs has the full list): local playlists,
-// custom-cover set/clear, multi-select + bulk bar, Suggested Songs,
-// offline download, share — not ported.
+// Known remaining parity deltas (playlist_qt.rs has the full list):
+// Suggested Songs and whole-playlist offline download are not ported.
 
 import QtQuick
 import QtQuick.Controls
@@ -370,7 +369,7 @@ Rectangle {
         Item { width: 1; height: 22 }
 
         // Header placeholder — the SHAPE of the header that is coming
-        // (150px cover + eyebrow/title/description/meta bars + the 7 round
+        // (150px cover + eyebrow/title/description/meta bars + the 8 round
         // action buttons), not a spinner. Replaced wholesale by the real
         // header the moment the document lands.
         QbzSkeleton {
@@ -380,7 +379,7 @@ Rectangle {
             height: 150
             coverSize: 150
             coverGap: 24
-            actionCount: 7
+            actionCount: 8
             phase: root.skelPhase
         }
 
@@ -636,6 +635,12 @@ Rectangle {
                         onClicked: QbzBridge.playlistCopy()
                     }
                     QbzCircleAction {
+                        visible: !root.isLocal
+                        name: "link"
+                        anchors.verticalCenter: parent.verticalCenter
+                        onClicked: QbzBridge.playlistShare(String(root.doc.id || ""))
+                    }
+                    QbzCircleAction {
                         visible: root.isOwner
                         name: "pen-line"
                         anchors.verticalCenter: parent.verticalCenter
@@ -662,7 +667,7 @@ Rectangle {
                         onClicked: root.setMultiSelect(!root.multiSelect)
                     }
 
-                    Item { width: parent.width - 40 - 32 * 7 - 8 * 12 - 220 - 140; height: 1 }
+                    Item { width: parent.width - 40 - 32 * 8 - 9 * 12 - 220 - 140; height: 1 }
 
                     // In-playlist search.
                     Rectangle {

@@ -13,6 +13,7 @@
 
 import QtQuick
 import com.blitzfc.qbz
+import "controls"
 import "theme"
 
 Rectangle {
@@ -154,36 +155,13 @@ Rectangle {
 
             // --- Sign in ---------------------------------------------
             // Opens the user's default web browser (no embedded webview).
-            Rectangle {
+            QbzPrimaryButton {
                 id: signInButton
                 width: parent.width
-                height: 48
-                radius: theme.radiusSm
                 property bool canSignIn: root.tosAccepted && QbzSession.loginPhase === 0
-                opacity: canSignIn ? 1.0 : 0.5
-                color: signInArea.containsMouse && canSignIn ? theme.accentHover : theme.accent
-                Behavior on color { ColorAnimation { duration: 150 } }
-
-                Text {
-                    anchors.centerIn: parent
-                    text: QbzSession.tr("Sign in with your browser", QbzSession.trRev)
-                    // On the accent fill (accentHover under the cursor). NOT
-                    // a departure from primitives/QbzPrimaryButton.slint:36
-                    // (`Theme.accent-text`), which is what the twin returns on
-                    // 34 of the 35 palettes — a floor for rose-pine-dawn only
-                    // (accent-text #575279 on accent #d7827e is 2.56:1).
-                    color: theme.accentGlyphColor
-                    font.pixelSize: theme.fontButton
-                    font.weight: theme.weightSemibold
-                }
-                MouseArea {
-                    id: signInArea
-                    anchors.fill: parent
-                    enabled: signInButton.canSignIn
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzSession.signInViaBrowser()
-                }
+                label: QbzSession.tr("Sign in with your browser", QbzSession.trRev)
+                btnEnabled: signInButton.canSignIn
+                onClicked: QbzSession.signInViaBrowser()
             }
 
             Item { width: 1; height: theme.spacingMd }
@@ -398,26 +376,43 @@ Rectangle {
             // opens the GUEST profile (user 0) — Local Library only,
             // adopted by the account on the first real login.
             Item {
+                id: offlineButton
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: offlineText.implicitWidth
                 height: offlineText.implicitHeight + 3
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Button
+                Accessible.name: offlineText.text
+                Accessible.onPressAction: QbzSession.startOffline()
+                Keys.onPressed: function (event) {
+                    if (!event.isAutoRepeat
+                            && (event.key === Qt.Key_Return
+                                || event.key === Qt.Key_Enter
+                                || event.key === Qt.Key_Space)) {
+                        QbzSession.startOffline()
+                        event.accepted = true
+                    }
+                }
                 Text {
                     id: offlineText
                     text: QbzSession.tr("Start offline (no access to Qobuz™ services)", QbzSession.trRev)
-                    color: offlineArea.containsMouse ? theme.accent : theme.textMuted
+                    color: offlineArea.containsMouse || offlineButton.activeFocus
+                           ? theme.accent : theme.textMuted
                     font.pixelSize: theme.fontLink
                 }
                 Rectangle {
                     y: offlineText.implicitHeight + 1
                     width: offlineText.implicitWidth
                     height: 1
-                    color: offlineArea.containsMouse ? theme.accent : theme.textMuted
+                    color: offlineArea.containsMouse || offlineButton.activeFocus
+                           ? theme.accent : theme.textMuted
                 }
                 MouseArea {
                     id: offlineArea
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
+                    onPressed: offlineButton.forceActiveFocus()
                     onClicked: QbzSession.startOffline()
                 }
             }

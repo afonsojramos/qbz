@@ -1808,23 +1808,15 @@ impl qbz_local::QbzLocal {
         crate::spawn(async move {
             let request_id = album_id.clone();
             let selection = tokio::task::spawn_blocking(move || {
-                let index = usize::try_from(index).ok()?;
-                let (versions, filter_json) = crate::local_state::state(|state| {
-                    Some((
-                        state.genre_detail_versions.get(&request_id)?.clone(),
-                        state
-                            .genre_detail_filters
-                            .get(&request_id)
-                            .cloned()
-                            .unwrap_or_default(),
-                    ))
-                })?;
-                let selected = versions.get(index)?.1.clone();
-                let doc = crate::local_album_actions::genre_detail_doc(
-                    &request_id,
-                    versions.as_slice(),
-                    index,
-                );
+                let filter_json = crate::local_state::state(|state| {
+                    state
+                        .genre_detail_filters
+                        .get(&request_id)
+                        .cloned()
+                        .unwrap_or_default()
+                });
+                let (doc, selected) =
+                    crate::local_album_actions::genre_version_selection(&request_id, index)?;
                 Some((
                     request_id,
                     selected,

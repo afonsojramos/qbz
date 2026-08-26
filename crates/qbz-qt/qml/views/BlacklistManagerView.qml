@@ -24,19 +24,17 @@
 //   is the global HeaderBar in this port — the same treatment
 //   settings/SettingsView.qml:24-25 already documents for the identical case.
 //   ADR-004 is satisfied by the HeaderBar.
-// - `UiFocusState.text-input-focused` (:554) is NOT ported: the port has no
-//   equivalent guard anywhere and no global keybinding layer to guard (neither
-//   Main.qml nor AppShell.qml declares a Shortcut). It belongs to the
-//   port-wide hotkey pass; recorded here as its call site.
+// - The old per-view `UiFocusState.text-input-focused` write is unnecessary:
+//   AppShell/KioskShell compute the active TextInput and pass that gate through
+//   the app-wide QbzHotkeys dispatcher before any binding is considered.
 // - The list is a recycling ListView, not a Flickable over every row
 //   (TRACK-RULES §6 — a list that can be large is born windowed), so the
 //   Slint's `list-hover-rows` scrollbar reveal-on-row-hover is dropped:
 //   QbzScrollBar reveals on scroll + gutter hover/press instead, and a
 //   per-row hover counter across a recycling delegate is cost for a cosmetic
 //   cue.
-// - No toast host exists in this port, so the reference's failure toasts have
-//   nowhere to land. Failures log Rust-side and the settled `blacklistChanged`
-//   republish corrects any optimistic glyph.
+// - Mutation feedback uses the app-wide QbzToast host through `toast_qt`;
+//   the settled `blacklistChanged` republish also corrects optimistic glyphs.
 //
 // Nav re-entry: nav_qt::back()/forward() republish `currentView` and run NO
 // per-view load, so this view calls QbzBlacklist.reload() in

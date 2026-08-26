@@ -25,10 +25,8 @@
 //! NOT a shared module: the Slint crate keeps its own copy too, and extracting
 //! commonalities into a shared crate is out of scope (backend untouchable).
 //!
-//! Wired by the QConnect facade (block B3) + event sink (block B4); until
-//! those land the constructor is unused, so the module keeps the reference's
-//! `#![allow(dead_code)]` (same convention as `toast_qt.rs`).
-#![allow(dead_code)]
+//! Wired by the QConnect facade and event sink. The module intentionally has
+//! no blanket dead-code suppression: an orphaned renderer seam must warn.
 
 use std::sync::Arc;
 use std::time::Duration;

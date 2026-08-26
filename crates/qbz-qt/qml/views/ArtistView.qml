@@ -18,9 +18,9 @@
 // MusicBrainz is off in Settings or the artist has no confident MB match, is
 // simply ABSENT — never an error frame, and nothing is requested.
 //
-// POC-NOTEs: blacklist banner, artist Scene, Create Collection, radio
-// engines (dropdown inert), multi-select, the sticky behavior of the JUMP TO
-// bar (it scrolls with the page).
+// Blacklist banner, Artist Scene, Create Collection, both radio engines,
+// multi-select and the sticky JUMP TO bar are live. The remaining artist-page
+// deltas are documented beside their data producers in artist_qt.rs.
 //
 // "Share" left this list when the seam landed: the ⋯ entry now calls
 // QbzArtist.share (artist_bridge.rs -> src/share_qt.rs), which copies
@@ -625,12 +625,8 @@ Rectangle {
     // ONE source for the two surfaces the .slint drives off the same
     // ArtistState.is-blacklisted: the overflow-menu row label
     // (ArtistPageView.slint:565-567) and the hidden-artist banner (:595, :600).
-    // artist_qt.rs does not seed the field yet (spec 03 C5 — main.rs:2653-2659
-    // does it in the reference), so `artist.isBlacklisted` reads `undefined`
-    // today and toggleState's `fallback === true` folds that to false; the
-    // optimistic flip + the `blacklistChanged` settle below make the page
-    // correct within a visit, and it becomes correct on ENTRY the moment the
-    // seed lands, with no QML change.
+    // `artist_qt` seeds the field on entry; the local toggle map provides the
+    // optimistic edge while `blacklistChanged` settles or rolls it back.
     readonly property bool artistBlacklisted: toggleState("artistBlacklist", artist.isBlacklisted)
     function toggleBlacklist() {
         var aid = artist.id || ""
@@ -2442,7 +2438,6 @@ Rectangle {
             // wrong three tab colours. padH 0 because this Column already
             // pads 32 — the .slint's own 32px padding lands the strip in the
             // same place.
-            // POC-NOTE (unchanged): the bar scrolls with the page; the
             // The bar itself is an OVERLAY outside this Flickable (see
             // `jumpBar` after it) so it can pin to the top on scroll. What
             // stays in the flow is this slot, which reserves exactly its
@@ -3142,7 +3137,7 @@ Rectangle {
                                 label: modelData.name
                                 tooltip: modelData.name
                                 iconName: "disc"
-                                // POC-NOTE: no label view yet.
+                                onClicked: QbzHome.openLabel(modelData.id)
                             }
                         }
                     }

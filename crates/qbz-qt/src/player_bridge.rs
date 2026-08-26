@@ -27,9 +27,8 @@ pub mod qbz_player {
         #[qml_element]
         #[qml_singleton]
         // --- Now playing (Slint NowPlayingState; np_ prefix) ------------
-        // POC: fed by a static NowPlayingModel (src/now_playing.rs) with
-        // empty-state defaults; phase 4 swaps the data source for the real
-        // player poll.
+        // Fed by the live NowPlayingModel (`now_playing.rs`), which the player
+        // poll updates and which supplies empty-state defaults before a track.
         #[qproperty(bool, np_has_track)]
         #[qproperty(QString, np_title)]
         #[qproperty(QString, np_artist)]
@@ -163,8 +162,7 @@ pub mod qbz_player {
         #[qinvokable]
         fn request_np_artwork_size(self: Pin<&mut QbzPlayer>, px: i32);
 
-        // --- Transport (phase 4 wires the player; POC log-and-noop, except
-        // the pure-UI toggles which mutate the NowPlayingModel) -----------
+        // --- Live transport ----------------------------------------------
         #[qinvokable]
         fn toggle_play(self: Pin<&mut QbzPlayer>);
         #[qinvokable]

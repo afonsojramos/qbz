@@ -23,6 +23,7 @@
 import QtQuick
 import com.blitzfc.qbz
 import "../controls"
+import "../immersive"
 import "../kiosk"
 import "../theme"
 
@@ -497,18 +498,9 @@ Rectangle {
             // main.rs:1682); the extra history entry is the accepted
             // divergence rather than a second Rust entry point.
             onPlaying: QbzShell.navigateTo("nowplaying")
-            // R2 (contract §0): the tile's only action in the reference is
-            // opening the Immersive overlay (:652-654), and the kiosk's
-            // Immersive mount is the Immersive task's deliverable (the Loader
-            // at the bottom of this file). Until that task lands the ACTION is
-            // a sanctioned no-op — the tile's pixels and its focus ring are
-            // NOT deferred. Wiring QbzImmersive here instead would be worse
-            // than nothing: `open` would go true over an empty mount and the
-            // key guard below would then reject every key against a surface
-            // that renders nothing.
-            onVisualizer: {
-                // Intentionally empty — see the note above.
-            }
+            // The kiosk owns its Immersive mount below, so the visualizer tile
+            // follows the same open funnel as the desktop view-mode row.
+            onVisualizer: QbzImmersive.openFromMenu()
             onMenu: QbzShell.navigateTo("settings")
         }
     }
@@ -627,14 +619,12 @@ Rectangle {
     // The desktop hangs its copy inside AppShell, so the kiosk shell must
     // mount its own; declared LAST = on top of everything.
     //
-    // SANCTIONED EMPTY MOUNT (contract §4.6 / R2): the kiosk Immersive
-    // surface is the Immersive task's deliverable and this Loader is the seam
-    // it lands in. The key-rejection arm above (QbzImmersive.open) ships NOW
-    // so the two compose the moment this gets a sourceComponent.
-    Loader {
-        id: immersiveMount
+    // The same surface as desktop, hosted locally because AppShell and
+    // KioskShell are sibling roots. `preKiosk` prevents an Immersive close
+    // from changing a fullscreen appliance window back to Windowed.
+    ImmersiveView {
         anchors.fill: root
-        active: QbzImmersive.open
+        preKiosk: true
     }
 
     // The two conditionally-mounted children, hoisted out of the column so

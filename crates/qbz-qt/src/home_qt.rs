@@ -6,18 +6,15 @@
 //! JSON document (`homeSectionsJson`) — see the POC-NOTE in
 //! `publish_sections` for why not QVariantList-of-QVariantMap.
 //!
-//! POC-NOTEs (skipped vs the Slint controller):
-//! - Artist/album blacklist filtering (T8): the blacklist store is not
-//!   opened in this POC (phase-1 skip), so no rows are dropped.
+//! Known parity deltas:
+//! - Artist/album blacklist filtering: the shared store is live, but Home's
+//!   section assembly does not yet consult it, so no rows are dropped here.
 //! - Reco-scored taste ordering of favorite albums (reco store skipped):
 //!   favorites render in plain favorite order, and Rediscover falls back to
 //!   the local "not in the recently-played window" heuristic (the same
 //!   fallback the Slint build uses while its reco store is cold).
-//! - Radio Stations (For You): the port has no album-radio invokable, so the
-//!   rail is NOT built — a tile that starts nothing is worse than an absent
-//!   rail. Artist Spotlight likewise has no ported panel.
-//! - Qobuz Mixes renders as the four static navigation tiles (the mix DETAIL
-//!   views are out of scope — tiles inert).
+//! - Radio Stations, Artist Spotlight and the four Qobuz Mix detail views are
+//!   live in `foryou_qt`; this module only provides their ordering slots.
 //! - The "View all" full-list pages are LIVE (see `browse_qt`): the generic
 //!   album carousels open DiscoverBrowse for their endpoint, and the three
 //!   local rails (Qobuz Playlists / Recently Played Albums / Most Played
@@ -1684,8 +1681,8 @@ pub(crate) fn quality_detail_from_parts(
 }
 
 // ---------------------------------------------------------------------------
-// Personalized rails — ported from foryou.rs (live-session only; the reco /
-// blacklist stores are skipped, see module docs).
+// Personalized rails — live-session data; reco taste ordering and Home-level
+// blacklist filtering remain the two documented deltas above.
 // ---------------------------------------------------------------------------
 
 /// Flat-Album card mapping (foryou.rs `map_album`).
@@ -1917,8 +1914,8 @@ where
     }
 }
 
-/// "Release Watch" — `/release/watch` artists, capped 18 (blacklist filter
-/// skipped — the store is not open in this POC).
+/// "Release Watch" — `/release/watch` artists, capped 18. Home-level blacklist
+/// filtering is a known parity delta.
 async fn fetch_release_watch<A>(runtime: &Arc<AppRuntime<A>>) -> Vec<HomeCard>
 where
     A: FrontendAdapter + Send + Sync + 'static,

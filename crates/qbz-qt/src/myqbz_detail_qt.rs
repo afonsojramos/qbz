@@ -26,9 +26,8 @@
 //!   returns the marked English literal and the reference never wraps it in
 //!   `t()`), while an unresolved one reads the translated `t("ALBUM")`.
 //!
-//! Out of scope, 1:1 with the port's own dependencies (spec 02 §1.1): the
-//! offline availability filter and the offline-index badge resolution — this
-//! port opens no offline-cache index.
+//! Offline loads use the active cache index both to hide unavailable entries
+//! and to hydrate cached Qobuz quality/type badges without calling the API.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1489,6 +1488,74 @@ fn resolve_from_tracks(item: &MixtapeCollectionItem, tracks: &[QueueTrack]) -> R
     }
 }
 
+/// Resolve a cached Qobuz item's badge from the local offline index. This is
+/// the offline equivalent of `resolve_from_tracks`; Qobuz playlist membership
+/// cannot be derived locally and deliberately returns `None`.
+async fn resolve_offline_cached(item: &MixtapeCollectionItem) -> Option<ResolvedItem> {
+    use qbz_offline_cache::OfflineCacheStatus;
+
+    if item.source != AlbumSource::Qobuz {
+        return None;
+    }
+    let offline = crate::offline_qt::get().await?;
+    let guard = offline.db.lock().await;
+    let db = guard.as_ref()?;
+
+    let (info, ready_count) = match item.item_type {
+        ItemType::Album => {
+            let ready: Vec<qbz_offline_cache::CachedTrackInfo> = db
+                .get_album_tracks(&item.source_item_id)
+                .ok()?
+                .into_iter()
+                .filter(|track| matches!(track.status, OfflineCacheStatus::Ready))
+                .collect();
+            let count = ready.len();
+            (ready.into_iter().next()?, count)
+        }
+        ItemType::Track => {
+            let id = item.source_item_id.parse::<u64>().ok()?;
+            let info = db.get_track(id).ok().flatten()?;
+            if !matches!(info.status, OfflineCacheStatus::Ready) {
+                return None;
+            }
+            (info, 1)
+        }
+        ItemType::Playlist => return None,
+    };
+
+    let quality_tier = match info.bit_depth {
+        Some(depth) if depth >= 24 => "hires",
+        Some(_) => "cd",
+        None if info.quality.to_ascii_lowercase().contains("hires") => "hires",
+        None => "",
+    };
+    let quality_detail = if quality_tier.is_empty() {
+        String::new()
+    } else {
+        crate::home_qt::quality_detail_from_parts(info.bit_depth, info.sample_rate)
+    };
+    let type_label_text = match item.item_type {
+        ItemType::Album => {
+            let count = item
+                .track_count
+                .filter(|count| *count > 0)
+                .map(|count| count as u32)
+                .unwrap_or(ready_count as u32);
+            classify_release_type(Some(count)).to_uppercase()
+        }
+        other => type_label(other),
+    };
+
+    Some(ResolvedItem {
+        source_kind: "qobuz".to_string(),
+        quality_tier: quality_tier.to_string(),
+        quality_detail,
+        type_label: type_label_text,
+        artwork_url: String::new(),
+        artist_id: String::new(),
+    })
+}
+
 /// Insert into `RESOLVE_CACHE` and patch the RENDERED row IN PLACE. A full
 /// array replacement would reset `ListView.contentY` and throw the user to the
 /// top (spec 02 §9.1) — and this is not a re-derive, so it must not clear the
@@ -1605,6 +1672,7 @@ fn resolve_items(runtime: Arc<AppRuntime<LoggingAdapter>>) {
     }
     crate::spawn(async move {
         let semaphore = Arc::new(Semaphore::new(MAX_RESOLVE_CONCURRENCY));
+        let offline = crate::offline_fwd::engine().status().is_offline();
         let mut handles = Vec::with_capacity(pending.len());
         for item in pending {
             let sem = Arc::clone(&semaphore);
@@ -1617,8 +1685,19 @@ fn resolve_items(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 if current_id() != collection_id {
                     return None;
                 }
-                let tracks = crate::myqbz_play_qt::fetch_item_tracks(&runtime, &item).await;
-                let resolved = resolve_from_tracks(&item, &tracks);
+                let resolved = if offline {
+                    resolve_offline_cached(&item).await
+                } else {
+                    None
+                };
+                let resolved = match resolved {
+                    Some(resolved) => resolved,
+                    None => {
+                        let tracks =
+                            crate::myqbz_play_qt::fetch_item_tracks(&runtime, &item).await;
+                        resolve_from_tracks(&item, &tracks)
+                    }
+                };
                 let repair = item
                     .artwork_url
                     .as_deref()
@@ -2070,9 +2149,6 @@ pub(crate) fn row_item_type(source_item_id: &str) -> String {
 pub(crate) async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, id: String) {
     reset();
 
-    // D11.c GAP: the reference drops items failing the offline availability
-    // rule here (`myqbz.rs:231 retain_available_offline`). This port opens no
-    // offline-cache index, so no item is hidden (spec 02 §1.1).
     // ONE blocking hop for both reads: the collection (DB) and this
     // collection's persisted accordion set (a small per-user JSON). Neither may
     // run on the GUI thread, and pairing them keeps the load at one hop.
@@ -2087,11 +2163,25 @@ pub(crate) async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, id: String) 
     .ok()
     .flatten();
 
-    let Some((collection, stored_open)) = loaded else {
+    let Some((mut collection, stored_open)) = loaded else {
         log::warn!("[qbz-qt] myqbz_detail load({id}): collection not found");
         apply_not_found();
         return;
     };
+
+    if crate::offline_fwd::engine().status().is_offline() {
+        let before = collection.items.len();
+        let items: Vec<&MixtapeCollectionItem> = collection.items.iter().collect();
+        let availability = crate::myqbz_qt::offline_availability(&items).await;
+        drop(items);
+        collection
+            .items
+            .retain(|item| availability.item_available(item));
+        let hidden = before.saturating_sub(collection.items.len());
+        if hidden > 0 {
+            log::info!("[qbz-qt] myqbz_detail offline filter hid {hidden} unavailable item(s)");
+        }
+    }
 
     apply(collection, stored_open);
     let missing = attach_artwork();
@@ -2245,35 +2335,23 @@ pub(crate) fn bulk_action(id: String) {
         }
         "remove-selected" => crate::myqbz_edit_qt::remove_selected(),
         "clear" => clear_selection(),
-        // The Slint's seventh action resolves the selection to Qobuz track ids
-        // and opens the global playlist picker (LIVE here since
-        // QbzPlaylistPicker landed).
-        //
-        // Only QOBUZ TRACK items resolve to a catalog id. An album or playlist
-        // item is a container whose members this bar never fetched, and a
-        // local / Plex item's `source_item_id` is a library path or a rating
-        // key — the picker's Qobuz arm would read either as a catalog id and
-        // add an unrelated track (the id-confusion class
-        // `playlist_picker_qt.rs`'s header exists to make unrepresentable).
-        // Those rows are SKIPPED and counted in the log rather than guessed at.
+        // Resolve every selected container through qbz-source, then pass only
+        // the resulting Qobuz catalog tracks to the Qobuz playlist picker.
+        // Local/Plex tracks are skipped by the shared source registry.
         "add-to-playlist" => {
             let items = selected_full_items();
-            let ids: Vec<String> = items
-                .iter()
-                .filter(|it| it.item_type == ItemType::Track && it.source == AlbumSource::Qobuz)
-                .map(|it| it.source_item_id.clone())
-                .collect();
-            let skipped = items.len() - ids.len();
-            if skipped > 0 {
-                log::info!(
-                    "[qbz-qt] myqbz_detail add-to-playlist: skipped {skipped} non-Qobuz-track \
-                     item(s) (album / playlist containers and local / Plex refs have no catalog id)"
-                );
-            }
-            if ids.is_empty() {
+            if items.is_empty() {
                 return;
             }
-            crate::playlist_picker_qt::open_for_ids(&crate::app(), ids);
+            crate::spawn(async move {
+                let runtime = crate::app();
+                let ids = crate::myqbz_play_qt::resolve_bulk_qobuz_track_ids(&runtime, &items).await;
+                if ids.is_empty() {
+                    crate::toast_qt::error(qbz_i18n::t("No tracks to add"));
+                    return;
+                }
+                crate::playlist_picker_qt::open_for_ids(&runtime, ids);
+            });
         }
         other => {
             log::warn!("[qbz-qt] myqbz_detail bulk_action: unknown id {other}");

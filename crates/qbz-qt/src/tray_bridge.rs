@@ -180,6 +180,8 @@ impl qbz_tray::QbzTray {
         if QT_THREAD.set(self.qt_thread()).is_err() {
             log::warn!("[qbz-qt] tray Qt thread already registered");
         }
+        #[cfg(target_os = "linux")]
+        crate::single_instance_qt::bind_ui();
     }
 
     /// D18's report-back. Flag only — it never touches a window.

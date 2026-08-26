@@ -19,8 +19,8 @@
 //!
 //! NOT ported forward, replicating the reference's own absences (§9 D5/D6):
 //! controller-mode auto-skip on PlaybackError (the reference TODO) and the
-//! lifecycle badge wiring.
-#![allow(dead_code)]
+//! lifecycle badge wiring. The module intentionally has no blanket dead-code
+//! suppression: an orphaned event arm must warn.
 
 use std::sync::{Arc, OnceLock, Weak};
 

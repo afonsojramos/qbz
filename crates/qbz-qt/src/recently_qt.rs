@@ -235,14 +235,6 @@ pub(crate) fn prune_albums(album_ids: &[String]) -> usize {
 /// id, capped at [`MAX_RECENT`]) and its album at the front of the album
 /// history (dedup by album id, capped at [`MAX_RECENT_ALBUMS`]).
 ///
-/// WIRED: the only caller is [`record_queue_track`], from the de-duped
-/// playback track-start edge in `playback_qt.rs`. Ephemeral ids are rejected
-/// here as well as there — see [`is_ephemeral_track_id`].
-#[allow(dead_code)]
-pub(crate) fn record(track: RecentTrack) {
-    record_in_context(track, "")
-}
-
 /// The same write, told what the user was PLAYING FROM.
 ///
 /// The context cannot ride on `RecentTrack` itself, and this is the constraint

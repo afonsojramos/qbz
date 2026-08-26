@@ -7,10 +7,9 @@
 //!   Here that falls out of the model: there is a single document and a single
 //!   monotonic `seq`, so a publish overwrites whatever was showing and the QML
 //!   host restarts its auto-hide timer off the `seq` change.
-//! * Auto-hide by kind — success 3000 · info 3000 · warning 4000 · error 5000 ·
-//!   buffering PERSISTENT (`toast.rs:31-40`). The delay itself lives in QML
-//!   (`controls/QbzToast.qml`), keyed off `seq`, so Rust never owns a timer and
-//!   never needs a hide round-trip. All this side publishes is `persistent`.
+//! * Auto-hide by kind — success 3000 · info 3000 · warning 4000 · error 5000.
+//!   The delay itself lives in QML (`controls/QbzToast.qml`), keyed off `seq`,
+//!   so Rust never owns a timer and never needs a hide round-trip.
 //! * The global toggle is applied HERE, in Rust: non-error toasts honour
 //!   `in_app_toasts`, errors ALWAYS show (`toast.rs:47-50`). The QML host does
 //!   not read `QbzBridge.settingsJson` at all.
@@ -20,12 +19,6 @@
 //! a `crate::spawn` task and from inside `spawn_blocking` alike. Before
 //! `QbzShell.boot()` the hop is a silent no-op, same as every other bridge.
 //!
-//! This is an API surface, not a call-site list: `warning` / `buffering` have no
-//! MyQBZ producer yet (acceptance item 8 drives them from a temporary call), so
-//! the unused helpers are allowed rather than removed — exactly as the reference
-//! does at `toast.rs:13`.
-#![allow(dead_code)]
-
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use cxx_qt_lib::QString;
@@ -35,14 +28,13 @@ use serde::Serialize;
 /// which is also what makes a repeat of the SAME message re-show.
 static SEQ: AtomicI32 = AtomicI32::new(0);
 
-/// The five kinds `primitives/Toast.slint:20-38` renders (icon + tint per kind).
+/// The four kinds with live producers (icon + tint per kind).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ToastKind {
     Success,
     Info,
     Warning,
     Error,
-    Buffering,
 }
 
 impl ToastKind {
@@ -53,7 +45,6 @@ impl ToastKind {
             ToastKind::Info => "info",
             ToastKind::Warning => "warning",
             ToastKind::Error => "error",
-            ToastKind::Buffering => "buffering",
         }
     }
 }
@@ -65,7 +56,6 @@ struct ToastDoc {
     seq: i32,
     kind: &'static str,
     message: String,
-    persistent: bool,
 }
 
 /// Publish a toast. Applies the `in_app_toasts` gate, then one `ui()` hop.
@@ -83,7 +73,6 @@ pub(crate) fn show(message: impl Into<String>, kind: ToastKind) {
         seq: SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1),
         kind: kind.as_str(),
         message: message.into(),
-        persistent: kind == ToastKind::Buffering,
     };
     let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".into());
     crate::shell_bridge::ui(move |mut b| {
@@ -107,9 +96,4 @@ pub(crate) fn warning(message: impl Into<String>) {
 
 pub(crate) fn error(message: impl Into<String>) {
     show(message, ToastKind::Error);
-}
-
-/// Persistent toast (no auto-hide) — dismissed by the QML close button only.
-pub(crate) fn buffering(message: impl Into<String>) {
-    show(message, ToastKind::Buffering);
 }

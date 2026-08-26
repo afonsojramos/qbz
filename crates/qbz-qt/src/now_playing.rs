@@ -397,7 +397,6 @@ pub fn set_track(meta: TrackMeta) {
 /// (Qobuz-sourced, not local/Plex); ungoverned tracks keep the cause line off.
 /// Publishes nothing on its own: the seed only changes what the NEXT
 /// `set_effective_stream` computes.
-#[allow(dead_code)] // wired by the poll pump / a cast service (see GLUE)
 pub fn set_catalog_quality(bit_depth: Option<u32>, sample_rate: Option<f64>, governed: bool) {
     crate::quality_state::seed_track(bit_depth, sample_rate, governed);
 }
@@ -406,7 +405,6 @@ pub fn set_catalog_quality(bit_depth: Option<u32>, sample_rate: Option<f64>, gov
 /// (`sample_rate` / `bit_depth`; 0 = not reported yet). Re-evaluates the
 /// downgrade block and republishes ONLY when the params actually moved, so a
 /// steady stream costs one atomic compare per tick and no Qt hop.
-#[allow(dead_code)] // wired by the poll pump / a cast service (see GLUE)
 pub fn set_effective_stream(eff_rate_hz: u32, eff_bits: u32) {
     let (changed, snapshot) = with_model(|m| {
         if m.eff_rate_hz == eff_rate_hz && m.eff_bits == eff_bits {
@@ -459,7 +457,6 @@ pub fn clear_track() {
 
 /// A Chromecast/DLNA session connected or dropped (`cast_service.rs`
 /// `push_connection_state`). `protocol` is "cast" | "dlna".
-#[allow(dead_code)] // wired by the poll pump / a cast service (see GLUE)
 pub fn set_cast_session(active: bool, protocol: &str, target: &str) {
     mutate(|m| {
         m.cast_active = active;
@@ -523,7 +520,6 @@ pub fn set_remote_volume_locked(locked: bool) {
 /// cannot see (the local player is stopped while casting —
 /// `cast_service.rs` `publish_delivered_quality`). `limit_cause` is a
 /// `qbz_models::QualityLimit` discriminant already classified by the caller.
-#[allow(dead_code)] // wired by the poll pump / a cast service (see GLUE)
 pub fn set_cast_delivered(delivered: Delivered) {
     mutate(|m| m.delivered = delivered);
 }

@@ -16,11 +16,9 @@
 //!   library feed carries no label id). `libraryCount` is therefore always
 //!   0, the catalog/library `SegmentedTabBar` never mounts, and the library
 //!   branch is absent — rather than a toggle that switches to an empty tab.
-//! - **Popular Tracks multi-select**: `qml/rows/TrackRow.qml` has no
-//!   multi-select arm, and two of the Slint bar's seven actions
-//!   (`add-to-playlist`, `add-to-mixtape`) have no bridge seam at all. The
-//!   select disc renders DIMMED and inert; the `MultiSelectBar` is not
-//!   ported. See the view's header note.
+//! - **Popular Tracks multi-select**: the shared row and destination bridges
+//!   are live, but this page does not yet own a selection model or mount the
+//!   bulk bar. See the view's header note.
 //! - **Blacklist**: the premise of this note ("`crate::artist_blacklist` does
 //!   not exist in this port") is DEAD — the module is bound at `auth_qt.rs`
 //!   and the QUEUE is filtered since PARITY-DEBT #1. What is still missing is
@@ -36,8 +34,7 @@
 //!   copied link was dead on arrival (owner-reported 2026-08-02). The host is
 //!   per-entity, not per-app: track/album on `open.`, artist/playlist/label on
 //!   `play.` — which is exactly why the URL builders live in one place now.
-//! - **Scroll restore**: no Qt counterpart exists (`nav_qt` stores view ids
-//!   only), so `report-scroll` / `sr-restore` are not ported.
+//! - **Scroll restore** is live through the shared `ScrollMemory.qml` seam.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -952,9 +949,8 @@ fn sort_cards(items: &mut [HomeCard], sort: &str) {
 /// Re-derive the Rust-built strings on both label documents after a language
 /// change: the JUMP TO tab labels and the "Unknown" group bucket.
 ///
-/// GLUE NEEDED: nothing calls this yet — `main.rs::apply_language` only
-/// republishes "album" / "artist" off `LAST_DETAIL`. See the report.
-#[allow(dead_code)]
+/// Called by `main.rs::apply_language`; `trRev` cannot retranslate strings
+/// that already arrived inside a JSON document.
 pub fn republish_for_language() {
     {
         if let Ok(mut s) = LABEL.lock() {

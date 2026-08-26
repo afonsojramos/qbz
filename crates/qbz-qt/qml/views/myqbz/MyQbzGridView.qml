@@ -47,9 +47,8 @@
 //    scrolls, because the body must be a windowed GridView/ListView and
 //    nesting one inside a page Flickable is not an option. Same shape as
 //    views/LibraryView.qml and views/LocalLibraryView.qml.
-// 4. Slint's scroll-position restore (NavState.restore-scope / scroll-restore
-//    / report-scroll, :38-50) has NO counterpart anywhere in this port. Omitted
-//    rather than reinvented as a MyQBZ-only mechanism.
+// 4. Scroll-position restore uses the shared ScrollMemory instances below,
+//    separately for the grid and list bodies.
 // 5. Slint reads `MyQbzState.loading` in neither grid; the cardGrid skeleton
 //    below is the same deliberate improvement LibraryView.qml:1163-1225
 //    documents. The empty state stays gated on `!loading`, and the skeleton is

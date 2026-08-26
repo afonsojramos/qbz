@@ -53,8 +53,8 @@
 // Connect is LIVE: the golden ConnectButton opens shell/QconnectFlyout.qml
 // (QbzQConnect — device list, set-active, connect/disconnect) and carries
 // the "Qobuz Connect: On/Off" hover bubble via the shell's tooltip overlay.
-// Inert (TODO comments at the call sites): add-to-playlist. add-to-mixtape
-// is LIVE since the MyQBZ domain landed (QbzMyQbzAdd.open).
+// Add-to-playlist and add-to-mixtape are live through the two app-wide
+// pickers (QbzPlaylistPicker / QbzMyQbzAdd).
 //
 // SIZE (project rule): the inline SongCard / TransportControls / FavToggle
 // components moved out to shell/SongCard.qml, shell/TransportControls.qml and

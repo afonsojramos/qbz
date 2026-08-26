@@ -7,6 +7,9 @@
 //! async work; results hop back to Qt through the bridge's `CxxQtThread`.
 
 mod auth_qt;
+mod deep_link_qt;
+#[cfg(target_os = "linux")]
+mod single_instance_qt;
 // Per-domain QML bridge singletons (phase 23 — the QbzBridge God-object
 // split). THE PATTERN (phase-1, replicated per domain file):
 //   1. one #[cxx_qt::bridge] mod per file (crate root — cxx-qt-build
@@ -40,6 +43,11 @@ mod suggestions_bridge;
 // Hotkeys layer (2026-08-03 hotkeys-port contract, block B1): the
 // QbzHotkeys singleton — the QML dispatcher's Rust brain (§1.1 pipeline).
 mod hotkeys_bridge;
+// App-wide "Open Music Link" modal and its frontend-neutral resolver adapter.
+// The bridge is a singleton because the header, hotkey and launcher/deep-link
+// paths all outlive the surface that triggered them.
+mod link_resolver_bridge;
+mod link_resolver_qt;
 // Search domain (2026-08-03 cortinilla-parity contract, commit C0): the
 // QbzSearch singleton, extracted from the QbzBridge god-object.
 mod search_bridge;
@@ -748,8 +756,6 @@ fn on_session_entered() {
     let restored = crate::settings_qt::read_pref_f32("volume")
         .unwrap_or(1.0)
         .clamp(0.0, 1.0);
-    let rt = app();
-    spawn(async move { playback_qt::set_volume(&rt, restored).await });
     // ...and seed the UI model with the SAME value, or the engine and the
     // slider disagree from the first frame.
     //
@@ -793,6 +799,14 @@ fn on_session_entered() {
             qconnect_service.spawn_offline_force_disconnect(&tokio_handle);
         }
     }
+    // Seed the saved level, then enforce unity gain for ALSA-direct `hw`.
+    // Sequencing both writes in one task prevents the asynchronous restore
+    // from landing after the bit-perfect correction.
+    let rt = app();
+    spawn(async move {
+        playback_qt::set_volume(&rt, restored).await;
+        settings_qt::maybe_force_bitperfect_volume(&rt).await;
+    });
     // 3. Startup auto-connect — gated on NOT offline: the offline shell entry
     //    never auto-connects, and calling the spawn there would burn its
     //    internal once-per-process FIRED latch before a real online entry
@@ -823,6 +837,9 @@ fn enter_shell(session: auth_qt::SessionInfo) {
         b.as_mut()
             .set_screen(QString::from(kiosk_profile_qt::shell_screen()));
     });
+    // Drain a cold-start launcher URL only after authenticated session entry;
+    // the resolver's navigation requires the Qobuz API.
+    deep_link_qt::set_online_session(true);
 }
 
 /// Login screen primary button / recovery banner: the system-browser OAuth
@@ -877,6 +894,7 @@ pub(crate) fn cancel_login() {
 /// came up with no sidebar at all — no folders, no local playlists — and the
 /// Refresh row was the only way back. See `on_session_entered`'s header.
 pub(crate) fn start_offline() {
+    deep_link_qt::set_online_session(false);
     let runtime = app();
     spawn(async move {
         match auth_qt::start_offline_session(&runtime).await {
@@ -917,6 +935,7 @@ pub(crate) fn do_logout() {
     // Flip this before the async teardown: a delayed scrobble firing anywhere
     // in that window must already obey the logged-out opt-out.
     integrations_qt::set_qobuz_authenticated(false);
+    deep_link_qt::set_online_session(false);
     let runtime = app();
     spawn(async move {
         // A connected renderer keeps playing after the session ends unless it
@@ -2367,6 +2386,11 @@ pub(crate) fn apply_language(code: String) {
     // standing in its error state — which is also the only state the owner's
     // own account can produce, so it is the one worth getting right.
     purchases_qt::republish();
+    // Browse and Label also embed translated strings inside their JSON
+    // documents (playlist-count plurals, jump tabs and the Unknown bucket).
+    // `trRev` cannot reach those values, so refresh their live snapshots too.
+    browse_qt::republish_for_language();
+    label_qt::republish_for_language();
     let (view, id) = LAST_DETAIL.lock().unwrap().clone();
     if !id.is_empty() {
         match view.as_str() {
@@ -3139,6 +3163,12 @@ pub(crate) fn arm_hard_exit_watchdog(source: &'static str) {
 
 fn main() {
     qbz_log::install("info");
+    deep_link_qt::capture_argv();
+    #[cfg(target_os = "linux")]
+    if !single_instance_qt::acquire_or_raise() {
+        log::info!("[qbz-qt] another instance owns the session bus name; exiting");
+        return;
+    }
     // Link anchor for the hand-written QAbstractListModel. Its QML singleton
     // registration itself runs at QCoreApplication startup.
     local_tracks_model_qt::register_qml_model();

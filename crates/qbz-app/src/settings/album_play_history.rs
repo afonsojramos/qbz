@@ -55,7 +55,7 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
     )?;
     // PLAYBACK CONTEXT of the event — "album" | "playlist" | "" (unknown).
     //
-    // Additive, and it has to be: this .db is SHARED with the Slint build,
+    // Additive, and it has to be: this .db is shared with existing installs,
     // whose tree is frozen and whose INSERT names its columns explicitly
     // (`INSERT INTO album_play_events (album_id, occurred_at)`), so an extra
     // column with a DEFAULT is invisible to it and it simply writes `''`.
@@ -75,23 +75,23 @@ fn open_db() -> Option<Connection> {
     let path = db_path()?;
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            log::warn!("[qbz-slint] album_play_history dir create failed: {e}");
+            log::warn!("[qbz-app] album_play_history dir create failed: {e}");
             return None;
         }
     }
     let conn = match Connection::open(&path) {
         Ok(c) => c,
         Err(e) => {
-            log::warn!("[qbz-slint] album_play_history open failed: {e}");
+            log::warn!("[qbz-app] album_play_history open failed: {e}");
             return None;
         }
     };
     // ADR-002: WAL for any SQLite store touched off the UI thread.
     if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;") {
-        log::warn!("[qbz-slint] album_play_history pragma failed: {e}");
+        log::warn!("[qbz-app] album_play_history pragma failed: {e}");
     }
     if let Err(e) = init_schema(&conn) {
-        log::warn!("[qbz-slint] album_play_history schema failed: {e}");
+        log::warn!("[qbz-app] album_play_history schema failed: {e}");
         return None;
     }
     Some(conn)
@@ -149,7 +149,7 @@ fn record_on(conn: &Connection, m: &AlbumPlayMeta, now: i64) {
          VALUES (?, ?, ?)",
         params![m.album_id, now, m.context_kind],
     ) {
-        log::warn!("[qbz-slint] album_play_history insert event failed: {e}");
+        log::warn!("[qbz-app] album_play_history insert event failed: {e}");
     }
     if let Err(e) = conn.execute(
         r#"
@@ -181,7 +181,7 @@ fn record_on(conn: &Connection, m: &AlbumPlayMeta, now: i64) {
             now
         ],
     ) {
-        log::warn!("[qbz-slint] album_play_history upsert meta failed: {e}");
+        log::warn!("[qbz-app] album_play_history upsert meta failed: {e}");
     }
 }
 
@@ -236,7 +236,6 @@ fn query_on(conn: &Connection, limit: Option<u32>) -> Vec<AlbumPlayRow> {
 /// Record a play. Called from `playback::record_recent` when a track starts
 /// audible playback. No-op when the album id is empty (some local/Plex
 /// sources carry none — same guard as the recently-played rail).
-#[allow(dead_code)] // wired by playback::record_recent
 pub fn record_album_play(m: AlbumPlayMeta) {
     if m.album_id.is_empty() {
         return;
@@ -252,13 +251,11 @@ pub fn record_album_play(m: AlbumPlayMeta) {
 }
 
 /// The top `limit` most-played albums (the carousel).
-#[allow(dead_code)] // wired by home/foryou
 pub fn top_albums(limit: u32) -> Vec<AlbumPlayRow> {
     with_db(|conn| Some(query_on(conn, Some(limit)))).unwrap_or_default()
 }
 
 /// Every played album, ranked (the "View all" page).
-#[allow(dead_code)] // wired by the View-all loader
 pub fn all_albums() -> Vec<AlbumPlayRow> {
     with_db(|conn| Some(query_on(conn, None))).unwrap_or_default()
 }

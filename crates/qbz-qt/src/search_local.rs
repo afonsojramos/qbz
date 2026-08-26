@@ -387,23 +387,6 @@ pub(crate) fn append_immersive_local_albums(
 // The fetch
 // ---------------------------------------------------------------------------
 
-/// True only under HARD offline (connectivity confirmed Down).
-///
-/// Exact twin of the reference's `exclude_network_folders_now`. The reason it
-/// is not simply "are we offline": a manual offline TOGGLE with the LAN still
-/// up must keep NAS content visible, and only a confirmed-down link justifies
-/// hiding it. Per-mount accessibility checks in every browse query would be the
-/// exact-but-costly alternative.
-///
-/// **Scope note:** this fixes the cortinilla's call site only. Four other Qt
-/// call sites still pass a literal `false` (`local_albums.rs`), so the port
-/// stays inconsistent until PARITY-DEBT #82 is closed properly. Matching the
-/// reference on the surface being ported is this contract's job; sweeping the
-/// rest is not.
-fn exclude_network_folders_now() -> bool {
-    crate::offline_fwd::engine().status().connectivity == qbz_app::offline_mode::Connectivity::Down
-}
-
 /// Fetch up to `limit` local-library tracks matching `query`, off the calling
 /// thread.
 ///
@@ -428,7 +411,7 @@ pub(crate) async fn load_cortinilla_local(
     if q.chars().count() < 2 {
         return Vec::new();
     }
-    let exclude_network = exclude_network_folders_now();
+    let exclude_network = crate::offline_fwd::exclude_network_folders_now();
     // Plex is part of the user's Local Library — the Artists/Tracks tabs union
     // it — so the cortinilla must include it too. The DB search only hits
     // `local_tracks`; the Plex cache is a separate bounded set merged here.

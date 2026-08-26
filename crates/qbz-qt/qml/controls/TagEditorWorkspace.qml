@@ -911,7 +911,7 @@ Item {
                         spacing: 7
                         SettingsButton {
                             text: workspace.editor.tr("Apply to form")
-                            iconName: "download"
+                            iconName: "cloud-download"
                             minWidth: 0
                             onClicked: workspace.editor.applyRemote()
                         }

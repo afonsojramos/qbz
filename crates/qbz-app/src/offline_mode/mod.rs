@@ -160,22 +160,6 @@ impl OfflineModeEngine {
         store.get_settings()
     }
 
-    /// Persist the network-folders-in-manual-offline policy flag.
-    ///
-    /// NOTE (2026-06-10): no UI calls this anymore — the Slint "Show Network
-    /// Folder Content" toggle was removed when library visibility stopped
-    /// depending on offline mode (owner verdict; see qbz-slint's
-    /// NETWORK-FOLDER VISIBILITY note). Kept (pub, no dead-code warning in a
-    /// lib crate) because the store column must stay Tauri-DB-compatible.
-    pub fn set_show_network_folders(&self, enabled: bool) -> Result<(), String> {
-        let guard = self
-            .store
-            .lock()
-            .map_err(|e| format!("offline store lock poisoned: {}", e))?;
-        let store = guard.as_ref().ok_or("No active session")?;
-        store.set_show_network_folders_in_manual_offline(enabled)
-    }
-
     /// Restore the Tauri manual-offline policy: submit scrobbles through the
     /// network immediately even while the Qobuz offline gate is induced.
     /// Enabling it atomically disables accumulated mode in the shared store.

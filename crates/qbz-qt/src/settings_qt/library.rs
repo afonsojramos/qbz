@@ -8,11 +8,10 @@
 //! drives, cancellation and cleanup included); Plex rides `crate::local_plex`
 //! (wired this round) and the `QbzLocal` invokables.
 //!
-//! Deltas vs `settings/LocalLibrarySettings.slint` (reported, not hidden):
-//! - The per-folder EDIT modal (`LibFolderEditModal.slint`: alias + network
-//!   overrides) is not ported, so no edit affordance is shown.
-//! - The Plex PIN flow (generate code / link code / open sign-in) is not
-//!   ported; the manual server-url + token path is what this wires.
+//! The per-folder editor (alias + network overrides) and the Plex PIN sign-in
+//! flow are both live in Qt. Their surfaces are `LibFolderEditModal.qml` and
+//! `PlexSettings.qml`; this module owns the former's persisted state while
+//! `plex_pin_qt` owns the latter's pairing lifecycle.
 //!
 //! Retired 2026-08-04: "Add folder is a path field because this port has no
 //! `rfd` dependency". It has had one since the MyQBZ round (`Cargo.toml:137`)

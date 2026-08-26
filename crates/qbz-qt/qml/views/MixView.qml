@@ -41,8 +41,7 @@
 // - The "Add to playlist" disc (list-plus) is inert in the .slint too — it
 //   carries no `clicked` there (MixView.slint:182-188) — so it is inert
 //   here, dimmed the same way, rather than silently absent.
-// - No scroll restore: this port has no NavState.restore-scope counterpart
-//   (the same note LabelView.qml carries).
+// - Back/forward scroll restore is handled by ScrollMemory below.
 // - CIRCLE ACTION SIZE: the .slint MixView declares a LOCAL CircleAction
 //   fixed at 38px, predating the shared primitives/CircleAction.slint
 //   (44 primary / 32 secondary). This port mounts the shared

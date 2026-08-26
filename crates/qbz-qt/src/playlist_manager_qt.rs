@@ -605,7 +605,6 @@ async fn load(runtime: &Runtime) -> PmData {
                     }),
                     id: p.id,
                     name: p.name,
-                    description: p.description,
                     offline_only: p.offline_only,
                     track_count: p.track_count,
                     is_favorite: p.favorite,

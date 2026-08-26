@@ -71,9 +71,8 @@ Item {
     // only if the window was NOT fullscreen before (port of
     // main.rs:8660-8716, as QML state — no 150ms timer, D3).
     property bool wasFullscreen: false
-    // Kiosk seam: Qt has no kiosk screen yet, so this is always false and
-    // the kiosk shell-restore arm is a documented no-op (D4) — the kiosk
-    // Loader contract is 2026-08-02-kiosk-port §4.6 (Claude).
+    // The kiosk host sets this true so closing Immersive never changes an
+    // appliance window's fullscreen state. Desktop leaves the default false.
     property bool preKiosk: false
 
     Connections {

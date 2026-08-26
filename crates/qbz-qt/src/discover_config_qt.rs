@@ -14,17 +14,9 @@
 //! `{ tab, rows: [{ id, label, enabled }], enabled, total }` — parsed by
 //! `qml/controls/DiscoverConfigModal.qml`.
 //!
-//! POC-NOTEs vs the Slint controller:
-//! - Rows are filtered to the sections this port can actually RENDER
-//!   (`home_qt::renderable_ids`). The Slint modal lists every pref entry
-//!   because Slint implements every rail; here a reco-engine / radio /
-//!   spotlight row would be a toggle that changes nothing, which is exactly
-//!   the defect class this port removes.
-//! - The Recommendations tab's arm of the Slint modal (explainer + cache
-//!   window + "Refresh now") is NOT ported: it drives
-//!   `ExternalRecoState`/`ExternalRecoActions`, and the external reco engine
-//!   is out of scope. The toolbar gear is DISABLED on that tab instead of
-//!   opening an empty modal (HomeView.qml).
+//! Rows are filtered to the sections the active tab can render. The
+//! Recommendations tab has no orderable rows and uses the modal's dedicated
+//! explainer, cache-window and "Refresh now" arm instead.
 
 use cxx_qt_lib::QString;
 use qbz_app::settings::discover_prefs::{

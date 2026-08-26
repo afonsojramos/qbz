@@ -30,17 +30,14 @@
 //!     `crate::offline_mode::engine()`);
 //! (c) call-site renames to the Qt runtime accessors (`crate::app()`),
 //!     `qconnect_transport_qt`, `qconnect_engine_qt`, `qconnect_event_sink_qt`.
-//! §9 D10: `diagnostics_snapshot` / `QconnectDiagSnapshot` is SKIPPED (its only
-//! Slint consumers — the settings Diagnostics panel + markdown export — do not
-//! exist in Qt). §9 D8: the autoplay/stop unwired APIs stay ported-but-unwired,
-//! exactly like the reference.
+//! `diagnostics_snapshot` / `QconnectDiagSnapshot` feeds Qt's Developer
+//! diagnostics panel and bug-report markdown. The autoplay/stop remote APIs
+//! remain ported-but-unwired and carry targeted `allow(dead_code)` annotations;
+//! they are the only dormant surface in this service.
 //!
 //! The §11.5 main.rs wiring, the B4 `QbzQConnect` bridge AND the B5/B6
 //! `*_if_remote` call sites (playback_qt.rs / queue_qt.rs / playlist_qt.rs /
-//! myqbz_play_qt.rs / integrations_qt.rs / cast_qt.rs) are all in place. The
-//! module keeps the reference's `#![allow(dead_code)]` (same convention as
-//! `toast_qt.rs`) for the deliberately-unwired surface (§9 D8 autoplay/stop).
-#![allow(dead_code)]
+//! myqbz_play_qt.rs / integrations_qt.rs / cast_qt.rs) are all in place.
 
 use std::sync::Arc;
 
@@ -220,14 +217,6 @@ pub(crate) mod publish {
         });
     }
 
-    /// `QconnectDevState.open` -> `QbzQConnect.diag_open`. Nothing in the
-    /// facade/sink writes this today — DeveloperSettings "Open diagnostics"
-    /// drives the property from QML through the bridge's `diag_set_open`.
-    pub(crate) fn open_diag(open: bool) {
-        crate::qconnect_bridge::ui(move |mut b| {
-            b.as_mut().set_diag_open(open);
-        });
-    }
 }
 
 /// Reduced peer-renderer playback snapshot for the now-playing seek bar while
@@ -454,7 +443,6 @@ async fn update_lifecycle_state_if_running(
 pub struct QtQconnectService {
     inner: Arc<Mutex<QtQconnectInner>>,
     runtime: Runtime,
-    #[allow(dead_code)] // wired to the device-name settings UI in a later step
     custom_device_name: Arc<tokio::sync::RwLock<Option<String>>>,
     /// Track-id list of the queue we last pushed to the session (controller-side
     /// queue sync). Guards against re-pushing the same queue before the cloud's

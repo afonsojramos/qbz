@@ -112,7 +112,6 @@ fn write_store(store: &DismissStore) {
 /// no session is bound. Id 0 (a corrupt row) never matches.
 // Consumed by the reco exclusion set (spec 03 §9.2 item F21), which lands with
 // the recommendations filter slice.
-#[allow(dead_code)]
 pub fn ids_snapshot() -> HashSet<u64> {
     load_store()
         .artists

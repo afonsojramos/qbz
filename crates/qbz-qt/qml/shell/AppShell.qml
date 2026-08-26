@@ -715,6 +715,11 @@ Rectangle {
     PlaylistImportModal {
         anchors.fill: parent
     }
+    // Open Music Link — app-wide because both the header row and Ctrl+L open
+    // it, and a playlist result hands off to the importer beside it.
+    LinkResolverModal {
+        anchors.fill: parent
+    }
     // TrackReplacementModal — "Find available version" for a track Qobuz
     // pulled from the catalogue (2026-08-17 unavailable-tracks contract §6),
     // opened from the playlist row's context menu.

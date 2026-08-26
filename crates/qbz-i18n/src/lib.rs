@@ -1,8 +1,8 @@
 //! qbz-i18n — frontend-agnostic gettext-style translation catalog.
 //!
-//! Reads the same gettext `.po` files Slint bundles, keyed by
-//! `msgid = English source string` (no `msgctxt`). Reusable by any frontend
-//! (Slint / TUI / headless) — no slint or tauri dependencies (ADR-006).
+//! Reads QBZ's gettext `.po` files, keyed by `msgid = English source string`
+//! (no `msgctxt`). Reusable by Qt, TUI, or headless consumers, without a
+//! frontend dependency (ADR-006).
 
 pub mod plural;
 pub mod po;
@@ -19,18 +19,10 @@ const LANGS: [&str; 8] = ["en", "es", "de", "fr", "pt", "ru", "ja", "nl"];
 /// Embedded `.po` sources, OWNED BY THIS CRATE. Path is relative to this file
 /// (`crates/qbz-i18n/src/lib.rs`): `../` = `qbz-i18n/`.
 ///
-/// They used to live in `crates/qbz-ui/translations/` and be reached with
-/// `../../qbz-ui/...`, which made this crate's own doc comment ("frontend-
-/// agnostic ... no slint or tauri dependencies, ADR-006") false in the one way
-/// that mattered: no dependency in `Cargo.toml`, but eight `include_str!`
-/// reaching into the Slint crate's directory. Deleting `qbz-ui` — which is
-/// planned, before the Qt release — would have failed to compile `qbz-i18n`
-/// and with it `qbz-qt`, i.e. the whole app, over a data directory nobody
-/// thought of as a dependency. The extraction had taken the code and left the
-/// data behind.
-///
-/// `qbz-ui/build.rs` now borrows them back through `../qbz-i18n/translations`
-/// for as long as the Slint tree exists.
+/// These catalogs are intentionally owned here so deleting or replacing a
+/// frontend cannot break the shared translation crate through hidden
+/// `include_str!` paths. The historical `qbz-ui.po` filename is an on-disk
+/// catalog name, not a dependency on the retired frontend.
 const PO_EN: &str = include_str!("../translations/en/LC_MESSAGES/qbz-ui.po");
 const PO_ES: &str = include_str!("../translations/es/LC_MESSAGES/qbz-ui.po");
 const PO_DE: &str = include_str!("../translations/de/LC_MESSAGES/qbz-ui.po");

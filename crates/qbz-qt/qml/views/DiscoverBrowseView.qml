@@ -18,9 +18,9 @@
 // (HeaderBar.qml:235), so the title starts at x=48 — the 32 + 0 + 16 the
 // HomeView toolbar already uses (HomeView.qml:744).
 //
-// POC-NOTEs: no scroll restore (the port has no counterpart to
-// NavState.report-scroll / restore-scope); `windowed` grid mounting is the
-// AlbumCollection sampler rather than the .slint's own.
+// Back/forward scroll restore is handled by the shared ScrollMemory below;
+// `windowed` grid mounting is the AlbumCollection sampler rather than the
+// .slint's own.
 
 import QtQuick
 import QtQuick.Window

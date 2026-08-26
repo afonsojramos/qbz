@@ -1,4 +1,4 @@
-//! The single Qt-side bridge object for the POC.
+//! The shared Qt-side bridge object for cross-domain shell state.
 //!
 //! One `QbzBridge` QObject is registered as a QML SINGLETON (`QbzBridge.*`
 //! in QML). All session/login/offline/shell state the QML needs lives in
@@ -141,6 +141,9 @@ pub mod qbz_bridge {
         /// "Copy to your library" (foreign playlists).
         #[qinvokable]
         fn playlist_copy(self: Pin<&mut QbzBridge>);
+        /// Copy the public Qobuz playlist URL. Hidden for local playlists.
+        #[qinvokable]
+        fn playlist_share(self: Pin<&mut QbzBridge>, playlist_id: QString);
         #[qinvokable]
         fn playlist_rename(self: Pin<&mut QbzBridge>, name: QString);
         #[qinvokable]
@@ -333,6 +336,10 @@ impl qbz_bridge::QbzBridge {
 
     pub fn playlist_copy(self: Pin<&mut Self>) {
         crate::playlist_copy();
+    }
+
+    pub fn playlist_share(self: Pin<&mut Self>, playlist_id: QString) {
+        crate::share_qt::share_playlist(playlist_id.to_string());
     }
 
     pub fn playlist_rename(self: Pin<&mut Self>, name: QString) {

@@ -22,15 +22,10 @@
 //! Split out of `home_qt.rs` deliberately: that module is already ~1.2 k
 //! lines and these are four independent controllers, not more Home mapping.
 //!
-//! POC-NOTEs (deltas vs the Slint controllers, each deliberate):
-//! - Blacklist filtering: `crate::artist_blacklist` does not exist in this
-//!   port (see the phase-1 skip documented in `home_qt.rs`), so the
-//!   `album_blacklisted` drop the Slint applies on the discover pages is
-//!   inherited as a no-op. Playlists are unfiltered in Slint too.
-//! - Scroll restore: the Slint pages each call `NavState.report-scroll` and
-//!   re-apply `scroll-restore` on back/forward. The Qt port has NO
-//!   scroll-restore mechanism at all (`nav_qt` stores view ids only), so
-//!   these pages do not restore scroll. Dropped knowingly, not missed.
+//! Known delta: the blacklist store is live, but the album drop the Slint
+//! discover pages apply is not yet folded into these result lists. Playlists
+//! are unfiltered in the reference too. Back/forward scroll restore is live
+//! through `ScrollMemory.qml` + `nav_qt`.
 //! - `nav_qt` stores view IDs, so back-to-`discoverbrowse` re-mounts
 //!   whatever document is currently published (same limitation the album /
 //!   artist routes already have).
@@ -864,9 +859,8 @@ fn load_history(generation: u64) {
 /// and the playlist row subtitles (`tf()` plurals) — everything else is
 /// `@tr` on the QML side and re-evaluates on `trRev`.
 ///
-/// GLUE NEEDED: nothing calls this yet — `main.rs::apply_language` only
-/// republishes "album" / "artist" off `LAST_DETAIL`. See the report.
-#[allow(dead_code)]
+/// Called by `main.rs::apply_language`; `trRev` cannot retranslate strings
+/// that already arrived inside a JSON document.
 pub fn republish_for_language() {
     {
         if let Ok(mut s) = PLAYLISTS.lock() {

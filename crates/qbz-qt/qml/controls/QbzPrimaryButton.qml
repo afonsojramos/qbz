@@ -25,11 +25,9 @@
 // arm is the fixed danger red and therefore uses the confirm-standard's fixed
 // white label; reusing an accent-derived dark glyph there loses contrast.
 //
-// NOT ported (deliberate, both are port-wide gaps rather than MyQBZ ones):
-// the .slint's FocusScope Enter/Space activation and its keyboard focus ring
-// (:62-86). This port has no keyboard/shortcut layer at all — the whole tree
-// carries two key handlers (QbzLineEdit.qml:157, HeaderBar.qml:551) — so
-// wiring one here would be the only focusable button in the app.
+// Keyboard/accessibility contract: Tab focus, Enter/Space activation, a
+// visible focus ring and the Qt accessibility press action all converge on
+// the same `clicked` signal as the MouseArea.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -59,6 +57,26 @@ Rectangle {
     implicitWidth: lbl.implicitWidth + 40
     radius: theme.radiusSm
     opacity: root.btnEnabled ? 1.0 : 0.5
+    activeFocusOnTab: root.btnEnabled
+    Accessible.role: Accessible.Button
+    Accessible.name: root.label
+    Accessible.onPressAction: {
+        if (root.btnEnabled)
+            root.clicked()
+    }
+    border.width: root.activeFocus ? 2 : 0
+    border.color: root.destructive ? "#ffffff" : theme.accentGlyphColor
+
+    Keys.onPressed: function (event) {
+        if (root.btnEnabled
+                && !event.isAutoRepeat
+                && (event.key === Qt.Key_Return
+                    || event.key === Qt.Key_Enter
+                    || event.key === Qt.Key_Space)) {
+            root.clicked()
+            event.accepted = true
+        }
+    }
 
     color: root.destructive
         ? ((btnArea.containsMouse && root.btnEnabled)
@@ -86,6 +104,7 @@ Rectangle {
         enabled: root.btnEnabled
         hoverEnabled: root.btnEnabled
         cursorShape: root.btnEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+        onPressed: root.forceActiveFocus()
         onClicked: root.clicked()
     }
 }

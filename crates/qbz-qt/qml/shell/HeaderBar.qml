@@ -24,9 +24,7 @@
 // Right: the tri-state offline status badge with its flyout (recovery
 // "Sign in" wired to QbzSession.recoveryLogin) and the app menu (user block +
 // Settings + Keyboard Shortcuts + Documentation + What's New + About QBZ +
-// Report an Issue + Log Out + Close). ONE row is still missing against the
-// Slint menu: Open Music Link, which needs the LinkResolver this port does not
-// have yet.
+// Report an Issue + Log Out + Close).
 //
 // The custom window chrome IS built (the note claiming it was skipped was a
 // fossil): the header itself is the drag surface (`startSystemMove()` below),
@@ -1060,9 +1058,30 @@ Rectangle {
                             }
                         }
                     }
-                    // POC-NOTE: the manual-offline quick toggle (state 2)
-                    // needs OfflineModeActions.set-offline — not wired; the
-                    // status text above still renders.
+                    // Manual/induced state: the same persisted action as the
+                    // Settings toggle, exposed here as the quick path back
+                    // online.
+                    Row {
+                        visible: root.badgeState === 2
+                        width: parent.width
+                        height: visible ? 22 : 0
+                        spacing: 8
+                        Text {
+                            width: parent.width - 48
+                            height: parent.height
+                            text: QbzSession.tr("Offline mode", QbzSession.trRev)
+                            color: theme.textSecondary
+                            font.pixelSize: 12
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        QbzToggle {
+                            checked: true
+                            onToggled: function(value) {
+                                QbzBridge.settingsBool("offline-mode-enabled", value)
+                                badgeFlyout.close()
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1174,10 +1193,6 @@ Rectangle {
 
     // --- App menu (user block + Settings + Keyboard Shortcuts +
     // Documentation + What's New + About QBZ + Log Out + Close) ------------
-    // Still missing against the Slint menu, each needing a surface this port
-    // does not have yet: Open Music Link (the LinkResolver is not ported) and
-    // Report an Issue. (The older note here also listed Keyboard Shortcuts,
-    // Documentation, What's New and About QBZ, all of which have landed.)
     Popup {
         id: appMenu
         x: root.width - 234 - theme.spacingMd
@@ -1288,8 +1303,15 @@ Rectangle {
                 }
             }
             // Slint order (HeaderBar.slint:1175-1212): Settings, Open Music
-            // Link, Keyboard Shortcuts, Documentation… The Open Music Link
-            // row stays ABSENT (the LinkResolver is not ported, K3).
+            // Link, Keyboard Shortcuts, Documentation…
+            AppMenuItem {
+                name: "link"
+                label: QbzSession.tr("Open Qobuz Link", QbzSession.trRev)
+                onClicked: {
+                    appMenu.close()
+                    QbzLink.show()
+                }
+            }
             AppMenuItem {
                 name: "keyboard"
                 label: QbzSession.tr("Keyboard Shortcuts", QbzSession.trRev)

@@ -48,8 +48,8 @@
 //!   the store is cold. This port has no `qbz-reco` dependency, so it is the
 //!   FALLBACK path only — the same delta `home_qt` already documents for
 //!   "Rediscover Your Library".
-//! - No artist blacklist store in this port (`artist_blacklist` is Slint-side),
-//!   so the mix rows carry no `isBlacklisted` grey-out.
+//! - The shared artist blacklist store is live, but mix-row mapping does not
+//!   yet consult it, so the rows carry no `isBlacklisted` grey-out.
 //! - The mix page has no multi-select bar: `qml/rows/TrackRow.qml` has no
 //!   multi-select arm and two of the Slint bar's seven actions have no bridge
 //!   seam at all — the same call `LabelView.qml` already documents. The
