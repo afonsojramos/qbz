@@ -101,6 +101,12 @@ Rectangle {
     // Mirrors the dock's capture gate: false = the stream is frozen, so the
     // interpolator must park too.
     property bool capturing: false
+    // A stored scope choice survives a Software session, but the live band
+    // resolves it to Bars. The Rust renderer report publishes the same
+    // fallback; keeping it here makes the drawing arm safe during that
+    // report's event-loop turn too.
+    readonly property int effectiveMode: !QbzShell.gpuTier
+        && QbzShell.largeSpectrumMode >= 3 ? 0 : QbzShell.largeSpectrumMode
 
     visible: band.shown
     radius: theme.radiusMd
@@ -133,7 +139,7 @@ Rectangle {
     // FFT leaves {1, 15} empty; SpectrumPanel.slint parity).
     Loader {
         anchors.fill: parent
-        active: band.shown && QbzShell.largeSpectrumMode === 0
+        active: band.shown && band.effectiveMode === 0
         sourceComponent: Item {
             id: barsMode
             readonly property var activeBins: [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
@@ -233,7 +239,7 @@ Rectangle {
     // vertical centre (the L half is samples 0..255).
     Loader {
         anchors.fill: parent
-        active: band.shown && QbzShell.largeSpectrumMode === 1
+        active: band.shown && band.effectiveMode === 1
         sourceComponent: Item {
             id: waveMode
             readonly property real slot: band.width / 48
@@ -363,7 +369,7 @@ Rectangle {
     // Mode 2 — Energy: the 5 semantic bands (sub-bass .. air).
     Loader {
         anchors.fill: parent
-        active: band.shown && QbzShell.largeSpectrumMode === 2
+        active: band.shown && band.effectiveMode === 2
         sourceComponent: Item {
             id: energyMode
             readonly property real slot: band.width / 5
@@ -442,7 +448,7 @@ Rectangle {
     // that scope's DSP bit.
     Loader {
         anchors.fill: parent
-        active: band.shown && QbzShell.largeSpectrumMode === 3
+        active: band.shown && band.effectiveMode === 3
         sourceComponent: ScopePanel {
             compact: true
             scopeMode: 0
@@ -451,7 +457,7 @@ Rectangle {
     }
     Loader {
         anchors.fill: parent
-        active: band.shown && QbzShell.largeSpectrumMode === 4
+        active: band.shown && band.effectiveMode === 4
         sourceComponent: ScopePanel {
             compact: true
             scopeMode: 1
@@ -459,7 +465,8 @@ Rectangle {
         }
     }
 
-    // Click the band → cycle all five modes (persisted).
+    // Click the band → cycle all five modes on GPU, the three compatible
+    // modes on Software (persisted by the Rust handler).
     MouseArea {
         anchors.fill: parent
         cursorShape: Qt.PointingHandCursor

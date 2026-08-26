@@ -307,6 +307,7 @@ Item {
     Loader {
         anchors.fill: parent
         active: QbzShaderScene.scene === 0
+            && QbzShell.gpuTier
             && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 7
         visible: active
         sourceComponent: Item {
@@ -338,6 +339,7 @@ Item {
     Loader {
         anchors.fill: parent
         active: QbzShaderScene.scene === 0
+            && QbzShell.gpuTier
             && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 8
         visible: active
         sourceComponent: Item {

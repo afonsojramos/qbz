@@ -2056,9 +2056,15 @@ pub(crate) fn large_toggle_visualizer() {
 }
 
 /// Large dock, band click: cycle Bars -> Waveform -> Energy -> Goniometer ->
-/// Oscilloscope.
+/// Oscilloscope on the GPU tier. Qt's software scene graph cannot draw the
+/// two native scope traces, so that tier cycles only the three compatible
+/// modes instead of landing on guide axes with no signal.
 pub(crate) fn large_cycle_spectrum() {
-    let mode = settings_qt::set_large_spectrum_mode((settings_qt::large_spectrum_mode() + 1) % 5);
+    let gpu_tier = renderer_qt::gpu_tier();
+    let current =
+        settings_qt::large_spectrum_mode_for_tier(settings_qt::large_spectrum_mode(), gpu_tier);
+    let mode_count = if gpu_tier { 5 } else { 3 };
+    let mode = settings_qt::set_large_spectrum_mode((current + 1) % mode_count);
     let height = shell_bridge::large_dock_height(settings_qt::large_visualizer_on());
     log::info!("[qbz-qt] large spectrum mode -> {mode}");
     // Point the drain at the new stream BEFORE the UI switches, so the first

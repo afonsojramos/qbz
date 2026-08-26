@@ -241,6 +241,18 @@ fn pinned_view(default_key: &str) -> Option<(i32, i32)> {
     }
 }
 
+/// The two stereo scopes are native scene-graph traces. On Qt's Software and
+/// Null backends only their QML guide axes survive, so a remembered or stale
+/// request must land on the compatible Spectrum panel instead. This is a live
+/// resolution only: the remembered mode remains stored and returns on GPU.
+fn focus_mode_for_tier(view_mode: i32, mode: i32, gpu_tier: bool) -> i32 {
+    if view_mode == 0 && !gpu_tier && matches!(mode, 7 | 8) {
+        3
+    } else {
+        mode
+    }
+}
+
 /// The single funnel behind every `open` write (contract §3/D3). Holds the
 /// store + notify, the §3.1 apply-default-view on the false→true edge, and
 /// the §3.3a viz keep-alive on both edges.
@@ -298,6 +310,12 @@ fn apply_open(mut this: Pin<&mut QbzImmersive>, value: bool) {
             this.as_mut().set_mode(m);
         }
         // Unknown key: Slint's `_ => {}` — leave the current view alone.
+        let live_mode =
+            focus_mode_for_tier(this.view_mode, this.mode, crate::renderer_qt::gpu_tier());
+        if live_mode != this.mode {
+            log::info!("[qbz-qt] immersive: native scope unavailable on renderer tier -> Spectrum");
+            this.as_mut().set_mode(live_mode);
+        }
         crate::viz_qt::immersive_opened();
         crate::viz_qt::set_immersive_view(this.view_mode, this.mode);
         // Shader scenes (block A1): the open edge decides the scene. Under
@@ -356,6 +374,7 @@ impl qbz_immersive::QbzImmersive {
     /// "remember"; a pinned default wins on the next open, so it must not be
     /// overwritten (main.rs:10339-10357 parity).
     pub fn set_view(mut self: Pin<&mut Self>, view_mode: i32, mode: i32, split_panel: i32) {
+        let mode = focus_mode_for_tier(view_mode, mode, crate::renderer_qt::gpu_tier());
         self.as_mut().set_view_mode(view_mode);
         self.as_mut().set_mode(mode);
         self.as_mut().set_split_panel(split_panel);
@@ -441,6 +460,17 @@ mod tests {
         assert_eq!(pinned_view("remember"), None);
         assert_eq!(pinned_view(""), None);
         assert_eq!(pinned_view("wavebed"), None); // pinned never lands on WaveBed
+    }
+
+    #[test]
+    fn software_tier_falls_back_from_scopes_to_spectrum() {
+        assert_eq!(focus_mode_for_tier(0, 7, false), 3);
+        assert_eq!(focus_mode_for_tier(0, 8, false), 3);
+        assert_eq!(focus_mode_for_tier(0, 7, true), 7);
+        assert_eq!(focus_mode_for_tier(0, 8, true), 8);
+        assert_eq!(focus_mode_for_tier(0, 6, false), 6);
+        // FOCUS mode is irrelevant in Split; do not rewrite stored state.
+        assert_eq!(focus_mode_for_tier(1, 8, false), 8);
     }
 
     #[test]

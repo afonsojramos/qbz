@@ -964,7 +964,11 @@ pub(crate) const DOCK_BAND_GAP: f32 = 10.0;
 pub(crate) fn large_dock_height(visualizer_on: bool) -> f32 {
     let base = DOCK_PAD_TOP + DOCK_ART_SIZE + DOCK_PAD_BOTTOM;
     if visualizer_on {
-        let band_height = if crate::settings_qt::large_spectrum_mode() >= 3 {
+        let mode = crate::settings_qt::large_spectrum_mode_for_tier(
+            crate::settings_qt::large_spectrum_mode(),
+            crate::renderer_qt::gpu_tier(),
+        );
+        let band_height = if mode >= 3 {
             DOCK_ART_SIZE
         } else {
             DOCK_BAND_HEIGHT
@@ -1099,6 +1103,18 @@ impl qbz_shell::QbzShell {
         self.as_mut().set_gpu_tier(tier);
         self.as_mut().set_shader_scenes_available(tier);
         self.as_mut().set_app_background_available(tier);
+        // The two scope modes are QSG-native traces. On Software their QML
+        // guides still draw, which used to leave an empty instrument in the
+        // Large NPB. Publish a LIVE Bars fallback without overwriting the
+        // stored scope choice; a later GPU session restores it.
+        let live_mode = crate::settings_qt::large_spectrum_mode_for_tier(
+            crate::settings_qt::large_spectrum_mode(),
+            tier,
+        );
+        self.as_mut().set_large_spectrum_mode(live_mode);
+        crate::viz_qt::set_mode(live_mode);
+        self.as_mut()
+            .set_large_dock_height(large_dock_height(crate::settings_qt::large_visualizer_on()));
         let kiosk = crate::kiosk_profile_qt::active();
         self.as_mut()
             .set_reduce_motion(crate::renderer_qt::reduce_motion(kiosk));

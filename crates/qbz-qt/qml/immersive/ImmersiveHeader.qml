@@ -207,8 +207,11 @@ Item {
         }
         Repeater {
             // FOCUS owner order: the two reading surfaces sit directly below
-            // Coverflow; the reactive visualizers follow them.
-            model: [
+            // Coverflow; the reactive visualizers follow them. The two native
+            // scopes are appended only on the GPU tier: Software can draw
+            // their QML axes but not the scene-graph trace.
+            model: {
+                var rows = [
                 { "vm": 0, "m": 0, "sp": -1, "entry": "",
                   "label": QbzSession.tr("Album Reactive", QbzSession.trRev) },
                 { "vm": 0, "m": 1, "sp": -1, "entry": "",
@@ -223,11 +226,15 @@ Item {
                   "label": QbzSession.tr("Spectrum", QbzSession.trRev) },
                 { "vm": 0, "m": 6, "sp": -1, "entry": "",
                   "label": QbzSession.tr("Wave Bed", QbzSession.trRev) },
-                { "vm": 0, "m": 7, "sp": -1, "entry": "",
-                  "label": QbzSession.tr("Goniometer", QbzSession.trRev) },
-                { "vm": 0, "m": 8, "sp": -1, "entry": "",
-                  "label": QbzSession.tr("Oscilloscope", QbzSession.trRev) },
-            ]
+                ]
+                if (QbzShell.gpuTier) {
+                    rows.push({ "vm": 0, "m": 7, "sp": -1, "entry": "",
+                                "label": QbzSession.tr("Goniometer", QbzSession.trRev) })
+                    rows.push({ "vm": 0, "m": 8, "sp": -1, "entry": "",
+                                "label": QbzSession.tr("Oscilloscope", QbzSession.trRev) })
+                }
+                return rows
+            }
             delegate: menuRow
         }
         Repeater {

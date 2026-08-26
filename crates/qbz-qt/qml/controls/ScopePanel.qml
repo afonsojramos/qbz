@@ -5,6 +5,11 @@ import "../theme"
 Item {
     id: root
 
+    // ScopeTraceItem is a native scene-graph line strip. Software/Null can
+    // paint the guide rectangles below but not the trace; hide the complete
+    // instrument instead of leaving axes that look like a dead visualizer.
+    visible: QbzShell.gpuTier
+
     QbzTheme { id: theme }
 
     // 0 = goniometer, 1 = pitch-locked oscilloscope.

@@ -875,6 +875,22 @@ pub fn large_spectrum_mode() -> i32 {
         .unwrap_or(0)
 }
 
+/// Resolve a stored Large-NPB mode against the renderer that actually won.
+///
+/// Goniometer and Oscilloscope are native scene-graph line strips. Qt's
+/// Software/Null backend can still draw their QML guide axes, but cannot draw
+/// the trace; exposing either mode there leaves a convincing-looking empty
+/// instrument. Keep the stored preference untouched so returning to a GPU
+/// restores it, and use Bars as the live fallback on the no-GPU tier.
+pub fn large_spectrum_mode_for_tier(mode: i32, gpu_tier: bool) -> i32 {
+    let mode = mode.clamp(0, 4);
+    if gpu_tier || mode < 3 {
+        mode
+    } else {
+        0
+    }
+}
+
 /// Persist the band mode (clamped 0-4); returns the stored index.
 pub fn set_large_spectrum_mode(mode: i32) -> i32 {
     let mode = mode.clamp(0, 4);
@@ -3301,5 +3317,16 @@ mod local_tab_order_tests {
         }
         assert_eq!(local_genre_filters_position_from("future-edge"), "top");
         assert_eq!(local_genre_filters_position_from(""), "top");
+    }
+
+    #[test]
+    fn software_tier_hides_native_scope_modes_without_touching_legacy_modes() {
+        for mode in 0..=2 {
+            assert_eq!(large_spectrum_mode_for_tier(mode, false), mode);
+        }
+        assert_eq!(large_spectrum_mode_for_tier(3, false), 0);
+        assert_eq!(large_spectrum_mode_for_tier(4, false), 0);
+        assert_eq!(large_spectrum_mode_for_tier(3, true), 3);
+        assert_eq!(large_spectrum_mode_for_tier(4, true), 4);
     }
 }

@@ -41,7 +41,8 @@ Item {
     property bool ambientOn: false
 
     readonly property bool bandOn: QbzShell.largeVisualizerOn
-    readonly property int bandHeight: QbzShell.largeSpectrumMode >= 3
+    readonly property int bandHeight: QbzShell.gpuTier
+        && QbzShell.largeSpectrumMode >= 3
         ? Math.round(root.width) : 42
     readonly property int padTop: 9
     readonly property int bandGap: 10

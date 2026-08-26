@@ -710,14 +710,19 @@ pub(crate) fn immersive_opened() {
 /// untouched — trap 4/20), single-stream marshalling resumes, and
 /// `ACTIVE_MODE` is restored from the dock's persisted pref (dock mode-cycles
 /// while immersive was open already updated it via
-/// `settings_qt::set_large_spectrum_mode`).
+/// `settings_qt::set_large_spectrum_mode`). The renderer-tier resolution is
+/// repeated here so closing Immersive on Software cannot quietly re-enable a
+/// hidden scope producer.
 pub(crate) fn immersive_closed() {
     IMMERSIVE_PANEL_SCOPE_MASK.store(0, Ordering::Relaxed);
     IMMERSIVE_SCOPE_MASK.store(0, Ordering::Relaxed);
     apply_scope_mask();
     set_enabled_source(VizSource::Immersive, false);
     MARSHAL_ALL.store(false, Ordering::Relaxed);
-    set_mode(crate::settings_qt::large_spectrum_mode());
+    set_mode(crate::settings_qt::large_spectrum_mode_for_tier(
+        crate::settings_qt::large_spectrum_mode(),
+        crate::renderer_qt::gpu_tier(),
+    ));
 }
 
 /// Point the drain at the stream the band is actually rendering. Called at
