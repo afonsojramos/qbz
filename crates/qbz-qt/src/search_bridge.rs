@@ -59,10 +59,8 @@ pub mod qbz_search {
         #[qproperty(i32, cortinilla_selected_index)]
         /// Content-space top-y of the selected row, for scroll-into-view.
         #[qproperty(f64, cortinilla_scroll_y)]
-
         // --- Results page --------------------------------------------------
         #[qproperty(QString, search_json)]
-
         // --- Intelligent Search kill switch --------------------------------
         /// `ui_prefs.intelligent_search` mirror. Live-flippable, no restart.
         ///
@@ -75,7 +73,6 @@ pub mod qbz_search {
         /// is the domain's canonical state; its `toggle` invokable was
         /// deleted (zero QML callers, contract DEAD-1).
         #[qproperty(bool, intelligent_search)]
-
         type QbzSearch = super::QbzSearchRust;
 
         /// Registers this bridge's Qt-thread hop. MUST be called from
@@ -180,10 +177,7 @@ pub(crate) fn set_cortinilla_query(q: String) {
 /// The live header query as last published. Empty before the first keystroke
 /// and after a clear.
 pub(crate) fn cortinilla_query() -> String {
-    CORT_QUERY
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
+    CORT_QUERY.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 static QT_THREAD: OnceLock<CxxQtThread<QbzSearch>> = OnceLock::new();

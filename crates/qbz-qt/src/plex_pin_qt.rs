@@ -189,7 +189,11 @@ pub async fn generate_code(server_url: String) {
 
 /// Open the Plex sign-in page in the user's browser.
 pub async fn open_auth_url() {
-    let url = PIN.lock().unwrap_or_else(|e| e.into_inner()).auth_url.clone();
+    let url = PIN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .auth_url
+        .clone();
     if url.is_empty() {
         return;
     }

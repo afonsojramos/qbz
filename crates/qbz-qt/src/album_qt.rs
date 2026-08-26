@@ -356,12 +356,11 @@ fn spawn_header_color(generation: u64, artwork_url: String) {
             .await
             .ok()
             .flatten();
-        let atmo = tokio::task::spawn_blocking(move || {
-            crate::atmosphere_qt::for_cover_blocking(&p2)
-        })
-        .await
-        .ok()
-        .flatten();
+        let atmo =
+            tokio::task::spawn_blocking(move || crate::atmosphere_qt::for_cover_blocking(&p2))
+                .await
+                .ok()
+                .flatten();
         if hex.is_some() || atmo.is_some() {
             publish_patch(generation, move |doc| {
                 if let Some(hex) = hex {
@@ -456,24 +455,24 @@ fn credit_role(roles: Option<&Vec<String>>) -> String {
 /// album.rs `build_credits` (releaseArtistsMapper parity, minus the
 /// "VARIOUS"-composer drop it also applies).
 fn build_credits(album: &Album) -> Vec<(String, String, String)> {
-    let mut credits: Vec<(String, String, String)> = match album.artists.as_ref().filter(|v| !v.is_empty())
-    {
-        Some(list) => list
-            .iter()
-            .map(|a| {
-                (
-                    a.name.clone(),
-                    a.id.to_string(),
-                    credit_role(a.roles.as_ref()),
-                )
-            })
-            .collect(),
-        None => vec![(
-            album.artist.name.clone(),
-            album.artist.id.to_string(),
-            String::new(),
-        )],
-    };
+    let mut credits: Vec<(String, String, String)> =
+        match album.artists.as_ref().filter(|v| !v.is_empty()) {
+            Some(list) => list
+                .iter()
+                .map(|a| {
+                    (
+                        a.name.clone(),
+                        a.id.to_string(),
+                        credit_role(a.roles.as_ref()),
+                    )
+                })
+                .collect(),
+            None => vec![(
+                album.artist.name.clone(),
+                album.artist.id.to_string(),
+                String::new(),
+            )],
+        };
     // Album-level composer appended last, unless it's the localized
     // "Various Composers" placeholder (releaseArtistsMapper's VARIOUS drop).
     if let Some(composer) = album.composer.as_ref().filter(|c| !c.name.is_empty()) {
@@ -552,7 +551,10 @@ fn map_track(track: &Track) -> TrackRow {
 }
 
 /// Fetch + map the album detail (album.rs `map_album` port).
-pub async fn load_album(runtime: &Arc<AppRuntime<LoggingAdapter>>, album_id: &str) -> Result<AlbumViewData, String> {
+pub async fn load_album(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    album_id: &str,
+) -> Result<AlbumViewData, String> {
     let album = runtime
         .core()
         .get_album(album_id)
@@ -578,9 +580,9 @@ pub async fn load_album(runtime: &Arc<AppRuntime<LoggingAdapter>>, album_id: &st
         .as_ref()
         .filter(|g| !g.name.is_empty())
         .map(|g| g.name.clone());
-    let tracks_str = album.tracks_count.map(|count| {
-        qbz_i18n::tf("{} track", "{} tracks", count as i64, &[&count.to_string()])
-    });
+    let tracks_str = album
+        .tracks_count
+        .map(|count| qbz_i18n::tf("{} track", "{} tracks", count as i64, &[&count.to_string()]));
     let duration_str = album.duration.map(format_duration);
 
     let mut pre_parts: Vec<String> = Vec::new();
@@ -892,10 +894,7 @@ fn pick_booklet_url(album: &Album) -> String {
 /// `booklet::download_booklet`): fetch with a 30s client, then a native
 /// save-as dialog seeded `{title}.pdf`. No-op when the open album has none.
 pub fn download_booklet() {
-    let (title, url) = BOOKLET_STASH
-        .lock()
-        .map(|s| s.clone())
-        .unwrap_or_default();
+    let (title, url) = BOOKLET_STASH.lock().map(|s| s.clone()).unwrap_or_default();
     if url.is_empty() {
         return;
     }
@@ -1038,7 +1037,10 @@ fn map_release_card(release: &qbz_models::PageArtistRelease) -> AlbumCardData {
                 .and_then(|list| list.first().map(|a| a.name.clone()))
         })
         .unwrap_or_default();
-    let bit_depth = release.audio_info.as_ref().and_then(|a| a.maximum_bit_depth);
+    let bit_depth = release
+        .audio_info
+        .as_ref()
+        .and_then(|a| a.maximum_bit_depth);
     let sample_rate = release
         .audio_info
         .as_ref()
@@ -1115,7 +1117,8 @@ pub async fn load_more_from_artist(
 /// One Last.fm recommendation as the card shape the two Qobuz rows already use,
 /// so the third row reuses their delegate instead of a fourth card variant.
 fn reco_to_card(r: qbz_external_reco::AlbumReco) -> AlbumCardData {
-    let art_url = crate::cover_artwork_qt::prefer_album_cover(&r.qobuz_album_id, r.artwork_url.clone());
+    let art_url =
+        crate::cover_artwork_qt::prefer_album_cover(&r.qobuz_album_id, r.artwork_url.clone());
     AlbumCardData {
         is_pinned: crate::sidebar_qt::is_pinned("album", &r.qobuz_album_id),
         is_favorite: crate::fav_cache_qt::is_album_favorite(&r.qobuz_album_id),
@@ -1161,7 +1164,12 @@ pub async fn load_suggestions(
             let date = a
                 .dates
                 .as_ref()
-                .and_then(|d| d.original.clone().or(d.download.clone()).or(d.stream.clone()))
+                .and_then(|d| {
+                    d.original
+                        .clone()
+                        .or(d.download.clone())
+                        .or(d.stream.clone())
+                })
                 .or(a.release_date_original.clone());
             let (artist, card_artist_id) = card_artist(a);
             AlbumCardData {
@@ -1339,7 +1347,12 @@ fn spawn_deferred_rows(
             },
             async {
                 let suggestions = load_suggestions(&runtime, &album_id).await;
-                publish_row(generation, "suggestions", "suggestionsLoading", &suggestions);
+                publish_row(
+                    generation,
+                    "suggestions",
+                    "suggestionsLoading",
+                    &suggestions,
+                );
                 suggestions
             },
         );

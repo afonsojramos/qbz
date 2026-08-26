@@ -100,12 +100,7 @@ pub fn get(query: &str) -> Option<CortinillaData> {
     if !instant_paint_enabled() {
         return None;
     }
-    CACHE
-        .lock()
-        .ok()?
-        .as_ref()?
-        .get(query)
-        .cloned()
+    CACHE.lock().ok()?.as_ref()?.get(query).cloned()
 }
 
 /// Store a FINISHED payload.

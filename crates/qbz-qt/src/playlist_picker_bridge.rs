@@ -49,7 +49,6 @@ pub mod qbz_playlist_picker_bridge {
         // creating flags, the playlist rows, the inline create panel and the
         // duplicate-confirm sub-modal).
         #[qproperty(QString, picker_json)]
-
         type QbzPlaylistPicker = super::QbzPlaylistPickerRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain

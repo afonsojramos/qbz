@@ -126,7 +126,10 @@ fn snapshot_doc() -> Doc {
         auto_tail: AUTO_TAIL.load(Ordering::SeqCst),
         uploading: UPLOADING.load(Ordering::SeqCst),
         copied: COPIED.load(Ordering::SeqCst),
-        uploaded_url: UPLOADED_URL.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        uploaded_url: UPLOADED_URL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
     }
 }
 
@@ -292,7 +295,10 @@ pub async fn upload() {
 }
 
 pub fn copy_url() {
-    let url = UPLOADED_URL.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let url = UPLOADED_URL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     if url.is_empty() {
         return;
     }

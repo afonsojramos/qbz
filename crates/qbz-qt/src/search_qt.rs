@@ -379,7 +379,11 @@ fn map_track(track: &Track) -> TrackRow {
         .as_ref()
         .and_then(|a| a.image.best().cloned())
         .unwrap_or_default();
-    let album_id = track.album.as_ref().map(|a| a.id.clone()).unwrap_or_default();
+    let album_id = track
+        .album
+        .as_ref()
+        .map(|a| a.id.clone())
+        .unwrap_or_default();
     let album = track
         .album
         .as_ref()
@@ -459,7 +463,8 @@ fn map_playlist(playlist: &Playlist) -> PlaylistRow {
     let mut subtitle = playlist.owner.name.clone();
     if playlist.tracks_count > 0 {
         let count = playlist.tracks_count;
-        let tracks_label = qbz_i18n::tf("{} track", "{} tracks", count as i64, &[&count.to_string()]);
+        let tracks_label =
+            qbz_i18n::tf("{} track", "{} tracks", count as i64, &[&count.to_string()]);
         subtitle = if subtitle.is_empty() {
             tracks_label
         } else {
@@ -641,8 +646,12 @@ fn map_search_all_to_cortinilla(query: &str, results: &SearchAllResults) -> Cort
     let mut artist_rows: Vec<CortRow> = results.artists.items.iter().map(&to_artist_row).collect();
     let mut album_rows: Vec<CortRow> = results.albums.items.iter().map(&to_album_row).collect();
     let mut track_rows: Vec<CortRow> = results.tracks.items.iter().map(&to_track_row).collect();
-    let mut playlist_rows: Vec<CortRow> =
-        results.playlists.items.iter().map(&to_playlist_row).collect();
+    let mut playlist_rows: Vec<CortRow> = results
+        .playlists
+        .items
+        .iter()
+        .map(&to_playlist_row)
+        .collect();
 
     rank_within(query, "artist", &mut artist_rows, |r| r.id.clone());
     rank_within(query, "album", &mut album_rows, |r| r.id.clone());
@@ -675,8 +684,18 @@ fn map_search_all_to_cortinilla(query: &str, results: &SearchAllResults) -> Cort
                     .iter()
                     .find(|a| a.id.to_string() == id)
                     .map(&to_artist_row),
-                "album" => results.albums.items.iter().find(|a| a.id == id).map(&to_album_row),
-                "track" => results.tracks.items.iter().find(|t| t.id.to_string() == id).map(&to_track_row),
+                "album" => results
+                    .albums
+                    .items
+                    .iter()
+                    .find(|a| a.id == id)
+                    .map(&to_album_row),
+                "track" => results
+                    .tracks
+                    .items
+                    .iter()
+                    .find(|t| t.id.to_string() == id)
+                    .map(&to_track_row),
                 "playlist" => results
                     .playlists
                     .items
@@ -706,10 +725,30 @@ fn map_search_all_to_cortinilla(query: &str, results: &SearchAllResults) -> Cort
             });
         }
     };
-    push_section(&qbz_i18n::t("Albums"), "album", album_rows, results.albums.total);
-    push_section(&qbz_i18n::t("Artists"), "artist", artist_rows, results.artists.total);
-    push_section(&qbz_i18n::t("Tracks"), "track", track_rows, results.tracks.total);
-    push_section(&qbz_i18n::t("Playlists"), "playlist", playlist_rows, results.playlists.total);
+    push_section(
+        &qbz_i18n::t("Albums"),
+        "album",
+        album_rows,
+        results.albums.total,
+    );
+    push_section(
+        &qbz_i18n::t("Artists"),
+        "artist",
+        artist_rows,
+        results.artists.total,
+    );
+    push_section(
+        &qbz_i18n::t("Tracks"),
+        "track",
+        track_rows,
+        results.tracks.total,
+    );
+    push_section(
+        &qbz_i18n::t("Playlists"),
+        "playlist",
+        playlist_rows,
+        results.playlists.total,
+    );
 
     let mut data = CortinillaData {
         query: query.to_string(),
@@ -1144,8 +1183,7 @@ pub fn row_clicked(flat_index: i32) {
             "artist" => {
                 crate::nav_qt::record("local");
                 crate::shell_bridge::ui(|mut b| {
-                    b.as_mut()
-                        .set_current_view(QString::from("local"))
+                    b.as_mut().set_current_view(QString::from("local"))
                 });
                 crate::local_album_actions::open_artist_by_name(row.title);
             }
@@ -1354,8 +1392,7 @@ static IMM_SEL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new
 /// directly. Read by the hotkeys pipeline's (B) dropdown-steal
 /// (2026-08-03 hotkeys-port contract §1.1(B): `QbzImmersive.open &&
 /// QbzImmersive.immSearchOpen` wins over the desktop cortinilla).
-static IMM_SEARCH_OPEN: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static IMM_SEARCH_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn imm_search_open() -> bool {
     IMM_SEARCH_OPEN.load(Ordering::SeqCst)
@@ -1418,8 +1455,12 @@ fn map_search_all_to_immersive(query: &str, results: &SearchAllResults) -> Corti
 
     let mut artist_rows: Vec<CortRow> = results.artists.items.iter().map(&to_artist_row).collect();
     let mut album_rows: Vec<CortRow> = results.albums.items.iter().map(&to_album_row).collect();
-    let mut playlist_rows: Vec<CortRow> =
-        results.playlists.items.iter().map(&to_playlist_row).collect();
+    let mut playlist_rows: Vec<CortRow> = results
+        .playlists
+        .items
+        .iter()
+        .map(&to_playlist_row)
+        .collect();
     // Intra-category order applies the learned ranking BEFORE truncation
     // (search.rs `take`); the caps themselves live in the assembly seam.
     rank_within(query, "artist", &mut artist_rows, |r| r.id.clone());
@@ -1431,7 +1472,11 @@ fn map_search_all_to_immersive(query: &str, results: &SearchAllResults) -> Corti
         artist_rows,
         album_rows,
         playlist_rows,
-        (results.artists.total, results.albums.total, results.playlists.total),
+        (
+            results.artists.total,
+            results.albums.total,
+            results.playlists.total,
+        ),
     )
 }
 
@@ -1465,7 +1510,12 @@ fn assemble_immersive_sections(
     };
     push(&qbz_i18n::t("Artists"), "artist", artist_rows, totals.0);
     push(&qbz_i18n::t("Albums"), "album", album_rows, totals.1);
-    push(&qbz_i18n::t("Playlists"), "playlist", playlist_rows, totals.2);
+    push(
+        &qbz_i18n::t("Playlists"),
+        "playlist",
+        playlist_rows,
+        totals.2,
+    );
 
     let mut data = CortinillaData {
         query: query.to_string(),
@@ -1833,7 +1883,9 @@ pub fn imm_row_activated(flat_index: i32) {
                     if let Err(e) =
                         crate::playlist_qt::enqueue_playlist_by_id(&runtime, pid, &mode).await
                     {
-                        log::error!("[qbz-qt] immersive search enqueue_playlist {pid} ({mode}): {e}");
+                        log::error!(
+                            "[qbz-qt] immersive search enqueue_playlist {pid} ({mode}): {e}"
+                        );
                     }
                 });
             }
@@ -2114,21 +2166,59 @@ pub async fn submit(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str, tab:
     let mut albums: Vec<CardRow> = results.albums.items.iter().map(map_album).collect();
     let mut tracks: Vec<TrackRow> = results.tracks.items.iter().map(map_track).collect();
     let mut artists: Vec<ArtistRow> = results.artists.items.iter().map(map_artist).collect();
-    let mut playlists: Vec<PlaylistRow> = results.playlists.items.iter().map(map_playlist).collect();
+    let mut playlists: Vec<PlaylistRow> =
+        results.playlists.items.iter().map(map_playlist).collect();
 
-    let (mp_kind, mut mp_album, mut mp_artist, mut mp_track, mp_quality) = match &results.most_popular {
-        Some(MostPopularItem::Albums(a)) => ("album".to_string(), Some(map_album(a)), None, None, quality_label(a.maximum_bit_depth, a.maximum_sampling_rate)),
-        Some(MostPopularItem::Artists(a)) => ("artist".to_string(), None, Some(map_artist(a)), None, String::new()),
-        Some(MostPopularItem::Tracks(t)) => {
-            ("track".to_string(), None, None, Some(map_track(t)), quality_label(t.maximum_bit_depth, t.maximum_sampling_rate))
-        }
-        None => (String::new(), None, None, None, String::new()),
-    };
+    let (mp_kind, mut mp_album, mut mp_artist, mut mp_track, mp_quality) =
+        match &results.most_popular {
+            Some(MostPopularItem::Albums(a)) => (
+                "album".to_string(),
+                Some(map_album(a)),
+                None,
+                None,
+                quality_label(a.maximum_bit_depth, a.maximum_sampling_rate),
+            ),
+            Some(MostPopularItem::Artists(a)) => (
+                "artist".to_string(),
+                None,
+                Some(map_artist(a)),
+                None,
+                String::new(),
+            ),
+            Some(MostPopularItem::Tracks(t)) => (
+                "track".to_string(),
+                None,
+                None,
+                Some(map_track(t)),
+                quality_label(t.maximum_bit_depth, t.maximum_sampling_rate),
+            ),
+            None => (String::new(), None, None, None, String::new()),
+        };
     let mut missing: Vec<String> = Vec::new();
-    missing.extend(attach_urls(albums.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect()));
-    missing.extend(attach_urls(tracks.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect()));
-    missing.extend(attach_urls(artists.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect()));
-    missing.extend(attach_urls(playlists.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect()));
+    missing.extend(attach_urls(
+        albums
+            .iter_mut()
+            .map(|r| (r.art_url.clone(), &mut r.art_path))
+            .collect(),
+    ));
+    missing.extend(attach_urls(
+        tracks
+            .iter_mut()
+            .map(|r| (r.art_url.clone(), &mut r.art_path))
+            .collect(),
+    ));
+    missing.extend(attach_urls(
+        artists
+            .iter_mut()
+            .map(|r| (r.art_url.clone(), &mut r.art_path))
+            .collect(),
+    ));
+    missing.extend(attach_urls(
+        playlists
+            .iter_mut()
+            .map(|r| (r.art_url.clone(), &mut r.art_path))
+            .collect(),
+    ));
     if let Some(a) = &mut mp_album {
         missing.extend(attach_urls(vec![(a.art_url.clone(), &mut a.art_path)]));
     }
@@ -2143,7 +2233,9 @@ pub async fn submit(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str, tab:
     // first list entry (apply_search dedupe) — derived AFTER artwork attach
     // so its rows carry the disk paths (they are clones of `artists` rows).
     let artists_carousel: Vec<ArtistRow> = match (&mp_kind, artists.first()) {
-        (kind, Some(first)) if kind == "artist" && mp_artist.as_ref().is_some_and(|m| m.id == first.id) => {
+        (kind, Some(first))
+            if kind == "artist" && mp_artist.as_ref().is_some_and(|m| m.id == first.id) =>
+        {
             artists[1..].to_vec()
         }
         _ => artists.clone(),
@@ -2183,10 +2275,30 @@ pub async fn submit(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str, tab:
                 let mut guard = PAGE.lock().unwrap();
                 let doc = &mut guard.get_or_insert_with(PageState::default).doc;
                 let mut missing2 = Vec::new();
-                missing2.extend(attach_urls(doc.albums.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect()));
-                missing2.extend(attach_urls(doc.tracks.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect()));
-                missing2.extend(attach_urls(doc.artists.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect()));
-                missing2.extend(attach_urls(doc.playlists.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect()));
+                missing2.extend(attach_urls(
+                    doc.albums
+                        .iter_mut()
+                        .map(|r| (r.art_url.clone(), &mut r.art_path))
+                        .collect(),
+                ));
+                missing2.extend(attach_urls(
+                    doc.tracks
+                        .iter_mut()
+                        .map(|r| (r.art_url.clone(), &mut r.art_path))
+                        .collect(),
+                ));
+                missing2.extend(attach_urls(
+                    doc.artists
+                        .iter_mut()
+                        .map(|r| (r.art_url.clone(), &mut r.art_path))
+                        .collect(),
+                ));
+                missing2.extend(attach_urls(
+                    doc.playlists
+                        .iter_mut()
+                        .map(|r| (r.art_url.clone(), &mut r.art_path))
+                        .collect(),
+                ));
                 // The carousel shares rows with `artists`; artPath lives on
                 // the ArtistRow structs, so refresh the carousel from the
                 // updated list.
@@ -2256,7 +2368,11 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
     let (bl, abl) = blacklist_snapshots();
 
     match tab {
-        1 => match runtime.core().search_albums(&query, PAGE_SIZE, offset, search_type.as_deref()).await {
+        1 => match runtime
+            .core()
+            .search_albums(&query, PAGE_SIZE, offset, search_type.as_deref())
+            .await
+        {
             Ok(page) => {
                 let mut rows: Vec<CardRow> = page
                     .items
@@ -2264,7 +2380,11 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
                     .filter(|a| !qbz_core::core::album_blacklisted(a, &bl, &abl))
                     .map(map_album)
                     .collect();
-                let missing = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
+                let missing = attach_urls(
+                    rows.iter_mut()
+                        .map(|r| (r.art_url.clone(), &mut r.art_path))
+                        .collect(),
+                );
                 let total = page.total as i32;
                 let mut guard = PAGE.lock().unwrap();
                 if let Some(p) = guard.as_mut() {
@@ -2280,7 +2400,11 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
             }
             Err(e) => log::error!("[qbz-qt] search load-more albums failed: {e}"),
         },
-        2 => match runtime.core().search_tracks(&query, PAGE_SIZE, offset, search_type.as_deref()).await {
+        2 => match runtime
+            .core()
+            .search_tracks(&query, PAGE_SIZE, offset, search_type.as_deref())
+            .await
+        {
             Ok(page) => {
                 let mut rows: Vec<TrackRow> = page
                     .items
@@ -2288,7 +2412,11 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
                     .filter(|t| !qbz_core::core::track_blacklisted(t, &bl, &abl))
                     .map(map_track)
                     .collect();
-                let missing = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
+                let missing = attach_urls(
+                    rows.iter_mut()
+                        .map(|r| (r.art_url.clone(), &mut r.art_path))
+                        .collect(),
+                );
                 let total = page.total as i32;
                 let mut guard = PAGE.lock().unwrap();
                 if let Some(p) = guard.as_mut() {
@@ -2304,7 +2432,11 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
             }
             Err(e) => log::error!("[qbz-qt] search load-more tracks failed: {e}"),
         },
-        3 => match runtime.core().search_artists(&query, PAGE_SIZE, offset, search_type.as_deref()).await {
+        3 => match runtime
+            .core()
+            .search_artists(&query, PAGE_SIZE, offset, search_type.as_deref())
+            .await
+        {
             Ok(page) => {
                 // Artist axis ONLY — the reference filters this category on
                 // `bl` alone (`search.rs:1655`); an artist has no album id.
@@ -2314,7 +2446,11 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
                     .filter(|a| !bl.contains(&a.id))
                     .map(map_artist)
                     .collect();
-                let missing = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
+                let missing = attach_urls(
+                    rows.iter_mut()
+                        .map(|r| (r.art_url.clone(), &mut r.art_path))
+                        .collect(),
+                );
                 let total = page.total as i32;
                 let mut guard = PAGE.lock().unwrap();
                 if let Some(p) = guard.as_mut() {
@@ -2330,10 +2466,18 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
             }
             Err(e) => log::error!("[qbz-qt] search load-more artists failed: {e}"),
         },
-        4 => match runtime.core().search_playlists(&query, PAGE_SIZE, offset).await {
+        4 => match runtime
+            .core()
+            .search_playlists(&query, PAGE_SIZE, offset)
+            .await
+        {
             Ok(page) => {
                 let mut rows: Vec<PlaylistRow> = page.items.iter().map(map_playlist).collect();
-                let missing = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
+                let missing = attach_urls(
+                    rows.iter_mut()
+                        .map(|r| (r.art_url.clone(), &mut r.art_path))
+                        .collect(),
+                );
                 let total = page.total as i32;
                 let mut guard = PAGE.lock().unwrap();
                 if let Some(p) = guard.as_mut() {
@@ -2375,14 +2519,22 @@ pub async fn filter_changed(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: i3
     let (bl, abl) = blacklist_snapshots();
 
     // Albums.
-    if let Ok(page) = runtime.core().search_albums(&query, PAGE_SIZE, 0, search_type.as_deref()).await {
+    if let Ok(page) = runtime
+        .core()
+        .search_albums(&query, PAGE_SIZE, 0, search_type.as_deref())
+        .await
+    {
         let mut rows: Vec<CardRow> = page
             .items
             .iter()
             .filter(|a| !qbz_core::core::album_blacklisted(a, &bl, &abl))
             .map(map_album)
             .collect();
-        let _ = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
+        let _ = attach_urls(
+            rows.iter_mut()
+                .map(|r| (r.art_url.clone(), &mut r.art_path))
+                .collect(),
+        );
         let total = page.total as i32;
         let mut guard = PAGE.lock().unwrap();
         if let Some(p) = guard.as_mut() {
@@ -2396,14 +2548,22 @@ pub async fn filter_changed(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: i3
         }
     }
     // Tracks.
-    if let Ok(page) = runtime.core().search_tracks(&query, PAGE_SIZE, 0, search_type.as_deref()).await {
+    if let Ok(page) = runtime
+        .core()
+        .search_tracks(&query, PAGE_SIZE, 0, search_type.as_deref())
+        .await
+    {
         let mut rows: Vec<TrackRow> = page
             .items
             .iter()
             .filter(|t| !qbz_core::core::track_blacklisted(t, &bl, &abl))
             .map(map_track)
             .collect();
-        let _ = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
+        let _ = attach_urls(
+            rows.iter_mut()
+                .map(|r| (r.art_url.clone(), &mut r.art_path))
+                .collect(),
+        );
         let total = page.total as i32;
         let mut guard = PAGE.lock().unwrap();
         if let Some(p) = guard.as_mut() {
@@ -2417,14 +2577,22 @@ pub async fn filter_changed(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: i3
         }
     }
     // Artists (the API takes the search_type too, 1:1 the Slint filter).
-    if let Ok(page) = runtime.core().search_artists(&query, PAGE_SIZE, 0, search_type.as_deref()).await {
+    if let Ok(page) = runtime
+        .core()
+        .search_artists(&query, PAGE_SIZE, 0, search_type.as_deref())
+        .await
+    {
         let mut rows: Vec<ArtistRow> = page
             .items
             .iter()
             .filter(|a| !bl.contains(&a.id))
             .map(map_artist)
             .collect();
-        let _ = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
+        let _ = attach_urls(
+            rows.iter_mut()
+                .map(|r| (r.art_url.clone(), &mut r.art_path))
+                .collect(),
+        );
         let total = page.total as i32;
         let mut guard = PAGE.lock().unwrap();
         if let Some(p) = guard.as_mut() {
@@ -2463,8 +2631,16 @@ mod tests {
                 kind: "album".into(),
                 has_more: false,
                 rows: vec![
-                    CortRow { kind: "album".into(), id: "1".into(), ..Default::default() },
-                    CortRow { kind: "album".into(), id: "2".into(), ..Default::default() },
+                    CortRow {
+                        kind: "album".into(),
+                        id: "1".into(),
+                        ..Default::default()
+                    },
+                    CortRow {
+                        kind: "album".into(),
+                        id: "2".into(),
+                        ..Default::default()
+                    },
                 ],
             }],
         };
@@ -2477,12 +2653,20 @@ mod tests {
     fn flat_indices_top_is_zero() {
         let mut data = CortinillaData {
             query: "q".into(),
-            top: Some(CortRow { kind: "artist".into(), id: "9".into(), ..Default::default() }),
+            top: Some(CortRow {
+                kind: "artist".into(),
+                id: "9".into(),
+                ..Default::default()
+            }),
             sections: vec![CortSection {
                 title: "Albums".into(),
                 kind: "album".into(),
                 has_more: false,
-                rows: vec![CortRow { kind: "album".into(), id: "1".into(), ..Default::default() }],
+                rows: vec![CortRow {
+                    kind: "album".into(),
+                    id: "1".into(),
+                    ..Default::default()
+                }],
             }],
         };
         assign_flat_indices(&mut data);
@@ -2492,7 +2676,10 @@ mod tests {
 
     #[test]
     fn quality_label_formats() {
-        assert_eq!(quality_label(Some(24), Some(96.0)), "Hi-Res 24-bit / 96 kHz");
+        assert_eq!(
+            quality_label(Some(24), Some(96.0)),
+            "Hi-Res 24-bit / 96 kHz"
+        );
         assert_eq!(quality_label(Some(16), None), "CD 16-bit / 44.1 kHz");
         assert_eq!(quality_label(None, Some(192.0)), "");
         assert_eq!(mmss(5), "0:05");
@@ -2520,18 +2707,34 @@ mod tests {
         // Contract §3.4 / search.rs:609-611,690-692: Artists, Albums,
         // Playlists IN THAT ORDER; caps 2/5/2; NO top result; NO track rows;
         // flat indices from 1 (main.rs:10491-10499).
-        let artists: Vec<CortRow> = (0..4).map(|i| imm_row("artist", &format!("ar{i}"), "qobuz")).collect();
-        let albums: Vec<CortRow> = (0..7).map(|i| imm_row("album", &format!("al{i}"), "qobuz")).collect();
-        let playlists: Vec<CortRow> = (0..3).map(|i| imm_row("playlist", &format!("pl{i}"), "qobuz")).collect();
+        let artists: Vec<CortRow> = (0..4)
+            .map(|i| imm_row("artist", &format!("ar{i}"), "qobuz"))
+            .collect();
+        let albums: Vec<CortRow> = (0..7)
+            .map(|i| imm_row("album", &format!("al{i}"), "qobuz"))
+            .collect();
+        let playlists: Vec<CortRow> = (0..3)
+            .map(|i| imm_row("playlist", &format!("pl{i}"), "qobuz"))
+            .collect();
         let data = assemble_immersive_sections("q", artists, albums, playlists, (4, 7, 3));
 
-        assert!(data.top.is_none(), "the immersive payload has NO top result");
+        assert!(
+            data.top.is_none(),
+            "the immersive payload has NO top result"
+        );
         let kinds: Vec<&str> = data.sections.iter().map(|s| s.kind.as_str()).collect();
-        assert_eq!(kinds, ["artist", "album", "playlist"], "section order is Artists/Albums/Playlists");
+        assert_eq!(
+            kinds,
+            ["artist", "album", "playlist"],
+            "section order is Artists/Albums/Playlists"
+        );
         assert_eq!(data.sections[0].rows.len(), 2, "artists cap 2");
         assert_eq!(data.sections[1].rows.len(), 5, "albums cap 5");
         assert_eq!(data.sections[2].rows.len(), 2, "playlists cap 2");
-        assert!(data.sections.iter().all(|s| s.has_more), "totals exceed every cap");
+        assert!(
+            data.sections.iter().all(|s| s.has_more),
+            "totals exceed every cap"
+        );
         // Flat indices run from 1, contiguous across sections.
         let flats: Vec<i32> = data
             .sections
@@ -2539,7 +2742,11 @@ mod tests {
             .flat_map(|s| s.rows.iter().map(|r| r.flat_index))
             .collect();
         assert_eq!(flats, (1..=9).collect::<Vec<i32>>());
-        assert!(data.sections.iter().flat_map(|s| s.rows.iter()).all(|r| r.kind != "track"));
+        assert!(data
+            .sections
+            .iter()
+            .flat_map(|s| s.rows.iter())
+            .all(|r| r.kind != "track"));
     }
 
     #[test]
@@ -2562,20 +2769,56 @@ mod tests {
         // Contract §3.4 round-2-verified mapping (main.rs:10614-10749).
         // Local album rows branch BEFORE the Qobuz match (the id is a group
         // key, not a numeric Qobuz id).
-        assert_eq!(imm_dispatch("local", "album", "replace"), ImmDispatch::LocalPlay);
-        assert_eq!(imm_dispatch("local", "album", "next"), ImmDispatch::LocalEnqueue("next".into()));
-        assert_eq!(imm_dispatch("local", "album", "queue"), ImmDispatch::LocalEnqueue("queue".into()));
+        assert_eq!(
+            imm_dispatch("local", "album", "replace"),
+            ImmDispatch::LocalPlay
+        );
+        assert_eq!(
+            imm_dispatch("local", "album", "next"),
+            ImmDispatch::LocalEnqueue("next".into())
+        );
+        assert_eq!(
+            imm_dispatch("local", "album", "queue"),
+            ImmDispatch::LocalEnqueue("queue".into())
+        );
         // Qobuz replace arms.
-        assert_eq!(imm_dispatch("qobuz", "album", "replace"), ImmDispatch::PlayAlbum);
-        assert_eq!(imm_dispatch("qobuz", "playlist", "replace"), ImmDispatch::PlayPlaylist);
-        assert_eq!(imm_dispatch("qobuz", "artist", "replace"), ImmDispatch::PlayArtist);
+        assert_eq!(
+            imm_dispatch("qobuz", "album", "replace"),
+            ImmDispatch::PlayAlbum
+        );
+        assert_eq!(
+            imm_dispatch("qobuz", "playlist", "replace"),
+            ImmDispatch::PlayPlaylist
+        );
+        assert_eq!(
+            imm_dispatch("qobuz", "artist", "replace"),
+            ImmDispatch::PlayArtist
+        );
         // Qobuz next/queue arms (mode carried verbatim).
-        assert_eq!(imm_dispatch("qobuz", "album", "next"), ImmDispatch::EnqueueAlbum("next".into()));
-        assert_eq!(imm_dispatch("qobuz", "album", "queue"), ImmDispatch::EnqueueAlbum("queue".into()));
-        assert_eq!(imm_dispatch("qobuz", "playlist", "next"), ImmDispatch::EnqueuePlaylist("next".into()));
-        assert_eq!(imm_dispatch("qobuz", "playlist", "queue"), ImmDispatch::EnqueuePlaylist("queue".into()));
-        assert_eq!(imm_dispatch("qobuz", "artist", "next"), ImmDispatch::EnqueueArtistTop("next".into()));
-        assert_eq!(imm_dispatch("qobuz", "artist", "queue"), ImmDispatch::EnqueueArtistTop("queue".into()));
+        assert_eq!(
+            imm_dispatch("qobuz", "album", "next"),
+            ImmDispatch::EnqueueAlbum("next".into())
+        );
+        assert_eq!(
+            imm_dispatch("qobuz", "album", "queue"),
+            ImmDispatch::EnqueueAlbum("queue".into())
+        );
+        assert_eq!(
+            imm_dispatch("qobuz", "playlist", "next"),
+            ImmDispatch::EnqueuePlaylist("next".into())
+        );
+        assert_eq!(
+            imm_dispatch("qobuz", "playlist", "queue"),
+            ImmDispatch::EnqueuePlaylist("queue".into())
+        );
+        assert_eq!(
+            imm_dispatch("qobuz", "artist", "next"),
+            ImmDispatch::EnqueueArtistTop("next".into())
+        );
+        assert_eq!(
+            imm_dispatch("qobuz", "artist", "queue"),
+            ImmDispatch::EnqueueArtistTop("queue".into())
+        );
         // Unknown combinations are inert (no track rows exist in the payload;
         // an unknown action does nothing).
         assert_eq!(imm_dispatch("qobuz", "track", "replace"), ImmDispatch::None);
@@ -2588,11 +2831,27 @@ mod tests {
         // main.rs:10524-10540: Down from -1 -> first row; Up from the first
         // row -> -1; both ends clamp (no wrap).
         let order = vec![1, 2, 3, 4];
-        assert_eq!(imm_next_selection(&order, -1, 1), 1, "Down from -1 lands on the first row");
-        assert_eq!(imm_next_selection(&order, -1, -1), -1, "Up from -1 stays at -1");
-        assert_eq!(imm_next_selection(&order, 1, -1), -1, "Up from the first row returns to -1");
+        assert_eq!(
+            imm_next_selection(&order, -1, 1),
+            1,
+            "Down from -1 lands on the first row"
+        );
+        assert_eq!(
+            imm_next_selection(&order, -1, -1),
+            -1,
+            "Up from -1 stays at -1"
+        );
+        assert_eq!(
+            imm_next_selection(&order, 1, -1),
+            -1,
+            "Up from the first row returns to -1"
+        );
         assert_eq!(imm_next_selection(&order, 1, 1), 2);
-        assert_eq!(imm_next_selection(&order, 4, 1), 4, "Down on the last row clamps (no wrap)");
+        assert_eq!(
+            imm_next_selection(&order, 4, 1),
+            4,
+            "Down on the last row clamps (no wrap)"
+        );
         assert_eq!(imm_next_selection(&order, 3, -1), 2);
     }
 
@@ -2613,7 +2872,10 @@ mod tests {
                     title: "Albums".into(),
                     kind: "album".into(),
                     has_more: false,
-                    rows: vec![imm_row("album", "1", "qobuz"), imm_row("album", "2", "qobuz")],
+                    rows: vec![
+                        imm_row("album", "1", "qobuz"),
+                        imm_row("album", "2", "qobuz"),
+                    ],
                 },
                 CortSection {
                     title: "Artists".into(),
@@ -2679,7 +2941,10 @@ mod tests {
                     title: "Artists".into(),
                     kind: "artist".into(),
                     has_more: false,
-                    rows: vec![imm_row("artist", "1", "qobuz"), imm_row("artist", "2", "qobuz")],
+                    rows: vec![
+                        imm_row("artist", "1", "qobuz"),
+                        imm_row("artist", "2", "qobuz"),
+                    ],
                 },
                 CortSection {
                     title: "Albums".into(),
@@ -2690,10 +2955,18 @@ mod tests {
             ],
         };
         assign_flat_indices(&mut data);
-        assert_eq!(imm_scroll_y(&data, -1), 0.0, "no selection scrolls to the top");
+        assert_eq!(
+            imm_scroll_y(&data, -1),
+            0.0,
+            "no selection scrolls to the top"
+        );
         assert_eq!(imm_scroll_y(&data, 1), 28.0, "first section header block");
         assert_eq!(imm_scroll_y(&data, 2), 84.0, "28 + one 56px row");
-        assert_eq!(imm_scroll_y(&data, 3), 168.0, "28 + 2*56 + the second section's 28");
+        assert_eq!(
+            imm_scroll_y(&data, 3),
+            168.0,
+            "28 + 2*56 + the second section's 28"
+        );
         assert_eq!(imm_scroll_y(&data, 99), 0.0, "unknown index falls to 0");
     }
 
@@ -2701,8 +2974,22 @@ mod tests {
     fn local_caps_profiles_and_fetch_limit() {
         // search.rs:717-746: normal 3/2/3, expanded 8/4/8; fetch_limit =
         // max(albums, tracks) * 12 + 40.
-        assert_eq!(crate::search_local::LocalCaps::for_session(false), crate::search_local::LocalCaps { albums: 3, artists: 2, tracks: 3 });
-        assert_eq!(crate::search_local::LocalCaps::for_session(true), crate::search_local::LocalCaps { albums: 8, artists: 4, tracks: 8 });
+        assert_eq!(
+            crate::search_local::LocalCaps::for_session(false),
+            crate::search_local::LocalCaps {
+                albums: 3,
+                artists: 2,
+                tracks: 3
+            }
+        );
+        assert_eq!(
+            crate::search_local::LocalCaps::for_session(true),
+            crate::search_local::LocalCaps {
+                albums: 8,
+                artists: 4,
+                tracks: 8
+            }
+        );
         assert_eq!(crate::search_local::LocalCaps::NORMAL.fetch_limit(), 76);
         assert_eq!(crate::search_local::LocalCaps::EXPANDED.fetch_limit(), 136);
     }

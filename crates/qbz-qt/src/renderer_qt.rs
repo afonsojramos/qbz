@@ -449,8 +449,8 @@ pub fn apply_gpu_preference() {
     // A GPU pick needs Vulkan (see below), so it cannot also honour an explicit
     // `software`/`opengl` choice — the more specific, explicitly-chosen
     // RENDERER wins and this says so rather than quietly overriding it.
-    if let Some(forced) = std::env::var_os("QSG_RHI_BACKEND")
-        .or_else(|| std::env::var_os("QT_QUICK_BACKEND"))
+    if let Some(forced) =
+        std::env::var_os("QSG_RHI_BACKEND").or_else(|| std::env::var_os("QT_QUICK_BACKEND"))
     {
         log::info!(
             "[qbz-qt] gpu: the renderer row already forced {forced:?}; a GPU pick needs \
@@ -461,16 +461,17 @@ pub fn apply_gpu_preference() {
     let pref = crate::settings_qt::pref_str("gpu_power", "auto");
     let Some(gpu) = resolve_gpu(&pref) else {
         if pref != "auto" && !pref.is_empty() {
-            log::warn!(
-                "[qbz-qt] gpu: '{pref}' matches no device present on this machine -> Auto"
-            );
+            log::warn!("[qbz-qt] gpu: '{pref}' matches no device present on this machine -> Auto");
         }
         return;
     };
     if gpu.index == default_gpu_index() {
         // Already the default: selecting it needs no override, and forcing one
         // would buy the Vulkan coupling below for nothing.
-        log::info!("[qbz-qt] gpu: '{}' is device 0 (the default) -> no override", gpu.name);
+        log::info!(
+            "[qbz-qt] gpu: '{}' is device 0 (the default) -> no override",
+            gpu.name
+        );
         return;
     }
     // THE VULKAN COUPLING, and why it is the only honest route.
@@ -545,7 +546,10 @@ mod tests {
         assert!(!reduce_motion(false), "GPU + desktop = full motion");
         assert!(reduce_motion(true), "kiosk forces it on regardless of tier");
         GPU_TIER.store(false, Ordering::SeqCst);
-        assert!(reduce_motion(false), "a software tier forces it on by itself");
+        assert!(
+            reduce_motion(false),
+            "a software tier forces it on by itself"
+        );
         assert!(reduce_motion(true));
         GPU_TIER.store(true, Ordering::SeqCst);
     }

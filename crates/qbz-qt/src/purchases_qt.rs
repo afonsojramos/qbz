@@ -543,7 +543,11 @@ fn downloaded_for_format(downloaded_format_ids: &[u32], selected: Option<u32>) -
 /// album `formatId` is set and differs from the selected format reports NOTHING
 /// — that is what makes changing the dropdown hide the green checks. Every
 /// other status passes through unscoped.
-fn status_scoped(state: Option<&AlbumDownload>, track_id: u64, selected: Option<u32>) -> Option<DlStatus> {
+fn status_scoped(
+    state: Option<&AlbumDownload>,
+    track_id: u64,
+    selected: Option<u32>,
+) -> Option<DlStatus> {
     let state = state?;
     let status = *state.statuses.get(&track_id)?;
     if status == DlStatus::Complete {
@@ -838,7 +842,8 @@ async fn ensure_registry() -> Registry {
 // than that import.
 
 fn publish_list() {
-    let json = with_list(|s| serde_json::to_string(&build_list_doc(s)).unwrap_or_else(|_| "{}".into()));
+    let json =
+        with_list(|s| serde_json::to_string(&build_list_doc(s)).unwrap_or_else(|_| "{}".into()));
     crate::purchases_bridge::ui(move |mut b| {
         b.as_mut().set_list_json(QString::from(json.as_str()));
         let next = b.as_ref().purchases_rev() + 1;
@@ -847,7 +852,8 @@ fn publish_list() {
 }
 
 fn publish_album() {
-    let json = with_detail(|s| serde_json::to_string(&build_album_doc(s)).unwrap_or_else(|_| "{}".into()));
+    let json =
+        with_detail(|s| serde_json::to_string(&build_album_doc(s)).unwrap_or_else(|_| "{}".into()));
     crate::purchases_bridge::ui(move |mut b| {
         b.as_mut().set_album_json(QString::from(json.as_str()));
         let next = b.as_ref().purchases_rev() + 1;
@@ -874,7 +880,12 @@ fn build_list_doc(s: &ListState) -> ListDoc {
         .iter()
         .filter(|a| !s.hide_unavailable || a.downloadable)
         .filter(|a| {
-            matches_quality(filter, a.hires, a.maximum_bit_depth, a.maximum_sampling_rate)
+            matches_quality(
+                filter,
+                a.hires,
+                a.maximum_bit_depth,
+                a.maximum_sampling_rate,
+            )
         })
         .filter(|a| !s.hide_downloaded || !a.downloaded)
         .collect();
@@ -888,7 +899,12 @@ fn build_list_doc(s: &ListState) -> ListDoc {
         .iter()
         .filter(|t| !s.hide_downloaded || !t.downloaded)
         .filter(|t| {
-            matches_quality(filter, t.hires, t.maximum_bit_depth, t.maximum_sampling_rate)
+            matches_quality(
+                filter,
+                t.hires,
+                t.maximum_bit_depth,
+                t.maximum_sampling_rate,
+            )
         })
         .collect();
 
@@ -940,7 +956,13 @@ fn sort_albums(list: &mut [&PurchaseAlbum], key: &str, ascending: bool) {
             flip(ord)
         }),
         // "purchased" / "date" — the default.
-        _ => list.sort_by(|a, b| flip(a.purchased_at.unwrap_or(0).cmp(&b.purchased_at.unwrap_or(0)))),
+        _ => list.sort_by(|a, b| {
+            flip(
+                a.purchased_at
+                    .unwrap_or(0)
+                    .cmp(&b.purchased_at.unwrap_or(0)),
+            )
+        }),
     }
 }
 
@@ -1206,7 +1228,9 @@ fn build_album_doc(s: &DetailState) -> AlbumDoc {
         // a destination exists in the STORE — i.e. a download really happened,
         // not merely that the user picked a folder.
         add_to_library_visible: all_complete
-            && dl_ref.and_then(|d| d.resolved_album_folder.as_ref()).is_some(),
+            && dl_ref
+                .and_then(|d| d.resolved_album_folder.as_ref())
+                .is_some(),
     }
 }
 
@@ -1243,7 +1267,10 @@ async fn read_registry() -> Registry {
     };
     let mut format_map: HashMap<i64, Vec<u32>> = HashMap::new();
     for (track_id, format_id) in formats {
-        format_map.entry(track_id).or_default().push(format_id as u32);
+        format_map
+            .entry(track_id)
+            .or_default()
+            .push(format_id as u32);
     }
     Registry {
         downloaded_ids: ids.into_iter().collect(),
@@ -1283,7 +1310,11 @@ fn open_owned_library_db() -> Option<LibraryDatabase> {
 /// SHARED `apply_download_flags`, which carries the owner's §11-1 ruling (the
 /// album rule reads the local registry) — never a local re-derivation, so the
 /// list and the detail cannot disagree about the same album.
-fn annotate(albums: Vec<PurchaseAlbum>, tracks: Vec<PurchaseTrack>, reg: &Registry) -> (Vec<PurchaseAlbum>, Vec<PurchaseTrack>) {
+fn annotate(
+    albums: Vec<PurchaseAlbum>,
+    tracks: Vec<PurchaseTrack>,
+    reg: &Registry,
+) -> (Vec<PurchaseAlbum>, Vec<PurchaseTrack>) {
     let mut response = PurchaseResponse {
         albums: SearchResultsPage {
             total: albums.len() as u32,
@@ -1415,7 +1446,11 @@ fn load_tab(generation: u64, tab: String, force: bool) {
         if s.generation != generation {
             return false;
         }
-        let already = if tab == "tracks" { s.tracks_loaded } else { s.albums_loaded };
+        let already = if tab == "tracks" {
+            s.tracks_loaded
+        } else {
+            s.albums_loaded
+        };
         if already && !force {
             return false;
         }
@@ -1479,7 +1514,11 @@ fn load_tab(generation: u64, tab: String, force: bool) {
                         &mut s.counts.albums
                     };
                     if *counter == 0 {
-                        *counter = if server_total > 0 { server_total } else { loaded_len };
+                        *counter = if server_total > 0 {
+                            server_total
+                        } else {
+                            loaded_len
+                        };
                     }
 
                     s.loading = false;
@@ -1574,8 +1613,7 @@ pub fn search(query: String) {
         match result {
             Ok(response) => {
                 let filtered = svc::filter_purchase_response(response, &query);
-                let (albums, tracks) =
-                    annotate(filtered.albums.items, filtered.tracks.items, &reg);
+                let (albums, tracks) = annotate(filtered.albums.items, filtered.tracks.items, &reg);
                 let applied = with_list(|s| {
                     // Two guards: the visit, and the search token — a slow
                     // earlier query must not overwrite a newer one's results.
@@ -1628,7 +1666,13 @@ pub fn set_group(key: String) {
 }
 
 pub fn set_view_mode(mode: String) {
-    with_list(|s| s.view_mode = if mode == "list" { "list".into() } else { "grid".into() });
+    with_list(|s| {
+        s.view_mode = if mode == "list" {
+            "list".into()
+        } else {
+            "grid".into()
+        }
+    });
     publish_list();
 }
 
@@ -1745,7 +1789,8 @@ async fn load_album(generation: u64, album_id: String) {
 
     let reg = ensure_registry().await;
 
-    let album = svc::build_purchase_album(&catalog, &purchases, &reg.downloaded_ids, &reg.format_map);
+    let album =
+        svc::build_purchase_album(&catalog, &purchases, &reg.downloaded_ids, &reg.format_map);
     let formats = svc::synth_formats(&catalog);
     let cover_url = catalog.image.best().cloned().unwrap_or_default();
 
@@ -1812,7 +1857,10 @@ pub fn set_format(format_id: i32) {
     let changed = with_detail(|s| {
         let id = format_id as u32;
         if !s.formats.iter().any(|f| f.id == id) {
-            log::warn!("[qbz-qt] purchases: format {id} is not offered for album {}", s.album_id);
+            log::warn!(
+                "[qbz-qt] purchases: format {id} is not offered for album {}",
+                s.album_id
+            );
             return false;
         }
         s.selected_format_id = Some(id);
@@ -1971,7 +2019,12 @@ async fn ensure_destination(mut plan: DownloadPlan) -> Option<DownloadPlan> {
 /// The album-level context every track is tagged from (§14): built ONCE before
 /// the loop, with the cover fetched once rather than per track.
 async fn build_context(catalog: &Album) -> svc::PurchaseAlbumContext {
-    let cover = match catalog.image.large.as_deref().or(catalog.image.best().map(String::as_str)) {
+    let cover = match catalog
+        .image
+        .large
+        .as_deref()
+        .or(catalog.image.best().map(String::as_str))
+    {
         Some(url) if !url.is_empty() => svc::fetch_asset_bytes(url).await,
         _ => None,
     };
@@ -2019,17 +2072,20 @@ async fn run_album_download(plan: DownloadPlan) {
     // the tracks. The folder is the one the FIRST successful track produced —
     // the store's rewritten destination — falling back to the deterministic
     // derivation when nothing landed.
-    let folder = with_store(|st| st.get(&plan.album_id).and_then(|d| d.resolved_album_folder.clone()))
-        .filter(|d| d != &plan.destination)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            album_dir_for(
-                &plan.destination,
-                &plan.artist,
-                &plan.album_title,
-                &plan.quality_dir,
-            )
-        });
+    let folder = with_store(|st| {
+        st.get(&plan.album_id)
+            .and_then(|d| d.resolved_album_folder.clone())
+    })
+    .filter(|d| d != &plan.destination)
+    .map(PathBuf::from)
+    .unwrap_or_else(|| {
+        album_dir_for(
+            &plan.destination,
+            &plan.artist,
+            &plan.album_title,
+            &plan.quality_dir,
+        )
+    });
     if cover.is_some() || back.is_some() {
         let _ = tokio::task::spawn_blocking(move || {
             svc::write_album_cover_files(&folder, cover.as_deref(), back.as_deref());
@@ -2058,7 +2114,10 @@ fn run_sequential(
     ctx: svc::PurchaseAlbumContext,
     cancellable: bool,
 ) {
-    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt,
         Err(e) => {
             log::error!("[qbz-qt] purchases: download runtime build failed: {e}");
@@ -2192,7 +2251,12 @@ async fn refresh_after_download() {
     let reg = read_registry().await;
     set_registry(reg.clone());
 
-    let (albums, tracks) = with_list(|s| (std::mem::take(&mut s.albums_raw), std::mem::take(&mut s.tracks_raw)));
+    let (albums, tracks) = with_list(|s| {
+        (
+            std::mem::take(&mut s.albums_raw),
+            std::mem::take(&mut s.tracks_raw),
+        )
+    });
     let (albums, tracks) = annotate(albums, tracks, &reg);
     with_list(|s| {
         s.albums_raw = albums;
@@ -2210,15 +2274,11 @@ async fn refresh_after_download() {
             for track in &mut page.items {
                 let tid = track.id as i64;
                 track.downloaded = reg.downloaded_ids.contains(&tid);
-                track.downloaded_format_ids =
-                    reg.format_map.get(&tid).cloned().unwrap_or_default();
+                track.downloaded_format_ids = reg.format_map.get(&tid).cloned().unwrap_or_default();
             }
         }
-        album.downloaded = svc::album_downloaded_from_registry(
-            &album.id,
-            album.tracks_count,
-            &reg.album_counts,
-        );
+        album.downloaded =
+            svc::album_downloaded_from_registry(&album.id, album.tracks_count, &reg.album_counts);
         true
     });
     if refreshed {
@@ -2275,17 +2335,20 @@ pub fn download_goodies() {
 
         // The album folder the tracks went into, or the one they WOULD go into
         // — a booklet is worth downloading before any audio is.
-        let folder = with_store(|st| st.get(&plan.album_id).and_then(|d| d.resolved_album_folder.clone()))
-            .filter(|d| d != &plan.destination)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                album_dir_for(
-                    &plan.destination,
-                    &plan.artist,
-                    &plan.album_title,
-                    &plan.quality_dir,
-                )
-            });
+        let folder = with_store(|st| {
+            st.get(&plan.album_id)
+                .and_then(|d| d.resolved_album_folder.clone())
+        })
+        .filter(|d| d != &plan.destination)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            album_dir_for(
+                &plan.destination,
+                &plan.artist,
+                &plan.album_title,
+                &plan.quality_dir,
+            )
+        });
 
         for goody in &goodies {
             // A goodie failure never fails anything: `download_goodie` returns
@@ -2321,8 +2384,11 @@ pub fn download_goodies() {
 /// (`database.rs:1105-1120`) and the gold badge in the Local Library.
 pub fn add_to_library() {
     let (album_id, destination) = with_detail(|s| {
-        let dest = with_store(|st| st.get(&s.album_id).and_then(|d| d.resolved_album_folder.clone()))
-            .unwrap_or_else(|| s.destination.clone());
+        let dest = with_store(|st| {
+            st.get(&s.album_id)
+                .and_then(|d| d.resolved_album_folder.clone())
+        })
+        .unwrap_or_else(|| s.destination.clone());
         (s.album_id.clone(), dest)
     });
     if album_id.is_empty() || destination.trim().is_empty() {
@@ -2523,7 +2589,10 @@ mod tests {
         // hiding a failure behind a dropdown change would hide the retry
         // control with it.
         let failed = state_with(Some(27), &[(1, DlStatus::Failed)]);
-        assert_eq!(status_scoped(Some(&failed), 1, Some(7)), Some(DlStatus::Failed));
+        assert_eq!(
+            status_scoped(Some(&failed), 1, Some(7)),
+            Some(DlStatus::Failed)
+        );
 
         let running = state_with(Some(27), &[(1, DlStatus::Downloading)]);
         assert_eq!(
@@ -2534,7 +2603,10 @@ mod tests {
 
     #[test]
     fn all_complete_is_format_scoped_and_gates_add_to_library() {
-        let state = state_with(Some(27), &[(1, DlStatus::Complete), (2, DlStatus::Complete)]);
+        let state = state_with(
+            Some(27),
+            &[(1, DlStatus::Complete), (2, DlStatus::Complete)],
+        );
         assert!(all_complete_for_format(Some(&state), Some(27)));
         assert!(!all_complete_for_format(Some(&state), Some(7)));
         assert!(!all_complete_for_format(Some(&state), None));
@@ -2673,17 +2745,47 @@ mod tests {
     #[test]
     fn the_quality_filter_matches_the_reference_predicates() {
         assert!(matches_quality(QualityFilter::All, false, None, None));
-        assert!(matches_quality(QualityFilter::Hires, true, Some(24), Some(96.0)));
-        assert!(!matches_quality(QualityFilter::Hires, false, Some(16), Some(44.1)));
+        assert!(matches_quality(
+            QualityFilter::Hires,
+            true,
+            Some(24),
+            Some(96.0)
+        ));
+        assert!(!matches_quality(
+            QualityFilter::Hires,
+            false,
+            Some(16),
+            Some(44.1)
+        ));
         // CD: not hires AND (16-bit OR nothing known at all).
-        assert!(matches_quality(QualityFilter::Cd, false, Some(16), Some(44.1)));
+        assert!(matches_quality(
+            QualityFilter::Cd,
+            false,
+            Some(16),
+            Some(44.1)
+        ));
         assert!(matches_quality(QualityFilter::Cd, false, None, None));
         assert!(!matches_quality(QualityFilter::Cd, false, None, Some(44.1)));
-        assert!(!matches_quality(QualityFilter::Cd, true, Some(16), Some(44.1)));
+        assert!(!matches_quality(
+            QualityFilter::Cd,
+            true,
+            Some(16),
+            Some(44.1)
+        ));
         // Lossy: no bit depth, or under 16.
-        assert!(matches_quality(QualityFilter::Lossy, false, None, Some(44.1)));
+        assert!(matches_quality(
+            QualityFilter::Lossy,
+            false,
+            None,
+            Some(44.1)
+        ));
         assert!(matches_quality(QualityFilter::Lossy, false, Some(8), None));
-        assert!(!matches_quality(QualityFilter::Lossy, false, Some(16), None));
+        assert!(!matches_quality(
+            QualityFilter::Lossy,
+            false,
+            Some(16),
+            None
+        ));
     }
 
     #[test]
@@ -2767,7 +2869,12 @@ mod tests {
             "So What",
             "flac",
         );
-        let derived = album_dir_for("/music", "Miles Davis", "Kind of Blue", "[FLAC][24-bit,96kHz]");
+        let derived = album_dir_for(
+            "/music",
+            "Miles Davis",
+            "Kind of Blue",
+            "[FLAC][24-bit,96kHz]",
+        );
         assert_eq!(track.parent().unwrap(), derived.as_path());
         assert_eq!(
             derived,

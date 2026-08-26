@@ -223,7 +223,8 @@ fn publish(grid: Grid) {
             b.as_mut().set_mixtapes_json(QString::from(json.as_str()));
         }),
         Grid::Collections => crate::myqbz_bridge::ui(move |mut b| {
-            b.as_mut().set_collections_json(QString::from(json.as_str()));
+            b.as_mut()
+                .set_collections_json(QString::from(json.as_str()));
         }),
     }
 }
@@ -378,13 +379,7 @@ pub(crate) fn small_qobuz_url(url: &str, target: u32) -> String {
         return String::new();
     }
     const TOKENS: [&str; 8] = [
-        "_50.jpg",
-        "_100.jpg",
-        "_150.jpg",
-        "_230.jpg",
-        "_300.jpg",
-        "_600.jpg",
-        "_max.jpg",
+        "_50.jpg", "_100.jpg", "_150.jpg", "_230.jpg", "_300.jpg", "_600.jpg", "_max.jpg",
         "_org.jpg",
     ];
     let lower = url.to_lowercase();
@@ -745,9 +740,7 @@ pub(crate) fn grid_set_kind_filter(kind: &str) {
         "collection" | "artist_collection" => kind,
         _ => "all",
     };
-    with_grid(Grid::Collections, |g| {
-        g.doc.kind_filter = kind.to_string()
-    });
+    with_grid(Grid::Collections, |g| g.doc.kind_filter = kind.to_string());
     rebuild(Grid::Collections);
     publish(Grid::Collections);
     artwork_refresh(Grid::Collections);

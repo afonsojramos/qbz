@@ -114,9 +114,7 @@ fn dominant_hue_bin(img: &image::RgbaImage) -> (usize, f32, u32) {
         hist[bin] += 1.0;
         chromatic += 1;
     }
-    let score_at = |i: usize| {
-        hist[i] + 0.5 * (hist[(i + BINS - 1) % BINS] + hist[(i + 1) % BINS])
-    };
+    let score_at = |i: usize| hist[i] + 0.5 * (hist[(i + BINS - 1) % BINS] + hist[(i + 1) % BINS]);
     let mut best_i = 0usize;
     let mut best = -1.0f32;
     for (i, _) in hist.iter().enumerate() {
@@ -150,9 +148,7 @@ fn spectrum_colors(img: &image::RgbaImage) -> ((u8, u8, u8), (u8, u8, u8)) {
         let bin = ((h / 360.0 * BINS as f32) as usize).min(BINS - 1);
         hist[bin] += 1.0;
     }
-    let score_at = |i: usize| {
-        hist[i] + 0.5 * (hist[(i + BINS - 1) % BINS] + hist[(i + 1) % BINS])
-    };
+    let score_at = |i: usize| hist[i] + 0.5 * (hist[(i + BINS - 1) % BINS] + hist[(i + 1) % BINS]);
     let mut sec_i: Option<usize> = None;
     let mut sec_best = 0.0f32;
     for i in 0..BINS {
@@ -253,9 +249,7 @@ mod tests {
     fn dominant_hue_wins_over_speck() {
         // 3/4 red-ish + 1/4 blue-ish: the coverage-weighted primary must be
         // the red hue (not the more saturated speck).
-        let img = img_from(&[
-            (200, 30, 30), (200, 30, 30), (200, 30, 30), (30, 30, 220),
-        ]);
+        let img = img_from(&[(200, 30, 30), (200, 30, 30), (200, 30, 30), (30, 30, 220)]);
         let (primary, _secondary) = spectrum_colors(&img);
         let (h, _s, _l) = rgb_to_hsl(primary.0, primary.1, primary.2);
         assert!(h < 15.0 || h > 345.0, "primary hue {h} should be red-ish");
@@ -275,7 +269,10 @@ mod tests {
         let img = img_from(&[(200, 30, 30), (200, 30, 30), (200, 30, 30), (210, 40, 40)]);
         let accent = lyrics_accent_color(&img);
         let (h, _s, _l) = rgb_to_hsl(accent.0, accent.1, accent.2);
-        assert!((170.0..=190.0).contains(&h), "accent hue {h} should be cyan-ish");
+        assert!(
+            (170.0..=190.0).contains(&h),
+            "accent hue {h} should be cyan-ish"
+        );
     }
 
     #[test]
@@ -287,7 +284,10 @@ mod tests {
         let (ph, _, _) = rgb_to_hsl(primary.0, primary.1, primary.2);
         let (sh, _, sl) = rgb_to_hsl(secondary.0, secondary.1, secondary.2);
         let dist = (ph - sh).abs().min(360.0 - (ph - sh).abs());
-        assert!(dist < 30.0, "mono cover: secondary hue {sh} vs primary {ph}");
+        assert!(
+            dist < 30.0,
+            "mono cover: secondary hue {sh} vs primary {ph}"
+        );
         assert!(sl < 0.45, "mono cover: secondary should be deeper (L={sl})");
     }
 
@@ -340,7 +340,6 @@ mod tests {
     }
 }
 
-
 /// Recompute the ambient triad from the current track's artwork and publish
 /// it to the bridge (ambientPrimary/Secondary/Accent). Called on track
 /// change from playback_qt's now-playing refresh. A cover that is not on
@@ -365,24 +364,15 @@ pub fn update_for_artwork(artwork_url: &str) {
             let bytes = std::fs::read(&path).ok()?;
             let img = image::load_from_memory(&bytes).ok()?;
             let rgba = img.to_rgba8();
-            let tiny = image::imageops::resize(
-                &rgba,
-                16,
-                16,
-                image::imageops::FilterType::Triangle,
-            );
+            let tiny =
+                image::imageops::resize(&rgba, 16, 16, image::imageops::FilterType::Triangle);
             let (primary, secondary) = spectrum_colors(&tiny);
             let accent = lyrics_accent_color(&tiny);
             // Immersive (contract §4.3): the SAME decode feeds the 8x8 glow
             // sample and the atmosphere asset — both inside this
             // spawn_blocking, never on the Qt thread
             // (atmosphere_qt.rs:126-127).
-            let tiny8 = image::imageops::resize(
-                &rgba,
-                8,
-                8,
-                image::imageops::FilterType::Triangle,
-            );
+            let tiny8 = image::imageops::resize(&rgba, 8, 8, image::imageops::FilterType::Triangle);
             let glow = glow_hex_qt(glow_color(&tiny8));
             let atmosphere = crate::atmosphere_qt::for_cover_blocking(&path);
             // B1: the SAME decode feeds the Tunnel Flow palette — the Tauri
@@ -397,7 +387,14 @@ pub fn update_for_artwork(artwork_url: &str) {
             let tunnel = crate::tunnelflow_qt::line_palette_json(
                 &crate::tunnelflow_qt::line_palette(&tiny36),
             );
-            Some((hex(primary), hex(secondary), hex(accent), glow, atmosphere, tunnel))
+            Some((
+                hex(primary),
+                hex(secondary),
+                hex(accent),
+                glow,
+                atmosphere,
+                tunnel,
+            ))
         })
         .await
         .ok()
@@ -405,10 +402,12 @@ pub fn update_for_artwork(artwork_url: &str) {
         if let Some((primary, secondary, accent, glow, atmosphere, tunnel)) = triad {
             log::info!("[qbz-qt] ambient palette: {primary} / {secondary} / {accent}");
             crate::shell_bridge::ui(move |mut b| {
-                b.as_mut().set_ambient_primary(QString::from(primary.as_str()));
+                b.as_mut()
+                    .set_ambient_primary(QString::from(primary.as_str()));
                 b.as_mut()
                     .set_ambient_secondary(QString::from(secondary.as_str()));
-                b.as_mut().set_ambient_accent(QString::from(accent.as_str()));
+                b.as_mut()
+                    .set_ambient_accent(QString::from(accent.as_str()));
             });
             // Publish ONLY on success; on failure (or a missing atmosphere)
             // the previous values stay — never cleared on track change (the

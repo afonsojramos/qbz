@@ -334,15 +334,12 @@ pub(crate) async fn play_all_tracks(
     tracks: Vec<QueueTrack>,
 ) {
     if tracks.is_empty() {
-        crate::toast_qt::error(qbz_i18n::t(
-            "This collection resolved to 0 playable tracks",
-        ));
+        crate::toast_qt::error(qbz_i18n::t("This collection resolved to 0 playable tracks"));
         return;
     }
     // Context `None` — `derive_context` infers album-or-artist (T16).
     // F1: the anchor comes back from the seam, never from `tracks[0]`.
-    let Some(anchor) =
-        crate::playback_qt::set_queue_stamped(runtime, tracks, Some(0), None).await
+    let Some(anchor) = crate::playback_qt::set_queue_stamped(runtime, tracks, Some(0), None).await
     else {
         // The seam already toasted the count and left the previous queue alone.
         // `set_queue_source_collection` and `touch_play` below are bookkeeping
@@ -361,12 +358,7 @@ pub(crate) async fn play_all_tracks(
     // regardless of where the audio plays (the Slint collection-play flow
     // records it on the routed path too).
     if !crate::playback_qt::route_play_to_peer(runtime, first_id).await {
-        if let Err(e) = crate::playback_qt::play_resolved_offline_aware(
-            runtime,
-            first_id,
-            0,
-        )
-        .await
+        if let Err(e) = crate::playback_qt::play_resolved_offline_aware(runtime, first_id, 0).await
         {
             log::error!("[qbz-qt] myqbz_play: play_track {first_id} failed: {e}");
         }
@@ -429,16 +421,16 @@ async fn persist_album_shuffle(collection_id: &str) {
             db.with_connection(|conn| {
                 qbz_mixtape::repo::set_play_mode(conn, &write_id, CollectionPlayMode::AlbumShuffle)
             })
-            .map_err(|e| {
-                qbz_library::LibraryError::Database(format!("set_play_mode failed: {e}"))
-            })
+            .map_err(|e| qbz_library::LibraryError::Database(format!("set_play_mode failed: {e}")))
         })
     })
     .await;
     match persisted {
         Ok(Some(())) => {}
         Ok(None) => {
-            log::warn!("[qbz-qt] myqbz_play: persist album_shuffle({collection_id}): db write failed");
+            log::warn!(
+                "[qbz-qt] myqbz_play: persist album_shuffle({collection_id}): db write failed"
+            );
             return;
         }
         Err(e) => {
@@ -542,12 +534,8 @@ pub(crate) fn item_action(source_item_id: String, action: String) {
                 if crate::playback_qt::route_play_to_peer(&runtime, first_id).await {
                     return;
                 }
-                if let Err(e) = crate::playback_qt::play_resolved_offline_aware(
-                    &runtime,
-                    first_id,
-                    0,
-                )
-                .await
+                if let Err(e) =
+                    crate::playback_qt::play_resolved_offline_aware(&runtime, first_id, 0).await
                 {
                     log::error!("[qbz-qt] myqbz_play: play_track {first_id} failed: {e}");
                 }
@@ -713,11 +701,7 @@ fn bulk_enqueue_inner(items: Vec<MixtapeCollectionItem>, mode: BulkEnqueueMode) 
 /// (`MyQbzDetailView.qml:628-630` sends it): the reference intercepts the same
 /// action string before the playback modes (`qbz/src/main.rs:6790-6811`) and
 /// opens the PARENT item with the parent's REAL type.
-pub(crate) fn play_inline_track(
-    item_source_item_id: String,
-    track_id: String,
-    action: String,
-) {
+pub(crate) fn play_inline_track(item_source_item_id: String, track_id: String, action: String) {
     if action == "go-to-album" {
         // Route through the PARENT item, never the track's own ids, and with the
         // parent's real item_type — a playlist parent must reach the playlist
@@ -780,12 +764,8 @@ pub(crate) fn play_inline_track(
                 if crate::playback_qt::route_play_to_peer(&runtime, first_id).await {
                     return;
                 }
-                if let Err(e) = crate::playback_qt::play_resolved_offline_aware(
-                    &runtime,
-                    first_id,
-                    0,
-                )
-                .await
+                if let Err(e) =
+                    crate::playback_qt::play_resolved_offline_aware(&runtime, first_id, 0).await
                 {
                     log::error!("[qbz-qt] myqbz_play: play_track {first_id} failed: {e}");
                 }
@@ -802,8 +782,9 @@ pub(crate) fn play_inline_track(
                     if crate::playback_qt::route_track_to_peer(&track, "next").await {
                         return;
                     }
-                    let added_castable =
-                        crate::playback_qt::batch_all_qconnect_castable(std::slice::from_ref(&track));
+                    let added_castable = crate::playback_qt::batch_all_qconnect_castable(
+                        std::slice::from_ref(&track),
+                    );
                     runtime.core().add_track_next(track).await;
                     crate::playback_qt::sync_qconnect_after_add(added_castable).await;
                 }
@@ -821,8 +802,9 @@ pub(crate) fn play_inline_track(
                     if crate::playback_qt::route_track_to_peer(&track, "queue").await {
                         return;
                     }
-                    let added_castable =
-                        crate::playback_qt::batch_all_qconnect_castable(std::slice::from_ref(&track));
+                    let added_castable = crate::playback_qt::batch_all_qconnect_castable(
+                        std::slice::from_ref(&track),
+                    );
                     runtime.core().add_tracks(vec![track]).await;
                     crate::playback_qt::sync_qconnect_after_add(added_castable).await;
                 }
@@ -840,9 +822,18 @@ mod tests {
     #[test]
     fn row_mode_accepts_both_spellings() {
         assert!(matches!(RowMode::parse("play"), Some(RowMode::Play)));
-        assert!(matches!(RowMode::parse("play_next"), Some(RowMode::PlayNext)));
-        assert!(matches!(RowMode::parse("play-later"), Some(RowMode::PlayLater)));
-        assert!(matches!(RowMode::parse("append"), Some(RowMode::AddToQueue)));
+        assert!(matches!(
+            RowMode::parse("play_next"),
+            Some(RowMode::PlayNext)
+        ));
+        assert!(matches!(
+            RowMode::parse("play-later"),
+            Some(RowMode::PlayLater)
+        ));
+        assert!(matches!(
+            RowMode::parse("append"),
+            Some(RowMode::AddToQueue)
+        ));
         assert!(RowMode::parse("nonsense").is_none());
     }
 

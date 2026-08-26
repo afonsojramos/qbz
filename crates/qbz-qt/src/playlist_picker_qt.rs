@@ -695,7 +695,12 @@ fn toast_added(n: usize, name: &str) {
         return;
     }
     let msg = if name.is_empty() {
-        qbz_i18n::tf("Added {} track", "Added {} tracks", n as i64, &[&n.to_string()])
+        qbz_i18n::tf(
+            "Added {} track",
+            "Added {} tracks",
+            n as i64,
+            &[&n.to_string()],
+        )
     } else {
         qbz_i18n::tf(
             "Added {} track to {}",

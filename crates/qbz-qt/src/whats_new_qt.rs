@@ -280,7 +280,9 @@ fn format_release_date(iso: &str) -> String {
 /// Strip inline `**bold**` / `` `code` `` markers and reduce inline markdown
 /// links `[text](url)` to just their `text`.
 fn strip_inline(text: &str) -> String {
-    strip_markdown_links(text).replace("**", "").replace('`', "")
+    strip_markdown_links(text)
+        .replace("**", "")
+        .replace('`', "")
 }
 
 /// If `s[start..]` begins with a markdown link `[label](url)`, return
@@ -514,8 +516,14 @@ mod tests {
         assert_eq!(
             toc,
             vec![
-                TocEntry { id: "alpha".into(), label: "Alpha".into() },
-                TocEntry { id: "beta".into(), label: "Beta".into() },
+                TocEntry {
+                    id: "alpha".into(),
+                    label: "Alpha".into()
+                },
+                TocEntry {
+                    id: "beta".into(),
+                    label: "Beta".into()
+                },
             ]
         );
     }
@@ -581,22 +589,34 @@ mod tests {
 
     #[test]
     fn slugify_collapses_runs_and_drops_punctuation() {
-        assert_eq!(slugify("The headless daemon (qbzd)"), "the-headless-daemon-qbzd");
+        assert_eq!(
+            slugify("The headless daemon (qbzd)"),
+            "the-headless-daemon-qbzd"
+        );
         // Emphasis chars vanish; the comma and the `&` are dropped and the
         // whitespace run they leave behind collapses to ONE hyphen.
-        assert_eq!(slugify("  **Library, home & discovery**  "), "library-home-discovery");
+        assert_eq!(
+            slugify("  **Library, home & discovery**  "),
+            "library-home-discovery"
+        );
         assert_eq!(slugify("---"), "");
     }
 
     #[test]
     fn release_dates_format_like_the_reference_and_fall_back_raw() {
         assert_eq!(format_release_date("2026-07-04T18:22:01Z"), "Jul 4, 2026");
-        assert_eq!(format_release_date("2026-12-31T00:00:00+02:00"), "Dec 31, 2026");
+        assert_eq!(
+            format_release_date("2026-12-31T00:00:00+02:00"),
+            "Dec 31, 2026"
+        );
         assert_eq!(format_release_date("2026-01-09T00:00:00Z"), "Jan 9, 2026");
         // Malformed input is echoed verbatim, never blanked.
         assert_eq!(format_release_date("not a date"), "not a date");
         assert_eq!(format_release_date("2026/07/04"), "2026/07/04");
-        assert_eq!(format_release_date("2026-13-04T00:00:00Z"), "2026-13-04T00:00:00Z");
+        assert_eq!(
+            format_release_date("2026-13-04T00:00:00Z"),
+            "2026-13-04T00:00:00Z"
+        );
         assert_eq!(format_release_date(""), "");
     }
 
@@ -639,11 +659,15 @@ mod tests {
         assert!(wiki.url.starts_with("https://"), "{wiki:?}");
 
         // No block carries un-stripped inline markers.
-        assert!(blocks.iter().all(|b| !b.text.contains("**") && !b.text.contains('`')));
+        assert!(blocks
+            .iter()
+            .all(|b| !b.text.contains("**") && !b.text.contains('`')));
         // Nothing is a KIND_SECTION with a level above 1, and no bullet is
         // level 0 (that combination is what the indent-0 rule prevents).
         assert!(blocks.iter().all(|b| b.kind != KIND_BULLET || b.level >= 1));
-        assert!(blocks.iter().all(|b| b.kind != KIND_SECTION || b.level <= 1));
+        assert!(blocks
+            .iter()
+            .all(|b| b.kind != KIND_SECTION || b.level <= 1));
         // Paragraphs exist (the intro prose, and the `---` separators the
         // reference deliberately does not special-case).
         assert!(blocks.iter().any(|b| b.kind == KIND_PARAGRAPH));

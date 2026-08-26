@@ -203,7 +203,10 @@ impl QtQconnectEventSink {
             let is_remote = transport_connected && is_peer_renderer_active(session);
             let active = session.active_renderer_id;
             let active_info = active.and_then(|active_id| {
-                session.renderers.iter().find(|r| r.renderer_id == active_id)
+                session
+                    .renderers
+                    .iter()
+                    .find(|r| r.renderer_id == active_id)
             });
             let cast_target = if is_remote {
                 active_info
@@ -302,8 +305,8 @@ impl QtQconnectEventSink {
             .await;
 
         if let Some(loop_mode) = outcome.apply_loop_mode {
-            if let Err(err) = qconnect_app::renderer::apply_remote_loop_mode(&self.engine, loop_mode)
-                .await
+            if let Err(err) =
+                qconnect_app::renderer::apply_remote_loop_mode(&self.engine, loop_mode).await
             {
                 log::warn!("[QConnect] Failed to apply remote loop mode: {err}");
             }
@@ -503,8 +506,7 @@ impl QconnectEventSink for QtQconnectEventSink {
                 } else {
                     log::info!("[QConnect] Renderer command applied: {:?}", command);
                 }
-                let became_active =
-                    matches!(command, RendererCommand::SetActive { active: true });
+                let became_active = matches!(command, RendererCommand::SetActive { active: true });
                 if let Err(err) = qconnect_app::renderer::apply_renderer_command(
                     &self.engine,
                     &self.sync_state,
@@ -560,9 +562,7 @@ impl QconnectEventSink for QtQconnectEventSink {
                 // (Reference TODO(slint-qconnect-ui); kept unwired per §9 D6.)
                 log::info!("[QConnect] Lifecycle -> {state:?} (UI badge TODO)");
             }
-            QconnectAppEvent::Diagnostic {
-                channel, level, ..
-            } => {
+            QconnectAppEvent::Diagnostic { channel, level, .. } => {
                 log::debug!("[QConnect] diagnostic {channel} [{level}]");
             }
             _ => {}

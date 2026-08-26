@@ -51,8 +51,7 @@ fn publish_selection() {
     let json = lib::to_json(&tree::tree_visible());
     let count = tree::tree_selected_count();
     ui(move |mut b| {
-        b.as_mut()
-            .set_local_tree_json(QString::from(json.as_str()));
+        b.as_mut().set_local_tree_json(QString::from(json.as_str()));
         b.as_mut().set_local_tree_selected_count(count);
     });
 }
@@ -71,7 +70,8 @@ pub fn set_select_mode(on: bool) {
 /// Folder checkbox: recursive, so it is a DB read on a blocking thread.
 pub fn toggle_folder_select(path: String) {
     crate::spawn(async move {
-        let _ = tokio::task::spawn_blocking(move || tree::toggle_folder_select_blocking(&path)).await;
+        let _ =
+            tokio::task::spawn_blocking(move || tree::toggle_folder_select_blocking(&path)).await;
         publish_selection();
     });
 }
@@ -80,7 +80,8 @@ pub fn toggle_folder_select(path: String) {
 /// from the parent folder listing — blocking either way.
 pub fn toggle_track_select(path: String) {
     crate::spawn(async move {
-        let _ = tokio::task::spawn_blocking(move || tree::toggle_track_select_blocking(&path)).await;
+        let _ =
+            tokio::task::spawn_blocking(move || tree::toggle_track_select_blocking(&path)).await;
         publish_selection();
     });
 }
@@ -152,7 +153,10 @@ pub fn bulk_action(scope: String, ids_json: String, action: String) {
 ///   last resort for a local id that scrolled out of the cached page.
 fn resolve_blocking(scope: &str, ids: &[String]) -> Vec<LocalTrack> {
     if scope == "album" {
-        return ids.iter().flat_map(|key| fetch_album_tracks_blocking(key)).collect();
+        return ids
+            .iter()
+            .flat_map(|key| fetch_album_tracks_blocking(key))
+            .collect();
     }
     let cached: HashMap<i64, LocalTrack> = state(|s| {
         s.tracks_raw

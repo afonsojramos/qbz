@@ -219,7 +219,9 @@ pub fn search(query: &str) {
         d.preview = None;
         d.selected_id.clear();
         (
-            d.provider.parse::<RemoteProvider>().unwrap_or(RemoteProvider::MusicBrainz),
+            d.provider
+                .parse::<RemoteProvider>()
+                .unwrap_or(RemoteProvider::MusicBrainz),
             // The album artist as the app currently knows it, which is what
             // lets the orchestration split "artist album" back apart.
             crate::local_ephemeral::tracks_snapshot()
@@ -243,7 +245,11 @@ pub fn search(query: &str) {
             "[qbz-qt] disc meta: {} returned {} result(s){}",
             provider_word(provider),
             response.results.len(),
-            if response.rate_limited { " (rate limited)" } else { "" }
+            if response.rate_limited {
+                " (rate limited)"
+            } else {
+                ""
+            }
         );
         with(|d| {
             // A late answer from a provider the user has since switched away
@@ -292,7 +298,9 @@ pub fn select(provider_id: &str) {
         d.selected_id = id.clone();
         d.loading_id = id.clone();
         d.preview = None;
-        d.provider.parse::<RemoteProvider>().unwrap_or(RemoteProvider::MusicBrainz)
+        d.provider
+            .parse::<RemoteProvider>()
+            .unwrap_or(RemoteProvider::MusicBrainz)
     });
     publish();
 
@@ -375,7 +383,11 @@ pub fn apply() {
         tracks: (0..disc_tracks)
             .map(|i| qbz_disc::store::TrackMemory {
                 number: i as u32 + 1,
-                title: meta.tracks.get(i).map(|t| t.title.clone()).unwrap_or_default(),
+                title: meta
+                    .tracks
+                    .get(i)
+                    .map(|t| t.title.clone())
+                    .unwrap_or_default(),
                 artist: meta.artist.clone(),
             })
             .collect(),

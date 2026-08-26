@@ -144,13 +144,8 @@ impl AlsaDirectStream {
         // immediately before a real `PCM::new()` and held for as long as that
         // PCM is open.
         // TODO(Task 5): replace second arg with user-facing DAC name from settings.
-        let reservation =
-            crate::DeviceReservation::acquire(device_id, device_id).map_err(|e| {
-                format!(
-                    "Cannot acquire exclusive device '{}': {}",
-                    device_id, e
-                )
-            })?;
+        let reservation = crate::DeviceReservation::acquire(device_id, device_id)
+            .map_err(|e| format!("Cannot acquire exclusive device '{}': {}", device_id, e))?;
 
         // Defensive margin only matters when the reservation actually displaced
         // a holder (or could have). On the degraded D-Bus path the bus name is
@@ -380,9 +375,7 @@ impl AlsaDirectStream {
                 }
             }
             let Some((format, le)) = selected else {
-                return Err(
-                    "Device has no native DSD format (kernel quirk missing?)".to_string()
-                );
+                return Err("Device has no native DSD format (kernel quirk missing?)".to_string());
             };
             hwp.set_channels(channels as u32)
                 .map_err(|e| format!("Failed to set channels: {}", e))?;
@@ -441,7 +434,11 @@ impl AlsaDirectStream {
         match io.writei(samples) {
             Ok(written) => {
                 if written != frames {
-                    log::warn!("[ALSA Direct] Partial DoP write: {} / {} frames", written, frames);
+                    log::warn!(
+                        "[ALSA Direct] Partial DoP write: {} / {} frames",
+                        written,
+                        frames
+                    );
                 }
                 Ok(())
             }
@@ -852,7 +849,10 @@ impl AlsaDirectStream {
             // libc::EBADFD — the PCM was not in a running-ish state.
             const EBADFD: i32 = 77;
             if e.errno() as i32 != EBADFD {
-                log::warn!("[ALSA Direct] drop on stop failed (continuing to prepare): {}", e);
+                log::warn!(
+                    "[ALSA Direct] drop on stop failed (continuing to prepare): {}",
+                    e
+                );
             }
         }
         pcm.prepare()

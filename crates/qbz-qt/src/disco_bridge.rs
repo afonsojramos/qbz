@@ -48,7 +48,6 @@ pub mod qbz_disco_bridge {
         // loading/error, order, tri-state header flags, footer counts and the
         // grouped candidates with their alternates).
         #[qproperty(QString, disco_json)]
-
         type QbzDisco = super::QbzDiscoRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain
@@ -95,11 +94,7 @@ pub mod qbz_disco_bridge {
 
         /// Clears one override (back to the classifier's verdict).
         #[qinvokable]
-        fn reset_type_override(
-            self: Pin<&mut QbzDisco>,
-            source: QString,
-            source_item_id: QString,
-        );
+        fn reset_type_override(self: Pin<&mut QbzDisco>, source: QString, source_item_id: QString);
 
         /// Create the artist_collection: trimmed-empty name ⇒ the raw literal
         /// "Artist Collection" (untranslated, 1:1 with myqbz_builder.rs:858),

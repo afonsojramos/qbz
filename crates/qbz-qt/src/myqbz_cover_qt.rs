@@ -65,12 +65,10 @@ fn set_custom_artwork(id: &str, path: Option<&str>) -> bool {
     let id = id.to_string();
     let path = path.map(|p| p.to_string());
     crate::library_db_qt::with_db(true, move |db| {
-        db.with_connection(|conn| {
-            qbz_mixtape::repo::set_custom_artwork(conn, &id, path.as_deref())
-        })
-        .map_err(|e| {
-            qbz_library::LibraryError::Database(format!("set_custom_artwork failed: {e}"))
-        })
+        db.with_connection(|conn| qbz_mixtape::repo::set_custom_artwork(conn, &id, path.as_deref()))
+            .map_err(|e| {
+                qbz_library::LibraryError::Database(format!("set_custom_artwork failed: {e}"))
+            })
     })
     .is_some()
 }

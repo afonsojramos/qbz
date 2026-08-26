@@ -77,7 +77,10 @@ pub fn init_for_user(base_dir: &Path) {
     match store.get_favorite_album_ids() {
         Ok(ids) => {
             let set: HashSet<String> = ids.into_iter().collect();
-            log::info!("[qbz-qt] favorites cache: {} album ids seeded from disk", set.len());
+            log::info!(
+                "[qbz-qt] favorites cache: {} album ids seeded from disk",
+                set.len()
+            );
             if let Ok(mut guard) = FAV_ALBUMS.write() {
                 *guard = set;
             }
@@ -116,8 +119,14 @@ pub fn init_for_user(base_dir: &Path) {
 /// Seed one numeric set from the store's `i64` rows (the three of them read
 /// identically; the album set is the odd one out because its ids are text).
 fn write_u64(cell: &RwLock<HashSet<u64>>, ids: Vec<i64>, what: &str) {
-    let set: HashSet<u64> = ids.into_iter().filter_map(|id| u64::try_from(id).ok()).collect();
-    log::info!("[qbz-qt] favorites cache: {} {what} ids seeded from disk", set.len());
+    let set: HashSet<u64> = ids
+        .into_iter()
+        .filter_map(|id| u64::try_from(id).ok())
+        .collect();
+    log::info!(
+        "[qbz-qt] favorites cache: {} {what} ids seeded from disk",
+        set.len()
+    );
     if let Ok(mut guard) = cell.write() {
         *guard = set;
     }
@@ -177,7 +186,10 @@ pub fn is_favorite(kind: &str, id: &str) -> bool {
 }
 
 pub fn contains_track(track_id: u64) -> bool {
-    FAV_TRACKS.read().map(|g| g.contains(&track_id)).unwrap_or(false)
+    FAV_TRACKS
+        .read()
+        .map(|g| g.contains(&track_id))
+        .unwrap_or(false)
 }
 
 /// Snapshot of the whole favourite-track set — the shape the queue publisher
@@ -187,15 +199,24 @@ pub fn all_tracks() -> HashSet<u64> {
 }
 
 pub fn is_album_favorite(album_id: &str) -> bool {
-    FAV_ALBUMS.read().map(|g| g.contains(album_id)).unwrap_or(false)
+    FAV_ALBUMS
+        .read()
+        .map(|g| g.contains(album_id))
+        .unwrap_or(false)
 }
 
 pub fn is_artist_favorite(artist_id: u64) -> bool {
-    FAV_ARTISTS.read().map(|g| g.contains(&artist_id)).unwrap_or(false)
+    FAV_ARTISTS
+        .read()
+        .map(|g| g.contains(&artist_id))
+        .unwrap_or(false)
 }
 
 pub fn is_label_favorite(label_id: u64) -> bool {
-    FAV_LABELS.read().map(|g| g.contains(&label_id)).unwrap_or(false)
+    FAV_LABELS
+        .read()
+        .map(|g| g.contains(&label_id))
+        .unwrap_or(false)
 }
 
 /// Snapshot of the followed-label id set — the label page seeds its header
@@ -208,7 +229,10 @@ pub fn all_labels() -> HashSet<u64> {
 /// authority `library_qt::toggle_playlist_favorite` reads to pick its
 /// direction, so the drawn heart and the click cannot disagree.
 pub fn is_playlist_favorite(playlist_id: u64) -> bool {
-    FAV_PLAYLISTS.read().map(|g| g.contains(&playlist_id)).unwrap_or(false)
+    FAV_PLAYLISTS
+        .read()
+        .map(|g| g.contains(&playlist_id))
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------

@@ -48,7 +48,6 @@ pub mod qbz_album_bridge {
         #[qproperty(bool, album_info_loading)]
         #[qproperty(QString, album_info_json)]
         #[qproperty(QString, album_info_error)]
-
         type QbzAlbum = super::QbzAlbumRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -78,7 +77,12 @@ pub mod qbz_album_bridge {
         #[qinvokable]
         fn cover_remove_custom(self: Pin<&mut QbzAlbum>, album_id: QString);
         #[qinvokable]
-        fn cover_save_as(self: Pin<&mut QbzAlbum>, album_id: QString, title: QString, artwork_url: QString);
+        fn cover_save_as(
+            self: Pin<&mut QbzAlbum>,
+            album_id: QString,
+            title: QString,
+            artwork_url: QString,
+        );
         /// ⋯ menu Share rows (share_qt.rs): copy the Qobuz link, or resolve
         /// UPC -> Deezer -> Album.link and copy that (async, toasts).
         #[qinvokable]
@@ -98,7 +102,12 @@ pub mod qbz_album_bridge {
         /// Multi-select bulk bar (album_qt::bulk_action): ids in visible
         /// order, action id from the bar's vocabulary.
         #[qinvokable]
-        fn album_bulk_action(self: Pin<&mut QbzAlbum>, album_id: QString, ids_json: QString, action: QString);
+        fn album_bulk_action(
+            self: Pin<&mut QbzAlbum>,
+            album_id: QString,
+            ids_json: QString,
+            action: QString,
+        );
     }
 
     impl cxx_qt::Threading for QbzAlbum {}
@@ -170,7 +179,12 @@ impl qbz_album_bridge::QbzAlbum {
     pub fn cover_remove_custom(self: Pin<&mut Self>, album_id: QString) {
         crate::cover_artwork_qt::remove_custom_cover(album_id.to_string());
     }
-    pub fn cover_save_as(self: Pin<&mut Self>, album_id: QString, title: QString, artwork_url: QString) {
+    pub fn cover_save_as(
+        self: Pin<&mut Self>,
+        album_id: QString,
+        title: QString,
+        artwork_url: QString,
+    ) {
         crate::cover_artwork_qt::save_cover_as(
             album_id.to_string(),
             title.to_string(),
@@ -194,7 +208,16 @@ impl qbz_album_bridge::QbzAlbum {
         // not just the failed rows (Slint main.rs:12204).
         crate::offline_cache_qt::redownload_album(album_id.to_string(), false);
     }
-    pub fn album_bulk_action(self: Pin<&mut Self>, album_id: QString, ids_json: QString, action: QString) {
-        crate::album_qt::bulk_action(album_id.to_string(), ids_json.to_string(), action.to_string());
+    pub fn album_bulk_action(
+        self: Pin<&mut Self>,
+        album_id: QString,
+        ids_json: QString,
+        action: QString,
+    ) {
+        crate::album_qt::bulk_action(
+            album_id.to_string(),
+            ids_json.to_string(),
+            action.to_string(),
+        );
     }
 }

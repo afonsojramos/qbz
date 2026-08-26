@@ -62,7 +62,6 @@ pub mod qbz_myqbz_bridge {
         #[qproperty(QString, mix_json)]
         // --- Nav branding (label + custom icon), seeded at construction -----
         #[qproperty(QString, branding_json)]
-
         type QbzMyQbz = super::QbzMyQbzRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain

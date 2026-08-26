@@ -336,8 +336,14 @@ mod tests {
         add(42, "X", None).expect("add succeeds with a bound store");
         assert!(is_blacklisted(42), "added id is blacklisted");
         assert!(is_blacklisted_id_str("42"), "string-id check matches");
-        assert!(!is_blacklisted_id_str("not-a-number"), "local ids never match");
-        assert!(ids_snapshot().contains(&42), "snapshot contains the added id");
+        assert!(
+            !is_blacklisted_id_str("not-a-number"),
+            "local ids never match"
+        );
+        assert!(
+            ids_snapshot().contains(&42),
+            "snapshot contains the added id"
+        );
         assert_eq!(count(), 1);
 
         // Album axis: orthogonal, String-keyed, shares the enabled flag.
@@ -351,7 +357,10 @@ mod tests {
         );
         assert_eq!(album_count(), 1);
         // A blocked album drops via the shared stamp predicate, artist-independent.
-        assert!(stamp_row("qobuz", &[], Some("zzz")), "album-blocked row drops");
+        assert!(
+            stamp_row("qobuz", &[], Some("zzz")),
+            "album-blocked row drops"
+        );
         assert!(
             !stamp_row("local", &[], Some("zzz")),
             "non-qobuz row is protected even when album-blocked"
@@ -366,13 +375,19 @@ mod tests {
             "non-qobuz track is protected"
         );
         assert!(card_blacklisted("zzz", "1"), "card drops on the album axis");
-        assert!(card_blacklisted("aaa", "42"), "card drops on the artist axis");
+        assert!(
+            card_blacklisted("aaa", "42"),
+            "card drops on the artist axis"
+        );
         assert_eq!(count(), 1, "album add did not touch the artist count");
 
         teardown();
         assert!(!is_blacklisted(42), "fail-open after teardown");
         assert!(ids_snapshot().is_empty(), "empty snapshot after teardown");
-        assert!(!is_album_blacklisted("zzz"), "album fail-open after teardown");
+        assert!(
+            !is_album_blacklisted("zzz"),
+            "album fail-open after teardown"
+        );
         assert!(album_ids_snapshot().is_empty(), "empty album snapshot");
         assert_eq!(count(), 0);
         assert_eq!(album_count(), 0);

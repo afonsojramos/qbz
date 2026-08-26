@@ -224,7 +224,10 @@ pub(crate) fn set_mac_dock_hidden(hidden: bool) {
     } else {
         NSApplicationActivationPolicy::Regular
     });
-    log::info!("[tray] dock icon {}", if hidden { "hidden" } else { "shown" });
+    log::info!(
+        "[tray] dock icon {}",
+        if hidden { "hidden" } else { "shown" }
+    );
 }
 
 #[cfg(not(target_os = "macos"))]

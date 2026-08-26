@@ -166,14 +166,16 @@ pub fn save_cover_as(album_id: String, title: String, artwork_url: String) {
         let dest_path = dest.path().to_path_buf();
 
         // Local sources first: the override file, then the artwork cache.
-        let local = album_cover(&album_id).filter(|p| !p.is_empty()).or_else(|| {
-            let cached = crate::artwork_qt::cached_path(&artwork_url);
-            if cached.is_empty() {
-                None
-            } else {
-                Some(cached)
-            }
-        });
+        let local = album_cover(&album_id)
+            .filter(|p| !p.is_empty())
+            .or_else(|| {
+                let cached = crate::artwork_qt::cached_path(&artwork_url);
+                if cached.is_empty() {
+                    None
+                } else {
+                    Some(cached)
+                }
+            });
         if let Some(src) = local {
             if let Err(e) = tokio::fs::copy(&src, &dest_path).await {
                 log::warn!("[qbz-qt] cover save-as copy failed: {e}");
@@ -193,7 +195,12 @@ pub fn save_cover_as(album_id: String, title: String, artwork_url: String) {
                 return;
             }
         };
-        match client.get(&artwork_url).send().await.and_then(|r| r.error_for_status()) {
+        match client
+            .get(&artwork_url)
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+        {
             Ok(resp) => match resp.bytes().await {
                 Ok(bytes) => {
                     if let Err(e) = tokio::fs::write(&dest_path, &bytes).await {
@@ -374,7 +381,12 @@ pub fn save_artist_image_as(artist_name: String, artwork_url: String) {
                 return;
             }
         };
-        match client.get(&artwork_url).send().await.and_then(|r| r.error_for_status()) {
+        match client
+            .get(&artwork_url)
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+        {
             Ok(resp) => match resp.bytes().await {
                 Ok(bytes) => {
                     if let Err(e) = tokio::fs::write(&dest_path, &bytes).await {
@@ -403,7 +415,11 @@ struct PlaylistStore {
 }
 
 fn playlist_store_path() -> Option<PathBuf> {
-    Some(dirs::data_dir()?.join("qbz").join("custom_playlist_covers.json"))
+    Some(
+        dirs::data_dir()?
+            .join("qbz")
+            .join("custom_playlist_covers.json"),
+    )
 }
 
 fn load_playlist_store() -> PlaylistStore {
@@ -647,8 +663,14 @@ mod tests {
         // The whole point of scoping the widening: an arbitrary URL must not
         // start colliding with another one on its bare filename.
         assert_eq!(art_key("https://example.com/thing/photo.jpg"), None);
-        assert_eq!(art_key("https://static.qobuz.com/images/covers/tr/9l/abc123.jpg"), None);
+        assert_eq!(
+            art_key("https://static.qobuz.com/images/covers/tr/9l/abc123.jpg"),
+            None
+        );
         assert_eq!(art_key(""), None);
-        assert_eq!(art_key("https://static.qobuz.com/images/artists/covers/large/"), None);
+        assert_eq!(
+            art_key("https://static.qobuz.com/images/artists/covers/large/"),
+            None
+        );
     }
 }

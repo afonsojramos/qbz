@@ -200,9 +200,7 @@ pub(crate) fn open() {
         let unique = qbz_mixtape::shuffle::unique_track_count(&tracks) as i32;
         if unique <= 0 {
             close();
-            crate::toast_qt::error(qbz_i18n::t(
-                "This collection resolved to 0 playable tracks",
-            ));
+            crate::toast_qt::error(qbz_i18n::t("This collection resolved to 0 playable tracks"));
         } else {
             apply_options(unique);
         }

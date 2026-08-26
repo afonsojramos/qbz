@@ -95,7 +95,9 @@ pub(crate) mod session_unavailable {
     /// Remember that `track_id` failed terminally. Called by the reactive skip
     /// walk when it recognises a `TrackUnavailable`.
     pub(crate) fn mark(track_id: u64) {
-        IDS.lock().unwrap_or_else(|e| e.into_inner()).insert(track_id);
+        IDS.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(track_id);
     }
 
     /// Did this track already die under the player this run? The second half of
@@ -111,7 +113,9 @@ pub(crate) mod session_unavailable {
     /// back (rights restored), a stale entry would keep marking it dead for the
     /// rest of the session.
     pub(crate) fn forget(track_id: u64) {
-        IDS.lock().unwrap_or_else(|e| e.into_inner()).remove(&track_id);
+        IDS.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&track_id);
     }
 }
 

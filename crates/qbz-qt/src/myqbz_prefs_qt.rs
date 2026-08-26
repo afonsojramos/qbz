@@ -255,7 +255,10 @@ pub(crate) fn pick_icon() {
     crate::spawn(async move {
         let Some(file) = rfd::AsyncFileDialog::new()
             .set_title(&qbz_i18n::t_args("Choose a {} icon", &[DEFAULT_LABEL]))
-            .add_filter(&qbz_i18n::t("Image"), &["svg", "png", "jpg", "jpeg", "webp"])
+            .add_filter(
+                &qbz_i18n::t("Image"),
+                &["svg", "png", "jpg", "jpeg", "webp"],
+            )
             .pick_file()
             .await
         else {
@@ -642,7 +645,10 @@ mod tests {
             r#"{"a":["qobuz|1","local|/x",""],"b":{"nope":true},"c":["qobuz|2",7],"d":null}"#,
         )
         .expect("parses");
-        assert_eq!(parse_open_rows_entry(doc.get("a")), vec!["qobuz|1", "local|/x"]);
+        assert_eq!(
+            parse_open_rows_entry(doc.get("a")),
+            vec!["qobuz|1", "local|/x"]
+        );
         assert!(parse_open_rows_entry(doc.get("b")).is_empty());
         assert_eq!(parse_open_rows_entry(doc.get("c")), vec!["qobuz|2"]);
         assert!(parse_open_rows_entry(doc.get("d")).is_empty());

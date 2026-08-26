@@ -43,7 +43,6 @@ pub mod qbz_myqbz_add_bridge {
         // ONE JSON document (myqbz_add_qt.rs AddDoc: open/loading flags, header
         // strings, the create sub-panel and the collection rows).
         #[qproperty(QString, add_json)]
-
         type QbzMyQbzAdd = super::QbzMyQbzAddRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain

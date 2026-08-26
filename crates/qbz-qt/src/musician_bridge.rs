@@ -56,7 +56,6 @@ pub mod qbz_musician_bridge {
         /// (resolving the same musician twice), the same trick
         /// `QbzSession.trRev` plays.
         #[qproperty(i32, musician_rev)]
-
         type QbzMusician = super::QbzMusicianRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain

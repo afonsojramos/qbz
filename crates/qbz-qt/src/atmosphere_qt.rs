@@ -172,7 +172,10 @@ mod tests {
         let centre = out.get_pixel(64, 64);
         let corner = out.get_pixel(2, 2);
         let lum = |p: &Rgba<u8>| p[0] as u32 + p[1] as u32 + p[2] as u32;
-        assert!(lum(corner) < lum(centre), "corner {corner:?} vs centre {centre:?}");
+        assert!(
+            lum(corner) < lum(centre),
+            "corner {corner:?} vs centre {centre:?}"
+        );
     }
 
     #[test]

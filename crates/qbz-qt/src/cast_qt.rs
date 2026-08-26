@@ -510,11 +510,9 @@ impl CastService {
         cast_bridge::ui(|mut b| {
             b.as_mut().set_quality_limit_cause(0);
             b.as_mut().set_quality_over_cap(false);
-            b.as_mut()
-                .set_quality_origin(cxx_qt_lib::QString::from(""));
+            b.as_mut().set_quality_origin(cxx_qt_lib::QString::from(""));
             b.as_mut().set_device_cap_available(false);
-            b.as_mut()
-                .set_device_cap_key(cxx_qt_lib::QString::from(""));
+            b.as_mut().set_device_cap_key(cxx_qt_lib::QString::from(""));
             b.as_mut().set_device_cap_index(0);
         });
         self.push_connection_state().await;
@@ -668,10 +666,7 @@ impl CastService {
                     "FLAC"
                 }
                 .to_string(),
-                crate::quality_state::detail(
-                    Some(p.bits_per_sample),
-                    Some(p.sample_rate as f64),
-                ),
+                crate::quality_state::detail(Some(p.bits_per_sample), Some(p.sample_rate as f64)),
             ),
             None => quality_label_from_track(track),
         };
@@ -1073,8 +1068,7 @@ impl CastService {
                     // The guard only makes sense when the position signal is
                     // usable: renderers whose RelTime never moves honor
                     // STOPPED like pre-guard behavior.
-                    let position_reliable =
-                        inner.cast_max_position > CAST_POSITION_SIGNAL_MIN_SECS;
+                    let position_reliable = inner.cast_max_position > CAST_POSITION_SIGNAL_MIN_SECS;
                     let near_end = duration <= 0.0
                         || !position_reliable
                         || max_position >= duration - CAST_END_GUARD_SECS;
@@ -1116,13 +1110,7 @@ impl CastService {
         crate::viz_qt::set_paused(!playing);
 
         // The cast poll drives the bar while connected.
-        crate::now_playing::set_position(
-            position as i32,
-            duration as i32,
-            playing,
-            0.0,
-            true,
-        );
+        crate::now_playing::set_position(position as i32, duration as i32, playing, 0.0, true);
         push_position(position as f32, duration as f32, playing);
 
         if ended {
@@ -1264,12 +1252,7 @@ impl CastService {
         // requested-mp3 shortcut is for the LOCAL engine path; here a
         // successful STREAMINFO parse proves the bytes are FLAC, never MP3.
         let effective_tier = if delivered.downgraded && info.probe.is_some() {
-            if eff_bits >= 24 {
-                "hires"
-            } else {
-                "cd"
-            }
-            .to_string()
+            if eff_bits >= 24 { "hires" } else { "cd" }.to_string()
         } else {
             delivered.effective_tier.clone()
         };

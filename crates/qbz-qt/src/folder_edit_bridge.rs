@@ -61,7 +61,6 @@ pub mod qbz_folder_edit_bridge {
         // The full folder editor (§4.5). Parseable default so QML's
         // JSON.parse never throws on the pre-publish frame.
         #[qproperty(QString, edit_json)]
-
         type QbzFolderEdit = super::QbzFolderEditRust;
 
         /// Registers this object's Qt-thread hop. Without it every `ui()`

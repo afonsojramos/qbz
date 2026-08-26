@@ -266,8 +266,11 @@ fn fetch_discover(generation: u64) {
             Ok(data) => {
                 let has_more = data.has_more;
                 let fetched = data.items.len() as u32;
-                let mut cards: Vec<HomeCard> =
-                    data.items.into_iter().map(crate::home_qt::map_album).collect();
+                let mut cards: Vec<HomeCard> = data
+                    .items
+                    .into_iter()
+                    .map(crate::home_qt::map_album)
+                    .collect();
                 // The return is the MISSING list, and nobody wants it any more —
                 // see the note at the publish below. This call is kept purely
                 // for its disk-cache side effect.
@@ -696,7 +699,8 @@ fn publish_history() {
         (doc, s.loading)
     };
     crate::home_bridge::ui(move |mut b| {
-        b.as_mut().set_play_history_json(QString::from(json.as_str()));
+        b.as_mut()
+            .set_play_history_json(QString::from(json.as_str()));
         b.as_mut().set_play_history_loading(loading);
     });
 }
@@ -909,7 +913,10 @@ mod tests {
 
     #[test]
     fn visible_json_filters() {
-        let cards = vec![card("Blue Train", "Coltrane"), card("Giant Steps", "Coltrane")];
+        let cards = vec![
+            card("Blue Train", "Coltrane"),
+            card("Giant Steps", "Coltrane"),
+        ];
         assert!(visible_json(&cards, "blue").contains("Blue Train"));
         assert!(!visible_json(&cards, "blue").contains("Giant Steps"));
         assert!(visible_json(&cards, "").contains("Giant Steps"));

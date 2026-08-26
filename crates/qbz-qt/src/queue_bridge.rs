@@ -32,16 +32,13 @@ pub mod qbz_queue {
         // --- Queue panel -------------------------------------------------
         // POC: empty until phase 4 (QML shows the empty states).
         #[qproperty(QList_QVariant, queue_model)]
-
         // --- Queue panel (phase 9) -----------------------------------------
         // One JSON document (queue_qt.rs QueueDoc: current/upcoming/history
         // + pagination + #442 section markers). Supersedes `queueModel`.
         #[qproperty(QString, queue_json)]
-
         // Full chronological queue projection used only by QueueView. It is
         // opt-in so ordinary sidebar publishes stay paged and cheap.
         #[qproperty(QString, extended_queue_json)]
-
         // --- Immersive coverflow (2026-08-02 immersive-port contract §4.4) --
         // `{"index":i32,"tracks":[{id,title,artist,artUrl}]}` over the FULL
         // flat queue ([history oldest-first, NOW, upcoming]); `index` = flat
@@ -50,7 +47,6 @@ pub mod qbz_queue {
         // immersive Queue badge + coverflow read THIS, never the paged
         // `queue_json`. Full-shape default, never "{}" (trap 15).
         #[qproperty(QString, coverflow_json)]
-
         // --- Sleep timer (queue footer) ------------------------------------
         // Kept OUT of `queue_json`: the countdown reformats every second and
         // the document is re-parsed by three QML files on every change, so
@@ -71,7 +67,6 @@ pub mod qbz_queue {
         #[qproperty(bool, drop_play_prompt)]
         #[qproperty(bool, sleep_active)]
         #[qproperty(QString, sleep_remaining)]
-
         type QbzQueue = super::QbzQueueRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -260,12 +255,7 @@ impl qbz_queue::QbzQueue {
         expected_id: QString,
         slot: i32,
     ) {
-        crate::queue_extended_drop(
-            phase.to_string(),
-            index,
-            expected_id.to_string(),
-            slot,
-        );
+        crate::queue_extended_drop(phase.to_string(), index, expected_id.to_string(), slot);
     }
 
     pub fn queue_remove_upcoming_flat(self: Pin<&mut Self>, index: i32) {

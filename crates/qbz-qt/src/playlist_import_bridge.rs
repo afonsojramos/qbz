@@ -40,7 +40,6 @@ pub mod qbz_playlist_import_bridge {
         #[qml_singleton]
         // ONE JSON document (playlist_import_qt.rs ImportDoc).
         #[qproperty(QString, import_json)]
-
         type QbzPlaylistImport = super::QbzPlaylistImportRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain

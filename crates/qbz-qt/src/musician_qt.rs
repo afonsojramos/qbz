@@ -445,7 +445,9 @@ fn store_bands(mbid: &str, bands: &[BandRow]) {
 /// air for the same MBID.
 fn claim_inflight(mbid: &str) -> bool {
     let mut guard = BANDS_INFLIGHT.lock().unwrap();
-    guard.get_or_insert_with(HashSet::new).insert(mbid.to_string())
+    guard
+        .get_or_insert_with(HashSet::new)
+        .insert(mbid.to_string())
 }
 
 fn release_inflight(mbid: &str) {
@@ -735,9 +737,12 @@ pub fn open_band(mbid: String) {
     // since when it is open it is the one the user is clicking in.
     let name = {
         let guard = MODAL.lock().unwrap();
-        guard
-            .as_ref()
-            .and_then(|m| m.bands.iter().find(|b| b.mbid == mbid).map(|b| b.name.clone()))
+        guard.as_ref().and_then(|m| {
+            m.bands
+                .iter()
+                .find(|b| b.mbid == mbid)
+                .map(|b| b.name.clone())
+        })
     }
     .or_else(|| {
         with_state(|s| {

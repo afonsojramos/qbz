@@ -100,7 +100,7 @@ fn apply_status(
     mut b: core::pin::Pin<&mut crate::session_bridge::qbz_session::QbzSession>,
     status: OfflineStatus,
 ) {
-        b.as_mut().set_offline(status.is_offline());
+    b.as_mut().set_offline(status.is_offline());
     b.as_mut().set_offline_mode(match status.mode {
         OfflineMode::Online => 0,
         OfflineMode::RealOffline => 1,
@@ -112,7 +112,8 @@ fn apply_status(
         Connectivity::Down => 2,
     });
     b.as_mut().set_captive_portal(status.captive_portal);
-    b.as_mut().set_show_recovery_banner(status.show_recovery_banner());
+    b.as_mut()
+        .set_show_recovery_banner(status.show_recovery_banner());
     // The header badge's "Logged out" state needs the raw session flag —
     // show_recovery_banner() is false while connectivity is down.
     b.as_mut().set_offline_session(status.offline_session);

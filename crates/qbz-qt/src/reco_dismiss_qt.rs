@@ -223,7 +223,10 @@ mod tests {
         dismiss(9, "Lost", ""); // no-op while unbound; must not panic
         init_for_user(&dir);
         assert!(ids_snapshot().contains(&42), "rows survive a re-bind");
-        assert!(!ids_snapshot().contains(&9), "unbound mutation did not persist");
+        assert!(
+            !ids_snapshot().contains(&9),
+            "unbound mutation did not persist"
+        );
 
         // Undo.
         remove(42);

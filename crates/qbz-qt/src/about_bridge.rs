@@ -65,7 +65,6 @@ pub mod qbz_about_bridge {
         /// `hasBody`, the TOC and the flat block model. Produced by
         /// `whats_new_qt.rs`. Same `"{}"` default, same reason.
         #[qproperty(QString, whats_new_json)]
-
         type QbzAbout = super::QbzAboutRust;
 
         /// Registers this object's Qt-thread hop. Harmless to call twice, and

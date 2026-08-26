@@ -51,14 +51,12 @@ pub mod qbz_qconnect {
         // auto-connect success tail and the offline force-disconnect watcher —
         // the facade itself never writes it (1:1 with the reference).
         #[qproperty(bool, qconnect_connected)]
-
         // --- Device picker -------------------------------------------------
         // JSON array of device rows (see the module header for the exact
         // shape). Rebuilt on every inbound event by the sink.
         #[qproperty(QString, devices_json)]
         // -1 = none.
         #[qproperty(i32, active_renderer_id)]
-
         // --- Diagnostics modal (DeveloperSettings > QOBUZ CONNECT) ---------
         // QML-driven open/close (DeveloperSettings sets it true; the modal's
         // own close sets it false).
@@ -67,7 +65,6 @@ pub mod qbz_qconnect {
         #[qproperty(QString, diag_status)]
         // The rolling 150-line event log, newest first.
         #[qproperty(QString, diag_log_text)]
-
         type QbzQConnect = super::QbzQConnectRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY

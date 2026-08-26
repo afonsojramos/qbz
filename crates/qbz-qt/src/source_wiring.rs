@@ -123,7 +123,9 @@ pub(crate) fn install() {
     registry.plex().set_creds(Some(Arc::new(PlexCredsGlue)));
     registry.jellyfin().set_creds(Some(Arc::new(JellyfinGlue)));
     registry.subsonic().set_creds(Some(Arc::new(SubsonicGlue)));
-    registry.local().set_ephemeral(Some(Arc::new(EphemeralGlue)));
+    registry
+        .local()
+        .set_ephemeral(Some(Arc::new(EphemeralGlue)));
     // Reads BEFORE a user is bound (splash, session restore) must resolve the
     // way `local_state::with_db` already resolves them — through
     // `load_last_user_id` — or the window between boot and
@@ -231,7 +233,9 @@ pub(crate) fn teardown() {
     registry.plex().set_creds(Some(Arc::new(PlexCredsGlue)));
     registry.jellyfin().set_creds(Some(Arc::new(JellyfinGlue)));
     registry.subsonic().set_creds(Some(Arc::new(SubsonicGlue)));
-    registry.local().set_ephemeral(Some(Arc::new(EphemeralGlue)));
+    registry
+        .local()
+        .set_ephemeral(Some(Arc::new(EphemeralGlue)));
     registry
         .local()
         .set_unbound_fallback(Some(Box::new(crate::local_state::db_path)));

@@ -463,7 +463,11 @@ pub fn clear_track() {
 pub fn set_cast_session(active: bool, protocol: &str, target: &str) {
     mutate(|m| {
         m.cast_active = active;
-        m.cast_protocol = if active { protocol.to_string() } else { String::new() };
+        m.cast_protocol = if active {
+            protocol.to_string()
+        } else {
+            String::new()
+        };
         if active {
             m.cast_target = target.to_string();
         } else if !m.is_remote {
@@ -595,7 +599,8 @@ pub fn set_artwork_path_large(path: String) {
         *last = path.clone();
     }
     crate::player_bridge::ui(move |mut b| {
-        b.as_mut().set_np_artwork_path_large(QString::from(path.as_str()))
+        b.as_mut()
+            .set_np_artwork_path_large(QString::from(path.as_str()))
     });
 }
 

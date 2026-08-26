@@ -679,8 +679,7 @@ async fn favorite_award_ids() -> HashSet<String> {
 }
 
 pub fn toggle_follow() {
-    let (id, following, busy) =
-        with_state(|s| (s.id.clone(), s.is_following, s.follow_toggling));
+    let (id, following, busy) = with_state(|s| (s.id.clone(), s.is_following, s.follow_toggling));
     if id.is_empty() || busy {
         return;
     }

@@ -46,7 +46,6 @@ pub mod qbz_suggestions {
         // The §4.5 document (see the file header). Written ONLY by
         // suggestions_qt through `ui()`.
         #[qproperty(QString, suggestions_json)]
-
         type QbzSuggestions = super::QbzSuggestionsRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY

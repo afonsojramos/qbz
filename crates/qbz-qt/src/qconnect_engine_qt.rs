@@ -92,10 +92,14 @@ impl QconnectRendererEngine for QtRendererEngine {
         self.core().stop().map_err(|err| err.to_string())
     }
     fn seek(&self, position_secs: u64) -> Result<(), String> {
-        self.core().seek(position_secs).map_err(|err| err.to_string())
+        self.core()
+            .seek(position_secs)
+            .map_err(|err| err.to_string())
     }
     fn set_volume(&self, fraction: f32) -> Result<(), String> {
-        self.core().set_volume(fraction).map_err(|err| err.to_string())
+        self.core()
+            .set_volume(fraction)
+            .map_err(|err| err.to_string())
     }
     fn get_playback_state(&self) -> PlaybackState {
         self.core().get_playback_state()
@@ -220,13 +224,9 @@ impl QconnectRendererEngine for QtRendererEngine {
 
     fn current_output_format(&self) -> Option<(u32, u32)> {
         let player = self.core().player();
-        Some((
-            player.state.get_sample_rate(),
-            player.state.get_bit_depth(),
-        ))
+        Some((player.state.get_sample_rate(), player.state.get_bit_depth()))
     }
 }
-
 
 async fn download_remote_audio(url: &str) -> Result<Vec<u8>, String> {
     let response = reqwest::Client::new()
@@ -358,7 +358,12 @@ async fn probe_remote_stream_info(url: &str) -> Result<RemoteStreamInfo, String>
         .header("User-Agent", "Mozilla/5.0")
         .send()
         .await
-        .map_err(|err| format!("probe HEAD request failed: {}", describe_reqwest_error(&err)))?;
+        .map_err(|err| {
+            format!(
+                "probe HEAD request failed: {}",
+                describe_reqwest_error(&err)
+            )
+        })?;
 
     if !head_response.status().is_success() {
         return Err(format!(
@@ -381,7 +386,12 @@ async fn probe_remote_stream_info(url: &str) -> Result<RemoteStreamInfo, String>
         .header("Range", "bytes=0-65535")
         .send()
         .await
-        .map_err(|err| format!("probe range request failed: {}", describe_reqwest_error(&err)))?;
+        .map_err(|err| {
+            format!(
+                "probe range request failed: {}",
+                describe_reqwest_error(&err)
+            )
+        })?;
 
     if !range_response.status().is_success() {
         return Err(format!(
@@ -486,8 +496,12 @@ async fn download_and_stream_remote_track(
     let mut last_log_time = Instant::now();
 
     while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result
-            .map_err(|err| format!("remote streaming chunk failed: {}", describe_reqwest_error(&err)))?;
+        let chunk = chunk_result.map_err(|err| {
+            format!(
+                "remote streaming chunk failed: {}",
+                describe_reqwest_error(&err)
+            )
+        })?;
         bytes_received += chunk.len() as u64;
 
         if let Err(err) = writer.push_chunk(&chunk) {

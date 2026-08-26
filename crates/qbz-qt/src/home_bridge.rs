@@ -116,7 +116,6 @@ pub mod qbz_home {
         #[qproperty(bool, award_loading)]
         #[qproperty(QString, award_albums_json)]
         #[qproperty(bool, award_albums_loading)]
-
         // --- Radio start-up indicator (src/foryou_qt.rs) -------------------
         // "" while idle, else the KEY of the radio currently being built:
         // "album:<id>" or "artist:<id>". A radio is not one request — it is a
@@ -136,7 +135,6 @@ pub mod qbz_home {
         //
         // READ + NOTIFY: only `foryou_qt` writes it, always in pairs.
         #[qproperty(QString, radio_pending, READ, NOTIFY)]
-
         type QbzHome = super::QbzHomeRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -733,8 +731,7 @@ impl qbz_home::QbzHome {
         if patch.is_empty() {
             return;
         }
-        self.as_mut()
-            .reco_art_ready(QString::from(patch.as_str()));
+        self.as_mut().reco_art_ready(QString::from(patch.as_str()));
     }
 
     /// Synchronous, in-memory re-hand on HomeView mount. The history stores

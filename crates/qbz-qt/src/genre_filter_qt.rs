@@ -393,7 +393,8 @@ pub(crate) fn current_json() -> String {
 fn publish() {
     let json = current_json();
     crate::ui(move |mut b| {
-        b.as_mut().set_genre_filter_json(QString::from(json.as_str()));
+        b.as_mut()
+            .set_genre_filter_json(QString::from(json.as_str()));
     });
 }
 
@@ -455,7 +456,11 @@ async fn load_descendants(id: u64) {
     let kids: Vec<u64> = STATE
         .lock()
         .ok()
-        .and_then(|s| s.children.get(&id).map(|k| k.iter().map(|c| c.id).collect()))
+        .and_then(|s| {
+            s.children
+                .get(&id)
+                .map(|k| k.iter().map(|c| c.id).collect())
+        })
         .unwrap_or_default();
     for kid in kids {
         load_children(kid).await;

@@ -20,7 +20,9 @@ use serde::Serialize;
 
 use qbz_source::SourceId;
 
-use crate::local_rows::{art_token, basename, folder_key, map_track, FolderDetail, SubfolderRow, TrackRow, TreeNode};
+use crate::local_rows::{
+    art_token, basename, folder_key, map_track, FolderDetail, SubfolderRow, TrackRow, TreeNode,
+};
 use crate::local_state::{state, with_art, with_db};
 
 /// `list_folder_children` + the reference's on-disk cover fallback for the
@@ -153,7 +155,12 @@ pub fn tree_collapse(path: &str) -> Vec<TreeNode> {
 /// preload).
 pub fn tree_expand_blocking(path: &str) -> Vec<TreeNode> {
     let children = folder_children_with_covers(path);
-    let nodes = state(|s| s.tree.iter().position(|n| n.path == path).map(|pos| (pos, s.tree[pos].depth)));
+    let nodes = state(|s| {
+        s.tree
+            .iter()
+            .position(|n| n.path == path)
+            .map(|pos| (pos, s.tree[pos].depth))
+    });
     let Some((pos, depth)) = nodes else {
         return state(|s| s.tree.clone());
     };
@@ -204,7 +211,9 @@ fn visible_nodes() -> Vec<TreeNode> {
             .iter()
             .filter(|n| {
                 n.segment.to_lowercase().contains(q)
-                    || matches.iter().any(|m| m.starts_with(&format!("{}/", n.path)))
+                    || matches
+                        .iter()
+                        .any(|m| m.starts_with(&format!("{}/", n.path)))
             })
             .cloned()
             .collect()
@@ -413,10 +422,10 @@ pub fn load_folder_detail_blocking(path: &str) -> FolderDetail {
                     let key = folder_key(path);
                     if let Some(a) = artwork.as_ref().filter(|a| !a.is_empty()) {
                         // The folder tree is `library.db`: every cover here is a
-                // local file.
-                if let Some(t) = art_token(Some("local"), a) {
-                    art.insert(key.clone(), t);
-                }
+                        // local file.
+                        if let Some(t) = art_token(Some("local"), a) {
+                            art.insert(key.clone(), t);
+                        }
                     }
                     Some(SubfolderRow {
                         path: path.clone(),

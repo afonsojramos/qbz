@@ -32,7 +32,8 @@ const MAX_MINUTES: i32 = 24 * 60; // 1440
 fn push_state(active: bool, remaining: String) {
     crate::queue_bridge::ui(move |mut b| {
         b.as_mut().set_sleep_active(active);
-        b.as_mut().set_sleep_remaining(QString::from(remaining.as_str()));
+        b.as_mut()
+            .set_sleep_remaining(QString::from(remaining.as_str()));
     });
 }
 

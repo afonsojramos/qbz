@@ -303,7 +303,9 @@ fn fetch_label(generation: u64, id: u64) {
                         c.id.as_deref()
                             .map(|id| {
                                 let id = id.to_lowercase();
-                                id.contains("award") || id.contains("critic") || id.contains("press")
+                                id.contains("award")
+                                    || id.contains("critic")
+                                    || id.contains("press")
                             })
                             .unwrap_or(false)
                     })
@@ -632,9 +634,7 @@ pub fn enqueue_top(mode: String) {
     }
     let runtime = crate::app();
     crate::spawn(async move {
-        if let Err(e) =
-            crate::playback_qt::enqueue_track_list_mode(&runtime, queue, &mode).await
-        {
+        if let Err(e) = crate::playback_qt::enqueue_track_list_mode(&runtime, queue, &mode).await {
             log::error!("[qbz-qt] label enqueue-top ({mode}) failed: {e}");
         }
     });
@@ -1152,7 +1152,9 @@ fn parse_artist_image(raw: &Value) -> String {
             portrait.get("hash").and_then(|v| v.as_str()),
             portrait.get("format").and_then(|v| v.as_str()),
         ) {
-            return format!("https://static.qobuz.com/images/artists/covers/medium/{hash}.{format}");
+            return format!(
+                "https://static.qobuz.com/images/artists/covers/medium/{hash}.{format}"
+            );
         }
     }
     String::new()
@@ -1289,8 +1291,15 @@ fn parse_top_track(index: usize, raw: &Value) -> TrackRow {
         })
         .unwrap_or(true);
     TrackRow {
-        is_favorite: id.parse::<u64>().map(crate::fav_cache_qt::contains_track).unwrap_or(false),
-        cache_status: if crate::offline_qt::is_cached(&id) { 3 } else { 0 },
+        is_favorite: id
+            .parse::<u64>()
+            .map(crate::fav_cache_qt::contains_track)
+            .unwrap_or(false),
+        cache_status: if crate::offline_qt::is_cached(&id) {
+            3
+        } else {
+            0
+        },
         id,
         number: (index + 1).to_string(),
         title,
@@ -1327,7 +1336,10 @@ fn parse_playlist(raw: &Value) -> HomeCard {
         .filter(|s| !s.is_empty())
         .unwrap_or("Qobuz")
         .to_string();
-    let track_count = raw.get("tracks_count").and_then(|v| v.as_u64()).unwrap_or(0);
+    let track_count = raw
+        .get("tracks_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let id = raw.get("id").map(value_to_string).unwrap_or_default();
     let pid = id.parse::<u64>().ok();
     HomeCard {
@@ -1339,7 +1351,9 @@ fn parse_playlist(raw: &Value) -> HomeCard {
         // raw JSON with no owner block worth trusting, so ownership is
         // resolved by ID against the user's own playlist list rather than by
         // comparing an owner field that may not be there.
-        is_favorite: pid.map(crate::fav_cache_qt::is_playlist_favorite).unwrap_or(false),
+        is_favorite: pid
+            .map(crate::fav_cache_qt::is_playlist_favorite)
+            .unwrap_or(false),
         playlist_owned: pid.map(crate::playlist_qt::is_owned).unwrap_or(false),
         playlist_following: pid.map(crate::playlist_qt::is_following).unwrap_or(false),
         id,
@@ -1409,8 +1423,15 @@ fn parse_more_labels(resp: &qbz_models::LabelExploreResponse, current: u64) -> V
 fn track_row_to_queue(row: &TrackRow) -> QueueTrack {
     let duration_secs = {
         let mut parts = row.duration.split(':');
-        parts.next().and_then(|m| m.parse::<u64>().ok()).unwrap_or(0) * 60
-            + parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0)
+        parts
+            .next()
+            .and_then(|m| m.parse::<u64>().ok())
+            .unwrap_or(0)
+            * 60
+            + parts
+                .next()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0)
     };
     QueueTrack {
         id: row.id.parse().unwrap_or(0),
@@ -1525,10 +1546,7 @@ mod tests {
 
     #[test]
     fn sorting_uses_the_plain_year() {
-        let mut items = vec![
-            card("A", "X", "1999", "cd"),
-            card("B", "Y", "2021", "cd"),
-        ];
+        let mut items = vec![card("A", "X", "1999", "cd"), card("B", "Y", "2021", "cd")];
         sort_cards(&mut items, "newest");
         assert_eq!(items[0].year, "2021");
         sort_cards(&mut items, "oldest");

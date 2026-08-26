@@ -100,7 +100,6 @@ pub mod qbz_lyrics_bridge {
         // Inline notice line (this shell has no toast host): translation
         // failures and the copy confirmation land here. "" = hidden.
         #[qproperty(QString, notice)]
-
         // --- Display prefs (Slint LyricsState S5 block) -------------------
         // Persisted per user in <data_dir>/qbz/users/<id>/lyrics_prefs.json —
         // the SAME file and field values the Slint build writes, so a user
@@ -120,7 +119,6 @@ pub mod qbz_lyrics_bridge {
         // Active (karaoke fill) color: false = follow the theme accent.
         #[qproperty(bool, use_custom_color)]
         #[qproperty(QString, custom_color)]
-
         type QbzLyrics = super::QbzLyricsRust;
 
         /// Registers this object's Qt-thread hop and seeds the persisted
@@ -355,7 +353,9 @@ impl qbz_lyrics_bridge::QbzLyrics {
         // with the new language (the Slint build reaches the same result via
         // the next track change; here it is immediate).
         let language_index = prefs.translation_language_index();
-        if translation_enabled() && language_index != LAST_LANGUAGE.swap(language_index, Ordering::SeqCst) {
+        if translation_enabled()
+            && language_index != LAST_LANGUAGE.swap(language_index, Ordering::SeqCst)
+        {
             self.as_mut().set_translation_busy(true);
             let pref = prefs.translation_language.clone();
             crate::spawn(async move {
@@ -740,7 +740,8 @@ fn publish(doc: LyricsDocJson, translation_available: bool, show_translation: bo
     // by the shell bridge; other surfaces may still bind it).
     let shell_json = json.clone();
     crate::shell_bridge::ui(move |mut b| {
-        b.as_mut().set_lyrics_json(QString::from(shell_json.as_str()));
+        b.as_mut()
+            .set_lyrics_json(QString::from(shell_json.as_str()));
     });
     ui(move |mut b| {
         b.as_mut().set_doc_json(QString::from(json.as_str()));
@@ -1061,4 +1062,3 @@ async fn enable_translation(pref: String) {
         }
     }
 }
-

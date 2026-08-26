@@ -58,7 +58,6 @@ pub mod qbz_session {
         // switch; every `QbzSession.tr(msgid, QbzSession.trRev)` binding
         // depends on it.
         #[qproperty(i32, tr_rev)]
-
         type QbzSession = super::QbzSessionRust;
 
         /// The first invokable (Main.qml Component.onCompleted): register

@@ -162,7 +162,10 @@ fn snapshot_doc() -> Doc {
 
 fn publish_now() {
     let json = serde_json::to_string(&snapshot_doc()).unwrap_or_else(|_| "{}".into());
-    ui(move |mut b| b.as_mut().set_diagnostics_json(QString::from(json.as_str())));
+    ui(move |mut b| {
+        b.as_mut()
+            .set_diagnostics_json(QString::from(json.as_str()))
+    });
 }
 
 /// Publish the document — but only while the panel is expanded. A collapsed
@@ -253,13 +256,14 @@ fn gather_blocking() -> Blocking {
     let graphics = qbz_app::settings::graphics::GraphicsSettings::default();
     let developer = qbz_app::settings::developer::DeveloperSettings::default();
     let gfx = qbz_app::diagnostics::detect_graphics_runtime(&graphics, false);
-    let diag = qbz_app::diagnostics::runtime_diagnostics(&qbz_app::diagnostics::DiagnosticsInputs {
-        audio: &audio,
-        graphics: &graphics,
-        developer: &developer,
-        gfx,
-        app_version: env!("CARGO_PKG_VERSION"),
-    });
+    let diag =
+        qbz_app::diagnostics::runtime_diagnostics(&qbz_app::diagnostics::DiagnosticsInputs {
+            audio: &audio,
+            graphics: &graphics,
+            developer: &developer,
+            gfx,
+            app_version: env!("CARGO_PKG_VERSION"),
+        });
     let sys = qbz_app::diagnostics::system_info();
     let (active_output, available_outputs, active_fmt) = collect_output_sinks();
 
@@ -378,9 +382,10 @@ fn gather_catalog_diagnostics() -> CatalogDiagnostics {
                 reason: String::new(),
                 generation: Some(manifest.active_generation),
                 tracks: stats.as_ref().ok().map(|value| value.track_count),
-                bytes: stats.as_ref().ok().map(|value| {
-                    value.page_size_bytes.saturating_mul(value.page_count)
-                }),
+                bytes: stats
+                    .as_ref()
+                    .ok()
+                    .map(|value| value.page_size_bytes.saturating_mul(value.page_count)),
                 runtime_check,
                 runtime_ok,
                 fts_activation_verified: true,
@@ -672,7 +677,10 @@ fn build_system_rows(
     rows.push(row(
         "Local Catalog Size",
         "—",
-        &catalog.bytes.map(format_bytes).unwrap_or_else(|| "—".to_string()),
+        &catalog
+            .bytes
+            .map(format_bytes)
+            .unwrap_or_else(|| "—".to_string()),
         0,
     ));
     rows.push(row(
@@ -689,7 +697,11 @@ fn build_system_rows(
         } else {
             "not active"
         },
-        if catalog.fts_activation_verified { 1 } else { 0 },
+        if catalog.fts_activation_verified {
+            1
+        } else {
+            0
+        },
     ));
     rows.push(row("Local Library Routes", "—", &catalog.routes, 0));
     rows
@@ -741,7 +753,12 @@ fn build_audio_rows(g: &Gathered) -> Vec<Row> {
         .unwrap_or("—");
 
     vec![
-        row("Output Device", &saved_output, output_runtime, output_status),
+        row(
+            "Output Device",
+            &saved_output,
+            output_runtime,
+            output_status,
+        ),
         row("Backend", &opt(&d.audio_backend_type), "—", 0),
         row("Exclusive Mode", yn(d.audio_exclusive_mode), "—", 0),
         row("DAC Passthrough", yn(d.audio_dac_passthrough), "—", 0),
@@ -757,7 +774,12 @@ fn build_audio_rows(g: &Gathered) -> Vec<Row> {
             0,
         ),
         row("Gapless", yn(d.audio_gapless_enabled), "—", 0),
-        row("PW Force Bitperfect", yn(d.audio_pw_force_bitperfect), "—", 0),
+        row(
+            "PW Force Bitperfect",
+            yn(d.audio_pw_force_bitperfect),
+            "—",
+            0,
+        ),
         row(
             "Stream Buffer",
             &format!("{}s", d.audio_stream_buffer_seconds),
@@ -775,12 +797,7 @@ fn build_graphics_rows(g: &Gathered) -> Vec<Row> {
         // The Qt analogue of the reference's "Renderer (Slint)": the saved
         // Settings > Appearance preference vs the RHI api that actually
         // resolved at startup (`renderer_qt::active_api`).
-        row(
-            "Renderer (Qt)",
-            &g.renderer_saved,
-            &g.renderer_runtime,
-            0,
-        ),
+        row("Renderer (Qt)", &g.renderer_saved, &g.renderer_runtime, 0),
         // Stands where the reference's `renderer_decision_summary()` adapter
         // string does. NOT byte-identical: this is the Vulkan enumeration in
         // `QT_VK_PHYSICAL_DEVICE_INDEX` order, not wgpu's adapter list.
@@ -807,13 +824,21 @@ fn build_graphics_rows(g: &Gathered) -> Vec<Row> {
         row(
             "GPU: NVIDIA",
             "—",
-            if d.runtime_has_nvidia { "Detected" } else { "No" },
+            if d.runtime_has_nvidia {
+                "Detected"
+            } else {
+                "No"
+            },
             0,
         ),
         row(
             "GPU: Intel",
             "—",
-            if d.runtime_has_intel { "Detected" } else { "No" },
+            if d.runtime_has_intel {
+                "Detected"
+            } else {
+                "No"
+            },
             0,
         ),
         row(
@@ -900,7 +925,12 @@ fn build_playback_rows(
         ),
         row("Has Track", "—", yn(track.is_some()), 0),
         row("Track Title", "—", &opt(&track.map(|t| t.title.clone())), 0),
-        row("Track Artist", "—", &opt(&track.map(|t| t.artist.clone())), 0),
+        row(
+            "Track Artist",
+            "—",
+            &opt(&track.map(|t| t.artist.clone())),
+            0,
+        ),
         row("Track Album", "—", &opt(&track.map(|t| t.album.clone())), 0),
         row(
             "Track Source",

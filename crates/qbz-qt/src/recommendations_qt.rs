@@ -88,10 +88,7 @@ static LOADED: AtomicBool = AtomicBool::new(false);
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 fn rows_snapshot() -> Rows {
-    ROWS.lock()
-        .ok()
-        .and_then(|g| g.clone())
-        .unwrap_or_default()
+    ROWS.lock().ok().and_then(|g| g.clone()).unwrap_or_default()
 }
 
 fn mutate(f: impl FnOnce(&mut Rows)) {
@@ -294,7 +291,12 @@ fn publish_weeklies(download: bool) {
             "slimTracks",
             rows.weekly_exploration.clone(),
         ),
-        section(WEEKLY_JAMS, String::new(), "slimTracks", rows.weekly_jams.clone()),
+        section(
+            WEEKLY_JAMS,
+            String::new(),
+            "slimTracks",
+            rows.weekly_jams.clone(),
+        ),
     ]
     .into_iter()
     .flatten()
@@ -310,7 +312,8 @@ fn publish_weeklies(download: bool) {
     }
     let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".to_string());
     crate::home_bridge::ui(move |mut b| {
-        b.as_mut().set_reco_weekly_json(QString::from(json.as_str()));
+        b.as_mut()
+            .set_reco_weekly_json(QString::from(json.as_str()));
     });
 
     if download && !missing.is_empty() {
@@ -742,9 +745,11 @@ async fn run(force: bool) {
     // ListenBrainz's own weekly cadence and have their own per-week cache, so
     // one transient empty build must not hide them for the whole window.
     if !force {
-        let cached = inputs
-            .cache
-            .and_then(|c| c.lock().ok().and_then(|g| g.get_results(&source_key, ttl_secs)));
+        let cached = inputs.cache.and_then(|c| {
+            c.lock()
+                .ok()
+                .and_then(|g| g.get_results(&source_key, ttl_secs))
+        });
         if let Some(json) = cached {
             if let Ok(result) = serde_json::from_str::<ExternalCarousels>(&json) {
                 apply_all(result, &followed);
@@ -848,7 +853,10 @@ async fn run(force: bool) {
                  results-cache write (likely transient; next open re-fetches)"
             );
         } else {
-            let json = collector.lock().ok().and_then(|g| serde_json::to_string(&*g).ok());
+            let json = collector
+                .lock()
+                .ok()
+                .and_then(|g| serde_json::to_string(&*g).ok());
             if let (Ok(guard), Some(json)) = (cache_mutex.lock(), json) {
                 guard.put_results(&source_key, &json);
             }
@@ -875,10 +883,7 @@ async fn build_and_apply_weeklies(inputs: &RecoInputs<'_>) {
     if inputs.listenbrainz.is_none() {
         return;
     }
-    let (explore, jams) = tokio::join!(
-        build_weekly_exploration(inputs),
-        build_weekly_jams(inputs)
-    );
+    let (explore, jams) = tokio::join!(build_weekly_exploration(inputs), build_weekly_jams(inputs));
     mutate(|rows| {
         rows.weekly_exploration = explore.iter().map(card_from_track).collect();
         rows.weekly_jams = jams.iter().map(card_from_track).collect();

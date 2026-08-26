@@ -230,7 +230,6 @@ pub(crate) fn initial_background_blur() -> bool {
     crate::settings_qt::pref_bool(KEY_BACKGROUND_BLUR, false)
 }
 
-
 pub(crate) fn initial_width() -> f32 {
     crate::settings_qt::pref_f32(KEY_WIDTH, DEFAULT_WIDTH)
 }
@@ -320,12 +319,11 @@ mod tests {
         let upcoming: Vec<QueueTrack> = (1..=60)
             .map(|i| track(100 + i, &format!("up-{i}"), None, 187, false))
             .collect();
-        let doc: serde_json::Value =
-            serde_json::from_str(&mini_queue_doc(&state(
-                Some(track(7, "Now", Some("Remastered"), 187, true)),
-                upcoming.clone(),
-            )))
-            .unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&mini_queue_doc(&state(
+            Some(track(7, "Now", Some("Remastered"), 187, true)),
+            upcoming.clone(),
+        )))
+        .unwrap();
 
         let rows = doc["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 61);

@@ -106,14 +106,14 @@ impl Default for AudioSettings {
             // fixes, and "System" is the app-like default audiophiles override.
             backend_type: Some(AudioBackendType::default()),
             alsa_plugin: Some(AlsaPlugin::Hw), // Default to hw (bit-perfect)
-            alsa_hardware_volume: false, // Disabled by default (maximum compatibility)
-            stream_first_track: true, // On by default (opt-out)
-            stream_buffer_seconds: 2, // 2 seconds initial buffer
+            alsa_hardware_volume: false,       // Disabled by default (maximum compatibility)
+            stream_first_track: true,          // On by default (opt-out)
+            stream_buffer_seconds: 2,          // 2 seconds initial buffer
             streaming_only: false, // Disabled by default (cache tracks for instant replay)
             limit_quality_to_device: false, // Opt-in. Off since 1.1.9 (#45); wired to the read-only probe in #638 fix 3
-            device_max_sample_rate: None, // Set when device is selected
+            device_max_sample_rate: None,   // Set when device is selected
             device_sample_rate_limits: HashMap::new(), // Per-device limits (empty = no limit)
-            normalization_enabled: false, // Off by default — preserves bit-perfect pipeline
+            normalization_enabled: false,   // Off by default — preserves bit-perfect pipeline
             normalization_target_lufs: -14.0, // Spotify/YouTube standard
             gapless_enabled: true, // On by default — works for same-format tracks on all backends
             pw_force_bitperfect: false, // Off by default — experimental PipeWire feature
@@ -122,7 +122,7 @@ impl Default for AudioSettings {
             skip_sink_switch: false, // Off by default — only for JACK/DAW routing setups
             allow_quality_fallback: false, // Off by default — fail rather than silently downgrade
             reserve_dac_while_running: false, // Off by default — opt-in DAC reservation (Lifetime B)
-            dsd_mode: default_dsd_mode(), // "convert" — safe on every DAC
+            dsd_mode: default_dsd_mode(),     // "convert" — safe on every DAC
         }
     }
 }
@@ -909,11 +909,12 @@ mod tests {
     fn stream_buffer_seconds_clamps_to_valid_range() {
         let (dir, store) = fresh_store("stream-buffer-clamp");
 
-        store
-            .set_stream_buffer_seconds(0)
-            .expect("set low buffer");
+        store.set_stream_buffer_seconds(0).expect("set low buffer");
         assert_eq!(
-            store.get_settings().expect("get settings").stream_buffer_seconds,
+            store
+                .get_settings()
+                .expect("get settings")
+                .stream_buffer_seconds,
             1
         );
 
@@ -921,7 +922,10 @@ mod tests {
             .set_stream_buffer_seconds(99)
             .expect("set high buffer");
         assert_eq!(
-            store.get_settings().expect("get settings").stream_buffer_seconds,
+            store
+                .get_settings()
+                .expect("get settings")
+                .stream_buffer_seconds,
             10
         );
         let _ = std::fs::remove_dir_all(dir);

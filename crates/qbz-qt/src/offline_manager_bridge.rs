@@ -58,7 +58,6 @@ pub mod qbz_offline_manager_bridge {
         /// spinner — on the one screen whose whole job is to show you that you
         /// DO have downloads.
         #[qproperty(bool, manager_loading)]
-
         type QbzOffline = super::QbzOfflineRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain

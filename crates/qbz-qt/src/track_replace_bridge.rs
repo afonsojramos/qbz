@@ -40,7 +40,6 @@ pub mod qbz_track_replace_bridge {
         #[qml_singleton]
         // ONE JSON document (track_replace_qt.rs ReplaceDoc).
         #[qproperty(QString, replace_json)]
-
         type QbzTrackReplace = super::QbzTrackReplaceRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain

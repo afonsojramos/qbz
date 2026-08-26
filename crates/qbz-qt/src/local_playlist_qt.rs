@@ -91,9 +91,11 @@ pub fn list_blocking() -> Vec<repo::LocalPlaylist> {
 }
 
 pub fn get_blocking(id: &str) -> Option<repo::LocalPlaylist> {
-    with_db(false, |db| Ok(db.with_connection(|conn| repo::get(conn, id))))
-        .and_then(|r| r.ok())
-        .flatten()
+    with_db(false, |db| {
+        Ok(db.with_connection(|conn| repo::get(conn, id)))
+    })
+    .and_then(|r| r.ok())
+    .flatten()
 }
 
 pub fn get_tracks_blocking(id: &str) -> Vec<repo::LocalPlaylistTrack> {
@@ -104,7 +106,11 @@ pub fn get_tracks_blocking(id: &str) -> Vec<repo::LocalPlaylistTrack> {
     .unwrap_or_default()
 }
 
-pub fn create_blocking(name: &str, description: Option<&str>, offline_only: bool) -> Option<String> {
+pub fn create_blocking(
+    name: &str,
+    description: Option<&str>,
+    offline_only: bool,
+) -> Option<String> {
     with_db(true, |db| {
         Ok(db.with_connection(|conn| repo::create(conn, name, description, offline_only)))
     })
@@ -392,10 +398,7 @@ async fn ready_cached_rows(track_ids: &[u64]) -> HashMap<u64, RowItem> {
         let Ok(Some(info)) = db.get_track(*track_id) else {
             continue;
         };
-        if !matches!(
-            info.status,
-            qbz_offline_cache::OfflineCacheStatus::Ready
-        ) {
+        if !matches!(info.status, qbz_offline_cache::OfflineCacheStatus::Ready) {
             continue;
         }
         let artwork_path = info.resolve_cover_path(&cache_path);
@@ -695,15 +698,10 @@ pub(crate) fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueT
                 title: title.clone(),
                 artist: artist.clone(),
                 album: album.clone(),
-                duration: crate::playlist_qt::mmss(
-                    (*duration_secs).min(u32::MAX as u64) as u32,
-                ),
+                duration: crate::playlist_qt::mmss((*duration_secs).min(u32::MAX as u64) as u32),
                 duration_secs: *duration_secs,
                 quality_tier: crate::playlist_qt::tier(*bit_depth).to_string(),
-                quality_detail: crate::home_qt::quality_detail_from_parts(
-                    *bit_depth,
-                    *sample_rate,
-                ),
+                quality_detail: crate::home_qt::quality_detail_from_parts(*bit_depth, *sample_rate),
                 quality_label: crate::playlist_qt::quality_label(*bit_depth, *sample_rate),
                 bit_depth: *bit_depth,
                 sample_rate: *sample_rate,
@@ -765,11 +763,7 @@ pub(crate) fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueT
                 // no bit depth.
                 quality_tier: crate::local_rows::tier_of(&t.format, t.bit_depth, t.sample_rate)
                     .to_string(),
-                quality_detail: crate::local_rows::detail_of(
-                    &t.format,
-                    t.bit_depth,
-                    t.sample_rate,
-                ),
+                quality_detail: crate::local_rows::detail_of(&t.format, t.bit_depth, t.sample_rate),
                 // The raw numbers, normalized to kHz exactly like
                 // `local_playback::local_queue_track` (:155-159) does — a local
                 // row reports Hz (44100), the catalog reports kHz (44.1), and
@@ -833,11 +827,7 @@ pub(crate) fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueT
 
 fn build_row_models(
     rows: &[LoadedRow],
-) -> (
-    Vec<QueueTrack>,
-    Vec<PlaylistTrackRow>,
-    HashMap<String, i32>,
-) {
+) -> (Vec<QueueTrack>, Vec<PlaylistTrackRow>, HashMap<String, i32>) {
     let mut display = Vec::with_capacity(rows.len());
     let mut queue = Vec::new();
     let mut positions = HashMap::new();
@@ -1104,12 +1094,8 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
     // The DB column survives as a READ fallback so a cover stored there by an
     // earlier build is not silently lost; `clear_custom_artwork_blocking` is
     // what lets Remove clear one of those.
-    let custom_cover = crate::cover_artwork_qt::playlist_cover(&id).or_else(|| {
-        header
-            .custom_artwork_path
-            .clone()
-            .filter(|p| !p.is_empty())
-    });
+    let custom_cover = crate::cover_artwork_qt::playlist_cover(&id)
+        .or_else(|| header.custom_artwork_path.clone().filter(|p| !p.is_empty()));
 
     let doc = PlaylistDoc {
         id: header.id.clone(),
@@ -1265,10 +1251,7 @@ pub async fn play_shuffled(runtime: &Runtime) {
 async fn play_in(runtime: &Runtime, start_row_id: &str, shuffle: bool) {
     let (queue, offline_only, playlist_id) = {
         let Ok(q) = CURRENT_QUEUE.lock() else { return };
-        let meta = CURRENT_META
-            .lock()
-            .ok()
-            .and_then(|m| m.clone());
+        let meta = CURRENT_META.lock().ok().and_then(|m| m.clone());
         let offline_only = meta.as_ref().map(|(_, o)| *o).unwrap_or(false);
         let playlist_id = meta.map(|(id, _)| id).unwrap_or_default();
         (q.clone(), offline_only, playlist_id)
@@ -1443,7 +1426,11 @@ pub async fn reorder_row(runtime: &Runtime, from_row: usize, to_slot: usize) {
     if from_row >= ids.len() || to_slot > ids.len() {
         return;
     }
-    let anchor = if to_slot > from_row { to_slot - 1 } else { to_slot };
+    let anchor = if to_slot > from_row {
+        to_slot - 1
+    } else {
+        to_slot
+    };
     if anchor == from_row {
         return;
     }

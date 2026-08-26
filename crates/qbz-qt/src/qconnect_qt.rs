@@ -53,16 +53,13 @@ use qconnect_app::queue_resolution::{
     resolve_controller_queue_item_from_snapshots, resolve_queue_item_ids_from_queue_state,
     QconnectRemoteSkipDirection,
 };
-use qconnect_app::renderer::{
-    PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING, PLAYING_STATE_STOPPED,
-};
+use qconnect_app::renderer::{PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING, PLAYING_STATE_STOPPED};
 use qconnect_app::{
     build_effective_renderer_snapshot, ensure_session_renderer_state, is_local_renderer_active,
-    is_peer_renderer_active, renderer_allows_remote_volume, QConnectQueueState,
-    QConnectRendererState, QconnectApp, QconnectAppEvent, QconnectEventSink,
-    queue_item_snapshot_for_cursor, QconnectFileAudioQualitySnapshot, QconnectLifecycleState,
-    QconnectRemoteSyncState, QconnectSessionState, QueueCommandType, RendererReport,
-    RendererReportType, SessionLoopHost,
+    is_peer_renderer_active, queue_item_snapshot_for_cursor, renderer_allows_remote_volume,
+    QConnectQueueState, QConnectRendererState, QconnectApp, QconnectAppEvent, QconnectEventSink,
+    QconnectFileAudioQualitySnapshot, QconnectLifecycleState, QconnectRemoteSyncState,
+    QconnectSessionState, QueueCommandType, RendererReport, RendererReportType, SessionLoopHost,
 };
 use qconnect_transport_ws::{NativeWsTransport, WsTransportConfig};
 use serde_json::{json, Value};
@@ -75,8 +72,8 @@ use crate::qconnect_transport_qt::{
     build_set_position_player_state_request, default_qconnect_device_info,
     default_qconnect_device_info_with_name, load_persisted_device_name, resolve_transport_config,
     QconnectJoinSessionRequest, QconnectMuteVolumeRequest, QconnectQueueVersionPayload,
-    QconnectSetPlayerStateQueueItemPayload, QconnectSetPlayerStateRequest, QconnectSetVolumeRequest,
-    AUDIO_QUALITY_HIRES_LEVEL2, BUFFER_STATE_OK,
+    QconnectSetPlayerStateQueueItemPayload, QconnectSetPlayerStateRequest,
+    QconnectSetVolumeRequest, AUDIO_QUALITY_HIRES_LEVEL2, BUFFER_STATE_OK,
 };
 
 const QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS: u64 = 1_500;
@@ -788,7 +785,11 @@ impl QtQconnectService {
         let active_id = session.active_renderer_id;
         let local_id = session.local_renderer_id;
         if let Some(active_id) = active_id {
-            if let Some(renderer) = session.renderers.iter().find(|r| r.renderer_id == active_id) {
+            if let Some(renderer) = session
+                .renderers
+                .iter()
+                .find(|r| r.renderer_id == active_id)
+            {
                 snap.active_name = renderer.friendly_name.clone();
                 snap.active_brand = renderer.brand.clone();
                 snap.active_model = renderer.model.clone();
@@ -1215,8 +1216,11 @@ impl QtQconnectService {
         {
             let state = sync_state.lock().await;
             if let Some(applied) = &state.last_applied_queue_state {
-                let applied_ids: Vec<u64> =
-                    applied.queue_items.iter().map(|item| item.track_id).collect();
+                let applied_ids: Vec<u64> = applied
+                    .queue_items
+                    .iter()
+                    .map(|item| item.track_id)
+                    .collect();
                 if applied_ids == ordered_ids {
                     return;
                 }
@@ -1261,7 +1265,9 @@ impl QtQconnectService {
                 log::info!(
                     "[QConnect] Pushed local queue to Connect ({count} tracks, start={start_index})"
                 );
-                dev_push_event(format!("-> QueueLoadTracks {count} tracks start={start_index}"));
+                dev_push_event(format!(
+                    "-> QueueLoadTracks {count} tracks start={start_index}"
+                ));
                 *self.last_pushed_queue_ids.lock().await = Some(ordered_ids);
             }
             Err(err) => log::warn!("[QConnect] Failed to push local queue: {err}"),
@@ -1350,9 +1356,9 @@ impl QtQconnectService {
                 log::info!(
                     "[QConnect] play_on_peer: pushed queue ({count} tracks, start={start_index})"
                 );
-                dev_push_event(
-                    format!("-> play_on_peer QueueLoadTracks {count} start={start_index}"),
-                );
+                dev_push_event(format!(
+                    "-> play_on_peer QueueLoadTracks {count} start={start_index}"
+                ));
                 *self.last_pushed_queue_ids.lock().await = Some(ordered_ids);
             }
             Err(err) => {
@@ -1437,9 +1443,9 @@ impl QtQconnectService {
                 log::info!(
                     "[QConnect] play_next_on_peer: inserted track {track_id} (after={insert_after:?})"
                 );
-                dev_push_event(
-                    format!("-> play_next QueueInsertTracks {track_id} after={insert_after:?}"),
-                );
+                dev_push_event(format!(
+                    "-> play_next QueueInsertTracks {track_id} after={insert_after:?}"
+                ));
                 self.note_controller_insert(insert_after, &[track_id]).await;
             }
             Err(err) => {
@@ -1458,7 +1464,11 @@ impl QtQconnectService {
     /// Mirrors the webplayer `queue_add_tracks` path: a single append command with
     /// a fresh `context_uuid`, `autoplay_reset: false`, `autoplay_loading: false`.
     /// Same admission + echo handling as `play_next_on_peer_if_active`.
-    pub async fn add_to_queue_on_peer_if_active(&self, track_id: u64, source: Option<&str>) -> bool {
+    pub async fn add_to_queue_on_peer_if_active(
+        &self,
+        track_id: u64,
+        source: Option<&str>,
+    ) -> bool {
         let peer_active = self.is_peer_renderer_active().await;
         if !peer_active {
             return false;
@@ -1469,7 +1479,9 @@ impl QtQconnectService {
                 "[QConnect] add_to_queue_on_peer: track {track_id} not Qobuz-castable; refusing"
             );
             crate::toast_qt::error(qbz_i18n::t("Track not castable to Qobuz Connect"));
-            dev_push_event(format!("-> add_to_queue REFUSED (non-Qobuz track {track_id})"));
+            dev_push_event(format!(
+                "-> add_to_queue REFUSED (non-Qobuz track {track_id})"
+            ));
             return true;
         }
 
@@ -1622,9 +1634,9 @@ impl QtQconnectService {
                 log::info!(
                     "[QConnect] play_next_batch_on_peer: inserted {count} tracks (after={insert_after:?})"
                 );
-                dev_push_event(
-                    format!("-> play_next QueueInsertTracks {count} tracks after={insert_after:?}"),
-                );
+                dev_push_event(format!(
+                    "-> play_next QueueInsertTracks {count} tracks after={insert_after:?}"
+                ));
                 self.note_controller_insert(insert_after, &ids_u64).await;
             }
             Err(err) => {
@@ -1680,7 +1692,9 @@ impl QtQconnectService {
                 "[QConnect] play_later_on_peer: track {track_id} not Qobuz-castable; refusing"
             );
             crate::toast_qt::error(qbz_i18n::t("Track not castable to Qobuz Connect"));
-            dev_push_event(format!("-> play_later REFUSED (non-Qobuz track {track_id})"));
+            dev_push_event(format!(
+                "-> play_later REFUSED (non-Qobuz track {track_id})"
+            ));
             return true;
         }
 
@@ -1704,9 +1718,9 @@ impl QtQconnectService {
                 log::info!(
                     "[QConnect] play_later_on_peer: inserted track {track_id} (after={insert_after:?})"
                 );
-                dev_push_event(
-                    format!("-> play_later QueueInsertTracks {track_id} after={insert_after:?}"),
-                );
+                dev_push_event(format!(
+                    "-> play_later QueueInsertTracks {track_id} after={insert_after:?}"
+                ));
                 self.note_controller_insert(insert_after, &[track_id]).await;
             }
             Err(err) => {
@@ -1750,11 +1764,11 @@ impl QtQconnectService {
             return false;
         }
         if !self.is_track_castable(track_id, source) {
-            log::info!(
-                "[QConnect] insert_at_slot: track {track_id} not Qobuz-castable; refusing"
-            );
+            log::info!("[QConnect] insert_at_slot: track {track_id} not Qobuz-castable; refusing");
             crate::toast_qt::error(qbz_i18n::t("Track not castable to Qobuz Connect"));
-            dev_push_event(format!("-> insert_at_slot REFUSED (non-Qobuz track {track_id})"));
+            dev_push_event(format!(
+                "-> insert_at_slot REFUSED (non-Qobuz track {track_id})"
+            ));
             return true;
         }
 
@@ -1861,9 +1875,9 @@ impl QtQconnectService {
                 log::info!(
                     "[QConnect] play_later_batch_on_peer: inserted {count} tracks (after={insert_after:?})"
                 );
-                dev_push_event(
-                    format!("-> play_later QueueInsertTracks {count} tracks after={insert_after:?}"),
-                );
+                dev_push_event(format!(
+                    "-> play_later QueueInsertTracks {count} tracks after={insert_after:?}"
+                ));
                 self.note_controller_insert(insert_after, &ids_u64).await;
             }
             Err(err) => {
@@ -2091,8 +2105,11 @@ impl QtQconnectService {
     /// snapshot (`playing_state == PLAYING`). Title/artist/art come from the
     /// materialized local core queue, so only these three fields are needed here.
     pub async fn remote_now_playing(&self) -> Option<RemoteNowPlaying> {
-        let (renderer, queue, _session) =
-            self.effective_remote_renderer_snapshot().await.ok().flatten()?;
+        let (renderer, queue, _session) = self
+            .effective_remote_renderer_snapshot()
+            .await
+            .ok()
+            .flatten()?;
         Some(RemoteNowPlaying {
             position_ms: renderer.current_position_ms.unwrap_or(0),
             updated_at_ms: renderer.updated_at_ms,
@@ -2212,21 +2229,23 @@ impl QtQconnectService {
                 }
             };
             log::info!("[QConnect] skip {direction_label} handoff skipped: {reason}");
-            dev_push_event(format!("controller skip {direction_label}: local ({reason})"));
+            dev_push_event(format!(
+                "controller skip {direction_label}: local ({reason})"
+            ));
             return Ok(false);
         };
 
-        let resolution =
-            resolve_controller_queue_item_from_snapshots(&queue, &renderer, direction);
+        let resolution = resolve_controller_queue_item_from_snapshots(&queue, &renderer, direction);
 
         let Some(target_queue_item_id) = resolution.target_queue_item_id else {
             log::warn!(
                 "[QConnect] skip {direction_label} handoff: no target queue item resolved (strategy={})",
                 resolution.strategy
             );
-            dev_push_event(
-                format!("controller skip {direction_label}: NO TARGET ({})", resolution.strategy),
-            );
+            dev_push_event(format!(
+                "controller skip {direction_label}: NO TARGET ({})",
+                resolution.strategy
+            ));
             return Err(format!(
                 "remote renderer active but no {direction_label} target queue item could be resolved"
             ));
@@ -2259,9 +2278,10 @@ impl QtQconnectService {
             "[QConnect] skip {direction_label} handoff -> queue_item {target_queue_item_id} (strategy={})",
             resolution.strategy
         );
-        dev_push_event(
-            format!("controller skip {direction_label} -> qid {target_queue_item_id} (active={:?})", session.active_renderer_id),
-        );
+        dev_push_event(format!(
+            "controller skip {direction_label} -> qid {target_queue_item_id} (active={:?})",
+            session.active_renderer_id
+        ));
 
         Ok(true)
     }
@@ -2319,9 +2339,10 @@ impl QtQconnectService {
             .await;
 
         log::info!("[QConnect] toggle_play handoff -> playing_state {next_playing_state}");
-        dev_push_event(
-            format!("controller toggle_play -> {next_playing_state} (active={:?})", session.active_renderer_id),
-        );
+        dev_push_event(format!(
+            "controller toggle_play -> {next_playing_state} (active={:?})",
+            session.active_renderer_id
+        ));
 
         Ok(true)
     }
@@ -2364,14 +2385,15 @@ impl QtQconnectService {
                 state.last_load_attempt = Some((track_id, std::time::Instant::now()));
             }
             log::info!("[QConnect] play_track handoff skipped: {reason} (track {track_id})");
-            dev_push_event(format!("controller play_track {track_id}: local ({reason})"));
+            dev_push_event(format!(
+                "controller play_track {track_id}: local ({reason})"
+            ));
             return Ok(false);
         }
 
         let deadline = tokio::time::Instant::now()
             + std::time::Duration::from_millis(QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS);
-        let poll_interval =
-            std::time::Duration::from_millis(QCONNECT_PLAY_TRACK_HANDOFF_POLL_MS);
+        let poll_interval = std::time::Duration::from_millis(QCONNECT_PLAY_TRACK_HANDOFF_POLL_MS);
         let mut attempts: u32 = 0;
         loop {
             attempts += 1;
@@ -2412,9 +2434,9 @@ impl QtQconnectService {
                 log::info!(
                     "[QConnect] play_track handoff -> qid {target_queue_item_id} (track {track_id}, attempts={attempts})"
                 );
-                dev_push_event(
-                    format!("controller play_track {track_id} -> qid {target_queue_item_id}"),
-                );
+                dev_push_event(format!(
+                    "controller play_track {track_id} -> qid {target_queue_item_id}"
+                ));
 
                 return Ok(true);
             }
@@ -2429,7 +2451,9 @@ impl QtQconnectService {
         log::warn!(
             "[QConnect] play_track handoff: track {track_id} not present in remote queue after {QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS}ms"
         );
-        dev_push_event(format!("controller play_track {track_id}: NOT IN QUEUE (timeout)"));
+        dev_push_event(format!(
+            "controller play_track {track_id}: NOT IN QUEUE (timeout)"
+        ));
         Err(format!(
             "remote renderer active but track {track_id} was not present in qconnect queue after {QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS}ms"
         ))
@@ -2513,10 +2537,14 @@ impl QtQconnectService {
         self.send_command(QueueCommandType::CtrlSrvrSetShuffleMode, payload)
             .await?;
 
-        log::info!("[QConnect] shuffle -> {next_shuffle} (cloud, active={:?})", session.active_renderer_id);
-        dev_push_event(
-            format!("shuffle -> {next_shuffle} (active={:?})", session.active_renderer_id),
+        log::info!(
+            "[QConnect] shuffle -> {next_shuffle} (cloud, active={:?})",
+            session.active_renderer_id
         );
+        dev_push_event(format!(
+            "shuffle -> {next_shuffle} (active={:?})",
+            session.active_renderer_id
+        ));
 
         Ok(true)
     }
@@ -2545,10 +2573,14 @@ impl QtQconnectService {
         self.send_command(QueueCommandType::CtrlSrvrSetLoopMode, payload)
             .await?;
 
-        log::info!("[QConnect] repeat -> {next_loop} (cloud, active={:?})", session.active_renderer_id);
-        dev_push_event(
-            format!("repeat -> {next_loop} (active={:?})", session.active_renderer_id),
+        log::info!(
+            "[QConnect] repeat -> {next_loop} (cloud, active={:?})",
+            session.active_renderer_id
         );
+        dev_push_event(format!(
+            "repeat -> {next_loop} (active={:?})",
+            session.active_renderer_id
+        ));
 
         Ok(true)
     }
@@ -2602,12 +2634,10 @@ impl QtQconnectService {
             "[QConnect] reorder upcoming {from_index} -> {to_index} (cloud, active={:?})",
             session.active_renderer_id
         );
-        dev_push_event(
-            format!(
-                "reorder {from_index} -> {to_index} (active={:?})",
-                session.active_renderer_id
-            ),
-        );
+        dev_push_event(format!(
+            "reorder {from_index} -> {to_index} (active={:?})",
+            session.active_renderer_id
+        ));
         Ok(true)
     }
 
@@ -2650,9 +2680,10 @@ impl QtQconnectService {
             .await?;
 
         log::info!("[QConnect] set_volume handoff -> {volume}");
-        dev_push_event(
-            format!("controller volume -> {volume} (active={:?})", session.active_renderer_id),
-        );
+        dev_push_event(format!(
+            "controller volume -> {volume} (active={:?})",
+            session.active_renderer_id
+        ));
 
         Ok(true)
     }
@@ -2674,9 +2705,10 @@ impl QtQconnectService {
             .await?;
 
         log::info!("[QConnect] mute handoff -> {value}");
-        dev_push_event(
-            format!("controller mute -> {value} (active={:?})", session.active_renderer_id),
-        );
+        dev_push_event(format!(
+            "controller mute -> {value} (active={:?})",
+            session.active_renderer_id
+        ));
 
         Ok(true)
     }
@@ -2701,9 +2733,10 @@ impl QtQconnectService {
             .await?;
 
         log::info!("[QConnect] set_autoplay_mode handoff -> {enabled}");
-        dev_push_event(
-            format!("controller autoplay -> {enabled} (active={:?})", session.active_renderer_id),
-        );
+        dev_push_event(format!(
+            "controller autoplay -> {enabled} (active={:?})",
+            session.active_renderer_id
+        ));
 
         Ok(true)
     }
@@ -2733,9 +2766,10 @@ impl QtQconnectService {
             .await?;
 
         log::info!("[QConnect] autoplay_load_tracks handoff -> {track_count} tracks");
-        dev_push_event(
-            format!("controller autoplay_load {track_count} (active={:?})", session.active_renderer_id),
-        );
+        dev_push_event(format!(
+            "controller autoplay_load {track_count} (active={:?})",
+            session.active_renderer_id
+        ));
 
         Ok(true)
     }
@@ -2776,9 +2810,10 @@ impl QtQconnectService {
             .await;
 
         log::info!("[QConnect] stop handoff");
-        dev_push_event(
-            format!("controller stop (active={:?})", session.active_renderer_id),
-        );
+        dev_push_event(format!(
+            "controller stop (active={:?})",
+            session.active_renderer_id
+        ));
 
         Ok(true)
     }
@@ -2816,9 +2851,10 @@ impl QtQconnectService {
         }
 
         log::info!("[QConnect] set_position handoff -> {position_ms}ms");
-        dev_push_event(
-            format!("controller seek -> {position_ms}ms (active={:?})", session.active_renderer_id),
-        );
+        dev_push_event(format!(
+            "controller seek -> {position_ms}ms (active={:?})",
+            session.active_renderer_id
+        ));
 
         Ok(true)
     }
@@ -2836,9 +2872,9 @@ impl QtQconnectService {
                 .ok_or_else(|| "QConnect service is not running".to_string())?
         };
         let handled = app.send_set_active_renderer(renderer_id).await?;
-        dev_push_event(
-            format!("controller set_active_renderer -> {renderer_id} (sent={handled})"),
-        );
+        dev_push_event(format!(
+            "controller set_active_renderer -> {renderer_id} (sent={handled})"
+        ));
         Ok(handled)
     }
 }
@@ -3277,7 +3313,10 @@ mod tests {
     #[test]
     fn qconnect_admits_catalog_and_offline_catalog_rows() {
         for source in ["qobuz", "qobuz_download", "qobuz_purchase", "offline"] {
-            assert!(is_qconnect_queue_track(&track(Some(source), true)), "{source}");
+            assert!(
+                is_qconnect_queue_track(&track(Some(source), true)),
+                "{source}"
+            );
         }
         assert!(is_qconnect_queue_track(&track(None, false)));
     }
@@ -3285,7 +3324,10 @@ mod tests {
     #[test]
     fn qconnect_rejects_every_server_and_file_source() {
         for source in ["local", "plex", "jellyfin", "subsonic", "navidrome"] {
-            assert!(!is_qconnect_queue_track(&track(Some(source), true)), "{source}");
+            assert!(
+                !is_qconnect_queue_track(&track(Some(source), true)),
+                "{source}"
+            );
         }
         assert!(!is_qconnect_queue_track(&track(None, true)));
     }

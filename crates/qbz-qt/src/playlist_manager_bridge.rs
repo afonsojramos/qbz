@@ -59,7 +59,6 @@ pub mod qbz_playlist_manager_bridge {
         // touches it — see playlist_manager_qt's header for what breaks when
         // the two are conflated.
         #[qproperty(bool, pm_loading)]
-
         type QbzPlaylistManager = super::QbzPlaylistManagerRust;
 
         /// Registers this object's Qt-thread hop. Until Main.qml calls it,

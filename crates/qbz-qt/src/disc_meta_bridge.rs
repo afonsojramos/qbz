@@ -32,7 +32,6 @@ pub mod qbz_disc_meta_bridge {
         /// The whole modal in one document. Parseable while closed so a
         /// binding reading `doc.open` on frame 1 cannot throw.
         #[qproperty(QString, meta_json)]
-
         type QbzDiscMeta = super::QbzDiscMetaRust;
 
         /// Registers the Qt-thread hop. Without it every publish from Rust is

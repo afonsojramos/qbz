@@ -56,22 +56,20 @@ use crate::playlist_manager_qt::{patch_cache, publish_document, visible_qobuz_id
 /// DB write below has to derive the value itself.
 fn patch_favorite(id: &str) -> Option<bool> {
     let mut out = None;
-    patch_cache(|data| {
-        match PlaylistRef::parse(id) {
-            Some(PlaylistRef::Local(local)) => {
-                if let Some(p) = data.locals.iter_mut().find(|p| p.id == local) {
-                    p.is_favorite = !p.is_favorite;
-                    out = Some(p.is_favorite);
-                }
+    patch_cache(|data| match PlaylistRef::parse(id) {
+        Some(PlaylistRef::Local(local)) => {
+            if let Some(p) = data.locals.iter_mut().find(|p| p.id == local) {
+                p.is_favorite = !p.is_favorite;
+                out = Some(p.is_favorite);
             }
-            Some(PlaylistRef::Qobuz(pid)) => {
-                if let Some(p) = data.playlists.iter_mut().find(|p| p.id == pid) {
-                    p.is_favorite = !p.is_favorite;
-                    out = Some(p.is_favorite);
-                }
-            }
-            None => {}
         }
+        Some(PlaylistRef::Qobuz(pid)) => {
+            if let Some(p) = data.playlists.iter_mut().find(|p| p.id == pid) {
+                p.is_favorite = !p.is_favorite;
+                out = Some(p.is_favorite);
+            }
+        }
+        None => {}
     });
     out
 }
@@ -89,27 +87,25 @@ pub(crate) fn toggle_favorite(id: &str) {
     }
     let id = id.to_string();
     crate::spawn(async move {
-        let _ = tokio::task::spawn_blocking(move || {
-            match PlaylistRef::parse(&id) {
-                Some(PlaylistRef::Local(local)) => {
-                    let value = optimistic.unwrap_or_else(|| {
-                        !local_playlist_qt::get_blocking(&local)
-                            .map(|p| p.favorite)
-                            .unwrap_or(false)
-                    });
-                    local_playlist_qt::set_favorite_blocking(&local, value);
-                }
-                Some(PlaylistRef::Qobuz(pid)) => {
-                    let value = optimistic.unwrap_or_else(|| {
-                        !folders_qt::playlist_settings_map()
-                            .get(&pid)
-                            .map(|s| s.is_favorite)
-                            .unwrap_or(false)
-                    });
-                    folders_qt::set_favorite(pid, value);
-                }
-                None => {}
+        let _ = tokio::task::spawn_blocking(move || match PlaylistRef::parse(&id) {
+            Some(PlaylistRef::Local(local)) => {
+                let value = optimistic.unwrap_or_else(|| {
+                    !local_playlist_qt::get_blocking(&local)
+                        .map(|p| p.favorite)
+                        .unwrap_or(false)
+                });
+                local_playlist_qt::set_favorite_blocking(&local, value);
             }
+            Some(PlaylistRef::Qobuz(pid)) => {
+                let value = optimistic.unwrap_or_else(|| {
+                    !folders_qt::playlist_settings_map()
+                        .get(&pid)
+                        .map(|s| s.is_favorite)
+                        .unwrap_or(false)
+                });
+                folders_qt::set_favorite(pid, value);
+            }
+            None => {}
         })
         .await;
     });
@@ -121,22 +117,20 @@ pub(crate) fn toggle_favorite(id: &str) {
 
 fn patch_hidden(id: &str) -> Option<bool> {
     let mut out = None;
-    patch_cache(|data| {
-        match PlaylistRef::parse(id) {
-            Some(PlaylistRef::Local(local)) => {
-                if let Some(p) = data.locals.iter_mut().find(|p| p.id == local) {
-                    p.is_hidden = !p.is_hidden;
-                    out = Some(p.is_hidden);
-                }
+    patch_cache(|data| match PlaylistRef::parse(id) {
+        Some(PlaylistRef::Local(local)) => {
+            if let Some(p) = data.locals.iter_mut().find(|p| p.id == local) {
+                p.is_hidden = !p.is_hidden;
+                out = Some(p.is_hidden);
             }
-            Some(PlaylistRef::Qobuz(pid)) => {
-                if let Some(p) = data.playlists.iter_mut().find(|p| p.id == pid) {
-                    p.is_hidden = !p.is_hidden;
-                    out = Some(p.is_hidden);
-                }
-            }
-            None => {}
         }
+        Some(PlaylistRef::Qobuz(pid)) => {
+            if let Some(p) = data.playlists.iter_mut().find(|p| p.id == pid) {
+                p.is_hidden = !p.is_hidden;
+                out = Some(p.is_hidden);
+            }
+        }
+        None => {}
     });
     out
 }
@@ -156,27 +150,25 @@ pub(crate) fn toggle_hidden(id: &str) {
     }
     let id = id.to_string();
     crate::spawn(async move {
-        let _ = tokio::task::spawn_blocking(move || {
-            match PlaylistRef::parse(&id) {
-                Some(PlaylistRef::Local(local)) => {
-                    let value = optimistic.unwrap_or_else(|| {
-                        !local_playlist_qt::get_blocking(&local)
-                            .map(|p| p.hidden)
-                            .unwrap_or(false)
-                    });
-                    local_playlist_qt::set_hidden_blocking(&local, value);
-                }
-                Some(PlaylistRef::Qobuz(pid)) => {
-                    let value = optimistic.unwrap_or_else(|| {
-                        !folders_qt::playlist_settings_map()
-                            .get(&pid)
-                            .map(|s| s.hidden)
-                            .unwrap_or(false)
-                    });
-                    folders_qt::set_hidden(pid, value);
-                }
-                None => {}
+        let _ = tokio::task::spawn_blocking(move || match PlaylistRef::parse(&id) {
+            Some(PlaylistRef::Local(local)) => {
+                let value = optimistic.unwrap_or_else(|| {
+                    !local_playlist_qt::get_blocking(&local)
+                        .map(|p| p.hidden)
+                        .unwrap_or(false)
+                });
+                local_playlist_qt::set_hidden_blocking(&local, value);
             }
+            Some(PlaylistRef::Qobuz(pid)) => {
+                let value = optimistic.unwrap_or_else(|| {
+                    !folders_qt::playlist_settings_map()
+                        .get(&pid)
+                        .map(|s| s.hidden)
+                        .unwrap_or(false)
+                });
+                folders_qt::set_hidden(pid, value);
+            }
+            None => {}
         })
         .await;
         // AFTER the write settles, inside the same task — otherwise the
@@ -194,22 +186,20 @@ pub(crate) fn toggle_hidden(id: &str) {
 fn patch_folder(id: &str, folder_id: &str) -> bool {
     let mut patched = false;
     let target = (!folder_id.is_empty()).then(|| folder_id.to_string());
-    patch_cache(|data| {
-        match PlaylistRef::parse(id) {
-            Some(PlaylistRef::Local(local)) => {
-                if let Some(p) = data.locals.iter_mut().find(|p| p.id == local) {
-                    p.folder_id = target;
-                    patched = true;
-                }
+    patch_cache(|data| match PlaylistRef::parse(id) {
+        Some(PlaylistRef::Local(local)) => {
+            if let Some(p) = data.locals.iter_mut().find(|p| p.id == local) {
+                p.folder_id = target;
+                patched = true;
             }
-            Some(PlaylistRef::Qobuz(pid)) => {
-                if let Some(p) = data.playlists.iter_mut().find(|p| p.id == pid) {
-                    p.folder_id = target;
-                    patched = true;
-                }
-            }
-            None => {}
         }
+        Some(PlaylistRef::Qobuz(pid)) => {
+            if let Some(p) = data.playlists.iter_mut().find(|p| p.id == pid) {
+                p.folder_id = target;
+                patched = true;
+            }
+        }
+        None => {}
     });
     patched
 }

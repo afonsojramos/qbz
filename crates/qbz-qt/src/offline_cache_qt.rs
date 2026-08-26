@@ -18,8 +18,8 @@
 
 use std::sync::Arc;
 
-use qbz_offline_cache::{CacheEvent, CacheEventSink, TrackCacheInfo};
 use qbz_offline_cache::OfflineCacheState;
+use qbz_offline_cache::{CacheEvent, CacheEventSink, TrackCacheInfo};
 
 use crate::offline_qt;
 use crate::shell_bridge;
@@ -31,11 +31,8 @@ use cxx_qt_lib::QString;
 fn push_status(track_id: u64, status: i32, progress: f64) {
     let id = track_id.to_string();
     shell_bridge::ui(move |mut b| {
-        b.as_mut().track_cache_status_changed(
-            QString::from(id.as_str()),
-            status,
-            progress,
-        );
+        b.as_mut()
+            .track_cache_status_changed(QString::from(id.as_str()), status, progress);
     });
 }
 
@@ -167,9 +164,9 @@ pub fn cache_track(id: u64) {
             let root = std::path::PathBuf::from(off.get_cache_path());
             if let Err(e) = qbz_offline_cache::maintenance::check_cache_limit(db, &root, limit) {
                 log::warn!("[qbz-qt] cache limit reached: {e}");
-                crate::toast_qt::error(
-                    qbz_i18n::t("Offline cache is full — free space or raise the limit"),
-                );
+                crate::toast_qt::error(qbz_i18n::t(
+                    "Offline cache is full — free space or raise the limit",
+                ));
                 return;
             }
             if let Err(e) = db.insert_track(&info, &file_path_str) {
@@ -214,9 +211,9 @@ pub fn cache_tracks_with_album(
             let root = std::path::PathBuf::from(off.get_cache_path());
             if let Err(e) = qbz_offline_cache::maintenance::check_cache_limit(db, &root, limit) {
                 log::warn!("[qbz-qt] batch cache limit reached: {e}");
-                crate::toast_qt::error(
-                    qbz_i18n::t("Offline cache is full — free space or raise the limit"),
-                );
+                crate::toast_qt::error(qbz_i18n::t(
+                    "Offline cache is full — free space or raise the limit",
+                ));
                 return;
             }
         }
@@ -260,10 +257,7 @@ pub fn cache_album(album_id: String) {
                 return;
             }
         };
-        let tracks: Vec<qbz_models::Track> = album
-            .tracks
-            .map(|c| c.items)
-            .unwrap_or_default();
+        let tracks: Vec<qbz_models::Track> = album.tracks.map(|c| c.items).unwrap_or_default();
         if tracks.is_empty() {
             crate::toast_qt::error(qbz_i18n::t("This album has no playable tracks"));
             return;

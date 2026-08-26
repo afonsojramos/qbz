@@ -202,12 +202,11 @@ pub(crate) fn open(id: &str) {
 fn open_local(id: String) {
     crate::spawn(async move {
         let lookup = id.clone();
-        let found = tokio::task::spawn_blocking(move || {
-            crate::local_playlist_qt::get_blocking(&lookup)
-        })
-        .await
-        .ok()
-        .flatten();
+        let found =
+            tokio::task::spawn_blocking(move || crate::local_playlist_qt::get_blocking(&lookup))
+                .await
+                .ok()
+                .flatten();
 
         let Some(p) = found else {
             // Deleted underneath us, or the DB is unreadable. Opening an
@@ -333,12 +332,7 @@ pub(crate) fn save(name: &str, description: &str, offline_only: bool) {
     });
 }
 
-async fn save_local(
-    id: &str,
-    name: &str,
-    desc: Option<String>,
-    offline_only: bool,
-) -> bool {
+async fn save_local(id: &str, name: &str, desc: Option<String>, offline_only: bool) -> bool {
     let id = id.to_string();
     let name = name.to_string();
     tokio::task::spawn_blocking(move || {
@@ -351,12 +345,7 @@ async fn save_local(
             Some(d) => Some(d),
             None => crate::local_playlist_qt::get_blocking(&id).and_then(|p| p.description),
         };
-        crate::local_playlist_qt::update_blocking(
-            &id,
-            &name,
-            description.as_deref(),
-            offline_only,
-        )
+        crate::local_playlist_qt::update_blocking(&id, &name, description.as_deref(), offline_only)
     })
     .await
     .unwrap_or(false)

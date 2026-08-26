@@ -72,7 +72,6 @@ pub mod qbz_mini {
         // binding and the first frame is already too late for a post-boot push.
         #[qproperty(f32, mini_width)]
         #[qproperty(f32, mini_height)]
-
         type QbzMini = super::QbzMiniRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain
@@ -100,7 +99,6 @@ pub mod qbz_mini {
         /// exists in `MiniShell.qml` gated on this one property.
         #[qinvokable]
         fn toggle_background_blur(self: Pin<&mut QbzMini>);
-
 
         /// Persist the expanded window size (contract A-14). Qt has no
         /// `WindowEvent::Resized`, so `MiniWindow.qml`'s 400 ms debounce calls
@@ -153,12 +151,7 @@ pub mod qbz_mini {
         /// `text_input_focused` argument** — the mini has no text fields, and
         /// `dispatch_mini` has no text-input guard either. `true` = consumed.
         #[qinvokable]
-        fn key_pressed(
-            self: Pin<&mut QbzMini>,
-            key: i32,
-            modifiers: i32,
-            text: QString,
-        ) -> bool;
+        fn key_pressed(self: Pin<&mut QbzMini>, key: i32, modifiers: i32, text: QString) -> bool;
     }
 
     // The custom WRITE targets. NOT qinvokables — QML reaches them by writing
@@ -386,7 +379,6 @@ impl qbz_mini::QbzMini {
         crate::mini_qt::save_background_blur(value);
     }
 
-
     /// Contract A-14 — the debounced resize persist.
     ///
     /// Three things happen here and the ORDER matters. The §4.7 guards decide
@@ -484,8 +476,8 @@ impl qbz_mini::QbzMini {
         crate::spawn(async move {
             if let Some(svc) = crate::qconnect_qt::service() {
                 match svc.play_remote_renderer_track_if_active(track_id).await {
-                    Ok(true) => return,  // handled by the peer
-                    Ok(false) => {}      // not applicable -> local path
+                    Ok(true) => return, // handled by the peer
+                    Ok(false) => {}     // not applicable -> local path
                     Err(e) => {
                         log::warn!("[qbz-qt] mini: queue play remote handoff: {e}");
                         return; // connected but errored -> do NOT play locally
@@ -529,12 +521,7 @@ impl qbz_mini::QbzMini {
     /// reads the user's ACTIVE bindings, so a rebound `mini.queue` works here
     /// exactly as the reference's `dispatch_mini` intends (`keybindings.rs:631`).
     /// A matched action consumes (`:647`); anything else propagates (`:645`).
-    pub fn key_pressed(
-        self: Pin<&mut Self>,
-        key: i32,
-        modifiers: i32,
-        text: QString,
-    ) -> bool {
+    pub fn key_pressed(self: Pin<&mut Self>, key: i32, modifiers: i32, text: QString) -> bool {
         let text = text.to_string();
         let overrides = crate::hotkeys_qt::load_overrides();
         let Some(action) =

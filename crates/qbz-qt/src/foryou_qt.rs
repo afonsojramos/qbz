@@ -329,7 +329,10 @@ where
     });
 }
 
-async fn load_spotlight<A>(runtime: &Arc<AppRuntime<A>>, favorites: &[Artist]) -> Option<SpotlightDoc>
+async fn load_spotlight<A>(
+    runtime: &Arc<AppRuntime<A>>,
+    favorites: &[Artist],
+) -> Option<SpotlightDoc>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
@@ -413,7 +416,11 @@ where
         category: page.artist_category.clone().unwrap_or_default(),
         art_url,
         art_path: String::new(),
-        has_top_tracks: page.top_tracks.as_ref().map(|t| !t.is_empty()).unwrap_or(false),
+        has_top_tracks: page
+            .top_tracks
+            .as_ref()
+            .map(|t| !t.is_empty())
+            .unwrap_or(false),
         albums,
     })
 }
@@ -865,7 +872,10 @@ where
 /// PRIMARY DailyQ / WeeklyQ path, Tauri `buildSeeds`): `get_track` each,
 /// extract `{track_id, artist_id, genre_id, label_id}` (artist = performer,
 /// else composer; missing ids default to 0), drop any with `artist_id == 0`.
-async fn build_tracks_to_analyse<A>(runtime: &Arc<AppRuntime<A>>, seeds: &[u64]) -> Vec<TrackToAnalyse>
+async fn build_tracks_to_analyse<A>(
+    runtime: &Arc<AppRuntime<A>>,
+    seeds: &[u64],
+) -> Vec<TrackToAnalyse>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
@@ -1075,7 +1085,11 @@ fn to_row(track: &Track) -> TrackRow {
             .and_then(|a| a.image.best().cloned())
             .unwrap_or_default(),
         is_favorite: crate::fav_cache_qt::is_favorite("track", &track.id.to_string()),
-        cache_status: if crate::offline_qt::is_cached(&track.id.to_string()) { 3 } else { 0 },
+        cache_status: if crate::offline_qt::is_cached(&track.id.to_string()) {
+            3
+        } else {
+            0
+        },
         // NOT covered by `..default()`: that would leave every For You / mix row
         // affirmatively claiming to be available, while `to_queue_track` two
         // functions down reads the real value — the row and the queue built from
@@ -1188,7 +1202,10 @@ pub(crate) fn mix_play_track(track_id: String) {
 
 /// A row's ⋯ menu: "next" | "later" | "queue".
 pub(crate) fn mix_enqueue_track(track_id: String, mode: String) {
-    let Some(track) = mix_queue().into_iter().find(|t| t.id.to_string() == track_id) else {
+    let Some(track) = mix_queue()
+        .into_iter()
+        .find(|t| t.id.to_string() == track_id)
+    else {
         return;
     };
     let runtime = crate::app();
@@ -1208,9 +1225,7 @@ fn play_queue_from(index: usize, shuffle: bool) {
     }
     let runtime = crate::app();
     crate::spawn(async move {
-        if let Err(e) =
-            crate::playback_qt::play_track_list(&runtime, queue, index, shuffle).await
-        {
+        if let Err(e) = crate::playback_qt::play_track_list(&runtime, queue, index, shuffle).await {
             log::warn!("[qbz-qt] mix play failed: {e}");
         }
     });

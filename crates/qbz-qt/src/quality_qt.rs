@@ -43,7 +43,10 @@ pub(crate) fn dsd_multiple_label(sample_rate: Option<f64>) -> String {
         Some(r) if r >= 1_000.0 => r * 1000.0,
         _ => return "DSD".to_string(),
     };
-    format!("DSD{}", ((hz / 2_822_400.0).round() as u32).saturating_mul(64))
+    format!(
+        "DSD{}",
+        ((hz / 2_822_400.0).round() as u32).saturating_mul(64)
+    )
 }
 
 /// `(tier, detail)` for `controls/QualityBadgeFull.qml`.

@@ -68,9 +68,7 @@ pub struct PlexFields {
 /// A password round-tripping through a QML string property would sit in the
 /// scene graph's memory and in any JSON the panel logged.
 /// Read one media server's persisted settings into the panel's shape.
-fn media_fields(
-    kind: qbz_app::settings::media_servers::MediaServerKind,
-) -> MediaServerFields {
+fn media_fields(kind: qbz_app::settings::media_servers::MediaServerKind) -> MediaServerFields {
     let s = crate::media_servers_qt::get(kind);
     MediaServerFields {
         enabled: s.enabled,
@@ -301,7 +299,10 @@ pub fn snapshot() -> Snapshot {
         scanning: SCANNING.load(Ordering::SeqCst),
         processed: PROCESSED.load(Ordering::SeqCst) as i32,
         total: TOTAL.load(Ordering::SeqCst) as i32,
-        file: CURRENT_FILE.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        file: CURRENT_FILE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
         cleaning: CLEANING.load(Ordering::SeqCst),
         cleanup_status: CLEANUP_STATUS
             .lock()
@@ -309,12 +310,8 @@ pub fn snapshot() -> Snapshot {
             .clone(),
         clearing: CLEARING.load(Ordering::SeqCst),
         status: STATUS.lock().unwrap_or_else(|e| e.into_inner()).clone(),
-        jellyfin: media_fields(
-            qbz_app::settings::media_servers::MediaServerKind::Jellyfin,
-        ),
-        subsonic: media_fields(
-            qbz_app::settings::media_servers::MediaServerKind::Subsonic,
-        ),
+        jellyfin: media_fields(qbz_app::settings::media_servers::MediaServerKind::Jellyfin),
+        subsonic: media_fields(qbz_app::settings::media_servers::MediaServerKind::Subsonic),
         plex: PlexFields {
             has_token: !plex_cfg.token.trim().is_empty(),
             server_url: plex_cfg.base_url,
@@ -779,13 +776,9 @@ pub fn scan(folder_id: Option<i64>) -> bool {
                 }
                 _ => {}
             };
-            if let Err(e) = qbz_library::scan_with_progress(
-                &db,
-                ids.as_deref(),
-                &cache,
-                &CANCEL,
-                &on_event,
-            ) {
+            if let Err(e) =
+                qbz_library::scan_with_progress(&db, ids.as_deref(), &cache, &CANCEL, &on_event)
+            {
                 log::error!("[qbz-qt] library scan failed: {e}");
                 if CLEANING.load(Ordering::SeqCst) {
                     *CLEANUP_STATUS.lock().unwrap_or_else(|e| e.into_inner()) =
@@ -826,8 +819,7 @@ pub async fn cleanup_missing() {
         qbz_i18n::t("Scanning track paths...");
     if !scan(None) {
         CLEANING.store(false, Ordering::SeqCst);
-        *CLEANUP_STATUS.lock().unwrap_or_else(|e| e.into_inner()) =
-            qbz_i18n::t("Scan failed.");
+        *CLEANUP_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = qbz_i18n::t("Scan failed.");
     }
     super::publish_snapshot().await;
 }

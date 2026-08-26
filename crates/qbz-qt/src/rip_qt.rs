@@ -72,7 +72,10 @@ fn with_status<R>(f: impl FnOnce(&mut Status) -> R) -> R {
 
 fn publish_status() {
     let json = with_status(|s| serde_json::to_string(s).unwrap_or_else(|_| "null".into()));
-    ui(move |mut b| b.as_mut().set_local_rip_status(QString::from(json.as_str())));
+    ui(move |mut b| {
+        b.as_mut()
+            .set_local_rip_status(QString::from(json.as_str()))
+    });
 }
 
 /// Show / hide the progress panel. The JOB is untouched either way — this
@@ -207,7 +210,8 @@ pub fn run(
                     (overall * 100.0) as u32
                 );
                 ui(move |mut b| {
-                    b.as_mut().set_local_rip_progress(QString::from(text.as_str()));
+                    b.as_mut()
+                        .set_local_rip_progress(QString::from(text.as_str()));
                 });
                 true
             })
@@ -281,7 +285,11 @@ fn build_plan(
     if rows.is_empty() {
         return None;
     }
-    let album = if album.is_empty() { rows[0].album.clone() } else { album.to_string() };
+    let album = if album.is_empty() {
+        rows[0].album.clone()
+    } else {
+        album.to_string()
+    };
     let album_artist = if album_artist.is_empty() {
         rows[0]
             .album_artist
@@ -305,7 +313,11 @@ fn build_plan(
             let (title, artist) = named.get(i).cloned().unwrap_or_default();
             Some(qbz_rip::RipTrack {
                 number: t.track_number.unwrap_or(i as u32 + 1),
-                title: if title.is_empty() { t.title.clone() } else { title },
+                title: if title.is_empty() {
+                    t.title.clone()
+                } else {
+                    title
+                },
                 artist: match artist {
                     a if !a.is_empty() => a,
                     _ if t.artist.is_empty() => album_artist.clone(),

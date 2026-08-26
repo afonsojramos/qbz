@@ -53,7 +53,6 @@ pub mod qbz_artist_bridge {
         // `loading` rides INSIDE the document rather than as a second
         // property — the reason is written down on that struct.
         #[qproperty(QString, artist_releases_json)]
-
         type QbzArtist = super::QbzArtistRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -100,7 +99,12 @@ pub mod qbz_artist_bridge {
 
         /// ArtistView per-section "Load more" — the next releases page.
         #[qinvokable]
-        fn load_release_section(self: Pin<&mut QbzArtist>, artist_id: QString, release_type: QString, offset: i32);
+        fn load_release_section(
+            self: Pin<&mut QbzArtist>,
+            artist_id: QString,
+            release_type: QString,
+            offset: i32,
+        );
 
         /// ArtistView per-section sort — `ReleaseGrid.slint:26`
         /// `set-section-sort(release-type, sort)`, fired by that view's
@@ -161,7 +165,12 @@ pub mod qbz_artist_bridge {
 
         /// Emitted with the next page of a releases bucket.
         #[qsignal]
-        fn release_section_ready(self: Pin<&mut QbzArtist>, release_type: QString, cards_json: QString, has_more: bool);
+        fn release_section_ready(
+            self: Pin<&mut QbzArtist>,
+            release_type: QString,
+            cards_json: QString,
+            has_more: bool,
+        );
     }
 
     impl cxx_qt::Threading for QbzArtist {}
@@ -213,7 +222,12 @@ impl qbz_artist_bridge::QbzArtist {
         crate::open_artist(artist_id.to_string());
     }
 
-    pub fn load_release_section(self: Pin<&mut Self>, artist_id: QString, release_type: QString, offset: i32) {
+    pub fn load_release_section(
+        self: Pin<&mut Self>,
+        artist_id: QString,
+        release_type: QString,
+        offset: i32,
+    ) {
         crate::load_release_section(artist_id.to_string(), release_type.to_string(), offset);
     }
     /// Straight through to `artist_qt`, with no `crate::` forwarder in main.rs:

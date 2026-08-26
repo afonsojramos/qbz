@@ -186,12 +186,7 @@ mod tests {
         // 3/4 muted red + 1/4 vivid blue: score = count*(0.72+avgSat*1.28) —
         // the red bucket (count ~972, sat ~0.5) must outrank the blue speck
         // (count ~324, sat ~0.97).
-        let img = img_from(&[
-            (140, 70, 70),
-            (140, 70, 70),
-            (140, 70, 70),
-            (30, 40, 235),
-        ]);
+        let img = img_from(&[(140, 70, 70), (140, 70, 70), (140, 70, 70), (30, 40, 235)]);
         let palette = line_palette(&img);
         assert_eq!(palette[0], (140, 70, 70));
         assert_eq!(palette[1], (30, 40, 235));
@@ -219,12 +214,7 @@ mod tests {
     fn low_saturation_candidates_are_skipped_after_the_first_pick() {
         // Dominant vivid red + several grays: the grays (sat 0 < 0.12) may
         // never follow the first pick, so the palette pads by repeating.
-        let img = img_from(&[
-            (220, 30, 30),
-            (220, 30, 30),
-            (220, 30, 30),
-            (120, 120, 120),
-        ]);
+        let img = img_from(&[(220, 30, 30), (220, 30, 30), (220, 30, 30), (120, 120, 120)]);
         let palette = line_palette(&img);
         assert_eq!(palette[0], (220, 30, 30));
         assert!(palette.iter().all(|&c| c == palette[0]));
@@ -249,8 +239,8 @@ mod tests {
         let mut img = image::RgbaImage::new(SAMPLE_SIZE, SAMPLE_SIZE);
         for (i, px) in img.pixels_mut().enumerate() {
             *px = match i % 3 {
-                0 => image::Rgba([200, 30, 30, 60]),   // alpha gate
-                1 => image::Rgba([8, 8, 10, 255]),     // luminance < 0.05
+                0 => image::Rgba([200, 30, 30, 60]),    // alpha gate
+                1 => image::Rgba([8, 8, 10, 255]),      // luminance < 0.05
                 _ => image::Rgba([252, 252, 250, 255]), // luminance > 0.97
             };
         }

@@ -46,7 +46,6 @@ pub mod qbz_blacklist_bridge {
         // artists") before the spinner. Slint's BlacklistState.loading has the
         // same `: true` default for the same reason.
         #[qproperty(bool, blacklist_loading)]
-
         type QbzBlacklist = super::QbzBlacklistRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain

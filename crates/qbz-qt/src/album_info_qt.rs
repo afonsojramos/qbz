@@ -118,18 +118,19 @@ fn roles_suffix(roles: &[String]) -> String {
 }
 
 fn map_track(index: usize, t: &Track, album_artist: &str) -> InfoTrack {
-    let performers: Vec<PerformerRow> = parse_performers(t.performers.as_deref().unwrap_or_default())
-        .into_iter()
-        .map(|p| PerformerRow {
-            roles: roles_suffix(&p.roles),
-            primary_role: p
-                .roles
-                .first()
-                .cloned()
-                .unwrap_or_else(|| qbz_i18n::t("Performer")),
-            name: p.name,
-        })
-        .collect();
+    let performers: Vec<PerformerRow> =
+        parse_performers(t.performers.as_deref().unwrap_or_default())
+            .into_iter()
+            .map(|p| PerformerRow {
+                roles: roles_suffix(&p.roles),
+                primary_role: p
+                    .roles
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| qbz_i18n::t("Performer")),
+                name: p.name,
+            })
+            .collect();
     let copyright = t
         .copyright
         .as_deref()
@@ -195,7 +196,12 @@ fn map(album: Album, requested_id: &str) -> AlbumInfoDoc {
     let meta_line = match album.genre.as_ref().filter(|g| !g.name.is_empty()) {
         Some(g) => [
             g.name.clone(),
-            qbz_i18n::tf("{} track", "{} tracks", track_count as i64, &[&track_count.to_string()]),
+            qbz_i18n::tf(
+                "{} track",
+                "{} tracks",
+                track_count as i64,
+                &[&track_count.to_string()],
+            ),
             album_duration(album.duration.unwrap_or(0)),
         ]
         .join(" · "),

@@ -88,7 +88,6 @@ pub mod qbz_playlist_edit_bridge {
         /// paid that bill once: the bridge header's own note about a missing
         /// `boot()` being "silently and forever" dropped is not hypothetical.
         #[qproperty(QString, create_json)]
-
         type QbzPlaylistEdit = super::QbzPlaylistEditRust;
 
         /// Registers this object's Qt-thread hop. Without it every `ui()`
@@ -213,17 +212,8 @@ impl qbz_playlist_edit_bridge::QbzPlaylistEdit {
         crate::playlist_edit_qt::open(&id.to_string());
     }
 
-    pub fn save(
-        self: Pin<&mut Self>,
-        name: QString,
-        description: QString,
-        offline_only: bool,
-    ) {
-        crate::playlist_edit_qt::save(
-            &name.to_string(),
-            &description.to_string(),
-            offline_only,
-        );
+    pub fn save(self: Pin<&mut Self>, name: QString, description: QString, offline_only: bool) {
+        crate::playlist_edit_qt::save(&name.to_string(), &description.to_string(), offline_only);
     }
 
     pub fn delete_playlist(self: Pin<&mut Self>) {

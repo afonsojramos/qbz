@@ -51,7 +51,6 @@ pub mod qbz_scene_bridge {
         // progress stream produces exactly that case (same phase, same pct,
         // same detail) more often than any other view in the tree.
         #[qproperty(i32, scene_rev)]
-
         type QbzScene = super::QbzSceneRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain

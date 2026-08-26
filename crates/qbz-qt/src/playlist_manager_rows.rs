@@ -257,12 +257,7 @@ pub(crate) fn playlist_item(p: &PmPlaylist) -> PlaylistRow {
     PlaylistRow {
         id: p.id.to_string(),
         name: p.name.clone(),
-        tracks_line: qbz_i18n::tf(
-            "{} track",
-            "{} tracks",
-            total as i64,
-            &[&total.to_string()],
-        ),
+        tracks_line: qbz_i18n::tf("{} track", "{} tracks", total as i64, &[&total.to_string()]),
         duration_line: format_duration(p.duration),
         local_line: if p.local_count > 0 {
             qbz_i18n::t_args("({} local)", &[&p.local_count.to_string()])
@@ -815,8 +810,7 @@ mod tests {
         let flat = visible_playlist_rows(&data, "", "all", "name", true, false, "grid", false);
         assert_eq!(ids(&flat).len(), 4);
         // Tree mode publishes the flat set unconditionally too (§4.2).
-        let tree_mode =
-            visible_playlist_rows(&data, "", "all", "name", true, true, "tree", false);
+        let tree_mode = visible_playlist_rows(&data, "", "all", "name", true, true, "tree", false);
         assert_eq!(ids(&tree_mode).len(), 4);
     }
 
@@ -838,8 +832,7 @@ mod tests {
         let visible =
             visible_playlist_rows(&data, "", "visible", "name", true, false, "grid", false);
         assert_eq!(ids(&visible), vec!["local:l2", "2"]);
-        let hidden =
-            visible_playlist_rows(&data, "", "hidden", "name", true, false, "grid", false);
+        let hidden = visible_playlist_rows(&data, "", "hidden", "name", true, false, "grid", false);
         assert_eq!(ids(&hidden), vec!["local:l1", "1"]);
     }
 

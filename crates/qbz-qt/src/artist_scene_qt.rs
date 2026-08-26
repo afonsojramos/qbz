@@ -903,7 +903,11 @@ fn apply_page(
         s.error.clear();
         s.progress_phase = "done";
         s.progress_pct = 100;
-        s.view_state = if s.artists.is_empty() { "empty" } else { "ready" };
+        s.view_state = if s.artists.is_empty() {
+            "empty"
+        } else {
+            "ready"
+        };
         true
     });
     if changed {
@@ -1416,10 +1420,7 @@ fn is_live_album(album: &Album) -> bool {
         return true;
     }
 
-    let studio_variant = has_any_word(
-        &title,
-        &["remaster", "deluxe", "anniversary", "expanded"],
-    );
+    let studio_variant = has_any_word(&title, &["remaster", "deluxe", "anniversary", "expanded"]);
     // `\b(tour|on tour)\b(?!.*\bedition\b)` — a lookahead over the REST of the
     // string, which is why "edition" is tested against the whole title here.
     if has_word(&title, "tour") && !has_word(&title, "edition") && !studio_variant {
@@ -1434,15 +1435,72 @@ fn is_live_album(album: &Album) -> bool {
 
 /// The city list from `qobuzAdapters.ts:222`, verbatim and in order.
 const LIVE_CITIES: &[&str] = &[
-    "seattle", "tokyo", "london", "paris", "new york", "los angeles", "chicago", "dallas",
-    "amsterdam", "berlin", "sydney", "melbourne", "montreal", "toronto", "rio", "sao paulo",
-    "mexico city", "denver", "boston", "philadelphia", "san francisco", "cleveland", "detroit",
-    "atlanta", "miami", "phoenix", "houston", "minneapolis", "st. louis", "st louis",
-    "kansas city", "nashville", "memphis", "austin", "portland", "oakland", "stockholm", "oslo",
-    "dublin", "manchester", "birmingham", "glasgow", "brussels", "madrid", "barcelona", "rome",
-    "milan", "vienna", "munich", "hamburg", "zurich", "prague", "warsaw", "moscow", "seoul",
-    "osaka", "singapore", "hong kong", "taipei", "manila", "jakarta", "mumbai", "delhi",
-    "bangalore", "cape town", "johannesburg",
+    "seattle",
+    "tokyo",
+    "london",
+    "paris",
+    "new york",
+    "los angeles",
+    "chicago",
+    "dallas",
+    "amsterdam",
+    "berlin",
+    "sydney",
+    "melbourne",
+    "montreal",
+    "toronto",
+    "rio",
+    "sao paulo",
+    "mexico city",
+    "denver",
+    "boston",
+    "philadelphia",
+    "san francisco",
+    "cleveland",
+    "detroit",
+    "atlanta",
+    "miami",
+    "phoenix",
+    "houston",
+    "minneapolis",
+    "st. louis",
+    "st louis",
+    "kansas city",
+    "nashville",
+    "memphis",
+    "austin",
+    "portland",
+    "oakland",
+    "stockholm",
+    "oslo",
+    "dublin",
+    "manchester",
+    "birmingham",
+    "glasgow",
+    "brussels",
+    "madrid",
+    "barcelona",
+    "rome",
+    "milan",
+    "vienna",
+    "munich",
+    "hamburg",
+    "zurich",
+    "prague",
+    "warsaw",
+    "moscow",
+    "seoul",
+    "osaka",
+    "singapore",
+    "hong kong",
+    "taipei",
+    "manila",
+    "jakarta",
+    "mumbai",
+    "delhi",
+    "bangalore",
+    "cape town",
+    "johannesburg",
 ];
 
 /// `\b(19[6-9]\d|20[0-2]\d)\b` — a standalone 4-digit token in 1960..=2029.

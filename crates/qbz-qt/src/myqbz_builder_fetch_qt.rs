@@ -155,7 +155,8 @@ pub fn fetch_local_and_plex(artist_name: &str) -> Vec<Candidate> {
             // (qbz/src/local_library.rs). This port has no equivalent and every
             // other call site hardcodes `false` (local_albums.rs:42,70,94,173);
             // the builder must see the SAME set the Albums tab shows.
-            /* exclude_network_folders */ false,
+            /* exclude_network_folders */
+            false,
             plex_path.as_deref(),
             remote_path.as_deref(),
             &remote_words,
@@ -234,7 +235,11 @@ mod tests {
     #[test]
     fn matches_artist_is_case_insensitive_over_both_columns() {
         assert!(matches_artist("Radiohead", "", "radiohead"));
-        assert!(matches_artist("Various", "Foo, Radiohead , Bar", "RADIOHEAD"));
+        assert!(matches_artist(
+            "Various",
+            "Foo, Radiohead , Bar",
+            "RADIOHEAD"
+        ));
         assert!(!matches_artist("Radioheads", "", "radiohead"));
         assert!(!matches_artist("Radiohead", "", "  "));
     }

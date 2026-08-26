@@ -75,8 +75,8 @@ pub fn open_image(path: &std::path::Path) -> Result<usize, String> {
     // folder uses), so this reuses it rather than growing a second rule about
     // where covers live. No cover is not an error — the pane draws its disc
     // glyph and the album plays.
-    let artwork = qbz_library::MetadataExtractor::find_folder_artwork(path, Some(&album))
-        .and_then(|found| {
+    let artwork =
+        qbz_library::MetadataExtractor::find_folder_artwork(path, Some(&album)).and_then(|found| {
             qbz_library::MetadataExtractor::cache_artwork_file(
                 std::path::Path::new(&found),
                 &qbz_library::get_artwork_cache_dir(),

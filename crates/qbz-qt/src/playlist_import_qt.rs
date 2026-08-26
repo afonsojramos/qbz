@@ -946,8 +946,8 @@ fn build_source(st: &State) -> Option<PlaylistSource> {
             let bytes = st.file_bytes.clone()?;
             // Detection runs HERE rather than at parse time so a wrong pick
             // fails before the modal flips into step B.
-            let format = qbz_playlist_import::sources::file::detect_format(&bytes, &st.file_name)
-                .ok()?;
+            let format =
+                qbz_playlist_import::sources::file::detect_format(&bytes, &st.file_name).ok()?;
             Some(PlaylistSource::File {
                 format,
                 bytes,
@@ -1244,10 +1244,7 @@ fn apply_execute_ok(summary: &ImportSummary) {
             qbz_i18n::t_args("Skipped: {}", &[&summary.skipped_tracks.to_string()]);
         // Hidden when there were none, which is every well-formed source.
         st.summary_duplicates = if summary.duplicate_tracks > 0 {
-            qbz_i18n::t_args(
-                "Duplicates: {}",
-                &[&summary.duplicate_tracks.to_string()],
-            )
+            qbz_i18n::t_args("Duplicates: {}", &[&summary.duplicate_tracks.to_string()])
         } else {
             String::new()
         };

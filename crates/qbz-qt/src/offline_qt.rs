@@ -126,7 +126,10 @@ fn cached_ids() -> &'static StdMutex<HashSet<u64>> {
 /// this set with persisted playlist membership without holding the mutex over
 /// a database read.
 pub(crate) fn cached_ids_set() -> HashSet<u64> {
-    cached_ids().lock().map(|ids| ids.clone()).unwrap_or_default()
+    cached_ids()
+        .lock()
+        .map(|ids| ids.clone())
+        .unwrap_or_default()
 }
 
 /// True if `track_id` has a ready offline copy. Used to seed each track row's
@@ -181,7 +184,9 @@ async fn load_cached_ids() {
                 .map(|tracks| {
                     tracks
                         .into_iter()
-                        .filter(|t| matches!(t.status, qbz_offline_cache::OfflineCacheStatus::Ready))
+                        .filter(|t| {
+                            matches!(t.status, qbz_offline_cache::OfflineCacheStatus::Ready)
+                        })
                         .map(|t| t.track_id)
                         .collect()
                 })

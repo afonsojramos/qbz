@@ -87,7 +87,6 @@ pub mod qbz_immersive {
         #[qproperty(f64, imm_search_scroll_y)]
         // Two-way with the search field.
         #[qproperty(QString, search_input_text)]
-
         type QbzImmersive = super::QbzImmersiveRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -288,7 +287,8 @@ fn apply_open(mut this: Pin<&mut QbzImmersive>, value: bool) {
             // numbers; pref_i32 is the compatible reader — delivery notes.)
             let vm = crate::settings_qt::pref_i32("immersive_last_view_mode", DEFAULT_VIEW_MODE);
             let m = crate::settings_qt::pref_i32("immersive_last_mode", DEFAULT_MODE);
-            let sp = crate::settings_qt::pref_i32("immersive_last_split_panel", DEFAULT_SPLIT_PANEL);
+            let sp =
+                crate::settings_qt::pref_i32("immersive_last_split_panel", DEFAULT_SPLIT_PANEL);
             this.as_mut().set_view_mode(vm);
             this.as_mut().set_mode(m);
             this.as_mut().set_split_panel(sp);
@@ -428,7 +428,10 @@ mod tests {
         // Owner ruling 2026-08-15: with no remembered triple, the
         // remember-restore fallbacks AND the bridge construction default land
         // on viewMode=1 (SPLIT), splitPanel=0 (Lyrics) — never a FOCUS panel.
-        assert_eq!((DEFAULT_VIEW_MODE, DEFAULT_MODE, DEFAULT_SPLIT_PANEL), (1, 0, 0));
+        assert_eq!(
+            (DEFAULT_VIEW_MODE, DEFAULT_MODE, DEFAULT_SPLIT_PANEL),
+            (1, 0, 0)
+        );
         assert_eq!(QbzImmersiveRust::default().view_mode, 1);
         assert_eq!(QbzImmersiveRust::default().split_panel, 0);
     }

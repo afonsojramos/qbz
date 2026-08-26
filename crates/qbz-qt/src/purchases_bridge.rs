@@ -60,7 +60,6 @@ pub mod qbz_purchases_bridge {
         /// (re-opening the same album, or a filter toggle that changes nothing
         /// visible), the same trick `QbzSession.trRev` plays.
         #[qproperty(i32, purchases_rev)]
-
         type QbzPurchases = super::QbzPurchasesRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain

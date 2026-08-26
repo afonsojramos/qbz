@@ -36,7 +36,6 @@ pub mod qbz_dac_wizard_bridge {
         /// The whole wizard state (see `dac_wizard_qt::WizardDoc`). Parseable
         /// default so QML's `JSON.parse` never throws on the pre-publish frame.
         #[qproperty(QString, wizard_json)]
-
         type QbzDacWizard = super::QbzDacWizardRust;
 
         /// Registers this object's Qt-thread hop. Without it every publish

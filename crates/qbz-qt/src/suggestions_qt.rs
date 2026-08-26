@@ -133,7 +133,8 @@ fn publish(doc: &SuggestionsDoc) {
         r#"{"loading":false,"error":false,"cards":[],"tracks":[]}"#.to_string()
     });
     crate::suggestions_bridge::ui(move |mut b| {
-        b.as_mut().set_suggestions_json(QString::from(json.as_str()));
+        b.as_mut()
+            .set_suggestions_json(QString::from(json.as_str()));
     });
 }
 
@@ -281,7 +282,11 @@ async fn load_suggestions(
     current_track_id: u64,
     seed_track_name: &str,
 ) -> Result<SuggestionsDoc, ()> {
-    let artist = match runtime.core().get_artist_detail(artist_id, None, None).await {
+    let artist = match runtime
+        .core()
+        .get_artist_detail(artist_id, None, None)
+        .await
+    {
         Ok(a) => a,
         Err(e) => {
             log::error!("[qbz-qt] suggestions get_artist_detail({artist_id}) failed: {e}");
@@ -374,7 +379,10 @@ async fn load_suggestions(
                     }
                 }
                 Err(e) => {
-                    log::warn!("[qbz-qt] suggestions get_playlist({}) failed: {e}", playlist.id);
+                    log::warn!(
+                        "[qbz-qt] suggestions get_playlist({}) failed: {e}",
+                        playlist.id
+                    );
                 }
             }
             // Fallback to the playlist's own images when no track covers found.
@@ -424,10 +432,7 @@ async fn load_suggestions(
 /// a reload when the panel already shows this (artist, track).
 pub(crate) fn load(track_id: String) {
     let (artist_id, track_name) = crate::now_playing::seed_meta();
-    let (Ok(aid), Ok(tid)) = (
-        artist_id.parse::<u64>(),
-        track_id.parse::<u64>(),
-    ) else {
+    let (Ok(aid), Ok(tid)) = (artist_id.parse::<u64>(), track_id.parse::<u64>()) else {
         // No track / no artist -> reset to the empty state and stop
         // (`navigate_suggestions`'s empty-payload arm, :3662-3667).
         with_state(|s| {
@@ -496,10 +501,7 @@ fn set_radio_loading(loading: bool) {
 /// track-list play seam. The radio-card spinner flips on optimistically and
 /// clears on completion (success OR failure, :16805).
 pub(crate) fn start_radio(seed_track_id: String, seed_track_name: String, seed_artist_id: String) {
-    let (Ok(tid), Ok(aid)) = (
-        seed_track_id.parse::<u64>(),
-        seed_artist_id.parse::<u64>(),
-    ) else {
+    let (Ok(tid), Ok(aid)) = (seed_track_id.parse::<u64>(), seed_artist_id.parse::<u64>()) else {
         return;
     };
     set_radio_loading(true);
@@ -514,10 +516,11 @@ pub(crate) fn start_radio(seed_track_id: String, seed_track_name: String, seed_a
             Ok(tracks) if !tracks.is_empty() => {
                 // The shared play_tracks seam: flat queue from the top, no
                 // shuffle — `foryou_qt::play_flat`'s shape (:1144-1157).
-                let queue: Vec<qbz_models::QueueTrack> =
-                    tracks.iter().map(crate::foryou_qt::to_queue_track).collect();
-                if let Err(e) =
-                    crate::playback_qt::play_track_list(&runtime, queue, 0, false).await
+                let queue: Vec<qbz_models::QueueTrack> = tracks
+                    .iter()
+                    .map(crate::foryou_qt::to_queue_track)
+                    .collect();
+                if let Err(e) = crate::playback_qt::play_track_list(&runtime, queue, 0, false).await
                 {
                     log::warn!("[qbz-qt] song radio play failed: {e}");
                 }
@@ -564,9 +567,7 @@ pub(crate) fn queue_playlist(playlist_id: String) {
     };
     let runtime = crate::app();
     crate::spawn(async move {
-        if let Err(e) =
-            crate::playlist_qt::enqueue_playlist_by_id(&runtime, id, "queue").await
-        {
+        if let Err(e) = crate::playlist_qt::enqueue_playlist_by_id(&runtime, id, "queue").await {
             log::error!("[qbz-qt] suggestions queue-playlist {id} failed: {e}");
         }
     });
@@ -580,9 +581,7 @@ pub(crate) fn play_next_playlist(playlist_id: String) {
     };
     let runtime = crate::app();
     crate::spawn(async move {
-        if let Err(e) =
-            crate::playlist_qt::enqueue_playlist_by_id(&runtime, id, "next").await
-        {
+        if let Err(e) = crate::playlist_qt::enqueue_playlist_by_id(&runtime, id, "next").await {
             log::error!("[qbz-qt] suggestions play-next-playlist {id} failed: {e}");
         }
     });
@@ -689,15 +688,7 @@ mod tests {
             .collect();
         assert_eq!(
             track_keys,
-            HashSet::from([
-                "id",
-                "title",
-                "artist",
-                "artistId",
-                "duration",
-                "artUrl",
-                "explicit",
-            ])
+            HashSet::from(["id", "title", "artist", "artistId", "duration", "artUrl", "explicit",])
         );
         assert_eq!(v["tracks"][0]["duration"], "3:45");
         assert_eq!(v["tracks"][0]["explicit"], true);

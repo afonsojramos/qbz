@@ -39,9 +39,7 @@ use cxx_qt::CxxQtThread;
 use cxx_qt::Threading as _;
 use cxx_qt_lib::QString;
 
-use crate::hotkeys_qt::{
-    CaptureOutcome, EscapeState, EscapeTarget, QT_KEY_DOWN, QT_KEY_UP,
-};
+use crate::hotkeys_qt::{CaptureOutcome, EscapeState, EscapeTarget, QT_KEY_DOWN, QT_KEY_UP};
 
 /// Full-shape default for the groups document (trap 15): the QML columns read
 /// `.col1.length` in the pre-publish frame. `boot()` refreshes immediately.
@@ -77,7 +75,6 @@ pub mod qbz_hotkeys {
         // Escape stack arms 2 and 3 read them).
         #[qproperty(bool, cheatsheet_open)]
         #[qproperty(bool, customize_open)]
-
         type QbzHotkeys = super::QbzHotkeysRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -263,8 +260,10 @@ impl qbz_hotkeys::QbzHotkeys {
                     // Live pending + the conflict label; recording STAYS so
                     // the user can pick a different combo
                     // (keybindings.rs:454-459).
-                    self.as_mut().set_pending_display(QString::from(display.as_str()));
-                    self.as_mut().set_conflict_label(QString::from(label.as_str()));
+                    self.as_mut()
+                        .set_pending_display(QString::from(display.as_str()));
+                    self.as_mut()
+                        .set_conflict_label(QString::from(label.as_str()));
                 }
                 CaptureOutcome::Bound { shortcut } => {
                     crate::hotkeys_qt::set_binding(&recording, &shortcut);
@@ -349,7 +348,9 @@ impl qbz_hotkeys::QbzHotkeys {
                 publish_groups(self.as_mut());
             }
             "ui.openLink" => {
-                log::debug!("[qbz-qt] hotkeys: ui.openLink — no-op seam, LinkResolver not ported (K3)");
+                log::debug!(
+                    "[qbz-qt] hotkeys: ui.openLink — no-op seam, LinkResolver not ported (K3)"
+                );
             }
             // Shift+M — the reference's `toggle_miniplayer()`
             // (keybindings.rs:547-558). Its gamescope guard is NOT repeated

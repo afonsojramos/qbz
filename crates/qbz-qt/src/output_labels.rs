@@ -126,7 +126,8 @@ pub fn publish(audio: &AudioSettings) {
     let l = output_labels(audio);
     let locked = volume_locked(audio);
     crate::player_bridge::ui(move |mut b| {
-        b.as_mut().set_np_output_backend_label(QString::from(l.backend));
+        b.as_mut()
+            .set_np_output_backend_label(QString::from(l.backend));
         b.as_mut().set_np_output_mode_label(QString::from(l.mode));
         b.as_mut().set_np_output_backend_active(l.backend_active);
         b.as_mut().set_np_output_mode_active(l.mode_active);

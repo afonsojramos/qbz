@@ -72,14 +72,12 @@ static CACHE: Mutex<Option<PmData>> = Mutex::new(None);
 /// the DB and by [`build_document`] from a warm cache; it is what
 /// `foldersJson` always carries, so a cold-cache publish can never clobber it
 /// with `[]`.
-static FOLDERS_CACHE: LazyLock<Mutex<Vec<FolderRow>>> =
-    LazyLock::new(|| Mutex::new(Vec::new()));
+static FOLDERS_CACHE: LazyLock<Mutex<Vec<FolderRow>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
 /// Session tree-expand state. Never reset — only the latch below is, so a
 /// re-entry re-expands every folder on top of whatever the user collapsed.
 /// That is the reference behaviour (§5.5); keep it.
-static EXPANDED: LazyLock<Mutex<HashSet<String>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
+static EXPANDED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// True once the tree has auto-expanded folders since the last `navigate()`.
 static TREE_INIT: Mutex<bool> = Mutex::new(false);
@@ -431,7 +429,11 @@ pub(crate) fn search_changed(query: &str) {
 
 pub(crate) fn set_filter(value: &str) {
     let valid = matches!(value, "all" | "visible" | "hidden");
-    TOOLBAR.lock().unwrap().filter = if valid { value.to_string() } else { "all".into() };
+    TOOLBAR.lock().unwrap().filter = if valid {
+        value.to_string()
+    } else {
+        "all".into()
+    };
     publish_document();
 }
 
@@ -568,10 +570,14 @@ async fn load(runtime: &Runtime) -> PmData {
     let remote: Vec<qbz_models::Playlist> = if offline {
         Vec::new()
     } else {
-        runtime.core().get_user_playlists().await.unwrap_or_else(|e| {
-            log::warn!("[qbz-qt] playlist-manager playlists load failed: {e}");
-            Vec::new()
-        })
+        runtime
+            .core()
+            .get_user_playlists()
+            .await
+            .unwrap_or_else(|e| {
+                log::warn!("[qbz-qt] playlist-manager playlists load failed: {e}");
+                Vec::new()
+            })
     };
     crate::playlist_snapshot_qt::record_names_detached(
         remote
@@ -725,7 +731,10 @@ async fn load(runtime: &Runtime) -> PmData {
     // `folder_id.is_none()` test.
     let mut locals = locals;
     for p in &mut locals {
-        if p.folder_id.as_ref().is_some_and(|f| !folder_ids.contains(f)) {
+        if p.folder_id
+            .as_ref()
+            .is_some_and(|f| !folder_ids.contains(f))
+        {
             p.folder_id = None;
         }
     }

@@ -602,8 +602,8 @@ pub(crate) fn set_hidden(folder_id: &str, hidden: bool) {
         return;
     }
     crate::spawn(async move {
-        let _ = tokio::task::spawn_blocking(move || folders_qt::set_folder_hidden(&id, hidden))
-            .await;
+        let _ =
+            tokio::task::spawn_blocking(move || folders_qt::set_folder_hidden(&id, hidden)).await;
         after_write();
     });
 }
@@ -625,7 +625,15 @@ mod tests {
     fn the_preset_list_is_the_references_seven_in_order() {
         assert_eq!(
             PRESETS,
-            ["heart", "star", "music", "folder", "disc", "library", "headphones"]
+            [
+                "heart",
+                "star",
+                "music",
+                "folder",
+                "disc",
+                "library",
+                "headphones"
+            ]
         );
     }
 
@@ -639,6 +647,9 @@ mod tests {
         assert_eq!(v["presets"].as_array().map(|a| a.len()), Some(7));
         assert_eq!(v["swatches"].as_array().map(|a| a.len()), Some(11));
         assert_eq!(v["swatches"][0]["isAccent"], serde_json::Value::Bool(true));
-        assert_eq!(v["customImagePath"], serde_json::Value::String(String::new()));
+        assert_eq!(
+            v["customImagePath"],
+            serde_json::Value::String(String::new())
+        );
     }
 }

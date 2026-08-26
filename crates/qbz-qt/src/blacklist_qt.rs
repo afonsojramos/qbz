@@ -327,8 +327,7 @@ pub fn publish() {
     };
     let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".to_string());
     crate::blacklist_bridge::ui(move |mut b| {
-        b.as_mut()
-            .set_blacklist_json(QString::from(json.as_str()));
+        b.as_mut().set_blacklist_json(QString::from(json.as_str()));
     });
 }
 
@@ -687,9 +686,7 @@ pub fn dismiss_artist(artist_id: String, artist_name: String, image_url: String)
         let (name, image) = match runtime.core().get_artist(id).await {
             Ok(a) => (
                 a.name,
-                a.image
-                    .and_then(|i| i.best().cloned())
-                    .unwrap_or_default(),
+                a.image.and_then(|i| i.best().cloned()).unwrap_or_default(),
             ),
             Err(e) => {
                 log::warn!("[qbz-qt] reco dismiss name resolve failed for {id}: {e}");

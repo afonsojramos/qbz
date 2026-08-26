@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use qbz_app::settings::pinned_items::{PinnedItemsService, PinnedItem, DB_FILE_NAME};
+use qbz_app::settings::pinned_items::{PinnedItem, PinnedItemsService, DB_FILE_NAME};
 use qbz_app::shell::AppRuntime;
 use qbz_app::user_data::UserDataPaths;
 use qbz_core::LoggingAdapter;
@@ -71,7 +71,13 @@ pub fn user_dir() -> Option<std::path::PathBuf> {
 
 /// Toggle the pin state of an album/artist/playlist. Returns the new
 /// state, or None with no store bound / on error.
-pub fn toggle_pin(kind: &str, id: &str, title: &str, subtitle: &str, artwork_url: &str) -> Option<bool> {
+pub fn toggle_pin(
+    kind: &str,
+    id: &str,
+    title: &str,
+    subtitle: &str,
+    artwork_url: &str,
+) -> Option<bool> {
     let service = PINNED.get()?.lock().unwrap();
     if service.is_pinned(kind, id) {
         service.unpin(kind, id).ok()?;
@@ -110,7 +116,11 @@ pub struct SidebarEntry {
     /// A first-class LOCAL playlist (`local:<uuid>`), not a Qobuz one. The row
     /// carries a hard-drive mark and routes to the local detail; its id is a
     /// string, so nothing may parse it as a catalog number.
-    #[serde(default, rename = "isLocal", skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        default,
+        rename = "isLocal",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub is_local: bool,
 }
 
@@ -478,9 +488,7 @@ pub fn rebuild() -> Vec<SidebarEntry> {
     /// Locals sort among THEMSELVES by name, always — they have no
     /// track-count or custom-position stat to honour the toolbar's other
     /// sorts with, and inventing one would order them arbitrarily.
-    fn sorted_locals<'a>(
-        mut list: Vec<&'a SidebarLocal>,
-    ) -> Vec<&'a SidebarLocal> {
+    fn sorted_locals<'a>(mut list: Vec<&'a SidebarLocal>) -> Vec<&'a SidebarLocal> {
         list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         list
     }
@@ -489,7 +497,12 @@ pub fn rebuild() -> Vec<SidebarEntry> {
     for (fid, fname) in &data.folders {
         let members: Vec<&SidebarPlaylist> = sorted
             .iter()
-            .filter(|p| data.folder_map.get(&p.id).map(|f| f == fid).unwrap_or(false))
+            .filter(|p| {
+                data.folder_map
+                    .get(&p.id)
+                    .map(|f| f == fid)
+                    .unwrap_or(false)
+            })
             .filter(|p| matches(p))
             .filter(|p| !data.hidden_playlists.contains(&p.id))
             .collect();
@@ -634,7 +647,12 @@ pub fn folder_popup_rows(folder_id: &str) -> Vec<FolderPopupRow> {
     };
     let mut rows: Vec<FolderPopupRow> = sort_playlists(&data.playlists)
         .into_iter()
-        .filter(|p| data.folder_map.get(&p.id).map(|f| f == folder_id).unwrap_or(false))
+        .filter(|p| {
+            data.folder_map
+                .get(&p.id)
+                .map(|f| f == folder_id)
+                .unwrap_or(false)
+        })
         .filter(|p| !data.hidden_playlists.contains(&p.id))
         .map(|p| FolderPopupRow {
             id: p.id.to_string(),

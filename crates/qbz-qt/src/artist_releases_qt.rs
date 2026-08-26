@@ -330,11 +330,7 @@ pub fn retry() {
         if s.artist_id.is_empty() {
             return None;
         }
-        Some((
-            s.artist_id.clone(),
-            s.name.clone(),
-            s.release_type.clone(),
-        ))
+        Some((s.artist_id.clone(), s.name.clone(), s.release_type.clone()))
     }) else {
         return;
     };
@@ -397,7 +393,9 @@ fn fetch(generation: u64, artist_id: String, release_type: String, offset: u32, 
         {
             Ok(resp) => resp,
             Err(e) => {
-                log::warn!("[qbz-qt] artist releases page failed ({artist_id}/{release_type}): {e}");
+                log::warn!(
+                    "[qbz-qt] artist releases page failed ({artist_id}/{release_type}): {e}"
+                );
                 fail(generation, first);
                 return;
             }

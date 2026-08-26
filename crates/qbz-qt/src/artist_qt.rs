@@ -413,7 +413,10 @@ pub(crate) fn map_release(release: &PageArtistRelease) -> AlbumCardData {
         .as_ref()
         .map(|a| a.id.to_string())
         .unwrap_or_default();
-    let bit_depth = release.audio_info.as_ref().and_then(|a| a.maximum_bit_depth);
+    let bit_depth = release
+        .audio_info
+        .as_ref()
+        .and_then(|a| a.maximum_bit_depth);
     let sample_rate = release
         .audio_info
         .as_ref()
@@ -538,12 +541,18 @@ fn map_track(index: usize, track: PageArtistTrack) -> TrackRow {
     let (album_id, album, artwork_url) = track
         .album
         .map(|a| {
-            let url = a.image.and_then(|img| img.smallest().cloned()).unwrap_or_default();
+            let url = a
+                .image
+                .and_then(|img| img.smallest().cloned())
+                .unwrap_or_default();
             (a.id, a.title, url)
         })
         .unwrap_or_default();
     let bit_depth = track.audio_info.as_ref().and_then(|a| a.maximum_bit_depth);
-    let sample_rate = track.audio_info.as_ref().and_then(|a| a.maximum_sampling_rate);
+    let sample_rate = track
+        .audio_info
+        .as_ref()
+        .and_then(|a| a.maximum_sampling_rate);
     // /artist/page reports availability on the nested `rights` object, not as a
     // flat key — the same read `playback_qt::artist_top_queue_tracks` (:731)
     // already does when it builds the queue row from this payload. `unwrap_or
@@ -557,7 +566,11 @@ fn map_track(index: usize, track: PageArtistTrack) -> TrackRow {
     TrackRow {
         is_favorite: crate::fav_cache_qt::contains_track(track.id),
         id: track.id.to_string(),
-        cache_status: if crate::offline_qt::is_cached(&track.id.to_string()) { 3 } else { 0 },
+        cache_status: if crate::offline_qt::is_cached(&track.id.to_string()) {
+            3
+        } else {
+            0
+        },
         number: (index + 1).to_string(),
         title,
         artist,
@@ -881,8 +894,15 @@ static TOP_QUEUE: std::sync::Mutex<Vec<QueueTrack>> = std::sync::Mutex::new(Vec:
 fn track_row_to_queue(row: &TrackRow) -> QueueTrack {
     let duration_secs = {
         let mut parts = row.duration.split(':');
-        parts.next().and_then(|m| m.parse::<u64>().ok()).unwrap_or(0) * 60
-            + parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0)
+        parts
+            .next()
+            .and_then(|m| m.parse::<u64>().ok())
+            .unwrap_or(0)
+            * 60
+            + parts
+                .next()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0)
     };
     QueueTrack {
         id: row.id.parse().unwrap_or(0),
@@ -967,7 +987,13 @@ pub async fn load_release_page(
         .map_err(|_| format!("invalid artist id: {artist_id}"))?;
     let resp = runtime
         .core()
-        .get_releases_grid(id, release_type, RELEASE_PAGE_SIZE, offset, Some("release_date"))
+        .get_releases_grid(
+            id,
+            release_type,
+            RELEASE_PAGE_SIZE,
+            offset,
+            Some("release_date"),
+        )
         .await
         .map_err(|e| e.to_string())?;
     let has_more = resp.has_more;
@@ -1006,9 +1032,10 @@ fn merge_release_page(
     else {
         return;
     };
-    let Some(section) = sections.iter_mut().find(|s| {
-        s.get("releaseType").and_then(|v| v.as_str()) == Some(release_type)
-    }) else {
+    let Some(section) = sections
+        .iter_mut()
+        .find(|s| s.get("releaseType").and_then(|v| v.as_str()) == Some(release_type))
+    else {
         return;
     };
     section["hasMore"] = json!(has_more);
@@ -1110,12 +1137,16 @@ pub(crate) fn resort_section(release_type: &str, sort: &str) {
     let release_type = release_type.to_string();
     let sort = sort.to_string();
     publish_patch(generation, move |doc| {
-        let Some(sections) = doc.get_mut("releaseSections").and_then(|v| v.as_array_mut()) else {
+        let Some(sections) = doc
+            .get_mut("releaseSections")
+            .and_then(|v| v.as_array_mut())
+        else {
             return;
         };
-        let Some(section) = sections.iter_mut().find(|s| {
-            s.get("releaseType").and_then(|v| v.as_str()) == Some(release_type.as_str())
-        }) else {
+        let Some(section) = sections
+            .iter_mut()
+            .find(|s| s.get("releaseType").and_then(|v| v.as_str()) == Some(release_type.as_str()))
+        else {
             return;
         };
         // Stamp the key BEFORE the cards: `sortBy` is what seats the picker
@@ -1186,8 +1217,11 @@ pub async fn load_artist_view(
 
     spawn_header_color(generation, header_art);
 
-    let similar_names: Vec<String> =
-        data.similar_artists.iter().map(|s| s.name.clone()).collect();
+    let similar_names: Vec<String> = data
+        .similar_artists
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
     spawn_enrichment(
         runtime.clone(),
         generation,
@@ -1332,12 +1366,11 @@ fn spawn_header_color(generation: u64, artwork_url: String) {
             .await
             .ok()
             .flatten();
-        let atmo = tokio::task::spawn_blocking(move || {
-            crate::atmosphere_qt::for_cover_blocking(&p2)
-        })
-        .await
-        .ok()
-        .flatten();
+        let atmo =
+            tokio::task::spawn_blocking(move || crate::atmosphere_qt::for_cover_blocking(&p2))
+                .await
+                .ok()
+                .flatten();
         if hex.is_some() || atmo.is_some() {
             publish_patch(generation, move |doc| {
                 if let Some(hex) = hex {
@@ -1390,8 +1423,7 @@ fn spawn_enrichment(
         crate::spawn(async move {
             let stories = load_stories(&runtime, &artist_id).await;
             publish_patch(generation, move |doc| {
-                doc["stories"] =
-                    serde_json::to_value(&stories).unwrap_or_else(|_| json!([]));
+                doc["stories"] = serde_json::to_value(&stories).unwrap_or_else(|_| json!([]));
                 doc["storiesLoading"] = json!(false);
             });
         });
@@ -1499,10 +1531,7 @@ fn map_story(item: ArtistStoryItem) -> StoryRow {
 
 /// The artist's Magazine stories (limit 2, like the official client). Any
 /// failure yields an empty list and the tab shows "No stories".
-async fn load_stories(
-    runtime: &Arc<AppRuntime<LoggingAdapter>>,
-    artist_id: &str,
-) -> Vec<StoryRow> {
+async fn load_stories(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &str) -> Vec<StoryRow> {
     let Ok(id) = artist_id.parse::<u64>() else {
         return Vec::new();
     };
@@ -1573,8 +1602,7 @@ fn map_origin(meta: &qbz_integrations::musicbrainz::ArtistMetadata) -> MbOriginJ
         .as_ref()
         .map(|loc| loc.display_name.clone())
         .unwrap_or_default();
-    let has_data =
-        !begin_date.is_empty() || !end_date.is_empty() || !location_display.is_empty();
+    let has_data = !begin_date.is_empty() || !end_date.is_empty() || !location_display.is_empty();
 
     // ---- Artist Scene payload, from the SAME metadata this call already has.
     // No extra fetch: `meta` carries the whole location and the affinity
@@ -1590,9 +1618,8 @@ fn map_origin(meta: &qbz_integrations::musicbrainz::ArtistMetadata) -> MbOriginJ
         .unwrap_or("")
         .to_string();
     // The INTENDED form of Tauri's guard — see the field's doc.
-    let location_clickable = loc.is_some_and(|l| {
-        !matches!(l.precision, LocationPrecision::Country) || l.city.is_some()
-    });
+    let location_clickable =
+        loc.is_some_and(|l| !matches!(l.precision, LocationPrecision::Country) || l.city.is_some());
 
     MbOriginJson {
         is_person,

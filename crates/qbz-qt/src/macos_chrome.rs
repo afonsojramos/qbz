@@ -175,7 +175,11 @@ pub(crate) fn apply_and_center() -> bool {
         .unwrap_or(false);
     let original = container.frame();
     let mut frame = original;
-    frame.origin.y += if parent_flipped { move_down } else { -move_down };
+    frame.origin.y += if parent_flipped {
+        move_down
+    } else {
+        -move_down
+    };
     unsafe { container.setFrame(frame) };
 
     // Re-measure: if the shift landed FURTHER from target than where it

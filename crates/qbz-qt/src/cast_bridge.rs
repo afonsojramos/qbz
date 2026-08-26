@@ -104,7 +104,6 @@ pub mod qbz_cast_bridge {
         // Raw last-error for the picker's error line (empty = none), same
         // as the Slint `CastState.error`.
         #[qproperty(QString, error)]
-
         type QbzCast = super::QbzCastRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY

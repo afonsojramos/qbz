@@ -221,7 +221,9 @@ pub(crate) fn prune_albums(album_ids: &[String]) -> usize {
     store
         .tracks
         .retain(|t| !album_ids.iter().any(|k| k == &t.album_id));
-    store.albums.retain(|a| !album_ids.iter().any(|k| k == &a.id));
+    store
+        .albums
+        .retain(|a| !album_ids.iter().any(|k| k == &a.id));
     let removed = tracks_before - store.tracks.len();
     if removed > 0 || albums_before != store.albums.len() {
         write_store(&store);

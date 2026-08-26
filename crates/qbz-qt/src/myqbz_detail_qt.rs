@@ -500,8 +500,7 @@ fn publish_rows(collection_id: &str, patches: Vec<RowPatch>) {
     })
     .unwrap_or_else(|_| "{}".into());
     crate::myqbz_bridge::ui(move |mut b| {
-        b.as_mut()
-            .detail_rows_patched(QString::from(json.as_str()));
+        b.as_mut().detail_rows_patched(QString::from(json.as_str()));
     });
 }
 
@@ -918,10 +917,7 @@ fn track_to_item(track: &QueueTrack) -> InlineTrackRow {
         id: track.id.to_string(),
         title: inline_track_title(track),
         artist: track.artist.clone(),
-        artist_id: track
-            .artist_id
-            .map(|id| id.to_string())
-            .unwrap_or_default(),
+        artist_id: track.artist_id.map(|id| id.to_string()).unwrap_or_default(),
         album: String::new(),
         album_id: track.album_id.clone().unwrap_or_default(),
         duration: track_duration_str(track.duration_secs),
@@ -1036,10 +1032,8 @@ fn rebuild(d: &mut DetailDoc) {
 
     let source_count = i32::from(d.src_qobuz) + i32::from(d.src_plex) + i32::from(d.src_local);
     d.filter_count = source_count + i32::from(d.type_filter != "all");
-    d.has_any_filter = d.type_filter != "all"
-        || source_count > 0
-        || d.sort != "position"
-        || d.sort_dir == "desc";
+    d.has_any_filter =
+        d.type_filter != "all" || source_count > 0 || d.sort != "position" || d.sort_dir == "desc";
 }
 
 /// Re-derive, resolve the newly-visible rows' artwork, publish, and — while in
@@ -1476,10 +1470,7 @@ fn resolve_from_tracks(item: &MixtapeCollectionItem, tracks: &[QueueTrack]) -> R
 /// same album twice hydrates both copies rather than only the first.
 fn apply_resolved(item: &MixtapeCollectionItem, resolved: ResolvedItem, collection_id: &str) {
     let key = cache_key(source_str(item.source), &item.source_item_id);
-    RESOLVE_CACHE
-        .lock()
-        .unwrap()
-        .insert(key, resolved.clone());
+    RESOLVE_CACHE.lock().unwrap().insert(key, resolved.clone());
 
     let stored_art_empty = item
         .artwork_url
@@ -2242,7 +2233,12 @@ pub(crate) fn bulk_action(id: String) {
 mod tests {
     use super::*;
 
-    fn item(position: i32, title: &str, kind: ItemType, source: AlbumSource) -> MixtapeCollectionItem {
+    fn item(
+        position: i32,
+        title: &str,
+        kind: ItemType,
+        source: AlbumSource,
+    ) -> MixtapeCollectionItem {
         MixtapeCollectionItem {
             collection_id: "c".into(),
             position,

@@ -135,27 +135,135 @@ pub struct ActionDef {
 /// (keybindings.rs:88-117; contract §2 verbatim).
 pub const ACTIONS: &[ActionDef] = &[
     // Playback
-    ActionDef { id: "playback.toggle", label_en: "Play / Pause", category: Category::Playback, default: "Space", context: Context::None },
-    ActionDef { id: "playback.next", label_en: "Next Track", category: Category::Playback, default: "Ctrl+ArrowRight", context: Context::None },
-    ActionDef { id: "playback.prev", label_en: "Previous Track", category: Category::Playback, default: "Ctrl+ArrowLeft", context: Context::None },
+    ActionDef {
+        id: "playback.toggle",
+        label_en: "Play / Pause",
+        category: Category::Playback,
+        default: "Space",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.next",
+        label_en: "Next Track",
+        category: Category::Playback,
+        default: "Ctrl+ArrowRight",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.prev",
+        label_en: "Previous Track",
+        category: Category::Playback,
+        default: "Ctrl+ArrowLeft",
+        context: Context::None,
+    },
     // Navigation
-    ActionDef { id: "nav.back", label_en: "Go Back", category: Category::Navigation, default: "Alt+ArrowLeft", context: Context::None },
-    ActionDef { id: "nav.forward", label_en: "Go Forward", category: Category::Navigation, default: "Alt+ArrowRight", context: Context::None },
-    ActionDef { id: "nav.search", label_en: "Search", category: Category::Navigation, default: "Ctrl+f", context: Context::None },
-    ActionDef { id: "nav.settings", label_en: "Settings", category: Category::Navigation, default: "Ctrl+,", context: Context::None },
+    ActionDef {
+        id: "nav.back",
+        label_en: "Go Back",
+        category: Category::Navigation,
+        default: "Alt+ArrowLeft",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "nav.forward",
+        label_en: "Go Forward",
+        category: Category::Navigation,
+        default: "Alt+ArrowRight",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "nav.search",
+        label_en: "Search",
+        category: Category::Navigation,
+        default: "Ctrl+f",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "nav.settings",
+        label_en: "Settings",
+        category: Category::Navigation,
+        default: "Ctrl+,",
+        context: Context::None,
+    },
     // Interface
-    ActionDef { id: "ui.sidebar", label_en: "Toggle Sidebar", category: Category::Ui, default: "Shift+S", context: Context::None },
-    ActionDef { id: "ui.focusMode", label_en: "Immersive Mode", category: Category::Ui, default: "Shift+I", context: Context::None },
-    ActionDef { id: "ui.queue", label_en: "Queue", category: Category::Ui, default: "q", context: Context::None },
-    ActionDef { id: "ui.escape", label_en: "Close / Dismiss", category: Category::Ui, default: "Escape", context: Context::None },
-    ActionDef { id: "ui.showShortcuts", label_en: "Show Shortcuts", category: Category::Ui, default: "?", context: Context::None },
-    ActionDef { id: "ui.openLink", label_en: "Open Qobuz Link", category: Category::Ui, default: "Ctrl+l", context: Context::None },
-    ActionDef { id: "ui.miniPlayer", label_en: "Toggle Mini Player", category: Category::Ui, default: "Shift+M", context: Context::None },
+    ActionDef {
+        id: "ui.sidebar",
+        label_en: "Toggle Sidebar",
+        category: Category::Ui,
+        default: "Shift+S",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "ui.focusMode",
+        label_en: "Immersive Mode",
+        category: Category::Ui,
+        default: "Shift+I",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "ui.queue",
+        label_en: "Queue",
+        category: Category::Ui,
+        default: "q",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "ui.escape",
+        label_en: "Close / Dismiss",
+        category: Category::Ui,
+        default: "Escape",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "ui.showShortcuts",
+        label_en: "Show Shortcuts",
+        category: Category::Ui,
+        default: "?",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "ui.openLink",
+        label_en: "Open Qobuz Link",
+        category: Category::Ui,
+        default: "Ctrl+l",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "ui.miniPlayer",
+        label_en: "Toggle Mini Player",
+        category: Category::Ui,
+        default: "Shift+M",
+        context: Context::None,
+    },
     // Immersive (contextual)
-    ActionDef { id: "focus.seekForward", label_en: "Seek Forward (5s)", category: Category::Immersive, default: "ArrowRight", context: Context::Immersive },
-    ActionDef { id: "focus.seekBack", label_en: "Seek Back (5s)", category: Category::Immersive, default: "ArrowLeft", context: Context::Immersive },
-    ActionDef { id: "focus.seekForwardLong", label_en: "Seek Forward (10s)", category: Category::Immersive, default: "Shift+ArrowRight", context: Context::Immersive },
-    ActionDef { id: "focus.seekBackLong", label_en: "Seek Back (10s)", category: Category::Immersive, default: "Shift+ArrowLeft", context: Context::Immersive },
+    ActionDef {
+        id: "focus.seekForward",
+        label_en: "Seek Forward (5s)",
+        category: Category::Immersive,
+        default: "ArrowRight",
+        context: Context::Immersive,
+    },
+    ActionDef {
+        id: "focus.seekBack",
+        label_en: "Seek Back (5s)",
+        category: Category::Immersive,
+        default: "ArrowLeft",
+        context: Context::Immersive,
+    },
+    ActionDef {
+        id: "focus.seekForwardLong",
+        label_en: "Seek Forward (10s)",
+        category: Category::Immersive,
+        default: "Shift+ArrowRight",
+        context: Context::Immersive,
+    },
+    ActionDef {
+        id: "focus.seekBackLong",
+        label_en: "Seek Back (10s)",
+        category: Category::Immersive,
+        default: "Shift+ArrowLeft",
+        context: Context::Immersive,
+    },
     // Mini Player (contextual — dispatched on the mini window)
     ActionDef {
         id: "mini.micro",
@@ -646,8 +754,7 @@ pub fn is_ctrl_a(key: i32, modifiers: i32, text: &str) -> bool {
     if !ctrl {
         return false;
     }
-    token_from_qt_key(key, modifiers, text)
-        .is_some_and(|tok| tok.eq_ignore_ascii_case("a"))
+    token_from_qt_key(key, modifiers, text).is_some_and(|tok| tok.eq_ignore_ascii_case("a"))
 }
 
 // ============================================================================
@@ -740,14 +847,35 @@ mod tests {
 
     #[test]
     fn named_keys_come_from_the_key_code() {
-        assert_eq!(token_from_qt_key(QT_KEY_SPACE, 0, " "), Some("Space".into()));
-        assert_eq!(token_from_qt_key(QT_KEY_LEFT, 0, ""), Some("ArrowLeft".into()));
-        assert_eq!(token_from_qt_key(QT_KEY_RIGHT, 0, ""), Some("ArrowRight".into()));
+        assert_eq!(
+            token_from_qt_key(QT_KEY_SPACE, 0, " "),
+            Some("Space".into())
+        );
+        assert_eq!(
+            token_from_qt_key(QT_KEY_LEFT, 0, ""),
+            Some("ArrowLeft".into())
+        );
+        assert_eq!(
+            token_from_qt_key(QT_KEY_RIGHT, 0, ""),
+            Some("ArrowRight".into())
+        );
         assert_eq!(token_from_qt_key(QT_KEY_UP, 0, ""), Some("ArrowUp".into()));
-        assert_eq!(token_from_qt_key(QT_KEY_DOWN, 0, ""), Some("ArrowDown".into()));
-        assert_eq!(token_from_qt_key(QT_KEY_ESCAPE, 0, ""), Some("Escape".into()));
-        assert_eq!(token_from_qt_key(QT_KEY_RETURN, 0, "\r"), Some("Enter".into()));
-        assert_eq!(token_from_qt_key(QT_KEY_ENTER, 0, "\r"), Some("Enter".into()));
+        assert_eq!(
+            token_from_qt_key(QT_KEY_DOWN, 0, ""),
+            Some("ArrowDown".into())
+        );
+        assert_eq!(
+            token_from_qt_key(QT_KEY_ESCAPE, 0, ""),
+            Some("Escape".into())
+        );
+        assert_eq!(
+            token_from_qt_key(QT_KEY_RETURN, 0, "\r"),
+            Some("Enter".into())
+        );
+        assert_eq!(
+            token_from_qt_key(QT_KEY_ENTER, 0, "\r"),
+            Some("Enter".into())
+        );
         assert_eq!(token_from_qt_key(QT_KEY_TAB, 0, "\t"), Some("Tab".into()));
         assert_eq!(
             token_from_qt_key(QT_KEY_BACKSPACE, 0, "\u{8}"),
@@ -765,7 +893,10 @@ mod tests {
         // is folded into the glyph — the stored string is "?".
         let token = token_from_qt_key(0x2f, QT_SHIFT, "?").unwrap();
         assert_eq!(token, "?");
-        assert_eq!(shortcut_from_parts(false, false, true, &token), Some("?".into()));
+        assert_eq!(
+            shortcut_from_parts(false, false, true, &token),
+            Some("?".into())
+        );
     }
 
     #[test]
@@ -911,8 +1042,7 @@ mod tests {
 
     #[test]
     fn groups_split_round_robin_into_three_columns() {
-        let doc: serde_json::Value =
-            serde_json::from_str(&groups_json(&no_overrides())).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&groups_json(&no_overrides())).unwrap();
         let labels = |col: &str| -> Vec<String> {
             doc[col]
                 .as_array()
@@ -928,8 +1058,7 @@ mod tests {
 
     #[test]
     fn groups_rows_carry_id_label_shortcut_modified_contextual() {
-        let doc: serde_json::Value =
-            serde_json::from_str(&groups_json(&no_overrides())).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&groups_json(&no_overrides())).unwrap();
         let row = &doc["col1"][0]["rows"][0];
         assert_eq!(row["id"], "playback.toggle");
         assert_eq!(row["label"], "Play / Pause"); // en fallback (msgid)
@@ -973,18 +1102,48 @@ mod tests {
             }
         }
         // Everything open → the link-resolver arm wins (order position 1).
-        assert_eq!(escape_target(&s(true, true, true, true, true, true, true, true)), EscapeTarget::LinkResolver);
+        assert_eq!(
+            escape_target(&s(true, true, true, true, true, true, true, true)),
+            EscapeTarget::LinkResolver
+        );
         // Then, in order, each surface beats every LATER one.
-        assert_eq!(escape_target(&s(false, true, true, true, true, true, true, true)), EscapeTarget::Customize);
-        assert_eq!(escape_target(&s(false, false, true, true, true, true, true, true)), EscapeTarget::Cheatsheet);
-        assert_eq!(escape_target(&s(false, false, false, true, true, true, true, true)), EscapeTarget::MusicianModal);
-        assert_eq!(escape_target(&s(false, false, false, false, true, true, true, true)), EscapeTarget::Cortinilla);
-        assert_eq!(escape_target(&s(false, false, false, false, false, true, true, true)), EscapeTarget::Immersive);
-        assert_eq!(escape_target(&s(false, false, false, false, false, false, true, true)), EscapeTarget::MultiSelect);
-        assert_eq!(escape_target(&s(false, false, false, false, false, false, false, true)), EscapeTarget::Queue);
-        assert_eq!(escape_target(&s(false, false, false, false, false, false, false, false)), EscapeTarget::None);
+        assert_eq!(
+            escape_target(&s(false, true, true, true, true, true, true, true)),
+            EscapeTarget::Customize
+        );
+        assert_eq!(
+            escape_target(&s(false, false, true, true, true, true, true, true)),
+            EscapeTarget::Cheatsheet
+        );
+        assert_eq!(
+            escape_target(&s(false, false, false, true, true, true, true, true)),
+            EscapeTarget::MusicianModal
+        );
+        assert_eq!(
+            escape_target(&s(false, false, false, false, true, true, true, true)),
+            EscapeTarget::Cortinilla
+        );
+        assert_eq!(
+            escape_target(&s(false, false, false, false, false, true, true, true)),
+            EscapeTarget::Immersive
+        );
+        assert_eq!(
+            escape_target(&s(false, false, false, false, false, false, true, true)),
+            EscapeTarget::MultiSelect
+        );
+        assert_eq!(
+            escape_target(&s(false, false, false, false, false, false, false, true)),
+            EscapeTarget::Queue
+        );
+        assert_eq!(
+            escape_target(&s(false, false, false, false, false, false, false, false)),
+            EscapeTarget::None
+        );
         // Multi-select beats the queue (order position 7 vs 8).
-        assert_eq!(escape_target(&s(false, false, false, false, false, false, true, true)), EscapeTarget::MultiSelect);
+        assert_eq!(
+            escape_target(&s(false, false, false, false, false, false, true, true)),
+            EscapeTarget::MultiSelect
+        );
     }
 
     /// The musician modal is opened FROM the immersive Track-info panel
@@ -1034,7 +1193,9 @@ mod tests {
         let key_w = QT_KEY_A + 22;
         assert_eq!(
             capture_step(&overrides, "ui.queue", key_w, 0, "w"),
-            CaptureOutcome::Bound { shortcut: "w".into() }
+            CaptureOutcome::Bound {
+                shortcut: "w".into()
+            }
         );
     }
 

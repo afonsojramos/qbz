@@ -247,8 +247,7 @@ pub(crate) fn normalize_title(title: &str) -> String {
         let ch = bytes[i] as char;
         if ch == '(' || ch == '[' {
             let inner = lower[i + 1..].trim_start();
-            let starts_kw =
-                KEYWORDS.iter().any(|k| inner.starts_with(k)) || starts_with_nth(inner);
+            let starts_kw = KEYWORDS.iter().any(|k| inner.starts_with(k)) || starts_with_nth(inner);
             if starts_kw {
                 cut = i;
                 break;
@@ -294,8 +293,7 @@ pub(crate) fn classify_release(
     let l = title.to_lowercase();
     let rt = qobuz_release_type.unwrap_or("");
     let gt = qobuz_group_type.unwrap_or("");
-    let type_is =
-        |needle: &str| rt.eq_ignore_ascii_case(needle) || gt.eq_ignore_ascii_case(needle);
+    let type_is = |needle: &str| rt.eq_ignore_ascii_case(needle) || gt.eq_ignore_ascii_case(needle);
 
     if rt.to_lowercase().contains("compilation")
         || gt.to_lowercase().contains("compilation")
@@ -819,24 +817,20 @@ pub fn open(artist_id: String) {
             Ok((qobuz, artist_name, avatar_url)) => {
                 // 2. Local + Plex by the resolved name (sequential, mandatory).
                 let name_for_local = artist_name.clone();
-                let mut local = tokio::task::spawn_blocking(move || {
-                    fetch_local_and_plex(&name_for_local)
-                })
-                .await
-                .unwrap_or_default();
+                let mut local =
+                    tokio::task::spawn_blocking(move || fetch_local_and_plex(&name_for_local))
+                        .await
+                        .unwrap_or_default();
 
                 // 2b. Plex cold-start retry: if Plex is enabled and we got
                 //     nothing from the Plex source, wait 2s and refetch once.
-                if crate::local_plex::is_enabled()
-                    && !local.iter().any(|c| c.source == "plex")
-                {
+                if crate::local_plex::is_enabled() && !local.iter().any(|c| c.source == "plex") {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     let name_retry = artist_name.clone();
-                    let retried = tokio::task::spawn_blocking(move || {
-                        fetch_local_and_plex(&name_retry)
-                    })
-                    .await
-                    .unwrap_or_default();
+                    let retried =
+                        tokio::task::spawn_blocking(move || fetch_local_and_plex(&name_retry))
+                            .await
+                            .unwrap_or_default();
                     if retried.iter().any(|c| c.source == "plex") {
                         local = retried;
                     }
@@ -850,8 +844,7 @@ pub fn open(artist_id: String) {
 
                 // 4. Fetch the avatar if it was not already cached, then ONE
                 //    republish (T17 — never one per image).
-                if !avatar_url.is_empty()
-                    && crate::artwork_qt::cached_path(&avatar_url).is_empty()
+                if !avatar_url.is_empty() && crate::artwork_qt::cached_path(&avatar_url).is_empty()
                 {
                     crate::artwork_qt::download_missing(vec![avatar_url.clone()]).await;
                     let path = crate::artwork_qt::cached_path(&avatar_url);
@@ -1114,12 +1107,18 @@ mod tests {
 
     #[test]
     fn normalize_title_strips_edition_suffixes() {
-        assert_eq!(normalize_title("OK Computer (Deluxe Edition)"), "ok computer");
+        assert_eq!(
+            normalize_title("OK Computer (Deluxe Edition)"),
+            "ok computer"
+        );
         assert_eq!(normalize_title("Nevermind [Remastered]"), "nevermind");
         assert_eq!(normalize_title("Grace  (20th Anniversary)"), "grace");
         assert_eq!(normalize_title("Kid A (10th Anniversary)"), "kid a");
         // A parenthetical that is NOT an edition marker is preserved.
-        assert_eq!(normalize_title("Song (Live at Wembley)"), "song (live at wembley)");
+        assert_eq!(
+            normalize_title("Song (Live at Wembley)"),
+            "song (live at wembley)"
+        );
     }
 
     /// The sharp edges of `normalize_title` that decide which releases land in
@@ -1183,15 +1182,36 @@ mod tests {
             classify_release("Greatest Hits Live", Some(20), Some("album"), None, true),
             "compilation"
         );
-        assert_eq!(classify_release("Unplugged", Some(12), None, None, false), "live");
-        assert_eq!(classify_release("Some EP", Some(12), None, None, false), "ep");
-        assert_eq!(classify_release("Whatever", Some(2), None, None, false), "single");
-        assert_eq!(classify_release("Whatever", Some(5), None, None, false), "ep");
-        assert_eq!(classify_release("Whatever", Some(12), None, None, false), "album");
+        assert_eq!(
+            classify_release("Unplugged", Some(12), None, None, false),
+            "live"
+        );
+        assert_eq!(
+            classify_release("Some EP", Some(12), None, None, false),
+            "ep"
+        );
+        assert_eq!(
+            classify_release("Whatever", Some(2), None, None, false),
+            "single"
+        );
+        assert_eq!(
+            classify_release("Whatever", Some(5), None, None, false),
+            "ep"
+        );
+        assert_eq!(
+            classify_release("Whatever", Some(12), None, None, false),
+            "album"
+        );
         // "epic" must NOT match the `ep` word test.
-        assert_eq!(classify_release("Epic", Some(12), None, None, false), "album");
+        assert_eq!(
+            classify_release("Epic", Some(12), None, None, false),
+            "album"
+        );
         // type_is matches either the item's or the group's type.
-        assert_eq!(classify_release("X", Some(12), None, Some("single"), false), "single");
+        assert_eq!(
+            classify_release("X", Some(12), None, Some("single"), false),
+            "single"
+        );
     }
 
     /// The arms `classify_precedence` does not reach. Each one changes the TYPE
@@ -1210,10 +1230,19 @@ mod tests {
             "compilation"
         );
         // live: the other two words, and punctuation counts as a boundary.
-        assert_eq!(classify_release("The Concert", Some(20), None, None, false), "live");
-        assert_eq!(classify_release("Live!", Some(20), None, None, false), "live");
+        assert_eq!(
+            classify_release("The Concert", Some(20), None, None, false),
+            "live"
+        );
+        assert_eq!(
+            classify_release("Live!", Some(20), None, None, false),
+            "live"
+        );
         // "alive" must NOT match the `live` word test.
-        assert_eq!(classify_release("Alive", Some(20), None, None, false), "album");
+        assert_eq!(
+            classify_release("Alive", Some(20), None, None, false),
+            "album"
+        );
         // The GROUP's type beats the item's for live (type_is is an OR).
         assert_eq!(
             classify_release("X", Some(20), Some("album"), Some("live"), false),
@@ -1242,8 +1271,14 @@ mod tests {
     #[test]
     fn quality_score_ordering() {
         // bit depth dominates, then rate, then format bonus.
-        assert!(quality_score(Some(24), Some(96.0), "FLAC") > quality_score(Some(16), Some(192.0), "FLAC"));
-        assert!(quality_score(Some(16), Some(44.1), "FLAC") > quality_score(Some(16), Some(44.1), "MP3"));
+        assert!(
+            quality_score(Some(24), Some(96.0), "FLAC")
+                > quality_score(Some(16), Some(192.0), "FLAC")
+        );
+        assert!(
+            quality_score(Some(16), Some(44.1), "FLAC")
+                > quality_score(Some(16), Some(44.1), "MP3")
+        );
         // Unknown format sits between mp3 (0) and flac (1000).
         let unknown = quality_score(Some(16), Some(44.1), "OGG");
         assert!(unknown > quality_score(Some(16), Some(44.1), "MP3"));
@@ -1267,7 +1302,10 @@ mod tests {
         // "fix" in the fetchers is not mistaken for a change here.
         assert_eq!(quality_score(Some(16), Some(44100.0), "FLAC"), 204_101_000);
         // AIFF is lossless but not in the bonus list, so it scores BELOW FLAC.
-        assert!(quality_score(Some(24), Some(96.0), "AIFF") < quality_score(Some(24), Some(96.0), "FLAC"));
+        assert!(
+            quality_score(Some(24), Some(96.0), "AIFF")
+                < quality_score(Some(24), Some(96.0), "FLAC")
+        );
     }
 
     #[test]
@@ -1303,7 +1341,10 @@ mod tests {
         );
         let by_title = ordered_groups(&groups, "title");
         assert_eq!(
-            by_title.iter().map(|g| g.title.as_str()).collect::<Vec<_>>(),
+            by_title
+                .iter()
+                .map(|g| g.title.as_str())
+                .collect::<Vec<_>>(),
             vec!["Aye", "Bee", "Cee"]
         );
         let manual = ordered_groups(&groups, "manual");
@@ -1422,7 +1463,10 @@ mod tests {
 
         // Compilation-only selection: the header box is EMPTY (neither all nor
         // some) but the footer still counts 1 and Create is enabled.
-        s.checked.get_mut(&comp_key).unwrap().push(comp_primary.clone());
+        s.checked
+            .get_mut(&comp_key)
+            .unwrap()
+            .push(comp_primary.clone());
         s.checked.get_mut(&c_key).unwrap().clear();
         assert!(!all_primaries_checked(&s));
         assert!(!some_primaries_checked(&s));
@@ -1470,7 +1514,10 @@ mod tests {
         toggle_all();
         session(|s| {
             assert!(!is_checked(s, &a_key, &a_primary));
-            assert!(is_checked(s, &comp_key, &comp_primary), "compilation untouched");
+            assert!(
+                is_checked(s, &comp_key, &comp_primary),
+                "compilation untouched"
+            );
             assert!(is_checked(s, &a_key, "qobuz|alt"), "alternate untouched");
             assert_eq!(selected_count(s), 2);
         });

@@ -256,10 +256,8 @@ pub(crate) fn toggle_play_mode() {
         let write_id = id.clone();
         let result = tokio::task::spawn_blocking(move || {
             write_repo(|db| {
-                db.with_connection(|conn| {
-                    qbz_mixtape::repo::set_play_mode(conn, &write_id, next)
-                })
-                .map_err(|e| e.to_string())
+                db.with_connection(|conn| qbz_mixtape::repo::set_play_mode(conn, &write_id, next))
+                    .map_err(|e| e.to_string())
             })
         })
         .await

@@ -87,8 +87,7 @@ const PACK_EMPTY: &str = "{\"phase\":0,\"beat\":0,\"level\":0,\"levelSmooth\":0,
 /// B1: the Tunnel Flow palette default — the Tauri fallback
 /// (`DEFAULT_LINE_PALETTE`, TunnelFlowPanel.svelte:63-68), so the scene has
 /// a valid palette before the first artwork extraction lands.
-const TUNNEL_PALETTE_DEFAULT: &str =
-    "[\"#ff6a6a\",\"#ffcd5c\",\"#68dcaa\",\"#6eb0ff\"]";
+const TUNNEL_PALETTE_DEFAULT: &str = "[\"#ff6a6a\",\"#ffcd5c\",\"#68dcaa\",\"#6eb0ff\"]";
 
 #[cxx_qt::bridge]
 pub mod qbz_shader_scene {
@@ -143,7 +142,6 @@ pub mod qbz_shader_scene {
         // TunnelFlowScene.qml stashes the parse and applies it on the pulse
         // edge.
         #[qproperty(QString, tunnel_palette_json, READ, NOTIFY)]
-
         type QbzShaderScene = super::QbzShaderSceneRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY

@@ -574,7 +574,10 @@ fn normalize_opt_string(value: Option<String>) -> Option<String> {
 }
 
 pub fn parse_subscribe_channels(items: Vec<String>) -> Result<Vec<Vec<u8>>, String> {
-    items.into_iter().map(|item| decode_hex_channel(&item)).collect()
+    items
+        .into_iter()
+        .map(|item| decode_hex_channel(&item))
+        .collect()
 }
 
 pub fn decode_hex_channel(raw: &str) -> Result<Vec<u8>, String> {

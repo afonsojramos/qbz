@@ -119,9 +119,7 @@ pub async fn export_settings(include_auth: bool) {
         };
         let path = dir.join(bundle::default_filename());
         match bundle::write_bundle_file(&path, &bundle) {
-            Ok(()) => {
-                qbz_i18n::t("Saved to {}").replacen("{}", &path.to_string_lossy(), 1)
-            }
+            Ok(()) => qbz_i18n::t("Saved to {}").replacen("{}", &path.to_string_lossy(), 1),
             Err(e) => {
                 log::error!("[qbz-qt] settings bundle write failed: {e:?}");
                 qbz_i18n::t("Export failed.")

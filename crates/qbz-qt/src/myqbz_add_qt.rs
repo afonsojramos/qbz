@@ -75,10 +75,7 @@ static PENDING: LazyLock<Mutex<Vec<AddItem>>> = LazyLock::new(|| Mutex::new(Vec:
 /// Snapshot of the pending items (a clone — the store is cleared on close, not
 /// on read, so a failed write can be retried from the same open modal).
 fn pending_snapshot() -> Vec<AddItem> {
-    PENDING
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
+    PENDING.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 fn item_type_from_str(s: &str) -> ItemType {
@@ -381,8 +378,8 @@ pub struct LoadedRow {
 pub(crate) fn load_rows(accepts: Accepts, items: &[AddItem]) -> Vec<LoadedRow> {
     crate::library_db_qt::with_db(false, |db| {
         Ok(db.with_connection(|conn| {
-            let mut cols: Vec<MixtapeCollection> =
-                qbz_mixtape::repo::list_collections(conn, None).unwrap_or_else(|e| {
+            let mut cols: Vec<MixtapeCollection> = qbz_mixtape::repo::list_collections(conn, None)
+                .unwrap_or_else(|e| {
                     log::warn!("[qbz-qt] myqbz_add list_collections failed: {e}");
                     Vec::new()
                 });
@@ -612,7 +609,9 @@ pub(crate) fn show_create(kind: &str) {
         accepts.create_fallback()
     };
     let Some(resolved) = resolved else {
-        log::warn!("[qbz-qt] myqbz_add: create '{kind}' refused — nothing is creatable for this payload");
+        log::warn!(
+            "[qbz-qt] myqbz_add: create '{kind}' refused — nothing is creatable for this payload"
+        );
         return;
     };
     if resolved != wanted {

@@ -281,7 +281,12 @@ pub fn set_init(index: i32) {
 fn recompute_check() {
     with_state(|s| {
         let health = s.last_health.unwrap_or_else(core::probe_health);
-        let view = core::check_view(health, s.doc.distro_index, s.doc.init_index, s.doc.sandboxed);
+        let view = core::check_view(
+            health,
+            s.doc.distro_index,
+            s.doc.init_index,
+            s.doc.sandboxed,
+        );
         s.doc.health_ok = view.health_ok;
         s.doc.health_summary = view.summary;
         s.doc.remediations = view
@@ -535,9 +540,8 @@ pub fn verify_own() {
                 s.doc.test_playing = false;
                 s.doc.test_rate_matched = false;
                 s.doc.test_negotiated_label = String::new();
-                s.doc.test_requested_label = qbz_i18n::t(
-                    "Your queue is empty — add some tracks first, or press Play test.",
-                );
+                s.doc.test_requested_label =
+                    qbz_i18n::t("Your queue is empty — add some tracks first, or press Play test.");
             });
             publish();
             return;

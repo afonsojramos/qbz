@@ -119,7 +119,11 @@ pub struct PlaylistTrackRow {
     pub unavailable: bool,
     /// The raw stored ref behind `unavailable`, shown so the user can see WHAT
     /// is broken rather than just that something is.
-    #[serde(default, rename = "unavailableRef", skip_serializing_if = "String::is_empty")]
+    #[serde(
+        default,
+        rename = "unavailableRef",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub unavailable_ref: String,
     /// Qobuz PULLED this track: the catalog reports `streamable: false` for it
     /// (contract §5.1). DISTINCT from [`Self::unavailable`] above, and the two
@@ -218,12 +222,20 @@ pub struct PlaylistDoc {
     /// This detail is a LOCAL playlist (`local:<uuid>`), not a Qobuz one. The
     /// view drops every Qobuz-only affordance on it (follow, copy, share, the
     /// Qobuz heart) and offers the local ones instead.
-    #[serde(default, rename = "isLocalPlaylist", skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        default,
+        rename = "isLocalPlaylist",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub is_local_playlist: bool,
     /// D8: an OFFLINE-ONLY local playlist. Nothing from one may ever reach
     /// Qobuz — the queue it builds is stamped so the QConnect push site skips
     /// the cloud entirely.
-    #[serde(default, rename = "offlineOnly", skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        default,
+        rename = "offlineOnly",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub offline_only: bool,
     /// This QOBUZ detail carries SIDECAR rows — local files and/or Plex tracks
     /// added to it through `playlist_local_tracks` / `playlist_plex_tracks`.
@@ -235,7 +247,11 @@ pub struct PlaylistDoc {
     /// those affordances. What it loses is drag/chevron reorder — see
     /// `apply_custom_order`, which keys its stored order by a `u64` catalog id
     /// and cannot tell one from a library row id.
-    #[serde(default, rename = "isMixed", skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        default,
+        rename = "isMixed",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub is_mixed: bool,
 }
 
@@ -293,10 +309,7 @@ pub(crate) fn mark_mixed() {
 /// A Plex row never rides its numeric id (the synthetic ids do not resolve):
 /// its rating key comes back from the open detail's queue snapshot through
 /// `local_picker_ref_for_row`, which returns it as `"plex:<key>"`.
-pub async fn remove_sidecar_row(
-    runtime: &Arc<AppRuntime<LoggingAdapter>>,
-    row_id: &str,
-) -> bool {
+pub async fn remove_sidecar_row(runtime: &Arc<AppRuntime<LoggingAdapter>>, row_id: &str) -> bool {
     let Some(playlist_id) = with_doc(|d| d.id.clone()).and_then(|id| id.parse::<u64>().ok()) else {
         return false;
     };
@@ -333,8 +346,12 @@ pub async fn remove_sidecar_row(
     let _ = tokio::task::spawn_blocking(move || {
         crate::library_db_qt::with_db(false, |db| {
             match &removal {
-                SidecarRemoval::Local(id) => db.remove_local_track_from_playlist(playlist_id, *id)?,
-                SidecarRemoval::Plex(key) => db.remove_plex_track_from_playlist(playlist_id, key)?,
+                SidecarRemoval::Local(id) => {
+                    db.remove_local_track_from_playlist(playlist_id, *id)?
+                }
+                SidecarRemoval::Plex(key) => {
+                    db.remove_plex_track_from_playlist(playlist_id, key)?
+                }
             }
             Ok(())
         })
@@ -970,7 +987,10 @@ fn collage_urls(playlist: &Playlist, tracks: &[Track]) -> Vec<String> {
 // Load
 // ---------------------------------------------------------------------------
 
-pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -> Result<(), String> {
+pub async fn load(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    playlist_id: u64,
+) -> Result<(), String> {
     {
         let mut guard = PAGE.lock().unwrap();
         let doc = &mut guard.get_or_insert_with(PageState::default).doc;
@@ -1108,7 +1128,8 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
     // library.db mirror in `fav_cache_qt` — the same authority the write reads
     // — and only falls back to the feed.
     let is_favorite = crate::library_qt::is_favorite("playlist", &playlist_id.to_string());
-    let is_owner = pl.owner.id != 0 && pl.owner.id == USER_ID.load(std::sync::atomic::Ordering::SeqCst);
+    let is_owner =
+        pl.owner.id != 0 && pl.owner.id == USER_ID.load(std::sync::atomic::Ordering::SeqCst);
     // Following is only meaningful for a FOREIGN playlist, and its authority
     // is the user's own playlist list (the ownership snapshot). The feed stays
     // as the fallback for the window before the first snapshot lands.
@@ -1118,13 +1139,9 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
     let is_following = !is_owner
         && (self::is_following(playlist_id)
             || crate::library_qt::with_library(|d| {
-                d.feed
-                    .iter()
-                    .any(|i| {
-                        i.kind == "playlist"
-                            && i.id == playlist_id.to_string()
-                            && i.playlist_following
-                    })
+                d.feed.iter().any(|i| {
+                    i.kind == "playlist" && i.id == playlist_id.to_string() && i.playlist_following
+                })
             })
             .unwrap_or(false));
     let pinned = crate::sidebar_qt::is_pinned("playlist", &playlist_id.to_string());
@@ -1136,7 +1153,8 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
     let is_copied = !is_owner && crate::library_db_qt::is_playlist_copied(playlist_id);
 
     // Custom drag order (applied when sort == custom).
-    let sort_state = with_doc(|d| (d.sort_field.clone(), d.sort_asc)).unwrap_or(("default".into(), true));
+    let sort_state =
+        with_doc(|d| (d.sort_field.clone(), d.sort_asc)).unwrap_or(("default".into(), true));
 
     let track_count = rows.len() as i32;
     let total_duration = total_duration_label(&rows);
@@ -1225,9 +1243,15 @@ fn apply_sort(doc: &mut PlaylistDoc, field: &str, asc: bool) {
     doc.sort_field = field.to_string();
     doc.sort_asc = asc;
     match field {
-        "title" => doc.tracks.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
-        "artist" => doc.tracks.sort_by(|a, b| a.artist.to_lowercase().cmp(&b.artist.to_lowercase())),
-        "album" => doc.tracks.sort_by(|a, b| a.album.to_lowercase().cmp(&b.album.to_lowercase())),
+        "title" => doc
+            .tracks
+            .sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
+        "artist" => doc
+            .tracks
+            .sort_by(|a, b| a.artist.to_lowercase().cmp(&b.artist.to_lowercase())),
+        "album" => doc
+            .tracks
+            .sort_by(|a, b| a.album.to_lowercase().cmp(&b.album.to_lowercase())),
         "duration" => doc.tracks.sort_by_key(|t| t.duration_secs),
         // A MIXED playlist has no usable custom order, and forcing one would
         // scramble the merge that just ran: `apply_custom_order` keys its
@@ -1271,7 +1295,11 @@ fn load_custom_orders(playlist_id: u64) -> Vec<u64> {
             v.get(playlist_id.to_string()).and_then(|ids| {
                 ids.as_array().map(|a| {
                     a.iter()
-                        .filter_map(|id| id.as_str().and_then(|s| s.parse::<u64>().ok()).or(id.as_u64()))
+                        .filter_map(|id| {
+                            id.as_str()
+                                .and_then(|s| s.parse::<u64>().ok())
+                                .or(id.as_u64())
+                        })
                         .collect()
                 })
             })
@@ -1572,7 +1600,8 @@ pub async fn copy_playlist(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     }
     // Persist the copy against the SOURCE id (idempotent). rusqlite is
     // blocking, so it goes off the async path like every other db write here.
-    let _ = tokio::task::spawn_blocking(move || crate::library_db_qt::mark_playlist_copied(pid)).await;
+    let _ =
+        tokio::task::spawn_blocking(move || crate::library_db_qt::mark_playlist_copied(pid)).await;
     // Only the page that asked for the copy gets the flag: the user may have
     // navigated away while the create was in flight (reference `is_open`).
     let source_id = pid.to_string();
@@ -1586,7 +1615,10 @@ pub async fn copy_playlist(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     if let Some(Some(doc)) = patched {
         publish(&doc);
     }
-    log::info!("[qbz-qt] playlist {pid} copied to library as {}", new_playlist.id);
+    log::info!(
+        "[qbz-qt] playlist {pid} copied to library as {}",
+        new_playlist.id
+    );
     crate::toast_qt::success(qbz_i18n::t("Copied to your library"));
 
     // The copy is OWNED, so it joins the sidebar and the Library's favorites
@@ -1785,7 +1817,8 @@ pub async fn remove_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_tr
     let Some(pid) = pid else { return };
     // Optimistic removal; the API is the source of truth on failure.
     with_doc(|d| {
-        d.tracks.retain(|t| t.playlist_track_id != playlist_track_id);
+        d.tracks
+            .retain(|t| t.playlist_track_id != playlist_track_id);
         d.track_count = d.tracks.len() as i32;
         d.total_duration = total_duration_label(&d.tracks);
         let doc = d.clone();
@@ -1894,7 +1927,10 @@ pub fn move_row(row_id: &str, delta: i32) {
 /// Fetch a playlist and build its queue (the card-level actions: the
 /// LibPlaylistCard overlay Play and its menu's queueing — no open view
 /// needed).
-async fn queue_for(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -> Result<Vec<QueueTrack>, String> {
+async fn queue_for(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    playlist_id: u64,
+) -> Result<Vec<QueueTrack>, String> {
     let pl = runtime
         .core()
         .get_playlist(playlist_id)
@@ -2024,7 +2060,11 @@ pub async fn set_follow_by_id(
 /// Add tracks to a playlist by id (the DnD drop path): Qobuz catalog ids
 /// via the membership API, then refresh the sidebar + the open detail when
 /// it matches.
-pub async fn add_tracks(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64, track_ids: &[u64]) {
+pub async fn add_tracks(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    playlist_id: u64,
+    track_ids: &[u64],
+) {
     if track_ids.is_empty() {
         return;
     }
@@ -2034,7 +2074,10 @@ pub async fn add_tracks(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: 
         .await
     {
         Ok(()) => {
-            log::info!("[qbz-qt] dropped {} track(s) onto playlist {playlist_id}", track_ids.len());
+            log::info!(
+                "[qbz-qt] dropped {} track(s) onto playlist {playlist_id}",
+                track_ids.len()
+            );
         }
         Err(e) => {
             log::error!("[qbz-qt] drop add to playlist {playlist_id} failed: {e}");
@@ -2099,13 +2142,9 @@ async fn play_queue_at(
     if crate::playback_qt::route_play_to_peer(runtime, first_id).await {
         return Ok(());
     }
-    crate::playback_qt::play_resolved_offline_aware(
-        runtime,
-        first_id,
-        0,
-    )
-    .await
-    .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
+    crate::playback_qt::play_resolved_offline_aware(runtime, first_id, 0)
+        .await
+        .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     crate::playback_qt::refresh_now_playing(runtime).await;
     Ok(())
 }
@@ -2135,7 +2174,10 @@ pub async fn play_shuffled(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<
 }
 
 /// Row play: the playlist as the queue, starting at this track.
-pub async fn play_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: &str) -> Result<(), String> {
+pub async fn play_track(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track_id: &str,
+) -> Result<(), String> {
     let start = with_doc(|d| d.tracks.iter().position(|t| t.id == track_id)).flatten();
     let tracks = current_queue();
     play_queue_at(runtime, tracks, start.unwrap_or(0), open_context()).await

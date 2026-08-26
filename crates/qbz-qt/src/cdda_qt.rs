@@ -125,7 +125,11 @@ async fn lookup_musicbrainz(disc_id: &str) -> Option<DiscMeta> {
         if status.as_u16() == 503 {
             log::warn!(
                 "[qbz-qt] cd: MusicBrainz is rate-limiting (503){}",
-                if attempt == 0 { ", retrying once" } else { ", giving up" }
+                if attempt == 0 {
+                    ", retrying once"
+                } else {
+                    ", giving up"
+                }
             );
             continue;
         }
@@ -185,7 +189,10 @@ async fn lookup_musicbrainz(disc_id: &str) -> Option<DiscMeta> {
         .and_then(|m| m.as_array())
         .and_then(|m| m.iter().find(|m| m.get("tracks").is_some()));
     let Some(media) = media else {
-        log::warn!("[qbz-qt] cd: release {:?} carries no track list", release.get("title"));
+        log::warn!(
+            "[qbz-qt] cd: release {:?} carries no track list",
+            release.get("title")
+        );
         return None;
     };
 
@@ -212,10 +219,8 @@ async fn lookup_musicbrainz(disc_id: &str) -> Option<DiscMeta> {
                                 .iter()
                                 .filter_map(|c| {
                                     let name = c.get("name").and_then(|n| n.as_str())?;
-                                    let join = c
-                                        .get("joinphrase")
-                                        .and_then(|j| j.as_str())
-                                        .unwrap_or("");
+                                    let join =
+                                        c.get("joinphrase").and_then(|j| j.as_str()).unwrap_or("");
                                     Some(format!("{name}{join}"))
                                 })
                                 .collect::<String>()
@@ -406,7 +411,11 @@ pub async fn open_disc() -> Result<usize, String> {
             log::info!(
                 "[qbz-qt] cd: remembered as {:?} ({})",
                 m.album,
-                if m.edited { "corrected by hand" } else { "from a previous lookup" }
+                if m.edited {
+                    "corrected by hand"
+                } else {
+                    "from a previous lookup"
+                }
             );
             meta_from_memory(m)
         }

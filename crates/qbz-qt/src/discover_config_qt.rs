@@ -26,11 +26,11 @@
 //!   is out of scope. The toolbar gear is DISABLED on that tab instead of
 //!   opening an empty modal (HomeView.qml).
 
+use cxx_qt_lib::QString;
 use qbz_app::settings::discover_prefs::{
     DiscoverPrefs, DiscoverPrefsStore, DiscoverySectionId, DiscoveryTab, DEFAULT_RAIL_SIZE,
     RAIL_SIZE_PRESETS,
 };
-use cxx_qt_lib::QString;
 use serde::Serialize;
 
 /// id -> label. Verbatim copy of `discover_prefs::label_for` in the Slint
@@ -93,8 +93,7 @@ struct ConfigDoc {
 /// per-user prefs file as the section order, and `recommendations_qt` writes it
 /// — one accessor beats two copies of the user-dir lookup drifting apart.
 pub(crate) fn store() -> Option<DiscoverPrefsStore> {
-    crate::sidebar_qt::user_dir()
-        .and_then(|dir| DiscoverPrefsStore::new_at(&dir).ok())
+    crate::sidebar_qt::user_dir().and_then(|dir| DiscoverPrefsStore::new_at(&dir).ok())
 }
 
 // ---------------------------------------------------------------------------

@@ -162,7 +162,10 @@ pub fn dsd_multiple_label(sample_rate: Option<f64>) -> String {
         Some(r) if r >= 1_000.0 => r * 1000.0,
         _ => return "DSD".to_string(),
     };
-    format!("DSD{}", ((hz / 2_822_400.0).round() as u32).saturating_mul(64))
+    format!(
+        "DSD{}",
+        ((hz / 2_822_400.0).round() as u32).saturating_mul(64)
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +245,10 @@ mod tests {
             QualityLimit::None as i32
         );
         // Ungoverned source (id 0) → none.
-        assert_eq!(classify_limit_cause(true, 0, 1, 16), QualityLimit::None as i32);
+        assert_eq!(
+            classify_limit_cause(true, 0, 1, 16),
+            QualityLimit::None as i32
+        );
         // Requested Hi-Res+ and still short → Qobuz had no more.
         assert_eq!(
             classify_limit_cause(true, Quality::UltraHiRes.id(), 0, 24),
@@ -251,12 +257,22 @@ mod tests {
         // Requested Hi-Res, delivered 24-bit → the promise held, so the
         // request-time cause did this.
         assert_eq!(
-            classify_limit_cause(true, Quality::HiRes.id(), QualityLimit::Preference as i32, 24),
+            classify_limit_cause(
+                true,
+                Quality::HiRes.id(),
+                QualityLimit::Preference as i32,
+                24
+            ),
             QualityLimit::Preference as i32
         );
         // Requested Hi-Res, delivered 16-bit → the promise broke: catalog.
         assert_eq!(
-            classify_limit_cause(true, Quality::HiRes.id(), QualityLimit::Preference as i32, 16),
+            classify_limit_cause(
+                true,
+                Quality::HiRes.id(),
+                QualityLimit::Preference as i32,
+                16
+            ),
             QualityLimit::CatalogAvailability as i32
         );
     }

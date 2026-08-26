@@ -366,7 +366,11 @@ mod tests {
         for _ in 0..10 {
             m.right();
         }
-        assert!(m.index < m.count, "never past the data ({before} -> {})", m.index);
+        assert!(
+            m.index < m.count,
+            "never past the data ({before} -> {})",
+            m.index
+        );
     }
 
     #[test]
@@ -387,7 +391,10 @@ mod tests {
             m.right();
         } // index 10, column 5
         m.up();
-        assert_eq!(m.index, 4, "min(tabs - 1, column) with 5 tabs and 6 columns");
+        assert_eq!(
+            m.index, 4,
+            "min(tabs - 1, column) with 5 tabs and 6 columns"
+        );
     }
 
     #[test]

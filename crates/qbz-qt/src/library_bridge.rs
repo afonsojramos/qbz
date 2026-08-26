@@ -46,7 +46,6 @@ pub mod qbz_library_bridge {
         // (library_sidepanel.rs). Its own document, never folded into
         // `library_json`: a selection must not re-serialize a 10k-row feed.
         #[qproperty(QString, sidepanel_json)]
-
         type QbzLibrary = super::QbzLibraryRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -127,7 +126,14 @@ pub mod qbz_library_bridge {
 
         /// AlbumCard pin badge: toggle pin (album/artist/playlist).
         #[qinvokable]
-        fn toggle_pin(self: Pin<&mut QbzLibrary>, kind: QString, id: QString, title: QString, subtitle: QString, artwork_url: QString);
+        fn toggle_pin(
+            self: Pin<&mut QbzLibrary>,
+            kind: QString,
+            id: QString,
+            title: QString,
+            subtitle: QString,
+            artwork_url: QString,
+        );
         /// Emitted after a pin toggle (`{kind}:{id}` key like artKey).
         #[qsignal]
         fn pin_changed(self: Pin<&mut QbzLibrary>, key: QString, value: bool);
@@ -250,7 +256,14 @@ impl qbz_library_bridge::QbzLibrary {
         crate::library_qt::play_visible_all(visible_ids_json.to_string(), shuffle);
     }
 
-    pub fn toggle_pin(self: Pin<&mut Self>, kind: QString, id: QString, title: QString, subtitle: QString, artwork_url: QString) {
+    pub fn toggle_pin(
+        self: Pin<&mut Self>,
+        kind: QString,
+        id: QString,
+        title: QString,
+        subtitle: QString,
+        artwork_url: QString,
+    ) {
         crate::toggle_pin(
             kind.to_string(),
             id.to_string(),

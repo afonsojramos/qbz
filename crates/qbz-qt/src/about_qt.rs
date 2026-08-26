@@ -231,7 +231,10 @@ async fn ensure_avatar(client: &reqwest::Client, handle: &str) -> Option<String>
     let out = dir.join(format!("{handle}.png"));
     // A zero-byte file is a failed write that would otherwise count as a hit
     // forever (the artwork cache's documented trap) — treat it as a miss.
-    if std::fs::metadata(&out).map(|m| m.len() > 0).unwrap_or(false) {
+    if std::fs::metadata(&out)
+        .map(|m| m.len() > 0)
+        .unwrap_or(false)
+    {
         return Some(crate::artwork_qt::file_url(&out.to_string_lossy()));
     }
     std::fs::create_dir_all(&dir).ok()?;
@@ -318,7 +321,10 @@ mod tests {
         let doc = snapshot_doc();
         assert_eq!(
             doc.release_url,
-            format!("https://github.com/vicrodh/qbz/releases/tag/v{}", app_version())
+            format!(
+                "https://github.com/vicrodh/qbz/releases/tag/v{}",
+                app_version()
+            )
         );
     }
 

@@ -347,7 +347,7 @@ where
                 // Phase 15: intelligent-search service (cortinilla
                 // cache+ranking).
                 crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
-        crate::search_cache_qt::init();
+                crate::search_cache_qt::init();
                 // Phase 17: playlist is_owner math.
                 crate::playlist_qt::set_user_id(user_id);
                 bind_per_user_stores(&dir, user_id).await;
@@ -600,7 +600,10 @@ mod tests {
             query_param("code_autorisation=abc123", "code_autorisation"),
             Some("abc123".to_string())
         );
-        assert_eq!(query_param("a=1&code=x%2Fy", "code"), Some("x/y".to_string()));
+        assert_eq!(
+            query_param("a=1&code=x%2Fy", "code"),
+            Some("x/y".to_string())
+        );
         assert_eq!(query_param("other=1", "code"), None);
     }
 

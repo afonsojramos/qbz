@@ -457,7 +457,12 @@ impl ShaderPackState {
 /// renders and hop them onto the Qt thread. Each cell's guard is released by
 /// the end of its `let` statement — the mutex is NEVER held across the
 /// `viz_bridge::ui` hop, so the producer never blocks on the drain.
-fn publish_active(cells: &VizCells, pack: &mut ShaderPackState, linebed: &mut linebed_qt::LineBedState, ribbon: &mut ribbon_qt::RibbonState) {
+fn publish_active(
+    cells: &VizCells,
+    pack: &mut ShaderPackState,
+    linebed: &mut linebed_qt::LineBedState,
+    ribbon: &mut ribbon_qt::RibbonState,
+) {
     // §4.2b: immersive open -> publish ALL THREE streams each frame (the
     // immersive panels consume bars + energy + waveform simultaneously, like
     // the Slint immersive does). ACTIVE_MODE is irrelevant here.
@@ -525,9 +530,7 @@ fn publish_active(cells: &VizCells, pack: &mut ShaderPackState, linebed: &mut li
         // (the C++ gap-fill cursor never moves backward on its own).
         if crate::shader_scene_bridge::ribbon_active() {
             if let Some(bins) = spectral.as_deref() {
-                if let Some(frame) =
-                    ribbon.frame(bins, crate::now_playing::ribbon_cursor())
-                {
+                if let Some(frame) = ribbon.frame(bins, crate::now_playing::ribbon_cursor()) {
                     crate::shader_scene_bridge::publish_ribbon(frame);
                 }
             }
@@ -959,7 +962,7 @@ mod tests {
         let doc: serde_json::Value = serde_json::from_str(&p.tick(Some(0.5), None)).unwrap();
         assert!((doc["beat"].as_f64().unwrap() - 0.44).abs() < 1e-6); // 0.5*0.88
         assert!((doc["transient"].as_f64().unwrap() - 0.425).abs() < 1e-6); // 0.5*0.85
-        // A weaker transient mid-decay does NOT lower the envelope (max-in).
+                                                                            // A weaker transient mid-decay does NOT lower the envelope (max-in).
         let doc: serde_json::Value = serde_json::from_str(&p.tick(Some(0.1), None)).unwrap();
         assert!((doc["beat"].as_f64().unwrap() - 0.44 * 0.88).abs() < 1e-5);
         assert!((doc["transient"].as_f64().unwrap() - 0.425 * 0.85).abs() < 1e-5);
@@ -985,8 +988,7 @@ mod tests {
             last_energy: [0.5; 5],
             ..Default::default()
         };
-        let doc: serde_json::Value =
-            serde_json::from_str(&p.tick(Some(0.5), None)).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&p.tick(Some(0.5), None)).unwrap();
         let expected = 0.012 + 0.5 * 0.02 + 0.44 * 0.02;
         assert!((doc["phase"].as_f64().unwrap() - expected).abs() < 1e-4);
     }
@@ -999,8 +1001,7 @@ mod tests {
         let mut p = ShaderPackState::default();
         let mut bins = vec![0.0f32; 101];
         bins[75] = 0.5; // highest active: 75/100 = 0.75
-        let doc: serde_json::Value =
-            serde_json::from_str(&p.tick(None, Some(&bins))).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&p.tick(None, Some(&bins))).unwrap();
         assert!((doc["energyHi"][1].as_f64().unwrap() - 0.75 * 0.15).abs() < 1e-5);
         // Empty of signal: target 0, the EMA decays toward it.
         let doc: serde_json::Value =

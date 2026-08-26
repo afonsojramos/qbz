@@ -61,7 +61,6 @@ pub mod qbz_kiosk_nav_bridge {
         #[qproperty(i32, dir)]
         /// Enter pulse for conditionally-mounted content views.
         #[qproperty(i32, activate_seq)]
-
         type QbzKioskNav = super::QbzKioskNavRust;
 
         /// Arrow keys, from the kiosk shell's root key handler.

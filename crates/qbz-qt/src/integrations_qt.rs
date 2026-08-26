@@ -69,8 +69,8 @@ static DISCOVER: OnceLock<Mutex<Option<DiscoverPrefsStore>>> = OnceLock::new();
 
 fn with_discover<T>(f: impl FnOnce(&DiscoverPrefsStore) -> T) -> Option<T> {
     let cell = DISCOVER.get_or_init(|| {
-        let store = crate::sidebar_qt::user_dir()
-            .and_then(|dir| DiscoverPrefsStore::new_at(&dir).ok());
+        let store =
+            crate::sidebar_qt::user_dir().and_then(|dir| DiscoverPrefsStore::new_at(&dir).ok());
         if store.is_none() {
             log::warn!("[qbz-qt] discover prefs store unavailable");
         }
@@ -407,7 +407,10 @@ pub async fn listenbrainz_set_token(token: &str) {
                 })
                 .await;
             }
-            set_status(qbz_i18n::t_args("Connected as {}", &[info.user_name.as_str()]), 2);
+            set_status(
+                qbz_i18n::t_args("Connected as {}", &[info.user_name.as_str()]),
+                2,
+            );
         }
         Err(e) => set_status(qbz_i18n::t_args("Error: {}", &[&e.to_string()]), 3),
     }
@@ -697,7 +700,12 @@ async fn send_now_playing(meta: &ScrobbleMeta, cfg: &ScrobblerSettings) {
             )
             .await;
         if let Err(e) = client
-            .submit_playing_now(&meta.artist, &meta.track, album, lb_info(meta.duration_secs))
+            .submit_playing_now(
+                &meta.artist,
+                &meta.track,
+                album,
+                lb_info(meta.duration_secs),
+            )
             .await
         {
             log::debug!("[qbz-qt] ListenBrainz now-playing failed: {e}");
@@ -725,7 +733,11 @@ async fn send_scrobble(meta: &ScrobbleMeta) {
                 .await
             {
                 Ok(()) => {
-                    log::info!("[qbz-qt] Last.fm scrobbled: {} - {}", meta.artist, meta.track);
+                    log::info!(
+                        "[qbz-qt] Last.fm scrobbled: {} - {}",
+                        meta.artist,
+                        meta.track
+                    );
                     true
                 }
                 Err(e) => {

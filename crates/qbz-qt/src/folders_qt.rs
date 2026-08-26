@@ -187,7 +187,9 @@ pub fn delete_folder(id: &str) -> bool {
 
 /// Move a playlist into `folder_id`, or to root when `None`.
 pub fn move_playlist(playlist_id: u64, folder_id: Option<&str>) {
-    with_db(true, |db| db.move_playlist_to_folder(playlist_id, folder_id));
+    with_db(true, |db| {
+        db.move_playlist_to_folder(playlist_id, folder_id)
+    });
 }
 
 /// Set a playlist's favorite flag.

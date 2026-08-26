@@ -289,7 +289,11 @@ pub(crate) fn submit(
                     })
                     .await;
                 }
-                log::info!("[qbz-qt] playlist created: {} ({})", playlist.name, playlist.id);
+                log::info!(
+                    "[qbz-qt] playlist created: {} ({})",
+                    playlist.name,
+                    playlist.id
+                );
                 settle_success(new_id, false);
             }
             Err(e) => {

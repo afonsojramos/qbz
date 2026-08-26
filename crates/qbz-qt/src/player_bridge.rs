@@ -90,7 +90,6 @@ pub mod qbz_player {
         // (ImmersiveSpectralOverlay.slint:45 parity).
         #[qproperty(i32, np_eff_rate_hz)]
         #[qproperty(i32, np_eff_bits)]
-
         // --- Output LEDs (settings.rs `output_labels`) -------------------
         // PIPEWIRE|ALSA|JACK|PULS|SYST|AUTO — *_active lights the LED.
         #[qproperty(QString, np_output_backend_label)]
@@ -105,7 +104,6 @@ pub mod qbz_player {
         // disabled with a tooltip instead of pretending it works. No audio
         // behaviour hangs off this flag — it is a UI mirror only.
         #[qproperty(bool, np_volume_locked)]
-
         // --- Cast / remote (Qobuz Connect + Chromecast/DLNA) -------------
         // A peer Qobuz Connect renderer owns playback (transport is remote).
         #[qproperty(bool, np_is_remote)]
@@ -150,7 +148,6 @@ pub mod qbz_player {
         // "Show track playing context" pref (Playback settings) — feeds the
         // SongCard layers icon.
         #[qproperty(bool, show_context_icon)]
-
         type QbzPlayer = super::QbzPlayerRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -204,7 +201,12 @@ pub mod qbz_player {
         fn play_album_from(self: Pin<&mut QbzPlayer>, album_id: QString, track_id: QString);
         /// AlbumView row "Play next" ("next") / "Add to queue" ("later").
         #[qinvokable]
-        fn enqueue_album_track(self: Pin<&mut QbzPlayer>, album_id: QString, track_id: QString, mode: QString);
+        fn enqueue_album_track(
+            self: Pin<&mut QbzPlayer>,
+            album_id: QString,
+            track_id: QString,
+            mode: QString,
+        );
         /// AlbumCard ⋯ menu: Play next ("next") / Add to queue ("later").
         #[qinvokable]
         fn enqueue_album(self: Pin<&mut QbzPlayer>, album_id: QString, mode: QString);
@@ -220,7 +222,13 @@ pub mod qbz_player {
         /// (bulk_tracks_qt.rs): ids in visible order + the bar's action id +
         /// the queue context to stamp ("" = none).
         #[qinvokable]
-        fn bulk_tracks_action(self: Pin<&mut QbzPlayer>, ids_json: QString, action: QString, context_kind: QString, context_id: QString);
+        fn bulk_tracks_action(
+            self: Pin<&mut QbzPlayer>,
+            ids_json: QString,
+            action: QString,
+            context_kind: QString,
+            context_id: QString,
+        );
         /// ArtistView Popular Tracks row play (whole list as the queue).
         #[qinvokable]
         fn play_artist_track(self: Pin<&mut QbzPlayer>, track_id: QString);
@@ -471,7 +479,12 @@ impl qbz_player::QbzPlayer {
         }
     }
 
-    pub fn enqueue_album_track(self: Pin<&mut Self>, album_id: QString, track_id: QString, mode: QString) {
+    pub fn enqueue_album_track(
+        self: Pin<&mut Self>,
+        album_id: QString,
+        track_id: QString,
+        mode: QString,
+    ) {
         if let Ok(tid) = track_id.to_string().parse::<u64>() {
             crate::enqueue_album_track(album_id.to_string(), tid, mode.to_string());
         }
@@ -497,7 +510,13 @@ impl qbz_player::QbzPlayer {
         }
     }
 
-    pub fn bulk_tracks_action(self: Pin<&mut Self>, ids_json: QString, action: QString, context_kind: QString, context_id: QString) {
+    pub fn bulk_tracks_action(
+        self: Pin<&mut Self>,
+        ids_json: QString,
+        action: QString,
+        context_kind: QString,
+        context_id: QString,
+    ) {
         crate::bulk_tracks_qt::run(
             ids_json.to_string(),
             action.to_string(),
