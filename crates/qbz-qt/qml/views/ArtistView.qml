@@ -577,13 +577,17 @@ Rectangle {
     readonly property bool contentConstrained:
         Window.width > 0 && Window.width < 1366
         && (QbzShell.queueOpen || QbzShell.lyricsOpen)
-    // The .slint AUTO-collapses on a constrain edge and AUTO-opens when there
-    // is room again, and re-applies the same rule on every artist change
-    // (`changed net-cramped` / `changed net-nav-watch` at :175-180, plus
-    // artist.rs `reset_network_sidebar`). The port opened FALSE and stayed
-    // shut until the user found the button.
+    // A constrain edge closes the full-width relationship sidebar so the
+    // release grid keeps priority. This is deliberately ONE-WAY: after that
+    // the existing Network button remains available and may reopen it even in
+    // the constrained layout; gaining room must not override that user choice.
+    // A newly opened artist still starts from the available-space default in
+    // syncArtistState(), matching the page-entry behaviour.
     property bool networkOpen: !contentConstrained
-    onContentConstrainedChanged: networkOpen = !contentConstrained
+    onContentConstrainedChanged: {
+        if (contentConstrained)
+            networkOpen = false
+    }
     property string netTab: "network"
     readonly property int preview: 5
     // Sidebar lists are unbounded upstream (an orchestra can list 150
