@@ -43,7 +43,7 @@ Row {
     property bool artistsExpanded: false
     onAlbumChanged: artistsExpanded = false
 
-    readonly property int coverPx: compact ? 128 : 224
+    readonly property int coverPx: compact ? 112 : 224
     spacing: compact ? 20 : 32
 
     Rectangle {
@@ -92,10 +92,13 @@ Row {
                 font.weight: theme.weightBold
                 elide: Text.ElideRight
             }
-            QbzCircleAction {
+            QbzIconButton {
                 id: localHeaderModeButton
                 anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
+                anchors.top: parent.top
+                anchors.topMargin: -4
+                btnSize: 26
+                iconSize: 13
                 name: root.compact ? "maximize-2" : "minimize-2"
                 onClicked: root.compactToggled()
                 HoverHandler { id: localHeaderModeHover }
@@ -106,7 +109,7 @@ Row {
                 ToolTip.delay: 350
             }
         }
-        Item { width: 1; height: 4 }
+        Item { width: 1; height: root.compact ? 2 : 4 }
         Row {
             spacing: 8
             Text {
@@ -170,7 +173,7 @@ Row {
                 }
             }
         }
-        Item { width: 1; height: root.compact ? 4 : 10 }
+        Item { width: 1; height: root.compact ? 2 : 10 }
         Text {
             width: parent.width
             text: root.compact ? root.compactInfoLine : root.infoLine
@@ -178,7 +181,7 @@ Row {
             font.pixelSize: theme.fontBody
             elide: Text.ElideRight
         }
-        Item { width: 1; height: root.compact ? 8 : 20 }
+        Item { width: 1; height: root.compact ? 4 : 20 }
 
         // ---- Local action row ----
         Row {
@@ -186,6 +189,7 @@ Row {
             QbzCircleAction {
                 name: "play-fill"
                 primary: true
+                compactPrimary: root.compact
                 onClicked: QbzLocal.albumSelectedAction("play", "")
             }
             QbzCircleAction {

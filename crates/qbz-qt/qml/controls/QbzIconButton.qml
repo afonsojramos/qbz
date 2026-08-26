@@ -32,6 +32,9 @@ Rectangle {
     property bool active: false
     property bool activeBackground: false
     property bool btnEnabled: true
+    /// Optional fixed tint for theme-independent hosts such as the dark album
+    /// atmosphere. Empty keeps the normal themed idle/hover selector.
+    property string tintOverride: ""
     /// Optional host for the shared QbzTooltip mechanism. Kept opt-in so the
     /// many icon-only call sites that intentionally have no bubble stay inert.
     property var tooltip: null
@@ -59,7 +62,8 @@ Rectangle {
         width: parent.iconSize
         height: parent.iconSize
         anchors.centerIn: parent
-        tintName: !parent.btnEnabled ? "muted"
+        tintName: btn.tintOverride !== "" ? btn.tintOverride
+            : !parent.btnEnabled ? "muted"
             : parent.active ? "accent"
             : biArea.containsMouse ? btn.tintStrong : btn.tintWeak
     }

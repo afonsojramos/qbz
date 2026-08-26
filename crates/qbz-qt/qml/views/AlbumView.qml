@@ -48,7 +48,8 @@ Rectangle {
     /// twin and both text columns all measure off it — they drifted apart at
     /// five separate literals before. The Row has no explicit height, so the
     /// header grows with this on its own.
-    readonly property int coverPx: compactHeaderPref ? 130 : 260
+    readonly property int coverPx: compactHeaderPref ? 112 : 260
+    readonly property int headerGapPx: compactHeaderPref ? 20 : 32
 
     /// How far past the header divider the artwork atmosphere reaches: the 8px
     /// spacer below the divider plus half of the 52px track toolbar band, so
@@ -120,6 +121,38 @@ Rectangle {
             } catch (e) { /* fall through to the document copy */ }
         }
         return album.compactHeader === true
+    }
+    property bool headerLayoutReady: false
+    property int headerLayoutEpoch: 0
+    property real headerSavedOffset: 0
+    property bool headerSnapshotValid: false
+    function toggleCompactHeader() {
+        // Capture before settingsJson changes: dependent geometry bindings and
+        // this property's change handler have no guaranteed observer order.
+        root.headerSavedOffset = pageFlick.contentY - pageFlick.originY
+        root.headerSnapshotValid = true
+        QbzBridge.settingsBool("compact-album-header", !root.compactHeaderPref)
+    }
+    onCompactHeaderPrefChanged: {
+        if (!root.headerLayoutReady)
+            return
+        // An inline ListView header changes originY with its height. Keep the
+        // viewport's offset from that origin so expanding pins the visible top
+        // edge and grows the header downward instead of behind the viewport.
+        var savedOffset = root.headerSnapshotValid
+            ? root.headerSavedOffset
+            : pageFlick.contentY - pageFlick.originY
+        root.headerSnapshotValid = false
+        var epoch = ++root.headerLayoutEpoch
+        Qt.callLater(function () {
+            if (epoch !== root.headerLayoutEpoch)
+                return
+            pageFlick.forceLayout()
+            var minY = pageFlick.originY
+            var maxY = minY + Math.max(0, pageFlick.contentHeight - pageFlick.height)
+            pageFlick.contentY = Math.max(minY,
+                Math.min(minY + savedOffset, maxY))
+        })
     }
     // `header.awards`, NOT `album.awards`. It is a field of AlbumHeader
     // (src/album_qt.rs:171), not of AlbumViewData — read one level too high it
@@ -318,6 +351,7 @@ Rectangle {
         root.applyAlbumDocument()
         syncAlbumState()
         dispatchCovers()
+        root.headerLayoutReady = true
     }
     Connections {
         target: QbzAlbum
@@ -719,7 +753,7 @@ Rectangle {
             Row {
                 visible: root.primaryLoading
                 width: parent.width - 64
-                spacing: 32
+                spacing: root.headerGapPx
 
                 QbzSkeleton {
                     variant: "block"
@@ -729,13 +763,13 @@ Rectangle {
                     phase: skeletonPhase.on
                 }
                 Column {
-                    width: parent.width - root.coverPx - 32
-                    spacing: 12
-                    Item { width: 1; height: 6 }
-                    QbzSkeleton { variant: "block"; width: Math.min(420, parent.width); height: 30; cellIndex: 0; phase: skeletonPhase.on }
-                    QbzSkeleton { variant: "block"; width: Math.min(260, parent.width); height: 18; cellIndex: 1; phase: skeletonPhase.on }
+                    width: parent.width - root.coverPx - root.headerGapPx
+                    spacing: root.compactHeaderPref ? 4 : 12
+                    Item { width: 1; height: root.compactHeaderPref ? 0 : 6 }
+                    QbzSkeleton { variant: "block"; width: Math.min(420, parent.width); height: root.compactHeaderPref ? 24 : 30; cellIndex: 0; phase: skeletonPhase.on }
+                    QbzSkeleton { variant: "block"; width: Math.min(260, parent.width); height: root.compactHeaderPref ? 16 : 18; cellIndex: 1; phase: skeletonPhase.on }
                     QbzSkeleton { variant: "block"; width: Math.min(340, parent.width); height: 14; cellIndex: 2; phase: skeletonPhase.on }
-                    Item { width: 1; height: 14 }
+                    Item { width: 1; height: root.compactHeaderPref ? 4 : 14 }
                     Row {
                         spacing: 12
                         Repeater {
@@ -743,8 +777,8 @@ Rectangle {
                             delegate: QbzSkeleton {
                                 required property int index
                                 variant: "circle"
-                                width: 44
-                                height: 44
+                                width: root.compactHeaderPref ? 32 : 44
+                                height: root.compactHeaderPref ? 32 : 44
                                 cellIndex: index
                                 phase: skeletonPhase.on
                             }
@@ -757,7 +791,7 @@ Rectangle {
             Row {
                 visible: !root.primaryLoading
                 width: parent.width - 64
-                spacing: 32
+                spacing: root.headerGapPx
 
                 Rectangle {
                     width: root.coverPx
@@ -795,7 +829,7 @@ Rectangle {
                 }
 
                 Column {
-                    width: parent.width - root.coverPx - 32
+                    width: parent.width - root.coverPx - root.headerGapPx
                     anchors.top: parent.top
                     anchors.topMargin: 4
                     spacing: 0
@@ -815,14 +849,16 @@ Rectangle {
                             font.weight: theme.weightBold
                             elide: Text.ElideRight
                         }
-                        QbzCircleAction {
+                        QbzIconButton {
                             id: headerModeButton
                             anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.top: parent.top
+                            anchors.topMargin: -4
+                            btnSize: 26
+                            iconSize: 13
                             name: root.compactHeaderPref ? "maximize-2" : "minimize-2"
-                            overlay: root.hdrOverlay
-                            onClicked: QbzBridge.settingsBool(
-                                "compact-album-header", !root.compactHeaderPref)
+                            tintOverride: root.hdrOverlay ? "white" : ""
+                            onClicked: root.toggleCompactHeader()
                             HoverHandler { id: headerModeHover }
                             ToolTip.visible: headerModeHover.hovered
                             ToolTip.text: root.compactHeaderPref
@@ -831,7 +867,7 @@ Rectangle {
                             ToolTip.delay: 350
                         }
                     }
-                    Item { width: 1; height: 4 }
+                    Item { width: 1; height: root.compactHeaderPref ? 2 : 4 }
                     // Credited-artist line (links + role suffixes).
                     Flow {
                         width: parent.width
@@ -874,7 +910,7 @@ Rectangle {
                             }
                         }
                     }
-                    Item { width: 1; height: root.compactHeaderPref ? 4 : 10 }
+                    Item { width: 1; height: root.compactHeaderPref ? 2 : 10 }
                     // Meta line (label as a clickable link when navigable).
                     Row {
                         spacing: 0
@@ -968,7 +1004,7 @@ Rectangle {
                         }
                     }
 
-                    Item { width: 1; height: root.compactHeaderPref ? 8 : 20 }
+                    Item { width: 1; height: root.compactHeaderPref ? 4 : 20 }
                     // Action row — AlbumPageView.slint:504-640. One shared
                     // CircleAction for every button including Play (the
                     // hand-rolled 44px disc it used to be drifted from the
@@ -979,6 +1015,7 @@ Rectangle {
                         spacing: 12
                         QbzCircleAction {
                             primary: true
+                            compactPrimary: root.compactHeaderPref
                             overlay: root.hdrOverlay
                             name: "play-fill"
                             anchors.verticalCenter: parent.verticalCenter

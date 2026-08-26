@@ -128,6 +128,7 @@ Item {
     property real coverSize: 150
     property real coverGap: 24
     property bool headerRound: false
+    property bool compactHeader: false
     property int actionCount: 0
     // "cardGrid" — cell pitch vs the card drawn inside it.
     property real cellW: 220
@@ -398,22 +399,24 @@ Item {
                 width: Math.max(0, root.width - root.coverSize - root.coverGap)
                 height: root.coverSize
                 Rectangle {
-                    width: 88
-                    height: 11
+                    y: root.compactHeader ? 4 : 0
+                    width: root.compactHeader ? Math.min(parent.width, 420) : 88
+                    height: root.compactHeader ? 24 : 11
                     radius: root.blockRadius
                     color: theme.surfaceElevated
                     opacity: root.breathe
                 }
                 Rectangle {
-                    y: 23
-                    width: Math.min(parent.width, 420)
-                    height: 28
+                    y: root.compactHeader ? 34 : 23
+                    width: root.compactHeader ? Math.min(parent.width, 260)
+                        : Math.min(parent.width, 420)
+                    height: root.compactHeader ? 16 : 28
                     radius: root.blockRadius
                     color: theme.surfaceElevated
                     opacity: root.breathe
                 }
                 Rectangle {
-                    y: 63
+                    y: root.compactHeader ? 56 : 63
                     width: Math.min(parent.width, 300)
                     height: 14
                     radius: root.blockRadius
@@ -421,6 +424,7 @@ Item {
                     opacity: root.breathe
                 }
                 Rectangle {
+                    visible: !root.compactHeader
                     y: 85
                     width: Math.min(parent.width, 200)
                     height: 13
@@ -433,7 +437,7 @@ Item {
                     delegate: Rectangle {
                         required property int index
                         x: index * 44
-                        y: 110
+                        y: root.compactHeader ? 80 : 110
                         width: 32
                         height: 32
                         radius: 16

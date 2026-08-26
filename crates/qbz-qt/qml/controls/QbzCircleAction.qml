@@ -5,8 +5,11 @@
 //
 // Numbers, read off primitives/CircleAction.slint:
 //   :24  diameter — primary 44, secondary 32 (the hierarchy lives HERE, not
-//        in the callers; the port had 40 and was uniformly small)
-//   :66  glyph — primary 19, secondary 15
+//        in the callers; the port had 40 and was uniformly small). Compact
+//        headers may deliberately collapse the primary to the secondary
+//        footprint without giving up its accent palette.
+//   :66  glyph — primary 19, secondary 15; the compact primary follows the
+//        secondary footprint here too.
 //   :48  ON-SURFACE arm (`overlay: false`, the default): primary = accent
 //        disc, secondary = surface-elevated disc, hover/active surface-hover
 //   :60  ring — border-strong (the port used border-muted)
@@ -65,6 +68,9 @@ Rectangle {
     property string name: ""
     property bool active: false
     property bool primary: false
+    /// Preserve the primary action palette while using the secondary action's
+    /// footprint. Album headers use this when their global compact mode is on.
+    property bool compactPrimary: false
     property bool btnEnabled: true
     /// While the action's work is in flight the glyph swaps for a spinning
     /// arc (CircleAction.slint:18 / :77 — the reference has this arm and the
@@ -84,8 +90,10 @@ Rectangle {
     /// runtime-tinted so it is the real token under every theme.
     readonly property string onSurfaceTint: "textPrimary"
 
-    width: primary ? 44 : 32
-    height: primary ? 44 : 32
+    readonly property bool largePrimary: primary && !compactPrimary
+
+    width: largePrimary ? 44 : 32
+    height: largePrimary ? 44 : 32
     radius: width / 2
     color: overlay
         ? (primary
@@ -151,8 +159,8 @@ Rectangle {
     QbzIcon {
         visible: !root.loading
         name: root.name
-        width: root.primary ? 19 : 15
-        height: root.primary ? 19 : 15
+        width: root.largePrimary ? 19 : 15
+        height: root.largePrimary ? 19 : 15
         // Whole-pixel centring, both axes — CircleAction.slint:67-68 rounds
         // them explicitly for the same reason: 44-19 and 32-15 are both ODD,
         // so `anchors.centerIn` lands the glyph on 12.5px / 8.5px and the

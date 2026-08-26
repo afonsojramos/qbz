@@ -58,6 +58,32 @@ Rectangle {
         }
         return doc && doc.compactHeader === true
     }
+    property bool headerLayoutReady: false
+    property int headerLayoutEpoch: 0
+    property real headerSavedOffset: 0
+    property bool headerSnapshotValid: false
+    function toggleCompactHeader() {
+        root.headerSavedOffset = flick.contentY - flick.originY
+        root.headerSnapshotValid = true
+        QbzBridge.settingsBool("compact-album-header", !root.compactHeaderPref)
+    }
+    onCompactHeaderPrefChanged: {
+        if (!root.headerLayoutReady)
+            return
+        var savedOffset = root.headerSnapshotValid
+            ? root.headerSavedOffset
+            : flick.contentY - flick.originY
+        root.headerSnapshotValid = false
+        var epoch = ++root.headerLayoutEpoch
+        Qt.callLater(function () {
+            if (epoch !== root.headerLayoutEpoch)
+                return
+            var minY = flick.originY
+            var maxY = minY + Math.max(0, flick.contentHeight - flick.height)
+            flick.contentY = Math.max(minY,
+                Math.min(minY + savedOffset, maxY))
+        })
+    }
     readonly property var allArtists: {
         if (!album) return []
         var raw = (album.allArtists || "").split(",")
@@ -97,9 +123,11 @@ Rectangle {
     // las filas ni en el derive, tiene que estar aquí (portada, versiones,
     // lista de artistas, toolbar).
     property double _mountedAt: Date.now()
-    Component.onCompleted: console.info(albTiming,
-        "[albtiming] arbol de la vista construido en "
-        + (Date.now() - root._mountedAt) + "ms")
+    Component.onCompleted: {
+        console.info(albTiming, "[albtiming] arbol de la vista construido en "
+            + (Date.now() - root._mountedAt) + "ms")
+        root.headerLayoutReady = true
+    }
     readonly property var visibleTracks: {
         var _dt = Date.now()
         var _r = root._deriveImpl()
@@ -400,9 +428,10 @@ Rectangle {
                 visible: root.pageLoading && !root.album
                 variant: "header"
                 width: parent.width
-                height: root.compactHeaderPref ? 128 : 224
-                coverSize: root.compactHeaderPref ? 128 : 224
+                height: root.compactHeaderPref ? 112 : 224
+                coverSize: root.compactHeaderPref ? 112 : 224
                 coverGap: root.compactHeaderPref ? 20 : 32
+                compactHeader: root.compactHeaderPref
                 actionCount: 5
                 phase: root.skelPhase
             }
@@ -420,8 +449,7 @@ Rectangle {
                 skelPhase: root.skelPhase
                 artSettleMs: root.artSettleMs
                 onOpenArtist: function (name) { root.openArtist(name) }
-                onCompactToggled: QbzBridge.settingsBool(
-                    "compact-album-header", !root.compactHeaderPref)
+                onCompactToggled: root.toggleCompactHeader()
             }
 
             Item { width: 1; height: 20 }
