@@ -320,6 +320,20 @@ Item {
             readonly property int headerH: 72
             readonly property int discHeaderH: 46
             readonly property int loadingBodyH: 50
+            readonly property real bodyHeight: loaded
+                ? visibleTracks * 50 + discHeaders * discHeaderH : 0
+            // Keep the album itself as one variable-height outer delegate, but
+            // give its tracks a real viewport. The former nested Repeater
+            // constructed one wrapper and two Loaders for all 247 tracks in a
+            // box set before the first frame could paint. Moving this small
+            // ListView through the visible slice preserves the exact outer
+            // geometry while Qt only instantiates the rows on screen.
+            readonly property real trackViewportStart: Math.max(
+                0, list.contentY - y - headerH - 300)
+            readonly property real trackViewportEnd: Math.min(
+                bodyHeight, list.contentY + list.height - y - headerH + 300)
+            readonly property real trackViewportHeight: Math.max(
+                0, trackViewportEnd - trackViewportStart)
             function ensureCurrent() {
                 // Delegate creation is only a visibility hint. Let the view's
                 // bounded scheduler choose foreground albums after ListView
@@ -329,7 +343,7 @@ Item {
             width: list.width
             height: headerH + (expanded
                 ? (loaded
-                    ? visibleTracks * 50 + discHeaders * discHeaderH + 12
+                    ? bodyHeight + 12
                     : loadingBodyH)
                 : 0)
 
@@ -391,45 +405,39 @@ Item {
                 size: 18
             }
 
-            Column {
+            ListView {
+                id: trackList
                 visible: albumBlock.expanded && albumBlock.loaded
+                    && albumBlock.trackViewportHeight > 0
                 x: 4
-                y: albumBlock.headerH
+                y: albumBlock.headerH + albumBlock.trackViewportStart
                 width: parent.width - 8
-                Repeater {
-                    model: albumBlock.tracks
-                    delegate: Item {
-                        id: trackBlock
-                        required property var modelData
-                        required property int index
-                        width: parent ? parent.width : 0
-                        readonly property bool showDisc: albumBlock.startsDisc(index)
-                        readonly property int discNumber: Number(modelData.disc || 1)
-                        readonly property bool discFolded:
-                            albumBlock.discIsCollapsed(discNumber)
-                        height: (showDisc ? albumBlock.discHeaderH : 0)
-                            + (discFolded ? 0 : 50)
-                        // The outer ListView virtualizes by ALBUM. A 150-track
-                        // box is one delegate, so its nested Repeater would
-                        // otherwise build 150 full TrackRows even though only
-                        // ~18 fit on screen. Keep cheap spacers for exact
-                        // geometry and mount heavy rows in a six-row lookahead.
-                        readonly property real contentTop:
-                            albumBlock.y + albumBlock.headerH + y
-                        readonly property bool inViewportBand:
-                            contentTop + height >= list.contentY - 300
-                            && contentTop <= list.contentY + list.height + 300
+                height: albumBlock.trackViewportHeight
+                model: albumBlock.tracks
+                contentY: albumBlock.trackViewportStart
+                interactive: false
+                clip: true
+                reuseItems: true
+                cacheBuffer: 300
+                boundsBehavior: Flickable.StopAtBounds
+                delegate: Item {
+                    id: trackBlock
+                    required property var modelData
+                    required property int index
+                    width: parent ? parent.width : 0
+                    readonly property bool showDisc: albumBlock.startsDisc(index)
+                    readonly property int discNumber: Number(modelData.disc || 1)
+                    readonly property bool discFolded:
+                        albumBlock.discIsCollapsed(discNumber)
+                    height: (showDisc ? albumBlock.discHeaderH : 0)
+                        + (discFolded ? 0 : 50)
 
-                        // A divider used to be an always-instantiated Item
-                        // whose `visible` flag was false on ordinary tracks.
-                        // That still constructed its art, six controls and
-                        // popup tree once PER TRACK. A 100-track box therefore
-                        // paid for 100 dividers to paint five. Loader makes the
-                        // object count match the number of actual boundaries.
-                        Loader {
+                    // A divider exists only on disc boundaries and only
+                    // while this virtualized delegate is near the viewport.
+                    Loader {
                             width: parent.width
                             height: trackBlock.showDisc ? albumBlock.discHeaderH : 0
-                            active: trackBlock.showDisc && trackBlock.inViewportBand
+                            active: trackBlock.showDisc
                             sourceComponent: Item {
                             id: discHeader
                             width: parent.width
@@ -542,14 +550,13 @@ Item {
                                 color: theme.borderSubtle
                             }
                             }
-                        }
+                    }
 
-                        Loader {
+                    Loader {
                             y: trackBlock.showDisc ? albumBlock.discHeaderH : 0
                             width: parent.width
                             height: trackBlock.discFolded ? 0 : 50
                             active: !trackBlock.discFolded
-                                && trackBlock.inViewportBand
                             sourceComponent: LocalTrackRow {
                                 view: root.view
                                 item: trackBlock.modelData
@@ -565,7 +572,6 @@ Item {
                                     QbzLocal.enqueue("track", trackBlock.modelData.id, mode)
                                 }
                             }
-                        }
                     }
                 }
             }

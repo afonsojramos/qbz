@@ -1635,12 +1635,18 @@ impl qbz_local::QbzLocal {
                     .cloned()
                     .collect::<Vec<_>>();
                 let filtered_rows = tracks.len();
-                let versions = crate::local_album_actions::split_versions(tracks);
+                let versions = std::sync::Arc::new(
+                    crate::local_album_actions::split_versions(tracks),
+                );
                 let selected = versions
                     .first()
                     .map(|(_, rows)| rows.clone())
                     .unwrap_or_default();
-                let doc = crate::local_album_actions::genre_detail_doc(&request_id, &versions, 0);
+                let doc = crate::local_album_actions::genre_detail_doc(
+                    &request_id,
+                    versions.as_slice(),
+                    0,
+                );
                 let json = crate::local_rows::to_json(&doc);
                 let project_elapsed = project_started.elapsed();
                 let versions_empty = versions.is_empty();
@@ -1726,6 +1732,7 @@ impl qbz_local::QbzLocal {
     }
 
     pub fn genre_album_select_version(self: Pin<&mut Self>, album_id: QString, index: i32) {
+        let started = std::time::Instant::now();
         let album_id = album_id.to_string();
         let generation = crate::local_state::state(|state| {
             let generation = state
@@ -1754,8 +1761,11 @@ impl qbz_local::QbzLocal {
                     ))
                 })?;
                 let selected = versions.get(index)?.1.clone();
-                let doc =
-                    crate::local_album_actions::genre_detail_doc(&request_id, &versions, index);
+                let doc = crate::local_album_actions::genre_detail_doc(
+                    &request_id,
+                    versions.as_slice(),
+                    index,
+                );
                 Some((
                     request_id,
                     selected,
@@ -1767,6 +1777,7 @@ impl qbz_local::QbzLocal {
             .ok()
             .flatten();
             if let Some((request_id, selected, json, filter_json)) = selection {
+                let bytes = json.len();
                 let current = crate::local_state::state(|state| {
                     if state
                         .genre_detail_version_generations
@@ -1785,6 +1796,12 @@ impl qbz_local::QbzLocal {
                 if !current {
                     return;
                 }
+                log::info!(
+                    "[qbz-qt][perf] genre album detail phase=version id={} bytes={} elapsed={:?}",
+                    request_id,
+                    bytes,
+                    started.elapsed(),
+                );
                 ui(move |mut bridge| {
                     bridge.as_mut().local_genre_album_ready(
                         QString::from(request_id.as_str()),

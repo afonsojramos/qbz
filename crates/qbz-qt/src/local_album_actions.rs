@@ -452,7 +452,7 @@ pub(crate) fn genre_select_version(album_id: &str, index: i32) -> Option<GenreAl
     state(|s| {
         s.genre_detail_raw.insert(album_id.to_string(), selected);
     });
-    Some(genre_detail_doc(album_id, &versions, index))
+    Some(genre_detail_doc(album_id, versions.as_slice(), index))
 }
 
 /// The header for ONE version — recomputed per version (the Slint recomputes
@@ -1149,8 +1149,10 @@ mod version_tests {
         ];
         state(|s| {
             s.genre_detail_raw.insert(album.to_string(), hires);
-            s.genre_detail_versions
-                .insert(album.to_string(), versions.clone());
+            s.genre_detail_versions.insert(
+                album.to_string(),
+                std::sync::Arc::new(versions.clone()),
+            );
         });
 
         let doc = genre_select_version(album, 1).expect("second version");

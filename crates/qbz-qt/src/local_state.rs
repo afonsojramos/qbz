@@ -125,7 +125,7 @@ pub struct LocalState {
     /// Every physical version behind the same expanded albums. The QML
     /// version picker changes `genre_detail_raw` from this cache, without a
     /// DB round-trip and without retargeting another expanded album.
-    pub genre_detail_versions: HashMap<String, Vec<(String, Vec<LocalTrack>)>>,
+    pub genre_detail_versions: HashMap<String, Arc<Vec<(String, Vec<LocalTrack>)>>>,
     /// Last serialized selected-version document for the same bounded set.
     /// A Genres view destroyed by navigation can republish this immediately
     /// instead of re-querying every authoritative source on Back.
@@ -615,18 +615,23 @@ mod phase_a_tests {
     #[test]
     fn genres_details_virtualizes_the_nested_box_set_rows() {
         // The outer ListView is album-granular: a 150-track box is one visible
-        // delegate. A plain nested Repeater therefore creates every TrackRow,
-        // plus one hidden disc-header tree per track. Keep only cheap geometry
-        // items outside the viewport and instantiate controls in a look-ahead
-        // band. Menus are click-cold for the same reason.
+        // delegate. A plain nested Repeater therefore creates every wrapper and
+        // Loader before the first frame. Keep the album's exact variable-height
+        // geometry, but move a non-interactive inner ListView through the visible
+        // slice so Qt constructs only the rows in its look-ahead band. Menus are
+        // click-cold for the same reason.
         let details = include_str!("../qml/views/local/LocalGenreDetails.qml");
         let column = include_str!("../qml/views/local/LocalGenreColumn.qml");
         let tab = include_str!("../qml/views/local/LocalGenresTab.qml");
         let versions = include_str!("../qml/views/local/VersionPicker.qml");
         let album_row = include_str!("../qml/views/local/LocalAlbumRow.qml");
-        assert!(details.contains("readonly property bool inViewportBand:"));
-        assert!(details.contains("active: trackBlock.showDisc && trackBlock.inViewportBand"));
-        assert!(details.contains("&& trackBlock.inViewportBand"));
+        assert!(details.contains("readonly property real trackViewportStart:"));
+        assert!(details.contains("readonly property real trackViewportHeight:"));
+        assert!(details.contains("id: trackList"));
+        assert!(details.contains("contentY: albumBlock.trackViewportStart"));
+        assert!(details.contains("interactive: false"));
+        assert!(details.contains("reuseItems: true"));
+        assert!(!details.contains("readonly property bool inViewportBand:"));
         assert!(!details.contains("visible: trackBlock.showDisc"));
         // A cold album is one compact loading row. `trackCount` is metadata,
         // never permission to reserve hundreds or thousands of blank pixels
