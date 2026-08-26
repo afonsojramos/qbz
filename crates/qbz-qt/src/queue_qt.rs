@@ -812,7 +812,7 @@ async fn play_extended_upcoming(
     expected_id: u64,
 ) {
     let state = runtime.core().get_queue_state_full().await;
-    let Some(track) = state.upcoming.get(upcoming_index) else {
+    let Some(track) = state.upcoming.get(upcoming_index).cloned() else {
         return;
     };
     if track.id != expected_id {
@@ -820,7 +820,7 @@ async fn play_extended_upcoming(
         return;
     }
     if crate::qconnect_qt::publish::is_connected()
-        && !crate::qconnect_qt::is_qconnect_queue_track(track)
+        && !crate::qconnect_qt::is_qconnect_queue_track(&track)
     {
         log::info!(
             "[qbz-qt] queue: skipped QConnect-incompatible upcoming row {}",
@@ -838,13 +838,27 @@ async fn play_extended_upcoming(
             }
         }
     }
-    play_upcoming_flat(runtime, upcoming_index).await;
+    if crate::local_playback::preflight_queue_track(&track)
+        .await
+        .is_err()
+    {
+        return;
+    }
+    match runtime
+        .core()
+        .play_upcoming_at_preserving_timeline(upcoming_index, expected_id)
+        .await
+    {
+        Some(track) => crate::playback_qt::play_queue_track_public(runtime, track.id).await,
+        None => log::warn!("[qbz-qt] queue: upcoming changed during extended activation"),
+    }
 }
 
-/// Activate a row from the chronological projection. Upcoming keeps its queue-
-/// wide index. A played row is cloned back into slot zero, then activated, so
-/// the remaining upcoming sequence survives instead of being replaced by the
-/// History tab's single-track queue.
+/// Activate a row from the chronological projection without moving the list's
+/// leading edge. Local playback moves only the core cursor; the generic Queue
+/// sidebar and Immersive activation paths keep their existing jump semantics.
+/// A remote QConnect renderer still receives an insert + play request because
+/// its authoritative timeline cannot be rewound through the local core.
 pub async fn play_extended(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     phase: &str,
@@ -873,22 +887,33 @@ pub async fn play_extended(
                 );
                 return;
             }
-            match insert_queue_track_at(runtime, track.clone(), 0).await {
-                Ok(InsertOutcome::Remote) => {
-                    if let Some(service) = crate::qconnect_qt::service() {
-                        if let Err(error) =
-                            service.play_remote_renderer_track_if_active(track.id).await
-                        {
-                            log::warn!(
-                                "[qbz-qt] queue: requeued remote history play failed: {error}"
-                            );
-                        }
+            if let Some(service) = crate::qconnect_qt::service() {
+                if service
+                    .insert_at_slot_on_peer_if_active(track.id, track.source.as_deref(), 0)
+                    .await
+                {
+                    if let Err(error) = service.play_remote_renderer_track_if_active(track.id).await
+                    {
+                        log::warn!("[qbz-qt] queue: requeued remote history play failed: {error}");
                     }
+                    return;
                 }
-                Ok(InsertOutcome::Local) => {
-                    play_extended_upcoming(runtime, 0, track.id).await;
+            }
+            if crate::local_playback::preflight_queue_track(&track)
+                .await
+                .is_err()
+            {
+                return;
+            }
+            match runtime
+                .core()
+                .play_history_at_preserving_timeline(phase_index, expected_id)
+                .await
+            {
+                Some(track) => {
+                    crate::playback_qt::play_queue_track_public(runtime, track.id).await;
                 }
-                Err(error) => log::warn!("[qbz-qt] queue: requeue history failed: {error}"),
+                None => log::warn!("[qbz-qt] queue: history changed during activation"),
             }
         }
         _ => {}

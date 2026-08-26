@@ -967,6 +967,124 @@ impl QueueManager {
         canonical_index.and_then(|idx| self.play_index(idx))
     }
 
+    /// Move within the chronological Listen List without changing its leading
+    /// edge. Unlike [`Self::play_upcoming_at`], every row crossed on the way
+    /// to the target is appended to playback history in play order. The flat
+    /// projection therefore keeps the same sequence and only moves its NOW
+    /// cursor; ordinary album/playlist/queue-sidebar activation retains the
+    /// existing jump semantics through the sibling method above.
+    ///
+    /// `expected_id` is checked under the same lock as the cursor mutation.
+    /// Queue documents are snapshots, so an index that went stale between the
+    /// click and this call must not activate a different row.
+    pub fn play_upcoming_at_preserving_timeline(
+        &self,
+        upcoming_index: usize,
+        expected_id: u64,
+    ) -> Option<QueueTrack> {
+        let mut state = self.state.lock().unwrap();
+        if state.tracks.is_empty() {
+            return None;
+        }
+
+        let (target_index, crossed): (usize, Vec<usize>) = match state.current_index {
+            Some(_) if state.shuffle => {
+                let target_position = state
+                    .shuffle_position
+                    .checked_add(1)?
+                    .checked_add(upcoming_index)?;
+                let target_index = *state.shuffle_order.get(target_position)?;
+                let crossed = state.shuffle_order[state.shuffle_position..target_position].to_vec();
+                (target_index, crossed)
+            }
+            Some(current_index) => {
+                let target_index = current_index.checked_add(1)?.checked_add(upcoming_index)?;
+                if target_index >= state.tracks.len() {
+                    return None;
+                }
+                (target_index, (current_index..target_index).collect())
+            }
+            None => {
+                let target_index = upcoming_index;
+                if target_index >= state.tracks.len() {
+                    return None;
+                }
+                // Starting midway through an idle Listen List still preserves
+                // its leading rows: they become the cursor's back path.
+                (target_index, (0..target_index).collect())
+            }
+        };
+
+        if state.tracks.get(target_index).map(|track| track.id) != Some(expected_id) {
+            return None;
+        }
+        let target_shuffle_position = if state.shuffle {
+            Some(
+                state
+                    .shuffle_order
+                    .iter()
+                    .position(|&index| index == target_index)?,
+            )
+        } else {
+            None
+        };
+
+        state.history.extend(crossed);
+        while state.history.len() > 50 {
+            state.history.pop_front();
+        }
+        state.current_index = Some(target_index);
+        state.manual_next_count = state
+            .manual_next_count
+            .saturating_sub(upcoming_index.saturating_add(1));
+        if let Some(position) = target_shuffle_position {
+            state.shuffle_position = position;
+        }
+
+        state.tracks.get(target_index).cloned()
+    }
+
+    /// Move the Listen List cursor back to a most-recent-first history row.
+    /// This is the direct equivalent of invoking [`Self::previous`] until that
+    /// row becomes current: newer history entries return to the upcoming side
+    /// through the canonical/shuffle order and older history remains behind
+    /// the cursor. No row is cloned or inserted, so the flat list neither
+    /// duplicates nor changes its beginning.
+    pub fn play_history_at_preserving_timeline(
+        &self,
+        history_index: usize,
+        expected_id: u64,
+    ) -> Option<QueueTrack> {
+        let mut state = self.state.lock().unwrap();
+        let target_position = state
+            .history
+            .len()
+            .checked_sub(history_index.checked_add(1)?)?;
+        let target_index = *state.history.get(target_position)?;
+        if state.tracks.get(target_index).map(|track| track.id) != Some(expected_id) {
+            return None;
+        }
+        let target_shuffle_position = if state.shuffle {
+            Some(
+                state
+                    .shuffle_order
+                    .iter()
+                    .position(|&index| index == target_index)?,
+            )
+        } else {
+            None
+        };
+
+        // `target_position` itself becomes NOW, so retain only rows older
+        // than it. VecDeque history is oldest-first internally.
+        state.history.truncate(target_position);
+        state.current_index = Some(target_index);
+        if let Some(position) = target_shuffle_position {
+            state.shuffle_position = position;
+        }
+        state.tracks.get(target_index).cloned()
+    }
+
     /// Jump to a specific track by index
     pub fn play_index(&self, index: usize) -> Option<QueueTrack> {
         let mut state = self.state.lock().unwrap();
@@ -1894,6 +2012,128 @@ mod tests {
         // (which would be the "current_index + 2 + 1" = 5 broken path).
         let track = queue.play_upcoming_at(2).expect("track");
         assert_eq!(track.id, 4);
+    }
+
+    #[test]
+    fn listen_list_upcoming_activation_preserves_linear_projection() {
+        let queue = QueueManager::new();
+        queue.set_queue((1..=6).map(create_test_track).collect(), Some(1));
+
+        // Before: [2 NOW, 3, 4, 5, 6]. Selecting 5 must only move NOW.
+        let track = queue
+            .play_upcoming_at_preserving_timeline(2, 5)
+            .expect("track");
+        assert_eq!(track.id, 5);
+
+        let state = queue.get_state_full();
+        assert_eq!(state.current_track.expect("current").id, 5);
+        assert_eq!(
+            state
+                .history
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![4, 3, 2]
+        );
+        assert_eq!(
+            state
+                .upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![6]
+        );
+    }
+
+    #[test]
+    fn listen_list_upcoming_activation_preserves_shuffle_projection() {
+        let queue = QueueManager::new();
+        queue.set_queue_with_order(
+            (1..=5).map(create_test_track).collect(),
+            Some(2),
+            true,
+            Some(vec![2, 4, 1, 3, 0]),
+        );
+
+        // Before: [3 NOW, 5, 2, 4, 1]. Selecting 4 must retain 5 and 2
+        // before the cursor instead of dropping them from the flat list.
+        let track = queue
+            .play_upcoming_at_preserving_timeline(2, 4)
+            .expect("track");
+        assert_eq!(track.id, 4);
+
+        let state = queue.get_state_full();
+        assert_eq!(state.current_track.expect("current").id, 4);
+        assert_eq!(
+            state
+                .history
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![2, 5, 3]
+        );
+        assert_eq!(
+            state
+                .upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn listen_list_history_activation_moves_cursor_without_inserting() {
+        let queue = QueueManager::new();
+        queue.set_queue((1..=5).map(create_test_track).collect(), Some(3));
+        queue.restore_history_indices(vec![0, 1, 2]);
+
+        // Core history is exposed newest-first as [3, 2, 1]. Selecting its
+        // middle row restores [1, 2 NOW, 3, 4, 5] without cloning track 2.
+        let track = queue
+            .play_history_at_preserving_timeline(1, 2)
+            .expect("track");
+        assert_eq!(track.id, 2);
+
+        let state = queue.get_state_full();
+        assert_eq!(state.current_track.expect("current").id, 2);
+        assert_eq!(
+            state
+                .history
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(
+            state
+                .upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
+        assert_eq!(state.total_tracks, 5);
+    }
+
+    #[test]
+    fn listen_list_activation_rejects_a_stale_row_atomically() {
+        let queue = QueueManager::new();
+        queue.set_queue((1..=4).map(create_test_track).collect(), Some(0));
+
+        assert!(queue.play_upcoming_at_preserving_timeline(1, 999).is_none());
+
+        let state = queue.get_state_full();
+        assert_eq!(state.current_track.expect("current").id, 1);
+        assert!(state.history.is_empty());
+        assert_eq!(
+            state
+                .upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4]
+        );
     }
 
     #[test]

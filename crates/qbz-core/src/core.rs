@@ -717,6 +717,40 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         track
     }
 
+    /// Move the cursor to an upcoming Listen List row while retaining every
+    /// crossed row in chronological history. `expected_id` makes the snapshot
+    /// index safe when queue mutations race the frontend activation.
+    pub async fn play_upcoming_at_preserving_timeline(
+        &self,
+        upcoming_index: usize,
+        expected_id: u64,
+    ) -> Option<QueueTrack> {
+        let queue = self.queue.write().await;
+        let track = queue.play_upcoming_at_preserving_timeline(upcoming_index, expected_id);
+        self.emit(CoreEvent::QueueUpdated {
+            state: queue.get_state(),
+        })
+        .await;
+        track
+    }
+
+    /// Move the cursor back to a Listen List history row without cloning it
+    /// into the queue. History coordinates are most-recent-first, matching the
+    /// public queue snapshot.
+    pub async fn play_history_at_preserving_timeline(
+        &self,
+        history_index: usize,
+        expected_id: u64,
+    ) -> Option<QueueTrack> {
+        let queue = self.queue.write().await;
+        let track = queue.play_history_at_preserving_timeline(history_index, expected_id);
+        self.emit(CoreEvent::QueueUpdated {
+            state: queue.get_state(),
+        })
+        .await;
+        track
+    }
+
     /// Play `track_id` preferring an offline-cached copy (the offline tier of
     /// the shared playback tier-walk) before the player's own L1/L2 → network
     /// path. `offline` is the frontend's open `OfflineCacheState` (None = no
