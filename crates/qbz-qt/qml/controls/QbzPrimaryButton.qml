@@ -20,9 +20,10 @@
 // :18-21). Padding 20 per side so `implicitWidth = label + 40` (:31-34);
 // label Typography.button (17px) semibold (:36-41).
 //
-// The label colour is `theme.accentGlyphColor`, not a hardcoded
-// `Theme.accent-text`: the owner-approved measured on-accent selector
-// (theme/QbzTheme.qml, "ON AN ACCENT FILL"). Do not "restore" #ffffff here.
+// The accent arm uses `theme.accentGlyphColor`, the owner-approved measured
+// on-accent selector (theme/QbzTheme.qml, "ON AN ACCENT FILL"). The destructive
+// arm is the fixed danger red and therefore uses the confirm-standard's fixed
+// white label; reusing an accent-derived dark glyph there loses contrast.
 //
 // NOT ported (deliberate, both are port-wide gaps rather than MyQBZ ones):
 // the .slint's FocusScope Enter/Space activation and its keyboard focus ring
@@ -71,7 +72,7 @@ Rectangle {
         anchors.centerIn: parent
         width: Math.min(implicitWidth, root.width - 40)
         text: root.label
-        color: theme.accentGlyphColor
+        color: root.destructive ? "#ffffff" : theme.accentGlyphColor
         font.pixelSize: root.labelSize
         font.weight: theme.weightSemibold
         horizontalAlignment: Text.AlignHCenter

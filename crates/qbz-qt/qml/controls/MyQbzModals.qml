@@ -1,11 +1,9 @@
 // MyQbzModals — the THREE small MyQBZ modals in one file, as three sibling
 // panels: Create (myqbz/CreateMyQbzModal.slint, 199 lines), Edit
 // (MyQbzEditModal.slint, 147) and Mix (MyQbzMixModal.slint, 184). Slint keeps
-// them apart only because each has its own global; they share the chrome
-// byte-for-byte (`#bf000000` backdrop that closes on click, a centred
-// surface-card panel with a 1px border-subtle border and 24px padding, a
-// right-aligned footer of one secondary + one primary button) and they are
-// mutually exclusive in practice.
+// them apart only because each has its own global; they share the same
+// `#bf000000` backdrop, centred surface-card panel and right-aligned action
+// footer, and they are mutually exclusive in practice.
 //
 // A GLOBAL overlay: AppShell.qml mounts it once and each panel self-gates on
 // its OWN document's `open` flag (`QbzMyQbz.createJson` / `editJson` /
@@ -15,10 +13,9 @@
 // Per-panel numbers that are NOT shared, and every one of them is deliberate:
 //   * width 420 / 420 / 440 (Create / Edit / Mix);
 //   * spacing 16 / 16 / 18;
-//   * title `Typography.heading` = 19 in Create, but a LITERAL 18 in Edit
-//     (MyQbzEditModal.slint:70) and Mix (MyQbzMixModal.slint:80);
-//   * a 28x28 close X in Create — Edit and Mix have NONE;
-//   * footer spacing 8 / 8 / 12 (MyQbzMixModal.slint:159).
+//   * Edit follows the current modal standard (20px padding, heading + 28x28
+//     close X, 10px footer spacing, 36px buttons); Create and Mix retain their
+//     reference-specific metrics until their own parity pass.
 //
 // Drop shadows (`drop-shadow-blur: 32px` on all three) are dropped: shadows
 // render nothing on this port's software path. The scrims carry `radius:
@@ -269,7 +266,7 @@ Item {
         }
         Rectangle {
             width: Math.min(root.width - 80, 420)
-            height: editCol.implicitHeight + 48
+            height: editCol.implicitHeight + 40
             x: Math.round((root.width - width) / 2)
             y: Math.round((root.height - height) / 2)
             radius: theme.radiusMd
@@ -281,22 +278,50 @@ Item {
 
             Column {
                 id: editCol
-                x: 24
-                y: 24
-                width: parent.width - 48
+                x: 20
+                y: 20
+                width: parent.width - 40
                 spacing: 16
 
-                // --- Title. A LITERAL 18px (:70), NOT fontHeading, and there
-                // is deliberately no close X in this modal.
-                Text {
+                // --- Standard modal title + close X.
+                Item {
                     width: parent.width
-                    text: editPanel.isRename ? root.t("Rename")
-                        : editPanel.isDescription ? root.t("Edit description")
-                        : root.t("Delete")
-                    color: theme.textPrimary
-                    font.pixelSize: 18
-                    font.weight: theme.weightBold
-                    elide: Text.ElideRight
+                    height: 28
+                    Text {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Math.max(0, parent.width - 28)
+                        text: editPanel.isRename ? root.t("Rename")
+                            : editPanel.isDescription ? root.t("Edit description")
+                            : root.t("Delete")
+                        color: theme.textPrimary
+                        font.pixelSize: theme.fontHeading
+                        font.weight: theme.weightSemibold
+                        elide: Text.ElideRight
+                    }
+                    Item {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 28
+                        height: 28
+                        opacity: editPanel.busy ? 0.5 : 1.0
+                        QbzIcon {
+                            anchors.centerIn: parent
+                            width: 17
+                            height: 17
+                            name: "x"
+                            tintName: editCloseArea.containsMouse ? "textPrimary" : "muted"
+                        }
+                        MouseArea {
+                            id: editCloseArea
+                            anchors.fill: parent
+                            enabled: !editPanel.busy
+                            hoverEnabled: !editPanel.busy
+                            cursorShape: editPanel.busy ? Qt.ArrowCursor
+                                                       : Qt.PointingHandCursor
+                            onClicked: QbzMyQbz.editClose()
+                        }
+                    }
                 }
 
                 // --- Body: rename
@@ -336,24 +361,25 @@ Item {
                     text: root.t("Delete \"{}\"? This cannot be undone.")
                             .replace("{}", root.editDoc.name || "")
                     color: theme.textSecondary
-                    font.pixelSize: 14
+                    font.pixelSize: theme.fontBody
                     wrapMode: Text.WordWrap
                 }
 
                 // --- Footer
                 Row {
                     anchors.right: parent.right
-                    spacing: 8
+                    spacing: 10
                     SettingsButton {
                         text: root.t("Cancel")
-                        btnHeight: 38
+                        btnHeight: 36
                         minWidth: 0
                         enabled: !editPanel.busy
                         onClicked: QbzMyQbz.editClose()
                     }
                     QbzPrimaryButton {
                         label: editPanel.isDelete ? root.t("Delete") : root.t("Save")
-                        btnHeight: 38
+                        btnHeight: 36
+                        labelSize: theme.fontBody
                         destructive: editPanel.isDelete
                         btnEnabled: editPanel.canSubmit
                         onClicked: {

@@ -278,66 +278,17 @@ Rectangle {
                     font.weight: theme.weightSemibold
                     font.letterSpacing: 1.5
                 }
-                // A THIRD toggle shape (32px tall, labelled, bordered box) —
-                // neither QbzSegToggle (icon segments) nor QbzToolButton, and
-                // one call site, so it stays inline (spec 01 §8.4).
-                Rectangle {
+                // Use the shared labelled segmented control. The former
+                // one-off Rectangle did not set a fill, so Qt's default white
+                // leaked through instead of the theme well.
+                QbzTabBar {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: segRow.implicitWidth
-                    height: 32
-                    radius: 8
-                    border.width: 1
-                    border.color: theme.surfaceElevated
-                    clip: true
-                    Row {
-                        id: segRow
-                        height: parent.height
-                        spacing: 0
-                        Repeater {
-                            model: root.orderSegments(QbzSession.trRev)
-                            delegate: Rectangle {
-                                id: seg
-                                required property var modelData
-                                required property int index
-                                readonly property bool active:
-                                    root.orderBy === seg.modelData.id
-                                // padding-l/r 14 (:572-573).
-                                width: segLabel.implicitWidth + 28
-                                height: parent.height
-                                // NOT accent (ADR-008, :558-563): a surface
-                                // highlight, told apart from hover by tone +
-                                // the bolder label.
-                                color: seg.active
-                                    ? theme.surfaceHover
-                                    : (segArea.containsMouse
-                                        ? theme.surfaceElevated : "transparent")
-                                Rectangle {
-                                    visible: seg.index > 0
-                                    x: 0
-                                    width: 1
-                                    height: parent.height
-                                    color: theme.surfaceElevated
-                                }
-                                Text {
-                                    id: segLabel
-                                    anchors.centerIn: parent
-                                    text: seg.modelData.label
-                                    color: (seg.active || segArea.containsMouse)
-                                        ? theme.textPrimary : theme.textSecondary
-                                    font.pixelSize: 12
-                                    font.weight: seg.active
-                                        ? theme.weightSemibold : theme.weightMedium
-                                }
-                                MouseArea {
-                                    id: segArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: QbzDisco.setOrder(seg.modelData.id)
-                                }
-                            }
-                        }
-                    }
+                    tabs: root.orderSegments(QbzSession.trRev)
+                    activeId: root.orderBy
+                    counts: false
+                    underline: false
+                    compact: false
+                    onSelected: function (id) { QbzDisco.setOrder(id) }
                 }
             }
             Item { width: 1; height: 20 }
