@@ -67,6 +67,10 @@ pub struct NowPlayingModel {
     pub quality_tier: String,
     /// CATALOG detail, e.g. "24-bit / 96 kHz".
     pub quality_detail: String,
+    /// The OPENED STREAM's bit-perfect mode, straight from the engine:
+    /// "direct" | "plugin" | "disabled" | "unknown". Never derived from
+    /// settings - that is what the mode LED already does.
+    pub bit_perfect_mode: String,
     /// Delivered-vs-catalog block (downgrade arrow + tooltip cause).
     pub delivered: Delivered,
     /// Last delivered stream params seen from the engine, so a poll tick that
@@ -160,6 +164,8 @@ fn publish(m: &NowPlayingModel) {
         b.as_mut().set_np_quality_detail(detail.clone());
         // Legacy alias of the same value (pre-contract Qt name).
         b.as_mut().set_np_quality_label(detail);
+        b.as_mut()
+            .set_np_bit_perfect_mode(QString::from(m.bit_perfect_mode.as_str()));
         b.as_mut().set_np_quality_downgraded(m.delivered.downgraded);
         b.as_mut()
             .set_np_quality_true_detail(QString::from(m.delivered.true_detail.as_str()));
@@ -377,6 +383,7 @@ pub fn set_track(meta: TrackMeta) {
         m.cache = 0.0;
         m.quality_tier = meta.quality_tier;
         m.quality_detail = meta.quality_label;
+        m.bit_perfect_mode = String::new();
         m.delivered = Delivered::default();
         m.eff_rate_hz = 0;
         m.eff_bits = 0;
@@ -405,13 +412,17 @@ pub fn set_catalog_quality(bit_depth: Option<u32>, sample_rate: Option<f64>, gov
 /// (`sample_rate` / `bit_depth`; 0 = not reported yet). Re-evaluates the
 /// downgrade block and republishes ONLY when the params actually moved, so a
 /// steady stream costs one atomic compare per tick and no Qt hop.
-pub fn set_effective_stream(eff_rate_hz: u32, eff_bits: u32) {
+pub fn set_effective_stream(eff_rate_hz: u32, eff_bits: u32, bit_perfect: &str) {
     let (changed, snapshot) = with_model(|m| {
-        if m.eff_rate_hz == eff_rate_hz && m.eff_bits == eff_bits {
+        if m.eff_rate_hz == eff_rate_hz
+            && m.eff_bits == eff_bits
+            && m.bit_perfect_mode == bit_perfect
+        {
             return false;
         }
         m.eff_rate_hz = eff_rate_hz;
         m.eff_bits = eff_bits;
+        m.bit_perfect_mode = bit_perfect.to_string();
         m.delivered = crate::quality_state::evaluate(eff_rate_hz, eff_bits);
         true
     });

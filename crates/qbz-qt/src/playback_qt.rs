@@ -3349,9 +3349,20 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
 
             // DELIVERED stream params -> the downgrade arrow + tooltip cause.
             // Deduped inside, so a steady stream costs no Qt-thread hop.
+            // The mode the STREAM negotiated, not the one the settings asked
+            // for. `output_labels.rs` already derives the LED from settings;
+            // this is the only value that can contradict it, which is exactly
+            // what makes it worth publishing.
+            let bit_perfect = match event.bit_perfect_mode {
+                Some(qbz_audio::BitPerfectMode::DirectHardware) => "direct",
+                Some(qbz_audio::BitPerfectMode::PluginFallback) => "plugin",
+                Some(qbz_audio::BitPerfectMode::Disabled) => "disabled",
+                None => "unknown",
+            };
             crate::now_playing::set_effective_stream(
                 event.sample_rate.unwrap_or(0),
                 event.bit_depth.unwrap_or(0),
+                bit_perfect,
             );
 
             // --- Gapless prefetch trigger (playback.rs:5362-5476) ---------

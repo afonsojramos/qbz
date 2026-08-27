@@ -71,6 +71,12 @@ pub mod qbz_player {
         // Legacy alias of np_quality_detail (the pre-contract Qt name) —
         // published from the same value so existing QML keeps working.
         #[qproperty(QString, np_quality_label)]
+        // What the OPENED STREAM actually negotiated: "direct" | "plugin" |
+        // "disabled" | "unknown". Distinct from the mode LED on purpose - that
+        // one is derived from SETTINGS (output_labels.rs), so it says what was
+        // ASKED FOR. Only this one can tell "exclusive worked" from "we asked
+        // for exclusive", which is what phase B's acceptance turns on.
+        #[qproperty(QString, np_bit_perfect_mode)]
         // DELIVERED-vs-catalog state (#590/#638). While `downgraded` is on,
         // the stamp's main line reports the delivered tier/detail and the
         // catalog max moves to the tooltip's "Source" line.
@@ -300,6 +306,7 @@ pub struct QbzPlayerRust {
     np_quality_tier: QString,
     np_quality_detail: QString,
     np_quality_label: QString,
+    np_bit_perfect_mode: QString,
     np_quality_downgraded: bool,
     np_quality_true_detail: QString,
     np_quality_effective_tier: QString,
@@ -355,6 +362,7 @@ impl Default for QbzPlayerRust {
             np_repeat_mode: 0,
             np_quality_detail: QString::default(),
             np_quality_label: QString::default(),
+            np_bit_perfect_mode: QString::default(),
             np_quality_downgraded: false,
             np_quality_true_detail: QString::default(),
             np_quality_effective_tier: QString::default(),
