@@ -5,15 +5,13 @@
 //! AES-256-GCM wraps. Failure (for any reason) = we fall back to HKDF
 //! over device identifiers.
 //!
-//! **Mobile skips the keyring entirely and goes straight to the KDF path.**
-//! Not a preference — a correctness requirement. `keyring` 3.x compiles no real
-//! backend for Android, and none for iOS without its `apple-native` feature;
-//! both resolve to an in-memory `mock`. The mock's writes *succeed*, so the
-//! attempt below would not fail into the fallback: it would report success and
-//! hand back a key that dies with the process, silently making every blob
-//! wrapped in one run undecryptable in the next. The KDF path derives from a
-//! persisted install id and is stable across launches, which is what a phone
-//! needs. `keyring` is a desktop-only dependency for the same reason.
+//! **Only Linux, macOS and Windows consult the keyring.** Every other target
+//! goes straight to the KDF path. This is a correctness requirement: without a
+//! native feature, `keyring` 3.x resolves to an in-memory `mock` whose writes
+//! *succeed*. Such a call would not fail into the fallback; it would hand back a
+//! key that dies with the process, silently making every blob wrapped in one run
+//! undecryptable in the next. The KDF path derives from a persisted install id
+//! and is stable across launches.
 //!
 //! The backend discriminator is baked into every wrapped blob so a blob
 //! produced by one backend can't be silently decrypted by another (and
@@ -24,7 +22,7 @@ use std::path::Path;
 
 use hkdf::Hkdf;
 // Only the keyring path mints a random master key; the KDF path derives one.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use rand::RngCore;
 use sha2::Sha256;
 
@@ -33,7 +31,7 @@ use crate::error::SecretError;
 use crate::install_id;
 
 const MASTER_KEY_LEN: usize = 32;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 const KEYRING_ENTRY_NAME: &str = "master-key-v1";
 const HKDF_INFO: &[u8] = b"qbz-secrets master-key derivation v1";
 
@@ -60,9 +58,9 @@ pub struct Backend {
 
 impl Backend {
     pub fn new(service_name: &str, storage_dir: &Path) -> Result<Self, SecretError> {
-        // Try keyring first — desktop only; see the module comment for why
-        // mobile must not, and why a mock's *success* is the dangerous case.
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        // Try keyring only where a real backend is selected at compile time;
+        // see the module comment for why a mock's success is dangerous.
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
         match try_open_keyring(service_name) {
             Ok(master_key) => {
                 log::info!("[qbz-secrets] Using OS keyring backend");
@@ -80,6 +78,25 @@ impl Backend {
         }
 
         // Fallback: derive from device identifiers.
+        let master_key = derive_fallback_key(service_name, storage_dir)?;
+        Ok(Self {
+            kind: BackendKind::KdfFallback,
+            master_key,
+        })
+    }
+
+    /// The KDF path only, never consulting the OS keyring.
+    ///
+    /// This exists for tests. Reaching the real Keychain from a unit test is
+    /// not a stronger test, it is a flaky one: macOS binds a keychain item's
+    /// ACL to the exact binary that created it, so the *second* `cargo test`
+    /// after any source edit is a new binary against an existing item, and the
+    /// OS blocks the process on an authorization dialog that a headless or CI
+    /// run can never answer. What the tests are about, wrap/unwrap round-trips
+    /// and tamper detection, is identical on either backend, so there is
+    /// nothing to be gained by rolling that dice.
+    #[cfg(test)]
+    pub(crate) fn kdf_only(service_name: &str, storage_dir: &Path) -> Result<Self, SecretError> {
         let master_key = derive_fallback_key(service_name, storage_dir)?;
         Ok(Self {
             kind: BackendKind::KdfFallback,
@@ -109,7 +126,7 @@ impl Backend {
 }
 
 /// Read (or create and store) the master key from the OS keyring.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn try_open_keyring(service_name: &str) -> Result<[u8; MASTER_KEY_LEN], SecretError> {
     use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine;
