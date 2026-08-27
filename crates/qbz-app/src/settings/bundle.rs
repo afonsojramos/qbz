@@ -1512,17 +1512,63 @@ fn desktop_paths() -> ProfilePaths {
     }
 }
 
-fn hostname() -> String {
-    std::env::var("HOSTNAME")
-        .ok()
-        .filter(|h| !h.trim().is_empty())
-        .or_else(|| {
-            std::fs::read_to_string("/etc/hostname")
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        })
-        .unwrap_or_else(|| "unknown".to_string())
+/// The machine's name, for user-facing device labels.
+///
+/// `HOSTNAME` is a SHELL variable rather than an environment one on most Linux
+/// setups, hence the file fallback. Windows exports `COMPUTERNAME` and has no
+/// `/etc/hostname`, so every Windows install used to land on the same
+/// "unknown" and collide on Qobuz Connect.
+///
+/// The single implementation: `qbz-qt` and `qbzd` both call it and keep only
+/// their own last-resort word, which differ on purpose.
+pub fn hostname() -> String {
+    for var in ["HOSTNAME", "COMPUTERNAME"] {
+        if let Ok(h) = std::env::var(var) {
+            let h = h.trim();
+            if !h.is_empty() {
+                return h.to_string();
+            }
+        }
+    }
+    if let Ok(h) = std::fs::read_to_string("/etc/hostname") {
+        let h = h.trim();
+        if !h.is_empty() {
+            return h.to_string();
+        }
+    }
+    "unknown".to_string()
+}
+
+#[cfg(test)]
+mod hostname_tests {
+    /// ONE test, not two: the environment is process-global and cargo runs
+    /// tests on parallel threads, so a sibling that sets HOSTNAME races a
+    /// sibling that clears it. Splitting these failed exactly that way.
+    #[test]
+    fn computername_is_the_windows_source_and_hostname_still_wins() {
+        let saved_host = std::env::var("HOSTNAME").ok();
+        let saved_computer = std::env::var("COMPUTERNAME").ok();
+
+        std::env::remove_var("HOSTNAME");
+        std::env::set_var("COMPUTERNAME", "WINBOX");
+        assert_eq!(super::hostname(), "WINBOX", "Windows has only COMPUTERNAME");
+
+        std::env::set_var("HOSTNAME", "gentoo-box");
+        assert_eq!(
+            super::hostname(),
+            "gentoo-box",
+            "HOSTNAME keeps precedence, so Linux behaviour does not move"
+        );
+
+        match saved_host {
+            Some(v) => std::env::set_var("HOSTNAME", v),
+            None => std::env::remove_var("HOSTNAME"),
+        }
+        match saved_computer {
+            Some(v) => std::env::set_var("COMPUTERNAME", v),
+            None => std::env::remove_var("COMPUTERNAME"),
+        }
+    }
 }
 
 fn now_rfc3339() -> String {

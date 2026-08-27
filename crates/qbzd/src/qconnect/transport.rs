@@ -106,18 +106,14 @@ pub fn resolve_qconnect_device_type() -> i32 {
 }
 
 pub fn resolve_system_hostname() -> String {
-    if let Ok(h) = std::env::var("HOSTNAME") {
-        if !h.trim().is_empty() {
-            return h.trim().to_string();
-        }
+    // One implementation, in qbz-app: this copy read HOSTNAME then
+    // /etc/hostname, neither of which Windows has, so every Windows install
+    // announced itself with the same name. The "Desktop" last resort is kept
+    // here rather than pushed down: qbzd's differs, and both are user-visible.
+    match qbz_app::settings::bundle::hostname().as_str() {
+        "unknown" => "Desktop".to_string(),
+        h => h.to_string(),
     }
-    if let Ok(h) = std::fs::read_to_string("/etc/hostname") {
-        let trimmed = h.trim().to_string();
-        if !trimmed.is_empty() {
-            return trimmed;
-        }
-    }
-    "Desktop".to_string()
 }
 
 /// Returns "QBZ ({hostname})" as the default device name (OD6 — daemon
