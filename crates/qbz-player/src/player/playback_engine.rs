@@ -525,6 +525,18 @@ impl PlaybackEngine {
                             log::warn!("[{label}] Hardware volume failed: {}", e);
                         }
                     }
+                    // Additive arm. `set_hardware_volume` is a DirectSink
+                    // method now, so a Windows sink can answer for itself
+                    // instead of the setting silently doing nothing; a sink
+                    // with no hardware volume returns Err and says so. macOS
+                    // and the other targets keep their previous silence --
+                    // CoreAudio has its own path (set_coreaudio_hardware_volume).
+                    #[cfg(windows)]
+                    {
+                        if let Err(e) = stream.set_hardware_volume(volume) {
+                            log::warn!("[{label}] Hardware volume failed: {}", e);
+                        }
+                    }
                 } else {
                     log::debug!(
                         "[{label}] Hardware volume control disabled (use DAC/amplifier)"
