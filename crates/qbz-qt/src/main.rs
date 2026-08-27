@@ -3409,6 +3409,30 @@ fn main() {
         }
     }
 
+    // The process identity Windows groups the taskbar button under, and the
+    // one a toast's `app_id` is matched against. Must be set BEFORE any window
+    // exists -- Windows caches the identity with the first one, and a later
+    // call is documented to fail.
+    //
+    // Without it the taskbar treats each launch as an anonymous window and the
+    // MSI's Start-menu shortcut (which carries System.AppUserModel.ID) does not
+    // group with it, and toasts are dropped with no error at all.
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+        let id: Vec<u16> = "com.blitzfc.qbz\0".encode_utf16().collect();
+        // SAFETY: `id` is NUL-terminated UTF-16 and outlives the call, which
+        // copies it. Called before any window is created, as documented.
+        let hr = unsafe { SetCurrentProcessExplicitAppUserModelID(id.as_ptr()) };
+        if hr < 0 {
+            // Worth a line: when this fails, taskbar grouping and toast
+            // delivery both break, and both fail SILENTLY. Without this the
+            // only symptom is "notifications do not work" with nothing to
+            // point at.
+            log::warn!("[qbz-qt] SetCurrentProcessExplicitAppUserModelID failed: 0x{hr:08X}");
+        }
+    }
+
     // D7 (research/02 §4.4): with no explicit style Qt loads `Windows` on
     // Windows and `Fusion` on Linux — never Basic — and the popups without an
     // explicit `background:` inherit native chrome. Pin Basic so all three

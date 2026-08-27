@@ -2279,9 +2279,19 @@ pub async fn publish_snapshot() {
                 .unwrap_or(false),
             is_macos: cfg!(target_os = "macos"),
             is_windows: cfg!(target_os = "windows"),
-            // When plan A-2 T3/T5 land, add target_os = "windows" to these
-            // two lists; those plans point at this line.
+            // Windows joins `tray_supported` when plan A-2 T5 lands; that
+            // plan points at this line.
             tray_supported: cfg!(any(target_os = "linux", target_os = "macos")),
+            // NOT Windows yet, even though the toast arm is implemented.
+            // An unpackaged desktop app only gets toasts when Windows can
+            // RESOLVE its AppUserModelID -- which needs a Start-menu shortcut
+            // carrying System.AppUserModel.ID, written by the MSI (plan A
+            // Task 14, not built yet). Calling
+            // SetCurrentProcessExplicitAppUserModelID is necessary and not
+            // sufficient. Until the MSI ships, a portable or dev build would
+            // show the row, the user would enable it, and nothing would ever
+            // appear -- the exact "renders and drives nothing" failure this
+            // flag exists to prevent. Flip it in the MSI task.
             system_notifications_supported: cfg!(any(
                 target_os = "linux",
                 target_os = "macos"

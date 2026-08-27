@@ -87,9 +87,9 @@ fn build_body(meta: &NotificationMeta) -> String {
     lines.join("\n")
 }
 
-// --- artwork cache (Linux + macOS) ------------------------------------------
+// --- artwork cache (Linux + macOS + Windows) ------------------------------------------
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn artwork_cache_dir() -> Result<PathBuf, String> {
     let dir = dirs::cache_dir()
         .ok_or_else(|| "Could not find cache directory".to_string())?
@@ -99,7 +99,7 @@ fn artwork_cache_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn resolve_local_artwork(url: &str) -> Option<PathBuf> {
     if let Some(path) = url.strip_prefix("file://") {
         // file:// URLs built with url::Url::from_file_path (e.g. the shared
@@ -109,6 +109,29 @@ fn resolve_local_artwork(url: &str) -> Option<PathBuf> {
         let decoded = urlencoding::decode(path)
             .map(|c| c.into_owned())
             .unwrap_or_else(|_| path.to_string());
+        // `file:///C:/x` leaves `/C:/x` here: the empty authority's slash, in
+        // front of a drive letter. PathBuf keeps it and the file never
+        // resolves, so the toast silently shows no cover. Forward slashes
+        // after that are fine -- Windows accepts them.
+        //
+        // Additive: Linux and macOS never match this shape, and their full
+        // percent-decode above is left exactly as it was. It has to stay
+        // full: art_url reaches here from BOTH url::Url::from_file_path
+        // (which escapes spaces as %20) and fs_url::file_url (which escapes
+        // only % # ?), and only the wider decode reads both.
+        #[cfg(target_os = "windows")]
+        {
+            let b = decoded.as_bytes();
+            if b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' {
+                return Some(PathBuf::from(&decoded[1..]));
+            }
+            // A non-empty authority is a UNC server: `file://nas/share/x`
+            // names `\\nas\share\x`. Without this it stays RELATIVE and
+            // resolves against the process working directory.
+            if !decoded.starts_with('/') && !decoded.is_empty() {
+                return Some(PathBuf::from(format!("//{decoded}")));
+            }
+        }
         return Some(PathBuf::from(decoded));
     }
     if let Some(path) = url.strip_prefix("asset://localhost/") {
@@ -120,7 +143,7 @@ fn resolve_local_artwork(url: &str) -> Option<PathBuf> {
 
 /// Shared blocking HTTP client (a fresh client per track leaks an fd → EMFILE
 /// over a long session — same reasoning as the Tauri image cache).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn http_client() -> &'static reqwest::blocking::Client {
     static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
@@ -136,7 +159,7 @@ fn http_client() -> &'static reqwest::blocking::Client {
 /// `offline` = local paths + md5 cache hits only, never the HTTP download —
 /// the verdict is injected by the caller so this crate stays frontend-agnostic
 /// (no dependency on the app's offline-mode engine).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn cache_artwork(url: &str, offline: bool) -> Result<PathBuf, String> {
     use md5::{Digest, Md5};
     use std::io::Write;
@@ -307,7 +330,39 @@ pub async fn show_track_notification(meta: NotificationMeta, offline: bool) {
         .await;
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    {
+        let _ = tokio::task::spawn_blocking(move || {
+            let artwork_path = meta.art_url.as_deref().and_then(|url| {
+                match cache_artwork(url, offline) {
+                    Ok(path) => Some(path),
+                    Err(e) => {
+                        log::debug!("[notify] could not cache artwork: {e}");
+                        None
+                    }
+                }
+            });
+            let mut notification = notify_rust::Notification::new();
+            // app_id MUST match the AUMID set in main() and registered by the
+            // MSI, or Windows drops the toast without a word. notify-rust's
+            // Windows arm forwards summary/body/app_id/image and SILENTLY
+            // ignores `actions` (src/windows.rs), so no buttons are attempted
+            // here -- adding them would look implemented and do nothing.
+            notification
+                .summary(&meta.title)
+                .body(&body)
+                .app_id("com.blitzfc.qbz");
+            if let Some(path) = artwork_path.as_ref().and_then(|p| p.to_str()) {
+                notification.image_path(path);
+            }
+            if let Err(e) = notification.show() {
+                log::warn!("[notify] Windows toast failed: {e}");
+            }
+        })
+        .await;
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         let _ = body;
         let _ = offline;
