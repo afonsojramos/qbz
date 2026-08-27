@@ -472,6 +472,41 @@ pub(crate) fn acquire_lock(path: &Path) -> Result<File> {
             }
         })?;
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION;
+        use windows_sys::Win32::Storage::FileSystem::{
+            LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+        };
+
+        let mut overlapped: windows_sys::Win32::System::IO::OVERLAPPED =
+            unsafe { std::mem::zeroed() };
+        // SAFETY: `file` is open, so its handle is valid for the call; the
+        // zeroed OVERLAPPED lives for the whole call; locking 0..u64::MAX is
+        // the documented "lock the entire file" idiom. The lock is released
+        // when `file` drops and the handle closes, matching flock().
+        let ok = unsafe {
+            LockFileEx(
+                file.as_raw_handle() as _,
+                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                0,
+                u32::MAX,
+                u32::MAX,
+                &mut overlapped,
+            )
+        };
+        if ok == 0 {
+            let error = std::io::Error::last_os_error();
+            return Err(
+                if error.raw_os_error() == Some(ERROR_LOCK_VIOLATION as i32) {
+                    CatalogError::BootstrapBusy
+                } else {
+                    CatalogError::Io(error)
+                },
+            );
+        }
+    }
     Ok(file)
 }
 
@@ -512,7 +547,39 @@ fn filesystem_available_bytes(path: &Path) -> Result<u64> {
     Ok(status.f_bavail.saturating_mul(status.f_frsize))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn filesystem_available_bytes(path: &Path) -> Result<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    // GetDiskFreeSpaceExW wants a path that exists. `available_bytes()` already
+    // hands us the nearest existing ancestor, but keep the walk local so a
+    // future caller cannot turn this into ERROR_PATH_NOT_FOUND on first run.
+    let probe = nearest_existing_ancestor(path).unwrap_or(path);
+    let wide: Vec<u16> = probe
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut free_to_caller: u64 = 0;
+    // SAFETY: `wide` is NUL-terminated and outlives the call; `free_to_caller`
+    // is a valid u64 slot; the remaining two out-params are documented as
+    // optional and are passed as null.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_to_caller,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(CatalogError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(free_to_caller)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn filesystem_available_bytes(_path: &Path) -> Result<u64> {
     Err(CatalogError::InvalidInput(
         "filesystem free-space preflight is unsupported on this platform".to_string(),

@@ -14,5 +14,15 @@ thiserror.workspace = true
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs"] }
 
+[target.'cfg(windows)'.dependencies]
+# GetDiskFreeSpaceExW for the free-space preflight; LockFileEx (+ OVERLAPPED,
+# hence Win32_System_IO) for the bootstrap lock. 0.61 is already in the
+# workspace lock, so this pulls nothing new.
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+] }
+
 [dev-dependencies]
 tempfile = "3"
