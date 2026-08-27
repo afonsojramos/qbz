@@ -3521,6 +3521,12 @@ fn main() {
     #[cfg(target_os = "windows")]
     win_shell::install_commit_data_handler(on_session_commit_data);
 
+    // W27's other half. Main.qml asks for CustomizeWindowHint so Qt does not
+    // paint its own button cluster over the QBZ header; this gives the window
+    // back a hit test, which that hint otherwise answers as HTNOWHERE for
+    // every pixel.
+    #[cfg(target_os = "windows")]
+    win_shell::install_hittest_filter();
 
     let mut engine = QQmlApplicationEngine::new();
 

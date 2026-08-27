@@ -140,11 +140,66 @@ ApplicationWindow {
     // the frame, and the reference never draws its own there
     // ("Linux only — macOS keeps the native traffic lights",
     // WindowControls.slint:1-2).
+    // WINDOWS takes the macOS shape, not the Linux one, and the difference is
+    // the whole feature (W27).
+    //
+    // `Qt.FramelessWindowHint` removes WS_THICKFRAME, and THAT is what the
+    // shell keys tiling on: Win+Arrow and Aero Snap by dragging to an edge both
+    // stop, along with the DWM drop shadow and the Win11 rounded corners. So
+    // "hide title bar" was not making the app refuse the shortcuts -- it had
+    // stopped being a window the shell could tile.
+    //
+    // NOT restored, and it cannot be from flags alone: the Windows 11 Snap
+    // Layouts flyout that appears when hovering a maximise button. Windows asks
+    // for it by hit-testing that pixel as HTMAXBUTTON, and QBZ's maximise
+    // button is a QML item inside the client area, so it answers HTCLIENT.
+    // Wiring it would mean reporting HTMAXBUTTON over that one rect from the
+    // native filter -- deliberate future work, not something this arm does.
+    //
+    // Qt 6.9's Windows plugin already implements WM_NCCALCSIZE -> 0,
+    // DwmExtendFrameIntoClientArea, the eight resize edges and
+    // safeAreaMargins() for `ExpandedClientAreaHint` -- the same flags the
+    // macOS arm uses. `CustomizeWindowHint` with no button hints then
+    // suppresses Qt's own painted title cluster
+    // (qwindowswindow.cpp :3561/:3600/:3624/:3645) while the window KEEPS
+    // WS_CAPTION, so the shell still treats it as tileable.
+    //
+    // It also provides no HTCAPTION drag band of its own (:3332-3338: with
+    // both isDefaultTitleBar and isCustomized false the whole title block is
+    // skipped), which is why HeaderBar's QML `startSystemMove()` stays: it
+    // issues SC_MOVE, and SC_MOVE drags DO snap. The eight QML resize grips
+    // stay enabled too and do not fight the native edges -- Qt answers
+    // WM_NCHITTEST first, so a press on the border never reaches QML.
     flags: QbzShell.systemTitleBar
         ? Qt.Window
         : (QbzShell.isMacos
             ? (Qt.Window | Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint)
-            : (Qt.Window | Qt.FramelessWindowHint))
+            : (QbzShell.isWindows
+                // Both halves were MEASURED on the box, and neither is
+                // optional:
+                //
+                // WITHOUT CustomizeWindowHint, Qt populates the default title
+                // hints and its customized-title path DRAWS minimise/maximise/
+                // close over the QBZ header.
+                //
+                // WITH it, Qt answers WM_NCHITTEST with HTNOWHERE for every
+                // pixel -- centre, header, player bar and sidebar all returned
+                // 0 -- and Windows sends no mouse input to HTNOWHERE, so the
+                // whole app becomes unclickable while still running.
+                //
+                // No public flag combination gives no-buttons + clicks +
+                // the WS_THICKFRAME that tiling needs, so the hint stays and
+                // `win_shell::install_hittest_filter()` answers the hit test
+                // instead. What this arm must NOT do is drop the hint: that
+                // trades the buttons back in.
+                //
+                // Frameless is not the answer either: it removes
+                // WS_THICKFRAME, and THAT is what Win+Arrow and Aero Snap
+                // actually key on -- not WS_CAPTION, which this window does
+                // not have in either arrangement.
+                ? (Qt.Window | Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint
+                   | Qt.CustomizeWindowHint)
+                : (Qt.Window | Qt.FramelessWindowHint)))
 
     // THE OTHER HALF OF ExpandedClientAreaHint, and the piece that made the
     // flag look broken when it was not.

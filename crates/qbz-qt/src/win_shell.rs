@@ -10,6 +10,22 @@ use std::ptr::NonNull;
 unsafe extern "C" {
     fn qbz_main_window_hwnd() -> *mut c_void;
     fn qbz_install_commit_data_handler(cb: extern "C" fn());
+    fn qbz_install_hittest_filter();
+}
+
+/// Answer WM_NCHITTEST for the custom-chrome window the way an ordinary
+/// borderless-resizable window would.
+///
+/// Needed because `Qt::CustomizeWindowHint` -- the only way to stop Qt drawing
+/// its own window buttons over the QBZ header -- makes Qt return HTNOWHERE for
+/// the whole window, and Windows sends no mouse input to HTNOWHERE. See the
+/// long note in `cxx/win_shell.cpp`.
+#[cfg(target_os = "windows")]
+pub(crate) fn install_hittest_filter() {
+    // SAFETY: no arguments; installs one process-lifetime filter on the
+    // QCoreApplication, and is idempotent on the C++ side. Called after
+    // `QGuiApplication::new`, on the GUI thread.
+    unsafe { qbz_install_hittest_filter() }
 }
 
 /// The top-level window's native handle, or `None` before it is shown.

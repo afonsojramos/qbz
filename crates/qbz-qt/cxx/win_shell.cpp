@@ -10,6 +10,16 @@
 #include <QtGui/QSessionManager>
 #include <QtGui/QWindow>
 
+#ifdef _WIN32
+#include <QtCore/QAbstractNativeEventFilter>
+#include <QtCore/QByteArray>
+#include <QtCore/QCoreApplication>
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 // The top-level window's native handle, or nullptr before one is shown.
 //
@@ -25,6 +35,75 @@ extern "C" void *qbz_main_window_hwnd()
         if (w->isVisible() && w->type() == Qt::Window)
             return reinterpret_cast<void *>(w->winId());
     return nullptr;
+}
+
+#ifdef _WIN32
+namespace {
+
+// Give the custom-chrome window a real hit-test back.
+//
+// MEASURED, not assumed. With `Qt::CustomizeWindowHint` -- which is the only
+// way to stop Qt painting its own minimise/maximise/close cluster on top of
+// QBZ's header -- Qt answers WM_NCHITTEST with HTNOWHERE for the ENTIRE
+// window: centre, header, player bar and sidebar all returned 0. Windows
+// delivers no mouse input to HTNOWHERE, so the app looked frozen while it was
+// running perfectly and the tray menu still drove playback.
+//
+// Without that hint Qt hit-tests correctly but populates the default title
+// hints, and its customized-title path draws the buttons over our header. No
+// combination of public flags gives all three of: no drawn buttons, working
+// clicks, and the WS_THICKFRAME that Windows tiling needs.
+//
+// So the flags keep CustomizeWindowHint and this filter answers the hit test
+// the way an ordinary sizable, caption-less window would: DefWindowProcW
+// returns the eight edge codes near the frame and HTCLIENT everywhere else.
+// Nothing here invents geometry -- it defers to the same code every other
+// borderless-resizable window uses.
+//
+// Dragging is unaffected and stays with QML's `startSystemMove()`: with no
+// caption there is no HTCAPTION band to inherit, which is the arrangement the
+// header was already written for.
+class QbzNcHitTestFilter : public QAbstractNativeEventFilter
+{
+public:
+    bool nativeEventFilter(const QByteArray &type, void *message, qintptr *result) override
+    {
+        if (type != QByteArrayLiteral("windows_generic_MSG"))
+            return false;
+        MSG *msg = static_cast<MSG *>(message);
+        if (!msg || msg->message != WM_NCHITTEST)
+            return false;
+
+        // NARROW ON PURPOSE: only a window that is sizable AND caption-less,
+        // which is exactly the custom-chrome main window. Menus, tooltips and
+        // popups have no WS_THICKFRAME; a window showing the system title bar
+        // has WS_CAPTION and must keep Qt's own answer. Getting this wrong
+        // would break hit-testing everywhere instead of fixing it in one
+        // place.
+        const LONG_PTR style = GetWindowLongPtrW(msg->hwnd, GWL_STYLE);
+        if ((style & WS_THICKFRAME) == 0 || (style & WS_CAPTION) == WS_CAPTION)
+            return false;
+
+        *result = static_cast<qintptr>(
+            DefWindowProcW(msg->hwnd, WM_NCHITTEST, msg->wParam, msg->lParam));
+        return true;
+    }
+};
+
+QbzNcHitTestFilter *g_hit_filter = nullptr;
+
+}  // namespace
+#endif  // _WIN32
+
+// Install the hit-test filter. Idempotent; a no-op off Windows.
+extern "C" void qbz_install_hittest_filter()
+{
+#ifdef _WIN32
+    if (g_hit_filter)
+        return;
+    g_hit_filter = new QbzNcHitTestFilter;
+    QCoreApplication::instance()->installNativeEventFilter(g_hit_filter);
+#endif
 }
 
 // WM_QUERYENDSESSION -> QGuiApplication::commitDataRequest, via Qt's Windows
