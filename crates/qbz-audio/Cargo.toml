@@ -64,3 +64,15 @@ jack = "0.13"
 # CoreAudio for device probing, sample rate switching, and (future) hog mode / exclusive mode
 coreaudio-rs = "0.14.1"
 objc2-core-audio = "0.3.2"
+
+[target.'cfg(windows)'.dependencies]
+# WASAPI exclusive mode (phase B). HEnquist's crate, the one CamillaDSP
+# uses. `windows` is pinned to the 0.62 line cpal already resolves, so
+# this adds no second windows tree to the graph.
+wasapi = "0.24"
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Media_Audio",
+  "Win32_System_Com",
+  "Win32_System_Threading",
+] }
