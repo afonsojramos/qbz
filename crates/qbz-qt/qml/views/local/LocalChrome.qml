@@ -242,14 +242,19 @@ Item {
     CardMenu {
         id: openMenu
         menuWidth: 220
+        // W16: the audio-CD row is dropped on Windows -- qbz-disc's CDDA
+        // backend is `mod unsupported` there and answers NoDrive to
+        // everything. SACD is an image file, so it stays on every platform.
         entries: [
             { "label": QbzSession.tr("Open folder…", QbzSession.trRev),
-              "icon": "folder-open", "action": "folder" },
+              "icon": "folder-open", "action": "folder" }
+        ].concat(QbzShell.isWindows ? [] : [
             { "label": QbzSession.tr("Open audio CD", QbzSession.trRev),
-              "icon": "disc", "action": "cd" },
+              "icon": "disc", "action": "cd" }
+        ]).concat([
             { "label": QbzSession.tr("Open SACD image…", QbzSession.trRev),
               "icon": "disc-3", "action": "sacd" }
-        ]
+        ])
         onPicked: function (action) {
             if (action === "folder") QbzLocal.ephemeralOpen()
             else if (action === "cd") QbzLocal.ephemeralOpenCd()

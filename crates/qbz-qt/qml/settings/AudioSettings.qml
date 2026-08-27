@@ -150,7 +150,14 @@ Column {
         }
     }
     SettingRow {
-        visible: root.doc.backendIsAlsa === true || root.doc.backendIsWasapi === true
+        // ALSA only. fc0d35e29 opened this to WASAPI expecting plan B Task 6
+        // (DoP over exclusive mode); the spike then measured this DAC refusing
+        // 176400, which is the DSD64 DoP carrier, and Task 6 lost its target.
+        // Both non-convert modes are `cfg(target_os = "linux")` in the audio
+        // thread and answer "DoP playback is Linux-only" with a stream error,
+        // so on Windows the row could only ever offer two ways to fail. DSD
+        // still plays there -- converted to PCM, which is the default.
+        visible: root.doc.backendIsAlsa === true
         label: QbzSession.tr("DSD playback", QbzSession.trRev)
         description: QbzSession.tr("How DSD tracks reach the DAC. WARNING: choose DoP or Native only if your DAC supports it — on any other DAC they play as loud noise. Volume is fixed and seeking is disabled in DoP/Native mode. Native additionally needs kernel support for the DAC.", QbzSession.trRev)
         QbzSelect {
@@ -201,10 +208,16 @@ Column {
         // whose only backend is System default. Linux is unchanged - visible
         // always, enabled only on ALSA.
         //
-        // `backendIsWasapi` does not exist yet; QML reads an absent doc
-        // property as `undefined`, and `undefined === true` is false, so this
-        // is correct today and becomes correct again the day the field lands.
-        visible: QbzShell.isLinux || root.doc.backendIsWasapi === true
+        // WINDOWS: hidden on purpose, even now that Phase B publishes
+        // `backendIsWasapi`. The exclusive path is chosen by the BACKEND
+        // dropdown ("WASAPI Exclusive"), not by this toggle -- the selection
+        // arm in qbz-player keys on `backend_type` and never reads
+        // `exclusive_mode`. Showing the toggle would put a control under the
+        // BIT-PERFECT header that changes nothing, which is worse than no
+        // control at all when the thing being judged IS bit-perfect. Whether
+        // Windows should instead mirror the Linux split (backend = transport,
+        // toggle = hw/plughw) is an open design question for the owner.
+        visible: QbzShell.isLinux
         label: QbzSession.tr("Exclusive mode", QbzSession.trRev)
         description: QbzSession.tr("Lock the device so no other app can resample it.", QbzSession.trRev)
         rowEnabled: root.doc.backendIsAlsa === true || root.doc.backendIsWasapi === true

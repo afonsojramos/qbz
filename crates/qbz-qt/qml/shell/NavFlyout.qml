@@ -250,9 +250,17 @@ Item {
         }
         entries.push(
             { "label": nav.trs("Open folder…"), "icon": "folder-open",
-              "view": "", "tab": "", "action": "openFolder", "enabled": true },
-            { "label": nav.trs("Open audio CD"), "icon": "disc",
-              "view": "", "tab": "", "action": "openCd", "enabled": true },
+              "view": "", "tab": "", "action": "openFolder", "enabled": true })
+        // W16: qbz-disc has no Windows CDDA backend -- `mod unsupported`
+        // compiles and every call returns NoDrive. Offering the entry would
+        // only ever produce "no drive found" on a machine that has one. SACD
+        // stays: that opens an image file, which needs no drive.
+        if (!QbzShell.isWindows) {
+            entries.push(
+                { "label": nav.trs("Open audio CD"), "icon": "disc",
+                  "view": "", "tab": "", "action": "openCd", "enabled": true })
+        }
+        entries.push(
             { "label": nav.trs("Open SACD image…"), "icon": "disc-3",
               "view": "", "tab": "", "action": "openSacd", "enabled": true })
         if (QbzLocal.localEphemeralActive) {
