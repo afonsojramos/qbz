@@ -3040,10 +3040,14 @@ fn publish_home_sections(sections: &home_qt::DiscoverSections) {
 /// `var_os(..).is_some()` answers YES for an EMPTY value, and an empty value
 /// is exactly what a shell or a test harness leaves behind when it clears a
 /// variable rather than unsetting it: `QSG_RHI_BACKEND= ./qbz` on Linux, and
-/// `$env:QSG_RHI_BACKEND = ''` in PowerShell 7.5+ on Windows. (`$null` removes
-/// the variable instead.) The whole preference then silently stopped applying,
-/// the persisted Settings choice included, and the only clue was one info line
-/// claiming an explicit backend was present.
+/// on Windows either `$env:QSG_RHI_BACKEND = ''` or
+/// `[Environment]::SetEnvironmentVariable('QSG_RHI_BACKEND', $null, 'Process')`
+/// — PowerShell coerces `$null` to `String.Empty` for a `string` parameter, so
+/// that call leaves the name PRESENT and empty, and a child process inherits
+/// it that way. (`$env:QSG_RHI_BACKEND = $null` is the one that removes it.)
+/// The whole preference then silently stopped applying, the persisted Settings
+/// choice included, and the only clue was one info line claiming an explicit
+/// backend was present.
 ///
 /// `QBZ_RENDERER`, read a few lines below, has always filtered the empty
 /// string. This is the same rule for the two Qt variables.
