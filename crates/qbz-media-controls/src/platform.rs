@@ -8,14 +8,17 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use souvlaki::{
-    MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
-    SeekDirection,
-};
+use souvlaki::{MediaControls, MediaMetadata, MediaPlayback, MediaPosition};
+// Only `spawn_native` and `map_event` touch these, and both are compiled out
+// on Windows (souvlaki's SMTC backend panics without an HWND — see `spawn`).
+#[cfg(not(target_os = "windows"))]
+use souvlaki::{MediaControlEvent, PlatformConfig, SeekDirection};
 
 use crate::types::{MediaEvent, MediaIntegration, PlaybackStatus, TrackMeta};
 
 /// Default step for a magnitude-less MPRIS-style `Seek` (5 seconds, micros).
+// Only `map_event` reads it, and that is compiled out on Windows.
+#[cfg(not(target_os = "windows"))]
 const SEEK_STEP_MICROS: i64 = 5_000_000;
 
 type EventCb = Arc<dyn Fn(MediaEvent) + Send + Sync>;
@@ -60,6 +63,8 @@ impl MediaIntegration for PlatformHandle {
     }
 }
 
+// Only `spawn_native` installs it, and that is compiled out on Windows.
+#[cfg(not(target_os = "windows"))]
 fn map_event(e: MediaControlEvent) -> Option<MediaEvent> {
     Some(match e {
         MediaControlEvent::Play => MediaEvent::Play,
@@ -86,11 +91,32 @@ fn map_event(e: MediaControlEvent) -> Option<MediaEvent> {
 }
 
 pub fn spawn(on_event: EventCb) -> Option<PlatformHandle> {
+    // souvlaki's Windows backend does NOT degrade gracefully without an HWND:
+    // `config.hwnd.expect(...)` at souvlaki-0.8.3/src/platform/windows/mod.rs:57-59
+    // PANICS, and `MediaControls::new` runs inside a tokio task, so the first
+    // session would abort the task rather than return the Err the match below
+    // is written for. (The old comment on `hwnd: None` claimed the opposite;
+    // it was read from the comment, not the mechanism.) No HWND is wired yet
+    // — that is plan A-2's "SMTC real" task — so bow out here on Windows.
+    #[cfg(target_os = "windows")]
+    {
+        let _ = on_event;
+        log::warn!("[media-controls] SMTC disabled: no window handle wired yet (Phase A)");
+        return None;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        return spawn_native(on_event);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn spawn_native(on_event: EventCb) -> Option<PlatformHandle> {
     let config = PlatformConfig {
         dbus_name: "com.blitzfc.qbz",
         display_name: "QBZ",
-        // macOS: unused. Windows SMTC needs the window HWND; not shipped/tested,
-        // so left None (init may fail there → None handle, no media controls).
+        // macOS: unused. Windows: unreachable — see the early return in
+        // `spawn` above.
         hwnd: None,
     };
 
