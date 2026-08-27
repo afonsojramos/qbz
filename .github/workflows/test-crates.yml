@@ -90,18 +90,23 @@ jobs:
           ./scripts/cargo-test.sh
           echo "cargo test wall time: $(( $(date +%s) - START ))s"
 
-  # Every shader must bake with the pinned qsb. Separate job so qsb is never
-  # on PATH while cargo runs (see qt-gate).
+  # Every shader must bake. Separate job so qsb is never on PATH while cargo
+  # runs (see qt-gate). The BAKE toolchain is pinned apart from the runtime
+  # floor: the committed .qsb need qsb >= 6.9 (plasma/ambient's uint hash
+  # constants vs the GLSL 1.20 variant, which desktop GL <= 3.1 selects at
+  # runtime, so it must stay in the pack) — see shader_bake_gate.sh.
   shader-gate:
     name: shader bake gate
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      QT_SHADERTOOLS_VERSION: ${{ vars.QT_VERSION_SHADERTOOLS || '6.9.3' }}
     steps:
       - uses: actions/checkout@v7
-      - name: Install Qt ${{ env.QT_VERSION }} + shader tools
+      - name: Install Qt ${{ env.QT_SHADERTOOLS_VERSION }} + shader tools
         uses: jurplel/install-qt-action@v4
         with:
-          version: ${{ env.QT_VERSION }}
+          version: ${{ env.QT_SHADERTOOLS_VERSION }}
           host: linux
           target: desktop
           arch: linux_gcc_64
@@ -124,7 +129,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config cmake clang libclang-dev nasm dbus \
             libasound2-dev libjack-jackd2-dev libdbus-1-dev libssl-dev \
-            libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev
+            libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev libwayland-dev
 
       # No qtshadertools here ON PURPOSE: with qsb on PATH build.rs re-bakes
       # shaders by mtime, which makes a fresh checkout nondeterministic. The
