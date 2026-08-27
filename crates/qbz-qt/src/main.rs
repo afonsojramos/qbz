@@ -3093,6 +3093,12 @@ fn apply_renderer_preference() {
             if cfg!(target_os = "macos") {
                 log::info!("[renderer] '{choice}' on macOS -> Metal default (the Slint GL remap)");
                 false
+            } else if cfg!(target_os = "windows") {
+                // d3d11 is Qt's healthy default here; desktop GL / ANGLE is a
+                // downgrade, not the GPU tier this pref means. Same remap as
+                // macOS: honour the intent (GPU path), not the literal backend.
+                log::info!("[renderer] '{choice}' on Windows -> d3d11 default (the Slint GL remap)");
+                false
             } else {
                 std::env::set_var("QSG_RHI_BACKEND", "opengl");
                 log::info!("[renderer] '{choice}' -> QSG_RHI_BACKEND=opengl");
@@ -3321,6 +3327,13 @@ fn main() {
     apply_renderer_preference();
     renderer_qt::apply_gpu_preference();
     apply_scroll_physics();
+
+    // D7 (research/02 §4.4): with no explicit style Qt loads `Windows` on
+    // Windows and `Fusion` on Linux — never Basic — and the popups without an
+    // explicit `background:` inherit native chrome. Pin Basic so all three
+    // platforms draw the same thing and windeployqt ships one style. Must run
+    // before the first QtQuick.Controls import, i.e. before the engine exists.
+    cxx_qt_lib::QQuickStyle::set_style(&QString::from("Basic"));
 
     let mut app = QGuiApplication::new();
     let mut engine = QQmlApplicationEngine::new();
