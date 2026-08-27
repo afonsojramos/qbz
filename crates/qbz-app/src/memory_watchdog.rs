@@ -51,7 +51,8 @@ pub fn spawn(player: Arc<Player>) -> tokio::task::JoinHandle<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(TICK_SECS));
         loop {
             interval.tick().await;
-            // None on platforms without /proc/meminfo — nothing to do.
+            // None where no memory probe exists (/proc/meminfo on unix,
+            // GlobalMemoryStatusEx on Windows) — nothing to do.
             let Some(pressure) = qbz_core::system_capabilities::read_memory_pressure() else {
                 continue;
             };
