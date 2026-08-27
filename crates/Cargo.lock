@@ -4725,6 +4725,7 @@ dependencies = [
  "toml",
  "urlencoding",
  "uuid 1.22.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
