@@ -206,6 +206,10 @@ pub mod qbz_shell {
         // `cfg!`, and AppearanceSettings.slint:1011-1043 gates the whole
         // group AND the Preferred-GPU row on it).
         #[qproperty(bool, is_linux)]
+        // Windows is neither of the two above, and QML must be able to say
+        // so: without it every two-way `isMacos ? ... : ...` ternary hands
+        // Windows the LINUX arm by default. Compile-time, like both others.
+        #[qproperty(bool, is_windows)]
         // --- Main-window geometry -----------------------------------------
         // The restored LOGICAL size + maximized flag from the shared
         // ui_prefs.json (settings_qt::window_size / window_maximized; the
@@ -790,6 +794,7 @@ pub struct QbzShellRust {
     invert_swipe_navigation: bool,
     is_macos: bool,
     is_linux: bool,
+    is_windows: bool,
     window_width: f32,
     window_height: f32,
     window_maximized: bool,
@@ -894,6 +899,7 @@ impl Default for QbzShellRust {
             // the same `cfg!` (main.rs seeds AppearanceState at startup).
             is_macos: cfg!(target_os = "macos"),
             is_linux: cfg!(target_os = "linux"),
+            is_windows: cfg!(target_os = "windows"),
             window_width,
             window_height,
             window_maximized: crate::settings_qt::window_maximized(),
