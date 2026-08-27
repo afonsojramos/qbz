@@ -19,6 +19,98 @@ const SEEK_STEP_MICROS: i64 = 5_000_000;
 
 type EventCb = Arc<dyn Fn(MediaEvent) + Send + Sync>;
 
+/// Keeps Windows from sleeping while a track plays.
+///
+/// `SetThreadExecutionState` sets state on the CALLING THREAD, and this
+/// module's own contract says outbound `set_playback` is "free from any
+/// thread" -- in practice the mpris-server thread, a tokio worker, or the Qt
+/// GUI thread, whichever pushed the update. Calling the API from there would
+/// pin the flag to a thread that may be a pool worker with a short life, and
+/// the request would silently evaporate with it.
+///
+/// So the state is owned by ONE thread that lives as long as the process, and
+/// callers only send it a bool. Windows drops every request a thread made when
+/// that thread exits, which is exactly why this thread never does.
+#[cfg(target_os = "windows")]
+mod sleep {
+    use std::sync::mpsc::{channel, Sender};
+    use std::sync::OnceLock;
+
+    fn worker() -> &'static Sender<bool> {
+        static TX: OnceLock<Sender<bool>> = OnceLock::new();
+        TX.get_or_init(|| {
+            let (tx, rx) = channel::<bool>();
+            std::thread::Builder::new()
+                .name("qbz-sleep-inhibit".to_string())
+                .spawn(move || {
+                    use windows_sys::Win32::System::Power::{
+                        SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED,
+                    };
+                    let mut held = false;
+                    while let Ok(playing) = rx.recv() {
+                        if playing == held {
+                            continue;
+                        }
+                        // ES_SYSTEM_REQUIRED without ES_DISPLAY_REQUIRED: an
+                        // audio player must keep the MACHINE awake, not the
+                        // screen. No ES_AWAYMODE_REQUIRED either -- that is for
+                        // media-centre appliances and it suppresses the sleep
+                        // the user asked for.
+                        let flags = if playing {
+                            ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+                        } else {
+                            ES_CONTINUOUS
+                        };
+                        // SAFETY: a plain flags call with no pointers. Always on
+                        // this thread, which is the whole point of the module.
+                        let previous = unsafe { SetThreadExecutionState(flags) };
+                        if previous == 0 {
+                            // The call FAILED (it returns the previous state,
+                            // or zero). Leave `held` alone: recording the new
+                            // value here would make every later message with
+                            // the same bool a no-op, so a failed RELEASE would
+                            // pin the machine awake for the rest of the
+                            // session with nothing left to undo it.
+                            log::warn!(
+                                "[inhibit] SetThreadExecutionState failed; execution state unchanged"
+                            );
+                            continue;
+                        }
+                        held = playing;
+                        log::debug!(
+                            "[inhibit] Windows execution state -> {}",
+                            if playing { "system required" } else { "continuous" }
+                        );
+                    }
+                })
+                .expect("spawn sleep-inhibit thread");
+            tx
+        })
+    }
+
+    pub(super) fn set_playing(playing: bool) {
+        let _ = worker().send(playing);
+    }
+}
+
+/// Keep the machine awake while playing, INDEPENDENTLY of whether the media
+/// integration started.
+///
+/// Deliberately a free function and not a `PlatformHandle` method. Hanging it
+/// off the handle tied it to SMTC: every caller returns early when
+/// `handle()` is `None`, so a failed souvlaki init or an HWND that never
+/// arrived would leave playback working and the machine falling asleep
+/// mid-track -- two unrelated features failing together for no reason.
+///
+/// A no-op everywhere but Windows: Linux hangs its logind inhibitor off the
+/// MPRIS update (`inhibit.rs`) and macOS needs none.
+pub fn set_sleep_inhibit(playing: bool) {
+    #[cfg(target_os = "windows")]
+    sleep::set_playing(playing);
+    #[cfg(not(target_os = "windows"))]
+    let _ = playing;
+}
+
 pub struct PlatformHandle {
     controls: Arc<Mutex<Option<MediaControls>>>,
 }

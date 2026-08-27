@@ -33,6 +33,15 @@ mod platform;
 /// **macOS:** souvlaki's command callbacks fire on the app run loop, so this is
 /// safe to call from any thread, but the run loop (Slint's winit loop) must be
 /// running for inbound events to arrive.
+/// Keep the machine awake while playing. No-op off Windows; see
+/// `platform::set_sleep_inhibit` for why it is not a handle method.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub use platform::set_sleep_inhibit;
+
+/// Keep the machine awake while playing. No-op on this platform.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn set_sleep_inhibit(_playing: bool) {}
+
 /// The platform window identity the OS integration needs.
 ///
 /// Windows SMTC is registered against a window: souvlaki's backend calls

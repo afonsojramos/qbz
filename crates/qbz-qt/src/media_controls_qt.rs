@@ -217,6 +217,10 @@ pub(crate) fn push_now_playing(track: &qbz_models::QueueTrack, title: &str, albu
     // smaller set of users.
     maybe_notify(track, title, album);
     push_metadata(track, title, album);
+    // BEFORE the early return, and for the same reason `maybe_notify` is:
+    // keeping the machine awake has nothing to do with whether the OS media
+    // integration started, and a track is about to play either way.
+    qbz_media_controls::set_sleep_inhibit(true);
     let Some(mc) = handle() else {
         return;
     };
@@ -299,6 +303,7 @@ pub(crate) fn clear_now_playing() {
 /// transitions the MPRIS `Position` getter answers from the last value pushed
 /// here — the same behaviour as the Slint build.
 pub(crate) fn push_playback_state(is_playing: bool, position_secs: u64) {
+    qbz_media_controls::set_sleep_inhibit(is_playing);
     let Some(mc) = handle() else {
         return;
     };
