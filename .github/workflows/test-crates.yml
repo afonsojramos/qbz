@@ -122,7 +122,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config cmake clang libclang-dev nasm \
+            build-essential pkg-config cmake clang libclang-dev nasm dbus \
             libasound2-dev libjack-jackd2-dev libdbus-1-dev libssl-dev \
             libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev
 
@@ -180,7 +180,11 @@ jobs:
           [ -z "$hits" ] || { echo "::error::qbz-qt graph resolves Slint crates:"; echo "$hits"; exit 1; }
           cargo test --manifest-path crates/Cargo.toml -p qbz-qt --no-fail-fast
           cargo build --manifest-path crates/Cargo.toml -p qbz-qt
-          QT_QPA_PLATFORM=offscreen RUST_LOG=info timeout 75 ./crates/target/debug/qbz > smoke.log 2>&1 || true
+          # Same isolation as scripts/cargo-test.sh: private XDG dirs + a
+          # private session bus (the single-instance lock is a D-Bus name).
+          iso="$(mktemp -d)"
+          XDG_CONFIG_HOME="$iso/config" XDG_DATA_HOME="$iso/data" XDG_CACHE_HOME="$iso/cache" XDG_STATE_HOME="$iso/state" \
+            QT_QPA_PLATFORM=offscreen RUST_LOG=info dbus-run-session -- timeout 75 ./crates/target/debug/qbz > smoke.log 2>&1 || true
           lines=$(wc -l < smoke.log); echo "smoke log: $lines lines"
           if (( lines < 10 )); then cat smoke.log; echo "::error::the app did not start"; exit 1; fi
           pat='is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed'

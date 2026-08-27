@@ -73,7 +73,15 @@ cargo test --manifest-path crates/Cargo.toml -p qbz-qt --no-fail-fast
 say "qt gate 5/5: offscreen boot of the debug binary"
 cargo build --manifest-path crates/Cargo.toml -p qbz-qt
 log="$(mktemp "${TMPDIR:-/tmp}/qbz-test-smoke-XXXXXX")"
-QT_QPA_PLATFORM=offscreen RUST_LOG=info timeout 75 ./crates/target/debug/qbz > "$log" 2>&1 || true
+# Isolated: its own XDG dirs (never the developer's config/session) and a
+# PRIVATE session bus — the single-instance lock is a D-Bus well-known name,
+# so a running QBZ would otherwise make this instance present-and-exit with
+# one log line. CI has no other instance; the same command keeps both equal.
+iso="$(mktemp -d "${TMPDIR:-/tmp}/qbz-test-xdg-XXXXXX")"
+bus=(); command -v dbus-run-session >/dev/null && bus=(dbus-run-session --)
+XDG_CONFIG_HOME="$iso/config" XDG_DATA_HOME="$iso/data" XDG_CACHE_HOME="$iso/cache" XDG_STATE_HOME="$iso/state" \
+  QT_QPA_PLATFORM=offscreen RUST_LOG=info "${bus[@]}" timeout 75 ./crates/target/debug/qbz > "$log" 2>&1 || true
+rm -rf "$iso"
 lines=$(wc -l < "$log")
 (( lines >= 10 )) || { cat "$log"; echo "smoke: the app did not start ($lines lines)"; exit 1; }
 pat='is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed'
