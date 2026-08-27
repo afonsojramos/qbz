@@ -1,3 +1,9 @@
+// No console window beside the GUI on Windows (W4). The file logger
+// (`qbz_log::install`) is unaffected; only the inherited stdio console goes.
+// If the offscreen smoke ever comes back with an empty log because of this,
+// the fix is AttachConsole(ATTACH_PARENT_PROCESS), not reverting this.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 //! qbz-qt — Qt/QML frontend POC entry point.
 //!
 //! Phase 1: boot flow (splash -> silent session restore -> shell
