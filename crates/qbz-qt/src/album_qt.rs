@@ -352,7 +352,10 @@ fn spawn_header_color(generation: u64, artwork_url: String) {
         if path.is_empty() {
             return;
         }
-        let path = path.trim_start_matches("file://").to_string();
+        // NOT trim_start_matches: cached_path returns a REAL file:// URL,
+        // so on Windows that leaves the `/` before the drive letter
+        // (`/C:/Users/...`), which opens nothing.
+        let path = qbz_models::fs_url::local_path(&path);
         // One decode, two products: the flat tint (the FALLBACK arm) and the
         // blurred atmosphere Slint actually renders behind the header.
         let p2 = path.clone();

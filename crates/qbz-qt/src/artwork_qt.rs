@@ -968,7 +968,10 @@ fn scaled_output_path(path: &str, w: u32, h: u32) -> Option<(String, PathBuf)> {
     if w == 0 || h == 0 {
         return None;
     }
-    let src = path.strip_prefix("file://").unwrap_or(path).to_string();
+    // NOT strip_prefix: leaves the `/` before a Windows drive letter, and the
+    // three percent-escapes, in a string used BOTH as the cache key and as
+    // the path to open.
+    let src = qbz_models::fs_url::local_path(path);
     let dir = dirs::cache_dir()?.join("qbz").join("images").join("scaled");
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();

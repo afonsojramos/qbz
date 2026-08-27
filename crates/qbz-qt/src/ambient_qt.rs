@@ -359,7 +359,10 @@ pub fn update_for_artwork(artwork_url: &str) {
         if path.is_empty() {
             return;
         }
-        let path = path.trim_start_matches("file://").to_string();
+        // NOT trim_start_matches: cached_path returns a REAL file:// URL,
+        // so on Windows that leaves the `/` before the drive letter
+        // (`/C:/Users/...`), which opens nothing.
+        let path = qbz_models::fs_url::local_path(&path);
         let triad = tokio::task::spawn_blocking(move || {
             let bytes = std::fs::read(&path).ok()?;
             let img = image::load_from_memory(&bytes).ok()?;

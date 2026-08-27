@@ -126,7 +126,12 @@ fn cache_dir() -> Option<PathBuf> {
 /// Blocking: decodes and resizes. Call it from `spawn_blocking`, never on the
 /// Qt thread.
 pub fn for_cover_blocking(cover_path: &str) -> Option<String> {
-    let src_path = cover_path.strip_prefix("file://").unwrap_or(cover_path);
+    // NOT strip_prefix: a real file:// URL leaves the `/` before the drive on
+    // Windows (`/C:/Users/...`), so image::open finds nothing and the header
+    // atmosphere - and therefore the whole album/artist header gradient -
+    // silently never appears.
+    let src_path = qbz_models::fs_url::local_path(cover_path);
+    let src_path = src_path.as_str();
     let dir = cache_dir()?;
 
     // Key on the cover path, like the artwork cache does.

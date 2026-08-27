@@ -670,8 +670,11 @@ impl Source for LocalSource {
         // A `file://` url is ALREADY on disk — reqwest cannot even build a
         // request for it ("builder error for url"), so it must never be
         // fetched.
-        if let Some(path) = token.strip_prefix("file://") {
-            return ArtRef::File(PathBuf::from(path));
+        if token.starts_with("file://") {
+            // NOT strip_prefix: on Windows that leaves the `/` before the drive
+            // (`/C:/Users/...`), which names nothing, and it leaves the three
+            // percent-escapes in place on every platform.
+            return ArtRef::File(PathBuf::from(qbz_models::fs_url::local_path(token)));
         }
         // An offline-download row can keep the CDN url its cover came from.
         if token.starts_with("http://") || token.starts_with("https://") {
