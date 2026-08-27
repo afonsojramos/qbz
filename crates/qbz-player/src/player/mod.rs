@@ -1630,6 +1630,11 @@ impl Player {
 
                 // Visualizer tap (outermost)
                 if let Some(ref tap) = thread_viz_tap {
+                    // FFT frequency bins must follow the decoded source rate.
+                    // Gapless sources are admitted only when their format
+                    // matches the current stream, so preparing the next one
+                    // cannot move this clock ahead to a different rate.
+                    tap.set_sample_rate(source.sample_rate().get());
                     Box::new(TappedSource::new(
                         source,
                         tap.ring_buffer.clone(),
@@ -2232,6 +2237,7 @@ impl Player {
                                     PlaybackEngine::new_alsa_direct(
                                         alsa_stream.clone(),
                                         hardware_volume,
+                                        thread_viz_tap.clone(),
                                     )
                                 }
                                 #[cfg(target_os = "linux")]
@@ -2676,6 +2682,7 @@ impl Player {
                                     PlaybackEngine::new_alsa_direct(
                                         alsa_stream.clone(),
                                         hardware_volume,
+                                        thread_viz_tap.clone(),
                                     )
                                 }
                                 #[cfg(target_os = "linux")]
@@ -3374,6 +3381,7 @@ impl Player {
                                         PlaybackEngine::new_alsa_direct(
                                             alsa_stream.clone(),
                                             hardware_volume,
+                                            thread_viz_tap.clone(),
                                         )
                                     }
                                     #[cfg(target_os = "linux")]
@@ -3624,6 +3632,7 @@ impl Player {
                                     PlaybackEngine::new_alsa_direct(
                                         alsa_stream.clone(),
                                         hardware_volume,
+                                        thread_viz_tap.clone(),
                                     )
                                 }
                                 #[cfg(target_os = "linux")]

@@ -153,7 +153,8 @@ fn run_fft_loop(tap: VisualizerTap, sink: Arc<dyn VizSink>) {
             let sample_rate = tap.sample_rate.load(Ordering::Relaxed);
 
             // Get samples from ring buffer
-            tap.ring_buffer.snapshot(&mut samples);
+            tap.ring_buffer
+                .snapshot_behind(&mut samples, tap.output_delay_samples());
 
             // The scope pipeline is explicitly requested by the visible
             // frontend destination. Its FIR and pitch FFT remain completely

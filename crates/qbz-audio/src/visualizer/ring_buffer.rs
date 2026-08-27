@@ -63,18 +63,40 @@ impl RingBuffer {
     /// Copies the last `dest.len()` samples into the provided slice.
     /// The samples are ordered from oldest to newest.
     pub fn snapshot(&self, dest: &mut [f32]) {
+        self.snapshot_behind(dest, 0);
+    }
+
+    /// Take a snapshot ending `lag_samples` behind the producer head.
+    ///
+    /// Direct output backends can queue a substantial amount of PCM ahead of
+    /// the hardware playhead. The visualizer still taps the exact source
+    /// samples, but asks for a historical window ending at the audible
+    /// position instead of the newest queued sample. A request older than the
+    /// retained ring is clamped to the oldest complete window; before enough
+    /// samples exist, the missing prefix remains silent.
+    pub fn snapshot_behind(&self, dest: &mut [f32], lag_samples: usize) {
+        dest.fill(0.0);
+        if dest.is_empty() || self.size == 0 {
+            return;
+        }
+
         let write_pos = self.write_pos.load(Ordering::Relaxed);
-        let len = dest.len().min(self.size);
+        let window_len = dest.len().min(self.size);
+        let lag_samples = lag_samples
+            .min(self.size.saturating_sub(window_len))
+            .min(write_pos);
+        let end_pos = write_pos - lag_samples;
+        let available = end_pos.min(window_len);
+        let dest_start = dest.len() - available;
+        let source_start = end_pos - available;
 
         // Safety: We're the only reader, and the writer only increments write_pos
         unsafe {
             let buffer = &*self.buffer.get();
 
-            for i in 0..len {
-                // Calculate the index for the i-th oldest sample
-                // We want samples from (write_pos - len) to (write_pos - 1)
-                let idx = (write_pos + self.size - len + i) % self.size;
-                dest[i] = buffer[idx];
+            for i in 0..available {
+                let idx = (source_start + i) % self.size;
+                dest[dest_start + i] = buffer[idx];
             }
         }
     }
@@ -122,5 +144,43 @@ mod tests {
 
         // Should get the last 4 samples: 6, 7, 8, 9
         assert_eq!(snapshot, [6.0, 7.0, 8.0, 9.0]);
+    }
+
+    #[test]
+    fn snapshot_behind_reads_a_historical_window() {
+        let buffer = RingBuffer::new(16);
+        for i in 0..10 {
+            buffer.push(i as f32);
+        }
+
+        let mut snapshot = [0.0f32; 4];
+        buffer.snapshot_behind(&mut snapshot, 3);
+
+        assert_eq!(snapshot, [3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn snapshot_behind_zero_fills_history_not_yet_captured() {
+        let buffer = RingBuffer::new(16);
+        buffer.push(1.0);
+        buffer.push(2.0);
+
+        let mut snapshot = [9.0f32; 4];
+        buffer.snapshot_behind(&mut snapshot, 1);
+
+        assert_eq!(snapshot, [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn snapshot_behind_never_reads_past_retained_history() {
+        let buffer = RingBuffer::new(8);
+        for i in 0..12 {
+            buffer.push(i as f32);
+        }
+
+        let mut snapshot = [0.0f32; 4];
+        buffer.snapshot_behind(&mut snapshot, usize::MAX);
+
+        assert_eq!(snapshot, [4.0, 5.0, 6.0, 7.0]);
     }
 }

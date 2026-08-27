@@ -8,7 +8,7 @@
 //! to enable gapless playback. When one source ends, the next is picked up
 //! seamlessly without interrupting the PCM stream.
 
-use qbz_audio::AlsaDirectStream;
+use qbz_audio::{AlsaDirectStream, VisualizerTap};
 #[cfg(target_os = "linux")]
 use qbz_audio::JackStream;
 use rodio::{mixer::Mixer, Player as RodioPlayer, Source};
@@ -129,7 +129,11 @@ impl PlaybackEngine {
 
     /// Create ALSA Direct engine with gapless source queue.
     /// Spawns a single writer thread that lives for the engine's lifetime.
-    pub fn new_alsa_direct(stream: Arc<AlsaDirectStream>, hardware_volume: bool) -> Self {
+    pub fn new_alsa_direct(
+        stream: Arc<AlsaDirectStream>,
+        hardware_volume: bool,
+        visualizer_tap: Option<VisualizerTap>,
+    ) -> Self {
         let is_playing = Arc::new(AtomicBool::new(false));
         let should_stop = Arc::new(AtomicBool::new(false));
         let position_frames = Arc::new(AtomicU64::new(0));
@@ -147,6 +151,7 @@ impl PlaybackEngine {
             let queue_c = source_queue.clone();
             let transition_c = source_transition.clone();
             let channels = stream.channels();
+            let visualizer_c = visualizer_tap.clone();
 
             thread::spawn(move || {
                 alsa_writer_thread(
@@ -158,6 +163,7 @@ impl PlaybackEngine {
                     queue_c,
                     transition_c,
                     channels,
+                    visualizer_c,
                 );
             })
         };
@@ -650,6 +656,24 @@ impl PlaybackEngine {
 /// When a source ends, seamlessly picks up the next one from the queue
 /// (gapless transition). If no next source is available, drains the ALSA
 /// buffer and waits for the next source or a stop signal.
+///
+/// The source is consumed in ~10 ms pieces instead of the historical fixed
+/// 8192-frame blocks. This does not change PCM data or ALSA parameters; it
+/// only keeps the passive visualizer tap from receiving ~186 ms bursts at
+/// 44.1 kHz. `snd_pcm_delay` then points snapshots behind the queued PCM at
+/// the part currently reaching the DAC.
+const ALSA_PCM_FEED_TARGET_MS: u64 = 10;
+const ALSA_PCM_FEED_MIN_FRAMES: u64 = 64;
+const ALSA_PCM_FEED_MAX_FRAMES: u64 = 8192;
+
+fn alsa_pcm_feed_frames(sample_rate: u32) -> usize {
+    let frames = u64::from(sample_rate)
+        .saturating_mul(ALSA_PCM_FEED_TARGET_MS)
+        .div_ceil(1000)
+        .clamp(ALSA_PCM_FEED_MIN_FRAMES, ALSA_PCM_FEED_MAX_FRAMES);
+    frames as usize
+}
+
 fn alsa_writer_thread(
     stream: Arc<AlsaDirectStream>,
     is_playing: Arc<AtomicBool>,
@@ -659,14 +683,25 @@ fn alsa_writer_thread(
     source_queue: Arc<SourceQueue<BoxedSampleIter>>,
     source_transition: Arc<AtomicBool>,
     channels: u16,
+    visualizer_tap: Option<VisualizerTap>,
 ) {
-    const CHUNK_FRAMES: usize = 8192;
-    let chunk_samples = CHUNK_FRAMES * channels as usize;
+    let chunk_frames = alsa_pcm_feed_frames(stream.sample_rate());
+    let chunk_samples = chunk_frames * channels as usize;
     let mut buffer_f32 = Vec::with_capacity(chunk_samples);
     let mut current_source: Option<BoxedSampleIter> = None;
     let mut total_frames: u64 = 0;
+    let mut queued_frames = 0u64;
+    let mut visualizer_was_enabled = false;
+    let mut delay_error_reported = false;
 
-    log::info!("[ALSA Direct Engine] Writer thread started (gapless-capable)");
+    if let Some(tap) = visualizer_tap.as_ref() {
+        tap.clear_output_delay();
+    }
+    log::info!(
+        "[ALSA Direct Engine] Writer thread started (gapless-capable, viz feed {} frames / ~{} ms)",
+        chunk_frames,
+        ALSA_PCM_FEED_TARGET_MS
+    );
 
     'thread: loop {
         // Check global stop
@@ -700,7 +735,44 @@ fn alsa_writer_thread(
             std::thread::sleep(Duration::from_millis(50));
         }
 
-        // Fill buffer from current source
+        // Keep the passive tap at the previous audible position while this
+        // next piece is pulled rapidly from the source. Once ALSA accepts it,
+        // the delay query below advances the tap by exactly what the device
+        // consumed. Shared/callback backends leave this offset at zero.
+        let visualizer_enabled = visualizer_tap
+            .as_ref()
+            .map(VisualizerTap::is_enabled)
+            .unwrap_or(false);
+        if visualizer_enabled {
+            if !visualizer_was_enabled {
+                match stream.playback_delay_frames() {
+                    Ok(delay) => queued_frames = delay,
+                    Err(error) => {
+                        if !delay_error_reported {
+                            log::warn!(
+                                "[ALSA Direct Engine] Visualizer delay query failed; using paced feed without playhead compensation: {}",
+                                error
+                            );
+                            delay_error_reported = true;
+                        }
+                        queued_frames = 0;
+                    }
+                }
+            }
+            if let Some(tap) = visualizer_tap.as_ref() {
+                tap.set_output_delay_frames(
+                    queued_frames.saturating_add(chunk_frames as u64),
+                    channels,
+                );
+            }
+        } else if visualizer_was_enabled {
+            if let Some(tap) = visualizer_tap.as_ref() {
+                tap.clear_output_delay();
+            }
+        }
+        visualizer_was_enabled = visualizer_enabled;
+
+        // Fill buffer from current source.
         buffer_f32.clear();
         let source = current_source.as_mut().unwrap();
         let mut source_ended = false;
@@ -715,6 +787,16 @@ fn alsa_writer_thread(
             }
         }
 
+        let frames_in_chunk = buffer_f32.len() / channels as usize;
+        if visualizer_enabled {
+            if let Some(tap) = visualizer_tap.as_ref() {
+                tap.set_output_delay_frames(
+                    queued_frames.saturating_add(frames_in_chunk as u64),
+                    channels,
+                );
+            }
+        }
+
         // Write whatever we have to ALSA (even partial chunks on source end)
         if !buffer_f32.is_empty() {
             if let Err(e) = stream.write_f32(&buffer_f32) {
@@ -722,10 +804,33 @@ fn alsa_writer_thread(
                 break 'thread;
             }
 
-            let frames_written = buffer_f32.len() / channels as usize;
-            total_frames += frames_written as u64;
+            total_frames += frames_in_chunk as u64;
             position_frames.store(total_frames, Ordering::SeqCst);
             duration_frames.store(total_frames, Ordering::SeqCst);
+
+            if visualizer_enabled {
+                match stream.playback_delay_frames() {
+                    Ok(delay) => {
+                        queued_frames = delay;
+                        if let Some(tap) = visualizer_tap.as_ref() {
+                            tap.set_output_delay_frames(queued_frames, channels);
+                        }
+                    }
+                    Err(error) => {
+                        if !delay_error_reported {
+                            log::warn!(
+                                "[ALSA Direct Engine] Visualizer delay query failed; using paced feed without playhead compensation: {}",
+                                error
+                            );
+                            delay_error_reported = true;
+                        }
+                        queued_frames = 0;
+                        if let Some(tap) = visualizer_tap.as_ref() {
+                            tap.clear_output_delay();
+                        }
+                    }
+                }
+            }
         }
 
         if source_ended {
@@ -760,6 +865,9 @@ fn alsa_writer_thread(
     }
 
     is_playing.store(false, Ordering::SeqCst);
+    if let Some(tap) = visualizer_tap.as_ref() {
+        tap.clear_output_delay();
+    }
     log::info!("[ALSA Direct Engine] Writer thread finished");
 }
 
@@ -977,5 +1085,25 @@ fn dop_writer_thread(
             // else: the queued next source is picked up on the next iteration
             // with the PCM still running — the gapless DSD transition.
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::alsa_pcm_feed_frames;
+
+    #[test]
+    fn alsa_pcm_feed_stays_near_ten_ms_across_pcm_rates() {
+        assert_eq!(alsa_pcm_feed_frames(44_100), 441);
+        assert_eq!(alsa_pcm_feed_frames(48_000), 480);
+        assert_eq!(alsa_pcm_feed_frames(96_000), 960);
+        assert_eq!(alsa_pcm_feed_frames(192_000), 1_920);
+        assert_eq!(alsa_pcm_feed_frames(768_000), 7_680);
+    }
+
+    #[test]
+    fn alsa_pcm_feed_has_defensive_bounds() {
+        assert_eq!(alsa_pcm_feed_frames(0), 64);
+        assert_eq!(alsa_pcm_feed_frames(u32::MAX), 8_192);
     }
 }

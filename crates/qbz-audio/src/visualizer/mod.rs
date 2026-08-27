@@ -20,7 +20,7 @@ pub use ring_buffer::RingBuffer;
 pub use scope::{GONIOMETER_BIT, OSCILLOSCOPE_BIT};
 pub use tapped_source::TappedSource;
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// Number of frequency bins to send to frontend
@@ -32,6 +32,14 @@ pub const FFT_SIZE: usize = 4096;
 
 /// Target frames per second for visualization updates
 pub const TARGET_FPS: u64 = 30;
+
+/// History retained for output-playhead alignment.
+///
+/// ALSA Direct currently allows up to 500 ms of queued PCM at high sample
+/// rates. 1,048,576 interleaved samples cover that delay plus the FFT window
+/// for stereo PCM through 768 kHz, while keeping the audio-thread write path
+/// allocation-free.
+const RING_HISTORY_SAMPLES: usize = 1_048_576;
 
 /// Shared state for visualization that can be passed to the audio thread
 #[derive(Clone)]
@@ -52,17 +60,22 @@ pub struct VisualizerTap {
     /// Requested real-time scope producers. Frontends update this off the
     /// audio thread; zero keeps the added DSP completely idle.
     pub scope_mask: Arc<AtomicU32>,
+    /// Number of interleaved samples queued ahead of the audible playhead.
+    /// Zero for callback-paced/shared backends; ALSA Direct updates it from
+    /// `snd_pcm_delay` without changing the PCM stream.
+    playback_lag_samples: Arc<AtomicUsize>,
 }
 
 impl VisualizerTap {
     /// Create a new tap
     pub fn new() -> Self {
         Self {
-            ring_buffer: Arc::new(RingBuffer::new(FFT_SIZE * 2)),
+            ring_buffer: Arc::new(RingBuffer::new(RING_HISTORY_SAMPLES)),
             enabled: Arc::new(AtomicBool::new(false)),
             paused: Arc::new(AtomicBool::new(false)),
             sample_rate: Arc::new(AtomicU32::new(44100)),
             scope_mask: Arc::new(AtomicU32::new(0)),
+            playback_lag_samples: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -107,6 +120,29 @@ impl VisualizerTap {
     /// Select the scope DSP that the visible frontend surfaces consume.
     pub fn set_scope_mask(&self, mask: u32) {
         self.scope_mask.store(mask, Ordering::Relaxed);
+    }
+
+    /// Align snapshots with a direct backend's audible playhead.
+    ///
+    /// `queued_frames` comes from the output API, so convert it to the
+    /// interleaved-sample units used by [`RingBuffer`]. Saturation keeps a
+    /// malformed device report from wrapping; the ring clamps to retained
+    /// history when the snapshot is taken.
+    pub fn set_output_delay_frames(&self, queued_frames: u64, channels: u16) {
+        let samples = queued_frames.saturating_mul(u64::from(channels));
+        self.playback_lag_samples.store(
+            usize::try_from(samples).unwrap_or(usize::MAX),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Return callback-paced/shared backends to the newest captured window.
+    pub fn clear_output_delay(&self) {
+        self.playback_lag_samples.store(0, Ordering::Relaxed);
+    }
+
+    pub(crate) fn output_delay_samples(&self) -> usize {
+        self.playback_lag_samples.load(Ordering::Relaxed)
     }
 }
 

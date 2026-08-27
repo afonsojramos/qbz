@@ -869,6 +869,18 @@ impl AlsaDirectStream {
         self.channels
     }
 
+    /// Frames accepted by ALSA but not yet presented by the device.
+    ///
+    /// This is observational only: it neither changes PCM parameters nor
+    /// waits for the device. The direct writer uses it to point the passive
+    /// visualizer tap at the audible playhead instead of the queue head.
+    pub fn playback_delay_frames(&self) -> Result<u64, String> {
+        let pcm = self.pcm.lock().unwrap();
+        pcm.delay()
+            .map(|frames| frames.max(0) as u64)
+            .map_err(|e| format!("Failed to query ALSA playback delay: {}", e))
+    }
+
     /// Get device ID
     pub fn device_id(&self) -> &str {
         &self.device_id
@@ -972,6 +984,10 @@ impl AlsaDirectStream {
 
     pub fn channels(&self) -> u16 {
         2
+    }
+
+    pub fn playback_delay_frames(&self) -> Result<u64, String> {
+        Ok(0)
     }
 
     /// Check if device is a bit-perfect hardware device (always false on non-Linux)
