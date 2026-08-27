@@ -165,6 +165,12 @@ cxx-qt-build = "0.7"
 qt-build-utils = "0.7"
 cc = "1"
 
+[target.'cfg(windows)'.build-dependencies]
+# Icon + VERSIONINFO + the longPathAware manifest, embedded as PE resources.
+# winresource, not winres: winres has been unmaintained since 2021 and this
+# is its maintained fork.
+winresource = "0.1"
+
 # macOS only: the Dock-icon activation policy behind the "Hide Dock icon when
 # closed to menu bar" setting (Spotify behaviour — close puts the app in the
 # menu bar and drops the Dock icon; minimize still goes to the Dock).

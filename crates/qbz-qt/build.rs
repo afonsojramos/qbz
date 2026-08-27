@@ -904,4 +904,31 @@ fn main() {
         })
         .cc_builder(apply_msvc_qt_flags)
         .build();
+
+    embed_windows_resources();
 }
+
+/// Icon, VERSIONINFO and the manifest, as PE resources.
+///
+/// The manifest declares `longPathAware` and NOTHING ELSE. Never add
+/// `dpiAware`/`dpiAwareness`: Qt 6 sets PerMonitorV2 itself at startup, a
+/// manifest declaration is immutable, and the two together either log a
+/// permanent COM error 0x5 or silently degrade scaling.
+///
+/// `build.rs` runs with `crates/qbz-qt` as its working directory, hence
+/// `../../packaging`.
+#[cfg(windows)]
+fn embed_windows_resources() {
+    println!("cargo:rerun-if-changed=../../packaging/icons/icon.ico");
+    println!("cargo:rerun-if-changed=../../packaging/windows/qbz.exe.manifest");
+    let mut res = winresource::WindowsResource::new();
+    res.set_icon("../../packaging/icons/icon.ico");
+    res.set_manifest_file("../../packaging/windows/qbz.exe.manifest");
+    res.set("ProductName", "QBZ");
+    res.set("FileDescription", "QBZ — Qobuz hi-res player");
+    res.set("LegalCopyright", "MIT — github.com/vicrodh/qbz");
+    res.compile().expect("windows resource");
+}
+
+#[cfg(not(windows))]
+fn embed_windows_resources() {}
