@@ -976,9 +976,13 @@ mod tests {
         assert!(one.artwork_url.as_deref().unwrap().contains("Disc 01"));
         assert!(five.artwork_url.as_deref().unwrap().contains("Disc 05"));
         let one_resolved = crate::artwork_qt::cached_path(one.artwork_url.as_deref().unwrap());
+        // Compare separator-normalised: a `file://` URL is always `/`-separated,
+        // so the round trip through it cannot hand back a host's backslashes.
+        // Both forms open the same file on Windows.
+        let slash = |p: &str| p.replace('\\', "/");
         assert_eq!(
-            crate::artwork_qt::local_path(&one_resolved),
-            disc_one.join("cover.jpg").to_string_lossy()
+            slash(&crate::artwork_qt::local_path(&one_resolved)),
+            slash(&disc_one.join("cover.jpg").to_string_lossy())
         );
 
         std::fs::remove_dir_all(&box_dir).unwrap();

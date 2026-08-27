@@ -719,13 +719,9 @@ pub(crate) fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueT
                 album: album.clone(),
                 album_version: None,
                 duration_secs: *duration_secs,
-                artwork_url: artwork_path.clone().map(|path| {
-                    if path.starts_with("file://") {
-                        path
-                    } else {
-                        format!("file://{path}")
-                    }
-                }),
+                artwork_url: artwork_path
+                    .clone()
+                    .map(|path| qbz_models::fs_url::file_url(&path)),
                 hires: bit_depth.map(|depth| depth >= 24).unwrap_or(false),
                 bit_depth: *bit_depth,
                 sample_rate: *sample_rate,

@@ -219,7 +219,7 @@ pub fn classify(url: &str) -> ArtUrl {
             ArtUrl::Plex(fetch)
         };
     }
-    if url.starts_with('/') {
+    if qbz_models::fs_url::is_local_abs_path(url) {
         return ArtUrl::LocalFile(url.to_string());
     }
     ArtUrl::Empty
@@ -240,27 +240,11 @@ pub fn classify(url: &str) -> ArtUrl {
 /// result (a tint decode, a copy) for exactly the files the escaping exists to
 /// support.
 pub fn local_path(url: &str) -> String {
-    let raw = url.strip_prefix("file://").unwrap_or(url);
-    raw.replace("%23", "#")
-        .replace("%3F", "?")
-        .replace("%25", "%")
+    qbz_models::fs_url::local_path(url)
 }
 
 pub fn file_url(path: &str) -> String {
-    if path.starts_with("file://") {
-        return path.to_string();
-    }
-    let mut out = String::with_capacity(path.len() + 8);
-    out.push_str("file://");
-    for ch in path.chars() {
-        match ch {
-            '%' => out.push_str("%25"),
-            '#' => out.push_str("%23"),
-            '?' => out.push_str("%3F"),
-            _ => out.push(ch),
-        }
-    }
-    out
+    qbz_models::fs_url::file_url(path)
 }
 
 // ---------------------------------------------------------------------------

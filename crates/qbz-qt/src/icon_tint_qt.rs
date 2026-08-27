@@ -622,8 +622,12 @@ impl qbz_icon_tint::QbzIconTint {
             }
         }
 
-        // Absolute paths start with '/', so this yields file:///home/...
-        QString::from(&format!("file://{}", root.join(&hex).display()))
+        // NOT format!("file://{path}"): on Windows that yields
+        // file://C:/... where the drive parses as the URL HOST, and the
+        // icon renders as an empty rectangle rather than an error.
+        QString::from(&qbz_models::fs_url::file_url(
+            &root.join(&hex).to_string_lossy(),
+        ))
     }
 }
 

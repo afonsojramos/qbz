@@ -73,10 +73,12 @@ pub fn local_queue_track(t: &LocalTrack) -> QueueTrack {
     // so the now-playing bar / queue resolve it from current creds.
     // `file://`-prefixing it poisons it into a local-read miss.
     let artwork_url = t.artwork_path.as_ref().map(|p| {
-        if is_plex || p.starts_with("file://") {
+        if is_plex {
             p.clone()
         } else {
-            format!("file://{p}")
+            // Idempotent, and drive/UNC-aware: format!("file://{p}") turned
+            // C:/... into a URL whose HOST was the drive letter.
+            qbz_models::fs_url::file_url(p)
         }
     });
     let sample_rate_khz = if t.sample_rate >= 1000.0 {
@@ -238,7 +240,7 @@ impl LocalSource {
     /// `<album>|||<album_artist>` form), and the literal unknown bucket
     /// (`library_qt.rs:1053`).
     fn is_group_key(id: &str) -> bool {
-        id.starts_with('/') || id.contains('|') || id == "__unknown_album__"
+        qbz_models::fs_url::is_local_abs_path(id) || id.contains('|') || id == "__unknown_album__"
     }
 
     /// True when `id` is a Plex namespaced row id (`local_plex.rs:37-42`).
@@ -678,7 +680,7 @@ impl Source for LocalSource {
                 cache_key: token.to_string(),
             };
         }
-        if token.starts_with('/') {
+        if qbz_models::fs_url::is_local_abs_path(token) {
             return ArtRef::File(PathBuf::from(token));
         }
         // A bare relative string is not something this source can resolve.

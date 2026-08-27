@@ -1168,13 +1168,7 @@ async fn offline_album_queue(album_id: &str) -> Result<Vec<QueueTrack>, String> 
             let artwork = local
                 .and_then(|row| row.artwork_path.clone())
                 .or_else(|| cached.resolve_cover_path(&cache_path))
-                .map(|path| {
-                    if path.starts_with("file://") {
-                        path
-                    } else {
-                        format!("file://{path}")
-                    }
-                });
+                .map(|path| qbz_models::fs_url::file_url(&path));
             let album = cached.album.clone().unwrap_or_default();
             let sample_rate = cached
                 .sample_rate
