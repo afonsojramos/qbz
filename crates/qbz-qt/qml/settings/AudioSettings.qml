@@ -150,7 +150,7 @@ Column {
         }
     }
     SettingRow {
-        visible: root.doc.backendIsAlsa === true
+        visible: root.doc.backendIsAlsa === true || root.doc.backendIsWasapi === true
         label: QbzSession.tr("DSD playback", QbzSession.trRev)
         description: QbzSession.tr("How DSD tracks reach the DAC. WARNING: choose DoP or Native only if your DAC supports it — on any other DAC they play as loud noise. Volume is fixed and seeking is disabled in DoP/Native mode. Native additionally needs kernel support for the DAC.", QbzSession.trRev)
         QbzSelect {
@@ -174,6 +174,12 @@ Column {
     // Opening it resets the wizard and kicks the audio-stack probe off the UI
     // thread, so there is nothing to arm here.
     SettingRow {
+        // The generated config is PipeWire/WirePlumber and qbz-dac-wizard-core
+        // knows no other stack, so off Linux the wizard cannot finish. Hidden,
+        // not disabled: a disabled row invites a bug report. This is NOT the
+        // reference's `backend-is-pipewire` gate coming back - within Linux
+        // every backend still sees it, which is the owner ruling above.
+        visible: QbzShell.isLinux
         label: QbzSession.tr("HiFi Wizard", QbzSession.trRev)
         description: QbzSession.tr("Auto-detect your DACs and set up bit-perfect playback, step by step.", QbzSession.trRev)
         SettingsButton {
@@ -190,16 +196,29 @@ Column {
     // =========================== BIT-PERFECT =============================
     GroupHeader { text: QbzSession.tr("BIT-PERFECT", QbzSession.trRev) }
     SettingRow {
+        // Hidden where no backend can honour it: on Windows until WASAPI
+        // exclusive lands (Phase B publishes backendIsWasapi), and on macOS,
+        // whose only backend is System default. Linux is unchanged - visible
+        // always, enabled only on ALSA.
+        //
+        // `backendIsWasapi` does not exist yet; QML reads an absent doc
+        // property as `undefined`, and `undefined === true` is false, so this
+        // is correct today and becomes correct again the day the field lands.
+        visible: QbzShell.isLinux || root.doc.backendIsWasapi === true
         label: QbzSession.tr("Exclusive mode", QbzSession.trRev)
         description: QbzSession.tr("Lock the device so no other app can resample it.", QbzSession.trRev)
-        rowEnabled: root.doc.backendIsAlsa === true
+        rowEnabled: root.doc.backendIsAlsa === true || root.doc.backendIsWasapi === true
         QbzToggle {
             checked: root.doc.exclusiveMode === true
-            enabled: root.doc.backendIsAlsa === true
+            enabled: root.doc.backendIsAlsa === true || root.doc.backendIsWasapi === true
             onToggled: function (v) { QbzBridge.settingsBool("exclusive-mode", v) }
         }
     }
     SettingRow {
+        // D-Bus org.freedesktop.ReserveDevice1, which is Linux only. On
+        // Windows exclusive mode IS the reservation (Phase B); on macOS it is
+        // Hog Mode.
+        visible: QbzShell.isLinux
         label: QbzSession.tr("Reserve DAC while running", QbzSession.trRev)
         description: QbzSession.tr("Hold the device reserved so other apps can't grab it.", QbzSession.trRev)
         QbzToggle {

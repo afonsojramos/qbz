@@ -355,7 +355,10 @@ ApplicationWindow {
         // all stay at their defaults, and nothing would be logged on either
         // side. The wizard is the loudest case after QbzBlacklist, because its
         // first step ends on "Checking your audio stack…" forever.
-        QbzDacWizard.boot()
+        // Linux only: the wizard's row is hidden elsewhere (AudioSettings.qml),
+        // so booting it would spin up an audio-stack probe nothing can reach.
+        if (QbzShell.isLinux)
+            QbzDacWizard.boot()
         // Offline Cache Manager. Nothing to seed — the view is unmounted until
         // the Settings row opens it — but without this line the manager's very
         // first publish is dropped and the view sits on its spinner forever:

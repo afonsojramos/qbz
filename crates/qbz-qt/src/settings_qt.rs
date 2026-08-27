@@ -1812,6 +1812,20 @@ pub struct SettingsDoc {
     /// `AppearanceState.is-macos`.
     #[serde(rename = "isMacos")]
     pub is_macos: bool,
+    #[serde(rename = "isWindows")]
+    pub is_windows: bool,
+    /// A tray backend exists on this platform (`tray_qt::init` would create
+    /// one). Phase A: Linux + macOS. Plan A-2 Task 5 adds Windows.
+    #[serde(rename = "traySupported")]
+    pub tray_supported: bool,
+    /// `notify.rs` has a real arm here. Phase A: Linux + macOS. Plan A-2
+    /// Task 3 adds Windows.
+    #[serde(rename = "systemNotificationsSupported")]
+    pub system_notifications_supported: bool,
+    /// The RENDERER group offers a real choice: Linux (Vulkan/GL/software)
+    /// and Windows (D3D11/D3D12/GL/software). macOS is always Metal.
+    #[serde(rename = "rendererSelectable")]
+    pub renderer_selectable: bool,
     #[serde(rename = "trayIconThemes")]
     pub tray_icon_themes: Vec<String>,
     #[serde(rename = "trayIconThemeIndex")]
@@ -2256,6 +2270,15 @@ pub async fn publish_snapshot() {
                 .map(|t| t.mac_hide_dock)
                 .unwrap_or(false),
             is_macos: cfg!(target_os = "macos"),
+            is_windows: cfg!(target_os = "windows"),
+            // When plan A-2 T3/T5 land, add target_os = "windows" to these
+            // two lists; those plans point at this line.
+            tray_supported: cfg!(any(target_os = "linux", target_os = "macos")),
+            system_notifications_supported: cfg!(any(
+                target_os = "linux",
+                target_os = "macos"
+            )),
+            renderer_selectable: cfg!(any(target_os = "linux", target_os = "windows")),
             tray_icon_themes: TRAY_ICON_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             tray_icon_theme_index: tray()
                 .get_settings()
