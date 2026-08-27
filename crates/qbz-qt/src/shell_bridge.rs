@@ -210,6 +210,19 @@ pub mod qbz_shell {
         // so: without it every two-way `isMacos ? ... : ...` ternary hands
         // Windows the LINUX arm by default. Compile-time, like both others.
         #[qproperty(bool, is_windows)]
+        // The Windows as-is disclaimer. True while the modal should be up.
+        //
+        // Seeded at CONSTRUCTION, like the window geometry above and for the
+        // same reason: Main.qml binds a modal to it and the first frame is
+        // already too late for a post-boot push.
+        //
+        // What it is seeded FROM is a version string, not a boolean. "Don't
+        // show again" stores the version that was acknowledged, so a build
+        // whose version differs from the stored one shows it again with no
+        // separate reset step -- the reset IS the comparison. Dismissing
+        // WITHOUT the box ticked only clears this property, so the next launch
+        // asks once more.
+        #[qproperty(bool, windows_disclaimer_open)]
         // --- Main-window geometry -----------------------------------------
         // The restored LOGICAL size + maximized flag from the shared
         // ui_prefs.json (settings_qt::window_size / window_maximized; the
@@ -456,6 +469,12 @@ pub mod qbz_shell {
         /// "unknown" (the pre-resolution value) is ignored, not latched.
         #[qinvokable]
         fn report_renderer_api(self: Pin<&mut QbzShell>, api: QString);
+
+        /// Close the Windows disclaimer. `remember` = the "Don't show this
+        /// again" box was ticked, which persists the CURRENT version as
+        /// acknowledged; the next release therefore shows it again.
+        #[qinvokable]
+        fn dismiss_windows_disclaimer(self: Pin<&mut QbzShell>, remember: bool);
 
         /// The frame-liveness watchdog's verdict (PARITY-DEBT #104's other
         /// owed half). Reported once by `Main.qml` after a settling window,
@@ -795,6 +814,7 @@ pub struct QbzShellRust {
     is_macos: bool,
     is_linux: bool,
     is_windows: bool,
+    windows_disclaimer_open: bool,
     window_width: f32,
     window_height: f32,
     window_maximized: bool,
@@ -900,6 +920,7 @@ impl Default for QbzShellRust {
             is_macos: cfg!(target_os = "macos"),
             is_linux: cfg!(target_os = "linux"),
             is_windows: cfg!(target_os = "windows"),
+            windows_disclaimer_open: crate::shell_bridge::windows_disclaimer_pending(),
             window_width,
             window_height,
             window_maximized: crate::settings_qt::window_maximized(),
@@ -1089,6 +1110,39 @@ pub fn multi_select_capable() -> bool {
     MULTI_SELECT_CAPABLE.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+/// The Windows as-is disclaimer, stored in `ui_prefs.json` as TWO fields
+/// (owner's call, 2026-08-27):
+///
+/// - `windows_disclaimer_hidden` -- the "Don't show this again" box;
+/// - `windows_disclaimer_ack_version` -- the version it was ticked on.
+///
+/// Two rather than one so the boolean means something on its own: a future
+/// "show it again" control can flip it without inventing a version to write,
+/// and reading the file tells you both what the user chose and when.
+///
+/// KNOWN AND ACCEPTED: reinstalling the SAME version does not bring the modal
+/// back, because `ui_prefs.json` lives in %APPDATA% and outlives the
+/// installer. A version CHANGE does bring it back, which is the requirement.
+/// If the same-version case ever matters, the MSI is the place to clear these
+/// two keys.
+/// Should the Windows as-is disclaimer be shown for THIS build?
+///
+/// Shown unless the user hid it AND hid it on this exact version. A newer
+/// build therefore shows it again with nothing to reset by hand.
+///
+/// Both fields come out of ONE parsed document; the keys and the write live in
+/// `settings_qt`, which owns `ui_prefs.json`'s read-modify-write discipline.
+///
+/// Windows only. On every other platform the modal does not exist, and this
+/// answers false without touching the prefs file.
+pub(crate) fn windows_disclaimer_pending() -> bool {
+    if !cfg!(target_os = "windows") {
+        return false;
+    }
+    let (hidden, acked) = crate::settings_qt::windows_disclaimer_state();
+    !hidden || acked != env!("CARGO_PKG_VERSION")
+}
+
 impl qbz_shell::QbzShell {
     pub fn boot(self: Pin<&mut Self>) {
         if QT_THREAD.set(self.qt_thread()).is_err() {
@@ -1106,6 +1160,29 @@ impl qbz_shell::QbzShell {
     /// `renderer_qt::reduce_motion` rather than assigning the tier directly —
     /// the kiosk toggle writes the same property, and a bare assignment from
     /// either side would erase the other's contribution.
+    /// Close the Windows disclaimer, optionally for this version.
+    ///
+    /// `remember == false` clears the property only: the modal is gone for
+    /// this run and comes back on the next launch, which is what a plain
+    /// "Close" should mean.
+    pub fn dismiss_windows_disclaimer(mut self: Pin<&mut Self>, remember: bool) {
+        self.as_mut().set_windows_disclaimer_open(false);
+        if !remember {
+            return;
+        }
+        // One transaction, and the log follows the RESULT: `save_pref` reports
+        // nothing, so an unconditional "acknowledged" line would claim a write
+        // that never happened whenever the document was unreadable.
+        if crate::settings_qt::save_windows_disclaimer_ack(env!("CARGO_PKG_VERSION")) {
+            log::info!(
+                "[qbz-qt] Windows disclaimer acknowledged for v{}",
+                env!("CARGO_PKG_VERSION")
+            );
+        } else {
+            log::warn!("[qbz-qt] could not persist the Windows disclaimer acknowledgement");
+        }
+    }
+
     pub fn report_renderer_api(mut self: Pin<&mut Self>, api: QString) {
         let api = api.to_string();
         if !crate::renderer_qt::set_active_api(&api) {

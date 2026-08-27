@@ -412,6 +412,57 @@ fn update_prefs(edit: impl FnOnce(&mut serde_json::Map<String, serde_json::Value
     let _ = edit_prefs(|doc| (edit(doc), ()));
 }
 
+/// The Windows as-is disclaimer, kept as two fields (owner's call): the
+/// "Don't show this again" box and the version it was ticked on.
+pub(crate) const WINDOWS_DISCLAIMER_HIDDEN_KEY: &str = "windows_disclaimer_hidden";
+pub(crate) const WINDOWS_DISCLAIMER_VERSION_KEY: &str = "windows_disclaimer_ack_version";
+
+/// Both fields out of ONE parsed document.
+///
+/// Reading them with two `pref_*` calls would parse the file twice and could
+/// synthesise a pair that never existed in a single snapshot -- the shared
+/// `ui_prefs.json` has another writer (the Slint app) and this one is read at
+/// construction, while it is most likely to be mid-write.
+pub(crate) fn windows_disclaimer_state() -> (bool, String) {
+    let Some(path) = prefs_path() else {
+        return (false, String::new());
+    };
+    let Some(doc) = read_json_object(&path) else {
+        return (false, String::new());
+    };
+    let hidden = doc
+        .get(WINDOWS_DISCLAIMER_HIDDEN_KEY)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let version = doc
+        .get(WINDOWS_DISCLAIMER_VERSION_KEY)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    (hidden, version)
+}
+
+/// Both fields into ONE transaction, and report whether it landed.
+///
+/// Two `save_pref` calls would be two whole-document read-modify-writes, and a
+/// crash or a failed rename between them leaves a torn pair -- `hidden` with no
+/// version, or a version with no `hidden`. Either half alone re-opens the
+/// modal, so the user would tick the box and see it again.
+pub(crate) fn save_windows_disclaimer_ack(version: &str) -> bool {
+    edit_prefs(|doc| {
+        doc.insert(
+            WINDOWS_DISCLAIMER_HIDDEN_KEY.to_string(),
+            serde_json::Value::Bool(true),
+        );
+        doc.insert(
+            WINDOWS_DISCLAIMER_VERSION_KEY.to_string(),
+            serde_json::Value::String(version.to_string()),
+        );
+        (true, ())
+    })
+    .is_some()
+}
+
 /// Flip a shared bool pref in ONE document — read and write inside the same
 /// read-modify-write, never `pref_bool` then `save_pref`. `None` = the
 /// document was unreadable, so nothing was written and nothing flipped.

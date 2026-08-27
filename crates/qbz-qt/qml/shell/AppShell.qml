@@ -929,4 +929,16 @@ Rectangle {
     WhatsNewModal {
         anchors.fill: parent
     }
+    // A LOADER, not a static mount. `visible: false` still CONSTRUCTS the
+    // whole subtree -- panel, Flickable, fourteen Repeater delegates, their
+    // texts and bindings -- on Linux and macOS, where this modal can never be
+    // shown. The Loader makes that cost real only where the modal exists.
+    //
+    // Last of the three so it lands on top at equal z: it is shown once per
+    // version at startup and has to be answered.
+    Loader {
+        anchors.fill: parent
+        active: QbzShell.isWindows && QbzShell.windowsDisclaimerOpen === true
+        sourceComponent: WindowsDisclaimerModal { }
+    }
 }

@@ -658,6 +658,7 @@ fn main() {
                 // QbzAbout's two documents.
                 "qml/shell/AboutModal.qml",
                 "qml/shell/WhatsNewModal.qml",
+                "qml/shell/WindowsDisclaimerModal.qml",
                 // Immersive mode (2026-08-02 immersive-port contract §2) —
                 // its own module directory like views/local/ and
                 // views/playlistmanager/. B2 shipped the root overlay + the
