@@ -89,7 +89,9 @@ const AUTHOR_HANDLE: &str = "vicrodh";
 /// The contributor handles. Copied VERBATIM from `about.rs:58-70`, order
 /// included: first the Tauri About modal's order, then the Slint-era
 /// external-PR contributors — `hoyon` (classical "work" grouping, PR #536),
-/// `mxnix` (Russian translation, PR #517) and `TerminalTilt`. Do not reorder.
+/// `mxnix` (Russian translation, PR #517), `TerminalTilt`, plus contributors
+/// whose implementation was superseded by Qt while their solution shipped.
+/// Do not reorder existing entries.
 const CONTRIBUTORS: &[&str] = &[
     "vorce",
     "boxdot",
@@ -102,6 +104,8 @@ const CONTRIBUTORS: &[&str] = &[
     "hoyon",
     "mxnix",
     "TerminalTilt",
+    "Alexandre-Menigault",
+    "MarkusAbtion",
 ];
 
 /// How many contributor chips per wrap row (`about.rs:76`). Slint has no
@@ -307,12 +311,14 @@ mod tests {
         assert_eq!(doc.contributor_rows.len(), 3);
         assert_eq!(doc.contributor_rows[0].len(), 5);
         assert_eq!(doc.contributor_rows[1].len(), 5);
-        assert_eq!(doc.contributor_rows[2].len(), 1);
+        assert_eq!(doc.contributor_rows[2].len(), 3);
         assert_eq!(doc.contributor_rows[0][0].name, "vorce");
         assert_eq!(doc.contributor_rows[2][0].name, "TerminalTilt");
+        assert_eq!(doc.contributor_rows[2][1].name, "Alexandre-Menigault");
+        assert_eq!(doc.contributor_rows[2][2].name, "MarkusAbtion");
         assert_eq!(
-            doc.contributor_rows[2][0].url,
-            "https://github.com/TerminalTilt"
+            doc.contributor_rows[2][2].url,
+            "https://github.com/MarkusAbtion"
         );
     }
 

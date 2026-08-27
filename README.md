@@ -679,6 +679,8 @@ pull requests.
 - [@AdamArstall](https://github.com/AdamArstall)
 - [@DoubleGate](https://github.com/DoubleGate)
 - [@pbaart](https://github.com/pbaart) — Dutch translation
+- [@Alexandre-Menigault](https://github.com/Alexandre-Menigault) — active lyrics wrapping
+- [@MarkusAbtion](https://github.com/MarkusAbtion) — opt-in section navigation
 
 ## License
 
