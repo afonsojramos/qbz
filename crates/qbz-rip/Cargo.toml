@@ -11,4 +11,4 @@ qbz-disc = { path = "../qbz-disc" }
 # to bundle into Flatpak, Snap or AppImage.
 flacenc = "0.5"
 # Already in the tree; writes FLAC Vorbis comments.
-lofty = "0.23"
+lofty.workspace = true

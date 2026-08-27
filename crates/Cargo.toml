@@ -102,6 +102,7 @@ regex = "1"
 
 # Audio
 symphonia = { version = "0.5", features = ["all"] }
+lofty = "0.25.1"
 
 # Random number generation (shuffle / DJ-mix) — mirrors src-tauri pin
 rand = "0.10"

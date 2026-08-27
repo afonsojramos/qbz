@@ -22,7 +22,7 @@ reqwest = { workspace = true }
 futures-util = { workspace = true }
 
 # FLAC tag + artwork embedding (legacy-format post-processing)
-lofty = "0.24"
+lofty.workspace = true
 
 # Platform cache dir (default offline-root location)
 dirs = "6"
@@ -40,7 +40,7 @@ tempfile = "3"
 # a real local HTTP server and drives the pipeline with real bytes. Integration
 # tests do not inherit `[dependencies]`, so the crates it names are repeated here.
 tokio = { workspace = true }
-lofty = "0.23"
+lofty.workspace = true
 qbz-models = { path = "../qbz-models" }
 qbz-library = { path = "../qbz-library" }
 # reqwest is built with `rustls-tls-webpki-roots-no-provider`, so building ANY
