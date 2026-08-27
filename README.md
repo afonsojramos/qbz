@@ -239,6 +239,22 @@ un-notarized apps. Two ways to unlock it, pick one:
   it's a one-time unlock for this copy of the app; updates installed through
   QBZ's own updater don't need it again.
 
+**Community alternative — signed and notarized:** Afonso Ramos independently
+maintains a [Homebrew Cask](https://github.com/afonsojramos/homebrew-qbz):
+
+```bash
+brew install --cask afonsojramos/qbz/qbz
+```
+
+You can also download the Apple Silicon or Intel DMG from the
+[signed macOS releases](https://github.com/afonsojramos/qbz-macos/releases/latest).
+These are made from the upstream QBZ application without recompiling it; its
+signature metadata and DMG container are replaced, then notarized by
+[@afonsojramos](https://github.com/afonsojramos). They are not produced or
+endorsed by the upstream project. The mirror publishes the source commit,
+original checksums, and signed checksums for each release; see its
+[trust and provenance documentation](https://github.com/afonsojramos/qbz-macos#trust-and-provenance).
+
 ## Features
 
 ### Audio and playback
