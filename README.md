@@ -19,29 +19,85 @@
 
 # QBZ
 
-QBZ is a free and open source high-fidelity streaming client for Linux and macOS with fully native playback. As of 2.0, the entire app is a single native Rust process built with a Slint UI — no browser engine, no webview — with DAC passthrough, per-track sample rate switching, exclusive mode, and bit-perfect audio delivery.
+QBZ is a free and open source high-fidelity music player for Linux and macOS
+with fully native playback. It is a single native Rust process with a Qt/QML
+interface — no browser engine, no webview — with DAC passthrough, per-track
+sample rate switching, exclusive mode and bit-perfect audio delivery.
+
+It plays your Qobuz subscription, your own local files, and your Plex, Jellyfin
+or Subsonic/Navidrome server, through the same interface and the same audio
+pipeline.
 
 No API keys needed. No telemetry. No tracking. Just music.
 
-## Legal / Branding
+## Contents
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+- [What QBZ is and what it is not](#what-qbz-is-and-what-it-is-not)
+- [Legal and branding](#legal-and-branding)
+- [Installation](#installation)
+- [Features](#features)
+- [Headless daemon (qbzd)](#headless-daemon-qbzd)
+- [Kiosk mode](#kiosk-mode)
+- [Tech stack](#tech-stack)
+- [Building from source](#building-from-source)
+
+</td>
+<td width="50%" valign="top">
+
+- [Environment variables](#environment-variables)
+- [Known issues](#known-issues)
+- [Reporting a problem](#reporting-a-problem)
+- [On LLMs and AI tools](#on-llms-and-ai-tools)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License](#license)
+
+</td>
+</tr>
+</table>
+
+## What QBZ is and what it is not
+
+QBZ exists as the player we wish a streaming company would give its users. It
+exists to fill the gap of an official client on Linux, because we don't like
+being second class citizens.
+
+But it is just as important to understand what QBZ is not, and never will be.
+It is not a web wrapper; I did not just package the web player and "Linuxify"
+it. It is not a download tool, and it never will be. I built QBZ and not TDL,
+SPTFY or DZR because I believe music belongs to the artists, and Qobuz is, so
+far, the fairest option and the one with the best quality. That is why QBZ
+exists.
+
+It will never have a built-in equalizer or DSP, either. The point is to send
+audio to your DAC untouched, bit for bit, and any processing would break that.
+If you want an EQ or effects, add them at the system level, for example with
+EasyEffects on PipeWire or a JACK graph, which make it easy.
+
+You can download songs to listen to them offline, but they carry the same locks
+as the official client and the same usage window once your membership expires.
+
+On the technical side: browsers cap audio output at 48 kHz and resample
+everything through WebAudio. QBZ uses a native playback pipeline with direct
+device control, so your DAC receives the original resolution, up to
+24-bit / 192 kHz, with no forced resampling.
+
+## Legal and branding
 
 - This application uses the Qobuz API but is not certified by Qobuz.
-- Qobuz is a trademark of Qobuz. QBZ is not affiliated with, endorsed by, or certified by Qobuz.
-- **Offline cache** is a temporary playback store for listening without an internet connection while you have a valid subscription. If your subscription becomes invalid, QBZ will remove all cached content after 3 days.
-- **Local library** is a "bring your own music" feature — play your own files with bit-perfect audio and the full QBZ interface, no streaming subscription required.
+- Qobuz is a trademark of Qobuz. QBZ is not affiliated with, endorsed by, or
+  certified by Qobuz.
+- **Offline cache** is a temporary playback store for listening without an
+  internet connection while you have a valid subscription. If your subscription
+  becomes invalid, QBZ will remove all cached content after 3 days.
+- **Local library** is a "bring your own music" feature — play your own files
+  with bit-perfect audio and the full QBZ interface, no streaming subscription
+  required.
 - Qobuz Terms of Service: https://www.qobuz.com/us-en/legal/terms
-
-## Why QBZ
-
-QBZ exists as the player we wish a streaming company would give its users. It exists to fill the gap of an official client on Linux, because we don't like being second class citizens.
-
-But it is just as important to understand what QBZ is not, and never will be. It is not a web wrapper; I did not just package the web player and "Linuxify" it. It is not a download tool, and it never will be. I built QBZ and not TDL, SPTFY or DZR because I believe music belongs to the artists, and Qobuz is, so far, the fairest option and the one with the best quality. That is why QBZ exists.
-
-It will never have a built-in equalizer or DSP, either. The point is to send audio to your DAC untouched, bit for bit, and any processing would break that. If you want an EQ or effects, add them at the system level, for example with EasyEffects on PipeWire or a JACK graph, which make it easy.
-
-You can download songs to listen to them offline, but they carry the same locks as the official client and the same usage window once your membership expires.
-
-On the technical side: browsers cap audio output at 48 kHz and resample everything through WebAudio. QBZ uses a native playback pipeline with direct device control, so your DAC receives the original resolution, up to 24-bit / 192 kHz, with no forced resampling.
 
 ## Installation
 
@@ -57,7 +113,18 @@ yay -S qbz-bin    # or paru -S qbz-bin
 flatpak install flathub com.blitzfc.qbz
 ```
 
-> **Audiophiles:** Flatpak sandboxing limits PipeWire bit-perfect. Use ALSA Direct backend for guaranteed bit-perfect in Flatpak, or install via native packages for full PipeWire support.
+> **Audiophiles:** bit-perfect works in Flatpak. The sandbox needs one
+> permission grant so QBZ can ask PipeWire to hand the DAC over cleanly (D-Bus
+> device reservation) — without it PipeWire keeps holding the device and other
+> apps keep mixing through it, even with exclusive mode selected:
+>
+> ```bash
+> flatpak override --user --own-name=org.freedesktop.ReserveDevice1.* com.blitzfc.qbz
+> ```
+>
+> QBZ shows this and the other sandbox grants under **Settings → Flatpak** with
+> copyable commands, and the HiFi Wizard covers the rest. Your host audio stack
+> still has to be configured correctly.
 
 ### Snap
 
@@ -67,9 +134,10 @@ sudo snap connect qbz-player:alsa
 sudo snap connect qbz-player:pipewire
 ```
 
-> **Note:** After installing, connect ALSA and PipeWire interfaces for full audio support. MPRIS media keys work out of the box.
+> **Note:** After installing, connect ALSA and PipeWire interfaces for full
+> audio support. MPRIS media keys work out of the box.
 
-### APT Repository (Debian/Ubuntu/Mint)
+### APT (Debian / Ubuntu / Mint)
 
 ```bash
 curl -fsSL https://vicrodh.github.io/qbz-apt/qbz-archive-keyring.gpg | gpg --dearmor | sudo tee /usr/share/keyrings/qbz-archive-keyring.gpg > /dev/null
@@ -84,11 +152,13 @@ EOF
 sudo apt update && sudo apt install qbz
 ```
 
-> Requires glibc 2.39+ (Ubuntu 24.04+, Debian 13+). For older releases use Flatpak, Snap, or AppImage.
+> Requires glibc 2.39+ (Ubuntu 24.04+, Debian 13+). For older releases use
+> Flatpak, Snap, or AppImage.
 
-### RPM (Fedora/openSUSE)
+### RPM (Fedora / openSUSE)
 
-Download from [Releases](https://github.com/vicrodh/qbz/releases): `sudo dnf install ./qbz-*.rpm`
+Download from [Releases](https://github.com/vicrodh/qbz/releases):
+`sudo dnf install ./qbz-*.rpm`
 
 > Requires glibc 2.39+ (Fedora 40+, openSUSE Tumbleweed).
 
@@ -101,14 +171,6 @@ emerge media-sound/qbz-bin    # prebuilt binary (recommended)
 # or
 emerge media-sound/qbz        # build from source
 ```
-
-> **Source-build warning (yes, even by Gentoo standards):** QBZ's UI compiles
-> into one giant generated Rust module — the release build peaks at 20–30 GB
-> of RAM and takes a long while (see
-> [The memory wall](#-the-memory-wall-read-this-before-your-first-build)).
-> Every version bump recompiles it. `qbz-bin` spares you all of that; the
-> source ebuild is there for those who enjoy the smell of rustc in the
-> morning.
 
 ### NixOS / Nix
 
@@ -144,13 +206,20 @@ inputs.qbz.url = "github:vicrodh/qbz";
 
 ### AppImage
 
-Download from [Releases](https://github.com/vicrodh/qbz/releases): `chmod +x QBZ.AppImage && ./QBZ.AppImage`
+Download from [Releases](https://github.com/vicrodh/qbz/releases):
+`chmod +x QBZ.AppImage && ./QBZ.AppImage`
 
 ### macOS
 
-**QBZ is Linux-first, but as of 2.0 macOS is out of its experimental phase and is a stable, fully supported platform** — a proper player for Linux and Mac. PipeWire, ALSA, and JACK are Linux-specific backends; macOS plays through its own CoreAudio backend, including a Core Audio Direct passthrough path for bit-perfect output. Casting (Chromecast/DLNA) and Qobuz Connect work on macOS as well.
+**QBZ is Linux-first, but macOS is a stable, fully supported platform** — a
+proper player for Linux and Mac. PipeWire, ALSA and JACK are Linux-specific
+backends; macOS plays through its own CoreAudio backend, including a Core Audio
+Direct passthrough path for bit-perfect output. Casting (Chromecast/DLNA) and
+Qobuz Connect work on macOS as well.
 
-Download the DMG (Apple Silicon or Intel) from [Releases](https://github.com/vicrodh/qbz/releases) and drag QBZ into Applications.
+Download the DMG (Apple Silicon or Intel) from
+[Releases](https://github.com/vicrodh/qbz/releases) and drag QBZ into
+Applications.
 
 **First launch:** QBZ is ad-hoc signed but NOT notarized (no Apple Developer
 subscription), so Gatekeeper will block the first run — and on recent macOS
@@ -172,34 +241,61 @@ un-notarized apps. Two ways to unlock it, pick one:
 
 ## Features
 
-### Audio and Playback
+### Audio and playback
 
-- **Bit-perfect playback** with DAC passthrough and per-track sample rate switching (44.1–192 kHz)
-- **Linux backends:** PipeWire, ALSA (with a Direct hw: bypass mode), PulseAudio, and JACK — all hardened in 2.0, PipeWire/PulseAudio work out of the box
-- **macOS backend:** CoreAudio, including a Core Audio Direct passthrough path for bit-perfect output
-- **HiFi Wizard** — revamped in 2.0 with real hardware auto-detection and a simpler, guided bit-perfect setup
+- **Bit-perfect playback** with DAC passthrough and per-track sample rate
+  switching (44.1–192 kHz)
+- **Linux backends:** PipeWire, ALSA (with a Direct `hw:` bypass mode),
+  PulseAudio and JACK — PipeWire and PulseAudio work out of the box
+- **macOS backend:** CoreAudio, including a Core Audio Direct passthrough path
+  for bit-perfect output
+- **HiFi Wizard** — hardware auto-detection and a guided bit-perfect setup
 - Native decoding: FLAC, MP3, AAC, ALAC, WavPack, Ogg Vorbis, Opus (Symphonia)
-- **DSD support** — DSF/DFF playback with DSD-to-PCM conversion, DoP, and native DSD passthrough (ALSA)
+- **DSD support** — DSF/DFF playback with DSD-to-PCM conversion, DoP, and
+  native DSD passthrough (ALSA)
+- **CD and SACD playback** — audio CDs and SACD discs play directly from the
+  drive; SACD goes out over DoP, with the titles read from the disc
+- **CD ripping to FLAC** — a guided rip wizard with per-track progress
 - Gapless playback on all backends
 - **Loudness normalization** (EBU R128) with ReplayGain support
 - Two-level audio cache with next-track prefetching
-- Streaming playback — start listening before download completes
+- Streaming playback — start listening before the download completes
 
-### Queue and Library
+### Your music, wherever it lives
 
-- Queue with shuffle, repeat (track/queue/off), and history
+QBZ treats every source the same way: one queue, one player, one interface.
+
+- **Qobuz** — your subscription, favourites, playlists and purchases
+- **Local files** — directory scanning, metadata extraction, CUE sheets and a
+  SQLite catalog; usable without ever logging into Qobuz
+- **Plex** — browse and play your Plex music library
+- **Jellyfin** — browse and play your Jellyfin music library
+- **Subsonic / Navidrome** — any Subsonic-compatible server
+- **Optical discs** — CD and SACD, played or ripped
+
+### Queue and library
+
+- Queue with shuffle, repeat (track/queue/off) and history
 - Favorites and playlists from your Qobuz account
-- **Qobuz playlist follow/unfollow** — subscribe natively, syncs across all Qobuz clients
-- **Local library** — directory scanning, metadata extraction, CUE sheets, SQLite indexing; usable without ever logging into Qobuz
-- **Artist/album blacklist** — block artists or individual albums, not just genres; fully reversible
-- Tag editor with sidecar storage (preserves original files)
+- **Qobuz playlist follow/unfollow** — subscribe natively, syncs across all
+  Qobuz clients
+- **Playlist manager** with folders and tags, plus playlist import from
+  Spotify, Apple Music, Tidal and Deezer
+- **Artist/album blacklist** — block artists or individual albums, not just
+  genres; fully reversible
+- **Metadata editor** — a full tabular editor for your local files, with
+  MusicBrainz and Discogs lookup, album art from local files or from
+  Cover Art Archive / Discogs / Last.fm, and a sidecar mode that leaves your
+  original files untouched
 - Virtualized lists for large libraries
 
 ### Qobuz Connect
 
-Multi-device playback control using Qobuz's real-time streaming protocol. Considerably more stable as of 2.0, though full 1:1 parity with the official clients is still in progress.
+Multi-device playback control using Qobuz's real-time streaming protocol. Full
+1:1 parity with the official clients is still in progress.
 
-- **Renderer mode** — receive playback commands from your phone, tablet, or web player
+- **Renderer mode** — receive playback commands from your phone, tablet or web
+  player
 - **Controller mode** — control remote devices from QBZ
 - Server-authoritative queue sync across all devices
 - Bidirectional transport: play, pause, skip, seek, shuffle, repeat, volume
@@ -214,57 +310,70 @@ Multi-device playback control using Qobuz's real-time streaming protocol. Consid
 - **MPRIS** media controls and media keys
 - **Last.fm** scrobbling and now-playing
 - **ListenBrainz** scrobbling with offline queue
-- **MusicBrainz** artist enrichment, musician credits, relationships (no telemetry — one-way pull)
-- **Discogs** artwork for local library
-- Playlist import from Spotify, Apple Music, Tidal, Deezer
+- **MusicBrainz** artist enrichment, musician credits, relationships (no
+  telemetry — one-way pull)
+- **Discogs** artwork and metadata for the local library
 - Desktop notifications with artwork
 
-### Immersive Player
+### Immersive player
 
-- Full-screen player with tabbed panel system, trimmed and re-tuned in 2.0 to stop being a resource drain
-- Multiple full-bleed view modes — Album Reactive, Coverflow, Static, Spectrum, Wave Bed, Lyrics — plus GPU shader scenes (Plasma, Tunnel, Aurora, Spectral Ribbon, Line Bed)
-- **Search overlay works inside Immersive mode** — switch albums without leaving the view
+- Full-screen player with a tabbed panel system
+- Multiple full-bleed view modes — Album Reactive, Coverflow, Static, Spectrum,
+  Wave Bed, Lyrics — plus GPU shader scenes (Plasma, Tunnel, Aurora, Spectral
+  Ribbon, Line Bed)
+- **Search overlay works inside Immersive mode** — switch albums without
+  leaving the view
 - Synchronized lyrics with line-by-line display
 - Split-panel layouts: Lyrics, Track Info, Suggestions, Queue
 
 ### Discovery
 
-- **Scene Discovery** — explore artists by location and musical scene (MusicBrainz-powered)
+- **Scene Discovery** — explore artists by location and musical scene
+  (MusicBrainz-powered)
 - **3-tab Home:** customizable Home, Editor's Picks, personalized For You
-- **Recommendations** — Last.fm and ListenBrainz/MusicBrainz-powered discovery based on your listening history, similarities, and local-listen vectorization
-- **Live search overlay** with a small cache layer that learns your preferences and stops surfacing results you never touch
+- **Recommendations** — Last.fm and ListenBrainz/MusicBrainz-powered discovery
+  based on your listening history, similarities and local-listen vectorization
+- **Live search overlay** with a small cache layer that learns your preferences
+  and stops surfacing results you never touch
 - Genre filtering, artist similarity engine, radio stations
 - Musician pages, label pages, album credits
 
 ### Interface
 
-- 30+ themes (Dark, OLED, Nord, Dracula, Tokyo Night, Catppuccin, Breeze, Adwaita...)
+- 30+ themes (Dark, OLED, Nord, Dracula, Tokyo Night, Catppuccin, Breeze,
+  Adwaita...) plus a custom theme editor
 - Auto-theme from DE, wallpaper, or custom image
-- Mini player
-- Album booklets download to your device — the old in-app PDF reader was dropped in 2.0 to keep the binary lean
+- Mini player and system tray
+- Album booklets download to your device
 - Configurable keyboard shortcuts, UI scale presets (XS–XL)
-- **8 languages:** English, Spanish, German, French, Portuguese, Russian, Japanese, Dutch
-- **Offline mode** usable without ever logging into Qobuz, with fully offline playlists and automatic reconnection
+- **8 languages:** English, Spanish, German, French, Portuguese, Russian,
+  Japanese, Dutch
+- **Offline mode** usable without ever logging into Qobuz, with fully offline
+  playlists and automatic reconnection
 
-## Headless Daemon (qbzd)
+## Headless daemon (qbzd)
 
 <p align="center">
   <img src="static/readme-qbzd.png" alt="qbzd — headless daemon CLI and TUI" width="760" />
 </p>
 
-Run QBZ without a screen: `qbzd` is a standalone ~25 MB binary (shipped inside the deb/rpm
-packages and as its own tarball) that turns any Linux box — a Raspberry Pi, a NAS, the
-living-room mini-PC — into a bit-perfect **Qobuz Connect endpoint** that appears in the
-official Qobuz apps like a hardware streamer.
+Run QBZ without a screen: `qbzd` is a standalone ~25 MB binary (shipped inside
+the deb/rpm packages and as its own tarball) that turns any Linux box — a
+Raspberry Pi, a NAS, the living-room mini-PC — into a bit-perfect **Qobuz
+Connect endpoint** that appears in the official Qobuz apps like a hardware
+streamer.
 
 - Daemon + full CLI + terminal setup wizard (TUI) in one binary
-- Browser-based login that works over SSH; one-file settings hand-off from desktop QBZ
+- Browser-based login that works over SSH; one-file settings hand-off from
+  desktop QBZ
 - HiFi wizard with copyable audio-stack config blocks (clipboard works over SSH)
-- MPRIS out of the box, live JSON events (`qbzd watch`), service files for systemd/OpenRC/runit
+- MPRIS out of the box, live JSON events (`qbzd watch`), service files for
+  systemd/OpenRC/runit
 
-Full manual: **[Headless Daemon (qbzd) — Wiki](https://github.com/vicrodh/qbz/wiki/Headless-Daemon)**
+Full manual:
+**[Headless Daemon (qbzd) — Wiki](https://github.com/vicrodh/qbz/wiki/Headless-Daemon)**
 
-## Kiosk Mode
+## Kiosk mode
 
 For Raspberry screens and handheld consoles.
 
@@ -272,224 +381,277 @@ For Raspberry screens and handheld consoles.
   <img src="static/readme-kiosk.jpeg" alt="QBZ Kiosk Mode on a handheld console" width="720" />
 </p>
 
-A touch-first face for touchscreens and small panels: set `QBZ_PROFILE=kiosk` and QBZ boots
-a big-target shell with its own NavRail, touch scrolling, an on-screen keyboard, and a
-centerpiece Now Playing with cover↔lyrics toggle and queue/history tabs. Switch between
-Kiosk and Desktop live from the Now Playing layout menu; fullscreen is opt-in via
-`QBZ_KIOSK_FULLSCREEN=1`.
+A touch-first face for touchscreens and small panels: set `QBZ_PROFILE=kiosk`
+and QBZ boots a big-target shell with its own NavRail, touch scrolling, an
+on-screen keyboard, and a centerpiece Now Playing with cover↔lyrics toggle and
+queue/history tabs. Switch between Kiosk and Desktop live from the Now Playing
+layout menu; fullscreen is opt-in via `QBZ_KIOSK_FULLSCREEN=1`.
 
-## Tech Stack
+## Tech stack
 
-As of 2.0, QBZ is a single native Rust process: the **Slint UI runs in-process** and talks to the same Rust core crates directly through callbacks and shared state — there is no browser engine, no webview, and no IPC bridge to serialize across (the old Tauri command-invoke boundary is gone entirely).
+QBZ is a single native Rust process. The UI is **Qt/QML**, bound to the Rust
+core through [cxx-qt](https://github.com/KDAB/cxx-qt): the QML scene graph and
+the Rust backend live in the same process and talk through generated QObject
+bridges — there is no browser engine, no webview and no IPC boundary to
+serialize across.
 
 | Layer | Technology |
 |-------|-----------|
-| **Desktop shell + UI** | Rust + Slint (native, single process — no webview, no IPC) |
-| **Audio decoding** | Symphonia (all codecs) via rodio 0.22 |
-| **Audio backends** | Linux: PipeWire, ALSA (alsa-rs, incl. Direct hw:), PulseAudio, JACK. macOS: CoreAudio (incl. Core Audio Direct) |
+| **Desktop shell + UI** | Qt 6 / QML via cxx-qt (native, single process — no webview, no IPC) |
+| **Custom rendering** | Qt RHI scene-graph items + baked `.qsb` shaders (visualizers, immersive scenes, waveform) |
+| **Audio decoding** | Symphonia (all codecs) via rodio |
+| **Audio backends** | Linux: PipeWire, ALSA (alsa-rs, incl. Direct `hw:`), PulseAudio, JACK. macOS: CoreAudio (incl. Core Audio Direct) |
 | **Networking** | reqwest (rustls-tls) |
 | **Database** | rusqlite (bundled SQLite, WAL mode) |
-| **Desktop** | mpris-server (Linux MPRIS), souvlaki (macOS/Windows media controls), ksni (Linux tray), keyring |
+| **Desktop** | mpris-server (Linux MPRIS), souvlaki (macOS media controls), ksni (Linux tray), keyring |
 | **Casting** | rust_cast (Chromecast), rupnp (DLNA/UPnP), mdns-sd |
-| **i18n** | qbz-i18n, gettext-style `.po` bundles compiled into the binary (7 locales) |
+| **i18n** | qbz-i18n, gettext-style `.po` bundles compiled into the binary (8 locales) |
 
-### Multi-Crate Architecture
+### Multi-crate architecture
 
-The Rust workspace lives entirely under `crates/` (manifest `crates/Cargo.toml`); the `qbz` crate is the binary, `qbz-ui` holds the Slint views and view-models. A representative slice of the 36 workspace members:
+The Rust workspace lives entirely under `crates/` (manifest
+`crates/Cargo.toml`). `qbz-qt` is the application crate — it owns the QML tree,
+the cxx-qt bridges and the RHI items, and produces the `qbz` binary. Everything
+below it is frontend-agnostic. A representative slice of the workspace:
 
 ```
 crates/
-  qbz/                   Binary crate: app entrypoint, window/renderer setup, wiring
-  qbz-ui/                Slint views (.slint) and view-model glue
+  qbz-qt/                Application crate: QML tree, cxx-qt bridges, RHI items
   qbz-app/               Application-level orchestration (non-UI)
-  qbz-theme/             Theme engine (30+ themes)
-  qbz-i18n/              Bundled translations (7 locales)
+  qbz-core/              Orchestrator (player + audio + API)
   qbz-models/            Shared domain types
+  qbz-theme/             Theme engine (30+ themes)
+  qbz-i18n/              Bundled translations (8 locales)
+
   qbz-audio/             Audio backends, loudness, device management
   qbz-player/            Playback engine, streaming, queue
-  qbz-qobuz/             Qobuz API client and auth
-  qbz-core/              Orchestrator (player + audio + API)
-  qbz-library/           Local library scanning and metadata
   qbz-dsd/               DSD (DSF/DFF) decoding, DoP, native DSD packing
-  qbz-plex/              Plex library integration
+  qbz-disc/              Optical media: CD-DA and SACD
+  qbz-rip/               CD ripping to FLAC
+  qbz-cmaf/              CMAF/DASH streaming
+  qbz-cache/             L1 memory + L2 disk audio caching
+  qbz-offline-cache/     Offline downloads and their lifecycle
+
+  qbz-qobuz/             Qobuz API client and auth
+  qbz-source/            Source-agnostic seam over every backend
+  qbz-library/           Local file scanning and metadata
+  qbz-local-catalog/     Derived read projection for the local library
+  qbz-plex/              Plex integration
+  qbz-jellyfin/          Jellyfin integration
+  qbz-subsonic/          Subsonic / Navidrome integration
+  qbz-media-cache/       Shared cache for remote media servers
+
   qbz-integrations/      Last.fm, ListenBrainz, MusicBrainz, Discogs
   qbz-reco/ qbz-external-reco/  Recommendations engine
   qbz-lyrics/            Lyrics (Qobuz-native, external fallback)
+  qbz-radio/             Radio stations
   qbz-mixtape/           Mixtape/DJ-mix generation
   qbz-playlist-import/   Spotify, Apple Music, Tidal, Deezer import
   qbz-media-controls/    MPRIS / SMTC / MPNowPlayingInfoCenter
-  qbz-dac-wizard/        HiFi Wizard (hardware auto-detection)
-  qbz-cache/             L1 memory + L2 disk audio caching
   qbz-cast/              Chromecast, DLNA/UPnP
+  qbz-dac-wizard-core/   HiFi Wizard (hardware auto-detection)
   qbz-credentials/ qbz-secrets/  Auth/token storage
+
   qconnect-protocol/     Qobuz Connect protobuf wire format
   qconnect-core/         Queue and renderer domain models
   qconnect-app/          Application logic and concurrency
   qconnect-transport-ws/ WebSocket transport with qcloud framing
+
+  qbzd/                  Headless daemon + CLI + setup TUI
 ```
 
-## Building from Source
+## Building from source
 
-QBZ 2.0 is a pure Rust workspace — there is no Node.js, no `npm install`, no
-webview. The workspace manifest is `crates/Cargo.toml`, and the app binary is
-the `qbz` crate inside it.
+QBZ is a pure Rust workspace — there is no Node.js, no `npm install`, no
+webview. The workspace manifest is `crates/Cargo.toml` and the application
+crate is `qbz-qt`, which builds a binary called `qbz`.
 
 ### Prerequisites
 
-- **Rust stable** for a plain `cargo build`, or the **nightly toolchain** if
-  you use the repo's build scripts (they pass `-Z threads` to parallelize the
-  compiler frontend — see below).
-- Linux or macOS with audio support. On Linux the scripts use
-  [`mold`](https://github.com/rui314/mold) as linker (install it, or edit the
-  `RUSTFLAGS` they set); plain `cargo build` needs neither nightly nor mold.
+- **Rust stable.** No nightly, no `mold`, no custom `RUSTFLAGS` — the build
+  needs none of them, and setting any of them invalidates the whole build cache
+  for no gain.
+- **Qt 6.8 or newer**, including its development headers *and* the private
+  headers (`<rhi/qrhi.h>` lives in Qt's private tree and the custom scene-graph
+  items need it).
+- Linux or macOS with audio support.
 - No Node.js/npm required.
 
-### System Dependencies
+### System dependencies
 
-Verified against the project's own Linux CI build (`.github/workflows/build-slint.yml`):
+**Debian / Ubuntu:**
 
-**Debian/Ubuntu:**
 ```bash
 sudo apt install build-essential pkg-config cmake clang libclang-dev nasm \
-  libasound2-dev libjack-jackd2-dev libfontconfig1-dev libfreetype-dev \
-  libxkbcommon-dev libwayland-dev libxcb1-dev libgl1-mesa-dev libegl1-mesa-dev \
-  libdbus-1-dev libssl-dev
+  qt6-base-dev qt6-base-private-dev \
+  qt6-declarative-dev qt6-declarative-private-dev \
+  qt6-shadertools-dev \
+  libasound2-dev libjack-jackd2-dev libdbus-1-dev libssl-dev
 ```
 
-**Fedora, Arch, Gentoo, and other distros:** package names differ; look for the
-equivalents of the Debian list above (a C compiler + clang/libclang, cmake,
-nasm, ALSA + JACK dev headers, fontconfig/freetype, Wayland/X11/xkbcommon,
-Mesa GL/EGL, D-Bus, and OpenSSL dev headers). Please open a PR if you confirm
-exact package names for your distro.
+`qt6-shadertools-dev` provides `qsb`, the shader baker. It is optional: the
+`.qsb` files are committed, so a build without `qsb` simply keeps them (the
+build prints a warning). You need it if you intend to modify a shader.
 
-**macOS:** Xcode Command Line Tools (`xcode-select --install`) and a Rust
-toolchain — that's it.
+**Fedora, Arch, Gentoo and other distros:** package names differ; look for the
+equivalents of the list above — a C/C++ compiler plus clang/libclang, cmake,
+nasm, the Qt 6 Base and Declarative modules with their development *and*
+private headers, Qt Shader Tools, and ALSA, JACK, D-Bus and OpenSSL development
+headers. Please open a PR if you confirm exact package names for your distro.
 
-### ⚠ The memory wall (read this before your first build)
+**macOS:** Xcode Command Line Tools (`xcode-select --install`), a Rust
+toolchain, and Qt 6 — Homebrew's `qt` is what the build is tested against
+(`brew install qt`); the build script finds it at `/opt/homebrew/opt/qt`
+without any `PATH` fiddling.
 
-Slint compiles the entire UI into ONE generated Rust module (~1.6 M lines for
-QBZ). A single **release** `rustc` invocation for that crate peaks at
-**20–30 GB of RAM**. This is a one-time cost per profile — once the UI crate is
-cached, incremental builds are cheap — but the first build WILL hit it, and on
-a machine without enough headroom the compiler gets OOM-killed (or worse,
-swap-freezes the box).
-
-The knobs that tame it (each lowers peak memory at some compile-time or
-runtime-optimization cost):
-
-| Knob | Effect |
-|------|--------|
-| `CARGO_BUILD_JOBS=1` | one rustc at a time — the single biggest saver |
-| `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256` | smaller codegen chunks (slightly less optimized binary) |
-| `CARGO_PROFILE_RELEASE_OPT_LEVEL=2` | opt 2 instead of 3 shaves several GB |
-| `-Z threads=1..2` (nightly RUSTFLAGS) | fewer frontend threads = less parallel memory |
-| swap | the peak tolerates swap; 16 GB RAM + ~18 GB swap is CI-proven |
-
-**If you have < 32 GB of RAM**, this works on any machine down to ~16 GB
-(+ swap) — it is literally the recipe our 16 GB CI runners use; expect it to be
-slow (2–3 h from scratch) rather than to fail:
-
-```bash
-CARGO_BUILD_JOBS=1 \
-CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256 \
-CARGO_PROFILE_RELEASE_OPT_LEVEL=2 \
-cargo build --release --manifest-path crates/Cargo.toml -p qbz
-```
-
-**If you have ≥ 32 GB free**, the plain build is fine and much faster:
+### Build and run
 
 ```bash
 git clone https://github.com/vicrodh/qbz.git && cd qbz
-cargo build --release --manifest-path crates/Cargo.toml -p qbz
+cargo build --release --manifest-path crates/Cargo.toml -p qbz-qt
 ./crates/target/release/qbz
 ```
 
-### The convenient way (Linux): `scripts/slint-run.sh`
+A release build from scratch is on the order of ten minutes on a modern
+desktop; incremental builds are a couple of minutes. The UI is QML and is
+loaded at runtime, so a change that touches only `.qml` does not go through
+`rustc` at all.
 
-The repo ships the build script we use ourselves — it reads `MemAvailable`
-and picks a tier automatically, so you don't have to think about any of the
-above:
+### The build script: `scripts/qt-run.sh`
 
-| Free RAM | Tier | Settings |
-|----------|------|----------|
-| ≥ 26 GB | FAST | threads=16, cgu=16, opt=3 — the distribution-grade build |
-| 14–26 GB | SAFE | threads=2, cgu=256, opt=3 |
-| < 14 GB | MIN | threads=1, cgu=256, opt=2 — slow but never freezes |
+The repo ships the build script we use ourselves. It runs the static QML audits
+first (they catch the class of mistake `cargo check` cannot see — a missing
+component, or a call to a bridge member that does not exist — in about a
+second), then builds and executes the binary directly:
 
 ```bash
-./scripts/slint-run.sh          # build (auto-tier) and run the binary
-NORUN=1 ./scripts/slint-run.sh  # build only
-FAST=1  ./scripts/slint-run.sh  # force the fast tier (close your apps first)
-THREADS=4 CODEGEN_UNITS=128 OPT=3 ./scripts/slint-run.sh  # manual override
+./scripts/qt-run.sh             # build (release) and run
+DEBUG=1    ./scripts/qt-run.sh  # debug profile
+NORUN=1    ./scripts/qt-run.sh  # build only
+TEST=1     ./scripts/qt-run.sh  # also run the crate's tests
+SMOKE=1    ./scripts/qt-run.sh  # offscreen smoke run instead of the GUI
+NO_AUDIT=1 ./scripts/qt-run.sh  # skip the QML audits
+JOBS=4     ./scripts/qt-run.sh  # cargo build jobs
 ```
 
-It requires the nightly toolchain and `mold`. Note that SAFE/MIN produce a
-functionally identical but not byte-identical binary vs FAST (different
-codegen-units/opt-level), and switching tiers forces a one-time rebuild of the
-UI crate.
-
-### Development iteration: release vs fast-debug
-
-Two dev loops, on purpose:
-
-- **`./scripts/slint-dev.sh`** — builds and runs in **release** mode with the
-  parallel compiler frontend. This is the default dev loop: runtime
-  performance is the whole reason QBZ is a native app, so we always test at
-  release perf and a regression can never hide behind "it's just dev mode".
-  The binary is the same optimized artifact as `cargo build --release`; only
-  compile time improves.
-- **`./scripts/slint-dev-fast.sh`** — **debug** build, dramatically faster to
-  compile and far lighter on RAM. Use it for purely visual/layout iteration
-  where runtime performance does not matter. Never benchmark on it.
-
-On macOS use **`./scripts/slint-dev-mac.sh`** (same intent, Apple-toolchain
-flags; works on Apple Silicon and Intel — an 8 GB M-series Mac builds fine,
-just slowly, thanks to macOS's aggressive swap).
+It works on Linux and macOS.
 
 ### Nix / NixOS
 
-`flake.nix` builds the same `qbz` binary via `rustPlatform.buildRustPackage`
-(`cargoBuildFlags = [ "-p" "qbz" ]`, root at `crates/`) — see the
-[NixOS / Nix](#nixos--nix) install section above, or run `nix build` /
-`nix develop` directly from a checkout.
+`flake.nix` builds the same binary via `rustPlatform.buildRustPackage` with the
+crate root at `crates/` — see the [NixOS / Nix](#nixos--nix) install section
+above, or run `nix build` / `nix develop` directly from a checkout.
 
-### API Proxy
+### API proxy
 
-Last.fm, Discogs, Tidal, Spotify-import, and MusicBrainz traffic goes through a hosted Cloudflare Workers proxy (`qbz-api-proxy.blitzkriegfc.workers.dev`) that holds all credentials server-side. Both pre-built releases and source builds use it out of the box — **no API keys or `.env` file required**.
+Last.fm, Discogs, Tidal, Spotify-import and MusicBrainz traffic goes through a
+hosted Cloudflare Workers proxy (`qbz-api-proxy.blitzkriegfc.workers.dev`) that
+holds all credentials server-side. Both pre-built releases and source builds use
+it out of the box — **no API keys or `.env` file required**.
 
-If you want to run against your own proxy (for development, or if you fork QBZ), the proxy source lives at [`vicrodh/qbz-api-proxy`](https://github.com/vicrodh/qbz-api-proxy). Deploy it with `wrangler deploy` and then edit the `*_PROXY_URL` constants in `crates/qbz-integrations/src/lastfm/client.rs`, `crates/qbz-integrations/src/discogs/mod.rs`, `crates/qbz-playlist-import/src/providers/tidal.rs`, and `crates/qbz-integrations/src/musicbrainz/client.rs` to point at your worker before rebuilding.
+If you want to run against your own proxy (for development, or if you fork
+QBZ), the proxy source lives at
+[`vicrodh/qbz-api-proxy`](https://github.com/vicrodh/qbz-api-proxy). Deploy it
+with `wrangler deploy` and then edit the `*_PROXY_URL` constants in
+`crates/qbz-integrations/src/lastfm/client.rs`,
+`crates/qbz-integrations/src/discogs/mod.rs`,
+`crates/qbz-playlist-import/src/providers/tidal.rs` and
+`crates/qbz-integrations/src/musicbrainz/client.rs` to point at your worker
+before rebuilding.
 
-### Environment Variables
+## Environment variables
 
-As of 2.0, QBZ auto-detects a working renderer (GPU wgpu → femtovg/OpenGL → software) at startup across Wayland/X11/Metal, so there is normally nothing to configure. One override remains for diagnostics or a broken GPU stack:
+QBZ picks a working renderer at startup and reverts automatically if a forced
+choice fails to produce frames, so there is normally nothing to configure. The
+renderer can also be set from **Settings → Appearance**; the environment
+variable overrides it for one launch.
 
 | Variable | Effect |
 |----------|--------|
-| `QBZ_RENDERER=software` (or `cpu`, `soft`) | Force the software renderer (crash recovery, VMs) |
-| `QBZ_RENDERER=gl` (or `gles`, `femtovg`) | Force the femtovg/OpenGL renderer (mid-tier GPUs) |
-| `QBZ_RENDERER=wgpu` (or `gpu`, `hardware`, `hw`) | Force the wgpu (GPU) renderer |
+| `QBZ_RENDERER=auto` (or `gpu`, `hardware`, `hw`) | Qt's default backend — the GPU path. This is the default |
+| `QBZ_RENDERER=gl` | Force the OpenGL backend (`QSG_RHI_BACKEND=opengl`) on Linux. On macOS this resolves to Metal |
+| `QBZ_RENDERER=software` (or `cpu`, `soft`) | Force the software renderer (`QT_QUICK_BACKEND=software`) — for VMs and broken GPU stacks |
+| `QBZ_PROFILE=kiosk` | Boot the touch-first Kiosk shell (`desktop` for the normal one) |
+| `QBZ_KIOSK_FULLSCREEN=1` | Start Kiosk mode fullscreen |
+
+Qt's own variables (`QSG_RHI_BACKEND`, `QT_QUICK_BACKEND`, `QT_QPA_PLATFORM`,
+`QT_SCALE_FACTOR`…) work as usual and take precedence over `QBZ_RENDERER`.
 
 If QBZ fails to start, try `QBZ_RENDERER=software qbz` first.
 
-## Known Issues
+## Known issues
 
-- **Hi-Res seeking** — seeking in tracks >96kHz can take 10-20s (decoder must scan from start). Use prev/next for instant navigation.
-- **ALSA Direct** — exclusive access blocks other apps. Use DAC/amplifier physical volume control.
-- **PipeWire bit-perfect in Flatpak** — limited by sandbox. Use ALSA Direct or native packages.
-- **DSD DoP / native mode** — seeking is disabled and volume is fixed while a DoP or native-DSD stream is active (any sample manipulation would corrupt the DSD stream). Convert-to-PCM mode has no such limits.
+- **Hi-Res seeking** — seeking in tracks above 96 kHz can take 10–20 s (the
+  decoder must scan from the start). Use prev/next for instant navigation.
+- **ALSA Direct** — exclusive access blocks other apps. Use your DAC's or
+  amplifier's physical volume control.
+- **DSD DoP / native mode** — seeking is disabled and volume is fixed while a
+  DoP or native-DSD stream is active (any sample manipulation would corrupt the
+  DSD stream). Convert-to-PCM mode has no such limits.
+- **Multichannel DSD comes out as stereo** — DoP and native passthrough are
+  two-channel by design (a DoP receiver is a stereo device). Multichannel
+  sources therefore play through the convert-to-PCM path, which folds up to 5.1
+  down to stereo (ITU-R BS.775, LFE dropped); 7.1 and above are not supported
+  and the file will not load. SACD discs play their stereo area.
+
+## Reporting a problem
+
+Having trouble with the app? Please report it in the
+[issue tracker](https://github.com/vicrodh/qbz/issues).
+
+What makes a problem solvable: a title that names the actual symptom, the logs,
+and a screenshot when it is something you can see. QBZ ships a tool for the logs
+so you don't have to go hunting for files — **Settings → Share logs**, pinned at
+the bottom of the Settings sidebar, opens the in-app log viewer. From there you
+can filter by level, search, copy the log with secrets redacted, or upload it and
+get a link to paste into the issue.
+
+## On LLMs and AI tools
+
+This project started about two years ago. I wrote the first version in Python,
+which is my main stack. Then it became my Rust learning project — most of the
+logic was written by hand, as a hobby, a proof to myself of what I could build
+and how much I could learn. It then sat frozen for a long time.
+
+Then LLMs went mainstream. They helped me put a real UX on top of what I already
+had, they unblocked problems I had never found the time for, and they compressed
+work that, at the pace and the hours I could actually give it, would have taken
+months — or would have left the project sitting in a folder on my NAS forever.
+
+Somewhere along the way QBZ filled a gap, and that made it relevant. Paying
+attention and caring about the details also means more responsibility, and more
+responsibility means more transparency: the project started by hand, but the
+amount of code I type myself today is minimal. That does not mean the code is
+careless. It goes through the same standards I use in my day job — the real one
+— it is under continuous improvement, and it is always open to comments,
+suggestions, requests and issue reports.
+
+Using AI tools does not mean I ask an LLM for every feature or change that
+crosses my mind, and it does not mean every request for a change or a new
+feature gets accepted without analysis. I go out of my way to avoid that rabbit
+hole — have a look at the [issues](https://github.com/vicrodh/qbz/issues). So if
+you come up with something new, help me by explaining it and justifying it. If I
+don't understand it, it is very unlikely to go in, because I cannot measure it
+or test it properly.
+
+I know we all want a lot of things. But keeping this app from turning into
+[The Homer](https://tenor.com/IeFy.gif) is real work.
+
+If you have a problem using software built with AI tools, this software is
+probably not for you.
 
 ## Documentation
 
-User guides, audio configuration, integrations, and troubleshooting: **[QBZ Wiki](https://github.com/vicrodh/qbz/wiki)** (work in progress).
-
-
-## Open Source
-
-QBZ is MIT-licensed. No telemetry, no tracking, no hidden services. Built for Linux and macOS audio enthusiasts.
+User guides, audio configuration, integrations and troubleshooting:
+**[QBZ Wiki](https://github.com/vicrodh/qbz/wiki)** (work in progress).
 
 ## Contributing
 
-Contributions welcome. Please read `CONTRIBUTING.md` before submitting issues or pull requests.
+QBZ is MIT-licensed. No telemetry, no tracking, no hidden services. Built for
+Linux and macOS audio enthusiasts.
+
+Contributions welcome. Please read `CONTRIBUTING.md` before submitting issues or
+pull requests.
 
 ### Contributors
 
@@ -501,6 +663,7 @@ Contributions welcome. Please read `CONTRIBUTING.md` before submitting issues or
 - [@GwendalBeaumont](https://github.com/GwendalBeaumont) — i18n
 - [@AdamArstall](https://github.com/AdamArstall)
 - [@DoubleGate](https://github.com/DoubleGate)
+- [@pbaart](https://github.com/pbaart) — Dutch translation
 
 ## License
 
