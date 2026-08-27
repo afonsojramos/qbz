@@ -39,6 +39,26 @@ fn qrc_alias(path: &Path) -> String {
     }
 }
 
+/// MSVC reports `__cplusplus` as `199711L` no matter what `/std:` says, unless
+/// `/Zc:__cplusplus` is passed. Qt refuses that value outright —
+/// `qcompilerdetection.h:1317` raises "Qt requires a C++17 compiler, and a
+/// suitable value for __cplusplus" on EVERY translation unit that includes a
+/// Qt header, ours and moc's alike, so the first Windows build cannot get past
+/// the Qt headers. And without `/permissive-` the Qt 6.9 headers do not parse
+/// under MSVC's default non-conforming mode: measured here, `qtmochelpers.h:262`
+/// C2065 'result', `qcomparehelpers.h:1348` C2968 recursive alias, and C2737 on
+/// every moc `staticMetaObject`. Both flags are what Qt's own CMake passes;
+/// neither cc-rs nor cxx-qt-build adds either.
+///
+/// The build script runs on the HOST, so ask cargo for the TARGET env rather
+/// than `cfg!()` — identical for a native build, not for a cross one.
+fn apply_msvc_qt_flags(cc: &mut cc::Build) {
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        cc.flag("/Zc:__cplusplus");
+        cc.flag("/permissive-");
+    }
+}
+
 /// Every RHI variant a Qt Quick shader should carry.
 ///
 /// `qsb --qt6` is only `100 es,120,150` + HLSL 50 + MSL 12. This is that plus
@@ -331,6 +351,7 @@ fn build_rhi_items() {
 
     let mut cc = cc::Build::new();
     cc.cpp(true).std("c++17").pic(true).include("cxx"); // the moc outputs do `#include "<name>.h"`
+    apply_msvc_qt_flags(&mut cc);
     for item in [
         "linebed_item",
         "plasma_item",
@@ -881,5 +902,6 @@ fn main() {
             qrc_files: &qrc_refs,
             ..Default::default()
         })
+        .cc_builder(apply_msvc_qt_flags)
         .build();
 }
