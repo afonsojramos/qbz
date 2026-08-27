@@ -217,30 +217,9 @@ backends; macOS plays through its own CoreAudio backend, including a Core Audio
 Direct passthrough path for bit-perfect output. Casting (Chromecast/DLNA) and
 Qobuz Connect work on macOS as well.
 
-Download the DMG (Apple Silicon or Intel) from
-[Releases](https://github.com/vicrodh/qbz/releases) and drag QBZ into
-Applications.
-
-**First launch:** QBZ is ad-hoc signed but NOT notarized (no Apple Developer
-subscription), so Gatekeeper will block the first run — and on recent macOS
-(Sequoia / 15 and later) the old right-click → Open trick no longer works for
-un-notarized apps. Two ways to unlock it, pick one:
-
-- **Settings route:** try to open QBZ once (it gets blocked), then go to
-  **System Settings → Privacy & Security**, scroll down to the message that
-  QBZ was blocked, and click **Open Anyway**.
-- **Terminal route** (what the settings toggle does, minus the clicking):
-
-  ```bash
-  xattr -dr com.apple.quarantine /Applications/QBZ.app
-  ```
-
-  This removes the quarantine attribute macOS stamps on downloaded files —
-  it's a one-time unlock for this copy of the app; updates installed through
-  QBZ's own updater don't need it again.
-
-**Community alternative — signed and notarized:** Afonso Ramos independently
-maintains a [Homebrew Cask](https://github.com/afonsojramos/homebrew-qbz):
+**Recommended — signed and notarized:** Afonso Ramos independently maintains a
+[Homebrew Cask](https://github.com/afonsojramos/homebrew-qbz), which installs
+without requiring a manual Gatekeeper bypass:
 
 ```bash
 brew install --cask afonsojramos/qbz/qbz
@@ -254,6 +233,26 @@ signature metadata and DMG container are replaced, then notarized by
 endorsed by the upstream project. The mirror publishes the source commit,
 original checksums, and signed checksums for each release; see its
 [trust and provenance documentation](https://github.com/afonsojramos/qbz-macos#trust-and-provenance).
+
+**Official upstream alternative — ad-hoc signed, not notarized:** if you prefer
+the artifact produced directly by the QBZ project, download the Apple Silicon
+or Intel DMG from [QBZ Releases](https://github.com/vicrodh/qbz/releases) and
+drag QBZ into Applications. Because the project has no Apple Developer
+subscription, Gatekeeper blocks its first run. On recent macOS versions
+(Sequoia / 15 and later), unlock it using either route:
+
+- **Settings route:** try to open QBZ once (it gets blocked), then go to
+  **System Settings → Privacy & Security**, scroll down to the message that
+  QBZ was blocked, and click **Open Anyway**.
+- **Terminal route** (what the settings toggle does, minus the clicking):
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/QBZ.app
+  ```
+
+  This removes the quarantine attribute macOS stamps on downloaded files —
+  it's a one-time unlock for this copy of the app; updates installed through
+  QBZ's own updater don't need it again.
 
 ## Features
 
