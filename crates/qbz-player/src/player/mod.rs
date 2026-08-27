@@ -544,8 +544,14 @@ enum StreamType {
         #[cfg(target_os = "macos")]
         exclusive_guard: Option<qbz_audio::CoreAudioExclusiveGuard>,
     },
-    #[cfg(target_os = "linux")]
-    AlsaDirect(Arc<qbz_audio::AlsaDirectStream>),
+    /// Any bit-perfect DIRECT sink: ALSA hw: on Linux, WASAPI exclusive on
+    /// Windows. One variant rather than one per platform, because everything
+    /// downstream treats them identically - see `qbz_audio::backend::DirectSink`.
+    ///
+    /// NOT cfg-gated: gating it to Linux is what made the Windows compiler
+    /// unable to check any of the arms that handle it, which is the whole
+    /// blind spot this port has to work around.
+    Direct(Arc<dyn qbz_audio::backend::DirectSink>),
     /// Native JACK output (#263 Tier 3). QBZ as a JACK client with stable ports;
     /// NOT bit-perfect (resampled to the graph rate).
     #[cfg(target_os = "linux")]
@@ -898,7 +904,7 @@ fn try_init_stream_with_backend(
                         return Some(result.map(|(stream, mode)| {
                             log::info!("ALSA Direct stream created with mode: {:?}", mode);
                             state.set_bit_perfect_mode(Some(mode));
-                            StreamType::AlsaDirect(Arc::new(stream))
+                            StreamType::Direct(Arc::new(stream))
                         }));
                     }
                 }
@@ -2220,8 +2226,7 @@ impl Player {
                                         }
                                     }
                                 }
-                                #[cfg(target_os = "linux")]
-                                StreamType::AlsaDirect(alsa_stream) => {
+                                StreamType::Direct(alsa_stream) => {
                                     *consecutive_sink_failures = 0;
                                     thread_state.set_stream_error(false);
                                     let hardware_volume = thread_settings
@@ -2229,7 +2234,7 @@ impl Player {
                                         .ok()
                                         .map(|s| s.alsa_hardware_volume)
                                         .unwrap_or(false);
-                                    PlaybackEngine::new_alsa_direct(
+                                    PlaybackEngine::new_direct(
                                         alsa_stream.clone(),
                                         hardware_volume,
                                     )
@@ -2666,14 +2671,13 @@ impl Player {
                                         }
                                     }
                                 }
-                                #[cfg(target_os = "linux")]
-                                StreamType::AlsaDirect(alsa_stream) => {
+                                StreamType::Direct(alsa_stream) => {
                                     let hardware_volume = thread_settings
                                         .lock()
                                         .ok()
                                         .map(|s| s.alsa_hardware_volume)
                                         .unwrap_or(false);
-                                    PlaybackEngine::new_alsa_direct(
+                                    PlaybackEngine::new_direct(
                                         alsa_stream.clone(),
                                         hardware_volume,
                                     )
@@ -3012,7 +3016,7 @@ impl Player {
                                     carrier,
                                     device
                                 );
-                                *stream_opt = Some(StreamType::AlsaDirect(stream.clone()));
+                                *stream_opt = Some(StreamType::Direct(stream.clone()));
                                 thread_state.set_current_device(Some(device));
                                 *current_track_sample_rate = Some(carrier);
                                 *current_track_channels = Some(2);
@@ -3134,7 +3138,7 @@ impl Player {
                                     if little_endian { "LE" } else { "BE" },
                                     device
                                 );
-                                *stream_opt = Some(StreamType::AlsaDirect(stream.clone()));
+                                *stream_opt = Some(StreamType::Direct(stream.clone()));
                                 thread_state.set_current_device(Some(device));
                                 *current_track_sample_rate = Some(rate);
                                 *current_track_channels = Some(2);
@@ -3364,17 +3368,16 @@ impl Player {
                                             }
                                         }
                                     }
-                                    #[cfg(target_os = "linux")]
-                                    StreamType::AlsaDirect(alsa_stream) => {
+                                    StreamType::Direct(alsa_stream) => {
                                         let hardware_volume = thread_settings
                                             .lock()
                                             .ok()
                                             .map(|s| s.alsa_hardware_volume)
                                             .unwrap_or(false);
-                                        PlaybackEngine::new_alsa_direct(
+                                        PlaybackEngine::new_direct(
                                             alsa_stream.clone(),
                                             hardware_volume,
-                                        )
+                                            )
                                     }
                                     #[cfg(target_os = "linux")]
                                     StreamType::Jack(jack_stream) => {
@@ -3614,14 +3617,13 @@ impl Player {
                                         }
                                     }
                                 }
-                                #[cfg(target_os = "linux")]
-                                StreamType::AlsaDirect(alsa_stream) => {
+                                StreamType::Direct(alsa_stream) => {
                                     let hardware_volume = thread_settings
                                         .lock()
                                         .ok()
                                         .map(|s| s.alsa_hardware_volume)
                                         .unwrap_or(false);
-                                    PlaybackEngine::new_alsa_direct(
+                                    PlaybackEngine::new_direct(
                                         alsa_stream.clone(),
                                         hardware_volume,
                                     )

@@ -1059,4 +1059,14 @@ impl crate::backend::DirectSink for AlsaDirectStream {
     fn channels(&self) -> u16 {
         AlsaDirectStream::channels(self)
     }
+    fn log_label(&self) -> &'static str {
+        "ALSA Direct Engine"
+    }
+    /// Linux only, because the inherent method is: the non-Linux stub of this
+    /// type has no mixer at all, and there the trait default refusal is the
+    /// honest answer.
+    #[cfg(target_os = "linux")]
+    fn set_hardware_volume(&self, volume: f32) -> Result<(), String> {
+        AlsaDirectStream::set_hardware_volume(self, volume)
+    }
 }

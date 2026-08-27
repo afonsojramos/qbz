@@ -8,6 +8,7 @@
 //! to enable gapless playback. When one source ends, the next is picked up
 //! seamlessly without interrupting the PCM stream.
 
+#[cfg(target_os = "linux")]
 use qbz_audio::AlsaDirectStream;
 #[cfg(target_os = "linux")]
 use qbz_audio::JackStream;
@@ -74,9 +75,14 @@ impl<S> SourceQueue<S> {
 pub enum PlaybackEngine {
     /// Rodio-based (PipeWire, Pulse, ALSA via CPAL)
     Rodio { sink: RodioPlayer },
-    /// Direct ALSA (hw: devices, bit-perfect) with gapless source queue
-    AlsaDirect {
-        stream: Arc<AlsaDirectStream>,
+    /// A bit-perfect DIRECT sink with a gapless source queue: ALSA hw: on
+    /// Linux, WASAPI exclusive on Windows. The two are interchangeable here -
+    /// the writer thread only ever calls `DirectSink`.
+    Direct {
+        stream: Arc<dyn qbz_audio::backend::DirectSink>,
+        /// Log prefix for THIS sink. Without it `play`/`pause`/`stop`/
+        /// `set_volume` printed "ALSA Direct Engine" for a WASAPI stream.
+        label: &'static str,
         is_playing: Arc<AtomicBool>,
         should_stop: Arc<AtomicBool>,
         position_frames: Arc<AtomicU64>,
@@ -129,7 +135,13 @@ impl PlaybackEngine {
 
     /// Create ALSA Direct engine with gapless source queue.
     /// Spawns a single writer thread that lives for the engine's lifetime.
-    pub fn new_alsa_direct(stream: Arc<AlsaDirectStream>, hardware_volume: bool) -> Self {
+    /// Takes ANY direct sink. The log prefix comes from the SINK, so no call
+    /// site can mislabel it.
+    pub fn new_direct(
+        stream: Arc<dyn qbz_audio::backend::DirectSink>,
+        hardware_volume: bool,
+    ) -> Self {
+        let label = stream.log_label();
         let is_playing = Arc::new(AtomicBool::new(false));
         let should_stop = Arc::new(AtomicBool::new(false));
         let position_frames = Arc::new(AtomicU64::new(0));
@@ -158,13 +170,14 @@ impl PlaybackEngine {
                     queue_c,
                     transition_c,
                     channels,
-                    "ALSA Direct Engine",
+                    label,
                 );
             })
         };
 
-        Self::AlsaDirect {
+        Self::Direct {
             stream,
+            label,
             is_playing,
             should_stop,
             position_frames,
@@ -303,7 +316,8 @@ impl PlaybackEngine {
                 sink.append(source);
                 Ok(())
             }
-            Self::AlsaDirect {
+            Self::Direct {
+                label,
                 is_playing,
                 should_stop,
                 position_frames,
@@ -323,9 +337,9 @@ impl PlaybackEngine {
                     should_stop.store(false, Ordering::SeqCst);
                     source_transition.store(false, Ordering::SeqCst);
                     is_playing.store(true, Ordering::SeqCst);
-                    log::info!("[ALSA Direct Engine] First source queued, playback starting");
+                    log::info!("[{label}] First source queued, playback starting");
                 } else {
-                    log::info!("[ALSA Direct Engine] Source queued for gapless transition");
+                    log::info!("[{label}] Source queued for gapless transition");
                 }
 
                 Ok(())
@@ -372,8 +386,10 @@ impl PlaybackEngine {
     pub fn play(&self) {
         match self {
             Self::Rodio { sink } => sink.play(),
-            Self::AlsaDirect { is_playing, .. } => {
-                log::info!("[ALSA Direct Engine] Resume requested");
+            Self::Direct {
+                label, is_playing, ..
+            } => {
+                log::info!("[{label}] Resume requested");
                 is_playing.store(true, Ordering::SeqCst);
             }
             #[cfg(target_os = "linux")]
@@ -393,8 +409,10 @@ impl PlaybackEngine {
     pub fn pause(&self) {
         match self {
             Self::Rodio { sink } => sink.pause(),
-            Self::AlsaDirect { is_playing, .. } => {
-                log::info!("[ALSA Direct Engine] Pause requested");
+            Self::Direct {
+                label, is_playing, ..
+            } => {
+                log::info!("[{label}] Pause requested");
                 is_playing.store(false, Ordering::SeqCst);
             }
             #[cfg(target_os = "linux")]
@@ -425,8 +443,9 @@ impl PlaybackEngine {
             Self::Rodio { sink } => {
                 sink.stop();
             }
-            Self::AlsaDirect {
+            Self::Direct {
                 stream,
+                label,
                 is_playing,
                 should_stop,
                 playback_thread,
@@ -435,7 +454,7 @@ impl PlaybackEngine {
                 if should_stop.load(Ordering::SeqCst) {
                     return; // Already stopped
                 }
-                log::info!("[ALSA Direct Engine] Stop requested");
+                log::info!("[{label}] Stop requested");
                 should_stop.store(true, Ordering::SeqCst);
                 is_playing.store(false, Ordering::SeqCst);
 
@@ -444,7 +463,7 @@ impl PlaybackEngine {
                 }
 
                 if let Err(e) = stream.stop() {
-                    log::warn!("[ALSA Direct Engine] Stop failed: {}", e);
+                    log::warn!("[{label}] Stop failed: {}", e);
                 }
             }
             #[cfg(target_os = "linux")]
@@ -493,8 +512,9 @@ impl PlaybackEngine {
     pub fn set_volume(&self, volume: f32) {
         match self {
             Self::Rodio { sink } => sink.set_volume(volume),
-            Self::AlsaDirect {
+            Self::Direct {
                 stream,
+                label,
                 hardware_volume,
                 ..
             } => {
@@ -502,12 +522,12 @@ impl PlaybackEngine {
                     #[cfg(target_os = "linux")]
                     {
                         if let Err(e) = stream.set_hardware_volume(volume) {
-                            log::warn!("[ALSA Direct Engine] Hardware volume failed: {}", e);
+                            log::warn!("[{label}] Hardware volume failed: {}", e);
                         }
                     }
                 } else {
                     log::debug!(
-                        "[ALSA Direct Engine] Hardware volume control disabled (use DAC/amplifier)"
+                        "[{label}] Hardware volume control disabled (use DAC/amplifier)"
                     );
                 }
             }
@@ -530,7 +550,7 @@ impl PlaybackEngine {
     pub fn empty(&self) -> bool {
         match self {
             Self::Rodio { sink } => sink.empty(),
-            Self::AlsaDirect {
+            Self::Direct {
                 is_playing,
                 source_queue,
                 ..
@@ -555,7 +575,7 @@ impl PlaybackEngine {
     pub fn take_source_transition(&self) -> bool {
         match self {
             Self::Rodio { .. } => false,
-            Self::AlsaDirect {
+            Self::Direct {
                 source_transition, ..
             } => source_transition
                 .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
@@ -580,7 +600,7 @@ impl PlaybackEngine {
     pub fn position_secs(&self) -> Option<u64> {
         match self {
             Self::Rodio { .. } => None,
-            Self::AlsaDirect {
+            Self::Direct {
                 position_frames,
                 stream,
                 ..
@@ -615,7 +635,7 @@ impl PlaybackEngine {
     pub fn duration_secs(&self) -> Option<u64> {
         match self {
             Self::Rodio { .. } => None,
-            Self::AlsaDirect {
+            Self::Direct {
                 duration_frames,
                 stream,
                 ..
@@ -640,14 +660,14 @@ impl PlaybackEngine {
 
     /// Check if using ALSA Direct engine
     #[allow(dead_code)]
-    pub fn is_alsa_direct(&self) -> bool {
-        matches!(self, Self::AlsaDirect { .. })
+    pub fn is_direct(&self) -> bool {
+        matches!(self, Self::Direct { .. })
     }
 }
 
-/// Single long-lived writer thread for ALSA Direct.
+/// Single long-lived writer thread for any bit-perfect direct sink.
 ///
-/// Continuously reads samples from the current source and writes to ALSA.
+/// Continuously reads samples from the current source and writes to the sink.
 /// When a source ends, seamlessly picks up the next one from the queue
 /// (gapless transition). If no next source is available, drains the ALSA
 /// buffer and waits for the next source or a stop signal.

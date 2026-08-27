@@ -759,11 +759,12 @@ mod imp {
                 // Partial period. Zero-padding keeps the samples we DO have
                 // instead of dropping them, which a silent buffer would.
                 buf.resize(need, 0);
-                // Same reasoning: the last period of a drain is partial by
-                // definition.
-                if draining.is_none() && !starved {
+                // Counted EVERY time, unlike the fully-empty case: a partial
+                // period is a discrete glitch that just happened, whereas an
+                // empty queue is one starvation that lasts. Same reasoning as
+                // above for why a drain's last partial period is not a fault.
+                if draining.is_none() {
                     underruns.fetch_add(1, Ordering::Relaxed);
-                    starved = true;
                 }
             }
             if render.write_to_device(n, &buf, None).is_err() {
@@ -1065,5 +1066,8 @@ impl crate::backend::DirectSink for WasapiDirectStream {
     }
     fn channels(&self) -> u16 {
         WasapiDirectStream::channels(self)
+    }
+    fn log_label(&self) -> &'static str {
+        "WASAPI Direct Engine"
     }
 }

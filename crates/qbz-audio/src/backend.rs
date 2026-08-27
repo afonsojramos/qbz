@@ -1003,4 +1003,20 @@ pub trait DirectSink: Send + Sync + 'static {
     fn stop(&self) -> Result<(), String>;
     fn sample_rate(&self) -> u32;
     fn channels(&self) -> u16;
+
+    /// Log prefix for this sink. On the trait rather than a parameter so a
+    /// call site cannot label an ALSA stream "WASAPI" or the reverse - which
+    /// is exactly what a hard-coded label at four call sites invites.
+    fn log_label(&self) -> &'static str;
+
+    /// Device-side volume, where the sink has one.
+    ///
+    /// The default REFUSES rather than silently succeeding: a sink without a
+    /// hardware mixer must not pretend it moved the volume. Every call site is
+    /// already gated on the engine's `hardware_volume` flag, which is false for
+    /// any such sink - permanently so for WASAPI exclusive, where the phase B
+    /// contract rules out ISimpleAudioVolume.
+    fn set_hardware_volume(&self, _volume: f32) -> Result<(), String> {
+        Err("this sink has no hardware volume".to_string())
+    }
 }
