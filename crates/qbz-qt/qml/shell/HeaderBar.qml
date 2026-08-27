@@ -100,9 +100,21 @@ Rectangle {
     // than the reference's estimate. The 78 stays only as the floor for the
     // case where the margin reads 0 (nothing to lose, and it is the number
     // the Slint build has used all along).
+    // `SafeArea` is Qt 6.9 API; the Linux pin is 6.8. The attached read lives
+    // in a macOS-only Loader so the binding never names the type elsewhere.
+    property real macSafeLeft: 0
+    Loader {
+        active: QbzShell.isMacos
+        sourceComponent: Component {
+            Item {
+                Component.onCompleted:
+                    root.macSafeLeft = Qt.binding(function() { return root.SafeArea.margins.left })
+            }
+        }
+    }
     readonly property int chromeLeftInset:
         QbzShell.isMacos && !QbzShell.systemTitleBar
-            ? Math.max(root.SafeArea.margins.left, 78)
+            ? Math.max(root.macSafeLeft, 78)
             : (root.chromeControls && root.wcOnLeft ? root.wcClusterWidth + 6 : 0)
 
     // The section-nav dropdown (catalog + panel + open/close behaviour).

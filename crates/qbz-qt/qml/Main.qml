@@ -167,10 +167,24 @@ ApplicationWindow {
     // takes the safe area over from Qt entirely. `HeaderBar.chromeLeftInset`
     // is where that responsibility is discharged: it reads
     // `SafeArea.margins.left` to clear the traffic lights.
-    topPadding: 0
-    bottomPadding: 0
-    leftPadding: 0
-    rightPadding: 0
+    // The four Window paddings are Qt 6.9 API (SafeArea landed in 6.9). The
+    // Linux pin is Qt 6.8 LTS, where declaring them here refuses the whole
+    // component ("Cannot assign to non-existent property") — measured on the
+    // CI VM, 2026-08-25. They only matter on macOS, so they are set there,
+    // imperatively, from a Loader that never instantiates elsewhere.
+    Loader {
+        active: QbzShell.isMacos
+        sourceComponent: Component {
+            Item {
+                Component.onCompleted: {
+                    window.topPadding = 0
+                    window.bottomPadding = 0
+                    window.leftPadding = 0
+                    window.rightPadding = 0
+                }
+            }
+        }
+    }
     color: "#1a1a1a"
 
     // Phase 23: every domain singleton boots (registers its Qt-thread
