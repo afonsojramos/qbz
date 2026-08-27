@@ -1040,3 +1040,23 @@ mod tests {
         assert_eq!(mixer_ctl_name("pulse"), "pulse");
     }
 }
+
+/// Forwards to the inherent methods, which is all this is: no behaviour is
+/// added, moved or wrapped. See `backend::DirectSink`.
+impl crate::backend::DirectSink for AlsaDirectStream {
+    fn write_f32(&self, samples: &[f32]) -> Result<(), String> {
+        AlsaDirectStream::write_f32(self, samples)
+    }
+    fn drain(&self) -> Result<(), String> {
+        AlsaDirectStream::drain(self)
+    }
+    fn stop(&self) -> Result<(), String> {
+        AlsaDirectStream::stop(self)
+    }
+    fn sample_rate(&self) -> u32 {
+        AlsaDirectStream::sample_rate(self)
+    }
+    fn channels(&self) -> u16 {
+        AlsaDirectStream::channels(self)
+    }
+}

@@ -149,7 +149,7 @@ impl PlaybackEngine {
             let channels = stream.channels();
 
             thread::spawn(move || {
-                alsa_writer_thread(
+                direct_writer_thread(
                     stream_c,
                     playing_c,
                     stop_c,
@@ -158,6 +158,7 @@ impl PlaybackEngine {
                     queue_c,
                     transition_c,
                     channels,
+                    "ALSA Direct Engine",
                 );
             })
         };
@@ -650,8 +651,14 @@ impl PlaybackEngine {
 /// When a source ends, seamlessly picks up the next one from the queue
 /// (gapless transition). If no next source is available, drains the ALSA
 /// buffer and waits for the next source or a stop signal.
-fn alsa_writer_thread(
-    stream: Arc<AlsaDirectStream>,
+/// The writer thread for any bit-perfect direct sink.
+///
+/// Generic rather than duplicated: ALSA and WASAPI need byte-identical
+/// behaviour here - same chunking, same gapless hand-off, same drain - and two
+/// copies of 112 lines drift. The body is unchanged from the ALSA-only version
+/// it replaces; only the stream type and the log label moved.
+fn direct_writer_thread<S: qbz_audio::backend::DirectSink + ?Sized>(
+    stream: Arc<S>,
     is_playing: Arc<AtomicBool>,
     should_stop: Arc<AtomicBool>,
     position_frames: Arc<AtomicU64>,
@@ -659,6 +666,7 @@ fn alsa_writer_thread(
     source_queue: Arc<SourceQueue<BoxedSampleIter>>,
     source_transition: Arc<AtomicBool>,
     channels: u16,
+    label: &'static str,
 ) {
     const CHUNK_FRAMES: usize = 8192;
     let chunk_samples = CHUNK_FRAMES * channels as usize;
@@ -666,12 +674,12 @@ fn alsa_writer_thread(
     let mut current_source: Option<BoxedSampleIter> = None;
     let mut total_frames: u64 = 0;
 
-    log::info!("[ALSA Direct Engine] Writer thread started (gapless-capable)");
+    log::info!("[{label}] Writer thread started (gapless-capable)");
 
     'thread: loop {
         // Check global stop
         if should_stop.load(Ordering::SeqCst) {
-            log::info!("[ALSA Direct Engine] Stop signal, writer thread exiting");
+            log::info!("[{label}] Stop signal, writer thread exiting");
             break 'thread;
         }
 
@@ -683,7 +691,7 @@ fn alsa_writer_thread(
                     current_source = Some(src);
                     total_frames = 0;
                     position_frames.store(0, Ordering::SeqCst);
-                    log::info!("[ALSA Direct Engine] Acquired new source from queue");
+                    log::info!("[{label}] Acquired new source from queue");
                 }
                 None => {
                     // No source available, loop back to check stop
@@ -718,7 +726,7 @@ fn alsa_writer_thread(
         // Write whatever we have to ALSA (even partial chunks on source end)
         if !buffer_f32.is_empty() {
             if let Err(e) = stream.write_f32(&buffer_f32) {
-                log::error!("[ALSA Direct Engine] Write failed: {}", e);
+                log::error!("[{label}] Write failed: {}", e);
                 break 'thread;
             }
 
@@ -730,14 +738,14 @@ fn alsa_writer_thread(
 
         if source_ended {
             log::info!(
-                "[ALSA Direct Engine] Source ended (total frames: {})",
+                "[{label}] Source ended (total frames: {})",
                 total_frames
             );
 
             // Try to get next source immediately (gapless transition)
             match source_queue.try_pop() {
                 Some(next_src) => {
-                    log::info!("[ALSA Direct Engine] Gapless transition to next source");
+                    log::info!("[{label}] Gapless transition to next source");
                     current_source = Some(next_src);
                     total_frames = 0;
                     position_frames.store(0, Ordering::SeqCst);
@@ -747,9 +755,9 @@ fn alsa_writer_thread(
                 }
                 None => {
                     // No next source — this is a natural end of playback
-                    log::info!("[ALSA Direct Engine] No next source, draining ALSA buffer");
+                    log::info!("[{label}] No next source, draining the device buffer");
                     if let Err(e) = stream.drain() {
-                        log::warn!("[ALSA Direct Engine] Drain failed: {}", e);
+                        log::warn!("[{label}] Drain failed: {}", e);
                     }
                     current_source = None;
                     is_playing.store(false, Ordering::SeqCst);
@@ -760,12 +768,12 @@ fn alsa_writer_thread(
     }
 
     is_playing.store(false, Ordering::SeqCst);
-    log::info!("[ALSA Direct Engine] Writer thread finished");
+    log::info!("[{label}] Writer thread finished");
 }
 
 /// Single long-lived feeder thread for JACK (#263 Tier 3).
 ///
-/// Mirrors `alsa_writer_thread`, but writes graph-rate interleaved STEREO f32
+/// Mirrors `direct_writer_thread`, but writes graph-rate interleaved STEREO f32
 /// into the JACK client's lock-free ring buffer via `JackStream::write_f32`
 /// (the RT process callback drains it), pacing itself when the ring is full.
 /// Sources are resampled to the graph rate + stereo at `append` time.
@@ -868,7 +876,7 @@ impl Drop for PlaybackEngine {
 
 /// Single long-lived writer thread for DoP (DSD over PCM).
 ///
-/// Mirrors `alsa_writer_thread`'s shape: pulls pre-packed S32 DoP words from
+/// Mirrors `direct_writer_thread`'s shape: pulls pre-packed S32 DoP words from
 /// the current source, writes them VERBATIM, and picks up the next queued
 /// source seamlessly (gapless DSD). Differences forced by the format:
 /// - pause writes 0x69 DSD silence (with valid alternating markers) instead

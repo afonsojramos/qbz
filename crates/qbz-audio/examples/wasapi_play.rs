@@ -83,8 +83,30 @@ fn main() {
             written += n as u64;
         }
 
+        // Drain, then WRITE AGAIN. This is the discriminating test for the
+        // gapless contract: drain must block until the queue has played out
+        // AND must leave the stream usable for the next source. An early
+        // return, or a render thread that exits on drain, both show up here
+        // and nowhere else.
+        let t0 = std::time::Instant::now();
+        let drained = stream.drain();
+        let drain_ms = t0.elapsed().as_millis();
+        println!();
+        println!("drain          : {drained:?} in {drain_ms} ms");
+
+        let mut second = Vec::with_capacity(frames_per_chunk * 2);
+        for _ in 0..frames_per_chunk {
+            let v = phase.sin() * amp;
+            phase += step;
+            second.push(v);
+            second.push(v);
+        }
+        match stream.write_f32(&second) {
+            Ok(()) => println!("write after drain: OK - the stream survived the drain"),
+            Err(e) => println!("write after drain: FAILED ({e}) - the stream died on drain"),
+        }
         let _ = stream.drain();
-        std::thread::sleep(std::time::Duration::from_millis(500));
+
         println!();
         println!("frames written : {written}");
         println!("underruns      : {}", stream.underruns());

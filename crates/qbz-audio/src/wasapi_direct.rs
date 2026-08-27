@@ -337,7 +337,11 @@ mod imp {
     pub(super) enum Ctl {
         Pause,
         Resume,
-        Drain,
+        /// Carries the reply channel the caller blocks on. `drain()` must not
+        /// return until the queue really has played out, because the player's
+        /// writer thread treats its return as "the source is finished" - and
+        /// the ALSA drain it shares that thread with does block.
+        Drain(Sender<()>),
         Stop,
     }
 
@@ -622,7 +626,10 @@ mod imp {
             return;
         }
         let mut paused = false;
-        let mut draining_until: Option<Instant> = None;
+        let mut draining: Option<(Instant, Sender<()>)> = None;
+        // Starvation is counted as an EVENT, not per period: one real underrun
+        // otherwise reports as hundreds while the queue stays empty.
+        let mut starved = false;
 
         loop {
             // Control first: a pause must not wait behind queued PCM.
@@ -639,7 +646,7 @@ mod imp {
                         paused = false;
                     }
                 }
-                Ok(Ctl::Drain) => draining_until = Some(Instant::now() + DRAIN_DEADLINE),
+                Ok(Ctl::Drain(done)) => draining = Some((Instant::now() + DRAIN_DEADLINE, done)),
                 Ok(Ctl::Stop) | Err(TryRecvError::Disconnected) => break,
                 Err(TryRecvError::Empty) => {}
             }
@@ -726,12 +733,20 @@ mod imp {
                 }
                 // Trailing silence during a DRAIN is the drain working, not a
                 // fault. Counting it reported 2 underruns on every clean run.
-                if draining_until.is_none() {
+                if draining.is_none() && !starved {
                     underruns.fetch_add(1, Ordering::Relaxed);
+                    starved = true;
                 }
-                if let Some(deadline) = draining_until {
-                    if Instant::now() >= deadline || pcm.try_recv().is_err() {
-                        break;
+                // The queue is empty, so a drain in flight is COMPLETE. Answer
+                // the caller and carry on: the stream stays open for the next
+                // source, which is what makes gapless work. Ending the thread
+                // here - as this used to - left a later append writing into a
+                // dead render thread.
+                if draining.as_ref().map(|(d, _)| Instant::now() >= *d).unwrap_or(false)
+                    || draining.is_some()
+                {
+                    if let Some((_, done)) = draining.take() {
+                        let _ = done.send(());
                     }
                 }
                 continue;
@@ -746,20 +761,16 @@ mod imp {
                 buf.resize(need, 0);
                 // Same reasoning: the last period of a drain is partial by
                 // definition.
-                if draining_until.is_none() {
+                if draining.is_none() && !starved {
                     underruns.fetch_add(1, Ordering::Relaxed);
+                    starved = true;
                 }
             }
             if render.write_to_device(n, &buf, None).is_err() {
                 dead.store(true, Ordering::SeqCst);
                 break;
             }
-
-            if let Some(deadline) = draining_until {
-                if carry.is_empty() && Instant::now() >= deadline {
-                    break;
-                }
-            }
+            starved = false;
         }
 
         let _ = client.stop_stream();
@@ -857,6 +868,21 @@ mod imp {
             self.timeouts.load(Ordering::Relaxed)
         }
 
+        pub(super) fn drain_blocking(&self) -> Result<(), String> {
+            self.check_alive()?;
+            let (tx, rx) = channel::<()>();
+            self.send_ctl(Ctl::Drain(tx))?;
+            match rx.recv_timeout(DRAIN_DEADLINE + Duration::from_secs(2)) {
+                Ok(()) => Ok(()),
+                Err(_) => {
+                    // Not an error to the caller: a stuck drain must not wedge
+                    // playback, and the stream is still usable.
+                    log::warn!("[WASAPI Direct] drain did not complete within its deadline");
+                    Ok(())
+                }
+            }
+        }
+
         pub(super) fn send_ctl(&self, c: Ctl) -> Result<(), String> {
             self.ctl
                 .send(c)
@@ -933,8 +959,15 @@ impl WasapiDirectStream {
         self.inner.send_ctl(imp::Ctl::Resume)
     }
 
+    /// Play out what is queued, then return - BLOCKING, like the ALSA drain
+    /// this shares a writer thread with. Returning early would tell the
+    /// player's writer thread the source had finished while it was still
+    /// playing.
+    ///
+    /// Bounded: a device that stopped consuming must not hang the writer, so a
+    /// drain that overruns its deadline returns anyway and says so.
     pub fn drain(&self) -> Result<(), String> {
-        self.inner.send_ctl(imp::Ctl::Drain)
+        self.inner.drain_blocking()
     }
 
     pub fn stop(&self) -> Result<(), String> {
@@ -1012,5 +1045,25 @@ impl WasapiDirectStream {
 
     pub fn bit_perfect_mode(&self) -> BitPerfectMode {
         BitPerfectMode::Disabled
+    }
+}
+
+/// Same forwarding as the ALSA side. Both platforms' constructors exist on
+/// every host (one of them refusing), so this impl is unconditional too.
+impl crate::backend::DirectSink for WasapiDirectStream {
+    fn write_f32(&self, samples: &[f32]) -> Result<(), String> {
+        WasapiDirectStream::write_f32(self, samples)
+    }
+    fn drain(&self) -> Result<(), String> {
+        WasapiDirectStream::drain(self)
+    }
+    fn stop(&self) -> Result<(), String> {
+        WasapiDirectStream::stop(self)
+    }
+    fn sample_rate(&self) -> u32 {
+        WasapiDirectStream::sample_rate(self)
+    }
+    fn channels(&self) -> u16 {
+        WasapiDirectStream::channels(self)
     }
 }

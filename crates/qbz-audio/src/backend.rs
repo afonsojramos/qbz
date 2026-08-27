@@ -985,3 +985,22 @@ impl CpalDefaultBackend {
         }
     }
 }
+
+/// The two-method surface a bit-perfect direct stream owes the player's writer
+/// thread, plus the three it owes the engine around it.
+///
+/// It exists so ONE writer thread serves both `AlsaDirectStream` and
+/// `WasapiDirectStream` instead of two copies drifting apart. The set is
+/// exactly what `playback_engine.rs` already called on the ALSA stream - no
+/// method was invented for the trait, and neither implementation gains or
+/// loses behaviour by having it.
+pub trait DirectSink: Send + Sync + 'static {
+    /// Interleaved f32, blocking when the device's queue is full. That block
+    /// IS the back-pressure that paces the writer thread.
+    fn write_f32(&self, samples: &[f32]) -> Result<(), String>;
+    /// Play out what is queued, then return. Bounded internally.
+    fn drain(&self) -> Result<(), String>;
+    fn stop(&self) -> Result<(), String>;
+    fn sample_rate(&self) -> u32;
+    fn channels(&self) -> u16;
+}
