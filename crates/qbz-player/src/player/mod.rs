@@ -887,6 +887,57 @@ fn try_init_stream_with_backend(
         skip_sink_switch: audio_settings.skip_sink_switch,
     };
 
+    // WASAPI EXCLUSIVE (Windows) - the bit-perfect path, tried before the
+    // shared CPAL stream exactly as ALSA Direct is on Linux.
+    //
+    // The device id is the WASAPI ENDPOINT ID, which is what the enumeration
+    // already publishes: Windows hands several endpoints the same friendly
+    // name, so the name cannot identify one. Without a chosen device there is
+    // nothing to open exclusively - falling through to shared is the honest
+    // answer, not picking the default DAC behind the user's back.
+    #[cfg(windows)]
+    if backend_type == AudioBackendType::WasapiExclusive {
+        match config.device_id.as_ref() {
+            None => {
+                log::info!(
+                    "[WASAPI] Exclusive mode selected with no device chosen; using the shared                      stream. Pick an output device to get bit-perfect playback."
+                );
+            }
+            Some(endpoint_id) => {
+                use qbz_audio::wasapi_direct::{WasapiDirectStream, WasapiTiming};
+                match WasapiDirectStream::new(
+                    endpoint_id,
+                    sample_rate,
+                    config.channels,
+                    WasapiTiming::Events,
+                ) {
+                    Ok(stream) => {
+                        let mode = stream.bit_perfect_mode();
+                        let info = stream.open_info();
+                        log::info!(
+                            "[WASAPI] Exclusive stream open: {} @ {} Hz, {:?}, mode {:?}",
+                            info.endpoint_name,
+                            info.rate,
+                            info.rung,
+                            mode
+                        );
+                        state.set_bit_perfect_mode(Some(mode));
+                        return Some(Ok(StreamType::Direct(Arc::new(stream))));
+                    }
+                    Err(e) => {
+                        // NOT fatal: a device that refuses this rate in
+                        // exclusive mode still plays through the shared path,
+                        // and silence would be a worse answer than a
+                        // resampled track.
+                        log::warn!(
+                            "[WASAPI] Exclusive open failed ({e}); falling back to the shared stream"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     // For ALSA backend with hw: devices, try direct ALSA first (Linux only)
     #[cfg(target_os = "linux")]
     if backend_type == AudioBackendType::Alsa {

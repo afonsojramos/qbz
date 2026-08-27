@@ -978,6 +978,7 @@ fn backend_name(b: AudioBackendType) -> &'static str {
         AudioBackendType::Alsa => "Alsa",
         AudioBackendType::Pulse => "Pulse",
         AudioBackendType::Jack => "Jack",
+        AudioBackendType::WasapiExclusive => "WasapiExclusive",
         AudioBackendType::SystemDefault => "SystemDefault",
     }
 }

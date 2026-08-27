@@ -42,6 +42,16 @@ pub enum AudioBackendType {
     ///   bit-perfect ALSA-exclusive / DAC-passthrough paths.
     Jack,
 
+    /// WASAPI EXCLUSIVE (Windows) - the bit-perfect path.
+    /// - Takes the endpoint exclusively; other apps go silent
+    /// - No resampling: the DAC is commanded to the track's own rate
+    /// - Selecting a device is required, by ENDPOINT ID (Windows gives several
+    ///   endpoints the same friendly name)
+    /// The trait's `create_output_stream` for this type is the SHARED CPAL one:
+    /// the exclusive stream bypasses the trait entirely, exactly as ALSA Direct
+    /// and JACK do.
+    WasapiExclusive,
+
     /// System default backend (non-Linux platforms)
     /// - Uses CPAL default host (CoreAudio on macOS, WASAPI on Windows)
     /// - Automatic device selection via OS audio system
@@ -308,6 +318,14 @@ impl BackendManager {
             backends.push(AudioBackendType::SystemDefault);
         }
 
+        #[cfg(windows)]
+        {
+            // Offered unconditionally: whether a given DEVICE accepts exclusive
+            // mode is answered per device when the stream opens, not here, and
+            // hiding the backend would hide the answer too.
+            backends.push(AudioBackendType::WasapiExclusive);
+        }
+
         backends
     }
 
@@ -332,6 +350,14 @@ impl BackendManager {
                     );
                     Ok(Box::new(CpalDefaultBackend::new()?))
                 }
+            }
+            AudioBackendType::WasapiExclusive => {
+                // The SHARED stream, deliberately. `create_stream_for_backend`
+                // tries the exclusive stream first and only reaches here when
+                // that is impossible - no device chosen, or the endpoint
+                // refusing every format - so this is the graceful fallback
+                // rather than the intended path.
+                Ok(Box::new(CpalDefaultBackend::new()?))
             }
             AudioBackendType::SystemDefault => {
                 // "System": play through the OS default output via CPAL's default

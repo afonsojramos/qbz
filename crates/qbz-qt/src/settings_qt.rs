@@ -1591,6 +1591,11 @@ pub struct SettingsDoc {
     pub backend_index: i32,
     #[serde(rename = "backendIsAlsa")]
     pub backend_is_alsa: bool,
+    /// True when the WASAPI exclusive backend is the active one. AudioSettings
+    /// QML gates the Exclusive-mode and DSD rows on it - see the comment there
+    /// for why they are hidden rather than disabled.
+    #[serde(rename = "backendIsWasapi")]
+    pub backend_is_wasapi: bool,
     #[serde(rename = "backendIsPipewire")]
     pub backend_is_pipewire: bool,
     #[serde(rename = "backendIsJack")]
@@ -2015,6 +2020,8 @@ fn backend_label(t: AudioBackendType) -> String {
         AudioBackendType::Pulse => "PulseAudio".to_string(),
         AudioBackendType::SystemDefault => qbz_i18n::t("System default"),
         AudioBackendType::Jack => "JACK".to_string(),
+        // Not translated, like the other backend proper nouns above it.
+        AudioBackendType::WasapiExclusive => "WASAPI Exclusive".to_string(),
     }
 }
 
@@ -2098,6 +2105,7 @@ pub async fn publish_snapshot() {
                 .collect(),
             backend_index: backend_index as i32 + 1,
             backend_is_alsa: active_backend == AudioBackendType::Alsa,
+            backend_is_wasapi: active_backend == AudioBackendType::WasapiExclusive,
             backend_is_pipewire: active_backend == AudioBackendType::PipeWire,
             backend_is_jack: active_backend == AudioBackendType::Jack,
             devices,
