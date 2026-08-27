@@ -5,6 +5,12 @@ use cxx_qt_build::{CxxQtBuilder, QmlModule};
 /// Collect every file under `dir` (recursive), crate-root-relative — the
 /// baked icon variants (qml/assets/icons/<tint>/<name>.svg) are too many to
 /// list by hand.
+///
+/// The strings become qrc ALIASES verbatim (qt-build-utils writes
+/// `<file alias="{path}">` from `Path::display()`), and QML asks with `/`
+/// (`QbzIcon.qml:231`, `FontPreload.qml:40-46`). On Windows `read_dir` joins
+/// with `\`, so normalise here or every asset fails with
+/// "QQuickImage: Cannot open".
 fn collect_qrc_files(dir: &Path, out: &mut Vec<String>) {
     for entry in
         std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
@@ -13,8 +19,23 @@ fn collect_qrc_files(dir: &Path, out: &mut Vec<String>) {
         if path.is_dir() {
             collect_qrc_files(&path, out);
         } else {
-            out.push(path.to_string_lossy().into_owned());
+            out.push(qrc_alias(&path));
         }
+    }
+}
+
+/// A qrc alias is always `/`-separated, whatever the host separator.
+///
+/// Rewritten only when the BUILD HOST is Windows. On Unix a backslash is a
+/// LEGAL filename character, so rewriting it there would quietly point the
+/// alias at a different file (or at none). `cfg!` in a build script reads the
+/// host, which is exactly the separator `read_dir` just produced.
+fn qrc_alias(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    if cfg!(windows) {
+        raw.replace('\\', "/")
+    } else {
+        raw.into_owned()
     }
 }
 
@@ -82,9 +103,23 @@ fn find_qsb() -> Option<std::path::PathBuf> {
             return Some(p);
         }
     }
+    // Windows: `qsb.exe`, and `Path::is_file()` does NOT append `.exe` (Rust's
+    // std only does that for a full path handed to `Command`), so probe both.
+    let names: &[&str] = if cfg!(windows) { &["qsb.exe", "qsb"] } else { &["qsb"] };
     if let Ok(path) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path) {
-            let p = dir.join("qsb");
+            for name in names {
+                let p = dir.join(name);
+                if p.is_file() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    // aqt / install-qt-action export QT_ROOT_DIR (e.g. F:\Qt\6.9.3\msvc2022_64).
+    if let Ok(root) = std::env::var("QT_ROOT_DIR") {
+        for name in names {
+            let p = std::path::Path::new(&root).join("bin").join(name);
             if p.is_file() {
                 return Some(p);
             }
