@@ -44,7 +44,7 @@ impl QualityHint {
     ///
     /// Moved from the kHz normalisation duplicated at
     /// `local_playback.rs:49-53`, `local_rows::tier_of` (local_rows.rs:184-188)
-    /// and `qbz-mixtape/enqueue.rs:527`.
+    /// and the Plex queue mapper in `sources/plex.rs`.
     pub fn from_hz(bit_depth: Option<u32>, sample_rate_hz: f64, format: &'static str) -> Self {
         let khz = if sample_rate_hz >= 1000.0 {
             sample_rate_hz / 1000.0

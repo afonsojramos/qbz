@@ -4375,9 +4375,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "log",
- "qbz-library",
  "qbz-models",
- "qbz-plex",
  "qbz-qobuz",
  "rand 0.10.1",
  "rusqlite",

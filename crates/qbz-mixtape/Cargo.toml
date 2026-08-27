@@ -5,23 +5,10 @@ edition = "2021"
 description = "Mixtapes & Collections backend for QBZ — schema, repo, shuffle, enqueue (headless, frontend-agnostic)"
 authors = ["blitzkriegfc"]
 
-[features]
-default = ["local", "plex"]
-# Resolving Mixtape items that live in the on-disk library (`qbz-library`).
-local = ["dep:qbz-library"]
-# Resolving `plex:`-prefixed album keys against the Plex cache. Reached through
-# `resolve_local_album`, so it builds on `local`.
-plex = ["local", "dep:qbz-plex"]
-
 [dependencies]
-# Shared QBZ crates (the real models + resolvers, not src-tauri shims)
+# Shared QBZ crates
 qbz-models = { path = "../qbz-models" }
 qbz-qobuz = { path = "../qbz-qobuz" }
-# Optional so the schema/repo/shuffle half of this crate is reusable where there
-# are no local files and no LAN peer to reach — a phone, for one. Both default
-# on, so the desktop build is unchanged.
-qbz-library = { path = "../qbz-library", optional = true }
-qbz-plex = { path = "../qbz-plex", optional = true }
 
 # Database
 rusqlite = { version = "0.31", features = ["bundled"] }

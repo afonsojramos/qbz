@@ -110,14 +110,10 @@ pub enum Accepted {
     Release,
     /// A playlist — and only one this build can actually resolve.
     ///
-    /// `qbz_mixtape::enqueue::resolve_local_item` answers `(Playlist, Local)`
-    /// with the hard error `"local playlists not supported in this release"`
-    /// (enqueue.rs:418-424: the schema has no local-only playlist id to
-    /// resolve against), and neither [`crate::LocalSource`] nor
-    /// [`crate::PlexSource`] claims a playlist either (`local.rs:601-606`,
-    /// `plex.rs:307-310` both answer `Unsupported`). That error is exactly the
-    /// unsupported combination R2 talks about; it stays where it is as the
-    /// safety net, and this slot is what makes it unreachable from the UI.
+    /// Neither [`crate::LocalSource`] nor [`crate::PlexSource`] claims a
+    /// playlist: both answer [`crate::SourceError::Unsupported`]. That error
+    /// is the unsupported combination R2 talks about; it stays as the safety
+    /// net, and this slot is what makes it unreachable from the UI.
     Playlist,
     /// A single track.
     Track,

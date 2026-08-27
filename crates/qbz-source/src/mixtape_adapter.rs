@@ -1,11 +1,9 @@
 //! Adapts the registry to `qbz_mixtape::ItemResolver`.
 //!
-//! `qbz-mixtape` is NOT modified, NOT absorbed, and stays a leaf of the graph:
-//! this crate depends on it, never the reverse. `ItemResolver`,
-//! `ProdItemResolver`, `resolve_collection_tracks`, `shuffle_items`,
-//! `next_item_index` and every free resolver fn stay byte-identical, so the
-//! `qbz` (Slint) crate keeps compiling and behaving exactly as today with zero
-//! edits.
+//! `qbz-mixtape` stays a provider-agnostic leaf of the graph: this crate
+//! depends on it, never the reverse. It retains `ItemResolver`, generic
+//! collection expansion and Qobuz mapping; this adapter supplies local and LAN
+//! dispatch through the registry.
 
 use qbz_models::mixtape::MixtapeCollectionItem;
 use qbz_models::QueueTrack;

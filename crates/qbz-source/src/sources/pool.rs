@@ -4,9 +4,9 @@
 //! **two** accessors (`local_state.rs:39-61`, open at `:47`; `library_db_qt.rs:
 //! 50-76`, open at `:62`), across 48 call sites in 17 files. Opening one MyQBZ
 //! collection logged 23–34 `Opening library database` lines — one per item,
-//! because `qbz_mixtape::resolve_collection_tracks`'s `for item in items` loop
-//! (enqueue.rs:50-68) drives `myqbz_play_qt::resolve_local` (:110-115) once per
-//! item. A 200-item collection = 200 opens.
+//! because collection expansion resolves every item independently. Before the
+//! registry adapter, that drove one fresh local resolver open per item. A
+//! 200-item collection therefore meant 200 opens.
 //!
 //! `open()` is not free: it runs the migrations and the pragmas.
 //!
@@ -14,9 +14,8 @@
 //!
 //! `LibraryDatabase` wraps a `rusqlite::Connection`
 //! (`qbz-library/src/database.rs:32-34`), which is `Send` but `!Sync`. So
-//! `&LibraryDatabase` is `!Send` and must NEVER cross an `.await` — the
-//! constraint `qbz-mixtape` documents at enqueue.rs:10-15. This type enforces
-//! that BY API: it hands out no guard, only [`DbPool::with`]. There is no
+//! `&LibraryDatabase` is `!Send` and must NEVER cross an `.await`. This type
+//! enforces that BY API: it hands out no guard, only [`DbPool::with`]. There is no
 //! `checkout() -> Guard` anywhere, public or crate-private. A future author
 //! cannot write the bug.
 

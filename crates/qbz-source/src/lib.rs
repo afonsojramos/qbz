@@ -12,7 +12,7 @@
 //!
 //! | concern | Qobuz path today | local path today | Plex path today | who wires it |
 //! |---|---|---|---|---|
-//! | tracks | `qbz_mixtape::resolve_qobuz_album` | `resolve_local_album_tracks` | `resolve_plex_album_tracks` | every view |
+//! | tracks | `qbz_mixtape::resolve_qobuz_album` | `LocalSource::tracks` | `PlexSource::tracks` | `SourceRegistry` |
 //! | artwork | `artwork_qt::cached_path` | `local_artwork::local_thumbnail` | `local_plex::thumb_url` | every view |
 //! | playback | `core().play_track_resolved` | `play_local_file` | `play_plex_track` | 2 duplicated routers |
 //! | context/meta | `to_item` + resolve cache | `map_track` / `map_album` | same, plus merges | every view |
@@ -56,7 +56,8 @@
 //!
 //! # Shape rules
 //!
-//! - **Additive.** Nothing in `qbz/src` (Slint) or `qbz-mixtape` changes; this
+//! - **One provider seam.** `qbz-mixtape` retains generic collection expansion
+//!   and Qobuz mapping; local and LAN provider resolution lives here. This
 //!   crate implements `qbz_mixtape::ItemResolver`, it does not absorb it.
 //! - **Nothing long-lived is cached that another crate owns.** The Qobuz client
 //!   is READ THROUGH a [`ClientLens`] on every call, because `qbz-core`

@@ -26,8 +26,8 @@ qbz-media-cache = { path = "../qbz-media-cache" }
 # — every statement lives in `qbz-media-cache` or `qbz-library`.
 rusqlite = { version = "0.31", features = ["bundled"] }
 # `ItemResolver` — this crate IMPLEMENTS it (mixtape_adapter.rs). qbz-mixtape is
-# NOT modified and NOT absorbed; the dependency remains one-directional so the
-# Qt application can consume the adapter without coupling qbz-mixtape to it.
+# provider-agnostic and the dependency remains one-directional, so the Qt
+# application can consume the adapter without coupling qbz-mixtape to sources.
 qbz-mixtape = { path = "../qbz-mixtape" }
 
 async-trait = { workspace = true }

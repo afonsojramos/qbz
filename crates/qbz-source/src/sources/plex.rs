@@ -8,7 +8,7 @@
 //! | path | `QueueTrack.id` | `source_item_id_hint` |
 //! |---|---|---|
 //! | LocalLibrary (`local_playback.rs:31-108`) | namespaced `1099511671736` | `file_path` = the raw rating key `"44440"` |
-//! | MyQBZ (`enqueue.rs:479-511` + `:52-56`) | raw `44440` | overwritten with `plex:<hash>` |
+//! | MyQBZ (`PlexSource::tracks` + `resolve_collection_tracks`) | raw `44440` | overwritten with `plex:<hash>` |
 //!
 //! Nobody wrote that table down: `plex_rating_key` (local_playback.rs:229-234,
 //! copy-pasted to local_album_actions.rs:439-450) is one engineer's
@@ -33,11 +33,46 @@ use crate::source::Source;
 
 /// Namespace bit for Plex track ids so they can never collide with a real
 /// `local_tracks.id`. Moved from `local_plex::PLEX_TRACK_ID_FLOOR`
-/// (local_plex.rs:37), which is 1:1 with the Slint's constant.
+/// (local_plex.rs:37); every frontend path uses the same namespace.
 pub const PLEX_TRACK_ID_FLOOR: u64 = 1 << 40;
 
 /// Memo ceiling, mirroring `artwork_qt::MEMO_CAP` (artwork_qt.rs:82).
 const MEMO_CAP: usize = 8192;
+
+/// Map the Plex cache row into the queue shape owned by this source.
+///
+/// The raw numeric rating key is deliberately the queue id for MyQBZ. The
+/// registry's claim path can then route playback back to the same Plex object,
+/// while `resolve_collection_tracks` stamps the album boundary separately.
+fn plex_queue_track(track: &PlexCachedTrack) -> QueueTrack {
+    let id = track.rating_key.parse().unwrap_or(track.id);
+    let sample_rate = (track.sample_rate > 0).then_some(track.sample_rate as f64 / 1000.0);
+    QueueTrack {
+        id,
+        title: track.title.clone(),
+        version: None,
+        artist: track.artist.clone(),
+        album: track.album.clone(),
+        album_version: None,
+        duration_secs: track.duration_secs,
+        artwork_url: track
+            .artwork_path
+            .clone()
+            .or_else(|| track.collection_artwork_path.clone()),
+        hires: track.bit_depth.is_some_and(|depth| depth > 16),
+        bit_depth: track.bit_depth,
+        sample_rate,
+        is_local: true,
+        album_id: Some(track.album_key.clone()),
+        artist_id: None,
+        streamable: true,
+        source: Some("plex".to_string()),
+        parental_warning: false,
+        source_item_id_hint: None,
+        context_kind: None,
+        context_id: None,
+    }
+}
 
 /// The Plex credentials, implemented by the frontend over its EXISTING store.
 ///
@@ -140,8 +175,8 @@ impl PlexSource {
     ///    `file_path`, which for a Plex row is the server key);
     /// 2. a numeric id with [`PLEX_TRACK_ID_FLOOR`] set → mask the namespace
     ///    bit and RESOLVE that cache row id, never `id.to_string()`;
-    /// 3. a bare numeric id → the rating key (the MyQBZ path,
-    ///    `enqueue.rs:480` `rating_key.parse().unwrap_or(track.id)`);
+    /// 3. a bare numeric id → the rating key (the MyQBZ path built by
+    ///    [`plex_queue_track`]);
     /// 4. otherwise → [`SourceError::BadIdShape`]. Notably a NON-NUMERIC rating
     ///    key with no hint: today `playback_track_id` falls back to a hash for
     ///    those, so case 3 would silently produce a hash and 404. Here it is a
@@ -184,9 +219,8 @@ impl PlexSource {
     fn cached_rows(item: &MediaRef) -> Vec<PlexCachedTrack> {
         match item.kind() {
             ItemKind::Album => {
-                // Moved from `qbz_mixtape::resolve_plex_album_tracks`
-                // (enqueue.rs:366-377) / `local_plex::album_tracks`
-                // (local_plex.rs:315-321).
+                // The provider-owned replacement for the legacy mixtape and
+                // `local_plex::album_tracks` cache reads.
                 qbz_plex::plex_cache_get_album_tracks(item.id().to_string()).unwrap_or_default()
             }
             ItemKind::Track => {
@@ -350,17 +384,13 @@ impl Source for PlexSource {
             return Err(Self::not_found(item));
         }
         self.memoize_art(item, &rows);
-        // ONE mapper for both entry points. `qbz_mixtape::
-        // plex_cached_track_to_queue_track` (enqueue.rs:479-508) is chosen over
+        // ONE mapper for both entry points. `plex_queue_track` is chosen over
         // `map_cached_to_local_track` + `local_queue_track`
         // (local_plex.rs:276-302 → local_playback.rs:31-108) because it emits
         // the RAW rating key as `QueueTrack.id`. That is survey requirement 2:
         // the same Plex track now carries ONE queue id regardless of which view
         // built the queue, instead of the two-way split in §6.2.
-        Ok(rows
-            .iter()
-            .map(qbz_mixtape::enqueue::plex_cached_track_to_queue_track)
-            .collect())
+        Ok(rows.iter().map(plex_queue_track).collect())
     }
 
     async fn meta(&self, item: &MediaRef) -> Result<ItemMeta, SourceError> {
@@ -547,6 +577,27 @@ mod tests {
     }
 
     #[test]
+    fn queue_mapper_preserves_plex_identity_and_quality() {
+        let mut row = cached_art_row(Some("/disc/thumb"), Some("/collection/thumb"));
+        row.id = 99;
+        row.rating_key = "44440".into();
+        row.bit_depth = Some(24);
+        row.sample_rate = 192_000;
+
+        let queue = plex_queue_track(&row);
+
+        assert_eq!(queue.id, 44_440);
+        assert_eq!(queue.album_id.as_deref(), Some("plex:album"));
+        assert_eq!(queue.source.as_deref(), Some("plex"));
+        assert_eq!(queue.artwork_url.as_deref(), Some("/disc/thumb"));
+        assert_eq!(queue.bit_depth, Some(24));
+        assert_eq!(queue.sample_rate, Some(192.0));
+        assert!(queue.hires);
+        assert!(queue.is_local);
+        assert!(queue.streamable);
+    }
+
+    #[test]
     fn track_art_prefers_the_disc_then_falls_back_to_the_collection() {
         let item = MediaRef::new(SourceId::PLEX, ItemKind::Track, "1");
         let row = cached_art_row(Some("/disc/thumb"), Some("/collection/thumb"));
@@ -612,7 +663,7 @@ mod tests {
     }
 
     /// BUG 2: the MyQBZ collections path stamps the ALBUM boundary key
-    /// (`qbz_plex::plex_album_key` → `plex:<hash>`, enqueue.rs:52-56). It is
+    /// (`qbz_plex::plex_album_key` → `plex:<hash>`). It is
     /// not a rating key, so it is IGNORED in favour of the numeric queue id.
     #[test]
     fn plex_prefixed_hint_is_normalised_away_not_passed_through() {
@@ -641,8 +692,7 @@ mod tests {
         );
     }
 
-    /// A missing hint falls back to the bare numeric id (the MyQBZ shape,
-    /// `enqueue.rs:480`).
+    /// A missing hint falls back to the bare numeric id (the MyQBZ shape).
     #[test]
     fn missing_hint_falls_back_to_queue_id() {
         assert_eq!(

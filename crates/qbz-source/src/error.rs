@@ -57,8 +57,8 @@ pub enum SourceError {
         id: String,
     },
 
-    /// This source does not resolve that kind. Carries `qbz-mixtape`'s "local
-    /// playlists not supported in this release" contract (enqueue.rs:418-423).
+    /// This source does not resolve that kind. In particular, local and LAN
+    /// sources do not expose playlist resolution.
     #[error("{by}: {kind:?} is not supported")]
     Unsupported { by: SourceId, kind: ItemKind },
 

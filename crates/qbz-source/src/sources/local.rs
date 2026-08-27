@@ -568,9 +568,8 @@ impl Source for LocalSource {
             }
             ItemKind::Track => Self::row_id(raw)
                 .map(|row| MediaRef::new(SourceId::LOCAL, ItemKind::Track, row.to_string())),
-            // enqueue.rs:418-423 — the library schema stores qobuz_playlist_id
-            // + local_track_id rows but there is no unique "local-only playlist
-            // id" to resolve against.
+            // The library schema stores qobuz_playlist_id + local_track_id rows
+            // but there is no unique local-only playlist id to resolve against.
             ItemKind::Playlist => Err(SourceError::Unsupported {
                 by: SourceId::LOCAL,
                 kind: ItemKind::Playlist,
@@ -586,19 +585,18 @@ impl Source for LocalSource {
 
     async fn tracks(&self, item: &MediaRef) -> Result<Vec<QueueTrack>, SourceError> {
         // No `.await` in this body: `&LibraryDatabase` is `!Send` and must never
-        // cross one (enqueue.rs:10-15). The future is ready on first poll; the
+        // cross one. The future is ready on first poll; the
         // caller keeps wrapping the call in `spawn_blocking` exactly where it
         // does today (local_playback.rs:302, :313, :323).
         let rows: Vec<LocalTrack> = match item.kind() {
-            // Moved from `qbz_mixtape::resolve_local_album_tracks`
-            // (enqueue.rs:351-364) + `local_albums::fetch_album_tracks_blocking`
-            // (local_albums.rs:225-241).
+            // Provider-owned replacement for the legacy mixtape resolver and
+            // `local_albums::fetch_album_tracks_blocking`.
             ItemKind::Album => self.album_tracks(item.id()),
             // Moved from `local_playback::play_folder` (local_playback.rs:312-319).
             ItemKind::Folder => self
                 .with(|db| db.list_folder_tracks_recursive(item.id(), false))
                 .unwrap_or_default(),
-            // Moved from `qbz_mixtape::resolve_local_track` (enqueue.rs:381-391).
+            // Provider-owned replacement for the legacy local-track resolver.
             ItemKind::Track => {
                 let row_id = item.id().parse::<i64>().map_err(|_| SourceError::BadIdShape {
                     by: SourceId::LOCAL,

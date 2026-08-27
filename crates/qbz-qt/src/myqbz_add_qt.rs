@@ -214,12 +214,10 @@ fn is_ephemeral_item(it: &AddItem) -> bool {
 ///   (`qbz-models/src/mixtape.rs` — `AlbumSource::Local` is an umbrella), so
 ///   the source is NOT consulted for an album.
 /// - **Mixtape**: albums, playlists and tracks.
-/// - **A LOCAL playlist belongs nowhere.** `qbz_mixtape::enqueue::
-///   resolve_local_item` (`enqueue.rs:404,417-422`) answers `(Playlist, Local)`
-///   with the hard error `"local playlists not supported in this release"` —
-///   there is no local-only playlist id to resolve against. That error is THE
-///   unsupported combination R2 talks about; it stays where it is, as the
-///   safety net, and this arm is what makes it unreachable from the UI.
+/// - **A LOCAL playlist belongs nowhere.** The local and LAN implementations
+///   in `qbz-source` reject playlist resolution; there is no local-only
+///   playlist id to resolve against. That error is the unsupported combination
+///   R2 talks about, and this arm makes it unreachable from the UI.
 /// - **Ephemeral: nothing** (R3).
 ///
 /// Kind and source are read through `item_type_from_str` / `source_from_str`,
@@ -947,9 +945,8 @@ mod tests {
             payload_accepts(&[add("playlist", "qobuz", "998877")]),
             Accepts::MIXTAPE_ONLY
         );
-        // R2: `qbz_mixtape::enqueue::resolve_local_item` hard-errors on
-        // (Playlist, Local). Offering ANY container for it is what makes that
-        // error reachable, so nothing is offered and the picker never opens.
+        // R2: qbz-source rejects (Playlist, Local). Offering ANY container for
+        // it would make that error reachable, so the picker never opens.
         let local_playlist = payload_accepts(&[add("playlist", "local", "whatever")]);
         assert_eq!(local_playlist, Accepts::NONE);
         assert!(!local_playlist.any());

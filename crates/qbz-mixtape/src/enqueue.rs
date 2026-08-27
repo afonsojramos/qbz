@@ -6,13 +6,9 @@
 //!
 //! Frontend-agnostic notes (ADR-006):
 //! - The Qobuz resolvers are async free fns over `qbz_qobuz::QobuzClient`.
-//! - The local/Plex resolvers are SYNCHRONOUS free fns over
-//!   `qbz_library::LibraryDatabase` / the `qbz-plex` cache. `&LibraryDatabase`
-//!   wraps a `rusqlite::Connection`, which is `!Sync`, so a `&LibraryDatabase`
-//!   is `!Send` and must NEVER be held across an `.await`. Keeping local/Plex
-//!   resolution in a synchronous free fn enforces that at the type level: the
-//!   caller does its own DB access (e.g. Slint's `with_db(|db| ...)`) and the
-//!   crate bakes in no specific handle type.
+//! - Provider-specific local and LAN resolution belongs to `qbz-source`.
+//!   This crate only defines collection ordering/flattening and the generic
+//!   resolver seam, so it does not pull provider databases into its graph.
 
 use qbz_models::mixtape::{AlbumSource, CollectionPlayMode, ItemType, MixtapeCollectionItem};
 use qbz_models::QueueTrack as CoreQueueTrack;
@@ -21,8 +17,8 @@ use qbz_models::QueueTrack as CoreQueueTrack;
 use qbz_models::Track as ApiTrack;
 
 /// Trait for expanding a single Mixtape item into its tracks. Implementations:
-/// - `ProdItemResolver`    — uses the Qobuz client + a caller-supplied local
-///   resolver (the real production path)
+/// - `ProdItemResolver` — uses the Qobuz client plus a caller-supplied resolver
+///   for non-Qobuz items
 /// - mocks in `#[cfg(test)]`
 #[async_trait::async_trait]
 pub trait ItemResolver: Send + Sync {
@@ -153,16 +149,9 @@ pub fn previous_item_index(
 
 // ──────────────────────────── ProdItemResolver ────────────────────────────
 
-/// Production resolver. Holds a reference to the shared Qobuz client and a
-/// caller-supplied `local` closure that resolves local/Plex items
-/// synchronously.
-///
-/// `&qbz_library::LibraryDatabase` is `!Send`/`!Sync` (it wraps a rusqlite
-/// `Connection`), so it cannot be stored here without breaking the
-/// `ItemResolver: Send + Sync` bound. Instead the caller supplies a
-/// `Send + Sync` closure that performs the DB access in its own synchronous
-/// scope (e.g. Slint's `with_db(|db| resolve_local_album_tracks(db, key))`).
-/// This keeps the crate free of any frontend's DB-handle type.
+/// Resolver over the shared Qobuz client plus a caller-supplied synchronous
+/// closure for non-Qobuz items. The closure keeps provider state and database
+/// handles outside this generic crate.
 pub struct ProdItemResolver<'a, L>
 where
     L: Fn(&MixtapeCollectionItem) -> Result<Vec<CoreQueueTrack>, String> + Send + Sync,
@@ -175,9 +164,8 @@ impl<'a, L> ProdItemResolver<'a, L>
 where
     L: Fn(&MixtapeCollectionItem) -> Result<Vec<CoreQueueTrack>, String> + Send + Sync,
 {
-    /// Build a production resolver from the shared Qobuz client and a local
-    /// resolver closure. The closure is invoked only for `AlbumSource::Local`
-    /// items and must perform its DB access synchronously.
+    /// Build a resolver from the shared Qobuz client and a non-Qobuz resolver
+    /// closure. The closure is invoked only for `AlbumSource::Local` items.
     pub fn new(client: &'a qbz_qobuz::QobuzClient, local: L) -> Self {
         Self { client, local }
     }
@@ -207,8 +195,7 @@ where
                     .map_err(|_| format!("invalid qobuz playlist id: {}", item.source_item_id))?;
                 resolve_qobuz_playlist(self.client, playlist_id).await
             }
-            // All local/Plex resolution is delegated to the caller-supplied
-            // synchronous closure (no `&LibraryDatabase` held across `.await`).
+            // Provider resolution is delegated to the caller-supplied closure.
             (_, AlbumSource::Local) => (self.local)(item),
         }
     }
@@ -333,122 +320,7 @@ pub async fn resolve_qobuz_playlist(
     Ok(tracks.iter().map(track_to_queue_track_from_api).collect())
 }
 
-// ── Local album (synchronous, frontend-agnostic) ──
-
-/// Resolve a `Local` album item's `source_item_id` into tracks.
-///
-/// Routes the `plex:`-prefixed keys to the Plex cache; everything else is a
-/// true local album resolved against the passed `&LibraryDatabase`. Both
-/// branches are synchronous — no `&LibraryDatabase` is held across an `.await`.
-#[cfg(feature = "local")]
-pub fn resolve_local_album(
-    db: &qbz_library::LibraryDatabase,
-    group_key: &str,
-) -> Result<Vec<CoreQueueTrack>, String> {
-    // Plex-backed items carry a Plex album_key as their source_item_id. Those
-    // rows live in the Plex cache DB (plex_cache_tracks), not local_tracks,
-    // so route them to the Plex cache fetcher instead of db.get_album_tracks.
-    if group_key.starts_with("plex:") {
-        #[cfg(feature = "plex")]
-        return resolve_plex_album_tracks(group_key);
-        // Refused rather than looked up in local_tracks: a Plex key is not a
-        // local album group, and resolving it there would silently return the
-        // wrong tracks or none at all.
-        #[cfg(not(feature = "plex"))]
-        return Err(format!(
-            "plex album {} cannot be resolved: this build has no Plex support",
-            group_key
-        ));
-    }
-
-    resolve_local_album_tracks(db, group_key)
-}
-
-/// Resolve a true local album group (no `plex:` prefix) against the library DB.
-#[cfg(feature = "local")]
-pub fn resolve_local_album_tracks(
-    db: &qbz_library::LibraryDatabase,
-    group_key: &str,
-) -> Result<Vec<CoreQueueTrack>, String> {
-    let tracks = db
-        .get_album_tracks(group_key)
-        .map_err(|e| format!("local get_album_tracks({}) failed: {}", group_key, e))?;
-
-    if tracks.is_empty() {
-        return Err(format!("local album {} has 0 tracks", group_key));
-    }
-
-    Ok(tracks.iter().map(local_track_to_queue_track).collect())
-}
-
-/// Resolve a `plex:`-prefixed album key against the shared Plex cache.
-#[cfg(feature = "plex")]
-pub fn resolve_plex_album_tracks(group_key: &str) -> Result<Vec<CoreQueueTrack>, String> {
-    let tracks = qbz_plex::plex_cache_get_album_tracks(group_key.to_string())
-        .map_err(|e| format!("plex cache get_album_tracks({}) failed: {}", group_key, e))?;
-    if tracks.is_empty() {
-        return Err(format!(
-            "plex album {} has 0 tracks (cache empty — visit LocalLibrary to sync)",
-            group_key
-        ));
-    }
-    Ok(tracks
-        .iter()
-        .map(plex_cached_track_to_queue_track)
-        .collect())
-}
-
-// ── Local track (synchronous) ──
-
-#[cfg(feature = "local")]
-pub fn resolve_local_track(
-    db: &qbz_library::LibraryDatabase,
-    track_id: i64,
-) -> Result<Vec<CoreQueueTrack>, String> {
-    let track = db
-        .get_track(track_id)
-        .map_err(|e| format!("local get_track({}) failed: {}", track_id, e))?
-        .ok_or_else(|| format!("local track {} not found", track_id))?;
-
-    Ok(vec![local_track_to_queue_track(&track)])
-}
-
-/// Full local-item dispatch contract (Album / Track / Playlist), centralized in
-/// the crate so frontends do NOT re-implement (and silently drift from) the
-/// matrix. This is the synchronous `&LibraryDatabase` counterpart of the async
-/// Qobuz resolvers; a frontend wires it into `ProdItemResolver`'s `local`
-/// closure through its own DB accessor — e.g. Slint's
-/// `with_db(|db| resolve_local_item(db, item))` (the closure runs in a sync
-/// scope, so `&LibraryDatabase` never crosses an `.await`).
-///
-/// Mirrors the original src-tauri `ProdItemResolver` Local arms exactly:
-/// - Album    → [`resolve_local_album`] (handles the `plex:` prefix internally)
-/// - Track    → parse `source_item_id` to `i64` (`invalid local track id`) → [`resolve_local_track`]
-/// - Playlist → hard error `local playlists not supported in this release`
-#[cfg(feature = "local")]
-pub fn resolve_local_item(
-    db: &qbz_library::LibraryDatabase,
-    item: &MixtapeCollectionItem,
-) -> Result<Vec<CoreQueueTrack>, String> {
-    match item.item_type {
-        ItemType::Album => resolve_local_album(db, &item.source_item_id),
-        ItemType::Track => {
-            let track_id: i64 = item
-                .source_item_id
-                .parse()
-                .map_err(|_| format!("invalid local track id: {}", item.source_item_id))?;
-            resolve_local_track(db, track_id)
-        }
-        ItemType::Playlist => {
-            // Local playlists are not supported in this release. The library DB
-            // schema stores qobuz_playlist_id + local_track_id rows but there is
-            // no unique "local-only playlist id" to resolve against.
-            Err("local playlists not supported in this release".into())
-        }
-    }
-}
-
-// ── Shared mapping helpers ──
+// ── Qobuz mapping helper ──
 
 /// Map a Qobuz API `Track` to a `CoreQueueTrack`.
 pub fn track_to_queue_track_from_api(track: &ApiTrack) -> CoreQueueTrack {
@@ -495,92 +367,6 @@ pub fn track_to_queue_track_from_api(track: &ApiTrack) -> CoreQueueTrack {
         streamable: track.is_streamable(),
         source: Some("qobuz".to_string()),
         parental_warning: track.parental_warning,
-        source_item_id_hint: None,
-        context_kind: None,
-        context_id: None,
-    }
-}
-
-/// Map a cached Plex track to a CoreQueueTrack. The Plex rating_key (numeric
-/// string) becomes the QueueTrack.id so the frontend's Plex playback path
-/// (`v2_plex_play_track` with `ratingKey: String(track.id)`) resolves to the
-/// same Plex object. source="plex" lets playback route to the Plex branch
-/// instead of the local-file branch.
-#[cfg(feature = "plex")]
-pub fn plex_cached_track_to_queue_track(track: &qbz_plex::PlexCachedTrack) -> CoreQueueTrack {
-    let id: u64 = track.rating_key.parse().unwrap_or(track.id);
-    let sample_rate_khz = if track.sample_rate > 0 {
-        Some((track.sample_rate as f64) / 1000.0)
-    } else {
-        None
-    };
-    CoreQueueTrack {
-        id,
-        title: track.title.clone(),
-        version: None,
-        artist: track.artist.clone(),
-        album: track.album.clone(),
-        album_version: None,
-        duration_secs: track.duration_secs,
-        artwork_url: track
-            .artwork_path
-            .clone()
-            .or_else(|| track.collection_artwork_path.clone()),
-        hires: track.bit_depth.map(|d| d > 16).unwrap_or(false),
-        bit_depth: track.bit_depth,
-        sample_rate: sample_rate_khz,
-        is_local: true,
-        album_id: Some(track.album_key.clone()),
-        artist_id: None,
-        streamable: true,
-        source: Some("plex".to_string()),
-        parental_warning: false,
-        source_item_id_hint: None,
-        context_kind: None,
-        context_id: None,
-    }
-}
-
-/// Map a `LocalTrack` to a `CoreQueueTrack`.
-/// `is_local = true`, `source = "local"`, `sample_rate` is converted from Hz
-/// to kHz to match the Qobuz convention used elsewhere in the queue display.
-#[cfg(feature = "local")]
-pub fn local_track_to_queue_track(track: &qbz_library::LocalTrack) -> CoreQueueTrack {
-    // Artwork: local tracks store a file path; expose it as a `file://` URL
-    // so the frontend's <img> can load it. Falls back to None when absent.
-    let artwork_url = track.artwork_path.as_ref().map(|p| {
-        if p.starts_with("file://") {
-            p.clone()
-        } else {
-            format!("file://{}", p)
-        }
-    });
-
-    // sample_rate in LocalTrack is stored in Hz (e.g. 44100.0 / 192000.0).
-    // CoreQueueTrack.sample_rate is in kHz (e.g. 44.1 / 192.0) matching the
-    // Qobuz API field `maximum_sampling_rate`. Divide by 1000.
-    let sample_rate_khz = track.sample_rate / 1000.0;
-
-    CoreQueueTrack {
-        // Local track ids are i64; CoreQueueTrack.id is u64.
-        // Local ids start from 1 and are never negative in practice.
-        id: track.id as u64,
-        title: track.title.clone(),
-        version: None,
-        artist: track.artist.clone(),
-        album: track.album_group_title.clone(),
-        album_version: None,
-        duration_secs: track.duration_secs,
-        artwork_url,
-        hires: track.bit_depth.map(|d| d > 16).unwrap_or(false),
-        bit_depth: track.bit_depth,
-        sample_rate: Some(sample_rate_khz),
-        is_local: true,
-        album_id: Some(track.album_group_key.clone()),
-        artist_id: None,
-        streamable: true,
-        source: Some("local".to_string()),
-        parental_warning: false,
         source_item_id_hint: None,
         context_kind: None,
         context_id: None,
@@ -655,26 +441,6 @@ mod tests {
             track_count: Some(tracks),
             added_at: 0,
         }
-    }
-
-    #[cfg(feature = "local")]
-    #[test]
-    fn resolve_local_item_playlist_is_unsupported() {
-        // The (Playlist, Local) hard error is a load-bearing contract (spec §5.4/§10);
-        // lock it so the later Slint enqueue slice cannot silently drop it.
-        let db = qbz_library::LibraryDatabase::open(std::path::Path::new(":memory:")).unwrap();
-        let it = item(0, ItemType::Playlist, AlbumSource::Local, "whatever", 0);
-        let err = resolve_local_item(&db, &it).unwrap_err();
-        assert_eq!(err, "local playlists not supported in this release");
-    }
-
-    #[cfg(feature = "local")]
-    #[test]
-    fn resolve_local_item_track_rejects_non_numeric_id() {
-        let db = qbz_library::LibraryDatabase::open(std::path::Path::new(":memory:")).unwrap();
-        let it = item(0, ItemType::Track, AlbumSource::Local, "not-a-number", 0);
-        let err = resolve_local_item(&db, &it).unwrap_err();
-        assert_eq!(err, "invalid local track id: not-a-number");
     }
 
     #[tokio::test]

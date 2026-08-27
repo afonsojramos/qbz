@@ -2,7 +2,7 @@
 //!
 //! All functions take `&Connection` (or `&mut Connection` when a transaction
 //! is needed). No Tauri state, no async runtime — testable with in-memory
-//! SQLite. The Slint command layer wraps these with the app's library handle.
+//! SQLite. The application layer wraps these with its per-user library handle.
 
 use rusqlite::{params, Connection, OptionalExtension, Result};
 use uuid::Uuid;
