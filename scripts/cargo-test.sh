@@ -3,8 +3,11 @@
 #
 # Rule (owner, 2026-08-26): test-crates is a living regression gate. Every
 # step it gains lands here in the same commit, and vice versa; the workflow
-# calls THIS script so the two cannot diverge. Bounded: CARGO_BUILD_JOBS=2,
-# --no-fail-fast, the `test` job's 20-minute limit.
+# calls THIS script so the two cannot diverge. Bounded: --no-fail-fast and
+# the `test` job's 20-minute limit. CARGO_BUILD_JOBS is left to cargo (= all
+# cores): the old "2" was a Slint-era memory tier, and measured cold on the
+# 4-vCPU CI VM (2026-08-26) jobs=4 took 392 s vs 589 s at jobs=2 with a
+# 2.7 GB peak — nothing in this graph needs the throttle.
 #
 # Default (job `test`, no Qt):
 #   cargo test --workspace --exclude qbz-qt
@@ -36,10 +39,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 say() { printf '[cargo-test] %s\n' "$*"; }
 
-say "job test: cargo test --workspace --exclude qbz-qt (jobs=$CARGO_BUILD_JOBS)"
+say "job test: cargo test --workspace --exclude qbz-qt (jobs=${CARGO_BUILD_JOBS:-all cores})"
 cargo test \
   --manifest-path crates/Cargo.toml \
   --workspace \
