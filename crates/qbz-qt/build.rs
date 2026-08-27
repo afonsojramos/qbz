@@ -379,6 +379,11 @@ fn build_rhi_items() {
     cc.file("cxx/font_fallback.cpp");
     println!("cargo:rerun-if-changed=cxx/win_shell.cpp");
     cc.file("cxx/win_shell.cpp");
+    // Shell_NotifyIconW tray. No Q_OBJECT, so no moc; the body is inside
+    // `#ifdef _WIN32` and compiles to nothing on Linux and macOS.
+    println!("cargo:rerun-if-changed=cxx/win_tray.cpp");
+    println!("cargo:rerun-if-changed=cxx/win_tray.h");
+    cc.file("cxx/win_tray.cpp");
     for p in qtbuild.include_paths() {
         cc.include(p);
     }

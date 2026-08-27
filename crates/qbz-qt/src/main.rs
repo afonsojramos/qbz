@@ -395,6 +395,9 @@ mod macos_chrome;
 // Ungated: the C++ behind it is portable Qt, so every platform
 // type-checks the seam even though only Windows uses the handle.
 mod win_shell;
+// Windows tray. The file carries its own `#![cfg(target_os = "windows")]`,
+// matching how tray_macos/tray_linux are declared.
+mod tray_windows;
 // MPRIS / media keys (owner ruling K3, REVERSED by the owner on 2026-08-04
 // after smoking the tray: "no aparece por ejemplo en el widget de now playing
 // de KDE Plasma"). Plasma reads MPRIS, so this is what makes the desktop see

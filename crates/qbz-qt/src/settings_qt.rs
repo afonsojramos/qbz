@@ -2279,9 +2279,12 @@ pub async fn publish_snapshot() {
                 .unwrap_or(false),
             is_macos: cfg!(target_os = "macos"),
             is_windows: cfg!(target_os = "windows"),
-            // Windows joins `tray_supported` when plan A-2 T5 lands; that
-            // plan points at this line.
-            tray_supported: cfg!(any(target_os = "linux", target_os = "macos")),
+            // Windows joined with A-2 T5 (Shell_NotifyIconW).
+            tray_supported: cfg!(any(
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "windows"
+            )),
             // NOT Windows yet, even though the toast arm is implemented.
             // An unpackaged desktop app only gets toasts when Windows can
             // RESOLVE its AppUserModelID -- which needs a Start-menu shortcut

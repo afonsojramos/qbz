@@ -128,6 +128,11 @@ pub(crate) struct TrayHandle {
     linux: Option<crate::tray_linux::LinuxTrayHandle>,
     #[cfg(target_os = "macos")]
     macos: bool,
+    // Same shape as the macOS flag and for the same reason: the icon lives in
+    // C++ process-global state, so this only records that a tray EXISTS. It is
+    // what `handle().is_some()` -- and therefore close-to-tray -- consults.
+    #[cfg(target_os = "windows")]
+    windows: bool,
 }
 
 impl TrayHandle {
@@ -135,6 +140,29 @@ impl TrayHandle {
         #[cfg(target_os = "linux")]
         if let Some(h) = &self.linux {
             h.set_track(title, artist, album);
+            return;
+        }
+        #[cfg(target_os = "windows")]
+        if self.windows {
+            // The tray's hover text is the Windows analogue of the Linux
+            // menu header: title on the first line, artist/album below.
+            //
+            // Through the GUI hop, exactly as the macOS theme arm below. This
+            // publisher runs on whatever thread playback pushed from -- the
+            // 1 Hz poll lives in `crate::spawn` -- while the Windows tray keeps
+            // process-global C++ state and talks to a window owned by the GUI
+            // thread. Calling straight through was a data race, not merely a
+            // documentation mismatch. Linux needs no hop because ksni's handle
+            // is a thread-safe channel.
+            let desc = match (artist.is_empty(), album.is_empty()) {
+                (true, true) => String::new(),
+                (true, false) => album.clone(),
+                (false, true) => artist.clone(),
+                (false, false) => format!("{artist} - {album}"),
+            };
+            crate::tray_bridge::ui(move |_b| {
+                crate::tray_windows::set_tooltip(&title, &desc);
+            });
             return;
         }
         #[cfg(not(target_os = "linux"))]
@@ -146,12 +174,21 @@ impl TrayHandle {
         if let Some(h) = &self.linux {
             h.clear_track();
         }
+        #[cfg(target_os = "windows")]
+        if self.windows {
+            crate::tray_bridge::ui(|_b| crate::tray_windows::set_tooltip("QBZ", ""));
+        }
     }
 
     pub(crate) fn set_playing(&self, is_playing: bool) {
         #[cfg(target_os = "linux")]
         if let Some(h) = &self.linux {
             h.set_playing(is_playing);
+            return;
+        }
+        #[cfg(target_os = "windows")]
+        if self.windows {
+            crate::tray_bridge::ui(move |_b| crate::tray_windows::set_playing(is_playing));
             return;
         }
         #[cfg(not(target_os = "linux"))]
@@ -170,6 +207,10 @@ impl TrayHandle {
             crate::tray_bridge::ui(move |_b| crate::tray_macos::set_icon_theme(&theme));
             return;
         }
+        // Windows has no arm on purpose: the notification area draws the
+        // executable's own RT_GROUP_ICON and Windows owns light/dark itself,
+        // so there is nothing for a theme choice to change. The settings row
+        // stays hidden there rather than offering a control that does nothing.
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let _ = theme;
     }
@@ -373,7 +414,28 @@ pub(crate) fn init(theme_override: String, enabled: bool) {
         });
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    // Windows: Shell_NotifyIconW owns a hidden window with a message loop,
+    // so the icon must be created on the thread that pumps it -- the Qt GUI
+    // thread. Same hop as macOS, and for the same class of reason.
+    #[cfg(target_os = "windows")]
+    {
+        let _ = theme_override;
+        crate::tray_bridge::ui(move |_b| {
+            let ok = crate::tray_windows::create();
+            // Both arms publish, exactly as Linux and macOS do: a failure MUST
+            // report false, or close-to-tray hides the window into a tray that
+            // is not there.
+            if ok {
+                let _ = TRAY.set(TrayHandle { windows: true });
+                push_tray_live(true);
+            } else {
+                log::error!("[tray] Windows notification-area icon could not be created");
+                push_tray_live(false);
+            }
+        });
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         let _ = theme_override;
         log::info!("[tray] no tray backend on this platform");

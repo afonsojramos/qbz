@@ -613,7 +613,12 @@ Column {
     SettingRow {
         // Absent while the tray is off — there is no icon to give a
         // variant to (owner 2026-08-21).
-        visible: root.doc.trayEnable === true
+        //
+        // And absent on Windows, where the notification area draws the
+        // executable's own icon: Windows owns light/dark there and the tray
+        // has no theme arm, so every choice here would render, persist and
+        // change nothing.
+        visible: root.doc.trayEnable === true && QbzShell.isWindows !== true
         label: QbzSession.tr("Tray icon variant", QbzSession.trRev)
         description: QbzSession.tr("Pick a mono glyph to match your panel (Plasma, GNOME's permanently dark top bar) or the full colour vinyl logo", QbzSession.trRev)
         QbzSelect {
