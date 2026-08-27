@@ -52,7 +52,9 @@ fn main() {
         println!("realigned: {}   timing: {:?}", info.realigned, info.timing);
         println!("bit-perfect mode: {:?}", stream.bit_perfect_mode());
         println!();
-        println!("playing {secs}s of 1 kHz at -20 dBFS - CHECK THE DAC DISPLAY, it must read {rate}");
+        println!("BEEP 1 of 3 - {secs}s of 1 kHz at -20 dBFS");
+        println!("CHECK THE DAC: it must read {rate}. Then expect TWO more one-second");
+        println!("beeps - one after the drain, one after the stop. Three beeps = PASS.");
 
         // Feed in period-sized chunks so the queue's back-pressure paces us
         // instead of a sleep. 1 kHz divides every rate in the ladder evenly
@@ -83,6 +85,13 @@ fn main() {
             written += n as u64;
         }
 
+        // The verdict must be judged on CONTINUOUS playback only. Everything
+        // after this point deliberately leaves the queue empty between beeps,
+        // and a genuine gap with the stream running IS an underrun -- counting
+        // those would make this instrument report a failure it created itself.
+        let underruns_playing = stream.underruns();
+        let timeouts_playing = stream.event_timeouts();
+
         // Drain, then WRITE AGAIN. This is the discriminating test for the
         // gapless contract: drain must block until the queue has played out
         // AND must leave the stream usable for the next source. An early
@@ -94,27 +103,80 @@ fn main() {
         println!();
         println!("drain          : {drained:?} in {drain_ms} ms");
 
-        let mut second = Vec::with_capacity(frames_per_chunk * 2);
-        for _ in 0..frames_per_chunk {
-            let v = phase.sin() * amp;
-            phase += step;
-            second.push(v);
-            second.push(v);
-        }
-        match stream.write_f32(&second) {
+        // A FULL SECOND, not one buffer. The point of these two checks is that
+        // a person can HEAR the second and third beeps; a 144-frame burst at
+        // 44.1 kHz is 3 ms, which is inaudible, so the test could pass or fail
+        // and sound identical either way.
+        let mut beep = |stream: &WasapiDirectStream, phase: &mut f32| -> Result<(), String> {
+            let mut left = rate as usize;
+            while left > 0 {
+                let n = frames_per_chunk.min(left);
+                let mut buf = Vec::with_capacity(n * 2);
+                for _ in 0..n {
+                    let v = phase.sin() * amp;
+                    *phase += step;
+                    if *phase > std::f32::consts::TAU {
+                        *phase -= std::f32::consts::TAU;
+                    }
+                    buf.push(v);
+                    buf.push(v);
+                }
+                stream.write_f32(&buf)?;
+                left -= n;
+            }
+            Ok(())
+        };
+
+        println!("BEEP 2 of 3 - one second, after the drain");
+        match beep(&stream, &mut phase) {
             Ok(()) => println!("write after drain: OK - the stream survived the drain"),
             Err(e) => println!("write after drain: FAILED ({e}) - the stream died on drain"),
         }
         let _ = stream.drain();
 
+        // STOP, then WRITE AGAIN. This is the OTHER half of the gapless
+        // contract and the one that was missing: the player calls
+        // engine.stop() on EVERY track change and then reuses the same stream
+        // object for the next track, exactly as ALSA's stop() does
+        // ("prepare for next playback"). A render thread that exits on Stop
+        // passes every drain test and still cannot play a second track --
+        // which is what shipped, and what the app log caught as
+        // "Write failed: render thread is gone".
+        let t1 = std::time::Instant::now();
+        let stopped = stream.stop();
+        println!("stop           : {stopped:?} in {} ms", t1.elapsed().as_millis());
+
+        println!("BEEP 3 of 3 - one second, after the stop");
+        let survived_stop = match beep(&stream, &mut phase) {
+            Ok(()) => {
+                println!("write after stop : OK - the stream survived the stop");
+                true
+            }
+            Err(e) => {
+                println!("write after stop : FAILED ({e}) - the stream died on stop");
+                false
+            }
+        };
+        let _ = stream.drain();
+
         println!();
         println!("frames written : {written}");
-        println!("underruns      : {}", stream.underruns());
-        println!("event timeouts : {}", stream.event_timeouts());
+        println!(
+            "underruns      : {} during playback ({} total, gaps between beeps included)",
+            underruns_playing,
+            stream.underruns()
+        );
+        println!(
+            "event timeouts : {} during playback ({} total)",
+            timeouts_playing,
+            stream.event_timeouts()
+        );
         println!(
             "VERDICT        : {}",
-            if stream.underruns() == 0 && stream.event_timeouts() == 0 {
-                "PASS - no underruns, no timeouts"
+            if !survived_stop {
+                "FAIL - the stream did not survive stop(); a track change kills it"
+            } else if underruns_playing == 0 && timeouts_playing == 0 {
+                "PASS - survived drain and stop, no underruns, no timeouts"
             } else {
                 "underruns occurred; try WasapiTiming::Polling"
             }

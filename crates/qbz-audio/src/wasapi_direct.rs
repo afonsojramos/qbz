@@ -323,7 +323,9 @@ mod imp {
     use super::{aligned_period_hns, Rung, WasapiOpenInfo, WasapiTiming, LADDER};
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender, TryRecvError};
+    use std::sync::mpsc::{
+        channel, sync_channel, Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError,
+    };
     use std::sync::Arc;
     use std::thread::JoinHandle;
     use std::time::{Duration, Instant};
@@ -341,8 +343,25 @@ mod imp {
         /// return until the queue really has played out, because the player's
         /// writer thread treats its return as "the source is finished" - and
         /// the ALSA drain it shares that thread with does block.
-        Drain(Sender<()>),
-        Stop,
+        /// `true` = the queue really played out; `false` = a Stop threw it
+        /// away. The caller must be able to tell those apart.
+        Drain(Sender<bool>),
+        /// Halt and discard, then WAIT for the next track -- ALSA's
+        /// "prepare for next playback". The render thread survives it,
+        /// because the player reuses one stream across track changes.
+        /// Carries the acknowledgement channel. `stop()` MUST NOT return
+        /// before the halt-and-purge has run: the player sends Stop and then
+        /// immediately queues the next track's PCM on the other channel, so a
+        /// fire-and-forget Stop lets the purge below eat audio belonging to
+        /// the track that is starting. Same failure as the original bug, one
+        /// track later and intermittent.
+        Stop(Sender<()>),
+        /// Real teardown: leave the loop and let the thread end. Only `Drop`
+        /// sends this. Keeping it separate from `Stop` is the whole point --
+        /// when `Stop` also meant "exit", `Drop` joined a thread that had
+        /// already gone, and the day `Stop` stopped meaning that, `Drop`
+        /// joined a thread that never would.
+        Shutdown,
     }
 
     pub(super) struct Inner {
@@ -363,6 +382,10 @@ mod imp {
 
     /// A drain cannot wait forever on a device that stopped consuming.
     const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
+    /// A Stop is acknowledged from the top of the render loop, so the wait is
+    /// at most one event timeout plus the halt itself. Generous by 10x, and
+    /// bounded so a dead device cannot wedge a track change.
+    const STOP_DEADLINE: Duration = Duration::from_secs(2);
 
     fn wave_format(rung: Rung, rate: u32, channels: u16) -> WaveFormat {
         let ty = if rung.is_float() {
@@ -606,7 +629,13 @@ mod imp {
         let first_deadline = Instant::now() + Duration::from_secs(5);
         while carry.is_empty() && Instant::now() < first_deadline {
             match ctl.try_recv() {
-                Ok(Ctl::Stop) | Err(TryRecvError::Disconnected) => return,
+                Ok(Ctl::Shutdown) | Err(TryRecvError::Disconnected) => return,
+                // Nothing has started yet, so a Stop has nothing to halt;
+                // discard whatever arrived and keep waiting for real audio.
+                Ok(Ctl::Stop(ack)) => {
+                    carry.clear();
+                    let _ = ack.send(());
+                }
                 _ => {}
             }
             if let Ok(chunk) = pcm.recv_timeout(Duration::from_millis(20)) {
@@ -626,7 +655,10 @@ mod imp {
             return;
         }
         let mut paused = false;
-        let mut draining: Option<(Instant, Sender<()>)> = None;
+        // Halted by Ctl::Stop and waiting for the next track's first chunk.
+        // NOT a teardown: see the Ctl::Stop arm below.
+        let mut stopped = false;
+        let mut draining: Option<(Instant, Sender<bool>)> = None;
         // Starvation is counted as an EVENT, not per period: one real underrun
         // otherwise reports as hundreds while the queue stays empty.
         let mut starved = false;
@@ -642,13 +674,115 @@ mod imp {
                 }
                 Ok(Ctl::Resume) => {
                     if paused {
-                        let _ = client.start_stream();
                         paused = false;
+                        // While `stopped` the client is Reset and unprimed,
+                        // and the re-arm block below owns the restart: it
+                        // pre-rolls BEFORE Start. Starting here as well would
+                        // play a buffer of silence and then, on the second
+                        // Start, fail with AUDCLNT_E_NOT_STOPPED.
+                        if !stopped {
+                            let _ = client.start_stream();
+                        }
                     }
                 }
-                Ok(Ctl::Drain(done)) => draining = Some((Instant::now() + DRAIN_DEADLINE, done)),
-                Ok(Ctl::Stop) | Err(TryRecvError::Disconnected) => break,
+                Ok(Ctl::Drain(done)) => {
+                    if stopped {
+                        // A halted, Reset stream holds nothing and plays
+                        // nothing, so it has drained by definition. Parking
+                        // this until the NEXT track arrives would block the
+                        // caller for the whole drain deadline.
+                        let _ = done.send(true);
+                    } else {
+                        draining = Some((Instant::now() + DRAIN_DEADLINE, done));
+                    }
+                }
+                Ok(Ctl::Stop(ack)) => {
+                    // ALSA's contract, which this mirrors deliberately:
+                    // "Stop PCM immediately (prepare for next playback)" --
+                    // DROP to halt and discard, then prepare, and the stream
+                    // OBJECT survives because the player reuses it for the next
+                    // track. Breaking here instead made the stream single-use:
+                    // the player calls engine.stop() on every track change, so
+                    // the render thread died before the first track's audio had
+                    // even finished buffering and every later write answered
+                    // "render thread is gone". Same shape as the drain defect,
+                    // second instance -- a control that means "get ready" was
+                    // read as "we are done".
+                    // The results are NOT ignored. If the halt half fails the
+                    // stream is not in a state a later Start can trust, and
+                    // reporting it as stopped-and-ready would be the same kind
+                    // of lie this whole fix exists to remove.
+                    let halted = client
+                        .stop_stream()
+                        .map_err(|e| format!("stop_stream: {e}"))
+                        .and_then(|()| {
+                            client
+                                .reset_stream()
+                                .map_err(|e| format!("reset_stream: {e}"))
+                        });
+                    carry.clear();
+                    // Discard what the previous track had already handed over,
+                    // the way DROP discards queued frames. Safe here and ONLY
+                    // here because `stop()` blocks on the ack below: nothing
+                    // written after stop() returns can be in flight yet.
+                    while pcm.try_recv().is_ok() {}
+                    // A drain waiting on this stream will never see its audio
+                    // play out -- it was just thrown away. Say so.
+                    if let Some((_, done)) = draining.take() {
+                        let _ = done.send(false);
+                    }
+                    starved = false;
+                    paused = false;
+                    stopped = true;
+                    // Acknowledge before any bail-out, so a caller blocked in
+                    // stop() is never stranded by a failure.
+                    let _ = ack.send(());
+                    if let Err(e) = halted {
+                        log::error!("[WASAPI Direct] halt failed ({e}); stream is dead");
+                        dead.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+                Ok(Ctl::Shutdown) | Err(TryRecvError::Disconnected) => break,
                 Err(TryRecvError::Empty) => {}
+            }
+
+            // Re-arm: hold the device open, idle, until the next track's first
+            // chunk arrives, then pre-roll and start again exactly as the
+            // initial start did. Keeping the client open is the point -- the
+            // exclusive lock stays ours across the track change.
+            if stopped && !paused {
+                match pcm.recv_timeout(Duration::from_millis(20)) {
+                    Ok(chunk) => carry.extend(chunk),
+                    Err(RecvTimeoutError::Timeout) => continue,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+                // Pre-roll BEFORE Start, and only claim the stream is running
+                // if the pre-roll actually happened: a Start over an unprimed
+                // exclusive buffer plays a period of silence and then starves.
+                let primed = client
+                    .get_available_space_in_frames()
+                    .map_err(|e| format!("get_available_space_in_frames: {e}"))
+                    .and_then(|n| {
+                        let need = n as usize * block_align;
+                        let take = need.min(carry.len());
+                        let mut buf: Vec<u8> = carry.drain(..take).collect();
+                        buf.resize(need, 0);
+                        render
+                            .write_to_device(n as usize, &buf, None)
+                            .map_err(|e| format!("write_to_device: {e}"))
+                    });
+                if let Err(e) = primed {
+                    log::error!("[WASAPI Direct] Re-arm prefill failed ({e}); stream is dead");
+                    dead.store(true, Ordering::SeqCst);
+                    break;
+                }
+                if let Err(e) = client.start_stream() {
+                    log::error!("[WASAPI Direct] Restart after stop failed: {e}");
+                    dead.store(true, Ordering::SeqCst);
+                    break;
+                }
+                stopped = false;
             }
 
             if paused {
@@ -746,7 +880,7 @@ mod imp {
                     || draining.is_some()
                 {
                     if let Some((_, done)) = draining.take() {
-                        let _ = done.send(());
+                        let _ = done.send(true);
                     }
                 }
                 continue;
@@ -871,16 +1005,41 @@ mod imp {
 
         pub(super) fn drain_blocking(&self) -> Result<(), String> {
             self.check_alive()?;
-            let (tx, rx) = channel::<()>();
+            let (tx, rx) = channel::<bool>();
             self.send_ctl(Ctl::Drain(tx))?;
             match rx.recv_timeout(DRAIN_DEADLINE + Duration::from_secs(2)) {
-                Ok(()) => Ok(()),
+                Ok(true) => Ok(()),
+                Ok(false) => {
+                    // A Stop threw the queue away while this drain waited. The
+                    // audio did NOT play out, and the caller's writer thread
+                    // treats a successful drain as "the source finished", so
+                    // saying Ok here would report a track as played that was
+                    // discarded mid-flight.
+                    Err("drain cancelled: the stream was stopped".to_string())
+                }
                 Err(_) => {
                     // Not an error to the caller: a stuck drain must not wedge
                     // playback, and the stream is still usable.
                     log::warn!("[WASAPI Direct] drain did not complete within its deadline");
                     Ok(())
                 }
+            }
+        }
+
+        /// Halt, discard, and leave the stream ready for the next track --
+        /// BLOCKING until the render thread confirms it has done so.
+        ///
+        /// The blocking is the contract, not politeness. The player sends this
+        /// on a track change and then immediately queues the next track's PCM;
+        /// if this returned early, the render thread's purge would run after
+        /// that audio had been handed over and would eat it.
+        pub(super) fn stop_blocking(&self) -> Result<(), String> {
+            self.check_alive()?;
+            let (tx, rx) = channel::<()>();
+            self.send_ctl(Ctl::Stop(tx))?;
+            match rx.recv_timeout(STOP_DEADLINE) {
+                Ok(()) => Ok(()),
+                Err(_) => Err("stop was not acknowledged by the render thread".to_string()),
             }
         }
 
@@ -893,11 +1052,15 @@ mod imp {
 
     impl Drop for Inner {
         fn drop(&mut self) {
-            let _ = self.ctl.send(Ctl::Stop);
+            // MUST be Shutdown, not Stop. `Stop` means "prepare for the next
+            // track" and the thread deliberately survives it -- sending it here
+            // parked the thread waiting for audio that would never come and
+            // hung `join()` forever, at process exit, every time.
+            let _ = self.ctl.send(Ctl::Shutdown);
             if let Some(join) = self.join.take() {
-                // The thread's own loop exits on Stop; joining without a
-                // deadline is safe because every wait inside it is bounded by
-                // the period timeout.
+                // Joining without a deadline is safe because every wait inside
+                // the loop is bounded: the event wait by `event_timeout_ms`,
+                // the re-arm wait by 20 ms, both looping back to this check.
                 let _ = join.join();
             }
         }
@@ -972,7 +1135,7 @@ impl WasapiDirectStream {
     }
 
     pub fn stop(&self) -> Result<(), String> {
-        self.inner.send_ctl(imp::Ctl::Stop)
+        self.inner.stop_blocking()
     }
 
     pub fn sample_rate(&self) -> u32 {
