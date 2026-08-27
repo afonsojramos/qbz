@@ -3334,6 +3334,29 @@ fn main() {
     renderer_qt::apply_gpu_preference();
     apply_scroll_physics();
 
+    // FONT ENGINE (Windows). Qt's default rasteriser on Windows renders the
+    // lyric text thin and jagged - the owner's words were "como fuente de
+    // bloc de notas con extra alias", and the same text is clean under
+    // FreeType. Verified on the box by launching with
+    // QT_QPA_PLATFORM=windows:fontengine=freetype and comparing the lyrics
+    // panel: same build, same font, only the rasteriser changed.
+    //
+    // Only when the variable carries no real value. `offscreen` is what the
+    // release smoke gate passes here, and overwriting it would make the gate
+    // test a platform nobody ships. Empty counts as absent: a cleared
+    // variable is present-with-no-value, which `var_os().is_some()` reports
+    // as set (the same trap the renderer preference had).
+    #[cfg(windows)]
+    {
+        let explicit = std::env::var_os("QT_QPA_PLATFORM")
+            .map(|v| !v.to_string_lossy().trim().is_empty())
+            .unwrap_or(false);
+        if !explicit {
+            std::env::set_var("QT_QPA_PLATFORM", "windows:fontengine=freetype");
+            log::info!("[qbz-qt] font engine -> freetype (Qt's Windows rasteriser aliases text)");
+        }
+    }
+
     // D7 (research/02 §4.4): with no explicit style Qt loads `Windows` on
     // Windows and `Fusion` on Linux — never Basic — and the popups without an
     // explicit `background:` inherit native chrome. Pin Basic so all three
