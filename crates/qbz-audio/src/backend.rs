@@ -456,6 +456,14 @@ impl AudioBackend for CpalDefaultBackend {
             .map(|desc| desc.name().to_string())
             .unwrap_or_else(|_| "Default Output".to_string());
 
+        // WINDOWS ONLY, additive. Endpoint FRIENDLY NAMES are not unique
+        // there: measured on a real box, three active render endpoints were
+        // all called "Altavoces" - the motherboard Realtek, a Bluetooth
+        // handsfree and a Cambridge Audio USB DAC. Matching the default by
+        // name would mark all three.
+        #[cfg(windows)]
+        let default_endpoint_id = default_device.id().ok().map(|i| i.1);
+
         let mut devices = Vec::new();
         for device in self
             .host
@@ -466,7 +474,6 @@ impl AudioBackend for CpalDefaultBackend {
                 .description()
                 .map(|desc| desc.name().to_string())
                 .unwrap_or_else(|_| "Unknown Device".to_string());
-            let is_default = name == default_name;
 
             // On macOS, probe device capabilities via CoreAudio
             #[cfg(target_os = "macos")]
@@ -479,10 +486,47 @@ impl AudioBackend for CpalDefaultBackend {
                 bool,
             ) = (None, None, None, false);
 
+            // WINDOWS ONLY, additive: id, display and description all come
+            // from fields cpal already fills but this backend ignored.
+            //
+            // `name` is the endpoint ("Altavoces") and repeats across
+            // devices; `driver()` is the ADAPTER ("Cambridge Audio USB Audio
+            // 2.0") and is what tells them apart; `id()` is the stable WASAPI
+            // endpoint GUID. Using the name as the id meant device_filter
+            // folded every same-named endpoint into one entry, so a USB DAC
+            // sharing the name "Altavoces" with the onboard card could not be
+            // selected at all - and an unselectable DAC blocks bit-perfect.
+            #[cfg(windows)]
+            let (id, display, description, is_default) = {
+                let driver = device
+                    .description()
+                    .ok()
+                    .and_then(|d| d.driver().map(str::to_string))
+                    .filter(|d| !d.is_empty() && d.as_str() != name.as_str());
+                let endpoint_id = device.id().ok().map(|i| i.1);
+                let display = match &driver {
+                    Some(d) => format!("{name} ({d})"),
+                    None => name.clone(),
+                };
+                let is_default = match (&endpoint_id, &default_endpoint_id) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => name == default_name,
+                };
+                (
+                    endpoint_id.unwrap_or_else(|| name.clone()),
+                    display,
+                    driver,
+                    is_default,
+                )
+            };
+            #[cfg(not(windows))]
+            let (id, display, description, is_default) =
+                (name.clone(), name.clone(), None, name == default_name);
+
             devices.push(AudioDevice {
-                id: name.clone(),
-                name,
-                description: None,
+                id,
+                name: display,
+                description,
                 is_default,
                 max_sample_rate: max_rate,
                 supported_sample_rates: supported_rates,
@@ -563,6 +607,14 @@ impl AudioBackend for CpalDefaultBackend {
                 .output_devices()
                 .map_err(|e| format!("Failed to enumerate devices: {}", e))?
                 .find(|d| {
+                    // WINDOWS ONLY, additive: enumerate_devices publishes the
+                    // stable endpoint GUID as the id there, because friendly
+                    // names repeat. The name comparison stays as the fallback
+                    // so a setting saved before this change still resolves.
+                    #[cfg(windows)]
+                    if d.id().map(|i| i.1 == *device_id).unwrap_or(false) {
+                        return true;
+                    }
                     d.description()
                         .map(|desc| desc.name() == device_id.as_str())
                         .unwrap_or(false)
