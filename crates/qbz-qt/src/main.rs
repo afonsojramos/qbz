@@ -395,6 +395,67 @@ mod macos_chrome;
 // Ungated: the C++ behind it is portable Qt, so every platform
 // type-checks the seam even though only Windows uses the handle.
 mod win_shell;
+
+/// Flush the session while Windows waits on WM_QUERYENDSESSION.
+///
+/// BOUNDED, and that is the whole design. Qt blocks inside `commitDataRequest`
+/// until this returns, and Windows starts terminating applications that have
+/// not answered after roughly five seconds -- so an unbounded save here does
+/// not protect the session, it gets the process killed halfway through writing
+/// it, which is worse than not trying.
+///
+/// So the save runs on its own thread and the GUI thread waits on a deadline
+/// comfortably under the OS limit. A `tokio::time::timeout` around the future
+/// would not do: it cannot preempt the synchronous SQLite section, which is
+/// the part that can actually take time.
+///
+/// If the deadline passes we return anyway and let the session end. The write
+/// either lands in the remaining moments or it does not; either way the shell
+/// is not left waiting, and the log says which happened.
+///
+/// `catch_unwind` because a panic must never cross the C ABI back into Qt's
+/// signal emission.
+#[cfg(target_os = "windows")]
+extern "C" fn on_session_commit_data() {
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    /// Well under the ~5 s Windows allows before it stops waiting.
+    const COMMIT_DEADLINE: Duration = Duration::from_secs(3);
+
+    let _ = std::panic::catch_unwind(|| {
+        log::info!("[qbz-qt] session ending; persisting");
+        let (tx, rx) = channel::<()>();
+        let spawned = std::thread::Builder::new()
+            .name("qbz-session-commit".to_string())
+            .spawn(move || {
+                // `save_on_exit` block_on()s the capture on the tokio handle
+                // bound at shell entry. Safe from a plain thread; it would
+                // panic only from inside an async context, which this is not.
+                qbz_app::session_persist::save_on_exit();
+                let _ = tx.send(());
+            });
+        if let Err(e) = spawned {
+            log::warn!("[qbz-qt] could not spawn the session-commit thread: {e}");
+            return;
+        }
+        // Timeout and Disconnected are DIFFERENT and must not share a line: a
+        // panic in the worker drops the sender, which arrives here as
+        // Disconnected, and reporting that as "did not finish in time" would
+        // hide a crash behind a slow-disk story. The outer catch_unwind cannot
+        // see it -- it guards this thread, not that one.
+        match rx.recv_timeout(COMMIT_DEADLINE) {
+            Ok(()) => log::info!("[qbz-qt] session persisted before the session ended"),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => log::warn!(
+                "[qbz-qt] session persist did not finish within {}s; letting the session end",
+                COMMIT_DEADLINE.as_secs()
+            ),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                log::error!("[qbz-qt] the session-persist thread died before reporting")
+            }
+        }
+    });
+}
 // Windows tray. The file carries its own `#![cfg(target_os = "windows")]`,
 // matching how tray_macos/tray_linux are declared.
 mod tray_windows;
@@ -3444,6 +3505,23 @@ fn main() {
     cxx_qt_lib::QQuickStyle::set_style(&QString::from("Basic"));
 
     let mut app = QGuiApplication::new();
+
+    // W25. Windows asks WM_QUERYENDSESSION before it decides to log off or
+    // shut down, and Qt turns that into `commitDataRequest` and BLOCKS inside
+    // the signal until the handler returns -- the one moment where a
+    // synchronous persist is safe. Anything deferred to a queued connection or
+    // another thread races the process being killed.
+    //
+    // WINDOWS ONLY, deliberately, though the hook itself is portable. Qt's
+    // session manager exists on X11 too, so installing this everywhere would
+    // add a blocking save to the Linux logout path -- a behaviour change on the
+    // platform this project leads with, and one that can only ever delay a
+    // logout. W25 is a Windows contract item; Linux can opt in on its own
+    // terms, deliberately, rather than inheriting it from a port.
+    #[cfg(target_os = "windows")]
+    win_shell::install_commit_data_handler(on_session_commit_data);
+
+
     let mut engine = QQmlApplicationEngine::new();
 
     // ── THE APP TYPEFACE, AND WHY IT IS SET RIGHT HERE ────────────────────

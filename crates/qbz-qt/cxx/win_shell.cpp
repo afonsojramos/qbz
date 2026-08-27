@@ -10,6 +10,7 @@
 #include <QtGui/QSessionManager>
 #include <QtGui/QWindow>
 
+
 // The top-level window's native handle, or nullptr before one is shown.
 //
 // MUST NOT be called before exec(): QWindow::winId() CREATES the platform
