@@ -52,7 +52,9 @@ jobs:
   test:
     name: cargo test (workspace, no UI)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The rule: CARGO_BUILD_JOBS=2, --no-fail-fast, 20 minutes. Cold ~10 min
+    # on the 4-vCPU runner (measured 589 s on an equivalent VM), warm ~2.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -78,7 +80,7 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/pre-release' }}
 
-      - name: cargo test
+      - name: cargo test (scripts/cargo-test.sh — the local mirror)
         env:
           CARGO_TERM_COLOR: always
           CARGO_BUILD_JOBS: "2"
@@ -87,15 +89,6 @@ jobs:
           START=$(date +%s)
           ./scripts/cargo-test.sh
           echo "cargo test wall time: $(( $(date +%s) - START ))s"
-
-      - name: qbzd slint-free dep-graph gate
-        run: |
-          set -euo pipefail
-          hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbzd -e normal \
-                 | grep -E '\b(slint|qbz-ui|qbz-slint-common|qbz-dac-wizard) v' || true)
-          if [ -n "$hits" ]; then
-            echo "::error::qbzd graph resolves Slint crates:"; echo "$hits"; exit 1
-          fi
 
   # Every shader must bake with the pinned qsb. Separate job so qsb is never
   # on PATH while cargo runs (see qt-gate).
@@ -171,33 +164,27 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/pre-release' }}
 
-      - name: Slint-free dep-graph gate (qbz-qt)
+      # The exact QT=1 half of scripts/cargo-test.sh, minus its `test` job
+      # (already run above) and its shader gate (the shader-gate job, so qsb
+      # is never on PATH while cargo runs here): dep-graph gate, cargo test
+      # -p qbz-qt, offscreen boot. Kept in the script so local == CI.
+      - name: qt gates (scripts/cargo-test.sh QT=1, without the workspace test)
+        env:
+          CARGO_TERM_COLOR: always
+          CARGO_BUILD_JOBS: "2"
+          QBZ_QT_QML_DIR: ${{ env.QT_ROOT_DIR }}/qml
         run: |
           set -euo pipefail
           hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbz-qt -e normal \
                  | grep -E '\b(slint|qbz-ui|qbz-slint-common|qbz-dac-wizard) v' || true)
           [ -z "$hits" ] || { echo "::error::qbz-qt graph resolves Slint crates:"; echo "$hits"; exit 1; }
-
-      - name: cargo test -p qbz-qt (debug)
-        env:
-          CARGO_TERM_COLOR: always
-        run: cargo test --manifest-path crates/Cargo.toml -p qbz-qt --no-fail-fast
-
-      # The debug binary is what the tests just linked; boot it headless. Pass
-      # = >= 10 log lines, zero QML complaints, core initialized (the login
-      # screen — `home published` needs a session CI does not have).
-      - name: Offscreen boot (debug binary)
-        run: |
-          set -uo pipefail
+          cargo test --manifest-path crates/Cargo.toml -p qbz-qt --no-fail-fast
           cargo build --manifest-path crates/Cargo.toml -p qbz-qt
           QT_QPA_PLATFORM=offscreen RUST_LOG=info timeout 75 ./crates/target/debug/qbz > smoke.log 2>&1 || true
           lines=$(wc -l < smoke.log); echo "smoke log: $lines lines"
           if (( lines < 10 )); then cat smoke.log; echo "::error::the app did not start"; exit 1; fi
-          errs=$(grep -av 'propertyCache' smoke.log \
-            | grep -aciE 'is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed' || true)
-          if (( errs > 0 )); then
-            grep -av 'propertyCache' smoke.log | grep -aiE 'is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed' | head -20
-            echo "::error::$errs QML complaint(s) in the smoke log"; exit 1
-          fi
+          pat='is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed'
+          errs=$(grep -av 'propertyCache' smoke.log | grep -aciE "$pat" || true)
+          if (( errs > 0 )); then grep -av 'propertyCache' smoke.log | grep -aiE "$pat" | head -20; echo "::error::$errs QML complaint(s)"; exit 1; fi
           grep -aq 'QbzCore initialized' smoke.log || { tail -20 smoke.log; echo "::error::never reached QbzCore init"; exit 1; }
           echo "smoke OK (0 QML complaints, core initialized)"
