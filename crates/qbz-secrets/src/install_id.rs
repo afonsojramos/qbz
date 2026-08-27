@@ -89,8 +89,18 @@ pub(crate) fn machine_id() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
         // HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid
+        use std::os::windows::process::CommandExt;
         use std::process::Command;
+
+        // The shipped binary is a GUI subsystem image (W4), so it owns no
+        // console; spawning `reg` without this flag makes Windows allocate one
+        // and a black box flashes on screen at every startup. CREATE_NO_WINDOW
+        // suppresses it. The command, its parse and its result are unchanged,
+        // so no already-derived machine id moves.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
         let output = Command::new("reg")
+            .creation_flags(CREATE_NO_WINDOW)
             .args([
                 "query",
                 "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
