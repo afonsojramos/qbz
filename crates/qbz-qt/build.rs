@@ -377,6 +377,8 @@ fn build_rhi_items() {
     // font through QFontDatabase before Main.qml constructs any text.
     println!("cargo:rerun-if-changed=cxx/font_fallback.cpp");
     cc.file("cxx/font_fallback.cpp");
+    println!("cargo:rerun-if-changed=cxx/win_shell.cpp");
+    cc.file("cxx/win_shell.cpp");
     for p in qtbuild.include_paths() {
         cc.include(p);
     }

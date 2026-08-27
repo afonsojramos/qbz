@@ -105,12 +105,89 @@ pub(crate) fn init() {
     if CONTROLS.get().is_some() {
         return;
     }
-    match qbz_media_controls::spawn(dispatch) {
-        Some(c) => {
-            let _ = CONTROLS.set(c);
-            log::info!("[media-controls] integration started");
+    // NON-WINDOWS: unchanged, deliberately. An earlier draft routed every
+    // platform through the GUI hop and that was a Linux/macOS regression on
+    // three counts: `tray_bridge::ui` is a NO-OP until `QbzTray::boot`
+    // registers the Qt thread (`tray_bridge.rs:172`) and `QbzSession.boot()`
+    // runs first (`Main.qml:254` vs `:380`), so initialization could be
+    // dropped outright; MPRIS would start only when the Qt queue drained,
+    // losing the first metadata push; and `main_window_hwnd()` calls
+    // `QWindow::winId()`, which CREATES the platform window as a side effect
+    // on platforms that had no reason to.
+    #[cfg(not(target_os = "windows"))]
+    {
+        match qbz_media_controls::spawn(dispatch, qbz_media_controls::NativeWindow::default()) {
+            Some(c) => {
+                let _ = CONTROLS.set(c);
+                log::info!("[media-controls] integration started");
+            }
+            None => log::info!("[media-controls] no integration on this platform"),
         }
-        None => log::info!("[media-controls] no integration on this platform"),
+    }
+
+    #[cfg(target_os = "windows")]
+    init_windows();
+}
+
+/// Windows needs the main window's HWND before SMTC can register, and it needs
+/// to read it on the GUI thread. Both of the things it waits for -- the tray
+/// bridge's Qt thread and a shown top-level window -- are "not yet", never
+/// "not ever", so this retries on a bounded schedule instead of giving up on
+/// the first miss the way a single hop would.
+#[cfg(target_os = "windows")]
+fn init_windows() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // Gate on QUEUED, not on CONTROLS: `init` can be called more than once,
+    // and CONTROLS is only set at the END of a successful spawn, so gating on
+    // it alone would let several initializers race and build duplicate
+    // integrations before one wins the OnceLock.
+    static QUEUED: AtomicBool = AtomicBool::new(false);
+    if QUEUED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    // A plain thread, because it is allowed to sleep: this must not occupy a
+    // tokio worker, and it must not be the GUI thread it is posting to.
+    let spawned = std::thread::Builder::new()
+        .name("qbz-smtc-init".to_string())
+        .spawn(|| {
+            // 40 x 250 ms = 10 s, comfortably longer than a cold window show.
+            for _ in 0..40 {
+                if CONTROLS.get().is_some() {
+                    return;
+                }
+                crate::tray_bridge::ui(|_b| {
+                    if CONTROLS.get().is_some() {
+                        return;
+                    }
+                    let native = qbz_media_controls::NativeWindow {
+                        hwnd: crate::win_shell::main_window_hwnd().map(|p| p.as_ptr()),
+                    };
+                    if native.hwnd.is_none() {
+                        // No top-level window yet. Say nothing and let the
+                        // next tick try -- logging here would print forty
+                        // times for a condition that resolves itself.
+                        return;
+                    }
+                    match qbz_media_controls::spawn(dispatch, native) {
+                        Some(c) => {
+                            let _ = CONTROLS.set(c);
+                            log::info!("[media-controls] integration started (SMTC)");
+                        }
+                        None => log::info!("[media-controls] no integration on this platform"),
+                    }
+                });
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            if CONTROLS.get().is_none() {
+                log::warn!(
+                    "[media-controls] SMTC never started: no top-level window after 10 s"
+                );
+            }
+        });
+    if let Err(e) = spawned {
+        log::warn!("[media-controls] could not spawn the SMTC init thread: {e}");
     }
 }
 

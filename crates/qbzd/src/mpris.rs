@@ -81,11 +81,17 @@ pub fn spawn(
     // integration never keeps the runtime alive.
     let weak: Weak<AppRuntime<DaemonAdapter>> = Arc::downgrade(runtime);
     let cb_handle = handle.clone();
-    let integration: Arc<dyn MediaIntegration> = Arc::from(qbz_media_controls::spawn(move |ev| {
-        if let Some(rt) = weak.upgrade() {
-            handle_media_event(&rt, &roots, &cb_handle, ev);
-        }
-    })?);
+    // Headless: the daemon owns no window, so there is no HWND to give.
+    // On Linux, which is the only place qbzd ships, MPRIS keys off the D-Bus
+    // name and ignores this entirely.
+    let integration: Arc<dyn MediaIntegration> = Arc::from(qbz_media_controls::spawn(
+        move |ev| {
+            if let Some(rt) = weak.upgrade() {
+                handle_media_event(&rt, &roots, &cb_handle, ev);
+            }
+        },
+        qbz_media_controls::NativeWindow::default(),
+    )?);
     log::info!("[mpris] publishing org.mpris.MediaPlayer2 (desktop media controls + media keys)");
 
     // OUTBOUND: seed once from live state, then follow the bus.

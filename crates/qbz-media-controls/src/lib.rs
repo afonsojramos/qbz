@@ -33,22 +33,42 @@ mod platform;
 /// **macOS:** souvlaki's command callbacks fire on the app run loop, so this is
 /// safe to call from any thread, but the run loop (Slint's winit loop) must be
 /// running for inbound events to arrive.
+/// The platform window identity the OS integration needs.
+///
+/// Windows SMTC is registered against a window: souvlaki's backend calls
+/// `config.hwnd.expect(..)`, so a missing handle is a PANIC, not a graceful
+/// degrade. Linux and macOS key off the D-Bus name and the app bundle
+/// respectively and ignore this entirely, which is why `default()` is the
+/// right thing to pass there and from headless callers.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NativeWindow {
+    pub hwnd: Option<*mut core::ffi::c_void>,
+}
+
+// SAFETY: an HWND is an opaque process-wide identifier, not a pointer that is
+// dereferenced here. It is read once by souvlaki on the thread that receives
+// it. Windows itself allows a window handle to be named from any thread; what
+// is thread-affine is the window's message loop, which this never touches.
+unsafe impl Send for NativeWindow {}
+
 pub fn spawn(
     on_event: impl Fn(MediaEvent) + Send + Sync + 'static,
+    native: NativeWindow,
 ) -> Option<Box<dyn MediaIntegration>> {
     let cb: Arc<dyn Fn(MediaEvent) + Send + Sync> = Arc::new(on_event);
 
     #[cfg(target_os = "linux")]
     {
+        let _ = native;
         return linux::spawn(cb).map(|h| Box::new(h) as Box<dyn MediaIntegration>);
     }
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        return platform::spawn(cb).map(|h| Box::new(h) as Box<dyn MediaIntegration>);
+        return platform::spawn(cb, native).map(|h| Box::new(h) as Box<dyn MediaIntegration>);
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
-        let _ = cb;
+        let _ = (cb, native);
         None
     }
 }

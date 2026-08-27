@@ -4367,10 +4367,12 @@ dependencies = [
  "md-5",
  "mpris-server",
  "notify-rust",
+ "qbz-models",
  "reqwest",
  "souvlaki",
  "tokio",
  "urlencoding",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4581,6 +4583,7 @@ dependencies = [
  "tokio",
  "urlencoding",
  "uuid 1.22.0",
+ "windows-sys 0.61.2",
  "winresource",
  "zbus 5.15.0",
 ]

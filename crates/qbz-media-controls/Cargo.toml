@@ -8,6 +8,10 @@ description = "Frontend-agnostic system media controls: MPRIS (mpris-server) on 
 
 [dependencies]
 log = { workspace = true }
+# fs_url::local_path -- the ONE file-URL helper (W2). SMTC needs a native
+# Windows path where MPRIS needs a file:// URL, and hand-rolling that
+# conversion is exactly the bug class that helper exists to prevent.
+qbz-models = { path = "../qbz-models" }
 # Notifications (all platforms): the async entry point spawns the HTTP download
 # + image resize on `spawn_blocking`, so a tokio runtime must be present.
 tokio = { workspace = true }
