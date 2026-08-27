@@ -43,7 +43,20 @@ Window {
     // clients — there is no such request in the core protocol; it takes a
     // compositor policy or a KWin rule, and Qt has nothing to send. The owner
     // chose removal over a button that lies.
+    // WINDOWS ONLY, owner decision D8 (2026-08-27), reversing nothing about
+    // K1: that ruling removed always-on-top because the owner smoked it on
+    // real Plasma Wayland and the hint did nothing -- a Wayland client cannot
+    // raise itself above other clients, there is no such request in the core
+    // protocol, and Qt had nothing to send. On Windows the same hint IS
+    // HWND_TOPMOST and does exactly what it says.
+    //
+    // So this is a DELIBERATE PER-PLATFORM DIVERGENCE, not a revert: the pin
+    // exists where the window manager can honour it and stays absent where it
+    // cannot. Linux and macOS keep the exact flags they had.
+    property bool pinnedOnTop: false
+
     flags: Qt.Window | Qt.FramelessWindowHint
+        | ((QbzShell.isWindows && root.pinnedOnTop) ? Qt.WindowStaysOnTopHint : 0)
 
     // Literal, never translated (app.slint:283 uses a plain string, not @tr).
     title: "QBZ Mini Player"
