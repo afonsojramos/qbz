@@ -4712,6 +4712,9 @@ msgstr "встроенный"
 msgid "Preferred GPU changed — restart QBZ to apply"
 msgstr "Предпочитаемый GPU изменён — перезапустите QBZ, чтобы применить"
 
+msgid "Selected GPU is unavailable in this display session — using Auto"
+msgstr "Выбранный GPU недоступен в этом сеансе отображения — используется авто"
+
 msgid "Renderer changed — restart QBZ to apply"
 msgstr "Отрисовщик изменён — перезапустите QBZ, чтобы применить"
 

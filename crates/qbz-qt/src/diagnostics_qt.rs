@@ -47,8 +47,9 @@
 //! not a port.
 //!
 //! REPLACED, not dropped — the Qt truths that stand where a GDK/GSK row stood:
-//! `Renderer (Qt)` (saved pref vs the resolved RHI api), `GPU Adapters` (the
-//! Vulkan enumeration `QT_VK_PHYSICAL_DEVICE_INDEX` counts), `GPU Tier`, and the
+//! `Renderer (Qt)` (saved pref vs the resolved RHI api), `GPU Adapters` (Qt's
+//! own Vulkan-device order, which `QT_VK_PHYSICAL_DEVICE_INDEX` addresses),
+//! `GPU Tier`, and the
 //! `QSG_RHI_BACKEND` / `QT_QUICK_BACKEND` / `QT_VK_PHYSICAL_DEVICE_INDEX`
 //! environment rows — which this binary SETS itself (`renderer_qt.rs:491`), so
 //! they are the most load-bearing env vars it has.
@@ -795,8 +796,9 @@ fn build_graphics_rows(g: &Gathered) -> Vec<Row> {
         // resolved at startup (`renderer_qt::active_api`).
         row("Renderer (Qt)", &g.renderer_saved, &g.renderer_runtime, 0),
         // Stands where the reference's `renderer_decision_summary()` adapter
-        // string does. NOT byte-identical: this is the Vulkan enumeration in
-        // `QT_VK_PHYSICAL_DEVICE_INDEX` order, not wgpu's adapter list.
+        // string does. NOT byte-identical: this is the actual Qt-owned Vulkan
+        // instance order addressed by `QT_VK_PHYSICAL_DEVICE_INDEX`, not
+        // wgpu's or an independently-created Vulkan instance's adapter list.
         row("GPU Adapters", "—", &g.gpu_adapters, 0),
         // Shaders + the dynamic background need this; false means the scenes
         // stay hidden and reduce-motion is forced on, which is exactly the

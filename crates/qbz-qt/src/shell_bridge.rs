@@ -458,9 +458,9 @@ pub mod qbz_shell {
         /// with the number of frames the window actually swapped in it.
         ///
         /// Proof of frames — not merely of a window — is what disarms the
-        /// startup sentinel: a backend can create a window and then never
-        /// present, which looks identical to a healthy start until the user
-        /// sees a frozen pane.
+        /// graphics startup sentinels: a backend or GPU can create a window and
+        /// then never present, which looks identical to a healthy start until
+        /// the user sees a frozen pane.
         #[qinvokable]
         fn report_frame_liveness(self: Pin<&mut QbzShell>, frames: i32);
 
@@ -1090,6 +1090,11 @@ impl qbz_shell::QbzShell {
         } else {
             start_shell_pulse();
         }
+        if crate::renderer_qt::take_preflight_fallback_notice() {
+            crate::toast_qt::warning(qbz_i18n::t(
+                "Selected GPU is unavailable in this display session — using Auto",
+            ));
+        }
     }
 
     /// The renderer probe's one-shot report (see the declaration).
@@ -1138,11 +1143,11 @@ impl qbz_shell::QbzShell {
             // matters.
             if crate::renderer_qt::sentinel_armed() {
                 log::warn!(
-                    "[qbz-qt] renderer: the liveness window closed with NO frames rendered — \
-                     leaving the startup sentinel armed so the next launch reverts to auto"
+                    "[qbz-qt] graphics: the liveness window closed with NO frames rendered — \
+                     leaving the startup sentinel armed so the next launch reverts to Auto"
                 );
             } else {
-                log::debug!("[qbz-qt] renderer: no frames in the liveness window (nothing armed)");
+                log::debug!("[qbz-qt] graphics: no frames in the liveness window (nothing armed)");
             }
             return;
         }
