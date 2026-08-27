@@ -416,29 +416,56 @@ pub(crate) fn init(theme_override: String, enabled: bool) {
 
     // Windows: Shell_NotifyIconW owns a hidden window with a message loop,
     // so the icon must be created on the thread that pumps it -- the Qt GUI
-    // thread. Same hop as macOS, and for the same class of reason.
+    // thread.
+    //
+    // The hop ALONE is not enough, and the first version of this shipped with
+    // exactly that bug: `tray_bridge::ui` silently discards work until
+    // `QbzTray::boot` registers the Qt thread, and this runs from
+    // `on_session_entered`, which reaches it first. The symptom was a tray that
+    // never appeared and a log with no `[tray]` line at all -- not even the
+    // "disabled by user setting" the gates print when they refuse, which is
+    // what pinned it down.
+    //
+    // So: record the intent, then try. Whichever of the two arrives SECOND --
+    // this call or `boot` -- does the work, and `create_now` is idempotent.
+    // No polling, and nothing to time out.
     #[cfg(target_os = "windows")]
     {
         let _ = theme_override;
-        crate::tray_bridge::ui(move |_b| {
-            let ok = crate::tray_windows::create();
-            // Both arms publish, exactly as Linux and macOS do: a failure MUST
-            // report false, or close-to-tray hides the window into a tray that
-            // is not there.
-            if ok {
-                let _ = TRAY.set(TrayHandle { windows: true });
-                push_tray_live(true);
-            } else {
-                log::error!("[tray] Windows notification-area icon could not be created");
-                push_tray_live(false);
-            }
-        });
+        TRAY_WANTED.store(true, Ordering::SeqCst);
+        crate::tray_bridge::ui(|_b| create_now());
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         let _ = theme_override;
         log::info!("[tray] no tray backend on this platform");
+    }
+}
+
+/// Set once `init` has decided a tray SHOULD exist. Read by
+/// `QbzTray::boot`, which creates it if `init` ran before the Qt thread was
+/// registered and its queued closure went nowhere.
+#[cfg(target_os = "windows")]
+static TRAY_WANTED: AtomicBool = AtomicBool::new(false);
+
+/// Create the Windows tray. GUI THREAD ONLY, and idempotent: both `init`'s
+/// hop and `QbzTray::boot` call it, and whichever runs first wins.
+#[cfg(target_os = "windows")]
+pub(crate) fn create_now() {
+    if !TRAY_WANTED.load(Ordering::SeqCst) || TRAY.get().is_some() {
+        return;
+    }
+    let ok = crate::tray_windows::create();
+    // Both arms publish, exactly as Linux and macOS do: a failure MUST report
+    // false, or close-to-tray hides the window into a tray that is not there.
+    if ok {
+        let _ = TRAY.set(TrayHandle { windows: true });
+        push_tray_live(true);
+        log::info!("[tray] Windows notification-area icon created");
+    } else {
+        log::error!("[tray] Windows notification-area icon could not be created");
+        push_tray_live(false);
     }
 }
 
