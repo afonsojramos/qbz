@@ -261,6 +261,30 @@ fn load_or_create_machine_id_fallback_at(root: &Path) -> Result<Vec<u8>, String>
 /// when none of `/etc/machine-id`, `$HOSTNAME`, `$USER` yields a value (the
 /// caller then falls back to a persisted random id under its config root).
 fn machine_id_stable_source() -> Option<Vec<u8>> {
+    // WINDOWS FIRST, and deliberately before the two env-var fallbacks below.
+    //
+    // Windows has no /etc/machine-id, so before this arm existed the chain fell
+    // through to `HOSTNAME` and then `USER` -- both of which are UNIX names that
+    // Windows itself never sets, but that an MSYS/Git-Bash environment may.
+    // Measured on BFCPC-WIN 2026-08-27: Git-Bash sets HOSTNAME as a shell
+    // variable it does not export (a child process reads None) and leaves USER
+    // empty, so the chain returned None and the persisted random fallback kept
+    // the key stable. Stable BY ACCIDENT: any environment that exports either
+    // name would silently derive a different key, and a key that changes is a
+    // credentials file that no longer decrypts.
+    //
+    // COMPUTERNAME is set by Windows itself, for every process, however the
+    // app was launched. Owner-approved 2026-08-27, accepting the one-time
+    // re-authentication that moving the key costs.
+    #[cfg(windows)]
+    {
+        if let Ok(name) = std::env::var("COMPUTERNAME") {
+            if !name.trim().is_empty() {
+                return Some(name.as_bytes().to_vec());
+            }
+        }
+    }
+
     // Try /etc/machine-id first (Linux)
     if let Ok(id) = fs::read_to_string("/etc/machine-id") {
         let trimmed = id.trim();
