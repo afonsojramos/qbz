@@ -16,6 +16,8 @@ mod auth_qt;
 mod deep_link_qt;
 #[cfg(target_os = "linux")]
 mod single_instance_qt;
+// The Windows sibling. Carries its own `#![cfg(target_os = "windows")]`.
+mod single_instance_win;
 // Per-domain QML bridge singletons (phase 23 — the QbzBridge God-object
 // split). THE PATTERN (phase-1, replicated per domain file):
 //   1. one #[cxx_qt::bridge] mod per file (crate root — cxx-qt-build
@@ -3347,6 +3349,15 @@ fn main() {
     #[cfg(target_os = "linux")]
     if !single_instance_qt::acquire_or_raise() {
         log::info!("[qbz-qt] another instance owns the session bus name; exiting");
+        return;
+    }
+    // Same decision, different primitive: a per-session named mutex arbitrates
+    // and a named pipe carries the handoff. `acquire_or_raise` has already
+    // forwarded this launch's deep link (or a bare PRESENT) by the time it
+    // answers false, so there is nothing left to do but leave.
+    #[cfg(target_os = "windows")]
+    if !single_instance_win::acquire_or_raise() {
+        log::info!("[qbz-qt] another instance owns the mutex; forwarded and exiting");
         return;
     }
     // Link anchor for the hand-written QAbstractListModel. Its QML singleton

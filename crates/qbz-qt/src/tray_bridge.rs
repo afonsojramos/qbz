@@ -187,6 +187,8 @@ impl qbz_tray::QbzTray {
         crate::tray_qt::create_now();
         #[cfg(target_os = "linux")]
         crate::single_instance_qt::bind_ui();
+        #[cfg(target_os = "windows")]
+        crate::single_instance_win::bind_ui();
     }
 
     /// D18's report-back. Flag only — it never touches a window.

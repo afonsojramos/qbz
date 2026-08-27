@@ -4581,6 +4581,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "url",
  "urlencoding",
  "uuid 1.22.0",
  "windows-sys 0.61.2",

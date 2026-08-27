@@ -30,6 +30,10 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
 urlencoding = "2"
+# Deep links are validated by a real parse before they are acted on: a
+# launcher can split a URL across argv, and a bare scheme is not a URL.
+# Already in the workspace lock via qbz-models.
+url = "2"
 open = "5"
 dirs = "5"
 
@@ -188,6 +192,16 @@ winresource = "0.1"
 # in the workspace lock.
 windows-sys = { version = "0.61", features = [
   "Win32_UI_Shell",
+  # Single instance: CreateMutexW arbitrates, a named pipe carries the
+  # handoff, and both need the error codes to tell "already there" from
+  # "failed".
+  "Win32_Foundation",
+  "Win32_System_Threading",
+  "Win32_System_Pipes",
+  # ProcessIdToSessionId: the pipe name is qualified by session, because
+  # pipe names are machine-global while the mutex is per-session.
+  "Win32_System_RemoteDesktop",
+  "Win32_Storage_FileSystem",
   # RegGetValueW: is this install's AppUserModelID actually registered?
   # Without that, Windows silently drops every toast.
   "Win32_System_Registry",
