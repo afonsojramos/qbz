@@ -321,6 +321,11 @@ fn build_rhi_items() {
     // font through QFontDatabase before Main.qml constructs any text.
     println!("cargo:rerun-if-changed=cxx/font_fallback.cpp");
     cc.file("cxx/font_fallback.cpp");
+    // Plain helper, no QObject/moc: enumerates the exact QVulkanInstance that
+    // Qt Quick will give QRhi. A raw Vulkan instance can see a different order
+    // when hybrid-GPU implicit layers are active.
+    println!("cargo:rerun-if-changed=cxx/qt_vulkan_probe.cpp");
+    cc.file("cxx/qt_vulkan_probe.cpp");
     for p in qtbuild.include_paths() {
         cc.include(p);
     }
@@ -337,10 +342,13 @@ fn build_rhi_items() {
         let libs = qtbuild.qmake_query("QT_INSTALL_LIBS");
         cc.flag(&format!("-F{}", libs.trim()));
         for module in ["QtCore", "QtGui", "QtQml", "QtQuick"] {
-            let private = format!(
-                "{}/{module}.framework/Headers/{version}/{module}",
-                libs.trim()
-            );
+            let version_root = format!("{}/{module}.framework/Headers/{version}", libs.trim());
+            if Path::new(&version_root).is_dir() {
+                // Private Qt headers include siblings as
+                // <QtGui/private/foo_p.h>; that needs the version root.
+                cc.include(&version_root);
+            }
+            let private = format!("{version_root}/{module}");
             if Path::new(&private).is_dir() {
                 cc.include(private);
             }
@@ -348,7 +356,11 @@ fn build_rhi_items() {
     } else {
         let headers = qtbuild.qmake_query("QT_INSTALL_HEADERS");
         for module in ["QtCore", "QtGui", "QtQml", "QtQuick"] {
-            let private = format!("{headers}/{module}/{version}/{module}");
+            let version_root = format!("{headers}/{module}/{version}");
+            if Path::new(&version_root).is_dir() {
+                cc.include(&version_root);
+            }
+            let private = format!("{version_root}/{module}");
             if Path::new(&private).is_dir() {
                 cc.include(private);
             }

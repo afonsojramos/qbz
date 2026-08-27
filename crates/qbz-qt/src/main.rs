@@ -3268,12 +3268,28 @@ pub(crate) fn arm_hard_exit_watchdog(source: &'static str) {
 
 fn main() {
     qbz_log::install("info");
+    // Internal, disposable graphics child. It must branch before the normal
+    // instance lock, navigation crash-chain, runtime and audio thread: a GPU
+    // whose DMA-BUFs the active Wayland compositor rejects is expected to kill
+    // THIS process, while the waiting parent remains healthy and falls back to
+    // Auto.
+    if renderer_qt::gpu_preflight_child_requested() {
+        let app = QGuiApplication::new();
+        let result = renderer_qt::run_gpu_preflight_child();
+        drop(app);
+        log::logger().flush();
+        std::process::exit(result);
+    }
     deep_link_qt::capture_argv();
     #[cfg(target_os = "linux")]
     if !single_instance_qt::acquire_or_raise() {
         log::info!("[qbz-qt] another instance owns the session bus name; exiting");
         return;
     }
+    // Validate a persisted explicit GPU before constructing anything costly or
+    // user-visible. The child uses its own Wayland connection; fatal protocol
+    // errors cannot take this parent down.
+    renderer_qt::preflight_saved_gpu_at_boot();
     // Link anchor for the hand-written QAbstractListModel. Its QML singleton
     // registration itself runs at QCoreApplication startup.
     local_tracks_model_qt::register_qml_model();
@@ -3367,15 +3383,16 @@ fn main() {
 
     let _ = APP.set(runtime);
 
-    // All three must run before QGuiApplication: the renderer envs are read
-    // when the backend is chosen, the GPU envs when the graphics context is
-    // created, and the wheel policy when Flickables are constructed. Setting
-    // any of them afterwards is a silent no-op.
+    // Renderer policy stays before QGuiApplication. Scroll policy only needs
+    // to precede Flickable construction. Preferred GPU has a narrower safe
+    // slot: QGuiApplication must first install the platform integration so we
+    // can enumerate Qt's real QVulkanInstance, but the selection env must land
+    // before the first QQuickWindow/QRhi is constructed.
     apply_renderer_preference();
-    renderer_qt::apply_gpu_preference();
     apply_scroll_physics();
 
     let mut app = QGuiApplication::new();
+    renderer_qt::apply_gpu_preference();
     let mut engine = QQmlApplicationEngine::new();
 
     // ── THE APP TYPEFACE, AND WHY IT IS SET RIGHT HERE ────────────────────

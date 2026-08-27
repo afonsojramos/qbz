@@ -1321,6 +1321,20 @@ pub fn save_pref(key: &str, value: serde_json::Value) {
     });
 }
 
+/// Persist Preferred GPU as one atomic pair: the readable model name retained
+/// for older builds plus the stable Vulkan identity used by the Qt launcher.
+/// The process-local Qt index is deliberately never written.
+pub(crate) fn save_gpu_preference(gpu: Option<&crate::renderer_qt::GpuInfo>) {
+    let (name, identity) = gpu
+        .map(|gpu| (gpu.name.as_str(), gpu.identity.as_str()))
+        .unwrap_or(("auto", ""));
+    update_prefs(|doc| {
+        doc.insert("gpu_power".to_string(), serde_json::json!(name));
+        doc.insert("gpu_identity".to_string(), serde_json::json!(identity));
+        true
+    });
+}
+
 // Tray store (qbz_app::settings::tray — per-user tray_settings.db, the SAME
 // file the Slint tray_settings.rs glue writes).
 static TRAY: OnceLock<qbz_app::settings::tray::TraySettingsState> = OnceLock::new();
@@ -1563,11 +1577,11 @@ fn gpu_power_choice() -> (Vec<String>, i32) {
     let gpus = crate::renderer_qt::gpus();
     let mut opts = vec![qbz_i18n::t("Auto (recommended)")];
     opts.extend(gpus.iter().map(|g| g.label()));
-    // Index 0 is Auto, so a device sits at its enumeration index + 1. An
-    // unmatched pref (a name from another machine, or a legacy class key with
-    // no such device) resolves to Auto.
-    let index = crate::renderer_qt::resolve_gpu(&pref_str("gpu_power", "auto"))
-        .map(|g| g.index as i32 + 1)
+    // Index 0 is Auto; UI positions are independent of Qt's process-local
+    // Vulkan indices (which can contain gaps when a CPU adapter is filtered).
+    let index = crate::renderer_qt::resolve_saved_gpu()
+        .and_then(|selected| gpus.iter().position(|gpu| gpu.identity == selected.identity))
+        .map(|position| position as i32 + 1)
         .unwrap_or(0);
     (opts, index)
 }
@@ -2943,23 +2957,17 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             crate::toast_qt::info(qbz_i18n::t("Renderer changed — restart QBZ to apply"));
         }
         "gpu-power" => {
-            // Index 0 is Auto; every other index is a REAL enumerated device,
-            // stored by NAME — the same shape the reference persists, so the
-            // shared ui_prefs round-trips between the two apps. The old arm
-            // accepted only index 0 and silently discarded the rest
-            // (PARITY-DEBT #83).
+            // Index 0 is Auto; every other position is a real Qt-enumerated
+            // device. Persist model + stable identity atomically, never the
+            // process-local Qt Vulkan index.
             let gpus = crate::renderer_qt::gpus();
-            let value = if index <= 0 {
-                "auto".to_string()
+            let selected = if index <= 0 {
+                None
             } else {
-                match gpus.get((index - 1) as usize) {
-                    Some(g) => g.name.clone(),
-                    // The list moved under the user (a GPU was unplugged, or
-                    // the document is stale) — Auto rather than a wrong device.
-                    None => "auto".to_string(),
-                }
+                gpus.get((index - 1) as usize)
             };
-            save_pref("gpu_power", serde_json::json!(value));
+            save_gpu_preference(selected);
+            let value = selected.map(|gpu| gpu.name.as_str()).unwrap_or("auto");
             log::info!("[qbz-qt] gpu_power -> {value} (restart to apply)");
             crate::toast_qt::info(qbz_i18n::t("Preferred GPU changed — restart QBZ to apply"));
         }

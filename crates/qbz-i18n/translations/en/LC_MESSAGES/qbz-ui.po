@@ -399,6 +399,9 @@ msgstr "integrated"
 msgid "Preferred GPU changed — restart QBZ to apply"
 msgstr "Preferred GPU changed — restart QBZ to apply"
 
+msgid "Selected GPU is unavailable in this display session — using Auto"
+msgstr "Selected GPU is unavailable in this display session — using Auto"
+
 msgid "Search your library"
 msgstr "Search your library"
 

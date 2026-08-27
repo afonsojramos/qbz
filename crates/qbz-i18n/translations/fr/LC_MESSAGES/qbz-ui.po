@@ -4696,6 +4696,9 @@ msgstr "intégré"
 msgid "Preferred GPU changed — restart QBZ to apply"
 msgstr "GPU préféré modifié — redémarrez QBZ pour appliquer"
 
+msgid "Selected GPU is unavailable in this display session — using Auto"
+msgstr "Le GPU sélectionné n’est pas disponible dans cette session d’affichage — utilisation du mode Auto"
+
 msgid "Renderer changed — restart QBZ to apply"
 msgstr "Moteur de rendu modifié — redémarrez QBZ pour l'appliquer"
 
