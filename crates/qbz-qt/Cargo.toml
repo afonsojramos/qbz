@@ -186,7 +186,12 @@ winresource = "0.1"
 # SetCurrentProcessExplicitAppUserModelID: the identity Windows groups the
 # taskbar button under and matches a toast's app_id against. 0.61 is already
 # in the workspace lock.
-windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
+windows-sys = { version = "0.61", features = [
+  "Win32_UI_Shell",
+  # RegGetValueW: is this install's AppUserModelID actually registered?
+  # Without that, Windows silently drops every toast.
+  "Win32_System_Registry",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # DIRECT objc2, added 2026-08-05 for the menu-bar tray: `declare_class!`,

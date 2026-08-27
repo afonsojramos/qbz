@@ -412,6 +412,49 @@ fn update_prefs(edit: impl FnOnce(&mut serde_json::Map<String, serde_json::Value
     let _ = edit_prefs(|doc| (edit(doc), ()));
 }
 
+/// Can this install actually deliver a toast?
+///
+/// Setting the process AUMID is necessary and NOT sufficient. An unpackaged
+/// desktop app only receives toasts once Windows can RESOLVE that id, which it
+/// does through either a Start-menu shortcut carrying
+/// `System.AppUserModel.ID` or the `AppUserModelId` registry key. The MSI
+/// writes both; a portable unzip has neither.
+///
+/// So the notifications row is offered on the strength of THIS, not of
+/// `cfg!(windows)`. Advertising it unconditionally would put a switch in front
+/// of portable users that can never produce a notification -- the "renders,
+/// persists and drives nothing" failure the capability flags exist to prevent.
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_toast_identity_registered() -> bool {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
+    };
+
+    let key: Vec<u16> = "Software\\Classes\\AppUserModelId\\com.blitzfc.qbz\0"
+        .encode_utf16()
+        .collect();
+    let mut handle: HKEY = std::ptr::null_mut();
+    // SAFETY: `key` is NUL-terminated UTF-16 and outlives the call; `handle` is
+    // a valid out-slot, only written on success. Read-only access.
+    let rc = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            0,
+            KEY_READ,
+            &mut handle,
+        )
+    };
+    if rc != 0 {
+        return false;
+    }
+    // SAFETY: opened above and not used afterwards.
+    unsafe {
+        RegCloseKey(handle);
+    }
+    true
+}
+
 /// The Windows as-is disclaimer, kept as two fields (owner's call): the
 /// "Don't show this again" box and the version it was ticked on.
 pub(crate) const WINDOWS_DISCLAIMER_HIDDEN_KEY: &str = "windows_disclaimer_hidden";
@@ -2336,20 +2379,21 @@ pub async fn publish_snapshot() {
                 target_os = "macos",
                 target_os = "windows"
             )),
-            // NOT Windows yet, even though the toast arm is implemented.
-            // An unpackaged desktop app only gets toasts when Windows can
-            // RESOLVE its AppUserModelID -- which needs a Start-menu shortcut
-            // carrying System.AppUserModel.ID, written by the MSI (plan A
-            // Task 14, not built yet). Calling
-            // SetCurrentProcessExplicitAppUserModelID is necessary and not
-            // sufficient. Until the MSI ships, a portable or dev build would
-            // show the row, the user would enable it, and nothing would ever
-            // appear -- the exact "renders and drives nothing" failure this
-            // flag exists to prevent. Flip it in the MSI task.
-            system_notifications_supported: cfg!(any(
-                target_os = "linux",
-                target_os = "macos"
-            )),
+            // Windows answers at RUNTIME, not by cfg: the toast arm is
+            // implemented, but delivery needs a registered AppUserModelID,
+            // which only the MSI provides. A portable unzip gets `false` and
+            // the row stays hidden rather than offering a switch that can
+            // never produce a notification.
+            system_notifications_supported: {
+                #[cfg(target_os = "windows")]
+                {
+                    windows_toast_identity_registered()
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    cfg!(any(target_os = "linux", target_os = "macos"))
+                }
+            },
             renderer_selectable: cfg!(any(target_os = "linux", target_os = "windows")),
             tray_icon_themes: TRAY_ICON_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             tray_icon_theme_index: tray()
