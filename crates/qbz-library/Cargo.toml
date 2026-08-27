@@ -25,7 +25,7 @@ notify = "8"
 dirs = "6"
 
 # Audio metadata
-lofty = "0.23"
+lofty = "0.24"
 qbz-dsd = { path = "../qbz-dsd" }
 
 # Image processing (thumbnails)
