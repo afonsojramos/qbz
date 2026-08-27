@@ -1163,6 +1163,16 @@ fn collect_output_sinks() -> (Option<String>, Vec<String>, Option<(String, Strin
 /// right now (vs the saved "Preferred Sample Rate"). Linux/PipeWire/Pulse only;
 /// `None` when pactl is unavailable (a Flatpak/Snap sandbox without it simply
 /// degrades to "—", same as the reference). READ-ONLY.
+/// W14, Windows only: `pactl` is a Pulse/PipeWire tool and does not exist on
+/// Windows, so the row degrades to the same "-" the missing-pactl path already
+/// produced -- without the spawn. macOS and the BSDs keep probing: a Homebrew
+/// or ports `pactl` there is real and can answer.
+#[cfg(windows)]
+fn active_sink_format() -> Option<(String, String)> {
+    None
+}
+
+#[cfg(not(windows))]
 fn active_sink_format() -> Option<(String, String)> {
     use std::process::Command;
     let default = Command::new("pactl")

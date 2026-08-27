@@ -5,6 +5,8 @@
 //! the check step can show the right `apt`/`dnf`/`pacman` remediation. None of
 //! this opens a stream — purely diagnostic.
 
+// Every target but Windows still probes; see `audio_stack_health`.
+#[cfg(not(windows))]
 use std::process::Command;
 
 /// Result of the audio-stack probes. All best-effort; a failed probe reads as
@@ -32,7 +34,8 @@ impl AudioStackHealth {
     }
 }
 
-/// True if `sh -c "<probe>"` exits 0.
+/// True if `sh -c "<probe>"` exits 0. Windows never probes; see below.
+#[cfg(not(windows))]
 fn sh_ok(probe: &str) -> bool {
     Command::new("sh")
         .arg("-c")
@@ -44,6 +47,31 @@ fn sh_ok(probe: &str) -> bool {
 
 /// Run the audio-stack probes. Linux-only meaningfully; elsewhere everything
 /// reads false except where trivially true.
+///
+/// W14: on WINDOWS ONLY the answer is all-false, returned WITHOUT running the
+/// probes. `systemctl`, `pactl` and `pw-dump` do not exist there (a spawn of a
+/// missing image fails before a process is made, which is harmless), but `sh`
+/// DOES exist wherever Git for Windows is installed, so the five `sh -c`
+/// probes really run and flash five console windows past a GUI-subsystem
+/// binary that owns no console.
+///
+/// Scoped to Windows, not to `not(linux)`: macOS and the BSDs can have a real
+/// `pactl`/`pw-dump` from Homebrew or ports, and answering false for them
+/// would be a lie this diff has no business telling.
+#[cfg(windows)]
+pub fn audio_stack_health() -> AudioStackHealth {
+    AudioStackHealth {
+        wireplumber_active: false,
+        has_pw_dump: false,
+        cpal_sees_pipewire: false,
+        has_pactl: false,
+        any_devices: false,
+    }
+}
+
+/// Run the audio-stack probes. Linux-only meaningfully; elsewhere everything
+/// reads false except where trivially true.
+#[cfg(not(windows))]
 pub fn audio_stack_health() -> AudioStackHealth {
     // systemd path first; fall back to a process check so non-systemd inits
     // (Gentoo/OpenRC, Void/runit) don't read as "WirePlumber down".
