@@ -3034,6 +3034,56 @@ fn publish_home_sections(sections: &home_qt::DiscoverSections) {
     });
 }
 
+/// Does an explicit Qt backend environment variable actually override the
+/// renderer preference?
+///
+/// `var_os(..).is_some()` answers YES for an EMPTY value, and an empty value
+/// is exactly what a shell or a test harness leaves behind when it clears a
+/// variable rather than unsetting it: `QSG_RHI_BACKEND= ./qbz` on Linux, and
+/// on Windows PowerShell's `SetEnvironmentVariable(name, $null)`, which leaves
+/// the name present with no value. The whole preference then silently stopped
+/// applying, the persisted Settings choice included, and the only clue was one
+/// info line claiming an explicit backend was present.
+///
+/// `QBZ_RENDERER`, read a few lines below, has always filtered the empty
+/// string. This is the same rule for the two Qt variables.
+fn qt_backend_env_overrides(name: &str) -> bool {
+    env_value_overrides(std::env::var_os(name))
+}
+
+/// The predicate above, split from the lookup so it can be tested without
+/// mutating process-global state, which races other tests in the same binary.
+fn env_value_overrides(value: Option<std::ffi::OsString>) -> bool {
+    value
+        .map(|v| !v.to_string_lossy().trim().is_empty())
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod renderer_env_tests {
+    use super::env_value_overrides;
+    use std::ffi::OsString;
+
+    #[test]
+    fn an_absent_variable_does_not_override() {
+        assert!(!env_value_overrides(None));
+    }
+
+    #[test]
+    fn an_empty_variable_does_not_override() {
+        // The defect: `QSG_RHI_BACKEND=` disabled the entire renderer
+        // preference, the user's persisted setting included.
+        assert!(!env_value_overrides(Some(OsString::from(""))));
+        assert!(!env_value_overrides(Some(OsString::from("   "))));
+    }
+
+    #[test]
+    fn a_real_value_still_overrides() {
+        assert!(env_value_overrides(Some(OsString::from("opengl"))));
+        assert!(env_value_overrides(Some(OsString::from(" d3d11 "))));
+    }
+}
+
 /// The Settings > Appearance RENDERER row, consumed at startup (PARITY-DEBT
 /// #104 — the row rendered and persisted into the SAME ui_prefs the Slint
 /// reads, but nothing consumed it, so it lied).
@@ -3058,8 +3108,7 @@ fn apply_renderer_preference() {
     // backend must be undone even when this one is being overridden by env.
     let reverted = renderer_qt::revert_if_previous_launch_died();
 
-    if std::env::var_os("QSG_RHI_BACKEND").is_some()
-        || std::env::var_os("QT_QUICK_BACKEND").is_some()
+    if qt_backend_env_overrides("QSG_RHI_BACKEND") || qt_backend_env_overrides("QT_QUICK_BACKEND")
     {
         log::info!("[renderer] explicit Qt backend env present; leaving the choice to it");
         return;
