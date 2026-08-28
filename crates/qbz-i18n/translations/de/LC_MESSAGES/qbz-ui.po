@@ -6030,3 +6030,12 @@ msgstr "Album konnte nicht geladen werden"
 
 msgid "This album has no tracks."
 msgstr "Dieses Album enthält keine Titel."
+
+msgid "Windows — yes, but read this first"
+msgstr "Windows — ja, aber lies zuerst das hier"
+
+msgid "Don't show this again"
+msgstr "Nicht mehr anzeigen"
+
+msgid "I understand"
+msgstr "Ich verstehe"

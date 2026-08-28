@@ -6012,3 +6012,12 @@ msgstr "アルバムを読み込めませんでした"
 
 msgid "This album has no tracks."
 msgstr "このアルバムには曲がありません。"
+
+msgid "Windows — yes, but read this first"
+msgstr "Windows — はい、ただしまずこれをお読みください"
+
+msgid "Don't show this again"
+msgstr "今後表示しない"
+
+msgid "I understand"
+msgstr "理解しました"
