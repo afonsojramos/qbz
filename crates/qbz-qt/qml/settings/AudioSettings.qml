@@ -141,9 +141,9 @@ Column {
         }
     }
     SettingRow {
-        visible: root.doc.backendIsAlsa === true && root.doc.alsaPluginIsHw === true
+        visible: root.doc.backendIsAlsa === true && root.doc.alsaDirectSelected === true
         label: QbzSession.tr("Hardware volume control", QbzSession.trRev)
-        description: QbzSession.tr("Use the ALSA mixer for volume instead of software gain.", QbzSession.trRev)
+        description: QbzSession.tr("Control volume through a mixer exposed by the selected ALSA device. If unavailable, direct playback stays fixed at 100%.", QbzSession.trRev)
         QbzToggle {
             checked: root.doc.alsaHardwareVolume === true
             onToggled: function (v) { QbzBridge.settingsBool("alsa-hardware-volume", v) }

@@ -802,12 +802,19 @@ fn on_session_entered() {
             qconnect_service.spawn_offline_force_disconnect(&tokio_handle);
         }
     }
-    // Seed the saved level, then enforce unity gain for ALSA-direct `hw`.
-    // Sequencing both writes in one task prevents the asynchronous restore
-    // from landing after the bit-perfect correction.
+    // Revalidate hardware volume first. When a compatible ALSA mixer exists,
+    // the probe samples its physical level and seeds SharedState without a
+    // write; restoring the persisted slider afterward would otherwise move
+    // that mixer at launch. Without hardware volume, restore the saved level
+    // and then enforce unity for the protected ALSA-direct path. Sequencing
+    // these decisions in one task prevents an asynchronous restore from
+    // landing after the bit-perfect correction.
     let rt = app();
     spawn(async move {
-        playback_qt::set_volume(&rt, restored).await;
+        let hardware_level = settings_qt::reconcile_alsa_hardware_volume(&rt).await;
+        if hardware_level.is_none() {
+            playback_qt::set_volume(&rt, restored).await;
+        }
         settings_qt::maybe_force_bitperfect_volume(&rt).await;
     });
     // 3. Startup auto-connect — gated on NOT offline: the offline shell entry
@@ -3422,7 +3429,7 @@ fn main() {
             "qrc:/qt/qml/com/blitzfc/qbz/qml/FontPreload.qml",
         ));
     }
-    font_qt::register_devanagari_fallback();
+    font_qt::register_script_fallbacks();
     let app_font_family = settings_qt::app_font_family();
     if !app_font_family.is_empty() {
         if let Some(app) = app.as_mut() {
@@ -3481,6 +3488,23 @@ fn main() {
         // playing for two seconds longer is a far smaller failure than an app
         // that cannot be closed, so the timeout wins the tie.
         if let Some(rt) = TOKIO.get() {
+            // Construct the timer *inside* the runtime. Building
+            // `tokio::time::timeout` as the argument to `block_on` happens
+            // before the runtime is entered and panics with "no reactor
+            // running" during every normal quit.
+            let notification_withdrawn = rt.block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    qbz_media_controls::withdraw_track_notification(),
+                )
+                .await
+            });
+            let notification_withdrawn = notification_withdrawn.is_ok();
+            if !notification_withdrawn {
+                log::warn!(
+                    "[qbz-qt] notification withdrawal did not finish within 1s; exiting anyway"
+                );
+            }
             let stopped = rt.block_on(async {
                 tokio::time::timeout(
                     std::time::Duration::from_secs(2),

@@ -16,8 +16,8 @@
 //    moves of <= 2 lines, INSTANT for bigger jumps and the initial sync,
 //    1:1 with Slint. The animation drives `contentY` only on the auto-follow
 //    path, so user wheel input is never animated.
-//  - the four embedded lyric font families (lazy: a FontLoader only gets a
-//    source once its option is selected).
+//  - the embedded lyric font families (lazy: one FontLoader exists only while
+//    a non-System option is selected).
 //
 // Unsynced/plain documents render as a static top-aligned list: no spacers,
 // no active line, no scroll-follow.
@@ -60,23 +60,32 @@ Item {
 
     readonly property real contentWidth: Math.max(0, width - 2 * sidePadding)
 
-    // ---- embedded lyric fonts (lazy) -------------------------------------
+    // ---- embedded lyric font (lazy) --------------------------------------
     readonly property string fontDir: "qrc:/qt/qml/com/blitzfc/qbz/qml/assets/fonts/"
-    FontLoader { id: fLineSeed; source: view.fontIndex === 1 ? view.fontDir + "LINESeedJP-Regular.ttf" : "" }
-    FontLoader { id: fMontserrat; source: view.fontIndex === 2 ? view.fontDir + "Montserrat-VariableFont_wght.ttf" : "" }
-    FontLoader { id: fNoto; source: view.fontIndex === 3 ? view.fontDir + "NotoSans-VariableFont_wdth,wght.ttf" : "" }
-    FontLoader { id: fSource; source: view.fontIndex === 4 ? view.fontDir + "SourceSans3-VariableFont_wght.ttf" : "" }
+    readonly property string fontSource: {
+        if (view.fontIndex === 1) return view.fontDir + "LINESeedJP-Regular.ttf"
+        if (view.fontIndex === 2) return view.fontDir + "Montserrat-VariableFont_wght.ttf"
+        if (view.fontIndex === 3) return view.fontDir + "NotoSans-VariableFont_wdth,wght.ttf"
+        if (view.fontIndex === 4) return view.fontDir + "SourceSans3-VariableFont_wght.ttf"
+        return ""
+    }
+    Component {
+        id: fontLoaderComponent
+        FontLoader { source: view.fontSource }
+    }
+    Loader {
+        id: selectedFontLoader
+        active: view.fontSource !== ""
+        sourceComponent: fontLoaderComponent
+    }
 
     // "" = the real Qt/system default = Slint's "System" option. A family
     // that has not finished loading falls back to the default rather than
     // rendering in a wrong face.
-    readonly property string fontFamily: {
-        if (view.fontIndex === 1) return fLineSeed.status === FontLoader.Ready ? fLineSeed.name : ""
-        if (view.fontIndex === 2) return fMontserrat.status === FontLoader.Ready ? fMontserrat.name : ""
-        if (view.fontIndex === 3) return fNoto.status === FontLoader.Ready ? fNoto.name : ""
-        if (view.fontIndex === 4) return fSource.status === FontLoader.Ready ? fSource.name : ""
-        return ""
-    }
+    readonly property string fontFamily:
+        selectedFontLoader.item
+        && selectedFontLoader.item.status === FontLoader.Ready
+            ? selectedFontLoader.item.name : ""
 
     // ---- auto-center scroll ----------------------------------------------
     // Last index centered on; -1 = nothing yet -> the next center is INSTANT.

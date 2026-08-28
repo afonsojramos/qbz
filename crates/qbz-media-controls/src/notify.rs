@@ -20,6 +20,19 @@
 
 use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
+const PORTAL_NOTIFICATION_ID: &str = "track-now-playing";
+
+/// Serializes portal mutations and invalidates slow, stale artwork jobs. A
+/// track-A notification can spend seconds downloading its cover while track B
+/// starts (or playback stops); without this generation check A may overwrite B
+/// or resurrect the notification after it was withdrawn.
+#[cfg(target_os = "linux")]
+static PORTAL_NOTIFICATION_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+#[cfg(target_os = "linux")]
+static PORTAL_NOTIFICATION_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Everything needed to render a track-change notification. The crate formats
 /// the body + quality line itself so the output matches the Tauri notification
 /// exactly, regardless of frontend.
@@ -249,11 +262,25 @@ pub async fn show_track_notification(meta: NotificationMeta, offline: bool) {
 
     #[cfg(target_os = "linux")]
     {
-        use ashpd::desktop::notification::{Notification as PortalNotification, NotificationProxy};
+        use ashpd::desktop::notification::{
+            DisplayHint, Notification as PortalNotification, NotificationProxy,
+        };
         use ashpd::desktop::Icon;
+        use std::sync::atomic::Ordering;
 
-        let mut notification =
-            PortalNotification::new(&meta.title).body(Some(body.as_str()));
+        let generation = PORTAL_NOTIFICATION_GENERATION
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+
+        // One stable id intentionally replaces the previous track toast. The
+        // portal normally treats that as an in-place update, which Plasma does
+        // not animate as a new banner after the first track. `show-as-new` is
+        // the portal's explicit contract for a replacement that must be
+        // presented again. It must not be combined with `transient`; stop,
+        // opt-out and shutdown withdraw the replaceable notification below.
+        let mut notification = PortalNotification::new(&meta.title)
+            .body(Some(body.as_str()))
+            .display_hint([DisplayHint::ShowAsNew]);
 
         if let Some(url) = meta.art_url.clone() {
             let prepared = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
@@ -273,11 +300,17 @@ pub async fn show_track_notification(meta: NotificationMeta, offline: bool) {
 
         match NotificationProxy::new().await {
             Ok(proxy) => {
-                if let Err(e) = proxy
-                    .add_notification("track-now-playing", notification)
+                let _guard = PORTAL_NOTIFICATION_GATE.lock().await;
+                if PORTAL_NOTIFICATION_GENERATION.load(Ordering::Acquire) != generation {
+                    log::debug!("[notify] stale track notification discarded");
+                    return;
+                }
+                match proxy
+                    .add_notification(PORTAL_NOTIFICATION_ID, notification)
                     .await
                 {
-                    log::warn!("[notify] XDG portal add_notification failed: {e}");
+                    Ok(()) => log::debug!("[notify] XDG portal notification published"),
+                    Err(e) => log::warn!("[notify] XDG portal add_notification failed: {e}"),
                 }
             }
             Err(e) => log::warn!("[notify] XDG notification portal unavailable: {e}"),
@@ -312,5 +345,35 @@ pub async fn show_track_notification(meta: NotificationMeta, offline: bool) {
         let _ = body;
         let _ = offline;
         log::info!("[notify] desktop notifications not implemented on this platform");
+    }
+}
+
+/// Withdraw the active Linux portal notification, if any. This also
+/// invalidates an in-flight artwork preparation so it cannot publish after a
+/// stop or process shutdown. Other platforms currently have no replaceable
+/// notification handle, so this is a deliberate no-op there.
+pub async fn withdraw_track_notification() {
+    #[cfg(target_os = "linux")]
+    {
+        use ashpd::desktop::notification::NotificationProxy;
+        use std::sync::atomic::Ordering;
+
+        let generation = PORTAL_NOTIFICATION_GENERATION
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        let proxy = match NotificationProxy::new().await {
+            Ok(proxy) => proxy,
+            Err(e) => {
+                log::debug!("[notify] XDG notification portal unavailable during withdrawal: {e}");
+                return;
+            }
+        };
+        let _guard = PORTAL_NOTIFICATION_GATE.lock().await;
+        if PORTAL_NOTIFICATION_GENERATION.load(Ordering::Acquire) != generation {
+            return;
+        }
+        if let Err(e) = proxy.remove_notification(PORTAL_NOTIFICATION_ID).await {
+            log::debug!("[notify] XDG portal remove_notification failed: {e}");
+        }
     }
 }

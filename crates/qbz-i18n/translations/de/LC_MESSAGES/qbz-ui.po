@@ -2077,8 +2077,14 @@ msgstr "Wie ALSA das Gerät öffnet – hw ist bit-perfect, plughw konvertiert."
 msgid "Hardware volume control"
 msgstr "Hardware-Lautstärkeregelung"
 
-msgid "Use the ALSA mixer for volume instead of software gain."
-msgstr "Verwendet den ALSA-Mixer für die Lautstärke anstelle von Software-Gain."
+msgid "Control volume through a mixer exposed by the selected ALSA device. If unavailable, direct playback stays fixed at 100%."
+msgstr "Steuert die Lautstärke über einen Mixer, den das ausgewählte ALSA-Gerät bereitstellt. Ist keiner verfügbar, bleibt die direkte Wiedergabe fest auf 100 %."
+
+msgid "This ALSA device has no compatible hardware volume control. Direct playback remains fixed at 100%."
+msgstr "Dieses ALSA-Gerät hat keine kompatible Hardware-Lautstärkeregelung. Die direkte Wiedergabe bleibt fest auf 100 %."
+
+msgid "QBZ could not fully release the previous audio device. See the audio log for details."
+msgstr "QBZ konnte das vorherige Audiogerät nicht vollständig freigeben. Details stehen im Audioprotokoll."
 
 msgid "BIT-PERFECT"
 msgstr "BIT-PERFECT"

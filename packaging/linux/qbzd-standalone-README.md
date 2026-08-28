@@ -62,6 +62,72 @@ systemctl --user enable --now qbzd
 systemctl --user status qbzd
 ```
 
+## System service (appliances and HiFiBerryOS)
+
+`qbzd` can also emit a **system-scoped** unit. This is the form an appliance
+manager can control with ordinary `systemctl` even when no user is logged in:
+
+```bash
+qbzd service systemd --system --user "$USER" --bin /usr/bin/qbzd \
+  | sudo tee /etc/systemd/system/qbzd.service >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl enable --now qbzd
+sudo systemctl status qbzd
+```
+
+`--system` changes who owns and manages the unit; it deliberately does **not**
+run the audio player as root. The generated unit contains `User=`, `HOME=` and
+`XDG_RUNTIME_DIR=` for the selected account. Keep that account in the `audio`
+group when using ALSA Direct, and enable linger when its PipeWire/Pulse socket
+lives under `/run/user/<uid>`:
+
+```bash
+sudo usermod -aG audio "$USER"
+sudo loginctl enable-linger "$USER"
+```
+
+HiFiBerryOS Next Generation can register an external player through drop-in
+files. Point its `systemd_service` field at `qbzd`; the upstream
+[Add your own player](https://github.com/hifiberry/hifiberry-os/blob/main/docs/add-your-own-player.md)
+guide documents the player descriptor, AudioControl registration and
+config-server permission files. A native HiFiBerry package can therefore own
+the unit and expose its on/off switch without making `qbzd` a root process.
+
+## Read-only root filesystems
+
+All default profile paths follow the standard XDG variables. Redirect them to
+writable mounts before running `qbzd setup`, then use the same environment in
+the service. This example keeps configuration and databases on persistent
+storage while putting disposable cache data in RAM (replace `/data` and the
+`qbz` account with paths/usernames from the appliance):
+
+```bash
+sudo install -d -o qbz -g qbz /data/qbzd-config /data/qbzd-data
+sudo -u qbz env \
+  XDG_CONFIG_HOME=/data/qbzd-config \
+  XDG_DATA_HOME=/data/qbzd-data \
+  XDG_CACHE_HOME=/run/qbzd-cache \
+  /usr/bin/qbzd setup
+```
+
+Add the same paths to the system unit with `sudo systemctl edit qbzd`:
+
+```ini
+[Service]
+Environment=XDG_CONFIG_HOME=/data/qbzd-config
+Environment=XDG_DATA_HOME=/data/qbzd-data
+Environment=XDG_CACHE_HOME=/run/qbzd-cache
+RuntimeDirectory=qbzd-cache
+RuntimeDirectoryMode=0700
+```
+
+After `sudo systemctl daemon-reload && sudo systemctl restart qbzd`, the roots
+reported by `qbzd status` should all be writable. As a simpler container-style
+alternative, set `data_root = "/writable/qbzd-state"` in `qbzd.toml`; this
+moves both application data and its cache below that directory. The XDG config
+root still holds `qbzd.toml` and the login credential, so it must remain
+readable (and writable whenever login/settings are changed).
+
 ## Why glibc 2.35
 
 This binary is built on ubuntu-22.04 (glibc 2.35) specifically so it runs on

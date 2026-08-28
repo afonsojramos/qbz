@@ -45,6 +45,10 @@ pub struct DaemonShared {
     /// funnels through) or a successful QConnect (re)connect. Defaults true
     /// (optimistic) until the first outcome latches it.
     pub network_online: std::sync::atomic::AtomicBool,
+    /// CoreEvent bus handle so state mutations here can publish matching bus
+    /// events (`emit_qconnect_session_changed`). None until `daemon::run`
+    /// attaches it right after boot; tests leave it None.
+    pub bus: Option<tokio::sync::broadcast::Sender<qbz_models::CoreEvent>>,
 }
 
 impl DaemonShared {
@@ -61,6 +65,21 @@ impl DaemonShared {
     pub fn set_network_online(&self, online: bool) {
         self.network_online
             .store(online, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Publish the CURRENT `qconnect` block as a `QconnectSessionChanged` bus
+    /// event (SSE `/api/events`, `qbzd watch`, the event hook). Call AFTER
+    /// mutating `self.qconnect`; a best-effort no-op before the bus attaches
+    /// or when no receiver is subscribed.
+    pub fn emit_qconnect_session_changed(&self) {
+        if let Some(bus) = &self.bus {
+            let _ = bus.send(qbz_models::CoreEvent::QconnectSessionChanged {
+                state: self.qconnect.state.clone(),
+                device_name: (!self.qconnect.device_name.is_empty())
+                    .then(|| self.qconnect.device_name.clone()),
+                session_active: self.qconnect.session_active,
+            });
+        }
     }
 }
 
@@ -141,6 +160,7 @@ mod tests {
             qconnect: QconnectStatus::default(),
             credential_fingerprint: None,
             network_online: std::sync::atomic::AtomicBool::new(true),
+            bus: None,
         };
         assert_eq!(shared.auth, AuthState::LoggedIn);
         assert_eq!(shared.user_id, Some(1234567));
@@ -164,6 +184,7 @@ mod tests {
             qconnect: QconnectStatus::default(),
             credential_fingerprint: None,
             network_online: std::sync::atomic::AtomicBool::new(true),
+            bus: None,
         };
         assert!(shared.network_online(), "defaults true (optimistic)");
 

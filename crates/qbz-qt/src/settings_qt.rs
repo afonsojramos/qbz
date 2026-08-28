@@ -1618,6 +1618,8 @@ pub struct SettingsDoc {
     pub alsa_plugin_index: i32,
     #[serde(rename = "alsaPluginIsHw")]
     pub alsa_plugin_is_hw: bool,
+    #[serde(rename = "alsaDirectSelected")]
+    pub alsa_direct_selected: bool,
     #[serde(rename = "alsaHardwareVolume")]
     pub alsa_hardware_volume: bool,
     #[serde(rename = "dsdModes")]
@@ -2105,6 +2107,7 @@ pub async fn publish_snapshot() {
             alsa_plugins: ALSA_PLUGIN_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             alsa_plugin_index: alsa_plugin_index as i32,
             alsa_plugin_is_hw: alsa_plugin == AlsaPlugin::Hw,
+            alsa_direct_selected: qbz_audio::alsa_direct::uses_alsa_direct_route(&audio_settings),
             alsa_hardware_volume: audio_settings.alsa_hardware_volume,
             dsd_modes: DSD_MODE_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             dsd_mode_index: DSD_MODE_VALUES
@@ -2317,6 +2320,64 @@ enum Apply {
     Reinit,
 }
 
+async fn probe_selected_hardware_volume(
+    audio: &qbz_audio::settings::AudioSettings,
+) -> Result<qbz_audio::alsa_direct::HardwareVolumeInfo, String> {
+    if !qbz_audio::alsa_direct::uses_alsa_direct_route(audio) {
+        return Err(
+            "hardware volume requires an explicitly selected ALSA Direct device".to_string(),
+        );
+    }
+    let device_id = audio
+        .output_device
+        .clone()
+        .ok_or_else(|| "ALSA Direct device is missing".to_string())?;
+    tokio::task::spawn_blocking(move || qbz_audio::alsa_direct::probe_hardware_volume(&device_id))
+        .await
+        .map_err(|error| format!("ALSA hardware-volume probe task failed: {error}"))?
+}
+
+fn seed_hardware_volume(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    info: &qbz_audio::alsa_direct::HardwareVolumeInfo,
+) {
+    // Update SharedState without touching the old output. The new direct
+    // engine reads this after Reinit and writes back the same level the probe
+    // sampled, instead of copying the locked path's synthetic 100% into the
+    // physical mixer (or writing the new device's level through the old one).
+    runtime.core().player().seed_volume_state(info.volume);
+    save_pref("volume", serde_json::json!(info.volume));
+    crate::now_playing::set_volume(info.volume);
+    log::info!(
+        "[qbz-qt] ALSA hardware volume: '{}' available at {:.0}%",
+        info.control_name,
+        info.volume * 100.0
+    );
+}
+
+async fn set_alsa_hardware_volume(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    enabled: bool,
+) -> Result<Apply, String> {
+    if !enabled {
+        return with_audio(|store| store.set_alsa_hardware_volume(false)).map(|_| Apply::Reinit);
+    }
+
+    let audio = with_audio(|store| store.get_settings())?;
+    let info = match probe_selected_hardware_volume(&audio).await {
+        Ok(info) => info,
+        Err(error) => {
+            // An old build or an external settings edit may already have left
+            // this true. Fail closed so the UI cannot advertise an enabled,
+            // inert slider after the probe rejects the device.
+            let _ = with_audio(|store| store.set_alsa_hardware_volume(false));
+            return Err(error);
+        }
+    };
+    seed_hardware_volume(runtime, &info);
+    with_audio(|store| store.set_alsa_hardware_volume(true)).map(|_| Apply::Reinit)
+}
+
 fn apply_audio(runtime: &Arc<AppRuntime<LoggingAdapter>>, apply: Apply) {
     let reinit = match apply {
         Apply::None => return,
@@ -2348,18 +2409,33 @@ fn apply_audio(runtime: &Arc<AppRuntime<LoggingAdapter>>, apply: Apply) {
     crate::publish_settings();
 }
 
-fn uses_alsa_direct_hw(audio: &qbz_audio::settings::AudioSettings) -> bool {
-    audio.backend_type.unwrap_or_default() == AudioBackendType::Alsa
-        && audio.alsa_plugin.unwrap_or(AlsaPlugin::Hw) == AlsaPlugin::Hw
+/// Release the live output and wait for the audio thread to confirm that the
+/// PCM/reservation is gone and any PipeWire sink QBZ suspended is awake.
+/// `Player::release_device` is intentionally blocking because the ack is the
+/// ordering guarantee; keep that wait off Tokio's worker threads.
+async fn release_output_device(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<(), String> {
+    let player = runtime.core().player();
+    tokio::task::spawn_blocking(move || player.release_device())
+        .await
+        .map_err(|error| format!("audio-device release task failed: {error}"))?
 }
 
-/// Keep software gain at unity for ALSA-direct `hw` output. The public core
+fn report_release_failure(error: &str) {
+    log::error!("[qbz-qt] output-device release failed: {error}");
+    crate::toast_qt::error(qbz_i18n::t(
+        "QBZ could not fully release the previous audio device. See the audio log for details.",
+    ));
+}
+
+fn requires_alsa_direct_unity(audio: &qbz_audio::settings::AudioSettings) -> bool {
+    qbz_audio::alsa_direct::uses_alsa_direct_route(audio) && !audio.alsa_hardware_volume
+}
+
+/// Keep software gain at unity for ALSA-direct output. The public core
 /// volume seam does not reconfigure the protected device/backend; the DAC owns
 /// level in this mode. A QConnect peer is deliberately exempt because its
 /// remote volume is the active control.
-pub(crate) async fn maybe_force_bitperfect_volume(
-    runtime: &Arc<AppRuntime<LoggingAdapter>>,
-) {
+pub(crate) async fn maybe_force_bitperfect_volume(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     let audio = match with_audio(|store| store.get_settings()) {
         Ok(audio) => audio,
         Err(error) => {
@@ -2367,7 +2443,7 @@ pub(crate) async fn maybe_force_bitperfect_volume(
             return;
         }
     };
-    if !uses_alsa_direct_hw(&audio) {
+    if !requires_alsa_direct_unity(&audio) {
         return;
     }
     let controlling_peer = match crate::qconnect_qt::service() {
@@ -2383,6 +2459,46 @@ pub(crate) async fn maybe_force_bitperfect_volume(
     }
     log::info!("[qbz-qt] bit-perfect: forced local volume to 100%");
     crate::now_playing::set_volume(1.0);
+}
+
+/// Revalidate a persisted hardware-volume preference after startup or a route
+/// change. A successful probe synchronizes QBZ to the physical mixer before
+/// any stream reinitialization. A failed probe disables the preference and
+/// reloads the player, leaving the protected direct path locked at unity.
+pub(crate) async fn reconcile_alsa_hardware_volume(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+) -> Option<f32> {
+    let audio = match with_audio(|store| store.get_settings()) {
+        Ok(audio) => audio,
+        Err(error) => {
+            log::error!("[qbz-qt] re-read audio for hardware-volume probe failed: {error}");
+            return None;
+        }
+    };
+    if !audio.alsa_hardware_volume || !qbz_audio::alsa_direct::uses_alsa_direct_route(&audio) {
+        return None;
+    }
+
+    match probe_selected_hardware_volume(&audio).await {
+        Ok(info) => {
+            seed_hardware_volume(runtime, &info);
+            Some(info.volume)
+        }
+        Err(error) => {
+            log::warn!("[qbz-qt] ALSA hardware volume unavailable; disabling the setting: {error}");
+            if let Err(persist_error) = with_audio(|store| store.set_alsa_hardware_volume(false)) {
+                log::error!(
+                    "[qbz-qt] failed to disable unavailable hardware volume: {persist_error}"
+                );
+                return None;
+            }
+            apply_audio(runtime, Apply::Reinit);
+            crate::toast_qt::error(qbz_i18n::t(
+                "This ALSA device has no compatible hardware volume control. Direct playback remains fixed at 100%.",
+            ));
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2416,9 +2532,7 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         "limit-quality-to-device" => {
             with_audio(|s| s.set_limit_quality_to_device(value)).map(|_| Apply::Reload)
         }
-        "alsa-hardware-volume" => {
-            with_audio(|s| s.set_alsa_hardware_volume(value)).map(|_| Apply::Reinit)
-        }
+        "alsa-hardware-volume" => set_alsa_hardware_volume(runtime, value).await,
         "exclusive-mode" => with_audio(|s| s.set_exclusive_mode(value)).map(|_| Apply::Reinit),
         "reserve-dac" => {
             with_audio(|s| s.set_reserve_dac_while_running(value)).map(|_| Apply::Reload)
@@ -2541,6 +2655,9 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         }
         "system-notifications" => {
             save_pref("system_notifications", serde_json::json!(value));
+            if !value {
+                crate::spawn(qbz_media_controls::withdraw_track_notification());
+            }
             Ok(Apply::None)
         }
         "window-title-show" => {
@@ -2712,9 +2829,24 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
                 refresh_device_cap(runtime).await;
             }
             apply_audio(runtime, apply);
+            if key == "alsa-hardware-volume" {
+                maybe_force_bitperfect_volume(runtime).await;
+            }
             publish_snapshot().await;
         }
-        Err(e) => log::error!("[qbz-qt] settings persist failed ({key}): {e}"),
+        Err(e) => {
+            log::error!("[qbz-qt] settings persist failed ({key}): {e}");
+            if key == "alsa-hardware-volume" {
+                // The failed enable path persisted `false`; push that state to
+                // the player/document and explain why the toggle bounced back.
+                apply_audio(runtime, Apply::Reinit);
+                maybe_force_bitperfect_volume(runtime).await;
+                publish_snapshot().await;
+                crate::toast_qt::error(qbz_i18n::t(
+                    "This ALSA device has no compatible hardware volume control. Direct playback remains fixed at 100%.",
+                ));
+            }
+        }
     }
 }
 
@@ -2749,6 +2881,16 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
                     None => return,
                 }
             };
+            let previous_backend = audio_settings().backend_type.unwrap_or_default();
+            if previous_backend == AudioBackendType::Alsa && backend != AudioBackendType::Alsa {
+                // This must complete BEFORE the new backend is persisted and
+                // initialized. Reinit used to drop the ALSA PCM but omitted
+                // the suspended-sink cleanup, while Refresh merely queued a
+                // release and raced its own re-enumeration.
+                if let Err(error) = release_output_device(runtime).await {
+                    report_release_failure(&error);
+                }
+            }
             if let Err(e) = with_audio(|s| s.set_backend_type(Some(backend))) {
                 log::error!("[qbz-qt] persist backend failed: {e}");
                 return;
@@ -2818,6 +2960,7 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             }
             // #638 fix 3, trigger 4 — a different DAC has a different ceiling.
             refresh_device_cap(runtime).await;
+            reconcile_alsa_hardware_volume(runtime).await;
             apply_audio(runtime, Apply::Reinit);
         }
         "dsd-mode" => {
@@ -2838,6 +2981,7 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
                 log::error!("[qbz-qt] persist alsa plugin failed: {e}");
                 return;
             }
+            reconcile_alsa_hardware_volume(runtime).await;
             apply_audio(runtime, Apply::Reinit);
             maybe_force_bitperfect_volume(runtime).await;
         }
@@ -3225,9 +3369,8 @@ pub async fn settings_reset(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 pub async fn refresh_devices(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     // Release whatever the player holds, then re-enumerate from scratch (the
     // whole point of the button is a device that was not in the last list).
-    let player = runtime.core().player();
-    if let Err(e) = player.release_device() {
-        log::warn!("[qbz-qt] release device failed: {e}");
+    if let Err(error) = release_output_device(runtime).await {
+        report_release_failure(&error);
     }
     invalidate_device_cache();
     // #638 fix 3, trigger 6 — Qt-only, and the easiest of the six to miss.
@@ -3237,6 +3380,7 @@ pub async fn refresh_devices(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     // default". Placed after the re-enumeration so the probe reads the new
     // device list, and before the publish so the row lands settled.
     refresh_device_cap(runtime).await;
+    reconcile_alsa_hardware_volume(runtime).await;
     publish_snapshot().await;
 }
 
@@ -3296,18 +3440,29 @@ mod local_tab_order_tests {
     }
 
     #[test]
-    fn only_alsa_hw_requires_unity_software_volume() {
+    fn only_alsa_direct_without_a_hardware_mixer_requires_unity_volume() {
         let mut audio = qbz_audio::settings::AudioSettings::default();
-        assert!(!uses_alsa_direct_hw(&audio));
+        assert!(!requires_alsa_direct_unity(&audio));
 
         audio.backend_type = Some(AudioBackendType::Alsa);
+        audio.output_device = Some("front:CARD=USB,DEV=0".to_string());
         audio.alsa_plugin = Some(AlsaPlugin::Hw);
-        assert!(uses_alsa_direct_hw(&audio));
+        assert!(requires_alsa_direct_unity(&audio));
+
+        audio.alsa_hardware_volume = true;
+        assert!(!requires_alsa_direct_unity(&audio));
+        audio.alsa_hardware_volume = false;
 
         audio.alsa_plugin = Some(AlsaPlugin::PlugHw);
-        assert!(!uses_alsa_direct_hw(&audio));
-        audio.backend_type = Some(AudioBackendType::PipeWire);
+        assert!(requires_alsa_direct_unity(&audio));
+        audio.alsa_plugin = Some(AlsaPlugin::Pcm);
+        assert!(!requires_alsa_direct_unity(&audio));
+
         audio.alsa_plugin = Some(AlsaPlugin::Hw);
-        assert!(!uses_alsa_direct_hw(&audio));
+        audio.output_device = None;
+        assert!(!requires_alsa_direct_unity(&audio));
+        audio.backend_type = Some(AudioBackendType::PipeWire);
+        audio.output_device = Some("front:CARD=USB,DEV=0".to_string());
+        assert!(!requires_alsa_direct_unity(&audio));
     }
 }

@@ -96,6 +96,12 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //     ordering — aborted alongside the scrobbler for a clean shutdown.
     let memwatch = qbz_app::memory_watchdog::spawn(booted.runtime.core().player());
 
+    // Attach the CoreEvent bus to the shared state so the qconnect lifecycle
+    // latches can publish `QconnectSessionChanged` (SSE + the event hook).
+    if let Ok(mut s) = booted.shared.lock() {
+        s.bus = Some(booted.bus.clone());
+    }
+
     // 10. playback driver (T4). Spawn the 450 ms headless orchestrator on the
     //     booted runtime + shared state. It runs safely regardless of auth: with
     //     no session the queue is empty and each tick is a near-no-op. The
@@ -117,7 +123,16 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     // QConnect report scheduler (step 12) waits on it. Created BEFORE the driver
     // so `on_edge` can capture it, and shared with `qconnect::start`.
     let report_notify = Arc::new(tokio::sync::Notify::new());
-    let deps = build_driver_deps(quality_cell.clone(), booted.shared.clone(), report_notify.clone());
+    // The same edge, pulsed onto a SECOND Notify for the events bridge (10e):
+    // two subscribers on one Notify would race for the single stored permit.
+    let edge_notify = Arc::new(tokio::sync::Notify::new());
+    let deps = build_driver_deps(
+        quality_cell.clone(),
+        booted.shared.clone(),
+        report_notify.clone(),
+        edge_notify.clone(),
+        booted.bus.clone(),
+    );
     let driver = tokio::spawn(playback_driver::run_driver(
         booted.runtime.clone(),
         deps,
@@ -138,6 +153,27 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //      enabled in the scrobbler store. Holds NO Arc<AppRuntime>, so it sits
     //      outside the #521/§8.2 ordering — aborted for a clean shutdown below.
     let scrobbler = crate::scrobble_engine::spawn(roots.clone(), booted.bus.subscribe());
+
+    // 10c½. Events bridge: translate the driver's transition edges into the
+    //       playback CoreEvents the bus consumers above (and SSE, and the event
+    //       hook below) are written for — TrackStarted / PlaybackStateChanged /
+    //       PositionUpdated / VolumeChanged. Holds only a Weak<AppRuntime>
+    //       upgraded per wake, but is still aborted+joined ahead of
+    //       `drop(booted)` so a mid-wake strong Arc can't outlive the ordering.
+    let events_bridge =
+        crate::events_bridge::spawn(&booted.runtime, booted.bus.clone(), edge_notify);
+
+    // 10c¾. Event hook (CONSOLE): fork `hooks.script` (or `QBZD_HOOK`) once per
+    //       forwarded bus event with QBZ_* variables in its environment — push
+    //       integration for headless boxes (moOde-style renderer coordination).
+    //       Holds no Arc<AppRuntime>; aborted for a clean shutdown.
+    let hooks = match crate::hooks::script(&roots) {
+        Some(path) => {
+            log::info!("[hooks] running {} on daemon events (hooks.script)", path.display());
+            Some(crate::hooks::spawn(path, booted.bus.subscribe()))
+        }
+        None => None,
+    };
 
     // 10d. MPRIS media controls (CONSOLE): publish org.mpris.MediaPlayer2 so a
     //      KDE/GNOME media widget, a plasmoid, or hardware media keys drive the
@@ -198,6 +234,7 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
         booted.runtime.clone(),
         booted.shared.clone(),
         &roots,
+        quality_cell.clone(),
         report_notify,
         booted.bus.subscribe(),
     );
@@ -236,6 +273,15 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     // device — the same ordering constraint as the driver (§8.2).
     memwatch.abort();
     let _ = memwatch.await;
+    // Stop the events bridge BEFORE `drop(booted)`: it upgrades its Weak to a
+    // strong Arc<AppRuntime> for the span of each wake (#521 ordering).
+    events_bridge.abort();
+    let _ = events_bridge.await;
+    // Stop the event-hook dispatcher (holds no Arc<AppRuntime>; order-free).
+    if let Some(hooks) = hooks {
+        hooks.abort();
+        let _ = hooks.await;
+    }
     // Tear down MPRIS: abort its updater and drop the D-Bus handle. Its inbound
     // callback held only a Weak<AppRuntime>, so this is order-free too.
     if let Some(mpris) = mpris {
@@ -270,7 +316,7 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //    Both calls self-gate to no-ops when QBZ forced nothing.
     #[cfg(target_os = "linux")]
     {
-        qbz_audio::alsa_backend::resume_suspended_sink();
+        let _ = qbz_audio::alsa_backend::resume_suspended_sink();
         qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
     }
 
@@ -384,11 +430,14 @@ async fn boot(roots: &ProfileRoots, cfg: &QbzdConfig, warn_count: usize) -> Resu
 /// Assemble the driver's host side channels: the streaming-quality resolver and
 /// the daemon-shared latching / tick-timestamping hooks. T10: `on_edge` now
 /// pulses the QConnect report `Notify` so the report scheduler reports on the
-/// same transition/periodic edges the driver detects (§7.2).
+/// same transition/periodic edges the driver detects (§7.2) — and, on a second
+/// `Notify`, the events bridge (10c½) that publishes those edges to the bus.
 fn build_driver_deps(
     quality_cell: Arc<std::sync::Mutex<qbz_models::Quality>>,
     shared: Arc<Mutex<DaemonShared>>,
     report_notify: Arc<tokio::sync::Notify>,
+    edge_notify: Arc<tokio::sync::Notify>,
+    bus: tokio::sync::broadcast::Sender<qbz_models::CoreEvent>,
 ) -> DriverDeps {
     let latch_shared = shared.clone();
     let tick_shared = shared;
@@ -402,15 +451,27 @@ fn build_driver_deps(
         // T10: signal the report scheduler on every ReportEdge. `notify_one`
         // stores a single permit if the scheduler is mid-report, so no edge is
         // lost and rapid edges coalesce into one report.
-        on_edge: Arc::new(move || report_notify.notify_one()),
+        on_edge: Arc::new(move || {
+            report_notify.notify_one();
+            edge_notify.notify_one();
+        }),
         on_latch: Arc::new(move |category, message| {
             if let Ok(mut s) = latch_shared.lock() {
                 match category {
-                    "stream" => s.last_errors.stream = Some(message),
-                    "transport" => s.last_errors.transport = Some(message),
-                    "auth" => s.last_errors.auth = Some(message),
+                    "stream" => s.last_errors.stream = Some(message.clone()),
+                    "transport" => s.last_errors.transport = Some(message.clone()),
+                    "auth" => s.last_errors.auth = Some(message.clone()),
                     _ => {}
                 }
+            }
+            // Surface stream failures on the bus too, so `/api/events` and the
+            // event hook see them live (e.g. a busy ALSA device at play time)
+            // instead of only the polled /api/status error latch.
+            if category == "stream" {
+                let _ = bus.send(qbz_models::CoreEvent::PlaybackError {
+                    track_id: 0,
+                    message,
+                });
             }
         }),
         on_tick: Arc::new(move || {
@@ -517,6 +578,8 @@ fn new_shared(cfg: &QbzdConfig) -> Arc<Mutex<DaemonShared>> {
         qconnect: QconnectStatus::default(),
         credential_fingerprint: None,
         network_online: std::sync::atomic::AtomicBool::new(true),
+        // Attached by daemon::run right after boot (the bus outlives boot).
+        bus: None,
     }))
 }
 

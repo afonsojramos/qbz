@@ -1641,3 +1641,12 @@ msgstr "This album has no tracks."
 
 msgid "Reactive Rings"
 msgstr "Reactive Rings"
+
+msgid "Control volume through a mixer exposed by the selected ALSA device. If unavailable, direct playback stays fixed at 100%."
+msgstr "Control volume through a mixer exposed by the selected ALSA device. If unavailable, direct playback stays fixed at 100%."
+
+msgid "This ALSA device has no compatible hardware volume control. Direct playback remains fixed at 100%."
+msgstr "This ALSA device has no compatible hardware volume control. Direct playback remains fixed at 100%."
+
+msgid "QBZ could not fully release the previous audio device. See the audio log for details."
+msgstr "QBZ could not fully release the previous audio device. See the audio log for details."

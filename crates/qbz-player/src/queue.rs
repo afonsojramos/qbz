@@ -1776,6 +1776,38 @@ mod tests {
     }
 
     #[test]
+    fn repeat_all_wraps_a_local_album_for_renderer_advance() {
+        let queue = QueueManager::new();
+        for id in 1..=3 {
+            let mut track = create_test_track(id);
+            track.is_local = true;
+            track.source = Some("local".to_string());
+            queue.add_track(track);
+        }
+        queue.play_index(2);
+        queue.set_repeat(RepeatMode::All);
+
+        let wrapped = queue.next().expect("repeat-all must wrap the album");
+        assert_eq!(wrapped.id, 1);
+        assert_eq!(queue.current_track().map(|track| track.id), Some(1));
+    }
+
+    #[test]
+    fn repeat_one_returns_the_same_local_track_for_renderer_advance() {
+        let queue = QueueManager::new();
+        let mut track = create_test_track(7);
+        track.is_local = true;
+        track.source = Some("local".to_string());
+        queue.add_track(track);
+        queue.play_index(0);
+        queue.set_repeat(RepeatMode::One);
+
+        let repeated = queue.next().expect("repeat-one must replay the current row");
+        assert_eq!(repeated.id, 7);
+        assert_eq!(queue.current_track().map(|track| track.id), Some(7));
+    }
+
+    #[test]
     fn test_clear_without_current_track() {
         let queue = QueueManager::new();
 
@@ -2187,6 +2219,44 @@ mod tests {
         // upcoming list is [3, 4, 5]; clicking position 1 must play id 4
         let track = queue.play_upcoming_at(1).expect("track");
         assert_eq!(track.id, 4);
+    }
+
+    #[test]
+    fn idle_queue_promotes_first_row_for_transport_play() {
+        let queue = QueueManager::new();
+        queue.set_queue(vec![create_test_track(99)], Some(0));
+        queue.clear(false);
+
+        // All three enqueue actions keep an idle list cursor-less. "Later"
+        // and "Next" form the manual block ahead of a plain queued row.
+        queue.add_track(create_test_track(1));
+        queue.add_track_later(create_test_track(2));
+        queue.add_track_next(create_test_track(3));
+
+        let idle = queue.get_state_full();
+        assert!(idle.current_track.is_none());
+        assert_eq!(
+            idle.upcoming.iter().map(|track| track.id).collect::<Vec<_>>(),
+            vec![3, 2, 1]
+        );
+
+        let promoted = queue
+            .play_upcoming_at_preserving_timeline(0, 3)
+            .expect("first idle row");
+        assert_eq!(promoted.id, 3);
+
+        let playing = queue.get_state_full();
+        assert_eq!(playing.current_track.expect("current").id, 3);
+        assert_eq!(
+            playing
+                .upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert!(playing.history.is_empty());
+        assert_eq!(playing.manual_next_count, 1);
     }
 
     #[test]

@@ -213,6 +213,55 @@ fn should_stream_gapless_successor(
     streaming_only && !player_cached && !offline_cached && throttle_cap > 0
 }
 
+/// The queue/engine edge a completed gapless fetch still belongs to.
+///
+/// Full-track materialization can outlive the predecessor. Checking only the
+/// requested successor lets a late result append that successor behind itself
+/// after the normal end-edge already started it. Queue edits and a late
+/// stop-after mark are equally stale. Keep the policy pure so all of those
+/// races have deterministic coverage.
+fn gapless_edge_matches(
+    predecessor_id: u64,
+    successor_id: u64,
+    engine_track_id: u64,
+    engine_queued_id: u64,
+    stop_after_id: Option<u64>,
+    queue_successor_id: Option<u64>,
+) -> bool {
+    predecessor_id != 0
+        && successor_id != 0
+        && predecessor_id != successor_id
+        && engine_track_id == predecessor_id
+        && engine_queued_id == 0
+        && stop_after_id != Some(predecessor_id)
+        && queue_successor_id == Some(successor_id)
+}
+
+async fn gapless_edge_is_current(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    predecessor_id: u64,
+    successor_id: u64,
+) -> bool {
+    let player = runtime.core().player();
+    let engine_track_id = player.state.current_track_id();
+    let engine_queued_id = player.state.get_gapless_next_track_id();
+    let stop_after_id = runtime.core().get_stop_after().await;
+    let queue_successor_id = runtime
+        .core()
+        .peek_upcoming(1)
+        .await
+        .first()
+        .map(|track| track.id);
+    gapless_edge_matches(
+        predecessor_id,
+        successor_id,
+        engine_track_id,
+        engine_queued_id,
+        stop_after_id,
+        queue_successor_id,
+    )
+}
+
 /// Warm the next two queue rows in the player's shared L1/L2 cache. This only
 /// performs cheap policy/queue work inline; every full download is spawned in
 /// the background and goes through `Player::prefetch_into_cache`, which owns
@@ -2244,9 +2293,51 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         return;
     }
 
-    if !was_playing && !runtime.core().player().has_loaded_audio() {
-        match runtime.core().current_track().await {
-            Some(track) => {
+    if !was_playing {
+        let current = runtime.core().current_track().await;
+
+        // IDLE LIST: Clear while paused intentionally removes the cursor and
+        // NPB, but Add to queue / Play next / Play later deliberately do not
+        // create a new current row. The paused engine can still hold the old
+        // decoded stream here, so checking `has_loaded_audio()` first would
+        // resume the track the user just cleared. Promote the first live queue
+        // occurrence before considering resume, with the expected id checked
+        // under the queue lock so a concurrent mutation cannot start a
+        // different row.
+        if current.is_none() {
+            let state = runtime.core().get_queue_state_full().await;
+            let Some(candidate) = state.upcoming.first().cloned() else {
+                log::info!("[qbz-qt] toggle-play ignored: empty queue");
+                return;
+            };
+            if crate::local_playback::preflight_queue_track(&candidate)
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let Some(track) = runtime
+                .core()
+                .play_upcoming_at_preserving_timeline(0, candidate.id)
+                .await
+            else {
+                log::warn!("[qbz-qt] toggle-play: idle queue changed before activation");
+                return;
+            };
+            log::info!(
+                "[qbz-qt] toggle-play: idle queue -> starting first track {}",
+                track.id
+            );
+            PENDING_PLAY_ID.store(track.id, Ordering::Relaxed);
+            play_queue_track(runtime, track.id, 0).await;
+            PENDING_PLAY_ID
+                .compare_exchange(track.id, 0, Ordering::Relaxed, Ordering::Relaxed)
+                .ok();
+            return;
+        }
+
+        if !runtime.core().player().has_loaded_audio() {
+            if let Some(track) = current {
                 log::info!(
                     "[qbz-qt] toggle-play: no loaded audio -> cold-starting current track {}",
                     track.id
@@ -2266,11 +2357,8 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
                     .compare_exchange(track.id, 0, Ordering::Relaxed, Ordering::Relaxed)
                     .ok();
             }
-            None => {
-                log::info!("[qbz-qt] toggle-play ignored: no loaded audio and an empty queue");
-            }
+            return;
         }
-        return;
     }
 
     let result = if was_playing {
@@ -3469,6 +3557,12 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                                 )
                                 .await
                             {
+                                if !gapless_edge_is_current(&runtime, track_id, next_id).await {
+                                    log::info!(
+                                        "[qbz-qt] [GAPLESS] discarded stale track {next_id} after predecessor {track_id} moved or its queue edge changed"
+                                    );
+                                    return;
+                                }
                                 let player = runtime.core().player();
                                 match player.play_next(data, next_id) {
                                     Ok(()) => log::info!(
@@ -3677,9 +3771,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_queue_with, prefetch_track_ids, quality_badge_from, reconcile_device_cap,
-        should_stream_gapless_successor, stream_error_text, xorshift_shuffle_seeded,
-        PrefetchCandidate, PrefetchTrackEdge,
+        filter_queue_with, gapless_edge_matches, prefetch_track_ids, quality_badge_from,
+        reconcile_device_cap, should_stream_gapless_successor, stream_error_text,
+        xorshift_shuffle_seeded, PrefetchCandidate, PrefetchTrackEdge,
     };
     use qbz_models::{Quality, QualityLimit, QueueTrack};
     use qbz_source::QualityHint;
@@ -3830,6 +3924,16 @@ mod tests {
     #[test]
     fn adaptive_cap_zero_blocks_incremental_gapless_download() {
         assert!(!should_stream_gapless_successor(true, false, false, 0));
+    }
+
+    #[test]
+    fn completed_gapless_fetch_only_matches_its_live_queue_edge() {
+        assert!(gapless_edge_matches(1, 2, 1, 0, None, Some(2)));
+        assert!(!gapless_edge_matches(1, 2, 2, 0, None, Some(2)));
+        assert!(!gapless_edge_matches(1, 2, 1, 9, None, Some(2)));
+        assert!(!gapless_edge_matches(1, 2, 1, 0, Some(1), Some(2)));
+        assert!(!gapless_edge_matches(1, 2, 1, 0, None, Some(3)));
+        assert!(!gapless_edge_matches(1, 1, 1, 0, None, Some(1)));
     }
 
     // --- #638 fix 3: the request tier reconciles preference against the

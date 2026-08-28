@@ -102,7 +102,9 @@ enum AudioCommand {
     /// stream (freeing an exclusive ALSA `hw:` grab + its D-Bus reservation)
     /// and un-suspends / un-forces anything QBZ parked, so PipeWire can
     /// reclaim a device QBZ was holding. User-triggered from settings.
-    ReleaseDevice,
+    ReleaseDevice {
+        completed: SyncSender<Result<(), String>>,
+    },
     /// Append next track to current engine for gapless playback (Rodio only)
     PlayNext {
         data: Vec<u8>,
@@ -438,6 +440,7 @@ fn create_output_stream_with_config(
     sample_rate: u32,
     channels: u16,
     exclusive_mode: bool,
+    state: SharedState,
 ) -> Result<MixerDeviceSink, String> {
     log::info!(
         "Creating MixerDeviceSink: {}Hz, {} channels, exclusive: {}",
@@ -508,9 +511,25 @@ fn create_output_stream_with_config(
     // Create MixerDeviceSink with custom config
     match DeviceSinkBuilder::from_device(device) {
         Ok(builder) => {
+            // rodio's default error callback only eprintln!s a live stream
+            // error (e.g. an ALSA buffer underrun mid-playback), so playback
+            // dies without the driver ever seeing a message to latch. Record
+            // it on the shared state instead so it drains to the event bus as
+            // a PlaybackError. Rate-limited: ALSA can repeat EPIPE every
+            // period on a wedged device, and each recorded message is one
+            // bus event (and one forked hook script) after the drain.
+            let mut last_reported: Option<std::time::Instant> = None;
             match builder
                 .with_supported_config(&supported_config)
                 .with_buffer_size(cpal_buffer_size)
+                .with_error_callback(move |err| {
+                    log::error!("Audio stream error: {err}");
+                    let now = std::time::Instant::now();
+                    if last_reported.map_or(true, |t| now.duration_since(t).as_secs() >= 5) {
+                        last_reported = Some(now);
+                        state.record_stream_error(format!("Audio stream error: {err}"));
+                    }
+                })
                 .open_stream()
             {
                 Ok(mixer_sink) => {
@@ -1994,6 +2013,7 @@ impl Player {
                                         sample_rate,
                                         channels,
                                         dac_passthrough,
+                                        thread_state.clone(),
                                     )
                                     .map(StreamType::rodio)
                                 };
@@ -2085,6 +2105,7 @@ impl Player {
                                         sample_rate,
                                         channels,
                                         dac_passthrough,
+                                        thread_state.clone(),
                                     )
                                     .map(StreamType::rodio)
                                 };
@@ -2513,6 +2534,7 @@ impl Player {
                                         sample_rate,
                                         channels,
                                         dac_passthrough,
+                                        thread_state.clone(),
                                     )
                                     .map(StreamType::rodio)
                                 };
@@ -2587,6 +2609,7 @@ impl Player {
                                         sample_rate,
                                         channels,
                                         dac_passthrough,
+                                        thread_state.clone(),
                                     )
                                     .map(StreamType::rodio)
                                 };
@@ -3785,6 +3808,35 @@ impl Player {
                             drop(stream_opt.take());
                             log::info!("Audio thread: previous stream dropped, device released");
 
+                            // ReloadSettings updates `thread_settings` before
+                            // this command is queued. When the NEW route is no
+                            // longer ALSA Direct, finish the teardown the same
+                            // way ReleaseDevice does: dropping the PCM alone
+                            // releases the fd/reservation but leaves the
+                            // PipeWire sink QBZ suspended. Keep it suspended
+                            // for direct->direct reinitialization so PipeWire
+                            // cannot race the immediate exclusive reopen.
+                            #[cfg(target_os = "linux")]
+                            {
+                                let next_is_alsa_direct = thread_settings
+                                    .lock()
+                                    .ok()
+                                    .map(|settings| {
+                                        qbz_audio::alsa_direct::uses_alsa_direct_route(&settings)
+                                    })
+                                    .unwrap_or(false);
+                                if !next_is_alsa_direct {
+                                    if let Err(error) =
+                                        qbz_audio::alsa_backend::resume_suspended_sink()
+                                    {
+                                        log::warn!(
+                                            "Audio thread: release during reinit was incomplete: {error}"
+                                        );
+                                    }
+                                }
+                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
+                            }
+
                             std::thread::sleep(Duration::from_millis(100));
 
                             *current_device_name = new_device;
@@ -3809,7 +3861,7 @@ impl Player {
                             // Keep current_audio_data and current_streaming_source
                             // intact so Resume can recreate the engine and seek.
                         }
-                        AudioCommand::ReleaseDevice => {
+                        AudioCommand::ReleaseDevice { completed } => {
                             log::info!("Audio thread: releasing output device (user-requested)");
                             // Cancel any deferred drop and tear the stream down NOW so
                             // the device is freed immediately (no warm-stream lingering).
@@ -3823,15 +3875,19 @@ impl Player {
                             // apps after bit-perfect ALSA Direct held it exclusively).
                             // Both calls are self-gating no-ops if QBZ didn't set them.
                             #[cfg(target_os = "linux")]
-                            {
-                                qbz_audio::alsa_backend::resume_suspended_sink();
+                            let release_result = {
+                                let result = qbz_audio::alsa_backend::resume_suspended_sink();
                                 qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
-                            }
+                                result
+                            };
+                            #[cfg(not(target_os = "linux"))]
+                            let release_result = Ok(());
                             thread_state.pause_playback_timer();
                             thread_state.is_playing.store(false, Ordering::SeqCst);
                             // Keep current_audio_data / current_streaming_source intact
                             // so a later Play / Resume reopens and continues.
                             log::info!("Audio thread: output device released");
+                            let _ = completed.send(release_result);
                         }
                         AudioCommand::PlayNext {
                             data,
@@ -4480,7 +4536,7 @@ impl Player {
                                 // above), so resume any PipeWire sink we suspended for
                                 // exclusive access — self-gating no-op otherwise (#263).
                                 #[cfg(target_os = "linux")]
-                                qbz_audio::alsa_backend::resume_suspended_sink();
+                                let _ = qbz_audio::alsa_backend::resume_suspended_sink();
                                 log::info!("Audio thread: suspended stream after pause");
                                 continue;
                             }
@@ -6079,6 +6135,19 @@ impl Player {
             .map_err(|e| format!("Failed to send volume command: {}", e))
     }
 
+    /// Seed the volume state for an imminent engine rebuild without touching
+    /// the currently open output. Settings uses this when enabling ALSA
+    /// hardware volume: it samples the physical mixer first, stores that level
+    /// here, then reinitializes the direct engine. Sending `SetVolume` instead
+    /// would write the new device's sampled level through the *old* device's
+    /// still-live hardware mixer before the reinit command reached the audio
+    /// thread.
+    pub fn seed_volume_state(&self, volume: f32) {
+        self.state
+            .volume
+            .store(volume.clamp(0.0, 1.0).to_bits(), Ordering::SeqCst);
+    }
+
     /// Seek to position in seconds
     pub fn seek(&self, position: u64) -> Result<(), String> {
         // Clamp to duration if known
@@ -6110,9 +6179,15 @@ impl Player {
     /// with a device re-enumeration in the UI to surface a freed or
     /// hot-plugged DAC without restarting the app.
     pub fn release_device(&self) -> Result<(), String> {
+        let (completed_tx, completed_rx) = mpsc::sync_channel(1);
         self.tx
-            .send(AudioCommand::ReleaseDevice)
-            .map_err(|e| format!("Failed to send release command: {}", e))
+            .send(AudioCommand::ReleaseDevice {
+                completed: completed_tx,
+            })
+            .map_err(|e| format!("Failed to send release command: {}", e))?;
+        completed_rx
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|error| format!("Timed out waiting for audio-device release: {error}"))?
     }
 
     /// Reload audio settings from fresh config (e.g., after database update)

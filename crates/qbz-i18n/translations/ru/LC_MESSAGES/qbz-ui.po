@@ -2014,8 +2014,14 @@ msgstr "Как ALSA открывает устройство — hw обеспе�
 msgid "Hardware volume control"
 msgstr "Аппаратное управление громкостью"
 
-msgid "Use the ALSA mixer for volume instead of software gain."
-msgstr "Использовать микшер ALSA для громкости вместо программного усиления."
+msgid "Control volume through a mixer exposed by the selected ALSA device. If unavailable, direct playback stays fixed at 100%."
+msgstr "Управляет громкостью через микшер выбранного устройства ALSA. Если он недоступен, громкость прямого воспроизведения остаётся на уровне 100 %."
+
+msgid "This ALSA device has no compatible hardware volume control. Direct playback remains fixed at 100%."
+msgstr "У этого устройства ALSA нет совместимого аппаратного регулятора громкости. Громкость прямого воспроизведения остаётся на уровне 100 %."
+
+msgid "QBZ could not fully release the previous audio device. See the audio log for details."
+msgstr "QBZ не удалось полностью освободить предыдущее аудиоустройство. Подробности смотрите в журнале аудио."
 
 msgid "BIT-PERFECT"
 msgstr "БИТ-ПЕРФЕКТ"

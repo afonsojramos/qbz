@@ -103,6 +103,9 @@ fn latch_lifecycle_into_shared(shared: &SharedState, state: QconnectLifecycleSta
         if matches!(state, QconnectLifecycleState::Connected) {
             s.set_network_online(true);
         }
+        // Surface the transition on the CoreEvent bus (SSE, `qbzd watch`,
+        // the event hook) alongside the /api/status latch.
+        s.emit_qconnect_session_changed();
     }
 }
 
@@ -144,6 +147,10 @@ pub struct DaemonQconnectService {
     #[allow(dead_code)] // T11 (settings reload) re-reads the KV through this path.
     settings_db: PathBuf,
     custom_device_name: Arc<tokio::sync::RwLock<Option<String>>>,
+    /// Shared with the playback driver and settings reload route; the engine
+    /// reads it for every remote stream start so QConnect cannot bypass the
+    /// daemon's configured maximum quality (#693).
+    quality_cap: Arc<std::sync::Mutex<qbz_models::Quality>>,
 }
 
 impl DaemonQconnectService {
@@ -194,7 +201,11 @@ impl DaemonQconnectService {
         // next connect. Unset/unknown -> Software (the OD4 default).
         let volume_mode =
             engine::VolumeMode::from_kv(transport::load_volume_mode_at(&self.settings_db).as_deref());
-        let engine = DaemonRendererEngine::new(Arc::clone(&self.runtime), volume_mode);
+        let engine = DaemonRendererEngine::new(
+            Arc::clone(&self.runtime),
+            volume_mode,
+            Arc::clone(&self.quality_cap),
+        );
         let sink = Arc::new(DaemonEventSink::new(engine, Arc::clone(&sync_state)));
         let app = Arc::new(QconnectApp::new(
             Arc::clone(&transport),
@@ -309,6 +320,7 @@ impl DaemonQconnectService {
         if let Ok(mut s) = self.shared.lock() {
             s.qconnect.state = "off".to_string();
             s.qconnect.session_active = false;
+            s.emit_qconnect_session_changed();
         }
         Ok(())
     }
@@ -462,6 +474,7 @@ pub fn start(
     runtime: Runtime,
     shared: SharedState,
     roots: &ProfileRoots,
+    quality_cap: Arc<std::sync::Mutex<qbz_models::Quality>>,
     report_notify: Arc<tokio::sync::Notify>,
     core_events: broadcast::Receiver<CoreEvent>,
 ) -> QconnectHandle {
@@ -492,6 +505,7 @@ pub fn start(
         shared,
         settings_db,
         custom_device_name: Arc::new(tokio::sync::RwLock::new(custom_name)),
+        quality_cap,
     });
 
     let watcher = if should_auto_connect {

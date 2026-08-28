@@ -5,6 +5,8 @@ mod api;
 mod cli;
 mod config;
 mod daemon;
+mod events_bridge;
+mod hooks;
 mod lock;
 mod login;
 mod mpris;

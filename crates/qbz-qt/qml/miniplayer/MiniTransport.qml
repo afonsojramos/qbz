@@ -28,6 +28,9 @@ Row {
     property int gap: 18
     /// Gated on `NowPlayingState.has-track` by the footer (:315).
     property bool btnEnabled: true
+    /// Play additionally accepts an idle, populated queue. The other four
+    /// controls remain tied to a real current track.
+    property bool playEnabled: root.btnEnabled
 
     spacing: root.gap
 
@@ -50,7 +53,7 @@ Row {
         name: QbzPlayer.npPlaying ? "pause" : "play-fill"
         iconSize: root.icPlay
         btn: root.btn
-        btnEnabled: root.btnEnabled
+        btnEnabled: root.playEnabled
         onClicked: QbzPlayer.togglePlay()
     }
     TBtn {

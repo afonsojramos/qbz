@@ -439,7 +439,43 @@ pub async fn apply_renderer_command(
             if let Some(value) = resolved_playing_state {
                 match value {
                     PLAYING_STATE_PLAYING => {
-                        engine.resume()?;
+                        // A state-only resume (current_track = null, e.g. a
+                        // mid-track handoff from a peer renderer after the
+                        // engine restarted) can land on an engine whose queue
+                        // cursor is set but which holds NO loaded audio — the
+                        // session store restores the queue paused and
+                        // unloaded. A bare resume() then dies in the audio
+                        // thread ("cannot resume - no audio data available")
+                        // while the cloud keeps reporting paused 0:00 to the
+                        // controller forever. Cold-load the cloud's current
+                        // track at its position first, exactly like the
+                        // SetActive takeback path; the has_loaded_audio gate
+                        // keeps echoes and live playback on the plain resume.
+                        let cold_engine = !engine.has_loaded_audio();
+                        let cold_track = projection_renderer_state.current_track.as_ref();
+                        if cold_engine && cold_track.is_some() {
+                            let track_id = cold_track.map(|t| t.track_id).unwrap_or(0);
+                            let start_position_secs = renderer_state
+                                .current_position_ms
+                                .or(*current_position_ms)
+                                .map(|ms| ms / 1000)
+                                .unwrap_or(0);
+                            if let Err(err) = force_remote_track_stream(
+                                engine,
+                                sync_state,
+                                track_id,
+                                projection_renderer_state.max_audio_quality,
+                                start_position_secs,
+                            )
+                            .await
+                            {
+                                log::warn!(
+                                    "[QConnect] Cold-start load of remote track {track_id} failed: {err}"
+                                );
+                            }
+                        } else {
+                            engine.resume()?;
+                        }
                     }
                     PLAYING_STATE_PAUSED => {
                         engine.pause()?;
@@ -1242,6 +1278,88 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(engine.calls().seeks, vec![40]);
+    }
+
+    /// A state-only resume (current_track = null) on a COLD engine — queue
+    /// cursor restored but no audio loaded, as after a daemon restart — must
+    /// cold-load the cloud's current track at the handed-off position instead
+    /// of issuing a bare resume that dies in the audio thread ("cannot resume
+    /// - no audio data available") and wedges the controller at paused 0:00.
+    #[tokio::test]
+    async fn apply_renderer_command_cold_resume_loads_current_track() {
+        let mut engine = MockEngine::new();
+        // Cursor reports the restored track, but nothing is loaded: the plain
+        // track-id guard would skip, which is why the force path is used.
+        engine.playback = PlaybackState {
+            track_id: 7,
+            ..Default::default()
+        };
+        engine.queue_tracks = vec![mock_queue_track(7)];
+        engine.queue_index = Some(0);
+        engine.loaded_audio = false;
+        let sync = sync();
+        let cmd = RendererCommand::SetState {
+            playing_state: Some(PLAYING_STATE_PLAYING),
+            current_position_ms: None,
+            current_track: None,
+            next_track: None,
+        };
+        // The cloud's view carries the session's current track + position.
+        let renderer_state = QConnectRendererState {
+            current_track: Some(qi(7, 2)),
+            current_position_ms: Some(242_491),
+            ..Default::default()
+        };
+        apply_renderer_command(&engine, &sync, &cmd, &renderer_state)
+            .await
+            .unwrap();
+        let calls = engine.calls();
+        assert_eq!(
+            calls.start_track_streams,
+            vec![7],
+            "cold resume must load the session's current track"
+        );
+        assert_eq!(
+            calls.start_positions,
+            vec![242],
+            "load must resume at the handed-off position"
+        );
+        assert_eq!(calls.resumes, 0, "no bare resume on a cold engine");
+    }
+
+    /// The cold-start load never fires while audio is loaded: a resume during
+    /// live playback (or a cloud echo) stays a plain resume, no re-stream.
+    #[tokio::test]
+    async fn apply_renderer_command_warm_resume_stays_plain() {
+        let mut engine = MockEngine::new();
+        engine.playback = PlaybackState {
+            track_id: 7,
+            position: 30,
+            ..Default::default()
+        };
+        engine.queue_tracks = vec![mock_queue_track(7)];
+        engine.queue_index = Some(0);
+        engine.loaded_audio = true;
+        let sync = sync();
+        let cmd = RendererCommand::SetState {
+            playing_state: Some(PLAYING_STATE_PLAYING),
+            current_position_ms: None,
+            current_track: None,
+            next_track: None,
+        };
+        let renderer_state = QConnectRendererState {
+            current_track: Some(qi(7, 2)),
+            ..Default::default()
+        };
+        apply_renderer_command(&engine, &sync, &cmd, &renderer_state)
+            .await
+            .unwrap();
+        let calls = engine.calls();
+        assert!(
+            calls.start_track_streams.is_empty(),
+            "no re-stream while audio is loaded"
+        );
+        assert_eq!(calls.resumes, 1, "plain resume on a warm engine");
     }
 
     /// #4 — WS-authoritative shuffle: a standalone SetShuffleMode must flip the

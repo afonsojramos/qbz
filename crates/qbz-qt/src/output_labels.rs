@@ -105,17 +105,14 @@ pub fn output_labels(audio: &AudioSettings) -> OutputLabels {
 /// (`qbz-player/src/player/playback_engine.rs`) is a documented NO-OP on the
 /// `AlsaDirect` arm unless `alsa_hardware_volume` is on, in which case it
 /// drives the DAC's own mixer instead (still bit-perfect, so the slider stays
-/// live). The ALSA backend builds an `AlsaDirectStream` for BOTH the `hw`
-/// (bit-perfect direct) and the `plughw` fallback plugin; only `Pcm` opts out
-/// of the direct engine entirely and lands on CPAL/rodio, where software
-/// volume works. Hence: ALSA backend, plugin != Pcm, hardware volume off.
+/// live). The route predicate also includes the selected device id: ALSA's
+/// system-default/sysdefault rows land on CPAL/Rodio and keep software volume,
+/// even if the plugin preference says `hw`.
 ///
 /// READ-ONLY derivation from the persisted `AudioSettings` — no audio
 /// behaviour is changed anywhere by this, the UI just stops lying about it.
 pub fn volume_locked(audio: &AudioSettings) -> bool {
-    matches!(audio.backend_type, Some(AudioBackendType::Alsa))
-        && !matches!(audio.alsa_plugin, Some(AlsaPlugin::Pcm))
-        && !audio.alsa_hardware_volume
+    qbz_audio::alsa_direct::uses_alsa_direct_route(audio) && !audio.alsa_hardware_volume
 }
 
 /// Derive + push the four LED values (and the volume-lock flag) onto the
@@ -219,6 +216,7 @@ mod tests {
             assert!(!volume_locked(&settings(b)), "{b:?} must keep the slider");
         }
         let mut s = settings(Some(AudioBackendType::Alsa));
+        s.output_device = Some("front:CARD=USB,DEV=0".to_string());
         // hw = the bit-perfect direct path: engine set_volume is a no-op.
         s.alsa_plugin = Some(AlsaPlugin::Hw);
         s.alsa_hardware_volume = false;
@@ -232,6 +230,12 @@ mod tests {
         assert!(volume_locked(&s));
         // Pcm opts out of the direct engine (CPAL/rodio) -> software volume.
         s.alsa_plugin = Some(AlsaPlugin::Pcm);
+        assert!(!volume_locked(&s));
+        // ALSA default/sysdefault use CPAL/Rodio rather than AlsaDirect.
+        s.alsa_plugin = Some(AlsaPlugin::Hw);
+        s.output_device = None;
+        assert!(!volume_locked(&s));
+        s.output_device = Some("sysdefault:CARD=USB".to_string());
         assert!(!volume_locked(&s));
     }
 

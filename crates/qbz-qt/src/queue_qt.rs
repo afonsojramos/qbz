@@ -615,6 +615,7 @@ static LOCAL_ROW_IDS: std::sync::LazyLock<Mutex<HashSet<u64>>> =
 pub async fn publish(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     let t_build = std::time::Instant::now();
     let state = runtime.core().get_queue_state_full().await;
+    let has_play_target = state.total_tracks > 0;
     let (search, requested_page) = {
         let view = VIEW.lock().unwrap();
         (view.search.clone(), view.page)
@@ -745,6 +746,7 @@ pub async fn publish(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         t_build.elapsed()
     );
     crate::queue_bridge::ui(move |mut b| {
+        b.as_mut().set_has_play_target(has_play_target);
         b.as_mut().set_queue_json(QString::from(json.as_str()));
     });
 }

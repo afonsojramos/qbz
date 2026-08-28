@@ -70,6 +70,7 @@ Rectangle {
     readonly property int timeFont: root.compactMode ? 10 : 11
 
     readonly property bool hasTrack: QbzPlayer.npHasTrack
+    readonly property bool canPlay: root.hasTrack || QbzQueue.hasPlayTarget
 
     // --- The pending-seek machine (:214-249) -------------------------------
     // All three constants are load-bearing: the -1.0 SENTINEL (every test is
@@ -273,6 +274,7 @@ Rectangle {
                         icSkip: root.icSkip
                         icPlay: root.icPlay
                         btnEnabled: root.hasTrack
+                        playEnabled: root.canPlay
                     }
 
                     // The capsule (:322-327): right-aligned, vertically centred
@@ -394,6 +396,7 @@ Rectangle {
                         icSkip: 9
                         icPlay: 9
                         btnEnabled: root.hasTrack
+                        playEnabled: root.canPlay
                     }
                 }
 

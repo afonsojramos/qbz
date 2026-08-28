@@ -16,7 +16,7 @@ mod types;
 pub use types::{xesam_url_for, MediaEvent, MediaIntegration, PlaybackStatus, TrackMeta};
 
 pub mod notify;
-pub use notify::{show_track_notification, NotificationMeta};
+pub use notify::{show_track_notification, withdraw_track_notification, NotificationMeta};
 
 #[cfg(target_os = "linux")]
 mod inhibit;
