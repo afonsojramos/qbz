@@ -106,6 +106,7 @@ const CONTRIBUTORS: &[&str] = &[
     "TerminalTilt",
     "Alexandre-Menigault",
     "MarkusAbtion",
+    "fengalin",
 ];
 
 /// How many contributor chips per wrap row (`about.rs:76`). Slint has no
@@ -308,18 +309,28 @@ mod tests {
     #[test]
     fn contributor_rows_are_chunks_of_five_in_source_order() {
         let doc = snapshot_doc();
-        assert_eq!(doc.contributor_rows.len(), 3);
-        assert_eq!(doc.contributor_rows[0].len(), 5);
-        assert_eq!(doc.contributor_rows[1].len(), 5);
-        assert_eq!(doc.contributor_rows[2].len(), 3);
-        assert_eq!(doc.contributor_rows[0][0].name, "vorce");
-        assert_eq!(doc.contributor_rows[2][0].name, "TerminalTilt");
-        assert_eq!(doc.contributor_rows[2][1].name, "Alexandre-Menigault");
-        assert_eq!(doc.contributor_rows[2][2].name, "MarkusAbtion");
         assert_eq!(
-            doc.contributor_rows[2][2].url,
-            "https://github.com/MarkusAbtion"
+            doc.contributor_rows.len(),
+            CONTRIBUTORS.len().div_ceil(CONTRIBUTORS_PER_ROW)
         );
+        assert!(doc
+            .contributor_rows
+            .iter()
+            .all(|row| !row.is_empty() && row.len() <= CONTRIBUTORS_PER_ROW));
+        let names: Vec<&str> = doc
+            .contributor_rows
+            .iter()
+            .flatten()
+            .map(|chip| chip.name.as_str())
+            .collect();
+        assert_eq!(names, CONTRIBUTORS);
+        let fengalin = doc
+            .contributor_rows
+            .iter()
+            .flatten()
+            .find(|chip| chip.name == "fengalin")
+            .unwrap();
+        assert_eq!(fengalin.url, "https://github.com/fengalin");
     }
 
     #[test]
