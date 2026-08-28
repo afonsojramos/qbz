@@ -100,6 +100,11 @@ parts:
       - libasound2t64
       - libasound2-plugins
       - libpipewire-0.3-0
+      # Keep the runtime tools used by PipeWireBackend in both architectures.
+      # They expose host sinks (including Bluetooth) and permit explicit sink
+      # routing inside the connected strict Snap sandbox (#703).
+      - pipewire-bin
+      - pulseaudio-utils
       - libjack-jackd2-0
       # TLS / HTTP
       - libssl3t64
