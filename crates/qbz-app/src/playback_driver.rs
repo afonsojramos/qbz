@@ -209,7 +209,8 @@ pub fn plan_tick(
     //    next track pre-queued and none is armed; arm the first playable upcoming
     //    exactly once per current track, suppressed when the current track is
     //    stop-after-marked (so it ends naturally and the marker can fire).
-    if ev.gapless_ready
+    if ev.is_playing
+        && ev.gapless_ready
         && ev.gapless_next_track_id == 0
         && ev.track_id != 0
         && state.gapless_requested_for != ev.track_id
@@ -382,6 +383,70 @@ pub struct DriverDeps {
     pub on_tick: Arc<dyn Fn() + Send + Sync>,
 }
 
+/// Result of a gapless byte fetch that ran outside the 450 ms control loop.
+/// Keeping the predecessor alongside the successor lets the loop reject a
+/// late download after a manual track/queue change instead of appending it to
+/// whichever engine happens to be current by then.
+struct GaplessFetchResult {
+    predecessor_id: u64,
+    successor_id: u64,
+    bytes: Option<Vec<u8>>,
+}
+
+/// A completed gapless fetch is usable only while both playback and the queue
+/// still describe the edge it was started for. `is_playing` is deliberately
+/// not required: `PlayNext` can safely land just after natural end and revive
+/// the now-empty engine, closing the final download-vs-end race.
+fn gapless_fetch_is_current(
+    result: &GaplessFetchResult,
+    event: &PlaybackEvent,
+    queue: &QueueSnapshot,
+) -> bool {
+    event.track_id == result.predecessor_id
+        && event.gapless_next_track_id == 0
+        && queue.current == result.predecessor_id
+        && queue.stop_after != Some(result.predecessor_id)
+        && queue.upcoming.first().copied() == Some((result.successor_id, true))
+}
+
+async fn finish_gapless_fetch<A: FrontendAdapter + Send + Sync + 'static>(
+    runtime: &Arc<AppRuntime<A>>,
+    result: GaplessFetchResult,
+) {
+    if result.bytes.is_none() {
+        log::warn!(
+            "[qbzd] driver: gapless fetch for track {} failed",
+            result.successor_id
+        );
+        return;
+    }
+
+    let core = runtime.core();
+    let queue = queue_snapshot(core).await;
+    let player = core.player();
+    let event = player.get_playback_event();
+    if !player.state.has_loaded_audio() || !gapless_fetch_is_current(&result, &event, &queue) {
+        log::info!(
+            "[qbzd] driver: discarding stale gapless track {} (predecessor was {})",
+            result.successor_id,
+            result.predecessor_id
+        );
+        return;
+    }
+
+    let bytes = result.bytes.expect("gapless bytes checked above");
+    match player.play_next(bytes, result.successor_id) {
+        Ok(()) => log::info!(
+            "[qbzd] driver: queued track {} for gapless playback",
+            result.successor_id
+        ),
+        Err(error) => log::warn!(
+            "[qbzd] driver: gapless play_next for track {} failed: {error}",
+            result.successor_id
+        ),
+    }
+}
+
 /// The 450 ms IO shell. Each tick: read the player event, drain the stream-error
 /// latch, project the queue, `plan_tick`, execute the actions, then
 /// `advance_state`. Breaks when `shutdown` flips to `true`; the loop is thin by
@@ -395,16 +460,35 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
     let mut state = DriverState::default();
     let mut ticker = tokio::time::interval(Duration::from_millis(TICK_MS));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Gapless downloads may outlive the fixed ten-second arm window, but they
+    // must never block the loop that detects natural end and advances the
+    // queue. JoinSet keeps those tasks owned by the driver so shutdown can
+    // abort and drain them before AppRuntime is dropped (#521 ordering).
+    let mut gapless_fetches = tokio::task::JoinSet::new();
 
     loop {
         tokio::select! {
-            _ = ticker.tick() => {}
-            _ = shutdown.changed() => {
-                if *shutdown.borrow() {
+            biased;
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
                     break;
                 }
                 continue;
             }
+            completed = gapless_fetches.join_next(), if !gapless_fetches.is_empty() => {
+                match completed {
+                    Some(Ok(result)) => finish_gapless_fetch(&runtime, result).await,
+                    Some(Err(error)) if error.is_cancelled() => {
+                        log::debug!("[qbzd] driver: stale gapless fetch cancelled");
+                    }
+                    Some(Err(error)) => {
+                        log::warn!("[qbzd] driver: gapless fetch task failed: {error}");
+                    }
+                    None => {}
+                }
+                continue;
+            }
+            _ = ticker.tick() => {}
         }
 
         let core = runtime.core();
@@ -416,6 +500,21 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
 
         let actions = plan_tick(&state, &ev, &queue, stream_error.as_deref());
 
+        // Once the engine/queue edge has moved, an outstanding fetch belongs
+        // to the old predecessor. Drop its network future immediately so it
+        // cannot contend with the normal next-track start.
+        if actions.iter().any(|action| {
+            matches!(
+                action,
+                DriverAction::SyncCursorTo(_)
+                    | DriverAction::AdvanceAndPlay
+                    | DriverAction::PauseStopAfter
+                    | DriverAction::QueueFinished
+            )
+        }) {
+            gapless_fetches.abort_all();
+        }
+
         for action in &actions {
             match action {
                 DriverAction::SyncCursorTo(id) => {
@@ -423,13 +522,23 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
                 }
                 DriverAction::ArmGapless(id) => {
                     let quality = (deps.quality)();
-                    if let Some(bytes) =
-                        core.fetch_for_gapless_resolved(*id, quality, None, None).await
-                    {
-                        if let Err(e) = player.play_next(bytes, *id) {
-                            log::warn!("[qbzd] driver: gapless play_next failed: {e}");
+                    let predecessor_id = ev.track_id;
+                    let successor_id = *id;
+                    let task_runtime = Arc::clone(&runtime);
+                    log::info!(
+                        "[qbzd] driver: fetching gapless track {successor_id} after {predecessor_id}"
+                    );
+                    gapless_fetches.spawn(async move {
+                        let bytes = task_runtime
+                            .core()
+                            .fetch_for_gapless_resolved(successor_id, quality, None, None)
+                            .await;
+                        GaplessFetchResult {
+                            predecessor_id,
+                            successor_id,
+                            bytes,
                         }
-                    }
+                    });
                 }
                 DriverAction::PauseStopAfter => {
                     // The ended track is the queue's current track (playback.rs:4708).
@@ -478,6 +587,14 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
 
         state = advance_state(&state, &ev, &actions);
         (deps.on_tick)();
+    }
+    gapless_fetches.abort_all();
+    while let Some(result) = gapless_fetches.join_next().await {
+        if let Err(error) = result {
+            if !error.is_cancelled() {
+                log::warn!("[qbzd] driver: gapless fetch failed during shutdown: {error}");
+            }
+        }
     }
     log::info!("[qbzd] driver: shutting down");
 }
@@ -862,6 +979,83 @@ mod tests {
         let s2 = advance_state(&s, &e, &a1);
         let a2 = plan_tick(&s2, &e, &queue, None);
         assert!(!a2.iter().any(|x| matches!(x, DriverAction::ArmGapless(_))));
+    }
+
+    #[test]
+    fn stopped_track_never_starts_a_gapless_fetch() {
+        let mut current = ev(1, false, 581, 581);
+        current.gapless_ready = true;
+        let previous = DriverState::after(&ev(1, true, 580, 581));
+        let actions = plan_tick(
+            &previous,
+            &current,
+            &q(1, &[(2, true)], "off", None),
+            None,
+        );
+        assert!(!actions
+            .iter()
+            .any(|action| matches!(action, DriverAction::ArmGapless(_))));
+        assert!(actions.contains(&DriverAction::AdvanceAndPlay));
+    }
+
+    #[test]
+    fn completed_gapless_fetch_requires_the_original_queue_edge() {
+        let result = GaplessFetchResult {
+            predecessor_id: 1,
+            successor_id: 2,
+            bytes: None,
+        };
+        let mut current = ev(1, true, 575, 581);
+        current.gapless_ready = true;
+        assert!(gapless_fetch_is_current(
+            &result,
+            &current,
+            &q(1, &[(2, true)], "off", None)
+        ));
+
+        // Natural end still accepts a just-finished download: PlayNext's
+        // late-arrival path revives the empty engine without replaying track 1.
+        current.is_playing = false;
+        assert!(gapless_fetch_is_current(
+            &result,
+            &current,
+            &q(1, &[(2, true)], "off", None)
+        ));
+
+        current.track_id = 2;
+        assert!(!gapless_fetch_is_current(
+            &result,
+            &current,
+            &q(2, &[(3, true)], "off", None)
+        ));
+    }
+
+    #[test]
+    fn completed_gapless_fetch_rejects_changed_successor_and_stop_after() {
+        let result = GaplessFetchResult {
+            predecessor_id: 1,
+            successor_id: 2,
+            bytes: None,
+        };
+        let mut current = ev(1, true, 575, 581);
+        current.gapless_ready = true;
+        assert!(!gapless_fetch_is_current(
+            &result,
+            &current,
+            &q(1, &[(3, true)], "off", None)
+        ));
+        assert!(!gapless_fetch_is_current(
+            &result,
+            &current,
+            &q(1, &[(2, true)], "off", Some(1))
+        ));
+
+        current.gapless_next_track_id = 9;
+        assert!(!gapless_fetch_is_current(
+            &result,
+            &current,
+            &q(1, &[(2, true)], "off", None)
+        ));
     }
 
     #[test]
