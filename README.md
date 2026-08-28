@@ -384,6 +384,10 @@ streamer.
 - HiFi wizard with copyable audio-stack config blocks (clipboard works over SSH)
 - MPRIS out of the box, live JSON events (`qbzd watch`), service files for
   systemd/OpenRC/runit
+- Event hooks: `qbzd settings set hooks.script /path/to/script` runs your script
+  on playback/session events with `QBZ_*` environment variables — push
+  integration for audio-box distros (moOde, Volumio, DIY setups), no polling
+  required
 
 Full manual:
 **[Headless Daemon (qbzd) — Wiki](https://github.com/vicrodh/qbz/wiki/Headless-Daemon)**

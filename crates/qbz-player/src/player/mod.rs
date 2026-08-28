@@ -438,6 +438,7 @@ fn create_output_stream_with_config(
     sample_rate: u32,
     channels: u16,
     exclusive_mode: bool,
+    state: SharedState,
 ) -> Result<MixerDeviceSink, String> {
     log::info!(
         "Creating MixerDeviceSink: {}Hz, {} channels, exclusive: {}",
@@ -508,9 +509,25 @@ fn create_output_stream_with_config(
     // Create MixerDeviceSink with custom config
     match DeviceSinkBuilder::from_device(device) {
         Ok(builder) => {
+            // rodio's default error callback only eprintln!s a live stream
+            // error (e.g. an ALSA buffer underrun mid-playback), so playback
+            // dies without the driver ever seeing a message to latch. Record
+            // it on the shared state instead so it drains to the event bus as
+            // a PlaybackError. Rate-limited: ALSA can repeat EPIPE every
+            // period on a wedged device, and each recorded message is one
+            // bus event (and one forked hook script) after the drain.
+            let mut last_reported: Option<std::time::Instant> = None;
             match builder
                 .with_supported_config(&supported_config)
                 .with_buffer_size(cpal_buffer_size)
+                .with_error_callback(move |err| {
+                    log::error!("Audio stream error: {err}");
+                    let now = std::time::Instant::now();
+                    if last_reported.map_or(true, |t| now.duration_since(t).as_secs() >= 5) {
+                        last_reported = Some(now);
+                        state.record_stream_error(format!("Audio stream error: {err}"));
+                    }
+                })
                 .open_stream()
             {
                 Ok(mixer_sink) => {
@@ -1994,6 +2011,7 @@ impl Player {
                                         sample_rate,
                                         channels,
                                         dac_passthrough,
+                                        thread_state.clone(),
                                     )
                                     .map(StreamType::rodio)
                                 };
@@ -2085,6 +2103,7 @@ impl Player {
                                         sample_rate,
                                         channels,
                                         dac_passthrough,
+                                        thread_state.clone(),
                                     )
                                     .map(StreamType::rodio)
                                 };
@@ -2513,6 +2532,7 @@ impl Player {
                                         sample_rate,
                                         channels,
                                         dac_passthrough,
+                                        thread_state.clone(),
                                     )
                                     .map(StreamType::rodio)
                                 };
@@ -2587,6 +2607,7 @@ impl Player {
                                         sample_rate,
                                         channels,
                                         dac_passthrough,
+                                        thread_state.clone(),
                                     )
                                     .map(StreamType::rodio)
                                 };

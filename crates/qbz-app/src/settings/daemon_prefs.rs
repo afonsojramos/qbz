@@ -16,6 +16,12 @@ pub struct DaemonPrefs {
     /// (CONSOLE ext). Default ON; the `QBZD_MPRIS` env var overrides it when
     /// set. Toggling this needs a daemon restart (the service spawns at boot).
     pub mpris_enabled: bool,
+    /// Absolute path of an executable the daemon runs on playback/session
+    /// events (CONSOLE ext), with the event in `QBZ_*` environment variables.
+    /// Empty = hooks off (the default). The `QBZD_HOOK` env var overrides it
+    /// when set. Changing it needs a daemon restart (the dispatcher spawns at
+    /// boot). Machine-local by design — NEVER part of the settings bundle.
+    pub hook_script: String,
 }
 impl Default for DaemonPrefs {
     fn default() -> Self {
@@ -23,6 +29,7 @@ impl Default for DaemonPrefs {
             streaming_quality: "hires_plus".into(),
             volume: 0.5,
             mpris_enabled: true,
+            hook_script: String::new(),
         }
     }
 }
@@ -35,7 +42,11 @@ pub fn load_at(data_root: &Path) -> DaemonPrefs {
                 // forward-compatible: unknown fields ignored WITH a warning (01 §10.3)
                 if let Some(obj) = v.as_object() {
                     for k in obj.keys() {
-                        if k != "streaming_quality" && k != "volume" && k != "mpris_enabled" {
+                        if k != "streaming_quality"
+                            && k != "volume"
+                            && k != "mpris_enabled"
+                            && k != "hook_script"
+                        {
                             log::warn!("[daemon_prefs] unknown field ignored: {k}");
                         }
                     }
@@ -92,6 +103,8 @@ mod tests {
             // Non-default (default is true) so the roundtrip actually exercises
             // the field, not just its presence.
             mpris_enabled: false,
+            // Non-default (default is empty) for the same reason.
+            hook_script: "/usr/local/bin/qbz-hook.sh".into(),
         };
 
         save_at(&prefs, &dir).expect("save daemon prefs");
@@ -100,6 +113,7 @@ mod tests {
         assert_eq!(loaded.streaming_quality, "cd");
         assert_eq!(loaded.volume, 0.72);
         assert!(!loaded.mpris_enabled);
+        assert_eq!(loaded.hook_script, "/usr/local/bin/qbz-hook.sh");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

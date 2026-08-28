@@ -129,6 +129,7 @@ impl SessionLoopHost for DaemonSessionLoopHost {
             // latch `network.online` false (the success side latches true in
             // `latch_lifecycle_into_shared` on the next `Connected` transition).
             s.set_network_online(false);
+            s.emit_qconnect_session_changed();
         }
         log::warn!("[QConnect] Reconnect exhausted ({attempts}): {last_reason}");
         // Daemon has no offline MODE, so the desktop's idle-retry offline park is
