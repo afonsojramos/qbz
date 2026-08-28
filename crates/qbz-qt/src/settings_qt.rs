@@ -2541,6 +2541,9 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         }
         "system-notifications" => {
             save_pref("system_notifications", serde_json::json!(value));
+            if !value {
+                crate::spawn(qbz_media_controls::withdraw_track_notification());
+            }
             Ok(Apply::None)
         }
         "window-title-show" => {

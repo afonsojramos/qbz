@@ -209,6 +209,7 @@ pub(crate) fn clear_now_playing() {
     // (`crates/qbz/src/playback.rs:1911`, same `u64::MAX` sentinel — a real
     // track id can never collide with it).
     NOTIFY_LAST_TRACK.store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+    crate::spawn(qbz_media_controls::withdraw_track_notification());
     if let Some(mc) = handle() {
         mc.set_playback(qbz_media_controls::PlaybackStatus::Stopped, None);
     }
