@@ -13,17 +13,38 @@
 // settings set hooks.script`. Changing it needs a daemon restart (the
 // dispatcher spawns at boot, like MPRIS).
 //
-// The dispatcher never waits for the script inside the recv loop (a slow
-// script would lag the broadcast bus) — each event forks detached and a small
-// reaper task collects the exit status. Scripts therefore may overlap; an
-// integrator needing strict ordering can flock inside the script.
+// The dispatcher never waits for one script before receiving another event.
+// It does, however, cap concurrent children so a stuck integration cannot
+// turn a burst of events into an unbounded process storm. Scripts may overlap;
+// an integrator needing strict ordering can flock inside the script.
 use std::path::PathBuf;
 
 use qbz_models::{CoreEvent, PlaybackState};
 use tokio::sync::broadcast;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use crate::paths::ProfileRoots;
+
+/// Hooks are an integration escape hatch, not a job runner. Four concurrent
+/// children leave room for short event bursts while putting a hard ceiling on
+/// a broken or hung script.
+const MAX_CONCURRENT_HOOKS: usize = 4;
+
+fn parse_script(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    if !path.is_absolute() {
+        log::warn!(
+            "[hooks] ignoring non-absolute script path '{}'; use an absolute path",
+            path.display()
+        );
+        return None;
+    }
+    Some(path)
+}
 
 /// Resolve the configured hook script: `QBZD_HOOK` when set (empty string
 /// disables), else the persisted `hooks.script` setting; None = hooks off.
@@ -32,12 +53,7 @@ pub fn script(roots: &ProfileRoots) -> Option<PathBuf> {
         Ok(v) => v,
         Err(_) => qbz_app::settings::daemon_prefs::load_at(&roots.data).hook_script,
     };
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(trimmed))
-    }
+    parse_script(&raw)
 }
 
 /// Spawn the hook dispatcher. Holds no `Arc<AppRuntime>` (only the script path
@@ -46,19 +62,40 @@ pub fn script(roots: &ProfileRoots) -> Option<PathBuf> {
 pub fn spawn(script: PathBuf, mut rx: broadcast::Receiver<CoreEvent>) -> JoinHandle<()> {
     use broadcast::error::RecvError;
     tokio::spawn(async move {
+        let mut children = JoinSet::new();
         loop {
-            let ev = match rx.recv().await {
-                Ok(ev) => ev,
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => return,
+            let ev = tokio::select! {
+                received = rx.recv() => match received {
+                    Ok(ev) => ev,
+                    Err(RecvError::Lagged(skipped)) => {
+                        log::warn!("[hooks] event receiver lagged; skipped {skipped} event(s)");
+                        continue;
+                    }
+                    Err(RecvError::Closed) => return,
+                },
+                finished = children.join_next(), if !children.is_empty() => {
+                    if let Some(Err(e)) = finished {
+                        log::debug!("[hooks] reaper task ended unexpectedly: {e}");
+                    }
+                    continue;
+                }
             };
             let Some(vars) = hook_env(&ev) else { continue };
+            if children.len() >= MAX_CONCURRENT_HOOKS {
+                log::warn!(
+                    "[hooks] dropping event while {MAX_CONCURRENT_HOOKS} hook scripts are still running"
+                );
+                continue;
+            }
             let mut cmd = tokio::process::Command::new(&script);
-            cmd.envs(vars).stdin(std::process::Stdio::null());
+            cmd.envs(vars)
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true);
             match cmd.spawn() {
                 Ok(mut child) => {
-                    // Detached reaper: never block the recv loop on the script.
-                    tokio::spawn(async move {
+                    // JoinSet owns every reaper. Dropping the dispatcher aborts
+                    // them, and kill_on_drop then terminates their children.
+                    children.spawn(async move {
                         let _ = child.wait().await;
                     });
                 }
@@ -88,7 +125,10 @@ fn hook_env(ev: &CoreEvent) -> Option<Vec<(String, String)>> {
     let mut vars: Vec<(String, String)> = Vec::new();
     let mut push = |k: &str, v: String| vars.push((format!("QBZ_{k}"), v));
     match ev {
-        TrackStarted { track, position_secs } => {
+        TrackStarted {
+            track,
+            position_secs,
+        } => {
             push("EVENT", "TrackStarted".into());
             push("TRACK_ID", track.id.to_string());
             push("TITLE", track.title.clone());
@@ -117,9 +157,16 @@ fn hook_env(ev: &CoreEvent) -> Option<Vec<(String, String)>> {
         VolumeChanged { volume } => {
             push("EVENT", "VolumeChanged".into());
             // 0-100, the same scale the `qbzd volume` verb speaks.
-            push("VOLUME", (((*volume).clamp(0.0, 1.0) * 100.0).round() as u32).to_string());
+            push(
+                "VOLUME",
+                (((*volume).clamp(0.0, 1.0) * 100.0).round() as u32).to_string(),
+            );
         }
-        QconnectSessionChanged { state, device_name, session_active } => {
+        QconnectSessionChanged {
+            state,
+            device_name,
+            session_active,
+        } => {
             push("EVENT", "QconnectSessionChanged".into());
             push("STATE", state.clone());
             push("SESSION_ACTIVE", session_active.to_string());
@@ -130,7 +177,11 @@ fn hook_env(ev: &CoreEvent) -> Option<Vec<(String, String)>> {
         LoggedIn { .. } => push("EVENT", "LoggedIn".into()),
         LoggedOut => push("EVENT", "LoggedOut".into()),
         SessionExpired => push("EVENT", "SessionExpired".into()),
-        Error { code, message, recoverable } => {
+        Error {
+            code,
+            message,
+            recoverable,
+        } => {
             push("EVENT", "Error".into());
             push("CODE", code.clone());
             push("MESSAGE", message.clone());
@@ -165,6 +216,16 @@ mod tests {
         vars.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
     }
 
+    #[test]
+    fn hook_path_must_be_absolute() {
+        assert_eq!(parse_script("  "), None);
+        assert_eq!(parse_script("relative/hook.sh"), None);
+        assert_eq!(
+            parse_script(" /opt/qbz/hook.sh "),
+            Some(PathBuf::from("/opt/qbz/hook.sh"))
+        );
+    }
+
     /// A minimal QueueTrack via its serde defaults (the struct has no Default
     /// impl, and adding one to the shared models is not this feature's call).
     fn test_track() -> qbz_models::QueueTrack {
@@ -186,8 +247,11 @@ mod tests {
     #[test]
     fn track_started_carries_metadata_and_json() {
         let track = test_track();
-        let vars = hook_env(&CoreEvent::TrackStarted { track, position_secs: 7 })
-            .expect("TrackStarted is forwarded");
+        let vars = hook_env(&CoreEvent::TrackStarted {
+            track,
+            position_secs: 7,
+        })
+        .expect("TrackStarted is forwarded");
         assert_eq!(get(&vars, "QBZ_EVENT"), Some("TrackStarted"));
         assert_eq!(get(&vars, "QBZ_TITLE"), Some("Red Beans"));
         assert_eq!(get(&vars, "QBZ_ARTIST"), Some("Jon Batiste"));
@@ -243,9 +307,20 @@ mod tests {
 
     #[test]
     fn chatty_and_bulky_events_are_not_forwarded() {
-        assert!(hook_env(&CoreEvent::PositionUpdated { position_secs: 1, duration_secs: 2 }).is_none());
+        assert!(
+            hook_env(&CoreEvent::PositionUpdated {
+                position_secs: 1,
+                duration_secs: 2
+            })
+            .is_none()
+        );
         assert!(hook_env(&CoreEvent::ShuffleChanged { enabled: true }).is_none());
-        assert!(hook_env(&CoreEvent::LoadingStarted { operation: "x".into() }).is_none());
+        assert!(
+            hook_env(&CoreEvent::LoadingStarted {
+                operation: "x".into()
+            })
+            .is_none()
+        );
     }
 
     #[test]
