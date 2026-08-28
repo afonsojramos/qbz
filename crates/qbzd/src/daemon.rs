@@ -234,6 +234,7 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
         booted.runtime.clone(),
         booted.shared.clone(),
         &roots,
+        quality_cell.clone(),
         report_notify,
         booted.bus.subscribe(),
     );

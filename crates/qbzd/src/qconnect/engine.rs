@@ -84,18 +84,36 @@ pub struct DaemonRendererEngine {
     runtime: Arc<AppRuntime<DaemonAdapter>>,
     /// T10 (OD4): resolved volume policy for this session (from the KV at connect).
     volume_mode: VolumeMode,
+    /// Live daemon `playback.quality` preference. The settings reload route
+    /// updates this same cell, so an active QConnect session honors changes
+    /// without reconnecting (#693).
+    quality_cap: Arc<std::sync::Mutex<Quality>>,
 }
 
 impl DaemonRendererEngine {
-    pub fn new(runtime: Arc<AppRuntime<DaemonAdapter>>, volume_mode: VolumeMode) -> Self {
+    pub fn new(
+        runtime: Arc<AppRuntime<DaemonAdapter>>,
+        volume_mode: VolumeMode,
+        quality_cap: Arc<std::sync::Mutex<Quality>>,
+    ) -> Self {
         Self {
             runtime,
             volume_mode,
+            quality_cap,
         }
     }
 
     fn core(&self) -> &Arc<QbzCore<DaemonAdapter>> {
         self.runtime.core()
+    }
+
+    fn effective_quality(&self, requested: Quality) -> Quality {
+        let cap = self
+            .quality_cap
+            .lock()
+            .map(|quality| *quality)
+            .unwrap_or_else(|poisoned| *poisoned.into_inner());
+        clamp_quality(requested, cap)
     }
 
     /// Last-resort load for tracks the raw-URL path cannot fetch (the CDN
@@ -209,10 +227,18 @@ impl QconnectRendererEngine for DaemonRendererEngine {
     async fn start_track_stream(
         &self,
         track_id: u64,
-        quality: Quality,
+        requested_quality: Quality,
         duration_secs: u64,
         start_position_secs: u64,
     ) -> Result<(), String> {
+        let quality = self.effective_quality(requested_quality);
+        if quality != requested_quality {
+            log::info!(
+                "[QConnect] playback.quality capped track {track_id}: controller requested {:?}, using {:?}",
+                requested_quality,
+                quality
+            );
+        }
         let stream_url = self
             .core()
             .get_stream_url(track_id, quality)
@@ -280,6 +306,9 @@ impl QconnectRendererEngine for DaemonRendererEngine {
     }
 }
 
+fn clamp_quality(requested: Quality, cap: Quality) -> Quality {
+    Quality::min_tier(requested, cap)
+}
 
 async fn download_remote_audio(url: &str) -> Result<Vec<u8>, String> {
     let response = reqwest::Client::new()
@@ -348,5 +377,23 @@ mod tests {
         assert_eq!(VolumeMode::from_kv(Some("garbage")), VolumeMode::Software);
         // Whitespace around the real value is tolerated.
         assert_eq!(VolumeMode::from_kv(Some(" locked ")), VolumeMode::Locked);
+    }
+
+    #[test]
+    fn qconnect_quality_never_exceeds_daemon_preference() {
+        let tiers = [
+            Quality::Mp3,
+            Quality::Lossless,
+            Quality::HiRes,
+            Quality::UltraHiRes,
+        ];
+        for requested in tiers {
+            for cap in tiers {
+                let effective = clamp_quality(requested, cap);
+                assert!(effective <= requested);
+                assert!(effective <= cap);
+                assert_eq!(effective, requested.min(cap));
+            }
+        }
     }
 }
