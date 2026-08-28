@@ -20,8 +20,8 @@
 // Hence this document: `QQmlApplicationEngine::load` returns with its
 // FontLoader already in the font database (verified: the family is present
 // the instant load() returns), so main.rs can set the application font in the
-// gap between this document and Main.qml. "System" maps to an empty source:
-// no UI family is loaded and Qt keeps the operating-system default.
+// gap between this document and Main.qml. "System" leaves the Loader inactive:
+// no empty URL is assigned and Qt keeps the operating-system default.
 //
 // It is deliberately NON-VISUAL — a QtObject, not a Window — so loading it
 // adds a root object and nothing else.
@@ -46,7 +46,11 @@ QtObject {
             return "assets/fonts/SourceSans3-VariableFont_wght.ttf"
         return ""
     }
-    readonly property FontLoader selected: FontLoader {
-        source: root.selectedSource
+    readonly property Component selectedComponent: Component {
+        FontLoader { source: root.selectedSource }
+    }
+    readonly property Loader selected: Loader {
+        active: root.selectedSource !== ""
+        sourceComponent: root.selectedComponent
     }
 }

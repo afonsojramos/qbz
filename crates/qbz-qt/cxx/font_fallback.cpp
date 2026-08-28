@@ -73,3 +73,27 @@ extern "C" bool qbz_register_devanagari_fallback()
     installFontMessageFilter();
     return true;
 }
+
+extern "C" bool qbz_register_japanese_fallback()
+{
+    // LINE Seed JP is already bundled as a selectable UI/lyrics face.  Make
+    // it Qt's deterministic fallback for the three scripts used by Japanese
+    // text as well.  Without this, a Latin-only choice such as Source Sans 3
+    // delegates to the host's first fontconfig match; a user-installed
+    // MS Gothic can therefore receive synthetic Medium/Bold and render much
+    // heavier than the surrounding UI.
+    const auto id = QFontDatabase::addApplicationFont(QStringLiteral(
+        ":/qt/qml/com/blitzfc/qbz/qml/assets/fonts/"
+        "LINESeedJP-Regular.ttf"));
+    if (id < 0)
+        return false;
+
+    const auto families = QFontDatabase::applicationFontFamilies(id);
+    if (families.isEmpty())
+        return false;
+    const auto &family = families.constFirst();
+    QFontDatabase::addApplicationFallbackFontFamily(QChar::Script_Han, family);
+    QFontDatabase::addApplicationFallbackFontFamily(QChar::Script_Hiragana, family);
+    QFontDatabase::addApplicationFallbackFontFamily(QChar::Script_Katakana, family);
+    return true;
+}

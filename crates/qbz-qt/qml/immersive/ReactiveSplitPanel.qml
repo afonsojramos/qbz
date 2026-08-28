@@ -86,17 +86,26 @@ Item {
         1.0 - root.ambientPrimary.b, 1.0), 1.18)
 
     readonly property string fontDir: "qrc:/qt/qml/com/blitzfc/qbz/qml/assets/fonts/"
-    FontLoader { id: fLineSeed; source: QbzLyrics.fontIndex === 1 ? root.fontDir + "LINESeedJP-Regular.ttf" : "" }
-    FontLoader { id: fMontserrat; source: QbzLyrics.fontIndex === 2 ? root.fontDir + "Montserrat-VariableFont_wght.ttf" : "" }
-    FontLoader { id: fNoto; source: QbzLyrics.fontIndex === 3 ? root.fontDir + "NotoSans-VariableFont_wdth,wght.ttf" : "" }
-    FontLoader { id: fSource; source: QbzLyrics.fontIndex === 4 ? root.fontDir + "SourceSans3-VariableFont_wght.ttf" : "" }
-    readonly property string lyricFontFamily: {
-        if (QbzLyrics.fontIndex === 1) return fLineSeed.status === FontLoader.Ready ? fLineSeed.name : ""
-        if (QbzLyrics.fontIndex === 2) return fMontserrat.status === FontLoader.Ready ? fMontserrat.name : ""
-        if (QbzLyrics.fontIndex === 3) return fNoto.status === FontLoader.Ready ? fNoto.name : ""
-        if (QbzLyrics.fontIndex === 4) return fSource.status === FontLoader.Ready ? fSource.name : ""
+    readonly property string fontSource: {
+        if (QbzLyrics.fontIndex === 1) return root.fontDir + "LINESeedJP-Regular.ttf"
+        if (QbzLyrics.fontIndex === 2) return root.fontDir + "Montserrat-VariableFont_wght.ttf"
+        if (QbzLyrics.fontIndex === 3) return root.fontDir + "NotoSans-VariableFont_wdth,wght.ttf"
+        if (QbzLyrics.fontIndex === 4) return root.fontDir + "SourceSans3-VariableFont_wght.ttf"
         return ""
     }
+    Component {
+        id: fontLoaderComponent
+        FontLoader { source: root.fontSource }
+    }
+    Loader {
+        id: selectedFontLoader
+        active: root.fontSource !== ""
+        sourceComponent: fontLoaderComponent
+    }
+    readonly property string lyricFontFamily:
+        selectedFontLoader.item
+        && selectedFontLoader.item.status === FontLoader.Ready
+            ? selectedFontLoader.item.name : ""
 
     function fmt(sec) {
         sec = Math.max(0, Math.floor(sec))

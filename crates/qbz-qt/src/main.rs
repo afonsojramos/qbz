@@ -3422,7 +3422,7 @@ fn main() {
             "qrc:/qt/qml/com/blitzfc/qbz/qml/FontPreload.qml",
         ));
     }
-    font_qt::register_devanagari_fallback();
+    font_qt::register_script_fallbacks();
     let app_font_family = settings_qt::app_font_family();
     if !app_font_family.is_empty() {
         if let Some(app) = app.as_mut() {
