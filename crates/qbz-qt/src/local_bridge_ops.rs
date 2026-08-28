@@ -11,18 +11,48 @@
 //! Every loader publishes its own tab's document + the shared badges; the
 //! Plex helpers publish the gates and drive the manual sync.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use cxx_qt_lib::QString;
 
 use crate::local_bridge::ui;
 use crate::local_library_qt as lib;
 use crate::local_plex as plex;
 
-/// Republish the tab badges + availability after any load.
+/// Republish the tab badges after any load.
 pub(crate) fn publish_counts() {
     let counts = lib::to_json(&lib::counts());
     ui(move |mut b| {
         b.as_mut()
             .set_local_counts_json(QString::from(counts.as_str()));
+    });
+}
+
+/// Republish whether any browse source currently makes Local Library usable.
+///
+/// `localAvailable` gates the entire Local Library surface, but it used to be
+/// seeded only once during bridge boot. Adding the first folder (or removing
+/// the last one) then refreshed every document behind the gate without ever
+/// changing the gate itself. Keep this asynchronous because `has_library`
+/// opens the per-user SQLite database.
+///
+/// A generation prevents a slower, older database read from overwriting the
+/// answer from a newer source mutation.
+static AVAILABILITY_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn publish_availability() {
+    let generation = AVAILABILITY_GENERATION
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1);
+    crate::spawn(async move {
+        let available = tokio::task::spawn_blocking(lib::has_library)
+            .await
+            .unwrap_or(false);
+        if AVAILABILITY_GENERATION.load(Ordering::Acquire) != generation {
+            log::debug!("[qbz-qt] discarded stale local availability generation {generation}");
+            return;
+        }
+        ui(move |mut b| b.as_mut().set_local_available(available));
     });
 }
 
@@ -144,6 +174,9 @@ fn pruned_albums_filter(has_jellyfin: bool, has_subsonic: bool) -> String {
 
 pub(crate) fn reload_browse() {
     publish_media_gates();
+    // This is the shared mutation chokepoint for folders and remote sources.
+    // Republish the gate as well as the documents it controls (#723).
+    publish_availability();
     // The cortinilla's instant-paint cache embeds LOCAL rows and their artwork
     // paths, so anything that reaches here has just made those rows possibly
     // wrong. This is the single chokepoint for local-library mutations, which

@@ -24,7 +24,7 @@ use cxx_qt_lib::QString;
 
 use crate::local_bridge_ops::{
     emit_artwork, emit_artwork_one, invalidate_artists, load_tab_impl, load_tracks,
-    publish_plex_state, publish_tree, reload_browse, run_sync,
+    publish_availability, publish_plex_state, publish_tree, reload_browse, run_sync,
 };
 use crate::local_library_qt as lib;
 use crate::local_plex as plex;
@@ -929,21 +929,16 @@ impl qbz_local::QbzLocal {
         let sort = lib::tracks_sort();
         let group = lib::tracks_group();
         let tracks_filter = lib::tracks_filter();
-        crate::spawn(async move {
-            let available = tokio::task::spawn_blocking(lib::has_library)
-                .await
-                .unwrap_or(false);
-            ui(move |mut b| {
-                b.as_mut().set_local_available(available);
-                b.as_mut()
-                    .set_local_album_mode(QString::from(mode.as_str()));
-                b.as_mut()
-                    .set_local_tracks_sort(QString::from(sort.as_str()));
-                b.as_mut()
-                    .set_local_tracks_group(QString::from(group.as_str()));
-                b.as_mut()
-                    .set_local_tracks_filter(QString::from(tracks_filter.as_str()));
-            });
+        publish_availability();
+        ui(move |mut b| {
+            b.as_mut()
+                .set_local_album_mode(QString::from(mode.as_str()));
+            b.as_mut()
+                .set_local_tracks_sort(QString::from(sort.as_str()));
+            b.as_mut()
+                .set_local_tracks_group(QString::from(group.as_str()));
+            b.as_mut()
+                .set_local_tracks_filter(QString::from(tracks_filter.as_str()));
         });
         publish_plex_state();
         crate::local_album_actions::publish_track_artwork();
