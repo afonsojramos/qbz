@@ -525,7 +525,13 @@ impl qbz_mini::QbzMini {
         let text = text.to_string();
         let overrides = crate::hotkeys_qt::load_overrides();
         let Some(action) =
-            crate::hotkeys_qt::action_for_mini_key(&overrides, key, modifiers, &text)
+            crate::hotkeys_qt::action_for_mini_key(
+                crate::hotkeys_qt::active_keymap(),
+                &overrides,
+                key,
+                modifiers,
+                &text,
+            )
         else {
             return false;
         };

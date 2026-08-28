@@ -6035,7 +6035,7 @@ msgstr "Cet album ne contient aucun titre."
 msgid "Reactive Rings"
 msgstr "Anneaux réactifs"
 
-# Hotkeys: the Spotify-parity playback actions
+# Hotkeys: the Spotify-parity playback actions + the keymap preset picker
 
 msgid "Volume Up"
 msgstr "Augmenter le volume"
@@ -6060,3 +6060,9 @@ msgstr "Avancer"
 
 msgid "Seek Back"
 msgstr "Reculer"
+
+msgid "Keymap"
+msgstr "Schéma de touches"
+
+msgid "Vim"
+msgstr "Vim"

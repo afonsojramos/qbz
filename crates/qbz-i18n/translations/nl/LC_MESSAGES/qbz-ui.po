@@ -6025,7 +6025,7 @@ msgstr "Dit album bevat geen nummers."
 msgid "Reactive Rings"
 msgstr "Reactieve ringen"
 
-# Hotkeys: the Spotify-parity playback actions
+# Hotkeys: the Spotify-parity playback actions + the keymap preset picker
 
 msgid "Volume Up"
 msgstr "Volume omhoog"
@@ -6050,3 +6050,9 @@ msgstr "Vooruit spoelen"
 
 msgid "Seek Back"
 msgstr "Terugspoelen"
+
+msgid "Keymap"
+msgstr "Toetsenschema"
+
+msgid "Vim"
+msgstr "Vim"

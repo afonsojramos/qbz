@@ -1642,7 +1642,7 @@ msgstr "This album has no tracks."
 msgid "Reactive Rings"
 msgstr "Reactive Rings"
 
-# Hotkeys: the Spotify-parity playback actions
+# Hotkeys: the Spotify-parity playback actions + the keymap preset picker
 
 msgid "Volume Up"
 msgstr "Volume Up"
@@ -1667,3 +1667,9 @@ msgstr "Seek Forward"
 
 msgid "Seek Back"
 msgstr "Seek Back"
+
+msgid "Keymap"
+msgstr "Keymap"
+
+msgid "Vim"
+msgstr "Vim"

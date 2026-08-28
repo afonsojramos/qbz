@@ -6055,7 +6055,7 @@ msgstr "В этом альбоме нет треков."
 msgid "Reactive Rings"
 msgstr "Реактивные кольца"
 
-# Hotkeys: the Spotify-parity playback actions
+# Hotkeys: the Spotify-parity playback actions + the keymap preset picker
 
 msgid "Volume Up"
 msgstr "Громче"
@@ -6080,3 +6080,9 @@ msgstr "Перемотка вперёд"
 
 msgid "Seek Back"
 msgstr "Перемотка назад"
+
+msgid "Keymap"
+msgstr "Раскладка клавиш"
+
+msgid "Vim"
+msgstr "Vim"

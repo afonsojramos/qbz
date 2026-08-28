@@ -65,6 +65,10 @@ pub mod qbz_hotkeys {
         #[qproperty(QString, groups_json)]
         // The customize header's "N modified" accent badge (§4.5).
         #[qproperty(i32, modified_count)]
+        // Active keymap preset as its selector index (0 = Default, 1 = Vim).
+        // Published alongside the groups so the editor's segmented control and
+        // the keycaps can never disagree about which preset is showing.
+        #[qproperty(i32, keymap_index)]
         // Capture state (§3.3): the action id being recorded ("" = not
         // recording), the live formatted pending combo, and the conflicting
         // action's label while a conflict is held.
@@ -109,6 +113,10 @@ pub mod qbz_hotkeys {
         fn reset_one(self: Pin<&mut QbzHotkeys>, id: QString);
         #[qinvokable]
         fn reset_all(self: Pin<&mut QbzHotkeys>);
+        /// Switch the keymap preset (0 = Default, 1 = Vim) + refresh. User
+        /// overrides are KEPT and keep winning over the new base.
+        #[qinvokable]
+        fn set_keymap(self: Pin<&mut QbzHotkeys>, index: i32);
         /// ui.showShortcuts target + the HeaderBar menu row: open the
         /// cheatsheet (and recompute the groups, §3.4 — recomputed on open).
         #[qinvokable]
@@ -152,6 +160,7 @@ use qbz_hotkeys::QbzHotkeys;
 pub struct QbzHotkeysRust {
     groups_json: QString,
     modified_count: i32,
+    keymap_index: i32,
     recording_id: QString,
     pending_display: QString,
     conflict_label: QString,
@@ -164,6 +173,7 @@ impl Default for QbzHotkeysRust {
         Self {
             groups_json: QString::from(GROUPS_EMPTY),
             modified_count: 0,
+            keymap_index: 0,
             recording_id: QString::from(""),
             pending_display: QString::from(""),
             conflict_label: QString::from(""),
@@ -191,11 +201,13 @@ pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzHotkeys>) + Send + 'static) {
 /// pieces derived from the store). Called by `refresh`, `boot`, every store
 /// mutation, and the open verbs (§3.4 — recompute on open).
 fn publish_groups(mut this: Pin<&mut QbzHotkeys>) {
+    let keymap = crate::hotkeys_qt::active_keymap();
     let overrides = crate::hotkeys_qt::load_overrides();
-    let json = crate::hotkeys_qt::groups_json(&overrides);
-    let count = crate::hotkeys_qt::modified_count_with(&overrides);
+    let json = crate::hotkeys_qt::groups_json(keymap, &overrides);
+    let count = crate::hotkeys_qt::modified_count_with(keymap, &overrides);
     this.as_mut().set_groups_json(QString::from(json.as_str()));
     this.as_mut().set_modified_count(count);
+    this.as_mut().set_keymap_index(keymap.index());
 }
 
 /// Clear the capture triple (recording id + pending + conflict) — the shared
@@ -281,7 +293,15 @@ impl qbz_hotkeys::QbzHotkeys {
         let recording = self.recording_id().to_string();
         if !recording.is_empty() {
             let overrides = crate::hotkeys_qt::load_overrides();
-            match crate::hotkeys_qt::capture_step(&overrides, &recording, key, modifiers, &text) {
+            let keymap = crate::hotkeys_qt::active_keymap();
+            match crate::hotkeys_qt::capture_step(
+                keymap,
+                &overrides,
+                &recording,
+                key,
+                modifiers,
+                &text,
+            ) {
                 CaptureOutcome::Cancelled => {
                     clear_capture(self.as_mut());
                 }
@@ -339,6 +359,7 @@ impl qbz_hotkeys::QbzHotkeys {
         // gates live in hotkeys_qt::action_for_key).
         let overrides = crate::hotkeys_qt::load_overrides();
         let Some(action) = crate::hotkeys_qt::action_for_key(
+            crate::hotkeys_qt::active_keymap(),
             &overrides,
             key,
             modifiers,
@@ -456,6 +477,11 @@ impl qbz_hotkeys::QbzHotkeys {
 
     pub fn reset_all(self: Pin<&mut Self>) {
         crate::hotkeys_qt::reset_all();
+        publish_groups(self);
+    }
+
+    pub fn set_keymap(self: Pin<&mut Self>, index: i32) {
+        crate::hotkeys_qt::set_keymap(crate::hotkeys_qt::Keymap::from_index(index));
         publish_groups(self);
     }
 
