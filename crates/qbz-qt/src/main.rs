@@ -3481,12 +3481,18 @@ fn main() {
         // playing for two seconds longer is a far smaller failure than an app
         // that cannot be closed, so the timeout wins the tie.
         if let Some(rt) = TOKIO.get() {
-            let notification_withdrawn = rt
-                .block_on(tokio::time::timeout(
+            // Construct the timer *inside* the runtime. Building
+            // `tokio::time::timeout` as the argument to `block_on` happens
+            // before the runtime is entered and panics with "no reactor
+            // running" during every normal quit.
+            let notification_withdrawn = rt.block_on(async {
+                tokio::time::timeout(
                     std::time::Duration::from_secs(1),
                     qbz_media_controls::withdraw_track_notification(),
-                ))
-                .is_ok();
+                )
+                .await
+            });
+            let notification_withdrawn = notification_withdrawn.is_ok();
             if !notification_withdrawn {
                 log::warn!(
                     "[qbz-qt] notification withdrawal did not finish within 1s; exiting anyway"

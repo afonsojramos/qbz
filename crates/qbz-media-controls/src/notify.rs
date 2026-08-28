@@ -272,9 +272,15 @@ pub async fn show_track_notification(meta: NotificationMeta, offline: bool) {
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1);
 
+        // One stable id intentionally replaces the previous track toast. The
+        // portal normally treats that as an in-place update, which Plasma does
+        // not animate as a new banner after the first track. `show-as-new` is
+        // the portal's explicit contract for a replacement that must be
+        // presented again. It must not be combined with `transient`; stop,
+        // opt-out and shutdown withdraw the replaceable notification below.
         let mut notification = PortalNotification::new(&meta.title)
             .body(Some(body.as_str()))
-            .display_hint([DisplayHint::Transient]);
+            .display_hint([DisplayHint::ShowAsNew]);
 
         if let Some(url) = meta.art_url.clone() {
             let prepared = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
@@ -299,11 +305,12 @@ pub async fn show_track_notification(meta: NotificationMeta, offline: bool) {
                     log::debug!("[notify] stale track notification discarded");
                     return;
                 }
-                if let Err(e) = proxy
+                match proxy
                     .add_notification(PORTAL_NOTIFICATION_ID, notification)
                     .await
                 {
-                    log::warn!("[notify] XDG portal add_notification failed: {e}");
+                    Ok(()) => log::debug!("[notify] XDG portal notification published"),
+                    Err(e) => log::warn!("[notify] XDG portal add_notification failed: {e}"),
                 }
             }
             Err(e) => log::warn!("[notify] XDG notification portal unavailable: {e}"),
