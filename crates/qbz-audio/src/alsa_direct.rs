@@ -113,6 +113,18 @@ pub struct AlsaDirectStream {
     device_id: String,
 }
 
+/// A writable ALSA mixer element and its current normalized level.
+///
+/// The probe is deliberately read-only. Callers use the sampled level to seed
+/// QBZ's volume state *before* enabling hardware volume, so changing the
+/// setting cannot copy the direct path's fixed 100% UI value into the
+/// physical mixer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HardwareVolumeInfo {
+    pub control_name: String,
+    pub volume: f32,
+}
+
 /// Defensive settle delay between reservation acquisition and PCM open.
 ///
 /// Only applied when the reservation actually transitioned ownership (i.e.
@@ -886,7 +898,7 @@ impl AlsaDirectStream {
         &self.device_id
     }
 
-    /// Try to set hardware volume via ALSA mixer
+    /// Try to set hardware volume via ALSA mixer.
     ///
     /// Returns error if:
     /// - DAC doesn't have mixer controls (common for USB DACs)
@@ -894,57 +906,29 @@ impl AlsaDirectStream {
     ///
     /// NOTE: Failure doesn't break playback, just means volume can't be controlled.
     pub fn set_hardware_volume(&self, volume: f32) -> Result<(), String> {
-        use alsa::mixer::SelemChannelId::*;
-        use alsa::mixer::{Mixer, SelemId};
+        let mixer = open_hardware_mixer(&self.device_id)?;
+        let (selem, name) = find_hardware_volume_control(&mixer, &self.device_id)?;
+        let (min, max) = usable_volume_range(&selem, &self.device_id, &name)?;
+        let volume = volume.clamp(0.0, 1.0);
+        let target = min + (((max - min) as f32 * volume).round() as i64);
 
-        // Mixer controls live on the CARD ctl device, not on the PCM alias the
-        // stream opened: `iec958:CARD=x,DEV=0` (HiFiBerry Digi, #331/#659),
-        // `hdmi:`, `front:`… are PCM plugin ids the mixer can't attach to, and
-        // a `DEV`-qualified `hw:` id isn't a valid ctl name either. Open the
-        // mixer on the derived `hw:CARD=<name>` instead.
-        let ctl_name = mixer_ctl_name(&self.device_id);
-        let mixer = Mixer::new(&ctl_name, false).map_err(|e| {
+        log::info!(
+            "[ALSA Direct] Setting hardware volume via '{}': {:.0}% (raw: {}/{})",
+            name,
+            volume * 100.0,
+            target,
+            max
+        );
+
+        // The ALSA helper addresses every playback channel the element owns
+        // and, unlike the old hand-written five-channel loop, propagates a
+        // write failure instead of reporting success after ignoring it.
+        selem.set_playback_volume_all(target).map_err(|error| {
             format!(
-                "Failed to open mixer for {} (ctl {}): {}",
-                self.device_id, ctl_name, e
+                "Failed to set ALSA hardware volume via '{}' for {}: {}",
+                name, self.device_id, error
             )
-        })?;
-
-        // Try to find a volume control element
-        // Common names: "Master", "PCM", "Speaker", "Headphone"
-        let control_names = ["Master", "PCM", "Speaker", "Headphone", "Digital"];
-
-        for name in &control_names {
-            let selem_id = SelemId::new(name, 0);
-
-            if let Some(selem) = mixer.find_selem(&selem_id) {
-                // Check if this element has playback volume control
-                if selem.has_playback_volume() {
-                    let (min, max) = selem.get_playback_volume_range();
-                    let target = min + ((max - min) as f32 * volume) as i64;
-
-                    log::info!(
-                        "[ALSA Direct] Setting hardware volume via '{}': {:.0}% (raw: {}/{})",
-                        name,
-                        volume * 100.0,
-                        target,
-                        max
-                    );
-
-                    // Set volume on all channels
-                    for channel in &[FrontLeft, FrontRight, FrontCenter, RearLeft, RearRight] {
-                        let _ = selem.set_playback_volume(*channel, target);
-                    }
-
-                    return Ok(());
-                }
-            }
-        }
-
-        Err(format!(
-            "No volume control found for {}. DAC may not support hardware mixer.",
-            self.device_id
-        ))
+        })
     }
 
     /// Check if device is a bit-perfect hardware device
@@ -954,6 +938,158 @@ impl AlsaDirectStream {
             || device_id.starts_with("plughw:")
             || device_id.starts_with("front:CARD=")
     }
+}
+
+#[cfg(target_os = "linux")]
+fn open_hardware_mixer(device_id: &str) -> Result<alsa::mixer::Mixer, String> {
+    use alsa::mixer::Mixer;
+
+    // Mixer controls live on the CARD ctl device, not on the PCM alias the
+    // stream opened: `iec958:CARD=x,DEV=0` (HiFiBerry Digi, #331/#659),
+    // `hdmi:`, `front:`… are PCM plugin ids the mixer can't attach to, and a
+    // `DEV`-qualified `hw:` id isn't a valid ctl name either.
+    let ctl_name = mixer_ctl_name(device_id);
+    Mixer::new(&ctl_name, false).map_err(|error| {
+        format!(
+            "Failed to open mixer for {} (ctl {}): {}",
+            device_id, ctl_name, error
+        )
+    })
+}
+
+/// Rank playback elements conservatively. ALSA devices are inconsistent:
+/// many expose `DAC` or `Line Out` instead of the five names the old code
+/// hard-coded. Capture/sidetone elements are never acceptable fallbacks.
+fn hardware_volume_rank(name: &str) -> u8 {
+    let lower = name.to_ascii_lowercase();
+    if ["capture", "mic", "boost", "sidetone", "loopback"]
+        .iter()
+        .any(|token| lower.contains(token))
+    {
+        return 0;
+    }
+
+    [
+        ("master", 100),
+        ("pcm", 90),
+        ("speaker", 80),
+        ("headphone", 70),
+        ("digital", 60),
+        ("dac", 50),
+        ("line out", 40),
+        ("playback", 30),
+    ]
+    .into_iter()
+    .find_map(|(token, score)| lower.contains(token).then_some(score))
+    .unwrap_or(1)
+}
+
+#[cfg(target_os = "linux")]
+fn find_hardware_volume_control<'a>(
+    mixer: &'a alsa::mixer::Mixer,
+    device_id: &str,
+) -> Result<(alsa::mixer::Selem<'a>, String), String> {
+    use alsa::mixer::Selem;
+
+    let mut candidates = mixer
+        .iter()
+        .filter_map(Selem::new)
+        .filter(|selem| selem.has_playback_volume())
+        .filter_map(|selem| {
+            let name = selem.get_id().get_name().ok()?.to_string();
+            let rank = hardware_volume_rank(&name);
+            (rank > 0).then_some((rank, name, selem))
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+
+    let Some((top_rank, _, _)) = candidates.first() else {
+        return Err(format!(
+            "No writable playback-volume control found for {}",
+            device_id
+        ));
+    };
+    if candidates.get(1).is_some_and(|next| next.0 == *top_rank) {
+        let names = candidates
+            .iter()
+            .filter(|candidate| candidate.0 == *top_rank)
+            .map(|candidate| candidate.1.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "Ambiguous playback-volume controls for {}: {}",
+            device_id, names
+        ));
+    }
+
+    let (_, name, selem) = candidates.remove(0);
+    Ok((selem, name))
+}
+
+#[cfg(target_os = "linux")]
+fn usable_volume_range(
+    selem: &alsa::mixer::Selem<'_>,
+    device_id: &str,
+    control_name: &str,
+) -> Result<(i64, i64), String> {
+    let (min, max) = selem.get_playback_volume_range();
+    (max > min).then_some((min, max)).ok_or_else(|| {
+        format!(
+            "ALSA playback-volume control '{}' for {} has no usable range ({min}..{max})",
+            control_name, device_id
+        )
+    })
+}
+
+/// Read-only capability probe used before the UI enables hardware volume.
+#[cfg(target_os = "linux")]
+pub fn probe_hardware_volume(device_id: &str) -> Result<HardwareVolumeInfo, String> {
+    use alsa::mixer::SelemChannelId;
+
+    let mixer = open_hardware_mixer(device_id)?;
+    let (selem, name) = find_hardware_volume_control(&mixer, device_id)?;
+    let (min, max) = usable_volume_range(&selem, device_id, &name)?;
+    let channel = SelemChannelId::all()
+        .iter()
+        .copied()
+        .find(|channel| selem.has_playback_channel(*channel))
+        .ok_or_else(|| {
+            format!(
+                "ALSA playback-volume control '{}' for {} has no playback channel",
+                name, device_id
+            )
+        })?;
+    let raw = selem.get_playback_volume(channel).map_err(|error| {
+        format!(
+            "Failed to read ALSA hardware volume via '{}' for {}: {}",
+            name, device_id, error
+        )
+    })?;
+    let volume = ((raw - min) as f32 / (max - min) as f32).clamp(0.0, 1.0);
+
+    Ok(HardwareVolumeInfo {
+        control_name: name,
+        volume,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn probe_hardware_volume(_device_id: &str) -> Result<HardwareVolumeInfo, String> {
+    Err("ALSA hardware volume is only available on Linux".to_string())
+}
+
+/// Mirrors the exact route predicate used by the player: ALSA plus a direct
+/// device id and either the `hw` or `plughw` engine. ALSA's default/sysdefault
+/// and `Pcm` routes use CPAL/Rodio and retain software volume.
+pub fn uses_alsa_direct_route(audio: &crate::settings::AudioSettings) -> bool {
+    audio.backend_type == Some(crate::backend::AudioBackendType::Alsa)
+        && audio.alsa_plugin.unwrap_or(crate::backend::AlsaPlugin::Hw)
+            != crate::backend::AlsaPlugin::Pcm
+        && audio
+            .output_device
+            .as_deref()
+            .is_some_and(AlsaDirectStream::is_hw_device)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1027,7 +1163,9 @@ pub(crate) fn mixer_ctl_name(device_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::mixer_ctl_name;
+    use super::{hardware_volume_rank, mixer_ctl_name, uses_alsa_direct_route};
+    use crate::backend::{AlsaPlugin, AudioBackendType};
+    use crate::settings::AudioSettings;
 
     #[test]
     fn mixer_ctl_name_maps_card_forms() {
@@ -1054,5 +1192,38 @@ mod tests {
         // No CARD= and no numeric arg → unchanged.
         assert_eq!(mixer_ctl_name("default"), "default");
         assert_eq!(mixer_ctl_name("pulse"), "pulse");
+    }
+
+    #[test]
+    fn hardware_volume_ranking_prefers_output_controls_and_rejects_capture_paths() {
+        assert!(hardware_volume_rank("Master") > hardware_volume_rank("PCM"));
+        assert!(hardware_volume_rank("PCM") > hardware_volume_rank("USB DAC"));
+        assert!(hardware_volume_rank("Speaker Playback") > 1);
+        assert_eq!(hardware_volume_rank("Mic Playback Volume"), 0);
+        assert_eq!(hardware_volume_rank("Capture"), 0);
+    }
+
+    #[test]
+    fn direct_route_requires_alsa_direct_device_and_non_pcm_plugin() {
+        let mut audio = AudioSettings::default();
+        assert!(!uses_alsa_direct_route(&audio));
+
+        audio.backend_type = Some(AudioBackendType::Alsa);
+        audio.output_device = Some("front:CARD=USB,DEV=0".to_string());
+        audio.alsa_plugin = Some(AlsaPlugin::Hw);
+        assert!(uses_alsa_direct_route(&audio));
+
+        audio.alsa_plugin = Some(AlsaPlugin::PlugHw);
+        assert!(uses_alsa_direct_route(&audio));
+
+        audio.alsa_plugin = Some(AlsaPlugin::Pcm);
+        assert!(!uses_alsa_direct_route(&audio));
+
+        audio.alsa_plugin = Some(AlsaPlugin::Hw);
+        audio.output_device = Some("sysdefault:CARD=USB".to_string());
+        assert!(!uses_alsa_direct_route(&audio));
+
+        audio.output_device = None;
+        assert!(!uses_alsa_direct_route(&audio));
     }
 }

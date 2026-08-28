@@ -802,12 +802,19 @@ fn on_session_entered() {
             qconnect_service.spawn_offline_force_disconnect(&tokio_handle);
         }
     }
-    // Seed the saved level, then enforce unity gain for ALSA-direct `hw`.
-    // Sequencing both writes in one task prevents the asynchronous restore
-    // from landing after the bit-perfect correction.
+    // Revalidate hardware volume first. When a compatible ALSA mixer exists,
+    // the probe samples its physical level and seeds SharedState without a
+    // write; restoring the persisted slider afterward would otherwise move
+    // that mixer at launch. Without hardware volume, restore the saved level
+    // and then enforce unity for the protected ALSA-direct path. Sequencing
+    // these decisions in one task prevents an asynchronous restore from
+    // landing after the bit-perfect correction.
     let rt = app();
     spawn(async move {
-        playback_qt::set_volume(&rt, restored).await;
+        let hardware_level = settings_qt::reconcile_alsa_hardware_volume(&rt).await;
+        if hardware_level.is_none() {
+            playback_qt::set_volume(&rt, restored).await;
+        }
         settings_qt::maybe_force_bitperfect_volume(&rt).await;
     });
     // 3. Startup auto-connect — gated on NOT offline: the offline shell entry

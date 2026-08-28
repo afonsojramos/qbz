@@ -316,7 +316,7 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //    Both calls self-gate to no-ops when QBZ forced nothing.
     #[cfg(target_os = "linux")]
     {
-        qbz_audio::alsa_backend::resume_suspended_sink();
+        let _ = qbz_audio::alsa_backend::resume_suspended_sink();
         qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
     }
 

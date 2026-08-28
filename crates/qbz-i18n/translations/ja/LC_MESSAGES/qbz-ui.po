@@ -2010,8 +2010,14 @@ msgstr "ALSAがデバイスを開く方法 — hwはビットパーフェクト�
 msgid "Hardware volume control"
 msgstr "ハードウェア音量コントロール"
 
-msgid "Use the ALSA mixer for volume instead of software gain."
-msgstr "ソフトウェアゲインの代わりにALSAミキサーで音量を調整します。"
+msgid "Control volume through a mixer exposed by the selected ALSA device. If unavailable, direct playback stays fixed at 100%."
+msgstr "選択したALSAデバイスが提供するミキサーで音量を調整します。利用できない場合、ダイレクト再生の音量は100%に固定されます。"
+
+msgid "This ALSA device has no compatible hardware volume control. Direct playback remains fixed at 100%."
+msgstr "このALSAデバイスには互換性のあるハードウェア音量コントロールがありません。ダイレクト再生の音量は100%に固定されます。"
+
+msgid "QBZ could not fully release the previous audio device. See the audio log for details."
+msgstr "QBZは以前のオーディオデバイスを完全に解放できませんでした。詳細はオーディオログを確認してください。"
 
 msgid "BIT-PERFECT"
 msgstr "ビットパーフェクト"
