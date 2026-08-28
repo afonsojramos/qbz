@@ -209,3 +209,4 @@ jobs:
           name: smoke-log-windows
           path: smoke.log
           if-no-files-found: ignore
+          retention-days: 7

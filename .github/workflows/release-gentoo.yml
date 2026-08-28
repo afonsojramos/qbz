@@ -209,6 +209,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: gentoo-overlay-dry-run
+          retention-days: 7
           path: |
             /tmp/qbz-overlay/media-sound/qbz-bin/*.ebuild
             /tmp/qbz-overlay/media-sound/qbz-bin/Manifest

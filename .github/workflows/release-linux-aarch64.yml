@@ -156,7 +156,10 @@ jobs:
           highest=$(printf '%s\n' "$floor" "GLIBC_2.35" | sort -V | tail -1)
           [ "$highest" = "GLIBC_2.35" ] || { echo "::error::floor $floor exceeds 2.35"; exit 1; }
       - uses: actions/upload-artifact@v7
-        with: { name: qbzd-linux-aarch64, path: crates/target/release/qbzd }
+        with:
+          name: qbzd-linux-aarch64
+          path: crates/target/release/qbzd
+          retention-days: 7
 
   package:
     needs: [version, build, build-qbzd]
@@ -292,6 +295,7 @@ jobs:
         with:
           name: qbz-linux-packages-${{ env.ARCH }}
           path: dist/*
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 7 }}
 
       - name: Publish GitHub Release Assets
         if: startsWith(github.ref, 'refs/tags/')

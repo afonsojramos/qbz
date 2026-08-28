@@ -220,6 +220,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: aur-qbz-bin-dry-run
+          retention-days: 7
           path: |
             /tmp/aur-qbz-bin/PKGBUILD
             /tmp/aur-qbz-bin/.SRCINFO
