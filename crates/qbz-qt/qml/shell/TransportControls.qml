@@ -73,6 +73,10 @@ Row {
     // play. Not gated on `npHasTrack`: the first play of a session has no
     // track yet, and that is exactly the case that felt dead.
     readonly property bool loading: QbzPlayer.npLoading
+    // Clear-while-paused removes the NPB cursor by design. Rows added
+    // afterwards still make Play actionable: the backend promotes the first
+    // one without resurrecting the cleared paused stream.
+    readonly property bool playEnabled: QbzPlayer.npHasTrack || QbzQueue.hasPlayTarget
     // Spin phase, advanced on the shared shell pulse (QbzShell.pulseMs).
     property real spinPhase: 0
     Connections {
@@ -94,10 +98,10 @@ Row {
         height: tc.playCircle ? 38 : 34
         radius: tc.playCircle ? width / 2 : theme.radiusSm
         anchors.verticalCenter: parent.verticalCenter
-        opacity: QbzPlayer.npHasTrack ? 1.0 : 0.3
+        opacity: tc.playEnabled ? 1.0 : 0.3
         color: tc.playCircle
-            ? (playArea.containsMouse && QbzPlayer.npHasTrack ? theme.accentHover : theme.accent)
-            : ((playArea.containsMouse && QbzPlayer.npHasTrack) ? theme.surfaceHover : "transparent")
+            ? (playArea.containsMouse && tc.playEnabled ? theme.accentHover : theme.accent)
+            : ((playArea.containsMouse && tc.playEnabled) ? theme.surfaceHover : "transparent")
         QbzIcon {
             // Hidden while loading — the ring below stands in for it, so the
             // button never shows a play glyph for a track that is still being
@@ -145,8 +149,8 @@ Row {
             id: playArea
             anchors.fill: parent
             hoverEnabled: true
-            cursorShape: QbzPlayer.npHasTrack ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: if (QbzPlayer.npHasTrack) QbzPlayer.togglePlay()
+            cursorShape: tc.playEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            onClicked: if (tc.playEnabled) QbzPlayer.togglePlay()
         }
     }
     QbzIconButton {

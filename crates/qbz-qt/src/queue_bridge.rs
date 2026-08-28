@@ -36,6 +36,11 @@ pub mod qbz_queue {
         // One JSON document (queue_qt.rs QueueDoc: current/upcoming/history
         // + pagination + #442 section markers). Supersedes `queueModel`.
         #[qproperty(QString, queue_json)]
+        // True whenever the core still has at least one queue row, including
+        // the idle state produced by Clear -> Add/Next/Later. Unlike
+        // `QbzPlayer.npHasTrack`, this deliberately does not require a current
+        // cursor: it is the transport's answer to "can Play start anything?".
+        #[qproperty(bool, has_play_target)]
         // Full chronological queue projection used only by QueueView. It is
         // opt-in so ordinary sidebar publishes stay paged and cheap.
         #[qproperty(QString, extended_queue_json)]
@@ -166,6 +171,7 @@ type QListQVariant = QList<QVariant>;
 pub struct QbzQueueRust {
     queue_model: QListQVariant,
     queue_json: QString,
+    has_play_target: bool,
     extended_queue_json: QString,
     coverflow_json: QString,
     drop_play_prompt: bool,
@@ -178,6 +184,7 @@ impl Default for QbzQueueRust {
         Self {
             queue_model: QListQVariant::default(),
             queue_json: QString::from("{}"),
+            has_play_target: false,
             extended_queue_json: QString::from(
                 r#"{"rows":[],"currentIndex":-1,"historyCount":0,"upcomingCount":0,"stopAfterId":"","infinitePlay":false,"searchQuery":""}"#,
             ),

@@ -577,7 +577,7 @@ Rectangle {
                 // (kiosk_nav_qt.rs:222-225).
                 if (QbzKioskNav.zone === "player") {
                     QbzKioskNav.markActive()
-                    if (QbzPlayer.npHasTrack)
+                    if (QbzPlayer.npHasTrack || QbzQueue.hasPlayTarget)
                         QbzPlayer.togglePlay()
                 } else if (QbzKioskNav.zone === "rail") {
                     QbzKioskNav.markActive()

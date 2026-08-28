@@ -2222,6 +2222,44 @@ mod tests {
     }
 
     #[test]
+    fn idle_queue_promotes_first_row_for_transport_play() {
+        let queue = QueueManager::new();
+        queue.set_queue(vec![create_test_track(99)], Some(0));
+        queue.clear(false);
+
+        // All three enqueue actions keep an idle list cursor-less. "Later"
+        // and "Next" form the manual block ahead of a plain queued row.
+        queue.add_track(create_test_track(1));
+        queue.add_track_later(create_test_track(2));
+        queue.add_track_next(create_test_track(3));
+
+        let idle = queue.get_state_full();
+        assert!(idle.current_track.is_none());
+        assert_eq!(
+            idle.upcoming.iter().map(|track| track.id).collect::<Vec<_>>(),
+            vec![3, 2, 1]
+        );
+
+        let promoted = queue
+            .play_upcoming_at_preserving_timeline(0, 3)
+            .expect("first idle row");
+        assert_eq!(promoted.id, 3);
+
+        let playing = queue.get_state_full();
+        assert_eq!(playing.current_track.expect("current").id, 3);
+        assert_eq!(
+            playing
+                .upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert!(playing.history.is_empty());
+        assert_eq!(playing.manual_next_count, 1);
+    }
+
+    #[test]
     fn peek_previous_matches_previous_without_consuming_history() {
         let queue = QueueManager::new();
         for i in 1..=4 {
