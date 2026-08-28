@@ -1641,3 +1641,29 @@ msgstr "This album has no tracks."
 
 msgid "Reactive Rings"
 msgstr "Reactive Rings"
+
+# Hotkeys: the Spotify-parity playback actions
+
+msgid "Volume Up"
+msgstr "Volume Up"
+
+msgid "Volume Down"
+msgstr "Volume Down"
+
+msgid "Mute / Unmute"
+msgstr "Mute / Unmute"
+
+msgid "Toggle Shuffle"
+msgstr "Toggle Shuffle"
+
+msgid "Cycle Repeat"
+msgstr "Cycle Repeat"
+
+msgid "Like Track"
+msgstr "Like Track"
+
+msgid "Seek Forward"
+msgstr "Seek Forward"
+
+msgid "Seek Back"
+msgstr "Seek Back"

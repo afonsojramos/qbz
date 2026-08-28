@@ -133,6 +133,14 @@ pub mod qbz_hotkeys {
         /// is stale.
         #[qsignal]
         fn focus_search_requested(self: Pin<&mut QbzHotkeys>);
+
+        /// playback.favorite — the same QML seam as `focus_search_requested`.
+        /// The now-playing track id lives on QbzPlayer, not in the Rust
+        /// now-playing model, so AppShell answers this with the call the
+        /// player bar's own heart makes (`QbzQueue.queueToggleFavorite`),
+        /// empty-id guard included, instead of a second id resolution here.
+        #[qsignal]
+        fn favorite_requested(self: Pin<&mut QbzHotkeys>);
     }
 
     impl cxx_qt::Threading for QbzHotkeys {}
@@ -225,6 +233,28 @@ fn seek_relative(delta: i32) {
     }
     let target = (pos + delta).clamp(0, duration);
     crate::transport_seek(target as f32 / duration as f32);
+}
+
+/// Keyboard volume step — the same 0.05 the player bars' +/- steppers use.
+const VOLUME_STEP: f32 = 0.05;
+
+/// The player bars' `volLocked` predicate (PlayerBar.qml:88-94) in Rust: the
+/// settings-derived ALSA-Direct hardware lock is LIFTED while a peer renderer
+/// owns playback, and the sink-pushed peer lock stands on its own. Without it
+/// the hotkey would move the on-screen slider for a change the engine
+/// documents as a no-op on that path.
+fn volume_locked() -> bool {
+    let settings_locked =
+        crate::output_labels::volume_locked(&crate::settings_qt::audio_settings());
+    (settings_locked && !crate::now_playing::is_remote())
+        || crate::now_playing::remote_volume_locked()
+}
+
+fn nudge_volume(delta: f32) {
+    if volume_locked() {
+        return;
+    }
+    crate::transport_set_volume((crate::now_playing::volume() + delta).clamp(0.0, 1.0));
 }
 
 impl qbz_hotkeys::QbzHotkeys {
@@ -351,6 +381,14 @@ impl qbz_hotkeys::QbzHotkeys {
             // here: it lives in `QbzMini::enter`, so this hotkey and the view
             // menu's row share ONE predicate (contract §4.10.1).
             "ui.miniPlayer" => crate::mini_bridge::toggle(),
+            "playback.volumeUp" => nudge_volume(VOLUME_STEP),
+            "playback.volumeDown" => nudge_volume(-VOLUME_STEP),
+            "playback.mute" => crate::transport_toggle_mute(),
+            "playback.shuffle" => crate::transport_toggle_shuffle(),
+            "playback.repeat" => crate::transport_cycle_repeat(),
+            "playback.favorite" => self.as_mut().favorite_requested(),
+            "playback.seekForward" => seek_relative(5),
+            "playback.seekBack" => seek_relative(-5),
             "focus.seekForward" => seek_relative(5),
             "focus.seekBack" => seek_relative(-5),
             "focus.seekForwardLong" => seek_relative(10),

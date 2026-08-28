@@ -146,6 +146,14 @@ Rectangle {
     Connections {
         target: QbzHotkeys
         function onFocusSearchRequested() { header.focusSearch() }
+        // playback.favorite — the player bar's own heart call, empty-id guard
+        // included. The now-playing track id is a QbzPlayer property, so the
+        // Rust dispatch signals and QML answers rather than resolving the id
+        // twice (PlayerBar.qml:769-773).
+        function onFavoriteRequested() {
+            var id = QbzPlayer.npTrackId
+            if (id !== "") QbzQueue.queueToggleFavorite("track", id)
+        }
     }
 
     // The §4.6 Ctrl+A + multi-select Escape-exit seam. Selection state is

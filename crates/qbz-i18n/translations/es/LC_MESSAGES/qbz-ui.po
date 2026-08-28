@@ -6042,3 +6042,29 @@ msgstr "Este álbum no tiene pistas."
 
 msgid "Reactive Rings"
 msgstr "Anillos reactivos"
+
+# Hotkeys: the Spotify-parity playback actions
+
+msgid "Volume Up"
+msgstr "Subir Volumen"
+
+msgid "Volume Down"
+msgstr "Bajar Volumen"
+
+msgid "Mute / Unmute"
+msgstr "Silenciar / Activar Sonido"
+
+msgid "Toggle Shuffle"
+msgstr "Alternar Aleatorio"
+
+msgid "Cycle Repeat"
+msgstr "Cambiar Repetición"
+
+msgid "Like Track"
+msgstr "Me Gusta"
+
+msgid "Seek Forward"
+msgstr "Avanzar"
+
+msgid "Seek Back"
+msgstr "Retroceder"

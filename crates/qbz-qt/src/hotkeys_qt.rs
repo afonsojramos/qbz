@@ -1,8 +1,9 @@
 //! Keyboard / hotkeys layer — the PURE core (2026-08-03 hotkeys-port contract
 //! `qbz-nix-docs/qt-frontend/2026-08-03-hotkeys-port/00-CONTRACT.md` v2 §3,
-//! block B1). Byte-faithful port of the Slint `crates/qbz/src/keybindings.rs`
-//! model: the 23-action DEFAULTS table (:88-117 — NB its :3 "26 actions"
-//! comment is STALE, do not "fix" the count), the shortcut-string grammar
+//! block B1). Port of the Slint `crates/qbz/src/keybindings.rs`
+//! model: the DEFAULTS table (:88-117 — 23 actions at the time of the port;
+//! NB its :3 "26 actions" comment is STALE, do not "fix" the count), the
+//! shortcut-string grammar
 //! (:153-249), the bindings store + conflict detection (:256-323), the groups
 //! builder + three-column round-robin (:329-380), the capture semantics
 //! (:434-467) and the §1.2 Escape priority stack (:585-615).
@@ -11,6 +12,12 @@
 //! in hotkeys_bridge.rs; the core+bridge split is the suggestions_qt /
 //! suggestions_bridge precedent). Do NOT list this file in build.rs
 //! rust_files.
+//!
+//! ONE deliberate addition POST-port, additive to the ported model: eight
+//! Playback actions the Slint table never had (volume, mute, shuffle, repeat,
+//! like, and a surface-independent seek — Spotify's desktop defaults).
+//! Everything below still resolves through one action table and one canonical
+//! shortcut string.
 //!
 //! The one intentional DIFFERENCE from Slint is the token source (contract
 //! §3.1 HYBRID rule, round-1 F1): Slint reads winit's LOGICAL key, which is
@@ -154,6 +161,65 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Previous Track",
         category: Category::Playback,
         default: "Ctrl+ArrowLeft",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.volumeUp",
+        label_en: "Volume Up",
+        category: Category::Playback,
+        default: "Ctrl+ArrowUp",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.volumeDown",
+        label_en: "Volume Down",
+        category: Category::Playback,
+        default: "Ctrl+ArrowDown",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.mute",
+        label_en: "Mute / Unmute",
+        category: Category::Playback,
+        default: "m",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.shuffle",
+        label_en: "Toggle Shuffle",
+        category: Category::Playback,
+        default: "Ctrl+s",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.repeat",
+        label_en: "Cycle Repeat",
+        category: Category::Playback,
+        default: "Ctrl+r",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.favorite",
+        label_en: "Like Track",
+        category: Category::Playback,
+        default: "Alt+Shift+B",
+        context: Context::None,
+    },
+    // Seek from ANY surface. The `focus.seek*` rows below stay bare arrows and
+    // stay immersive-only: there the arrows are free, everywhere else they
+    // belong to whatever the pointer is over.
+    ActionDef {
+        id: "playback.seekForward",
+        label_en: "Seek Forward",
+        category: Category::Playback,
+        default: "Ctrl+Shift+ArrowRight",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.seekBack",
+        label_en: "Seek Back",
+        category: Category::Playback,
+        default: "Ctrl+Shift+ArrowLeft",
         context: Context::None,
     },
     // Navigation
@@ -996,8 +1062,8 @@ mod tests {
         overrides.insert("stale.removed.action".into(), "x".into()); // unknown id
         let bindings = active_bindings_with(&overrides);
         assert_eq!(bindings.get("ui.queue").unwrap(), "w");
-        // The known count is exactly the 23 actions; the stale id is absent.
-        assert_eq!(bindings.len(), 23);
+        // The known count is exactly the action table; the stale id is absent.
+        assert_eq!(bindings.len(), ACTIONS.len());
         assert!(!bindings.contains_key("stale.removed.action"));
         // …but the overrides map itself is untouched (kept in the file).
         assert_eq!(overrides.get("stale.removed.action").unwrap(), "x");
@@ -1237,5 +1303,46 @@ mod tests {
         // Bare "a" and Ctrl+b are out.
         assert!(!is_ctrl_a(key_a, 0, "a"));
         assert!(!is_ctrl_a(QT_KEY_A + 1, QT_CONTROL, ""));
+    }
+
+    // --- The new Spotify-parity actions ------------------------------------
+
+    #[test]
+    fn the_new_playback_actions_dispatch_on_their_defaults() {
+        let ov = no_overrides();
+        for (key, modifiers, text, id) in [
+            (QT_KEY_UP, QT_CONTROL, "", "playback.volumeUp"),
+            (QT_KEY_DOWN, QT_CONTROL, "", "playback.volumeDown"),
+            (QT_KEY_A + 12, 0, "m", "playback.mute"),
+            (QT_KEY_A + 18, QT_CONTROL, "", "playback.shuffle"),
+            (QT_KEY_A + 17, QT_CONTROL, "", "playback.repeat"),
+            (QT_KEY_A + 1, QT_ALT | QT_SHIFT, "", "playback.favorite"),
+            (QT_KEY_RIGHT, QT_CONTROL | QT_SHIFT, "", "playback.seekForward"),
+            (QT_KEY_LEFT, QT_CONTROL | QT_SHIFT, "", "playback.seekBack"),
+        ] {
+            let a = action_for_key(&ov, key, modifiers, text, false)
+                .unwrap_or_else(|| panic!("{id} did not resolve"));
+            assert_eq!(a.id, id);
+        }
+    }
+
+    /// The global seek rows fire anywhere; the immersive ones keep their bare
+    /// arrows and stay gated on the overlay.
+    #[test]
+    fn global_seek_is_context_free_and_immersive_seek_still_is_not() {
+        let ov = no_overrides();
+        let global = action_for_key(
+            &ov,
+            QT_KEY_RIGHT,
+            QT_CONTROL | QT_SHIFT,
+            "",
+            false,
+        )
+        .unwrap();
+        assert_eq!(global.id, "playback.seekForward");
+        assert_eq!(global.context, Context::None);
+        assert!(action_for_key(&ov, QT_KEY_RIGHT, 0, "", false).is_none());
+        let imm = action_for_key(&ov, QT_KEY_RIGHT, 0, "", true).unwrap();
+        assert_eq!(imm.id, "focus.seekForward");
     }
 }

@@ -6054,3 +6054,29 @@ msgstr "В этом альбоме нет треков."
 
 msgid "Reactive Rings"
 msgstr "Реактивные кольца"
+
+# Hotkeys: the Spotify-parity playback actions
+
+msgid "Volume Up"
+msgstr "Громче"
+
+msgid "Volume Down"
+msgstr "Тише"
+
+msgid "Mute / Unmute"
+msgstr "Звук выкл. / вкл."
+
+msgid "Toggle Shuffle"
+msgstr "Перемешивание"
+
+msgid "Cycle Repeat"
+msgstr "Режим повтора"
+
+msgid "Like Track"
+msgstr "Нравится"
+
+msgid "Seek Forward"
+msgstr "Перемотка вперёд"
+
+msgid "Seek Back"
+msgstr "Перемотка назад"

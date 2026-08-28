@@ -6024,3 +6024,29 @@ msgstr "Dit album bevat geen nummers."
 
 msgid "Reactive Rings"
 msgstr "Reactieve ringen"
+
+# Hotkeys: the Spotify-parity playback actions
+
+msgid "Volume Up"
+msgstr "Volume omhoog"
+
+msgid "Volume Down"
+msgstr "Volume omlaag"
+
+msgid "Mute / Unmute"
+msgstr "Dempen / Dempen opheffen"
+
+msgid "Toggle Shuffle"
+msgstr "Shuffle aan/uit"
+
+msgid "Cycle Repeat"
+msgstr "Herhaling wisselen"
+
+msgid "Like Track"
+msgstr "Nummer liken"
+
+msgid "Seek Forward"
+msgstr "Vooruit spoelen"
+
+msgid "Seek Back"
+msgstr "Terugspoelen"
