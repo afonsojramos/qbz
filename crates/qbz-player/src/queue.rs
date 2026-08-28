@@ -1776,6 +1776,38 @@ mod tests {
     }
 
     #[test]
+    fn repeat_all_wraps_a_local_album_for_renderer_advance() {
+        let queue = QueueManager::new();
+        for id in 1..=3 {
+            let mut track = create_test_track(id);
+            track.is_local = true;
+            track.source = Some("local".to_string());
+            queue.add_track(track);
+        }
+        queue.play_index(2);
+        queue.set_repeat(RepeatMode::All);
+
+        let wrapped = queue.next().expect("repeat-all must wrap the album");
+        assert_eq!(wrapped.id, 1);
+        assert_eq!(queue.current_track().map(|track| track.id), Some(1));
+    }
+
+    #[test]
+    fn repeat_one_returns_the_same_local_track_for_renderer_advance() {
+        let queue = QueueManager::new();
+        let mut track = create_test_track(7);
+        track.is_local = true;
+        track.source = Some("local".to_string());
+        queue.add_track(track);
+        queue.play_index(0);
+        queue.set_repeat(RepeatMode::One);
+
+        let repeated = queue.next().expect("repeat-one must replay the current row");
+        assert_eq!(repeated.id, 7);
+        assert_eq!(queue.current_track().map(|track| track.id), Some(7));
+    }
+
+    #[test]
     fn test_clear_without_current_track() {
         let queue = QueueManager::new();
 
