@@ -197,6 +197,61 @@ Item {
                         font.weight: theme.weightMedium
                     }
                 }
+                // Keymap preset. Switching swaps the BASE shortcut table
+                // only — user overrides are kept and keep winning over it
+                // (hotkeys_qt::active_bindings_with), so Default <-> Vim is
+                // lossless. `keymapIndex` is republished with the groups, so
+                // the selection and the keycaps cannot disagree.
+                Row {
+                    id: keymapPicker
+                    anchors.right: closeX.left
+                    anchors.rightMargin: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 4
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        rightPadding: 6
+                        text: root.t("Keymap")
+                        color: theme.textMuted
+                        font.pixelSize: theme.fontLegal
+                    }
+                    Repeater {
+                        model: [{ "label": root.t("Default"), "index": 0 },
+                                { "label": root.t("Vim"), "index": 1 }]
+                        delegate: Rectangle {
+                            id: seg
+                            required property var modelData
+                            readonly property bool current:
+                                QbzHotkeys.keymapIndex === seg.modelData.index
+                            width: segLabel.implicitWidth + 20
+                            height: 26
+                            radius: theme.radiusSm
+                            color: seg.current
+                                ? theme.accent
+                                : (segArea.containsMouse ? theme.surfaceHover
+                                                         : "transparent")
+                            border.width: 1
+                            border.color: seg.current ? theme.accent
+                                                      : theme.borderSubtle
+                            Text {
+                                id: segLabel
+                                anchors.centerIn: parent
+                                text: seg.modelData.label
+                                color: seg.current ? theme.accentText
+                                                   : theme.textPrimary
+                                font.pixelSize: theme.fontLegal
+                                font.weight: theme.weightMedium
+                            }
+                            MouseArea {
+                                id: segArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: QbzHotkeys.setKeymap(seg.modelData.index)
+                            }
+                        }
+                    }
+                }
                 Item {
                     id: closeX
                     anchors.right: parent.right

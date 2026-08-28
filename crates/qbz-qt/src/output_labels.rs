@@ -113,17 +113,20 @@ pub fn output_labels(audio: &AudioSettings) -> OutputLabels {
 /// route — i.e. moving the slider changes nothing in the signal path.
 ///
 /// This is not a guess: `PlaybackEngine::set_volume`
-/// (`qbz-player/src/player/playback_engine.rs`) is a documented NO-OP on the
-/// `AlsaDirect` arm unless `alsa_hardware_volume` is on, in which case it
-/// drives the DAC's own mixer instead (still bit-perfect, so the slider stays
-/// live). The route predicate also includes the selected device id: ALSA's
-/// system-default/sysdefault rows land on CPAL/Rodio and keep software volume,
-/// even if the plugin preference says `hw`.
+/// (`qbz-player/src/player/playback_engine.rs`) is a documented NO-OP on a
+/// direct sink without hardware volume. ALSA can opt into its DAC mixer via
+/// `alsa_hardware_volume`; WASAPI Exclusive deliberately has no such path.
+/// Both route predicates include the selected device id: their no-device
+/// fallbacks land on CPAL/Rodio and keep software volume.
 ///
 /// READ-ONLY derivation from the persisted `AudioSettings` — no audio
 /// behaviour is changed anywhere by this, the UI just stops lying about it.
 pub fn volume_locked(audio: &AudioSettings) -> bool {
-    qbz_audio::alsa_direct::uses_alsa_direct_route(audio) && !audio.alsa_hardware_volume
+    let alsa_direct =
+        qbz_audio::alsa_direct::uses_alsa_direct_route(audio) && !audio.alsa_hardware_volume;
+    let wasapi_exclusive = audio.backend_type == Some(AudioBackendType::WasapiExclusive)
+        && audio.output_device.is_some();
+    alsa_direct || wasapi_exclusive
 }
 
 /// Derive + push the four LED values (and the volume-lock flag) onto the
@@ -215,8 +218,8 @@ mod tests {
     }
 
     #[test]
-    fn volume_is_locked_only_on_the_alsa_direct_engine_without_hw_mixer() {
-        // Non-ALSA backends keep software volume.
+    fn volume_is_locked_only_on_direct_engines_without_a_usable_mixer() {
+        // Shared/routed backends keep software volume.
         for b in [
             None,
             Some(AudioBackendType::PipeWire),
@@ -248,6 +251,16 @@ mod tests {
         assert!(!volume_locked(&s));
         s.output_device = Some("sysdefault:CARD=USB".to_string());
         assert!(!volume_locked(&s));
+
+        // WASAPI Exclusive is another DirectSink and intentionally rules out
+        // endpoint volume. Without a chosen endpoint it falls back to shared
+        // CPAL, so that exact fallback keeps the slider live.
+        let mut wasapi = settings(Some(AudioBackendType::WasapiExclusive));
+        assert!(!volume_locked(&wasapi));
+        wasapi.output_device = Some("{endpoint-id}".to_string());
+        assert!(volume_locked(&wasapi));
+        wasapi.alsa_hardware_volume = true;
+        assert!(volume_locked(&wasapi));
     }
 
     #[test]

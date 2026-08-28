@@ -871,9 +871,27 @@ Rectangle {
                     }
                     event.accepted = true
                 } else if (event.key === Qt.Key_Escape) {
-                    if (QbzSearch.cortinillaOpen) {
+                    // Escape must ALWAYS hand the keyboard back. With the
+                    // dropdown shut this was a no-op, and since the central
+                    // gate refuses every binding while a text input holds
+                    // focus (AppShell.qml:133-139), the field was a trap with
+                    // no keyboard way out — reachable from Ctrl+f, and one
+                    // keystroke away under the Vim keymap's `/`.
+                    //
+                    // Focus is handed to the shell root by the same duck-walk
+                    // the modals use, not merely cleared: a null
+                    // activeFocusItem passes the gate but leaves AppShell's
+                    // Keys handler receiving nothing at all.
+                    if (QbzSearch.cortinillaOpen)
                         QbzSearch.cortinillaDismiss()
-                        event.accepted = true
+                    event.accepted = true
+                    var p = searchInput
+                    while (p.parent) {
+                        if (p.parent.isQbzShellRoot === true) {
+                            p.parent.forceActiveFocus()
+                            return
+                        }
+                        p = p.parent
                     }
                 }
             }

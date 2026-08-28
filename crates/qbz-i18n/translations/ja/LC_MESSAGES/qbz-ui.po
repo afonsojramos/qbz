@@ -6033,3 +6033,34 @@ msgstr "今後表示しない"
 
 msgid "I understand"
 msgstr "理解しました"
+# Hotkeys: the Spotify-parity playback actions + the keymap preset picker
+
+msgid "Volume Up"
+msgstr "音量を上げる"
+
+msgid "Volume Down"
+msgstr "音量を下げる"
+
+msgid "Mute / Unmute"
+msgstr "ミュート / 解除"
+
+msgid "Toggle Shuffle"
+msgstr "シャッフル切り替え"
+
+msgid "Cycle Repeat"
+msgstr "リピート切り替え"
+
+msgid "Like Track"
+msgstr "お気に入りに追加"
+
+msgid "Seek Forward"
+msgstr "早送り"
+
+msgid "Seek Back"
+msgstr "巻き戻し"
+
+msgid "Keymap"
+msgstr "キーマップ"
+
+msgid "Vim"
+msgstr "Vim"

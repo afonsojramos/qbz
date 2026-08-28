@@ -518,6 +518,18 @@ pub fn is_remote() -> bool {
     with_model(|m| m.is_remote).0
 }
 
+/// Read-only: the current output volume 0..1. The keyboard volume steps read
+/// it to compute the next value (the bars read the published property).
+pub(crate) fn volume() -> f32 {
+    with_model(|m| m.volume).0
+}
+
+/// Read-only mirror of `set_remote_volume_locked` — the active peer renderer
+/// disallows remote volume control. Half of the hotkeys' `volume_locked`.
+pub(crate) fn remote_volume_locked() -> bool {
+    with_model(|m| m.remote_volume_locked).0
+}
+
 /// The REMOTE volume lock (contract §11.3): the active peer Qobuz Connect
 /// renderer disallows remote volume control. Written from the qconnect sink's
 /// badge refresh alongside `set_remote`, and cleared by the facade's

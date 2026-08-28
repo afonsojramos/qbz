@@ -7,7 +7,7 @@
 //! block B1): the ONE brain behind the AppShell QML dispatcher (route (b),
 //! divergence K1 — a QML-side single dispatcher + a Rust brain, because
 //! cxx-qt-lib 0.7.3 ships no QEvent/QKeyEvent/installEventFilter plumbing).
-//! The pure model (the 23-action table, grammar, store, capture, groups, the
+//! The pure model (the 31-action table, grammar, store, capture, groups, the
 //! §1.2 Escape stack) lives in `hotkeys_qt.rs`; this file is the singleton
 //! surface + the §1.1 ordered pipeline.
 //!
@@ -65,6 +65,10 @@ pub mod qbz_hotkeys {
         #[qproperty(QString, groups_json)]
         // The customize header's "N modified" accent badge (§4.5).
         #[qproperty(i32, modified_count)]
+        // Active keymap preset as its selector index (0 = Default, 1 = Vim).
+        // Published alongside the groups so the editor's segmented control and
+        // the keycaps can never disagree about which preset is showing.
+        #[qproperty(i32, keymap_index)]
         // Capture state (§3.3): the action id being recorded ("" = not
         // recording), the live formatted pending combo, and the conflicting
         // action's label while a conflict is held.
@@ -109,6 +113,10 @@ pub mod qbz_hotkeys {
         fn reset_one(self: Pin<&mut QbzHotkeys>, id: QString);
         #[qinvokable]
         fn reset_all(self: Pin<&mut QbzHotkeys>);
+        /// Switch the keymap preset (0 = Default, 1 = Vim) + refresh. User
+        /// overrides are KEPT and keep winning over the new base.
+        #[qinvokable]
+        fn set_keymap(self: Pin<&mut QbzHotkeys>, index: i32);
         /// ui.showShortcuts target + the HeaderBar menu row: open the
         /// cheatsheet (and recompute the groups, §3.4 — recomputed on open).
         #[qinvokable]
@@ -133,6 +141,14 @@ pub mod qbz_hotkeys {
         /// is stale.
         #[qsignal]
         fn focus_search_requested(self: Pin<&mut QbzHotkeys>);
+
+        /// playback.favorite — the same QML seam as `focus_search_requested`.
+        /// The now-playing track id lives on QbzPlayer, not in the Rust
+        /// now-playing model, so AppShell answers this with the call the
+        /// player bar's own heart makes (`QbzQueue.queueToggleFavorite`),
+        /// empty-id guard included, instead of a second id resolution here.
+        #[qsignal]
+        fn favorite_requested(self: Pin<&mut QbzHotkeys>);
     }
 
     impl cxx_qt::Threading for QbzHotkeys {}
@@ -144,6 +160,7 @@ use qbz_hotkeys::QbzHotkeys;
 pub struct QbzHotkeysRust {
     groups_json: QString,
     modified_count: i32,
+    keymap_index: i32,
     recording_id: QString,
     pending_display: QString,
     conflict_label: QString,
@@ -156,6 +173,7 @@ impl Default for QbzHotkeysRust {
         Self {
             groups_json: QString::from(GROUPS_EMPTY),
             modified_count: 0,
+            keymap_index: 0,
             recording_id: QString::from(""),
             pending_display: QString::from(""),
             conflict_label: QString::from(""),
@@ -183,11 +201,13 @@ pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzHotkeys>) + Send + 'static) {
 /// pieces derived from the store). Called by `refresh`, `boot`, every store
 /// mutation, and the open verbs (§3.4 — recompute on open).
 fn publish_groups(mut this: Pin<&mut QbzHotkeys>) {
+    let keymap = crate::hotkeys_qt::active_keymap();
     let overrides = crate::hotkeys_qt::load_overrides();
-    let json = crate::hotkeys_qt::groups_json(&overrides);
-    let count = crate::hotkeys_qt::modified_count_with(&overrides);
+    let json = crate::hotkeys_qt::groups_json(keymap, &overrides);
+    let count = crate::hotkeys_qt::modified_count_with(keymap, &overrides);
     this.as_mut().set_groups_json(QString::from(json.as_str()));
     this.as_mut().set_modified_count(count);
+    this.as_mut().set_keymap_index(keymap.index());
 }
 
 /// Clear the capture triple (recording id + pending + conflict) — the shared
@@ -218,13 +238,51 @@ fn select_all_active() -> bool {
 /// §1.3 seek math, verbatim from keybindings.rs:572-581:
 /// `clamp(npElapsedSecs ± d, 0, npDurationSecs) / npDurationSecs`, same 1 Hz
 /// base (the now_playing model is fed by the poll pump — immersive D14).
-fn seek_relative(delta: i32) {
+pub(crate) fn seek_relative(delta: i32) {
     let (pos, duration) = crate::now_playing::position();
     if duration <= 0 {
         return;
     }
     let target = (pos + delta).clamp(0, duration);
     crate::transport_seek(target as f32 / duration as f32);
+}
+
+/// Keyboard volume step — the same 0.05 the player bars' +/- steppers use.
+pub(crate) const VOLUME_STEP: f32 = 0.05;
+
+/// The player bars' `volLocked` predicate (PlayerBar.qml:88-94) in Rust: the
+/// settings-derived ALSA-Direct hardware lock is LIFTED while a peer renderer
+/// owns playback, and the sink-pushed peer lock stands on its own. Without it
+/// the hotkey would move the on-screen slider for a change the engine
+/// documents as a no-op on that path.
+fn volume_locked() -> bool {
+    let settings_locked =
+        crate::output_labels::volume_locked(&crate::settings_qt::audio_settings());
+    (settings_locked && !crate::now_playing::is_remote())
+        || crate::now_playing::remote_volume_locked()
+}
+
+pub(crate) fn nudge_volume(delta: f32) {
+    if volume_locked() {
+        return;
+    }
+    crate::transport_set_volume((crate::now_playing::volume() + delta).clamp(0.0, 1.0));
+}
+
+/// Match the player bars' mute gate. On a direct/exclusive route without a
+/// usable mixer, toggling the model would claim the app is muted even though
+/// the sink deliberately ignores software gain.
+pub(crate) fn toggle_mute() {
+    if !volume_locked() {
+        crate::transport_toggle_mute();
+    }
+}
+
+/// The favorite target is owned by AppShell because the authoritative track
+/// id is a QbzPlayer property. Queue the same singleton signal when a global
+/// shortcut arrives through the separate mini-window dispatcher.
+pub(crate) fn request_favorite() {
+    ui(|mut h| h.as_mut().favorite_requested());
 }
 
 impl qbz_hotkeys::QbzHotkeys {
@@ -251,7 +309,15 @@ impl qbz_hotkeys::QbzHotkeys {
         let recording = self.recording_id().to_string();
         if !recording.is_empty() {
             let overrides = crate::hotkeys_qt::load_overrides();
-            match crate::hotkeys_qt::capture_step(&overrides, &recording, key, modifiers, &text) {
+            let keymap = crate::hotkeys_qt::active_keymap();
+            match crate::hotkeys_qt::capture_step(
+                keymap,
+                &overrides,
+                &recording,
+                key,
+                modifiers,
+                &text,
+            ) {
                 CaptureOutcome::Cancelled => {
                     clear_capture(self.as_mut());
                 }
@@ -309,6 +375,7 @@ impl qbz_hotkeys::QbzHotkeys {
         // gates live in hotkeys_qt::action_for_key).
         let overrides = crate::hotkeys_qt::load_overrides();
         let Some(action) = crate::hotkeys_qt::action_for_key(
+            crate::hotkeys_qt::active_keymap(),
             &overrides,
             key,
             modifiers,
@@ -351,6 +418,14 @@ impl qbz_hotkeys::QbzHotkeys {
             // here: it lives in `QbzMini::enter`, so this hotkey and the view
             // menu's row share ONE predicate (contract §4.10.1).
             "ui.miniPlayer" => crate::mini_bridge::toggle(),
+            "playback.volumeUp" => nudge_volume(VOLUME_STEP),
+            "playback.volumeDown" => nudge_volume(-VOLUME_STEP),
+            "playback.mute" => toggle_mute(),
+            "playback.shuffle" => crate::transport_toggle_shuffle(),
+            "playback.repeat" => crate::transport_cycle_repeat(),
+            "playback.favorite" => self.as_mut().favorite_requested(),
+            "playback.seekForward" => seek_relative(5),
+            "playback.seekBack" => seek_relative(-5),
             "focus.seekForward" => seek_relative(5),
             "focus.seekBack" => seek_relative(-5),
             "focus.seekForwardLong" => seek_relative(10),
@@ -418,6 +493,11 @@ impl qbz_hotkeys::QbzHotkeys {
 
     pub fn reset_all(self: Pin<&mut Self>) {
         crate::hotkeys_qt::reset_all();
+        publish_groups(self);
+    }
+
+    pub fn set_keymap(self: Pin<&mut Self>, index: i32) {
+        crate::hotkeys_qt::set_keymap(crate::hotkeys_qt::Keymap::from_index(index));
         publish_groups(self);
     }
 

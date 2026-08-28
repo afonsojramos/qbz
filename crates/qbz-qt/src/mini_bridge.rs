@@ -145,9 +145,10 @@ pub mod qbz_mini {
         #[qsignal]
         fn close_app_requested(self: Pin<&mut QbzMini>);
 
-        /// The MINI window's own key dispatcher (contract A-15, §4.9), 1:1 with
-        /// the reference's `dispatch_mini`
-        /// (`crates/qbz/src/keybindings.rs:623-648`). **No
+        /// The MINI window's own key dispatcher (contract A-15, §4.9), based
+        /// on the reference's `dispatch_mini`
+        /// (`crates/qbz/src/keybindings.rs:623-648`) plus the context-free
+        /// playback actions added post-port. **No
         /// `text_input_focused` argument** — the mini has no text fields, and
         /// `dispatch_mini` has no text-input guard either. `true` = consumed.
         #[qinvokable]
@@ -525,7 +526,13 @@ impl qbz_mini::QbzMini {
         let text = text.to_string();
         let overrides = crate::hotkeys_qt::load_overrides();
         let Some(action) =
-            crate::hotkeys_qt::action_for_mini_key(&overrides, key, modifiers, &text)
+            crate::hotkeys_qt::action_for_mini_key(
+                crate::hotkeys_qt::active_keymap(),
+                &overrides,
+                key,
+                modifiers,
+                &text,
+            )
         else {
             return false;
         };
@@ -549,8 +556,23 @@ impl qbz_mini::QbzMini {
             "playback.toggle" => crate::transport_toggle_play(),
             "playback.next" => crate::transport_next(),
             "playback.prev" => crate::transport_previous(),
-            // Nothing else is bound on the mini (§4.9): no arrow navigation,
-            // no volume keys, no seek keys.
+            // Context::None playback actions stay global in the separate mini
+            // window too. Keep these routed through the same helpers as the
+            // main dispatcher so direct/exclusive volume locks cannot diverge.
+            "playback.volumeUp" => {
+                crate::hotkeys_bridge::nudge_volume(crate::hotkeys_bridge::VOLUME_STEP)
+            }
+            "playback.volumeDown" => {
+                crate::hotkeys_bridge::nudge_volume(-crate::hotkeys_bridge::VOLUME_STEP)
+            }
+            "playback.mute" => crate::hotkeys_bridge::toggle_mute(),
+            "playback.shuffle" => crate::transport_toggle_shuffle(),
+            "playback.repeat" => crate::transport_cycle_repeat(),
+            "playback.favorite" => crate::hotkeys_bridge::request_favorite(),
+            "playback.seekForward" => crate::hotkeys_bridge::seek_relative(5),
+            "playback.seekBack" => crate::hotkeys_bridge::seek_relative(-5),
+            // Navigation and immersive-only actions still belong to the main
+            // window; unmatched Context::None rows propagate here.
             _ => return false,
         }
         true

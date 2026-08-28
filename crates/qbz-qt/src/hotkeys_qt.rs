@@ -1,8 +1,9 @@
 //! Keyboard / hotkeys layer — the PURE core (2026-08-03 hotkeys-port contract
 //! `qbz-nix-docs/qt-frontend/2026-08-03-hotkeys-port/00-CONTRACT.md` v2 §3,
-//! block B1). Byte-faithful port of the Slint `crates/qbz/src/keybindings.rs`
-//! model: the 23-action DEFAULTS table (:88-117 — NB its :3 "26 actions"
-//! comment is STALE, do not "fix" the count), the shortcut-string grammar
+//! block B1). Port of the Slint `crates/qbz/src/keybindings.rs`
+//! model: the DEFAULTS table (:88-117 — 23 actions at the time of the port;
+//! NB its :3 "26 actions" comment is STALE, do not "fix" the count), the
+//! shortcut-string grammar
 //! (:153-249), the bindings store + conflict detection (:256-323), the groups
 //! builder + three-column round-robin (:329-380), the capture semantics
 //! (:434-467) and the §1.2 Escape priority stack (:585-615).
@@ -11,6 +12,14 @@
 //! in hotkeys_bridge.rs; the core+bridge split is the suggestions_qt /
 //! suggestions_bridge precedent). Do NOT list this file in build.rs
 //! rust_files.
+//!
+//! TWO deliberate additions POST-port, both additive to the ported model:
+//! eight Playback actions the Slint table never had (volume, mute, shuffle,
+//! repeat, like, and a surface-independent seek — Spotify-inspired desktop
+//! controls),
+//! and the `Keymap` preset, which swaps the BASE shortcut table under the user
+//! overrides instead of rewriting them. Everything below still resolves
+//! through one action table and one canonical shortcut string.
 //!
 //! The one intentional DIFFERENCE from Slint is the token source (contract
 //! §3.1 HYBRID rule, round-1 F1): Slint reads winit's LOGICAL key, which is
@@ -31,7 +40,7 @@
 //! because the map is one key. Every pure function takes the overrides map as
 //! an argument, so the §3.5 unit tests never touch the real file.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
@@ -123,16 +132,74 @@ pub enum Context {
     Mini,
 }
 
+/// Which preset supplies the base shortcuts. User overrides sit on top of
+/// whichever base is active, so switching preset never discards them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Keymap {
+    #[default]
+    Default,
+    /// Modifier-free home-row bindings. `j`/`k` are deliberately left UNBOUND:
+    /// they belong to a per-list cursor, which QBZ has no notion of yet, and a
+    /// global action bound there today would have to be taken back the day one
+    /// lands.
+    Vim,
+}
+
+impl Keymap {
+    /// Persisted `ui_prefs.json` value. An unknown string reads as `Default` —
+    /// a typo must not unbind the app.
+    pub fn from_key(key: &str) -> Keymap {
+        match key {
+            "vim" => Keymap::Vim,
+            _ => Keymap::Default,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Keymap::Default => "default",
+            Keymap::Vim => "vim",
+        }
+    }
+
+    /// QML passes the selector's index; same unknown-reads-as-Default rule.
+    pub fn from_index(index: i32) -> Keymap {
+        match index {
+            1 => Keymap::Vim,
+            _ => Keymap::Default,
+        }
+    }
+
+    pub fn index(self) -> i32 {
+        match self {
+            Keymap::Default => 0,
+            Keymap::Vim => 1,
+        }
+    }
+}
+
 pub struct ActionDef {
     pub id: &'static str,
     pub label_en: &'static str,
     pub category: Category,
     pub default: &'static str,
+    /// Shortcut under `Keymap::Vim`; empty = the preset keeps `default`.
+    pub vim: &'static str,
     pub context: Context,
 }
 
-/// The full action table — a 1:1 port of the Tauri `ACTIONS` array
-/// (keybindings.rs:88-117; contract §2 verbatim).
+impl ActionDef {
+    /// This action's shortcut under `keymap`, BEFORE user overrides.
+    pub fn base(&self, keymap: Keymap) -> &'static str {
+        match keymap {
+            Keymap::Vim if !self.vim.is_empty() => self.vim,
+            _ => self.default,
+        }
+    }
+}
+
+/// The full action table — the ported Tauri `ACTIONS` array plus the additive
+/// playback actions and optional Vim bases described above.
 pub const ACTIONS: &[ActionDef] = &[
     // Playback
     ActionDef {
@@ -140,6 +207,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Play / Pause",
         category: Category::Playback,
         default: "Space",
+        vim: "",
         context: Context::None,
     },
     ActionDef {
@@ -147,6 +215,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Next Track",
         category: Category::Playback,
         default: "Ctrl+ArrowRight",
+        vim: "n",
         context: Context::None,
     },
     ActionDef {
@@ -154,6 +223,74 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Previous Track",
         category: Category::Playback,
         default: "Ctrl+ArrowLeft",
+        vim: "p",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.volumeUp",
+        label_en: "Volume Up",
+        category: Category::Playback,
+        default: "Ctrl+ArrowUp",
+        vim: "Shift+K",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.volumeDown",
+        label_en: "Volume Down",
+        category: Category::Playback,
+        default: "Ctrl+ArrowDown",
+        vim: "Shift+J",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.mute",
+        label_en: "Mute / Unmute",
+        category: Category::Playback,
+        default: "m",
+        vim: "",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.shuffle",
+        label_en: "Toggle Shuffle",
+        category: Category::Playback,
+        default: "Ctrl+s",
+        vim: "s",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.repeat",
+        label_en: "Cycle Repeat",
+        category: Category::Playback,
+        default: "Ctrl+r",
+        vim: "r",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.favorite",
+        label_en: "Like Track",
+        category: Category::Playback,
+        default: "Alt+Shift+B",
+        vim: "f",
+        context: Context::None,
+    },
+    // Seek from ANY surface. The `focus.seek*` rows below stay bare arrows and
+    // stay immersive-only: there the arrows are free, everywhere else they
+    // belong to whatever the pointer is over.
+    ActionDef {
+        id: "playback.seekForward",
+        label_en: "Seek Forward",
+        category: Category::Playback,
+        default: "Ctrl+Shift+ArrowRight",
+        vim: "l",
+        context: Context::None,
+    },
+    ActionDef {
+        id: "playback.seekBack",
+        label_en: "Seek Back",
+        category: Category::Playback,
+        default: "Ctrl+Shift+ArrowLeft",
+        vim: "h",
         context: Context::None,
     },
     // Navigation
@@ -162,6 +299,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Go Back",
         category: Category::Navigation,
         default: "Alt+ArrowLeft",
+        vim: "Ctrl+o",
         context: Context::None,
     },
     ActionDef {
@@ -169,6 +307,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Go Forward",
         category: Category::Navigation,
         default: "Alt+ArrowRight",
+        vim: "Ctrl+i",
         context: Context::None,
     },
     ActionDef {
@@ -176,6 +315,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Search",
         category: Category::Navigation,
         default: "Ctrl+f",
+        vim: "/",
         context: Context::None,
     },
     ActionDef {
@@ -183,6 +323,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Settings",
         category: Category::Navigation,
         default: "Ctrl+,",
+        vim: "",
         context: Context::None,
     },
     // Interface
@@ -191,6 +332,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Toggle Sidebar",
         category: Category::Ui,
         default: "Shift+S",
+        vim: "",
         context: Context::None,
     },
     ActionDef {
@@ -198,6 +340,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Immersive Mode",
         category: Category::Ui,
         default: "Shift+I",
+        vim: "z",
         context: Context::None,
     },
     ActionDef {
@@ -205,6 +348,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Queue",
         category: Category::Ui,
         default: "q",
+        vim: "",
         context: Context::None,
     },
     ActionDef {
@@ -212,6 +356,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Close / Dismiss",
         category: Category::Ui,
         default: "Escape",
+        vim: "",
         context: Context::None,
     },
     ActionDef {
@@ -219,6 +364,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Show Shortcuts",
         category: Category::Ui,
         default: "?",
+        vim: "",
         context: Context::None,
     },
     ActionDef {
@@ -226,6 +372,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Open Music Link",
         category: Category::Ui,
         default: "Ctrl+l",
+        vim: "",
         context: Context::None,
     },
     ActionDef {
@@ -233,6 +380,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Toggle Mini Player",
         category: Category::Ui,
         default: "Shift+M",
+        vim: "",
         context: Context::None,
     },
     // Immersive (contextual)
@@ -241,6 +389,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Seek Forward (5s)",
         category: Category::Immersive,
         default: "ArrowRight",
+        vim: "",
         context: Context::Immersive,
     },
     ActionDef {
@@ -248,6 +397,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Seek Back (5s)",
         category: Category::Immersive,
         default: "ArrowLeft",
+        vim: "",
         context: Context::Immersive,
     },
     ActionDef {
@@ -255,6 +405,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Seek Forward (10s)",
         category: Category::Immersive,
         default: "Shift+ArrowRight",
+        vim: "",
         context: Context::Immersive,
     },
     ActionDef {
@@ -262,6 +413,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Seek Back (10s)",
         category: Category::Immersive,
         default: "Shift+ArrowLeft",
+        vim: "",
         context: Context::Immersive,
     },
     // Mini Player (contextual — dispatched on the mini window)
@@ -270,6 +422,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Micro View",
         category: Category::Mini,
         default: "1",
+        vim: "",
         context: Context::Mini,
     },
     ActionDef {
@@ -277,6 +430,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Compact View",
         category: Category::Mini,
         default: "2",
+        vim: "",
         context: Context::Mini,
     },
     ActionDef {
@@ -284,6 +438,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Artwork View",
         category: Category::Mini,
         default: "3",
+        vim: "",
         context: Context::Mini,
     },
     ActionDef {
@@ -291,6 +446,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Listen list",
         category: Category::Mini,
         default: "4",
+        vim: "",
         context: Context::Mini,
     },
     ActionDef {
@@ -298,6 +454,7 @@ pub const ACTIONS: &[ActionDef] = &[
         label_en: "Lyrics View",
         category: Category::Mini,
         default: "5",
+        vim: "",
         context: Context::Mini,
     },
 ];
@@ -459,21 +616,61 @@ pub(crate) fn load_overrides() -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The active binding map (defaults overlaid with the user's overrides,
-/// keybindings.rs:256-268). Overrides apply to KNOWN ids only; an unknown id
-/// is silently ignored here but KEPT in the file (a stale override rides
-/// along untouched — contract trap 3, RFB H5).
-pub fn active_bindings_with(overrides: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+/// The active binding map: the `keymap` preset's bases overlaid with the
+/// user's overrides (keybindings.rs:256-268). Overrides apply to KNOWN ids
+/// only; an unknown id is silently ignored here but KEPT in the file (a stale
+/// override rides along untouched — contract trap 3, RFB H5).
+///
+/// Overrides win over a base. A base shortcut some override has already taken
+/// leaves ITS action UNBOUND ("") instead of double-binding the combo:
+/// `action_for_shortcut` breaks a tie by BTreeMap id order, so a duplicate
+/// would silently hand the key to whichever action sorts first. Only reachable
+/// by switching preset with overrides in place — `apply_binding` refuses a
+/// conflict outright — and the empty binding is visible as a blank keycap in
+/// the editor rather than a wrong one.
+pub fn active_bindings_with(
+    keymap: Keymap,
+    overrides: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut claimed: BTreeSet<&str> = overrides
+        .iter()
+        .filter(|(id, _)| action(id).is_some())
+        .map(|(_, sc)| sc.as_str())
+        .collect();
     let mut map: BTreeMap<String, String> = BTreeMap::new();
     for a in ACTIONS {
-        map.insert(a.id.to_string(), a.default.to_string());
-    }
-    for (id, shortcut) in overrides {
-        if map.contains_key(id) {
-            map.insert(id.clone(), shortcut.clone());
+        if let Some(shortcut) = overrides.get(a.id) {
+            map.insert(a.id.to_string(), shortcut.clone());
+            continue;
+        }
+        let base = a.base(keymap);
+        if claimed.contains(base) {
+            map.insert(a.id.to_string(), String::new());
+        } else {
+            claimed.insert(base);
+            map.insert(a.id.to_string(), base.to_string());
         }
     }
     map
+}
+
+/// The persisted preset (`ui_prefs.json` -> `keymap`), shared with the Slint
+/// build the same way the `keybindings` map is.
+pub fn active_keymap() -> Keymap {
+    let key = crate::settings_qt::pref_json("keymap")
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+    Keymap::from_key(&key)
+}
+
+/// Persist the preset. User overrides are deliberately KEPT — they ride on top
+/// of the new base (see `active_bindings_with`), so switching to Vim and back
+/// is lossless.
+pub fn set_keymap(keymap: Keymap) {
+    crate::settings_qt::save_pref(
+        "keymap",
+        serde_json::Value::String(keymap.key().to_string()),
+    );
 }
 
 fn action_for_shortcut<'a>(
@@ -496,7 +693,8 @@ fn conflicting_action(
     bindings: &BTreeMap<String, String>,
 ) -> Option<&'static ActionDef> {
     for (id, sc) in bindings {
-        if sc == shortcut && id != exclude {
+        // "" is the unbound marker from `active_bindings_with`, never a combo.
+        if !sc.is_empty() && sc == shortcut && id != exclude {
             return action(id);
         }
     }
@@ -508,16 +706,20 @@ fn conflicting_action(
 /// override (keeps the file minimal — back-to-default pruning, contract
 /// trap 3). On true the caller persists the map.
 pub fn apply_binding(
+    keymap: Keymap,
     overrides: &mut BTreeMap<String, String>,
     action_id: &str,
     shortcut: &str,
 ) -> bool {
-    let bindings = active_bindings_with(overrides);
+    let bindings = active_bindings_with(keymap, overrides);
     if conflicting_action(shortcut, action_id, &bindings).is_some() {
         return false;
     }
-    let default = action(action_id).map(|a| a.default);
-    if Some(shortcut) == default {
+    // Back-to-BASE (not back-to-`default`) pruning: under Vim the preset's own
+    // shortcut is what "unmodified" means, so rebinding to it drops the
+    // override exactly as it does under Default.
+    let base = action(action_id).map(|a| a.base(keymap));
+    if Some(shortcut) == base {
         overrides.remove(action_id);
     } else {
         overrides.insert(action_id.to_string(), shortcut.to_string());
@@ -538,7 +740,7 @@ fn save_overrides(overrides: &BTreeMap<String, String>) {
 /// Persist a new binding. Returns false (and writes nothing) on a conflict.
 pub fn set_binding(action_id: &str, shortcut: &str) -> bool {
     let mut overrides = load_overrides();
-    if !apply_binding(&mut overrides, action_id, shortcut) {
+    if !apply_binding(active_keymap(), &mut overrides, action_id, shortcut) {
         return false;
     }
     save_overrides(&overrides);
@@ -579,14 +781,20 @@ pub struct Group {
 /// The 5 groups in `Category::ORDER`, labels localized via `qbz_i18n::t`
 /// (fallback = the English msgid — the inherited gap, contract §5; the 20
 /// missing msgids were added to the 7 non-en catalogs in this same block).
-pub fn build_groups(overrides: &BTreeMap<String, String>) -> Vec<Group> {
-    let bindings = active_bindings_with(overrides);
+pub fn build_groups(keymap: Keymap, overrides: &BTreeMap<String, String>) -> Vec<Group> {
+    let bindings = active_bindings_with(keymap, overrides);
     let mut groups: Vec<Group> = Vec::new();
     for cat in Category::ORDER {
         let mut rows: Vec<GroupRow> = Vec::new();
         for a in ACTIONS.iter().filter(|a| a.category == cat) {
             let shortcut = bindings.get(a.id).cloned().unwrap_or_default();
-            let modified = bindings.get(a.id).map(|s| s.as_str()) != Some(a.default);
+            // A preset collision can leave this base action visibly unbound
+            // even though the user never edited it. Only a meaningful stored
+            // override gets a reset affordance; otherwise resetOne would be a
+            // button that cannot change the row.
+            let modified = overrides
+                .get(a.id)
+                .is_some_and(|shortcut| shortcut != a.base(keymap));
             rows.push(GroupRow {
                 id: a.id.to_string(),
                 label: qbz_i18n::t(a.label_en),
@@ -603,11 +811,14 @@ pub fn build_groups(overrides: &BTreeMap<String, String>) -> Vec<Group> {
     groups
 }
 
-pub fn modified_count_with(overrides: &BTreeMap<String, String>) -> i32 {
-    let bindings = active_bindings_with(overrides);
+pub fn modified_count_with(keymap: Keymap, overrides: &BTreeMap<String, String>) -> i32 {
     ACTIONS
         .iter()
-        .filter(|a| bindings.get(a.id).map(|s| s.as_str()) != Some(a.default))
+        .filter(|a| {
+            overrides
+                .get(a.id)
+                .is_some_and(|shortcut| shortcut != a.base(keymap))
+        })
         .count() as i32
 }
 
@@ -616,8 +827,8 @@ pub fn modified_count_with(overrides: &BTreeMap<String, String>) -> i32 {
 /// cheatsheet/editor render three Repeater columns from one doc.
 /// `{"col1":[Group…],"col2":[…],"col3":[…]}` — full shape ALWAYS (trap 15:
 /// never "{}").
-pub fn groups_json(overrides: &BTreeMap<String, String>) -> String {
-    let groups = build_groups(overrides);
+pub fn groups_json(keymap: Keymap, overrides: &BTreeMap<String, String>) -> String {
+    let groups = build_groups(keymap, overrides);
     let mut cols: [Vec<Group>; 3] = Default::default();
     for (i, g) in groups.into_iter().enumerate() {
         cols[i % 3].push(g);
@@ -651,6 +862,7 @@ pub enum CaptureOutcome {
 }
 
 pub fn capture_step(
+    keymap: Keymap,
     overrides: &BTreeMap<String, String>,
     action_id: &str,
     key: i32,
@@ -667,7 +879,7 @@ pub fn capture_step(
     let Some(shortcut) = shortcut_from_parts(ctrl, alt, shift, &token) else {
         return CaptureOutcome::Ignored;
     };
-    let bindings = active_bindings_with(overrides);
+    let bindings = active_bindings_with(keymap, overrides);
     if let Some(conflict) = conflicting_action(&shortcut, action_id, &bindings) {
         return CaptureOutcome::Conflict {
             display: format_display(&shortcut),
@@ -688,6 +900,7 @@ pub fn capture_step(
 /// mini.* actions are kept in the table for binding-file compat + the
 /// cheatsheet, contract §2/K3).
 pub fn action_for_key(
+    keymap: Keymap,
     overrides: &BTreeMap<String, String>,
     key: i32,
     modifiers: i32,
@@ -697,7 +910,7 @@ pub fn action_for_key(
     let (ctrl, alt, shift) = mods_from_qt(modifiers);
     let token = token_from_qt_key(key, modifiers, text)?;
     let shortcut = shortcut_from_parts(ctrl, alt, shift, &token)?;
-    let bindings = active_bindings_with(overrides);
+    let bindings = active_bindings_with(keymap, overrides);
     let action = action_for_shortcut(&shortcut, &bindings)?;
     match action.context {
         Context::Immersive if !immersive_open => None,
@@ -714,13 +927,14 @@ pub fn action_for_key(
 /// not, because the immersive overlay lives on the main window, which is hidden
 /// while the mini is up. This mirrors the reference's split: `dispatch_mini`
 /// (`crates/qbz/src/keybindings.rs:623-648`) resolves over the same ACTIVE
-/// bindings — user overrides respected — and its table is exactly the mini + the
-/// three global playback rows.
+/// bindings — user overrides respected — and its table is the mini actions plus
+/// every context-free playback row.
 ///
 /// **`action_for_key`'s `Context::Mini => None` arm (`:572`) does NOT change.**
 /// The main window must keep rejecting mini actions and the test at
 /// `immersive_actions_are_gated_on_the_overlay_and_mini_never_fires` asserts it.
 pub fn action_for_mini_key(
+    keymap: Keymap,
     overrides: &BTreeMap<String, String>,
     key: i32,
     modifiers: i32,
@@ -729,7 +943,7 @@ pub fn action_for_mini_key(
     let (ctrl, alt, shift) = mods_from_qt(modifiers);
     let token = token_from_qt_key(key, modifiers, text)?;
     let shortcut = shortcut_from_parts(ctrl, alt, shift, &token)?;
-    let bindings = active_bindings_with(overrides);
+    let bindings = active_bindings_with(keymap, overrides);
     let action = action_for_shortcut(&shortcut, &bindings)?;
     match action.context {
         Context::Immersive => None,
@@ -977,7 +1191,7 @@ mod tests {
 
     #[test]
     fn conflict_is_exact_string_under_a_different_id() {
-        let bindings = active_bindings_with(&no_overrides());
+        let bindings = active_bindings_with(Keymap::Default, &no_overrides());
         // "q" is ui.queue's default — recording ui.sidebar sees the conflict.
         let conflict = conflicting_action("q", "ui.sidebar", &bindings).unwrap();
         assert_eq!(conflict.id, "ui.queue");
@@ -994,10 +1208,10 @@ mod tests {
         let mut overrides = no_overrides();
         overrides.insert("ui.queue".into(), "w".into());
         overrides.insert("stale.removed.action".into(), "x".into()); // unknown id
-        let bindings = active_bindings_with(&overrides);
+        let bindings = active_bindings_with(Keymap::Default, &overrides);
         assert_eq!(bindings.get("ui.queue").unwrap(), "w");
-        // The known count is exactly the 23 actions; the stale id is absent.
-        assert_eq!(bindings.len(), 23);
+        // The known count is exactly the action table; the stale id is absent.
+        assert_eq!(bindings.len(), ACTIONS.len());
         assert!(!bindings.contains_key("stale.removed.action"));
         // …but the overrides map itself is untouched (kept in the file).
         assert_eq!(overrides.get("stale.removed.action").unwrap(), "x");
@@ -1008,7 +1222,7 @@ mod tests {
     #[test]
     fn apply_binding_refuses_conflicts_without_touching_the_map() {
         let mut overrides = no_overrides();
-        assert!(!apply_binding(&mut overrides, "ui.sidebar", "q"));
+        assert!(!apply_binding(Keymap::Default, &mut overrides, "ui.sidebar", "q"));
         assert!(overrides.is_empty());
     }
 
@@ -1016,23 +1230,23 @@ mod tests {
     fn apply_binding_back_to_default_prunes_the_override() {
         let mut overrides = no_overrides();
         overrides.insert("ui.queue".into(), "w".into());
-        assert!(apply_binding(&mut overrides, "ui.queue", "q")); // "q" = default
+        assert!(apply_binding(Keymap::Default, &mut overrides, "ui.queue", "q")); // "q" = default
         assert!(!overrides.contains_key("ui.queue"));
     }
 
     #[test]
     fn apply_binding_writes_a_clean_rebind() {
         let mut overrides = no_overrides();
-        assert!(apply_binding(&mut overrides, "ui.queue", "w"));
+        assert!(apply_binding(Keymap::Default, &mut overrides, "ui.queue", "w"));
         assert_eq!(overrides.get("ui.queue").unwrap(), "w");
-        assert_eq!(modified_count_with(&overrides), 1);
+        assert_eq!(modified_count_with(Keymap::Default, &overrides), 1);
     }
 
     // --- Round-robin split {Playback,Immersive}/{Navigation,Mini}/{Interface}
 
     #[test]
     fn groups_split_round_robin_into_three_columns() {
-        let doc: serde_json::Value = serde_json::from_str(&groups_json(&no_overrides())).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&groups_json(Keymap::Default, &no_overrides())).unwrap();
         let labels = |col: &str| -> Vec<String> {
             doc[col]
                 .as_array()
@@ -1048,7 +1262,7 @@ mod tests {
 
     #[test]
     fn groups_rows_carry_id_label_shortcut_modified_contextual() {
-        let doc: serde_json::Value = serde_json::from_str(&groups_json(&no_overrides())).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&groups_json(Keymap::Default, &no_overrides())).unwrap();
         let row = &doc["col1"][0]["rows"][0];
         assert_eq!(row["id"], "playback.toggle");
         assert_eq!(row["label"], "Play / Pause"); // en fallback (msgid)
@@ -1157,12 +1371,12 @@ mod tests {
     fn capture_escape_cancels_and_bare_modifiers_are_ignored() {
         let overrides = no_overrides();
         assert_eq!(
-            capture_step(&overrides, "ui.queue", QT_KEY_ESCAPE, 0, ""),
+            capture_step(Keymap::Default, &overrides, "ui.queue", QT_KEY_ESCAPE, 0, ""),
             CaptureOutcome::Cancelled
         );
         // Qt.Key_Shift alone → Ignored (keep recording).
         assert_eq!(
-            capture_step(&overrides, "ui.queue", 0x0100_0020, QT_SHIFT, ""),
+            capture_step(Keymap::Default, &overrides, "ui.queue", 0x0100_0020, QT_SHIFT, ""),
             CaptureOutcome::Ignored
         );
     }
@@ -1172,7 +1386,7 @@ mod tests {
         let overrides = no_overrides();
         // Recording ui.sidebar, the user presses "q" (ui.queue's binding).
         let key_q = QT_KEY_A + 16;
-        match capture_step(&overrides, "ui.sidebar", key_q, 0, "q") {
+        match capture_step(Keymap::Default, &overrides, "ui.sidebar", key_q, 0, "q") {
             CaptureOutcome::Conflict { display, label } => {
                 assert_eq!(display, "Q");
                 assert_eq!(label, "Queue"); // en fallback msgid
@@ -1182,7 +1396,7 @@ mod tests {
         // A clean combo binds.
         let key_w = QT_KEY_A + 22;
         assert_eq!(
-            capture_step(&overrides, "ui.queue", key_w, 0, "w"),
+            capture_step(Keymap::Default, &overrides, "ui.queue", key_w, 0, "w"),
             CaptureOutcome::Bound {
                 shortcut: "w".into()
             }
@@ -1195,14 +1409,14 @@ mod tests {
     fn immersive_actions_are_gated_on_the_overlay_and_mini_never_fires() {
         let overrides = no_overrides();
         // ArrowRight with immersive CLOSED → miss.
-        assert!(action_for_key(&overrides, QT_KEY_RIGHT, 0, "", false).is_none());
+        assert!(action_for_key(Keymap::Default, &overrides, QT_KEY_RIGHT, 0, "", false).is_none());
         // …open → focus.seekForward.
-        let a = action_for_key(&overrides, QT_KEY_RIGHT, 0, "", true).unwrap();
+        let a = action_for_key(Keymap::Default, &overrides, QT_KEY_RIGHT, 0, "", true).unwrap();
         assert_eq!(a.id, "focus.seekForward");
         // "1" is mini.micro — never on the main window.
-        assert!(action_for_key(&overrides, QT_KEY_0 + 1, 0, "1", false).is_none());
+        assert!(action_for_key(Keymap::Default, &overrides, QT_KEY_0 + 1, 0, "1", false).is_none());
         // A global action resolves regardless.
-        let a = action_for_key(&overrides, QT_KEY_SPACE, 0, " ", false).unwrap();
+        let a = action_for_key(Keymap::Default, &overrides, QT_KEY_SPACE, 0, " ", false).unwrap();
         assert_eq!(a.id, "playback.toggle");
     }
 
@@ -1213,16 +1427,30 @@ mod tests {
     fn the_mini_gate_is_the_mirror_of_the_main_one() {
         let overrides = no_overrides();
         // "1" is mini.micro — it fires HERE and nowhere else.
-        let a = action_for_mini_key(&overrides, QT_KEY_0 + 1, 0, "1").unwrap();
+        let a = action_for_mini_key(Keymap::Default, &overrides, QT_KEY_0 + 1, 0, "1").unwrap();
         assert_eq!(a.id, "mini.micro");
         // …and it is still refused on the main window (the arm was not widened).
-        assert!(action_for_key(&overrides, QT_KEY_0 + 1, 0, "1", false).is_none());
+        assert!(action_for_key(Keymap::Default, &overrides, QT_KEY_0 + 1, 0, "1", false).is_none());
         // A global action resolves on both.
-        let a = action_for_mini_key(&overrides, QT_KEY_SPACE, 0, " ").unwrap();
+        let a = action_for_mini_key(Keymap::Default, &overrides, QT_KEY_SPACE, 0, " ").unwrap();
         assert_eq!(a.id, "playback.toggle");
+        // Newly added context-free playback actions resolve here too; the
+        // mini bridge owns a matching dispatch arm for each of them.
+        let volume =
+            action_for_mini_key(Keymap::Default, &overrides, QT_KEY_UP, QT_CONTROL, "").unwrap();
+        assert_eq!(volume.id, "playback.volumeUp");
+        let seek = action_for_mini_key(
+            Keymap::Default,
+            &overrides,
+            QT_KEY_RIGHT,
+            QT_CONTROL | QT_SHIFT,
+            "",
+        )
+        .unwrap();
+        assert_eq!(seek.id, "playback.seekForward");
         // Immersive-context actions never fire on the mini: the overlay lives
         // on the main window, which is hidden while the mini is up.
-        assert!(action_for_mini_key(&overrides, QT_KEY_RIGHT, 0, "").is_none());
+        assert!(action_for_mini_key(Keymap::Default, &overrides, QT_KEY_RIGHT, 0, "").is_none());
     }
 
     #[test]
@@ -1237,5 +1465,148 @@ mod tests {
         // Bare "a" and Ctrl+b are out.
         assert!(!is_ctrl_a(key_a, 0, "a"));
         assert!(!is_ctrl_a(QT_KEY_A + 1, QT_CONTROL, ""));
+    }
+
+    // --- Keymap presets ----------------------------------------------------
+
+    /// Every preset must be internally conflict-free: two actions sharing a
+    /// combo would be resolved by BTreeMap id order, i.e. arbitrarily. This is
+    /// the gate on adding a row to ACTIONS with a colliding `vim` (or
+    /// `default`) shortcut — it fails at `cargo test`, not in someone's hands.
+    #[test]
+    fn every_preset_binds_each_shortcut_at_most_once() {
+        for keymap in [Keymap::Default, Keymap::Vim] {
+            let mut seen: BTreeMap<&str, &str> = BTreeMap::new();
+            for a in ACTIONS {
+                let base = a.base(keymap);
+                assert!(!base.is_empty(), "{} has no {keymap:?} shortcut", a.id);
+                if let Some(prev) = seen.insert(base, a.id) {
+                    panic!("{keymap:?}: {base:?} bound to both {prev} and {}", a.id);
+                }
+            }
+        }
+    }
+
+    /// `j`/`k` stay free for a future per-list cursor — the reason the volume
+    /// rows are Shift+J / Shift+K rather than the bare keys.
+    #[test]
+    fn vim_leaves_j_and_k_unbound() {
+        let bound: Vec<&str> = ACTIONS.iter().map(|a| a.base(Keymap::Vim)).collect();
+        assert!(!bound.contains(&"j"));
+        assert!(!bound.contains(&"k"));
+    }
+
+    #[test]
+    fn vim_swaps_the_bases_it_defines_and_inherits_the_rest() {
+        let vim = active_bindings_with(Keymap::Vim, &no_overrides());
+        assert_eq!(vim["nav.search"], "/");
+        assert_eq!(vim["playback.seekForward"], "l");
+        assert_eq!(vim["playback.volumeUp"], "Shift+K");
+        // No `vim` column -> the default rides through unchanged.
+        assert_eq!(vim["ui.queue"], "q");
+        assert_eq!(vim["nav.settings"], "Ctrl+,");
+        // Nothing counts as modified just because the preset changed.
+        assert_eq!(modified_count_with(Keymap::Vim, &no_overrides()), 0);
+    }
+
+    #[test]
+    fn vim_dispatches_its_own_bases() {
+        let ov = no_overrides();
+        let key_slash = 0x2f;
+        assert!(action_for_key(Keymap::Default, &ov, key_slash, 0, "/", false).is_none());
+        let a = action_for_key(Keymap::Vim, &ov, key_slash, 0, "/", false).unwrap();
+        assert_eq!(a.id, "nav.search");
+    }
+
+    /// An override wins over the preset base, and the action whose base it took
+    /// goes UNBOUND rather than sharing the combo. Reachable only by switching
+    /// preset with overrides already in place.
+    #[test]
+    fn an_override_beats_a_base_and_unbinds_the_action_it_displaced() {
+        let mut ov = no_overrides();
+        ov.insert("ui.queue".into(), "/".into());
+        let vim = active_bindings_with(Keymap::Vim, &ov);
+        assert_eq!(vim["ui.queue"], "/");
+        assert_eq!(vim["nav.search"], "", "displaced base must not double-bind");
+        // The unbound row resolves to nothing rather than to an arbitrary
+        // action, and "" never matches a real keypress.
+        let a = action_for_key(Keymap::Vim, &ov, 0x2f, 0, "/", false).unwrap();
+        assert_eq!(a.id, "ui.queue");
+        // Only the row the user actually changed is resettable/countable. The
+        // displaced search row has no override for resetOne to remove.
+        let groups = build_groups(Keymap::Vim, &ov);
+        let row = |id: &str| {
+            groups
+                .iter()
+                .flat_map(|group| group.rows.iter())
+                .find(|row| row.id == id)
+                .unwrap()
+        };
+        assert!(row("ui.queue").modified);
+        assert!(!row("nav.search").modified);
+        assert_eq!(modified_count_with(Keymap::Vim, &ov), 1);
+    }
+
+    /// Rebinding to the ACTIVE preset's own shortcut prunes the override, the
+    /// same way it does under Default.
+    #[test]
+    fn back_to_the_vim_base_prunes_the_override() {
+        let mut ov = no_overrides();
+        assert!(apply_binding(Keymap::Vim, &mut ov, "nav.search", "w"));
+        assert_eq!(ov.get("nav.search").map(String::as_str), Some("w"));
+        assert!(apply_binding(Keymap::Vim, &mut ov, "nav.search", "/"));
+        assert!(!ov.contains_key("nav.search"), "back-to-base must prune");
+    }
+
+    #[test]
+    fn unknown_keymap_keys_and_indexes_read_as_default() {
+        assert_eq!(Keymap::from_key("emacs"), Keymap::Default);
+        assert_eq!(Keymap::from_key(""), Keymap::Default);
+        assert_eq!(Keymap::from_key("vim"), Keymap::Vim);
+        assert_eq!(Keymap::from_index(7), Keymap::Default);
+        assert_eq!(Keymap::from_index(Keymap::Vim.index()), Keymap::Vim);
+        assert_eq!(Keymap::from_key(Keymap::Vim.key()), Keymap::Vim);
+    }
+
+    // --- The new Spotify-inspired actions ----------------------------------
+
+    #[test]
+    fn the_new_playback_actions_dispatch_on_their_defaults() {
+        let ov = no_overrides();
+        for (key, modifiers, text, id) in [
+            (QT_KEY_UP, QT_CONTROL, "", "playback.volumeUp"),
+            (QT_KEY_DOWN, QT_CONTROL, "", "playback.volumeDown"),
+            (QT_KEY_A + 12, 0, "m", "playback.mute"),
+            (QT_KEY_A + 18, QT_CONTROL, "", "playback.shuffle"),
+            (QT_KEY_A + 17, QT_CONTROL, "", "playback.repeat"),
+            (QT_KEY_A + 1, QT_ALT | QT_SHIFT, "", "playback.favorite"),
+            (QT_KEY_RIGHT, QT_CONTROL | QT_SHIFT, "", "playback.seekForward"),
+            (QT_KEY_LEFT, QT_CONTROL | QT_SHIFT, "", "playback.seekBack"),
+        ] {
+            let a = action_for_key(Keymap::Default, &ov, key, modifiers, text, false)
+                .unwrap_or_else(|| panic!("{id} did not resolve"));
+            assert_eq!(a.id, id);
+        }
+    }
+
+    /// The global seek rows fire anywhere; the immersive ones keep their bare
+    /// arrows and stay gated on the overlay.
+    #[test]
+    fn global_seek_is_context_free_and_immersive_seek_still_is_not() {
+        let ov = no_overrides();
+        let global = action_for_key(
+            Keymap::Default,
+            &ov,
+            QT_KEY_RIGHT,
+            QT_CONTROL | QT_SHIFT,
+            "",
+            false,
+        )
+        .unwrap();
+        assert_eq!(global.id, "playback.seekForward");
+        assert_eq!(global.context, Context::None);
+        assert!(action_for_key(Keymap::Default, &ov, QT_KEY_RIGHT, 0, "", false).is_none());
+        let imm = action_for_key(Keymap::Default, &ov, QT_KEY_RIGHT, 0, "", true).unwrap();
+        assert_eq!(imm.id, "focus.seekForward");
     }
 }

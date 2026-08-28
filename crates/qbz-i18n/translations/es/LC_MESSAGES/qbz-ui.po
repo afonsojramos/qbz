@@ -6057,3 +6057,34 @@ msgstr "No volver a mostrar"
 
 msgid "I understand"
 msgstr "Entiendo"
+# Hotkeys: the Spotify-parity playback actions + the keymap preset picker
+
+msgid "Volume Up"
+msgstr "Subir volumen"
+
+msgid "Volume Down"
+msgstr "Bajar volumen"
+
+msgid "Mute / Unmute"
+msgstr "Silenciar / activar sonido"
+
+msgid "Toggle Shuffle"
+msgstr "Activar/desactivar reproducción aleatoria"
+
+msgid "Cycle Repeat"
+msgstr "Cambiar modo de repetición"
+
+msgid "Like Track"
+msgstr "Marcar pista como favorita"
+
+msgid "Seek Forward"
+msgstr "Avanzar"
+
+msgid "Seek Back"
+msgstr "Retroceder"
+
+msgid "Keymap"
+msgstr "Mapa de teclas"
+
+msgid "Vim"
+msgstr "Vim"

@@ -1650,3 +1650,34 @@ msgstr "This ALSA device has no compatible hardware volume control. Direct playb
 
 msgid "QBZ could not fully release the previous audio device. See the audio log for details."
 msgstr "QBZ could not fully release the previous audio device. See the audio log for details."
+# Hotkeys: the Spotify-parity playback actions + the keymap preset picker
+
+msgid "Volume Up"
+msgstr "Volume Up"
+
+msgid "Volume Down"
+msgstr "Volume Down"
+
+msgid "Mute / Unmute"
+msgstr "Mute / Unmute"
+
+msgid "Toggle Shuffle"
+msgstr "Toggle Shuffle"
+
+msgid "Cycle Repeat"
+msgstr "Cycle Repeat"
+
+msgid "Like Track"
+msgstr "Like Track"
+
+msgid "Seek Forward"
+msgstr "Seek Forward"
+
+msgid "Seek Back"
+msgstr "Seek Back"
+
+msgid "Keymap"
+msgstr "Keymap"
+
+msgid "Vim"
+msgstr "Vim"
