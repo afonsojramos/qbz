@@ -6033,3 +6033,6 @@ msgstr "Album konnte nicht geladen werden"
 
 msgid "This album has no tracks."
 msgstr "Dieses Album enthält keine Titel."
+
+msgid "Reactive Rings"
+msgstr "Reaktive Ringe"

@@ -3,8 +3,8 @@
 // width=parent-48 (§5.2 of the 2026-08-02 immersive-port contract).
 //
 // Three zones:
-//   LEFT    — the view-menu trigger (44x36 glass) + a 256px QbzContextMenu
-//             popup with the FOCUS and SPLIT groups in SLINT ORDER. Every row
+//   LEFT    — a 122x36 previous | picker | next capsule + a wide three-column
+//             popup (two FOCUS columns, one SPLIT). Every row
 //             fires QbzImmersive.setView(...); the data-panel rows also fire
 //             their §5.5 entry load (Queue / Track Info / Suggestions —
 //             Lyrics needs nothing: Qt fetches lyrics automatically per
@@ -23,6 +23,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../controls"
 import "../theme"
@@ -41,8 +42,39 @@ Item {
     readonly property bool trailingTrigger:
         QbzShell.isMacos && !QbzShell.systemTitleBar
 
+    // Persistent custom-chrome drag strip. Tauri kept a top-level
+    // data-tauri-drag-region over Immersive, but the Qt port never brought
+    // that surface across; the full-coverage click blocker therefore left no
+    // route to start a system move. Declared FIRST so every real control below
+    // wins hit-testing, matching HeaderBar.qml's proven drag pattern.
+    MouseArea {
+        anchors.fill: parent
+        // Immersive must remain draggable whenever native chrome is absent,
+        // including the explicit hide-titlebar preference: there is no second
+        // title strip behind this overlay to rescue that configuration.
+        enabled: !QbzShell.systemTitleBar
+            && header.Window.window !== null
+            && header.Window.window.visibility !== Window.FullScreen
+        acceptedButtons: Qt.LeftButton
+        property bool dragStarted: false
+        onPressed: dragStarted = false
+        onReleased: dragStarted = false
+        onPositionChanged: {
+            if (pressed && !dragStarted && header.Window.window) {
+                dragStarted = true
+                header.Window.window.startSystemMove()
+            }
+        }
+        onDoubleClicked: {
+            var w = header.Window.window
+            if (w)
+                w.visibility = w.visibility === Window.Maximized
+                    ? Window.Windowed : Window.Maximized
+        }
+    }
 
-    // --- LEFT: the view menu ---------------------------------------------
+
+    // --- LEFT: previous | view menu | next -------------------------------
     Rectangle {
         id: viewTrigger
         // MACOS ONLY: over on the right, beside the capsule. Everywhere else it
@@ -65,7 +97,7 @@ Item {
         // no meaning. Reserving the maximum keeps both still.
         x: header.trailingTrigger ? header.width - 112 - 12 - width : 0
         anchors.verticalCenter: parent.verticalCenter
-        width: 44
+        width: 122
         height: 36
         // Half the height — same silhouette as the capsule it now sits beside.
         radius: height / 2
@@ -73,25 +105,81 @@ Item {
         color: "#80000000"
         border.width: 1
         border.color: "#2effffff"
-        QbzIcon {
-            name: "layout-grid"
-            width: 16
-            height: 16
-            anchors.centerIn: parent
-            tintName: "white"
+        clip: true
+
+        Rectangle {
+            width: 38
+            height: parent.height
+            color: previousArea.containsMouse ? "#18ffffff" : "transparent"
+            QbzIcon {
+                name: "chevron-left"
+                width: 15
+                height: 15
+                anchors.centerIn: parent
+                tintName: "white"
+            }
+            MouseArea {
+                id: previousArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: viewMenu.cycle(-1)
+            }
         }
-        MouseArea {
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: viewMenu.openBelowLeft(viewTrigger)
+
+        Rectangle {
+            x: 38
+            width: 46
+            height: parent.height
+            color: menuArea.containsMouse ? "#18ffffff" : "transparent"
+            QbzIcon {
+                name: "layout-grid"
+                width: 16
+                height: 16
+                anchors.centerIn: parent
+                tintName: "white"
+            }
+            MouseArea {
+                id: menuArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: viewMenu.openBelowLeft(viewTrigger)
+            }
         }
+
+        Rectangle {
+            x: 84
+            width: 38
+            height: parent.height
+            color: nextArea.containsMouse ? "#18ffffff" : "transparent"
+            QbzIcon {
+                name: "chevron-right"
+                width: 15
+                height: 15
+                anchors.centerIn: parent
+                tintName: "white"
+            }
+            MouseArea {
+                id: nextArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: viewMenu.cycle(1)
+            }
+        }
+
+        Rectangle { x: 38; width: 1; height: parent.height; color: "#24ffffff" }
+        Rectangle { x: 83; width: 1; height: parent.height; color: "#24ffffff" }
     }
 
     QbzContextMenu {
         id: viewMenu
-        menuWidth: 256
-        contentSpacing: 1
+        // The old single column could run past a short display. The owner
+        // explicitly chose a wider three-column picker: two balanced FOCUS
+        // columns and one SPLIT column.
+        menuWidth: 660
+        contentSpacing: 0
         // §5.2 popup chrome: #0b0b0ef7, radius 16 (Slint RRGGBBAA converted).
         background: Rectangle {
             color: "#f70b0b0e"
@@ -109,6 +197,82 @@ Item {
         //   "suggestions" -> QbzSuggestions.load(QbzPlayer.npTrackId) (B4)
         //   ""            -> none (Lyrics rows: Qt fetches lyrics
         //                    automatically per track, §5.5).
+        readonly property var focusRows: {
+            var rows = [
+                { "vm": 0, "m": 0, "sp": -1, "entry": "",
+                  "label": QbzSession.tr("Album Reactive", QbzSession.trRev) },
+                { "vm": 0, "m": 1, "sp": -1, "entry": "",
+                  "label": QbzSession.tr("Static", QbzSession.trRev) },
+                { "vm": 0, "m": 2, "sp": -1, "entry": "",
+                  "label": QbzSession.tr("Coverflow", QbzSession.trRev) },
+                { "vm": 0, "m": 4, "sp": -1, "entry": "",
+                  "label": QbzSession.tr("Lyrics", QbzSession.trRev) },
+                { "vm": 0, "m": 5, "sp": -1, "entry": "queue",
+                  "label": QbzSession.tr("Queue", QbzSession.trRev) },
+                { "vm": 0, "m": 3, "sp": -1, "entry": "",
+                  "label": QbzSession.tr("Spectrum", QbzSession.trRev) },
+                { "vm": 0, "m": 6, "sp": -1, "entry": "",
+                  "label": QbzSession.tr("Wave Bed", QbzSession.trRev) },
+                { "vm": 0, "m": 9, "sp": -1, "entry": "",
+                  "label": QbzSession.tr("Reactive Rings", QbzSession.trRev) },
+            ]
+            if (QbzShell.gpuTier) {
+                rows.push({ "vm": 0, "m": 7, "sp": -1, "entry": "",
+                            "label": QbzSession.tr("Goniometer", QbzSession.trRev) })
+                rows.push({ "vm": 0, "m": 8, "sp": -1, "entry": "",
+                            "label": QbzSession.tr("Oscilloscope", QbzSession.trRev) })
+            }
+            if (QbzShell.shaderScenesAvailable) {
+                rows.push(
+                    { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 1,
+                      "label": QbzSession.tr("Plasma", QbzSession.trRev) },
+                    { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 2,
+                      "label": QbzSession.tr("Tunnel", QbzSession.trRev) },
+                    { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 3,
+                      "label": QbzSession.tr("Aurora", QbzSession.trRev) },
+                    { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 7,
+                      "label": QbzSession.tr("Ambient", QbzSession.trRev) },
+                    { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 4,
+                      "label": QbzSession.tr("Spectral Ribbon", QbzSession.trRev) },
+                    { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 5,
+                      "label": QbzSession.tr("Line Bed", QbzSession.trRev) },
+                    { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 8,
+                      "label": QbzSession.tr("Tunnel Flow", QbzSession.trRev) })
+            }
+            return rows
+        }
+
+        readonly property var splitRows: [
+            { "vm": 1, "m": -1, "sp": 0, "entry": "",
+              "label": QbzSession.tr("Lyrics", QbzSession.trRev) },
+            { "vm": 1, "m": -1, "sp": 1, "entry": "trackinfo",
+              "label": QbzSession.tr("Track Info", QbzSession.trRev) },
+            { "vm": 1, "m": -1, "sp": 2, "entry": "suggestions",
+              "label": QbzSession.tr("Suggestions", QbzSession.trRev) },
+            { "vm": 1, "m": -1, "sp": 3, "entry": "queue",
+              "label": QbzSession.tr("Queue", QbzSession.trRev) },
+            { "vm": 1, "m": -1, "sp": 4, "entry": "",
+              "label": QbzSession.tr("Now Playing", QbzSession.trRev) },
+            { "vm": 1, "m": -1, "sp": 5, "entry": "",
+              "label": QbzSession.tr("Now Playing", QbzSession.trRev)
+                  + " · " + QbzSession.tr("Lyrics", QbzSession.trRev) },
+        ]
+
+        readonly property int focusCut: Math.ceil(focusRows.length / 2)
+
+        function rowIsActive(row) {
+            if (row.sc !== undefined && row.sc >= 0)
+                return QbzImmersive.viewMode === 0
+                    && QbzShaderScene.scene === row.sc
+            if (row.vm === 0)
+                return QbzImmersive.viewMode === 0
+                    && QbzImmersive.mode === row.m
+                    && QbzShaderScene.scene === 0
+            return QbzImmersive.viewMode === 1
+                && QbzImmersive.splitPanel === row.sp
+                && QbzShaderScene.scene === 0
+        }
+
         function fireRow(row) {
             if (row.sc !== undefined && row.sc >= 0) {
                 // Shader scene row: FOCUS view + scene N (Slint sets
@@ -136,6 +300,25 @@ Item {
             viewMenu.close()
         }
 
+        // The columns are presentation only. Arrow navigation is ONE circular
+        // sequence in menu order: every FOCUS panel/scene, then every SPLIT
+        // panel, crossing the family boundary in both directions.
+        function cycle(direction) {
+            var rows = focusRows.concat(splitRows)
+            if (rows.length === 0)
+                return
+            var current = -1
+            for (var i = 0; i < rows.length; ++i) {
+                if (rowIsActive(rows[i])) {
+                    current = i
+                    break
+                }
+            }
+            var next = current < 0 ? (direction < 0 ? rows.length - 1 : 0)
+                : (current + direction + rows.length) % rows.length
+            fireRow(rows[next])
+        }
+
         Component {
             id: menuRow
             Rectangle {
@@ -143,16 +326,7 @@ Item {
                 // A1: shader rows (sc >= 0) are active when their scene is
                 // on; FOCUS panel rows additionally require the scene OFF
                 // (Slint: `active: is-focus && sh == 0 && md == N`).
-                readonly property bool active: {
-                    if (modelData.sc !== undefined && modelData.sc >= 0)
-                        return QbzShaderScene.scene === modelData.sc
-                    if (modelData.vm === 0)
-                        return QbzImmersive.viewMode === 0
-                            && QbzImmersive.mode === modelData.m
-                            && QbzShaderScene.scene === 0
-                    return QbzImmersive.viewMode === 1
-                        && QbzImmersive.splitPanel === modelData.sp
-                }
+                readonly property bool active: viewMenu.rowIsActive(modelData)
                 width: parent ? parent.width : 0
                 height: 33
                 radius: 8
@@ -193,111 +367,67 @@ Item {
             }
         }
 
-        // Group headers: 11px / 700 / #ffffff80 / letter-spacing 1.5 /
-        // ALL-CAPS (:481-487). The msgids are already caps.
-        Text {
+        // Group headers: FOCUS spans its two balanced columns; SPLIT owns the
+        // third. The row below determines the popup's height from its tallest
+        // column, so the picker never needs its own scroll area.
+        Row {
+            width: viewMenu.availableWidth
             height: 26
-            leftPadding: 10
-            verticalAlignment: Text.AlignVCenter
-            text: QbzSession.tr("FOCUS", QbzSession.trRev)
-            color: "#80ffffff"
-            font.pixelSize: 11
-            font.weight: Font.Bold
-            font.letterSpacing: 1.5
-        }
-        Repeater {
-            // FOCUS owner order: the two reading surfaces sit directly below
-            // Coverflow; the reactive visualizers follow them. The two native
-            // scopes are appended only on the GPU tier: Software can draw
-            // their QML axes but not the scene-graph trace.
-            model: {
-                var rows = [
-                { "vm": 0, "m": 0, "sp": -1, "entry": "",
-                  "label": QbzSession.tr("Album Reactive", QbzSession.trRev) },
-                { "vm": 0, "m": 1, "sp": -1, "entry": "",
-                  "label": QbzSession.tr("Static", QbzSession.trRev) },
-                { "vm": 0, "m": 2, "sp": -1, "entry": "",
-                  "label": QbzSession.tr("Coverflow", QbzSession.trRev) },
-                { "vm": 0, "m": 4, "sp": -1, "entry": "",
-                  "label": QbzSession.tr("Lyrics", QbzSession.trRev) },
-                { "vm": 0, "m": 5, "sp": -1, "entry": "queue",
-                  "label": QbzSession.tr("Queue", QbzSession.trRev) },
-                { "vm": 0, "m": 3, "sp": -1, "entry": "",
-                  "label": QbzSession.tr("Spectrum", QbzSession.trRev) },
-                { "vm": 0, "m": 6, "sp": -1, "entry": "",
-                  "label": QbzSession.tr("Wave Bed", QbzSession.trRev) },
-                ]
-                if (QbzShell.gpuTier) {
-                    rows.push({ "vm": 0, "m": 7, "sp": -1, "entry": "",
-                                "label": QbzSession.tr("Goniometer", QbzSession.trRev) })
-                    rows.push({ "vm": 0, "m": 8, "sp": -1, "entry": "",
-                                "label": QbzSession.tr("Oscilloscope", QbzSession.trRev) })
-                }
-                return rows
+            spacing: 8
+            Text {
+                width: (parent.width - 16) / 3 * 2 + 8
+                height: parent.height
+                leftPadding: 10
+                verticalAlignment: Text.AlignVCenter
+                text: QbzSession.tr("FOCUS", QbzSession.trRev)
+                color: "#80ffffff"
+                font.pixelSize: 11
+                font.weight: Font.Bold
+                font.letterSpacing: 1.5
             }
-            delegate: menuRow
+            Text {
+                width: (parent.width - 16) / 3
+                height: parent.height
+                leftPadding: 10
+                verticalAlignment: Text.AlignVCenter
+                text: QbzSession.tr("SPLIT", QbzSession.trRev)
+                color: "#80ffffff"
+                font.pixelSize: 11
+                font.weight: Font.Bold
+                font.letterSpacing: 1.5
+            }
         }
-        Repeater {
-            // A1 shader rows (:654-711), inside the FOCUS group like Slint
-            // (no separate header there). SHIPPED scenes only — the Slint
-            // order is Plasma, Tunnel, Aurora, Ambient, Spectral Ribbon,
-            // Line Bed: Plasma shipped with A2, the Ribbon with A3; Liquid
-            // Spectrum is parked in Slint itself, so its row DOES NOT
-            // appear (00-CONTRACT ruling 1); Line Bed shipped with A4 and
-            // appears LAST here, the shipped-set tail.
-            // There is NO "Off" row (owner ruling 2026-08-15: Slint has
-            // none — a panel row already turns the scene off, and `g`
-            // cycles back to 0). The whole group hides on tiers that
-            // cannot run the shaders (the Slint `if shader-scenes-available`
-            // gates) — QbzShell.shaderScenesAvailable is the single source
-            // of truth, seeded from the Rust renderer probe. The six A-block
-            // labels are EXISTING qbz-ui msgids; B1's "Tunnel Flow" is the
-            // one NEW msgid (added to all 8 locales).
-            model: QbzShell.shaderScenesAvailable ? [
-                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 1,
-                  "label": QbzSession.tr("Plasma", QbzSession.trRev) },
-                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 2,
-                  "label": QbzSession.tr("Tunnel", QbzSession.trRev) },
-                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 3,
-                  "label": QbzSession.tr("Aurora", QbzSession.trRev) },
-                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 7,
-                  "label": QbzSession.tr("Ambient", QbzSession.trRev) },
-                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 4,
-                  "label": QbzSession.tr("Spectral Ribbon", QbzSession.trRev) },
-                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 5,
-                  "label": QbzSession.tr("Line Bed", QbzSession.trRev) },
-                // B1: Tunnel Flow (sc 8) — the QT-ONLY scene (spec 02),
-                // after Line Bed. Menu-only: NOT in the `g` ring (spec 02
-                // §5). NEW msgid (added to all 8 locales).
-                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 8,
-                  "label": QbzSession.tr("Tunnel Flow", QbzSession.trRev) },
-            ] : []
-            delegate: menuRow
-        }
-        Text {
-            height: 26
-            leftPadding: 10
-            verticalAlignment: Text.AlignVCenter
-            text: QbzSession.tr("SPLIT", QbzSession.trRev)
-            color: "#80ffffff"
-            font.pixelSize: 11
-            font.weight: Font.Bold
-            font.letterSpacing: 1.5
-        }
-        Repeater {
-            // SPLIT rows (:741-780): Lyrics(0), Track Info(1),
-            // Suggestions(2), Queue(3).
-            model: [
-                { "vm": 1, "m": -1, "sp": 0, "entry": "",
-                  "label": QbzSession.tr("Lyrics", QbzSession.trRev) },
-                { "vm": 1, "m": -1, "sp": 1, "entry": "trackinfo",
-                  "label": QbzSession.tr("Track Info", QbzSession.trRev) },
-                { "vm": 1, "m": -1, "sp": 2, "entry": "suggestions",
-                  "label": QbzSession.tr("Suggestions", QbzSession.trRev) },
-                { "vm": 1, "m": -1, "sp": 3, "entry": "queue",
-                  "label": QbzSession.tr("Queue", QbzSession.trRev) },
-            ]
-            delegate: menuRow
+
+        Row {
+            id: menuColumns
+            width: viewMenu.availableWidth
+            spacing: 8
+            readonly property real columnWidth: (width - spacing * 2) / 3
+
+            Column {
+                width: menuColumns.columnWidth
+                spacing: 1
+                Repeater {
+                    model: viewMenu.focusRows.slice(0, viewMenu.focusCut)
+                    delegate: menuRow
+                }
+            }
+            Column {
+                width: menuColumns.columnWidth
+                spacing: 1
+                Repeater {
+                    model: viewMenu.focusRows.slice(viewMenu.focusCut)
+                    delegate: menuRow
+                }
+            }
+            Column {
+                width: menuColumns.columnWidth
+                spacing: 1
+                Repeater {
+                    model: viewMenu.splitRows
+                    delegate: menuRow
+                }
+            }
         }
     }
 

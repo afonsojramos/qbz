@@ -627,6 +627,8 @@ fn main() {
                 "qml/immersive/ImmersiveView.qml",
                 "qml/immersive/LyricsFocusPanel.qml",
                 "qml/immersive/QueueTabsPanel.qml",
+                "qml/immersive/ReactiveRingsPanel.qml",
+                "qml/immersive/ReactiveSplitPanel.qml",
                 // Shader scenes (2026-08-15 immersive-completion contract,
                 // block A1): the bottom-most scene layer (Tunnel / Aurora /
                 // Ambient) driven by QbzShaderScene.

@@ -292,13 +292,14 @@ void main() {
     // turned furthest from both foreground families. Two jobs: it gives the
     // arcs and worms something to read against (they were bright objects on
     // void, which is what made the disc look like a cut-out), and it fills the
-    // space the arc gate deliberately leaves open. It is deliberately dim and
-    // slow — this is atmosphere, not a fourth animated element competing for
-    // attention.
+    // space the arc gate deliberately leaves open. The owner wants the Plasma
+    // field materially darker than the other scenes, so this wash stays around
+    // half its original injection while the foreground arcs/worms retain their
+    // full music-reactive range.
     vec2 aw = c * 1.6 + vec2(t * 0.045, -t * 0.038);
     float amb = vnoise(aw + curl_noise(aw) * 0.35);
     float vign = 1.0 - smoothstep(0.30, 0.95, r);
-    field += ambA * (0.030 + lvl * 0.055) * (0.35 + amb * 0.65) * (0.25 + vign * 0.75);
+    field += ambA * (0.016 + lvl * 0.030) * (0.35 + amb * 0.65) * (0.25 + vign * 0.75);
 
     // Treble sparkle on the crests — fast brilliance, so it fires with the
     // cymbals instead of glowing with the average.
