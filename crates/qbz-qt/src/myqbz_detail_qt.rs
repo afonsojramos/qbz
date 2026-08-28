@@ -1470,7 +1470,9 @@ fn resolve_from_tracks(item: &MixtapeCollectionItem, tracks: &[QueueTrack]) -> R
     // artwork channel reads a bare filesystem path.
     let artwork_url = first
         .and_then(|t| t.artwork_url.clone())
-        .map(|u| u.strip_prefix("file://").map(str::to_string).unwrap_or(u))
+        // NOT strip_prefix: the artwork channel wants a bare filesystem path,
+        // and on Windows a real file:// URL strips to `/C:/Users/...`.
+        .map(|u| qbz_models::fs_url::local_path(&u))
         .unwrap_or_default();
 
     let artist_id = first

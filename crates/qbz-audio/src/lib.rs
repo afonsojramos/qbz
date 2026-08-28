@@ -29,6 +29,10 @@
 #[cfg(target_os = "linux")]
 pub mod alsa_backend;
 pub mod alsa_direct;
+pub mod wasapi_direct;
+/// Endpoint capabilities: the exclusive-mode rate sweep and the hotplug watch.
+#[cfg(windows)]
+pub mod wasapi_backend;
 #[cfg(target_os = "linux")]
 pub mod alsa_error_handler;
 pub mod analysis;
@@ -64,6 +68,7 @@ pub use alsa_backend::{
     resolve_stable_to_current_hw,
 };
 pub use alsa_direct::AlsaDirectStream;
+pub use wasapi_direct::{Rung, LADDER};
 pub use analysis::SpectralAnalyzer;
 pub use analyzer_tap::{AnalyzerMessage, AnalyzerTap, AnalyzerWaveformTrack};
 pub use backend::{

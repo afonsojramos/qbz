@@ -6024,3 +6024,12 @@ msgstr "このアルバムには曲がありません。"
 
 msgid "Reactive Rings"
 msgstr "リアクティブリング"
+
+msgid "Windows — yes, but read this first"
+msgstr "Windows — はい、ただしまずこれをお読みください"
+
+msgid "Don't show this again"
+msgstr "今後表示しない"
+
+msgid "I understand"
+msgstr "理解しました"

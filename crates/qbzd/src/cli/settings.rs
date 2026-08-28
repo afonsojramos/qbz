@@ -136,8 +136,11 @@ fn parse_backend(v: &str) -> Result<Option<AudioBackendType>, String> {
         "alsa" => Ok(Some(AudioBackendType::Alsa)),
         "pulse" | "pulseaudio" => Ok(Some(AudioBackendType::Pulse)),
         "jack" => Ok(Some(AudioBackendType::Jack)),
+        "wasapi" | "wasapi-exclusive" | "wasapi_exclusive" | "wasapiexclusive" => {
+            Ok(Some(AudioBackendType::WasapiExclusive))
+        }
         other => Err(format!(
-            "invalid backend '{other}' — expected one of: system, pipewire, alsa, pulse, jack"
+            "invalid backend '{other}' — expected one of: system, pipewire, alsa, pulse, jack, wasapi"
         )),
     }
 }
@@ -148,6 +151,7 @@ fn render_backend(v: Option<AudioBackendType>) -> String {
         Some(AudioBackendType::Alsa) => "alsa".to_string(),
         Some(AudioBackendType::Pulse) => "pulse".to_string(),
         Some(AudioBackendType::Jack) => "jack".to_string(),
+        Some(AudioBackendType::WasapiExclusive) => "wasapi".to_string(),
         None => "auto".to_string(),
     }
 }
@@ -1335,10 +1339,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_backend_accepts_the_five_concrete_backends_only() {
+    fn parse_backend_accepts_the_concrete_backends_only() {
         assert_eq!(parse_backend("alsa"), Ok(Some(AudioBackendType::Alsa)));
         assert_eq!(parse_backend("PipeWire"), Ok(Some(AudioBackendType::PipeWire)));
         assert_eq!(parse_backend("system"), Ok(Some(AudioBackendType::SystemDefault)));
+        assert_eq!(parse_backend("wasapi"), Ok(Some(AudioBackendType::WasapiExclusive)));
+        assert_eq!(render_backend(Some(AudioBackendType::WasapiExclusive)), "wasapi");
         assert!(parse_backend("auto").is_err(), "Auto is omitted in v1 (03-setup-tui.md §3.2.1)");
         assert!(parse_backend("bogus").is_err());
     }

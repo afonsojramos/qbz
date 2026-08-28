@@ -1,3 +1,9 @@
+// No console window beside the GUI on Windows (W4). The file logger
+// (`qbz_log::install`) is unaffected; only the inherited stdio console goes.
+// If the offscreen smoke ever comes back with an empty log because of this,
+// the fix is AttachConsole(ATTACH_PARENT_PROCESS), not reverting this.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 //! qbz-qt — Qt/QML frontend POC entry point.
 //!
 //! Phase 1: boot flow (splash -> silent session restore -> shell
@@ -10,6 +16,8 @@ mod auth_qt;
 mod deep_link_qt;
 #[cfg(target_os = "linux")]
 mod single_instance_qt;
+// The Windows sibling. Carries its own `#![cfg(target_os = "windows")]`.
+mod single_instance_win;
 // Per-domain QML bridge singletons (phase 23 — the QbzBridge God-object
 // split). THE PATTERN (phase-1, replicated per domain file):
 //   1. one #[cxx_qt::bridge] mod per file (crate root — cxx-qt-build
@@ -386,6 +394,73 @@ mod tray_macos;
 // macOS) rather than a gated `mod` line, so the QbzShell invokable that
 // calls it needs no cfg of its own.
 mod macos_chrome;
+// Ungated: the C++ behind it is portable Qt, so every platform
+// type-checks the seam even though only Windows uses the handle.
+mod win_shell;
+
+/// Flush the session while Windows waits on WM_QUERYENDSESSION.
+///
+/// BOUNDED, and that is the whole design. Qt blocks inside `commitDataRequest`
+/// until this returns, and Windows starts terminating applications that have
+/// not answered after roughly five seconds -- so an unbounded save here does
+/// not protect the session, it gets the process killed halfway through writing
+/// it, which is worse than not trying.
+///
+/// So the save runs on its own thread and the GUI thread waits on a deadline
+/// comfortably under the OS limit. A `tokio::time::timeout` around the future
+/// would not do: it cannot preempt the synchronous SQLite section, which is
+/// the part that can actually take time.
+///
+/// If the deadline passes we return anyway and let the session end. The write
+/// either lands in the remaining moments or it does not; either way the shell
+/// is not left waiting, and the log says which happened.
+///
+/// `catch_unwind` because a panic must never cross the C ABI back into Qt's
+/// signal emission.
+#[cfg(target_os = "windows")]
+extern "C" fn on_session_commit_data() {
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+
+    /// Well under the ~5 s Windows allows before it stops waiting.
+    const COMMIT_DEADLINE: Duration = Duration::from_secs(3);
+
+    let _ = std::panic::catch_unwind(|| {
+        log::info!("[qbz-qt] session ending; persisting");
+        let (tx, rx) = channel::<()>();
+        let spawned = std::thread::Builder::new()
+            .name("qbz-session-commit".to_string())
+            .spawn(move || {
+                // `save_on_exit` block_on()s the capture on the tokio handle
+                // bound at shell entry. Safe from a plain thread; it would
+                // panic only from inside an async context, which this is not.
+                qbz_app::session_persist::save_on_exit();
+                let _ = tx.send(());
+            });
+        if let Err(e) = spawned {
+            log::warn!("[qbz-qt] could not spawn the session-commit thread: {e}");
+            return;
+        }
+        // Timeout and Disconnected are DIFFERENT and must not share a line: a
+        // panic in the worker drops the sender, which arrives here as
+        // Disconnected, and reporting that as "did not finish in time" would
+        // hide a crash behind a slow-disk story. The outer catch_unwind cannot
+        // see it -- it guards this thread, not that one.
+        match rx.recv_timeout(COMMIT_DEADLINE) {
+            Ok(()) => log::info!("[qbz-qt] session persisted before the session ended"),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => log::warn!(
+                "[qbz-qt] session persist did not finish within {}s; letting the session end",
+                COMMIT_DEADLINE.as_secs()
+            ),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                log::error!("[qbz-qt] the session-persist thread died before reporting")
+            }
+        }
+    });
+}
+// Windows tray. The file carries its own `#![cfg(target_os = "windows")]`,
+// matching how tray_macos/tray_linux are declared.
+mod tray_windows;
 // MPRIS / media keys (owner ruling K3, REVERSED by the owner on 2026-08-04
 // after smoking the tray: "no aparece por ejemplo en el widget de now playing
 // de KDE Plasma"). Plasma reads MPRIS, so this is what makes the desktop see
@@ -3153,6 +3228,12 @@ fn apply_renderer_preference() {
             if cfg!(target_os = "macos") {
                 log::info!("[renderer] '{choice}' on macOS -> Metal default (the Slint GL remap)");
                 false
+            } else if cfg!(target_os = "windows") {
+                // d3d11 is Qt's healthy default here; desktop GL / ANGLE is a
+                // downgrade, not the GPU tier this pref means. Same remap as
+                // macOS: honour the intent (GPU path), not the literal backend.
+                log::info!("[renderer] '{choice}' on Windows -> d3d11 default (the Slint GL remap)");
+                false
             } else {
                 std::env::set_var("QSG_RHI_BACKEND", "opengl");
                 log::info!("[renderer] '{choice}' -> QSG_RHI_BACKEND=opengl");
@@ -3297,6 +3378,15 @@ fn main() {
     // user-visible. The child uses its own Wayland connection; fatal protocol
     // errors cannot take this parent down.
     renderer_qt::preflight_saved_gpu_at_boot();
+    // Same decision, different primitive: a per-session named mutex arbitrates
+    // and a named pipe carries the handoff. `acquire_or_raise` has already
+    // forwarded this launch's deep link (or a bare PRESENT) by the time it
+    // answers false, so there is nothing left to do but leave.
+    #[cfg(target_os = "windows")]
+    if !single_instance_win::acquire_or_raise() {
+        log::info!("[qbz-qt] another instance owns the mutex; forwarded and exiting");
+        return;
+    }
     // Link anchor for the hand-written QAbstractListModel. Its QML singleton
     // registration itself runs at QCoreApplication startup.
     local_tracks_model_qt::register_qml_model();
@@ -3398,8 +3488,85 @@ fn main() {
     apply_renderer_preference();
     apply_scroll_physics();
 
+    // FONT ENGINE (Windows). Qt's default rasteriser on Windows renders the
+    // lyric text thin and jagged - the owner's words were "como fuente de
+    // bloc de notas con extra alias", and the same text is clean under
+    // FreeType. Verified on the box by launching with
+    // QT_QPA_PLATFORM=windows:fontengine=freetype and comparing the lyrics
+    // panel: same build, same font, only the rasteriser changed.
+    //
+    // Only when the variable carries no real value. `offscreen` is what the
+    // release smoke gate passes here, and overwriting it would make the gate
+    // test a platform nobody ships. Empty counts as absent: a cleared
+    // variable is present-with-no-value, which `var_os().is_some()` reports
+    // as set (the same trap the renderer preference had).
+    #[cfg(windows)]
+    {
+        let explicit = std::env::var_os("QT_QPA_PLATFORM")
+            .map(|v| !v.to_string_lossy().trim().is_empty())
+            .unwrap_or(false);
+        if !explicit {
+            std::env::set_var("QT_QPA_PLATFORM", "windows:fontengine=freetype");
+            log::info!("[qbz-qt] font engine -> freetype (Qt's Windows rasteriser aliases text)");
+        }
+    }
+
+    // The process identity Windows groups the taskbar button under, and the
+    // one a toast's `app_id` is matched against. Must be set BEFORE any window
+    // exists -- Windows caches the identity with the first one, and a later
+    // call is documented to fail.
+    //
+    // Without it the taskbar treats each launch as an anonymous window and the
+    // MSI's Start-menu shortcut (which carries System.AppUserModel.ID) does not
+    // group with it, and toasts are dropped with no error at all.
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+        let id: Vec<u16> = "com.blitzfc.qbz\0".encode_utf16().collect();
+        // SAFETY: `id` is NUL-terminated UTF-16 and outlives the call, which
+        // copies it. Called before any window is created, as documented.
+        let hr = unsafe { SetCurrentProcessExplicitAppUserModelID(id.as_ptr()) };
+        if hr < 0 {
+            // Worth a line: when this fails, taskbar grouping and toast
+            // delivery both break, and both fail SILENTLY. Without this the
+            // only symptom is "notifications do not work" with nothing to
+            // point at.
+            log::warn!("[qbz-qt] SetCurrentProcessExplicitAppUserModelID failed: 0x{hr:08X}");
+        }
+    }
+
+    // D7 (research/02 §4.4): with no explicit style Windows loads its native
+    // Controls style, and popups without an explicit `background:` inherit
+    // native chrome. Pin Basic on Windows so windeployqt ships the style the
+    // QML was verified against. Preserve Qt's existing platform defaults on
+    // Linux and macOS. This must run before the first Controls import.
+    #[cfg(target_os = "windows")]
+    cxx_qt_lib::QQuickStyle::set_style(&QString::from("Basic"));
+
     let mut app = QGuiApplication::new();
     renderer_qt::apply_gpu_preference();
+
+    // W25. Windows asks WM_QUERYENDSESSION before it decides to log off or
+    // shut down, and Qt turns that into `commitDataRequest` and BLOCKS inside
+    // the signal until the handler returns -- the one moment where a
+    // synchronous persist is safe. Anything deferred to a queued connection or
+    // another thread races the process being killed.
+    //
+    // WINDOWS ONLY, deliberately, though the hook itself is portable. Qt's
+    // session manager exists on X11 too, so installing this everywhere would
+    // add a blocking save to the Linux logout path -- a behaviour change on the
+    // platform this project leads with, and one that can only ever delay a
+    // logout. W25 is a Windows contract item; Linux can opt in on its own
+    // terms, deliberately, rather than inheriting it from a port.
+    #[cfg(target_os = "windows")]
+    win_shell::install_commit_data_handler(on_session_commit_data);
+
+    // W27's other half. Main.qml asks for CustomizeWindowHint so Qt does not
+    // paint its own button cluster over the QBZ header; this gives the window
+    // back a hit test, which that hint otherwise answers as HTNOWHERE for
+    // every pixel.
+    #[cfg(target_os = "windows")]
+    win_shell::install_hittest_filter();
     let mut engine = QQmlApplicationEngine::new();
 
     // ── THE APP TYPEFACE, AND WHY IT IS SET RIGHT HERE ────────────────────

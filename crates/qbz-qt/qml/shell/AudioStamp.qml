@@ -72,11 +72,23 @@ Item {
     // otherwise. Empty when no detail exists (never a bare "CD: ").
     readonly property string qualityTooltip: {
         if (QbzPlayer.npQualityDetail === "") return ""
-        if (!showDelivered) return tierLabel + ": " + QbzPlayer.npQualityDetail
+        if (!showDelivered)
+            return tierLabel + ": " + QbzPlayer.npQualityDetail + root.streamModeLine
         var t = QbzSession.tr("Source: {}", QbzSession.trRev).replace("{}", QbzPlayer.npQualityDetail)
             + "\n"
             + QbzSession.tr("Output: {}", QbzSession.trRev).replace("{}", QbzPlayer.npQualityTrueDetail)
-        return causeLine === "" ? t : t + "\n" + causeLine
+        t = causeLine === "" ? t : t + "\n" + causeLine
+        return t + root.streamModeLine
+    }
+
+    // What the OPENED stream negotiated, appended to the tooltip. The mode LED
+    // beside it is derived from SETTINGS, so it says what was ASKED FOR; this
+    // says what the engine actually got. When they disagree, that is the whole
+    // point. Four technical tokens, so nothing new to translate.
+    readonly property string streamModeLine: {
+        var m = QbzPlayer.npBitPerfectMode
+        if (m === "" || m === "unknown") return ""
+        return "\nstream: " + m
     }
 
     readonly property bool localOutput: !QbzPlayer.npIsRemote && !QbzPlayer.npCastActive

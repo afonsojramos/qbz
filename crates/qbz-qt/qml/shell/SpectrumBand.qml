@@ -34,11 +34,11 @@
 // MSL 1.2 for Metal, SPIR-V always embedded for Vulkan). Regenerate after
 // ANY shader-source edit, from crates/qbz-qt:
 //   for m in bars wave energy; do \
-//     /usr/lib64/qt6/bin/qsb --glsl 440 --msl 12 \
+//     /usr/lib64/qt6/bin/qsb --glsl "100 es,300 es,310 es,320 es,120,150,440" --hlsl 50 --msl 12 \
 //       -o qml/assets/shaders/spectrum_$m.frag.qsb \
 //       qml/assets/shaders/spectrum_$m.frag; \
 //   done
-//   /usr/lib64/qt6/bin/qsb --glsl 440 --msl 12 \
+//   /usr/lib64/qt6/bin/qsb --glsl "100 es,300 es,310 es,320 es,120,150,440" --hlsl 50 --msl 12 -b \
 //     -o qml/assets/shaders/spectrum.vert.qsb qml/assets/shaders/spectrum.vert
 // (macOS: qsb is at $(brew --prefix qt)/bin/qsb.) A .qsb is keyed to the Qt
 // Shader Tools version that baked it — rebake when the system Qt moves.

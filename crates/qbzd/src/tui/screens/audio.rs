@@ -213,7 +213,10 @@ fn device_is_bit_perfect(backend: AudioBackendType, d: &AudioDevice) -> bool {
             alsa_section(&d.id, d.is_default, label) == AlsaSection::BitPerfect
         }
         AudioBackendType::PipeWire => d.is_hardware,
-        AudioBackendType::Pulse | AudioBackendType::SystemDefault | AudioBackendType::Jack => false,
+        AudioBackendType::Pulse
+        | AudioBackendType::SystemDefault
+        | AudioBackendType::Jack
+        | AudioBackendType::WasapiExclusive => false,
     }
 }
 
@@ -815,6 +818,7 @@ pub fn backend_label(b: AudioBackendType) -> String {
         AudioBackendType::Pulse => "PulseAudio".to_string(),
         AudioBackendType::SystemDefault => "System default".to_string(),
         AudioBackendType::Jack => "JACK".to_string(),
+        AudioBackendType::WasapiExclusive => "WASAPI Exclusive".to_string(),
     }
 }
 
@@ -826,6 +830,7 @@ fn backend_value(b: AudioBackendType) -> &'static str {
         AudioBackendType::Alsa => "alsa",
         AudioBackendType::Pulse => "pulse",
         AudioBackendType::Jack => "jack",
+        AudioBackendType::WasapiExclusive => "wasapi",
     }
 }
 

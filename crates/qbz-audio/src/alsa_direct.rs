@@ -1227,3 +1227,36 @@ mod tests {
         assert!(!uses_alsa_direct_route(&audio));
     }
 }
+
+/// Forwards to the inherent methods, which is all this is: no behaviour is
+/// added, moved or wrapped. See `backend::DirectSink`.
+impl crate::backend::DirectSink for AlsaDirectStream {
+    fn write_f32(&self, samples: &[f32]) -> Result<(), String> {
+        AlsaDirectStream::write_f32(self, samples)
+    }
+    fn drain(&self) -> Result<(), String> {
+        AlsaDirectStream::drain(self)
+    }
+    fn stop(&self) -> Result<(), String> {
+        AlsaDirectStream::stop(self)
+    }
+    fn sample_rate(&self) -> u32 {
+        AlsaDirectStream::sample_rate(self)
+    }
+    fn channels(&self) -> u16 {
+        AlsaDirectStream::channels(self)
+    }
+    fn playback_delay_frames(&self) -> Result<u64, String> {
+        AlsaDirectStream::playback_delay_frames(self)
+    }
+    fn log_label(&self) -> &'static str {
+        "ALSA Direct Engine"
+    }
+    /// Linux only, because the inherent method is: the non-Linux stub of this
+    /// type has no mixer at all, and there the trait default refusal is the
+    /// honest answer.
+    #[cfg(target_os = "linux")]
+    fn set_hardware_volume(&self, volume: f32) -> Result<(), String> {
+        AlsaDirectStream::set_hardware_volume(self, volume)
+    }
+}

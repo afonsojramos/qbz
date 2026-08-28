@@ -791,7 +791,7 @@ pub fn set_session_artwork(path: &str) {
     // `file://`), because that is the form the whole taxonomy downstream
     // expects.
     let ids: Vec<u64> = tracks.iter().map(|t| t.id as u64).collect();
-    let url = format!("file://{path}");
+    let url = qbz_models::fs_url::file_url(&path);
     crate::spawn(async move {
         let runtime = crate::app();
         if runtime.core().patch_queue_artwork(&ids, &url).await {

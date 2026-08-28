@@ -187,7 +187,21 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     onClicked: QbzMini.exit()
                 }
-                // NO PIN. Owner ruling K1 shipped always-on-top as NEW work
+                // THE PIN, on Windows only (owner decision D8, 2026-08-27).
+                // `Qt.WindowStaysOnTopHint` is HWND_TOPMOST there and works;
+                // everything below is why it is absent everywhere else, and
+                // that reasoning still stands unchanged.
+                CapBtn {
+                    name: "pin"
+                    visible: QbzShell.isWindows
+                    active: root.hostWindow ? root.hostWindow.pinnedOnTop : false
+                    anchors.verticalCenter: parent.verticalCenter
+                    onClicked: {
+                        if (root.hostWindow)
+                            root.hostWindow.pinnedOnTop = !root.hostWindow.pinnedOnTop
+                    }
+                }
+                // NO PIN ELSEWHERE. Owner ruling K1 shipped always-on-top as NEW work
                 // (the reference promises it in three comments and implements
                 // it nowhere), and the owner smoked it on real Plasma Wayland
                 // on 2026-08-04: `Qt.WindowStaysOnTopHint` did not keep the

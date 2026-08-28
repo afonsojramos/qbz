@@ -42,7 +42,6 @@ futures-util = { workspace = true }                            # remote_stream.r
 # new direct deps (versions already in lock where noted)
 tiny_http = "0.12"           # in lock via qbz-cast
 toml = "0.9"                 # in lock transitively
-libc = "0.2"                 # flock
 urlencoding = "2"            # OAuth redirect_url encode + callback decode (in lock via qbz)
 open = "5"                   # system-browser launch for `qbzd login` (in lock via qbz)
 clap = { version = "4", features = ["derive"] }
@@ -51,6 +50,17 @@ clap_complete = "4"
 # resolution; ratatui-core 0.30 accepts the locked 0.2.2 version (IV5).
 # The `crossterm` backend is a DEFAULT feature; re-exported as ratatui::crossterm.
 ratatui = "0.30"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"                 # flock in src/lock.rs
+
+[target.'cfg(windows)'.dependencies]
+# LockFileEx (+ OVERLAPPED, hence Win32_System_IO) for the instance lock.
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -412,6 +412,100 @@ fn update_prefs(edit: impl FnOnce(&mut serde_json::Map<String, serde_json::Value
     let _ = edit_prefs(|doc| (edit(doc), ()));
 }
 
+/// Can this install actually deliver a toast?
+///
+/// Setting the process AUMID is necessary and NOT sufficient. An unpackaged
+/// desktop app only receives toasts once Windows can RESOLVE that id, which it
+/// does through either a Start-menu shortcut carrying
+/// `System.AppUserModel.ID` or the `AppUserModelId` registry key. The MSI
+/// writes both; a portable unzip has neither.
+///
+/// So the notifications row is offered on the strength of THIS, not of
+/// `cfg!(windows)`. Advertising it unconditionally would put a switch in front
+/// of portable users that can never produce a notification -- the "renders,
+/// persists and drives nothing" failure the capability flags exist to prevent.
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_toast_identity_registered() -> bool {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
+    };
+
+    let key: Vec<u16> = "Software\\Classes\\AppUserModelId\\com.blitzfc.qbz\0"
+        .encode_utf16()
+        .collect();
+    let mut handle: HKEY = std::ptr::null_mut();
+    // SAFETY: `key` is NUL-terminated UTF-16 and outlives the call; `handle` is
+    // a valid out-slot, only written on success. Read-only access.
+    let rc = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            0,
+            KEY_READ,
+            &mut handle,
+        )
+    };
+    if rc != 0 {
+        return false;
+    }
+    // SAFETY: opened above and not used afterwards.
+    unsafe {
+        RegCloseKey(handle);
+    }
+    true
+}
+
+/// The Windows as-is disclaimer, kept as two fields (owner's call): the
+/// "Don't show this again" box and the version it was ticked on.
+pub(crate) const WINDOWS_DISCLAIMER_HIDDEN_KEY: &str = "windows_disclaimer_hidden";
+pub(crate) const WINDOWS_DISCLAIMER_VERSION_KEY: &str = "windows_disclaimer_ack_version";
+
+/// Both fields out of ONE parsed document.
+///
+/// Reading them with two `pref_*` calls would parse the file twice and could
+/// synthesise a pair that never existed in a single snapshot -- the shared
+/// `ui_prefs.json` has another writer (the Slint app) and this one is read at
+/// construction, while it is most likely to be mid-write.
+pub(crate) fn windows_disclaimer_state() -> (bool, String) {
+    let Some(path) = prefs_path() else {
+        return (false, String::new());
+    };
+    let Some(doc) = read_json_object(&path) else {
+        return (false, String::new());
+    };
+    let hidden = doc
+        .get(WINDOWS_DISCLAIMER_HIDDEN_KEY)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let version = doc
+        .get(WINDOWS_DISCLAIMER_VERSION_KEY)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    (hidden, version)
+}
+
+/// Both fields into ONE transaction, and report whether it landed.
+///
+/// Two `save_pref` calls would be two whole-document read-modify-writes, and a
+/// crash or a failed rename between them leaves a torn pair -- `hidden` with no
+/// version, or a version with no `hidden`. Either half alone re-opens the
+/// modal, so the user would tick the box and see it again.
+pub(crate) fn save_windows_disclaimer_ack(version: &str) -> bool {
+    edit_prefs(|doc| {
+        doc.insert(
+            WINDOWS_DISCLAIMER_HIDDEN_KEY.to_string(),
+            serde_json::Value::Bool(true),
+        );
+        doc.insert(
+            WINDOWS_DISCLAIMER_VERSION_KEY.to_string(),
+            serde_json::Value::String(version.to_string()),
+        );
+        (true, ())
+    })
+    .is_some()
+}
+
 /// Flip a shared bool pref in ONE document — read and write inside the same
 /// read-modify-write, never `pref_bool` then `save_pref`. `None` = the
 /// document was unreadable, so nothing was written and nothing flipped.
@@ -1605,6 +1699,11 @@ pub struct SettingsDoc {
     pub backend_index: i32,
     #[serde(rename = "backendIsAlsa")]
     pub backend_is_alsa: bool,
+    /// True when the WASAPI exclusive backend is the active one. AudioSettings
+    /// QML gates the Exclusive-mode and DSD rows on it - see the comment there
+    /// for why they are hidden rather than disabled.
+    #[serde(rename = "backendIsWasapi")]
+    pub backend_is_wasapi: bool,
     #[serde(rename = "backendIsPipewire")]
     pub backend_is_pipewire: bool,
     #[serde(rename = "backendIsJack")]
@@ -1828,6 +1927,20 @@ pub struct SettingsDoc {
     /// `AppearanceState.is-macos`.
     #[serde(rename = "isMacos")]
     pub is_macos: bool,
+    #[serde(rename = "isWindows")]
+    pub is_windows: bool,
+    /// A tray backend exists on this platform (`tray_qt::init` would create
+    /// one). Phase A: Linux + macOS. Plan A-2 Task 5 adds Windows.
+    #[serde(rename = "traySupported")]
+    pub tray_supported: bool,
+    /// `notify.rs` has a real arm here. Phase A: Linux + macOS. Plan A-2
+    /// Task 3 adds Windows.
+    #[serde(rename = "systemNotificationsSupported")]
+    pub system_notifications_supported: bool,
+    /// The RENDERER group offers a real choice: Linux (Vulkan/GL/software)
+    /// and Windows (D3D11/D3D12/GL/software). macOS is always Metal.
+    #[serde(rename = "rendererSelectable")]
+    pub renderer_selectable: bool,
     #[serde(rename = "trayIconThemes")]
     pub tray_icon_themes: Vec<String>,
     #[serde(rename = "trayIconThemeIndex")]
@@ -2017,6 +2130,8 @@ fn backend_label(t: AudioBackendType) -> String {
         AudioBackendType::Pulse => "PulseAudio".to_string(),
         AudioBackendType::SystemDefault => qbz_i18n::t("System default"),
         AudioBackendType::Jack => "JACK".to_string(),
+        // Not translated, like the other backend proper nouns above it.
+        AudioBackendType::WasapiExclusive => "WASAPI Exclusive".to_string(),
     }
 }
 
@@ -2100,6 +2215,7 @@ pub async fn publish_snapshot() {
                 .collect(),
             backend_index: backend_index as i32 + 1,
             backend_is_alsa: active_backend == AudioBackendType::Alsa,
+            backend_is_wasapi: active_backend == AudioBackendType::WasapiExclusive,
             backend_is_pipewire: active_backend == AudioBackendType::PipeWire,
             backend_is_jack: active_backend == AudioBackendType::Jack,
             devices,
@@ -2273,6 +2389,29 @@ pub async fn publish_snapshot() {
                 .map(|t| t.mac_hide_dock)
                 .unwrap_or(false),
             is_macos: cfg!(target_os = "macos"),
+            is_windows: cfg!(target_os = "windows"),
+            // Windows joined with A-2 T5 (Shell_NotifyIconW).
+            tray_supported: cfg!(any(
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "windows"
+            )),
+            // Windows answers at RUNTIME, not by cfg: the toast arm is
+            // implemented, but delivery needs a registered AppUserModelID,
+            // which only the MSI provides. A portable unzip gets `false` and
+            // the row stays hidden rather than offering a switch that can
+            // never produce a notification.
+            system_notifications_supported: {
+                #[cfg(target_os = "windows")]
+                {
+                    windows_toast_identity_registered()
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    cfg!(any(target_os = "linux", target_os = "macos"))
+                }
+            },
+            renderer_selectable: cfg!(any(target_os = "linux", target_os = "windows")),
             tray_icon_themes: TRAY_ICON_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             tray_icon_theme_index: tray()
                 .get_settings()

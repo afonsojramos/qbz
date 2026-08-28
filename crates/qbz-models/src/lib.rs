@@ -31,6 +31,7 @@
 
 pub mod error;
 pub mod events;
+pub mod fs_url;
 pub mod lenient;
 pub mod mixtape;
 pub mod playback;

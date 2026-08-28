@@ -8,6 +8,10 @@ description = "Frontend-agnostic system media controls: MPRIS (mpris-server) on 
 
 [dependencies]
 log = { workspace = true }
+# fs_url::local_path -- the ONE file-URL helper (W2). SMTC needs a native
+# Windows path where MPRIS needs a file:// URL, and hand-rolling that
+# conversion is exactly the bug class that helper exists to prevent.
+qbz-models = { path = "../qbz-models" }
 # Notifications (all platforms): the async entry point spawns the HTTP download
 # + image resize on `spawn_blocking`, so a tokio runtime must be present.
 tokio = { workspace = true }
@@ -27,6 +31,11 @@ urlencoding = "2"
 # org.mpris.MediaPlayer2.DesktopEntry property (RootInterface::desktop_entry),
 # which is the only way GNOME Shell resolves the app icon. souvlaki never sets
 # it. tokio feature so the server shares the app's tokio runtime.
+[target.'cfg(target_os = "windows")'.dependencies]
+# SetThreadExecutionState: keep the machine awake while a track plays.
+# 0.61 is already in the workspace lock.
+windows-sys = { version = "0.61", features = ["Win32_System_Power"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris-server = "0.8"
 async-channel = "2"

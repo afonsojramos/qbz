@@ -6060,3 +6060,12 @@ msgstr "В этом альбоме нет треков."
 
 msgid "Reactive Rings"
 msgstr "Реактивные кольца"
+
+msgid "Windows — yes, but read this first"
+msgstr "Windows — да, но сначала прочтите это"
+
+msgid "Don't show this again"
+msgstr "Больше не показывать"
+
+msgid "I understand"
+msgstr "Я понимаю"

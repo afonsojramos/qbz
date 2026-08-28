@@ -235,6 +235,7 @@ fn backend_label(b: Option<qbz_audio::AudioBackendType>) -> Option<String> {
             B::Alsa => "alsa",
             B::Pulse => "pulse",
             B::Jack => "jack",
+            B::WasapiExclusive => "wasapi",
             B::SystemDefault => "system",
         }
         .to_string()
@@ -275,6 +276,14 @@ fn cached_device_names(state: &super::ApiState) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_exclusive_backend_has_a_stable_status_label() {
+        assert_eq!(
+            backend_label(Some(qbz_audio::AudioBackendType::WasapiExclusive)).as_deref(),
+            Some("wasapi")
+        );
+    }
 
     /// A NeedsAuth [`StatusDoc`] built directly (no live runtime), matching the
     /// 02 §3.3.3 NeedsAuth fragment — the serde-shape contract these tests pin.

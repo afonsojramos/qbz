@@ -8,7 +8,9 @@
 //! to enable gapless playback. When one source ends, the next is picked up
 //! seamlessly without interrupting the PCM stream.
 
-use qbz_audio::{AlsaDirectStream, VisualizerTap};
+#[cfg(target_os = "linux")]
+use qbz_audio::AlsaDirectStream;
+use qbz_audio::VisualizerTap;
 #[cfg(target_os = "linux")]
 use qbz_audio::JackStream;
 use rodio::{mixer::Mixer, Player as RodioPlayer, Source};
@@ -74,9 +76,14 @@ impl<S> SourceQueue<S> {
 pub enum PlaybackEngine {
     /// Rodio-based (PipeWire, Pulse, ALSA via CPAL)
     Rodio { sink: RodioPlayer },
-    /// Direct ALSA (hw: devices, bit-perfect) with gapless source queue
-    AlsaDirect {
-        stream: Arc<AlsaDirectStream>,
+    /// A bit-perfect DIRECT sink with a gapless source queue: ALSA hw: on
+    /// Linux, WASAPI exclusive on Windows. The two are interchangeable here -
+    /// the writer thread only ever calls `DirectSink`.
+    Direct {
+        stream: Arc<dyn qbz_audio::backend::DirectSink>,
+        /// Log prefix for THIS sink. Without it `play`/`pause`/`stop`/
+        /// `set_volume` printed "ALSA Direct Engine" for a WASAPI stream.
+        label: &'static str,
         is_playing: Arc<AtomicBool>,
         should_stop: Arc<AtomicBool>,
         position_frames: Arc<AtomicU64>,
@@ -127,13 +134,16 @@ impl PlaybackEngine {
         Ok(Self::Rodio { sink })
     }
 
-    /// Create ALSA Direct engine with gapless source queue.
+    /// Create a bit-perfect direct engine with a gapless source queue.
     /// Spawns a single writer thread that lives for the engine's lifetime.
-    pub fn new_alsa_direct(
-        stream: Arc<AlsaDirectStream>,
+    /// Takes ANY direct sink. The log prefix comes from the SINK, so no call
+    /// site can mislabel it.
+    pub fn new_direct(
+        stream: Arc<dyn qbz_audio::backend::DirectSink>,
         hardware_volume: bool,
         visualizer_tap: Option<VisualizerTap>,
     ) -> Self {
+        let label = stream.log_label();
         let is_playing = Arc::new(AtomicBool::new(false));
         let should_stop = Arc::new(AtomicBool::new(false));
         let position_frames = Arc::new(AtomicU64::new(0));
@@ -154,7 +164,7 @@ impl PlaybackEngine {
             let visualizer_c = visualizer_tap.clone();
 
             thread::spawn(move || {
-                alsa_writer_thread(
+                direct_writer_thread(
                     stream_c,
                     playing_c,
                     stop_c,
@@ -163,13 +173,15 @@ impl PlaybackEngine {
                     queue_c,
                     transition_c,
                     channels,
+                    label,
                     visualizer_c,
                 );
             })
         };
 
-        Self::AlsaDirect {
+        Self::Direct {
             stream,
+            label,
             is_playing,
             should_stop,
             position_frames,
@@ -308,7 +320,8 @@ impl PlaybackEngine {
                 sink.append(source);
                 Ok(())
             }
-            Self::AlsaDirect {
+            Self::Direct {
+                label,
                 is_playing,
                 should_stop,
                 position_frames,
@@ -328,9 +341,9 @@ impl PlaybackEngine {
                     should_stop.store(false, Ordering::SeqCst);
                     source_transition.store(false, Ordering::SeqCst);
                     is_playing.store(true, Ordering::SeqCst);
-                    log::info!("[ALSA Direct Engine] First source queued, playback starting");
+                    log::info!("[{label}] First source queued, playback starting");
                 } else {
-                    log::info!("[ALSA Direct Engine] Source queued for gapless transition");
+                    log::info!("[{label}] Source queued for gapless transition");
                 }
 
                 Ok(())
@@ -377,8 +390,10 @@ impl PlaybackEngine {
     pub fn play(&self) {
         match self {
             Self::Rodio { sink } => sink.play(),
-            Self::AlsaDirect { is_playing, .. } => {
-                log::info!("[ALSA Direct Engine] Resume requested");
+            Self::Direct {
+                label, is_playing, ..
+            } => {
+                log::info!("[{label}] Resume requested");
                 is_playing.store(true, Ordering::SeqCst);
             }
             #[cfg(target_os = "linux")]
@@ -398,8 +413,10 @@ impl PlaybackEngine {
     pub fn pause(&self) {
         match self {
             Self::Rodio { sink } => sink.pause(),
-            Self::AlsaDirect { is_playing, .. } => {
-                log::info!("[ALSA Direct Engine] Pause requested");
+            Self::Direct {
+                label, is_playing, ..
+            } => {
+                log::info!("[{label}] Pause requested");
                 is_playing.store(false, Ordering::SeqCst);
             }
             #[cfg(target_os = "linux")]
@@ -430,8 +447,9 @@ impl PlaybackEngine {
             Self::Rodio { sink } => {
                 sink.stop();
             }
-            Self::AlsaDirect {
+            Self::Direct {
                 stream,
+                label,
                 is_playing,
                 should_stop,
                 playback_thread,
@@ -440,7 +458,7 @@ impl PlaybackEngine {
                 if should_stop.load(Ordering::SeqCst) {
                     return; // Already stopped
                 }
-                log::info!("[ALSA Direct Engine] Stop requested");
+                log::info!("[{label}] Stop requested");
                 should_stop.store(true, Ordering::SeqCst);
                 is_playing.store(false, Ordering::SeqCst);
 
@@ -449,7 +467,7 @@ impl PlaybackEngine {
                 }
 
                 if let Err(e) = stream.stop() {
-                    log::warn!("[ALSA Direct Engine] Stop failed: {}", e);
+                    log::warn!("[{label}] Stop failed: {}", e);
                 }
             }
             #[cfg(target_os = "linux")]
@@ -498,8 +516,9 @@ impl PlaybackEngine {
     pub fn set_volume(&self, volume: f32) {
         match self {
             Self::Rodio { sink } => sink.set_volume(volume),
-            Self::AlsaDirect {
+            Self::Direct {
                 stream,
+                label,
                 hardware_volume,
                 ..
             } => {
@@ -507,12 +526,24 @@ impl PlaybackEngine {
                     #[cfg(target_os = "linux")]
                     {
                         if let Err(e) = stream.set_hardware_volume(volume) {
-                            log::warn!("[ALSA Direct Engine] Hardware volume failed: {}", e);
+                            log::warn!("[{label}] Hardware volume failed: {}", e);
+                        }
+                    }
+                    // Additive arm. `set_hardware_volume` is a DirectSink
+                    // method now, so a Windows sink can answer for itself
+                    // instead of the setting silently doing nothing; a sink
+                    // with no hardware volume returns Err and says so. macOS
+                    // and the other targets keep their previous silence --
+                    // CoreAudio has its own path (set_coreaudio_hardware_volume).
+                    #[cfg(windows)]
+                    {
+                        if let Err(e) = stream.set_hardware_volume(volume) {
+                            log::warn!("[{label}] Hardware volume failed: {}", e);
                         }
                     }
                 } else {
                     log::debug!(
-                        "[ALSA Direct Engine] Hardware volume control disabled (use DAC/amplifier)"
+                        "[{label}] Hardware volume control disabled (use DAC/amplifier)"
                     );
                 }
             }
@@ -535,7 +566,7 @@ impl PlaybackEngine {
     pub fn empty(&self) -> bool {
         match self {
             Self::Rodio { sink } => sink.empty(),
-            Self::AlsaDirect {
+            Self::Direct {
                 is_playing,
                 source_queue,
                 ..
@@ -560,7 +591,7 @@ impl PlaybackEngine {
     pub fn take_source_transition(&self) -> bool {
         match self {
             Self::Rodio { .. } => false,
-            Self::AlsaDirect {
+            Self::Direct {
                 source_transition, ..
             } => source_transition
                 .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
@@ -585,7 +616,7 @@ impl PlaybackEngine {
     pub fn position_secs(&self) -> Option<u64> {
         match self {
             Self::Rodio { .. } => None,
-            Self::AlsaDirect {
+            Self::Direct {
                 position_frames,
                 stream,
                 ..
@@ -620,7 +651,7 @@ impl PlaybackEngine {
     pub fn duration_secs(&self) -> Option<u64> {
         match self {
             Self::Rodio { .. } => None,
-            Self::AlsaDirect {
+            Self::Direct {
                 duration_frames,
                 stream,
                 ..
@@ -645,37 +676,41 @@ impl PlaybackEngine {
 
     /// Check if using ALSA Direct engine
     #[allow(dead_code)]
-    pub fn is_alsa_direct(&self) -> bool {
-        matches!(self, Self::AlsaDirect { .. })
+    pub fn is_direct(&self) -> bool {
+        matches!(self, Self::Direct { .. })
     }
 }
 
-/// Single long-lived writer thread for ALSA Direct.
+/// Single long-lived writer thread for any bit-perfect direct sink.
 ///
-/// Continuously reads samples from the current source and writes to ALSA.
+/// Continuously reads samples from the current source and writes to the sink.
 /// When a source ends, seamlessly picks up the next one from the queue
 /// (gapless transition). If no next source is available, drains the ALSA
 /// buffer and waits for the next source or a stop signal.
 ///
 /// The source is consumed in ~10 ms pieces instead of the historical fixed
-/// 8192-frame blocks. This does not change PCM data or ALSA parameters; it
+/// 8192-frame blocks. This does not change PCM data or device parameters; it
 /// only keeps the passive visualizer tap from receiving ~186 ms bursts at
-/// 44.1 kHz. `snd_pcm_delay` then points snapshots behind the queued PCM at
-/// the part currently reaching the DAC.
-const ALSA_PCM_FEED_TARGET_MS: u64 = 10;
-const ALSA_PCM_FEED_MIN_FRAMES: u64 = 64;
-const ALSA_PCM_FEED_MAX_FRAMES: u64 = 8192;
+/// 44.1 kHz. Sinks that can measure their queued frames then point snapshots
+/// behind the submitted PCM at the part currently reaching the DAC.
+///
+/// Generic rather than duplicated: ALSA and WASAPI need byte-identical
+/// behaviour here — same pacing, gapless hand-off and drain — and two copies
+/// of this state machine would drift.
+const DIRECT_PCM_FEED_TARGET_MS: u64 = 10;
+const DIRECT_PCM_FEED_MIN_FRAMES: u64 = 64;
+const DIRECT_PCM_FEED_MAX_FRAMES: u64 = 8192;
 
-fn alsa_pcm_feed_frames(sample_rate: u32) -> usize {
+fn direct_pcm_feed_frames(sample_rate: u32) -> usize {
     let frames = u64::from(sample_rate)
-        .saturating_mul(ALSA_PCM_FEED_TARGET_MS)
+        .saturating_mul(DIRECT_PCM_FEED_TARGET_MS)
         .div_ceil(1000)
-        .clamp(ALSA_PCM_FEED_MIN_FRAMES, ALSA_PCM_FEED_MAX_FRAMES);
+        .clamp(DIRECT_PCM_FEED_MIN_FRAMES, DIRECT_PCM_FEED_MAX_FRAMES);
     frames as usize
 }
 
-fn alsa_writer_thread(
-    stream: Arc<AlsaDirectStream>,
+fn direct_writer_thread<S: qbz_audio::backend::DirectSink + ?Sized>(
+    stream: Arc<S>,
     is_playing: Arc<AtomicBool>,
     should_stop: Arc<AtomicBool>,
     position_frames: Arc<AtomicU64>,
@@ -683,9 +718,10 @@ fn alsa_writer_thread(
     source_queue: Arc<SourceQueue<BoxedSampleIter>>,
     source_transition: Arc<AtomicBool>,
     channels: u16,
+    label: &'static str,
     visualizer_tap: Option<VisualizerTap>,
 ) {
-    let chunk_frames = alsa_pcm_feed_frames(stream.sample_rate());
+    let chunk_frames = direct_pcm_feed_frames(stream.sample_rate());
     let chunk_samples = chunk_frames * channels as usize;
     let mut buffer_f32 = Vec::with_capacity(chunk_samples);
     let mut current_source: Option<BoxedSampleIter> = None;
@@ -698,15 +734,15 @@ fn alsa_writer_thread(
         tap.clear_output_delay();
     }
     log::info!(
-        "[ALSA Direct Engine] Writer thread started (gapless-capable, viz feed {} frames / ~{} ms)",
+        "[{label}] Writer thread started (gapless-capable, viz feed {} frames / ~{} ms)",
         chunk_frames,
-        ALSA_PCM_FEED_TARGET_MS
+        DIRECT_PCM_FEED_TARGET_MS
     );
 
     'thread: loop {
         // Check global stop
         if should_stop.load(Ordering::SeqCst) {
-            log::info!("[ALSA Direct Engine] Stop signal, writer thread exiting");
+            log::info!("[{label}] Stop signal, writer thread exiting");
             break 'thread;
         }
 
@@ -718,7 +754,7 @@ fn alsa_writer_thread(
                     current_source = Some(src);
                     total_frames = 0;
                     position_frames.store(0, Ordering::SeqCst);
-                    log::info!("[ALSA Direct Engine] Acquired new source from queue");
+                    log::info!("[{label}] Acquired new source from queue");
                 }
                 None => {
                     // No source available, loop back to check stop
@@ -736,7 +772,7 @@ fn alsa_writer_thread(
         }
 
         // Keep the passive tap at the previous audible position while this
-        // next piece is pulled rapidly from the source. Once ALSA accepts it,
+        // next piece is pulled rapidly from the source. Once the sink accepts it,
         // the delay query below advances the tap by exactly what the device
         // consumed. Shared/callback backends leave this offset at zero.
         let visualizer_enabled = visualizer_tap
@@ -750,7 +786,7 @@ fn alsa_writer_thread(
                     Err(error) => {
                         if !delay_error_reported {
                             log::warn!(
-                                "[ALSA Direct Engine] Visualizer delay query failed; using paced feed without playhead compensation: {}",
+                                "[{label}] Visualizer delay query failed; using paced feed without playhead compensation: {}",
                                 error
                             );
                             delay_error_reported = true;
@@ -797,10 +833,10 @@ fn alsa_writer_thread(
             }
         }
 
-        // Write whatever we have to ALSA (even partial chunks on source end)
+        // Write whatever we have to the direct sink (even partial chunks on source end)
         if !buffer_f32.is_empty() {
             if let Err(e) = stream.write_f32(&buffer_f32) {
-                log::error!("[ALSA Direct Engine] Write failed: {}", e);
+                log::error!("[{label}] Write failed: {}", e);
                 break 'thread;
             }
 
@@ -819,7 +855,7 @@ fn alsa_writer_thread(
                     Err(error) => {
                         if !delay_error_reported {
                             log::warn!(
-                                "[ALSA Direct Engine] Visualizer delay query failed; using paced feed without playhead compensation: {}",
+                                "[{label}] Visualizer delay query failed; using paced feed without playhead compensation: {}",
                                 error
                             );
                             delay_error_reported = true;
@@ -835,14 +871,14 @@ fn alsa_writer_thread(
 
         if source_ended {
             log::info!(
-                "[ALSA Direct Engine] Source ended (total frames: {})",
+                "[{label}] Source ended (total frames: {})",
                 total_frames
             );
 
             // Try to get next source immediately (gapless transition)
             match source_queue.try_pop() {
                 Some(next_src) => {
-                    log::info!("[ALSA Direct Engine] Gapless transition to next source");
+                    log::info!("[{label}] Gapless transition to next source");
                     current_source = Some(next_src);
                     total_frames = 0;
                     position_frames.store(0, Ordering::SeqCst);
@@ -852,9 +888,9 @@ fn alsa_writer_thread(
                 }
                 None => {
                     // No next source — this is a natural end of playback
-                    log::info!("[ALSA Direct Engine] No next source, draining ALSA buffer");
+                    log::info!("[{label}] No next source, draining the device buffer");
                     if let Err(e) = stream.drain() {
-                        log::warn!("[ALSA Direct Engine] Drain failed: {}", e);
+                        log::warn!("[{label}] Drain failed: {}", e);
                     }
                     current_source = None;
                     is_playing.store(false, Ordering::SeqCst);
@@ -868,12 +904,12 @@ fn alsa_writer_thread(
     if let Some(tap) = visualizer_tap.as_ref() {
         tap.clear_output_delay();
     }
-    log::info!("[ALSA Direct Engine] Writer thread finished");
+    log::info!("[{label}] Writer thread finished");
 }
 
 /// Single long-lived feeder thread for JACK (#263 Tier 3).
 ///
-/// Mirrors `alsa_writer_thread`, but writes graph-rate interleaved STEREO f32
+/// Mirrors `direct_writer_thread`, but writes graph-rate interleaved STEREO f32
 /// into the JACK client's lock-free ring buffer via `JackStream::write_f32`
 /// (the RT process callback drains it), pacing itself when the ring is full.
 /// Sources are resampled to the graph rate + stereo at `append` time.
@@ -976,7 +1012,7 @@ impl Drop for PlaybackEngine {
 
 /// Single long-lived writer thread for DoP (DSD over PCM).
 ///
-/// Mirrors `alsa_writer_thread`'s shape: pulls pre-packed S32 DoP words from
+/// Mirrors `direct_writer_thread`'s shape: pulls pre-packed S32 DoP words from
 /// the current source, writes them VERBATIM, and picks up the next queued
 /// source seamlessly (gapless DSD). Differences forced by the format:
 /// - pause writes 0x69 DSD silence (with valid alternating markers) instead
@@ -1090,20 +1126,20 @@ fn dop_writer_thread(
 
 #[cfg(test)]
 mod tests {
-    use super::alsa_pcm_feed_frames;
+    use super::direct_pcm_feed_frames;
 
     #[test]
-    fn alsa_pcm_feed_stays_near_ten_ms_across_pcm_rates() {
-        assert_eq!(alsa_pcm_feed_frames(44_100), 441);
-        assert_eq!(alsa_pcm_feed_frames(48_000), 480);
-        assert_eq!(alsa_pcm_feed_frames(96_000), 960);
-        assert_eq!(alsa_pcm_feed_frames(192_000), 1_920);
-        assert_eq!(alsa_pcm_feed_frames(768_000), 7_680);
+    fn direct_pcm_feed_stays_near_ten_ms_across_pcm_rates() {
+        assert_eq!(direct_pcm_feed_frames(44_100), 441);
+        assert_eq!(direct_pcm_feed_frames(48_000), 480);
+        assert_eq!(direct_pcm_feed_frames(96_000), 960);
+        assert_eq!(direct_pcm_feed_frames(192_000), 1_920);
+        assert_eq!(direct_pcm_feed_frames(768_000), 7_680);
     }
 
     #[test]
-    fn alsa_pcm_feed_has_defensive_bounds() {
-        assert_eq!(alsa_pcm_feed_frames(0), 64);
-        assert_eq!(alsa_pcm_feed_frames(u32::MAX), 8_192);
+    fn direct_pcm_feed_has_defensive_bounds() {
+        assert_eq!(direct_pcm_feed_frames(0), 64);
+        assert_eq!(direct_pcm_feed_frames(u32::MAX), 8_192);
     }
 }

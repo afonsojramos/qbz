@@ -130,7 +130,31 @@ impl Backend {
 fn try_open_keyring(service_name: &str) -> Result<[u8; MASTER_KEY_LEN], SecretError> {
     use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine;
+    use keyring::credential::CredentialPersistence;
     use keyring::Entry;
+
+    // A build without the per-platform keyring feature exports the in-memory
+    // mock, whose writes SUCCEED and whose contents die with the process: the
+    // master key would be regenerated every launch and every blob wrapped in
+    // one run would fail AES-GCM in the next, with the logs claiming the
+    // keyring works. That is strictly worse than the KDF fallback, which is
+    // at least stable. Refuse anything that is not disk-backed.
+    //
+    // Measured in keyring-3.6.3: every real backend (windows.rs, macos.rs,
+    // secret_service.rs) inherits the trait default `UntilDelete`
+    // (credential.rs:171-172); mock.rs:228-229 overrides it to `EntryOnly`.
+    //
+    // Reach of this check: it reads the COMPILE-TIME platform builder, which is
+    // what `Entry::new` uses here. It would not catch a caller that swapped the
+    // builder at runtime via `keyring::set_default_credential_builder` — nothing
+    // in this workspace does, and the defect this guards against is a build
+    // configuration one.
+    let persistence = keyring::default::default_credential_builder().persistence();
+    if !matches!(persistence, CredentialPersistence::UntilDelete) {
+        return Err(SecretError::Keyring(
+            "keyring backend is not disk-backed (mock?); refusing it".to_string(),
+        ));
+    }
 
     let entry = Entry::new(service_name, KEYRING_ENTRY_NAME)
         .map_err(|e| SecretError::Keyring(format!("Entry::new: {}", e)))?;

@@ -563,8 +563,14 @@ enum StreamType {
         #[cfg(target_os = "macos")]
         exclusive_guard: Option<qbz_audio::CoreAudioExclusiveGuard>,
     },
-    #[cfg(target_os = "linux")]
-    AlsaDirect(Arc<qbz_audio::AlsaDirectStream>),
+    /// Any bit-perfect DIRECT sink: ALSA hw: on Linux, WASAPI exclusive on
+    /// Windows. One variant rather than one per platform, because everything
+    /// downstream treats them identically - see `qbz_audio::backend::DirectSink`.
+    ///
+    /// NOT cfg-gated: gating it to Linux is what made the Windows compiler
+    /// unable to check any of the arms that handle it, which is the whole
+    /// blind spot this port has to work around.
+    Direct(Arc<dyn qbz_audio::backend::DirectSink>),
     /// Native JACK output (#263 Tier 3). QBZ as a JACK client with stable ports;
     /// NOT bit-perfect (resampled to the graph rate).
     #[cfg(target_os = "linux")]
@@ -900,6 +906,57 @@ fn try_init_stream_with_backend(
         skip_sink_switch: audio_settings.skip_sink_switch,
     };
 
+    // WASAPI EXCLUSIVE (Windows) - the bit-perfect path, tried before the
+    // shared CPAL stream exactly as ALSA Direct is on Linux.
+    //
+    // The device id is the WASAPI ENDPOINT ID, which is what the enumeration
+    // already publishes: Windows hands several endpoints the same friendly
+    // name, so the name cannot identify one. Without a chosen device there is
+    // nothing to open exclusively - falling through to shared is the honest
+    // answer, not picking the default DAC behind the user's back.
+    #[cfg(windows)]
+    if backend_type == AudioBackendType::WasapiExclusive {
+        match config.device_id.as_ref() {
+            None => {
+                log::info!(
+                    "[WASAPI] Exclusive mode selected with no device chosen; using the shared stream. Pick an output device to get bit-perfect playback."
+                );
+            }
+            Some(endpoint_id) => {
+                use qbz_audio::wasapi_direct::{WasapiDirectStream, WasapiTiming};
+                match WasapiDirectStream::new(
+                    endpoint_id,
+                    sample_rate,
+                    config.channels,
+                    WasapiTiming::Events,
+                ) {
+                    Ok(stream) => {
+                        let mode = stream.bit_perfect_mode();
+                        let info = stream.open_info();
+                        log::info!(
+                            "[WASAPI] Exclusive stream open: {} @ {} Hz, {:?}, mode {:?}",
+                            info.endpoint_name,
+                            info.rate,
+                            info.rung,
+                            mode
+                        );
+                        state.set_bit_perfect_mode(Some(mode));
+                        return Some(Ok(StreamType::Direct(Arc::new(stream))));
+                    }
+                    Err(e) => {
+                        // NOT fatal: a device that refuses this rate in
+                        // exclusive mode still plays through the shared path,
+                        // and silence would be a worse answer than a
+                        // resampled track.
+                        log::warn!(
+                            "[WASAPI] Exclusive open failed ({e}); falling back to the shared stream"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     // For ALSA backend with hw: devices, try direct ALSA first (Linux only)
     #[cfg(target_os = "linux")]
     if backend_type == AudioBackendType::Alsa {
@@ -917,7 +974,7 @@ fn try_init_stream_with_backend(
                         return Some(result.map(|(stream, mode)| {
                             log::info!("ALSA Direct stream created with mode: {:?}", mode);
                             state.set_bit_perfect_mode(Some(mode));
-                            StreamType::AlsaDirect(Arc::new(stream))
+                            StreamType::Direct(Arc::new(stream))
                         }));
                     }
                 }
@@ -2246,8 +2303,7 @@ impl Player {
                                         }
                                     }
                                 }
-                                #[cfg(target_os = "linux")]
-                                StreamType::AlsaDirect(alsa_stream) => {
+                                StreamType::Direct(alsa_stream) => {
                                     *consecutive_sink_failures = 0;
                                     thread_state.set_stream_error(false);
                                     let hardware_volume = thread_settings
@@ -2255,7 +2311,7 @@ impl Player {
                                         .ok()
                                         .map(|s| s.alsa_hardware_volume)
                                         .unwrap_or(false);
-                                    PlaybackEngine::new_alsa_direct(
+                                    PlaybackEngine::new_direct(
                                         alsa_stream.clone(),
                                         hardware_volume,
                                         thread_viz_tap.clone(),
@@ -2695,14 +2751,13 @@ impl Player {
                                         }
                                     }
                                 }
-                                #[cfg(target_os = "linux")]
-                                StreamType::AlsaDirect(alsa_stream) => {
+                                StreamType::Direct(alsa_stream) => {
                                     let hardware_volume = thread_settings
                                         .lock()
                                         .ok()
                                         .map(|s| s.alsa_hardware_volume)
                                         .unwrap_or(false);
-                                    PlaybackEngine::new_alsa_direct(
+                                    PlaybackEngine::new_direct(
                                         alsa_stream.clone(),
                                         hardware_volume,
                                         thread_viz_tap.clone(),
@@ -3042,7 +3097,7 @@ impl Player {
                                     carrier,
                                     device
                                 );
-                                *stream_opt = Some(StreamType::AlsaDirect(stream.clone()));
+                                *stream_opt = Some(StreamType::Direct(stream.clone()));
                                 thread_state.set_current_device(Some(device));
                                 *current_track_sample_rate = Some(carrier);
                                 *current_track_channels = Some(2);
@@ -3164,7 +3219,7 @@ impl Player {
                                     if little_endian { "LE" } else { "BE" },
                                     device
                                 );
-                                *stream_opt = Some(StreamType::AlsaDirect(stream.clone()));
+                                *stream_opt = Some(StreamType::Direct(stream.clone()));
                                 thread_state.set_current_device(Some(device));
                                 *current_track_sample_rate = Some(rate);
                                 *current_track_channels = Some(2);
@@ -3394,19 +3449,18 @@ impl Player {
                                             }
                                         }
                                     }
-                                    #[cfg(target_os = "linux")]
-                                    StreamType::AlsaDirect(alsa_stream) => {
+                                    StreamType::Direct(alsa_stream) => {
                                         let hardware_volume = thread_settings
                                             .lock()
                                             .ok()
                                             .map(|s| s.alsa_hardware_volume)
                                             .unwrap_or(false);
-                                        PlaybackEngine::new_alsa_direct(
-                                            alsa_stream.clone(),
-                                            hardware_volume,
-                                            thread_viz_tap.clone(),
-                                        )
-                                    }
+                                    PlaybackEngine::new_direct(
+                                        alsa_stream.clone(),
+                                        hardware_volume,
+                                        thread_viz_tap.clone(),
+                                    )
+                                }
                                     #[cfg(target_os = "linux")]
                                     StreamType::Jack(jack_stream) => {
                                         PlaybackEngine::new_jack(jack_stream.clone())
@@ -3645,14 +3699,13 @@ impl Player {
                                         }
                                     }
                                 }
-                                #[cfg(target_os = "linux")]
-                                StreamType::AlsaDirect(alsa_stream) => {
+                                StreamType::Direct(alsa_stream) => {
                                     let hardware_volume = thread_settings
                                         .lock()
                                         .ok()
                                         .map(|s| s.alsa_hardware_volume)
                                         .unwrap_or(false);
-                                    PlaybackEngine::new_alsa_direct(
+                                    PlaybackEngine::new_direct(
                                         alsa_stream.clone(),
                                         hardware_volume,
                                         thread_viz_tap.clone(),
@@ -5697,6 +5750,31 @@ impl Player {
                             });
                     }
                     let carrier = qbz_dsd::dop_carrier_rate(info.dsd_rate);
+                    // Ask the platform that owns the device. On Windows the
+                    // ALSA probe cannot answer, so this guard was taking its
+                    // `.unwrap_or(true)` and dispatching DoP on a DEFAULT
+                    // rather than on a measurement -- on a DAC that refuses
+                    // 176400, which is the DSD64 carrier.
+                    // WINDOWS: never. Not "probe and decide" -- the DoP
+                    // handler below is `cfg(target_os = "linux")` and answers
+                    // "DoP playback is Linux-only" with a stream error, so
+                    // dispatching here can only ever fail. Converting to PCM
+                    // is the one outcome that plays the track.
+                    //
+                    // It is also FAIL-CLOSED, which this guard has to be. An
+                    // undecoded DoP stream is read as ordinary PCM carrying
+                    // packed DSD and marker bytes: it comes out as very loud
+                    // broadband noise, which threatens tweeters and hearing.
+                    // An earlier draft here fell back to `true` whenever the
+                    // probe could not answer -- preserving exactly the guess
+                    // this work existed to remove.
+                    //
+                    // `wasapi_backend::supported_rates` is what a future
+                    // Windows DoP path would consult, and it already reports
+                    // that the owner's DAC refuses 176400, the DSD64 carrier.
+                    #[cfg(windows)]
+                    let rate_ok = false;
+                    #[cfg(not(windows))]
                     let rate_ok =
                         qbz_audio::alsa_backend::get_device_supported_rates(&device)
                             .map(|r| r.contains(&carrier))

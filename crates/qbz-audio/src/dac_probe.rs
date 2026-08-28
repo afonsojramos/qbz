@@ -11,6 +11,8 @@
 //! bit-perfect / sample-rate-passthrough path is untouched.
 
 use serde::{Deserialize, Serialize};
+// Every target but Windows still runs `pw-dump`.
+#[cfg(not(windows))]
 use std::process::Command;
 
 /// The DAC's live, negotiated hardware state — what the card is REALLY clocked
@@ -94,6 +96,18 @@ pub fn parse_alsa_card_for_node(json: &str, node_name: &str) -> Option<u32> {
 }
 
 /// Resolve the ALSA card number for a sink node by running `pw-dump`.
+///
+/// W14, Windows only: `pw-dump` does not exist there, so the spawn already
+/// failed into this same None. Scoped to Windows rather than `not(linux)` --
+/// a macOS or BSD box can have a real `pw-dump`, and this function is not the
+/// place to decide it may not speak.
+#[cfg(windows)]
+fn alsa_card_for_node(_node_name: &str) -> Option<u32> {
+    None
+}
+
+/// Resolve the ALSA card number for a sink node by running `pw-dump`.
+#[cfg(not(windows))]
 fn alsa_card_for_node(node_name: &str) -> Option<u32> {
     let output = Command::new("pw-dump").output().ok()?;
     if !output.status.success() {

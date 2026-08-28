@@ -30,6 +30,10 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
 urlencoding = "2"
+# Deep links are validated by a real parse before they are acted on: a
+# launcher can split a URL across argv, and a bare scheme is not a URL.
+# Already in the workspace lock via qbz-models.
+url = "2"
 open = "5"
 dirs = "5"
 
@@ -133,8 +137,9 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 # is the Wayland-correct one and needs no extra system libs.
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 
-# Linux system tray via StatusNotifierItem (src/tray_linux.rs). macOS uses the
-# native implementation in src/tray_macos.rs; Windows currently has no tray.
+# Linux system tray via StatusNotifierItem (src/tray_linux.rs). macOS and
+# Windows use their native implementations in src/tray_macos.rs and
+# src/tray_windows.rs.
 #
 # default-features = false: ksni's default is "tokio", which flips the shared
 # zbus 5 executor to tokio graph-wide. We only use the blocking API on
@@ -157,6 +162,12 @@ cxx-qt-build = "0.7"
 qt-build-utils = "0.7"
 cc = "1"
 
+[target.'cfg(windows)'.build-dependencies]
+# Icon + VERSIONINFO + the longPathAware manifest, embedded as PE resources.
+# winresource, not winres: winres has been unmaintained since 2021 and this
+# is its maintained fork.
+winresource = "0.1"
+
 # macOS only: the Dock-icon activation policy behind the "Hide Dock icon when
 # closed to menu bar" setting (Spotify behaviour — close puts the app in the
 # menu bar and drops the Dock icon; minimize still goes to the Dock).
@@ -168,6 +179,27 @@ cc = "1"
 # ⚠ NOT COMPILED OR TESTED HERE. This tree builds on Linux; the macOS arm is
 # behind cfg, so `cargo build` cannot see it. First real check is a macOS
 # build — the Mac mini (192.168.0.69) is where that happens.
+[target.'cfg(target_os = "windows")'.dependencies]
+# SetCurrentProcessExplicitAppUserModelID: the identity Windows groups the
+# taskbar button under and matches a toast's app_id against. 0.61 is already
+# in the workspace lock.
+windows-sys = { version = "0.61", features = [
+  "Win32_UI_Shell",
+  # Single instance: CreateMutexW arbitrates, a named pipe carries the
+  # handoff, and both need the error codes to tell "already there" from
+  # "failed".
+  "Win32_Foundation",
+  "Win32_System_Threading",
+  "Win32_System_Pipes",
+  # ProcessIdToSessionId: the pipe name is qualified by session, because
+  # pipe names are machine-global while the mutex is per-session.
+  "Win32_System_RemoteDesktop",
+  "Win32_Storage_FileSystem",
+  # RegGetValueW: is this install's AppUserModelID actually registered?
+  # Without that, Windows silently drops every toast.
+  "Win32_System_Registry",
+] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # DIRECT objc2, added 2026-08-05 for the menu-bar tray: `declare_class!`,
 # `msg_send_id!`, `sel!`, `ClassType`, `DeclaredClass`, `mutability` and

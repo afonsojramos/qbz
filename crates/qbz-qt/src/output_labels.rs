@@ -57,6 +57,7 @@ pub fn output_labels(audio: &AudioSettings) -> OutputLabels {
         Some(AudioBackendType::Alsa) => ("ALSA", true),
         Some(AudioBackendType::Jack) => ("JACK", true),
         Some(AudioBackendType::Pulse) => ("PULS", true),
+        Some(AudioBackendType::WasapiExclusive) => ("WASAPI", true),
         Some(AudioBackendType::SystemDefault) => ("SYST", false),
         None => ("AUTO", false),
     };
@@ -88,6 +89,16 @@ pub fn output_labels(audio: &AudioSettings) -> OutputLabels {
             }
         }
         Some(AudioBackendType::Pulse) => ("SHARED", false),
+        // Exclusive needs a CHOSEN device: with none the player falls through
+        // to the shared stream, and lighting EXCL there would be the LED
+        // lying, which is the one thing these two must never do.
+        Some(AudioBackendType::WasapiExclusive) => {
+            if audio.output_device.is_some() {
+                ("EXCL", true)
+            } else {
+                ("SHARED", false)
+            }
+        }
         Some(AudioBackendType::SystemDefault) | None => ("DEFAULT", false),
     };
     OutputLabels {

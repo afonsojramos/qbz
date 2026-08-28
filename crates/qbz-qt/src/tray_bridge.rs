@@ -180,8 +180,15 @@ impl qbz_tray::QbzTray {
         if QT_THREAD.set(self.qt_thread()).is_err() {
             log::warn!("[qbz-qt] tray Qt thread already registered");
         }
+        // If `tray_qt::init` ran before this point its queued closure was
+        // dropped on the floor -- `ui()` above is a no-op until the line
+        // right here. Pick the work up now; we are already on the GUI thread.
+        #[cfg(target_os = "windows")]
+        crate::tray_qt::create_now();
         #[cfg(target_os = "linux")]
         crate::single_instance_qt::bind_ui();
+        #[cfg(target_os = "windows")]
+        crate::single_instance_win::bind_ui();
     }
 
     /// D18's report-back. Flag only — it never touches a window.

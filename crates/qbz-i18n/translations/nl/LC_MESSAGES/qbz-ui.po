@@ -6030,3 +6030,12 @@ msgstr "Dit album bevat geen nummers."
 
 msgid "Reactive Rings"
 msgstr "Reactieve ringen"
+
+msgid "Windows — yes, but read this first"
+msgstr "Windows — ja, maar lees dit eerst"
+
+msgid "Don't show this again"
+msgstr "Niet meer weergeven"
+
+msgid "I understand"
+msgstr "Ik begrijp het"

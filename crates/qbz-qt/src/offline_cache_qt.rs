@@ -377,21 +377,19 @@ pub fn remove_album(album_id: String) {
 
 /// Open the cache directory in the desktop file manager (Slint `open_folder`).
 ///
-/// `xdg-open` / `open` by hand rather than the `rfd` used elsewhere in the
-/// port: rfd opens a PICKER, and this row is "show me the folder". Same two
-/// binaries the reference shells out to.
+/// Not the `rfd` used elsewhere in the port: rfd opens a PICKER, and this row
+/// is "show me the folder". Routed through the `open` crate like the other
+/// eleven sites in this crate — the hand-rolled `xdg-open` fallback ran on
+/// every non-macOS host, Windows included, where it does not exist. `open`
+/// uses ShellExecuteW there and xdg-open/open on Linux/macOS, so the two
+/// supported platforms behave exactly as before.
 pub fn open_folder() {
     crate::spawn(async move {
         let Some(off) = offline_qt::get().await else {
             return;
         };
         let path = off.get_cache_path();
-        let opener = if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        };
-        if let Err(e) = std::process::Command::new(opener).arg(&path).spawn() {
+        if let Err(e) = open::that(&path) {
             log::warn!("[qbz-qt] open offline folder failed: {e}");
         }
     });

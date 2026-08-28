@@ -6048,3 +6048,12 @@ msgstr "Este álbum no tiene pistas."
 
 msgid "Reactive Rings"
 msgstr "Anillos reactivos"
+
+msgid "Windows — yes, but read this first"
+msgstr "Windows — sí, pero lee esto primero"
+
+msgid "Don't show this again"
+msgstr "No volver a mostrar"
+
+msgid "I understand"
+msgstr "Entiendo"

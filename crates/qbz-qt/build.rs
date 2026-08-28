@@ -5,6 +5,12 @@ use cxx_qt_build::{CxxQtBuilder, QmlModule};
 /// Collect every file under `dir` (recursive), crate-root-relative — the
 /// baked icon variants (qml/assets/icons/<tint>/<name>.svg) are too many to
 /// list by hand.
+///
+/// The strings become qrc ALIASES verbatim (qt-build-utils writes
+/// `<file alias="{path}">` from `Path::display()`), and QML asks with `/`
+/// (`QbzIcon.qml:231`, `FontPreload.qml:40-46`). On Windows `read_dir` joins
+/// with `\`, so normalise here or every asset fails with
+/// "QQuickImage: Cannot open".
 fn collect_qrc_files(dir: &Path, out: &mut Vec<String>) {
     for entry in
         std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
@@ -13,8 +19,43 @@ fn collect_qrc_files(dir: &Path, out: &mut Vec<String>) {
         if path.is_dir() {
             collect_qrc_files(&path, out);
         } else {
-            out.push(path.to_string_lossy().into_owned());
+            out.push(qrc_alias(&path));
         }
+    }
+}
+
+/// A qrc alias is always `/`-separated, whatever the host separator.
+///
+/// Rewritten only when the BUILD HOST is Windows. On Unix a backslash is a
+/// LEGAL filename character, so rewriting it there would quietly point the
+/// alias at a different file (or at none). `cfg!` in a build script reads the
+/// host, which is exactly the separator `read_dir` just produced.
+fn qrc_alias(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    if cfg!(windows) {
+        raw.replace('\\', "/")
+    } else {
+        raw.into_owned()
+    }
+}
+
+/// MSVC reports `__cplusplus` as `199711L` no matter what `/std:` says, unless
+/// `/Zc:__cplusplus` is passed. Qt refuses that value outright —
+/// `qcompilerdetection.h:1317` raises "Qt requires a C++17 compiler, and a
+/// suitable value for __cplusplus" on EVERY translation unit that includes a
+/// Qt header, ours and moc's alike, so the first Windows build cannot get past
+/// the Qt headers. And without `/permissive-` the Qt 6.9 headers do not parse
+/// under MSVC's default non-conforming mode: measured here, `qtmochelpers.h:262`
+/// C2065 'result', `qcomparehelpers.h:1348` C2968 recursive alias, and C2737 on
+/// every moc `staticMetaObject`. Both flags are what Qt's own CMake passes;
+/// neither cc-rs nor cxx-qt-build adds either.
+///
+/// The build script runs on the HOST, so ask cargo for the TARGET env rather
+/// than `cfg!()` — identical for a native build, not for a cross one.
+fn apply_msvc_qt_flags(cc: &mut cc::Build) {
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        cc.flag("/Zc:__cplusplus");
+        cc.flag("/permissive-");
     }
 }
 
@@ -82,9 +123,23 @@ fn find_qsb() -> Option<std::path::PathBuf> {
             return Some(p);
         }
     }
+    // Windows: `qsb.exe`, and `Path::is_file()` does NOT append `.exe` (Rust's
+    // std only does that for a full path handed to `Command`), so probe both.
+    let names: &[&str] = if cfg!(windows) { &["qsb.exe", "qsb"] } else { &["qsb"] };
     if let Ok(path) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path) {
-            let p = dir.join("qsb");
+            for name in names {
+                let p = dir.join(name);
+                if p.is_file() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    // aqt / install-qt-action export QT_ROOT_DIR (e.g. F:\Qt\6.9.3\msvc2022_64).
+    if let Ok(root) = std::env::var("QT_ROOT_DIR") {
+        for name in names {
+            let p = std::path::Path::new(&root).join("bin").join(name);
             if p.is_file() {
                 return Some(p);
             }
@@ -296,6 +351,7 @@ fn build_rhi_items() {
 
     let mut cc = cc::Build::new();
     cc.cpp(true).std("c++17").pic(true).include("cxx"); // the moc outputs do `#include "<name>.h"`
+    apply_msvc_qt_flags(&mut cc);
     for item in [
         "linebed_item",
         "plasma_item",
@@ -326,6 +382,13 @@ fn build_rhi_items() {
     // when hybrid-GPU implicit layers are active.
     println!("cargo:rerun-if-changed=cxx/qt_vulkan_probe.cpp");
     cc.file("cxx/qt_vulkan_probe.cpp");
+    println!("cargo:rerun-if-changed=cxx/win_shell.cpp");
+    cc.file("cxx/win_shell.cpp");
+    // Shell_NotifyIconW tray. No Q_OBJECT, so no moc; the body is inside
+    // `#ifdef _WIN32` and compiles to nothing on Linux and macOS.
+    println!("cargo:rerun-if-changed=cxx/win_tray.cpp");
+    println!("cargo:rerun-if-changed=cxx/win_tray.h");
+    cc.file("cxx/win_tray.cpp");
     for p in qtbuild.include_paths() {
         cc.include(p);
     }
@@ -607,6 +670,7 @@ fn main() {
                 // QbzAbout's two documents.
                 "qml/shell/AboutModal.qml",
                 "qml/shell/WhatsNewModal.qml",
+                "qml/shell/WindowsDisclaimerModal.qml",
                 // Immersive mode (2026-08-02 immersive-port contract §2) —
                 // its own module directory like views/local/ and
                 // views/playlistmanager/. B2 shipped the root overlay + the
@@ -860,5 +924,33 @@ fn main() {
             qrc_files: &qrc_refs,
             ..Default::default()
         })
+        .cc_builder(apply_msvc_qt_flags)
         .build();
+
+    embed_windows_resources();
 }
+
+/// Icon, VERSIONINFO and the manifest, as PE resources.
+///
+/// The manifest declares `longPathAware` and NOTHING ELSE. Never add
+/// `dpiAware`/`dpiAwareness`: Qt 6 sets PerMonitorV2 itself at startup, a
+/// manifest declaration is immutable, and the two together either log a
+/// permanent COM error 0x5 or silently degrade scaling.
+///
+/// `build.rs` runs with `crates/qbz-qt` as its working directory, hence
+/// `../../packaging`.
+#[cfg(windows)]
+fn embed_windows_resources() {
+    println!("cargo:rerun-if-changed=../../packaging/icons/icon.ico");
+    println!("cargo:rerun-if-changed=../../packaging/windows/qbz.exe.manifest");
+    let mut res = winresource::WindowsResource::new();
+    res.set_icon("../../packaging/icons/icon.ico");
+    res.set_manifest_file("../../packaging/windows/qbz.exe.manifest");
+    res.set("ProductName", "QBZ");
+    res.set("FileDescription", "QBZ — Qobuz hi-res player");
+    res.set("LegalCopyright", "MIT — github.com/vicrodh/qbz");
+    res.compile().expect("windows resource");
+}
+
+#[cfg(not(windows))]
+fn embed_windows_resources() {}

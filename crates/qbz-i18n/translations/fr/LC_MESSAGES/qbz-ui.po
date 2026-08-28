@@ -6040,3 +6040,12 @@ msgstr "Cet album ne contient aucun titre."
 
 msgid "Reactive Rings"
 msgstr "Anneaux réactifs"
+
+msgid "Windows — yes, but read this first"
+msgstr "Windows — oui, mais lisez d'abord ceci"
+
+msgid "Don't show this again"
+msgstr "Ne plus afficher"
+
+msgid "I understand"
+msgstr "Je comprends"

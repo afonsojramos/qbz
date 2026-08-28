@@ -16,8 +16,80 @@ pub(crate) fn is_qobuz_link(arg: &str) -> bool {
         || arg.starts_with("http://open.qobuz.com/")
 }
 
+/// `qbz://` is OUR scheme, registered by the Windows MSI beside
+/// `qobuzapp://`. It is rewritten rather than taught downstream: the resolver
+/// (`qbz-music-link`) knows `qobuzapp://` and the Qobuz web shapes and nothing
+/// else, so an accepted `qbz://` would travel the whole way and then be
+/// classified "unsupported or invalid music link" -- which is exactly what a
+/// live test of the forwarding path produced. The two carry the same
+/// `album/track/artist` shape, so a prefix swap is the whole translation.
+///
+/// `is_qobuz_link` deliberately still answers false for it: that predicate
+/// describes what the LAUNCHER files advertise, and its test pins that.
+fn rewrite_own_scheme(arg: &str) -> Option<String> {
+    arg.strip_prefix("qbz://")
+        .map(|rest| format!("qobuzapp://{rest}"))
+}
+
+/// The first argument that is a link we can actually act on.
+///
+/// Keeps SCANNING past one it cannot use rather than giving up: a launcher can
+/// hand over several arguments and the first match is not necessarily the
+/// usable one.
 fn select_link(args: &[String]) -> Option<String> {
-    args.iter().find(|arg| is_qobuz_link(arg)).cloned()
+    for arg in args {
+        let candidate = if is_qobuz_link(arg) {
+            arg.clone()
+        } else if let Some(rewritten) = rewrite_own_scheme(arg) {
+            rewritten
+        } else {
+            continue;
+        };
+
+        // WINDOWS ONLY. ShellExecute hands the app whatever the registered
+        // `shell\open\command` produced, and an unencoded space in the link
+        // splits it across argv -- so a fragment can carry the scheme and
+        // nothing else. Acting on that navigates nowhere and reads as the deep
+        // link silently failing.
+        //
+        // Not applied elsewhere: Linux and macOS have accepted whatever
+        // matched the prefix since this shipped, and tightening that from a
+        // Windows port would be a behaviour change on platforms that never
+        // asked for it.
+        #[cfg(target_os = "windows")]
+        if url::Url::parse(&candidate).is_err() {
+            log::warn!(
+                "[qbz-qt] deep link: ignoring an unparseable argument ({})",
+                candidate.split('?').next().unwrap_or(&candidate)
+            );
+            continue;
+        }
+
+        return Some(candidate);
+    }
+    None
+}
+
+/// Is this something the forwarding path may act on?
+///
+/// The single-instance server feeds it whatever arrived on the pipe, which is
+/// not argv and is not ours.
+pub(crate) fn is_actionable(url: &str) -> bool {
+    if !is_qobuz_link(url) && !url.starts_with("qbz://") {
+        return false;
+    }
+    // A parse is NOT enough, which a test caught: `Url::parse("qbz://")`
+    // SUCCEEDS -- a valid scheme with an empty everything -- so a bare scheme
+    // would have passed the gate and reached the resolver as a navigation
+    // request for nothing.
+    //
+    // Every shape this accepts carries its target in the AUTHORITY:
+    // `qobuzapp://album/1` and `qbz://album/1` put "album" there, and the web
+    // URLs put the Qobuz host there. An empty one is not a link.
+    match url::Url::parse(url) {
+        Ok(u) => u.host_str().is_some_and(|h| !h.is_empty()),
+        Err(_) => false,
+    }
 }
 
 /// Capture argv before the single-instance decision so a duplicate process
@@ -79,6 +151,35 @@ mod tests {
         assert!(!is_qobuz_link("https://open.qobuz.com.evil.test/album/a"));
         assert!(!is_qobuz_link("https://spotify.com/track/1"));
         assert!(!is_qobuz_link("qbz://album/a"));
+    }
+
+    #[test]
+    fn our_own_scheme_is_rewritten_not_taught() {
+        // The resolver knows qobuzapp:// and the Qobuz web shapes. A qbz://
+        // URL that reached it came back "unsupported or invalid music link",
+        // so the translation happens here.
+        assert_eq!(
+            rewrite_own_scheme("qbz://album/12345").as_deref(),
+            Some("qobuzapp://album/12345")
+        );
+        assert_eq!(rewrite_own_scheme("qobuzapp://album/1"), None);
+        assert_eq!(rewrite_own_scheme("https://open.qobuz.com/album/1"), None);
+    }
+
+    #[test]
+    fn a_rewritten_link_is_selected() {
+        let args = vec!["--flag".to_string(), "qbz://track/9".to_string()];
+        assert_eq!(select_link(&args).as_deref(), Some("qobuzapp://track/9"));
+    }
+
+    #[test]
+    fn the_pipe_gate_accepts_only_real_links() {
+        assert!(is_actionable("qobuzapp://album/1"));
+        assert!(is_actionable("qbz://album/1"));
+        assert!(is_actionable("https://play.qobuz.com/album/1"));
+        assert!(!is_actionable("https://spotify.com/track/1"));
+        assert!(!is_actionable("qbz://"));
+        assert!(!is_actionable("not a url at all"));
     }
 
     #[test]
