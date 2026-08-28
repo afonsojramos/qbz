@@ -30,6 +30,9 @@
 pub mod alsa_backend;
 pub mod alsa_direct;
 pub mod wasapi_direct;
+/// Endpoint capabilities: the exclusive-mode rate sweep and the hotplug watch.
+#[cfg(windows)]
+pub mod wasapi_backend;
 #[cfg(target_os = "linux")]
 pub mod alsa_error_handler;
 pub mod analysis;

@@ -5685,6 +5685,31 @@ impl Player {
                             });
                     }
                     let carrier = qbz_dsd::dop_carrier_rate(info.dsd_rate);
+                    // Ask the platform that owns the device. On Windows the
+                    // ALSA probe cannot answer, so this guard was taking its
+                    // `.unwrap_or(true)` and dispatching DoP on a DEFAULT
+                    // rather than on a measurement -- on a DAC that refuses
+                    // 176400, which is the DSD64 carrier.
+                    // WINDOWS: never. Not "probe and decide" -- the DoP
+                    // handler below is `cfg(target_os = "linux")` and answers
+                    // "DoP playback is Linux-only" with a stream error, so
+                    // dispatching here can only ever fail. Converting to PCM
+                    // is the one outcome that plays the track.
+                    //
+                    // It is also FAIL-CLOSED, which this guard has to be. An
+                    // undecoded DoP stream is read as ordinary PCM carrying
+                    // packed DSD and marker bytes: it comes out as very loud
+                    // broadband noise, which threatens tweeters and hearing.
+                    // An earlier draft here fell back to `true` whenever the
+                    // probe could not answer -- preserving exactly the guess
+                    // this work existed to remove.
+                    //
+                    // `wasapi_backend::supported_rates` is what a future
+                    // Windows DoP path would consult, and it already reports
+                    // that the owner's DAC refuses 176400, the DSD64 carrier.
+                    #[cfg(windows)]
+                    let rate_ok = false;
+                    #[cfg(not(windows))]
                     let rate_ok =
                         qbz_audio::alsa_backend::get_device_supported_rates(&device)
                             .map(|r| r.contains(&carrier))

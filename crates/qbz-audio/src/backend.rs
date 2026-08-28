@@ -490,6 +490,12 @@ impl AudioBackend for CpalDefaultBackend {
         #[cfg(windows)]
         let default_endpoint_id = default_device.id().ok().map(|i| i.1);
 
+        // Idempotent, and this is the natural place: the first time anything
+        // asks what devices exist is the first time it matters that the answer
+        // can go stale.
+        #[cfg(windows)]
+        crate::wasapi_backend::start_hotplug_watch();
+
         let mut devices = Vec::new();
         for device in self
             .host
@@ -504,13 +510,19 @@ impl AudioBackend for CpalDefaultBackend {
             // On macOS, probe device capabilities via CoreAudio
             #[cfg(target_os = "macos")]
             let (supported_rates, max_rate, bus_type, is_hw) = { Self::probe_macos_device(&name) };
-            #[cfg(not(target_os = "macos"))]
+            // The placeholder for every platform that has no probe. On
+            // Windows `supported_rates`/`max_rate` are SHADOWED further down
+            // by the exclusive-mode sweep, which is why they carry an
+            // underscore prefix there and nowhere else.
+            #[cfg(all(not(target_os = "macos"), not(windows)))]
             let (supported_rates, max_rate, bus_type, is_hw): (
                 Option<Vec<u32>>,
                 Option<u32>,
                 Option<String>,
                 bool,
             ) = (None, None, None, false);
+            #[cfg(windows)]
+            let (bus_type, is_hw): (Option<String>, bool) = (None, false);
 
             // WINDOWS ONLY, additive: id, display and description all come
             // from fields cpal already fills but this backend ignored.
@@ -548,6 +560,33 @@ impl AudioBackend for CpalDefaultBackend {
             #[cfg(not(windows))]
             let (id, display, description, is_default) =
                 (name.clone(), name.clone(), None, name == default_name);
+
+            // WINDOWS: the rates the endpoint accepts in EXCLUSIVE mode, which
+            // is the only list that describes what reaches the converter
+            // untouched. Shadows the `(None, None, ...)` placeholder above.
+            //
+            // It cannot be inferred, which is the whole reason it is measured:
+            // the owner's DAC accepts 44100/48000/88200/96000/192000 and
+            // REFUSES 176400, so the 44.1 family stops at 88.2 while the 48
+            // family reaches 192. Cached per endpoint, so this costs once.
+            //
+            // `supported_rates` answers `None` when the endpoint could not
+            // be asked at all -- busy, gone, or COM refused -- and that must
+            // not reach a caller as "supports nothing", which would narrow a
+            // quality cap on the strength of a failed question. An endpoint
+            // that answers and lists nothing is reported the same way for the
+            // same reason: there is nothing to offer either way, and neither
+            // is a fact worth caching upstream.
+            #[cfg(windows)]
+            let (supported_rates, max_rate) = {
+                match crate::wasapi_backend::supported_rates(&id) {
+                    Some(rates) if !rates.is_empty() => {
+                        let top = rates.iter().copied().max();
+                        (Some(rates), top)
+                    }
+                    _ => (None, None),
+                }
+            };
 
             devices.push(AudioDevice {
                 id,
