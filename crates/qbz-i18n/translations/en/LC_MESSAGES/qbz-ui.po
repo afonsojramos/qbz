@@ -1638,3 +1638,6 @@ msgstr "Could not load album"
 
 msgid "This album has no tracks."
 msgstr "This album has no tracks."
+
+msgid "Reactive Rings"
+msgstr "Reactive Rings"

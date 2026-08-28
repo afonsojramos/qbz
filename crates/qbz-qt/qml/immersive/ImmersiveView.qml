@@ -145,7 +145,8 @@ Item {
         anchors.fill: parent
         visible: QbzShaderScene.scene === 0
             && !(QbzImmersive.viewMode === 0
-                 && (QbzImmersive.mode === 7 || QbzImmersive.mode === 8))
+                 && (QbzImmersive.mode === 7 || QbzImmersive.mode === 8
+                     || QbzImmersive.mode === 9))
         source: QbzImmersive.atmosphereUrl
         fallbackSource: QbzPlayer.npArtworkPath
         animated: visible && QbzPlayer.npPlaying && QbzImmersive.open
@@ -303,6 +304,11 @@ Item {
         visible: QbzShaderScene.scene === 0
             && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 6
     }
+    ReactiveRingsPanel {
+        anchors.fill: parent
+        visible: QbzShaderScene.scene === 0
+            && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 9
+    }
     Loader {
         anchors.fill: parent
         active: QbzShaderScene.scene === 0
@@ -383,8 +389,9 @@ Item {
     }
 
     // --- The shared immersive lyrics engine + document (§6.6, trap 22) ------
-    // ONE LyricsSyncEngine for BOTH immersive lyric surfaces (FOCUS mode 4
-    // AND SPLIT panel 0); the gate is the §6.6 formula verbatim
+    // ONE LyricsSyncEngine for all immersive lyric surfaces (FOCUS mode 4,
+    // legacy SPLIT panel 0 and cinematic SPLIT panel 5); the gate extends
+    // the §6.6 formula
     // (lyrics_sync.rs:214-217 parity). The QbzLyrics doc fields are parsed
     // once here and handed to both mounts.
     readonly property var immLyricsDoc: {
@@ -405,7 +412,9 @@ Item {
         gateOpen: QbzImmersive.open
             && QbzShaderScene.scene === 0 // A1: the scenes replace the panels
             && ((QbzImmersive.viewMode === 0 && QbzImmersive.mode === 4)
-                || (QbzImmersive.viewMode === 1 && QbzImmersive.splitPanel === 0))
+                || (QbzImmersive.viewMode === 1
+                    && (QbzImmersive.splitPanel === 0
+                        || QbzImmersive.splitPanel === 5)))
     }
     // Every doc commit resets the ladder and re-lands on the right line (the
     // LyricsPanel.qml:60-66 idiom — the Slint kick() on commit/panel open).
@@ -430,6 +439,7 @@ Item {
         anchors.fill: parent
         // A1: a shader scene replaces the SPLIT layout too (:1416 parity).
         visible: QbzShaderScene.scene === 0 && QbzImmersive.viewMode === 1
+            && QbzImmersive.splitPanel >= 0 && QbzImmersive.splitPanel <= 3
         // D2: re-request the large art when the SPLIT layout becomes visible
         // (leftCol's own request is gated on this visibility).
         onVisibleChanged: if (visible) leftCol.requestArtSize()
@@ -637,6 +647,26 @@ Item {
         }
     }
 
+    // The two cinematic SPLIT variants replace the legacy 50/50 composition
+    // with the supplied full-viewport artwork stage. One shared component
+    // guarantees that the background/card/waveform stay pixel-identical; only
+    // the card's right-hand content changes between metadata+seek and lyrics.
+    Loader {
+        anchors.fill: parent
+        active: QbzShaderScene.scene === 0
+            && QbzImmersive.viewMode === 1
+            && (QbzImmersive.splitPanel === 4
+                || QbzImmersive.splitPanel === 5)
+        visible: active
+        sourceComponent: ReactiveSplitPanel {
+            lyricsMode: QbzImmersive.splitPanel === 5
+            lines: root.immLyricsLines
+            synced: root.immLyricsSynced
+            status: root.immLyricsStatus
+            sync: immLyricsEngine
+        }
+    }
+
     // --- Layer 4: ImmersiveSongCard (§5.1, :1602-1605) ----------------------
     // Keep the compact bottom-right metadata over shader backgrounds,
     // Wave Bed, full-screen Lyrics and the two scope views. The lyrics surface
@@ -654,7 +684,8 @@ Item {
         visible: (QbzShaderScene.scene > 0
                   || (QbzImmersive.viewMode === 0
                       && (QbzImmersive.mode === 4 || QbzImmersive.mode === 6
-                          || QbzImmersive.mode === 7 || QbzImmersive.mode === 8)))
+                          || QbzImmersive.mode === 7 || QbzImmersive.mode === 8
+                          || QbzImmersive.mode === 9)))
             && QbzPlayer.npHasTrack
     }
 

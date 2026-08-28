@@ -7,8 +7,9 @@
 //! All enums are `i32` with the Slint numbering verbatim
 //! (`state.slint:4238,4249,4254`): view_mode 0 FOCUS / 1 SPLIT; mode 0 Album
 //! Reactive, 1 Static, 2 Coverflow, 3 Spectrum, 4 Lyrics, 5 Queue, 6 WaveBed,
-//! 7 Goniometer, 8 Oscilloscope;
-//! split_panel 0 Lyrics, 1 TrackInfo, 2 Suggestions, 3 Queue.
+//! 7 Goniometer, 8 Oscilloscope, 9 Reactive Rings;
+//! split_panel 0 Lyrics, 1 TrackInfo, 2 Suggestions, 3 Queue, 4 cinematic
+//! Now Playing, 5 cinematic one-line Lyrics.
 //!
 //! The `open` property uses a CUSTOM WRITE (`set_open`) so EVERY write — the
 //! five QML exit paths AND the Rust invokables — funnels through one Rust
@@ -63,9 +64,10 @@ pub mod qbz_immersive {
         #[qproperty(i32, view_mode)]
         // FOCUS foreground: 0 AlbumReactive, 1 Static, 2 Coverflow, 3
         // Spectrum, 4 Lyrics, 5 Queue, 6 WaveBed, 7 Goniometer,
-        // 8 Oscilloscope.
+        // 8 Oscilloscope, 9 Reactive Rings.
         #[qproperty(i32, mode)]
-        // SPLIT active panel: 0 Lyrics, 1 TrackInfo, 2 Suggestions, 3 Queue.
+        // SPLIT active panel: 0 Lyrics, 1 TrackInfo, 2 Suggestions, 3 Queue,
+        // 4 cinematic Now Playing, 5 cinematic one-line Lyrics.
         #[qproperty(i32, split_panel)]
         // AlbumReactive glow, Qt `#AARRGGBB` (Slint `#6464ff59` RRGGBBAA
         // converted — see GLOW_DEFAULT_QT). Published by ambient_qt only on
