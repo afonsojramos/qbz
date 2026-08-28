@@ -686,6 +686,7 @@ pull requests.
 - [@Alexandre-Menigault](https://github.com/Alexandre-Menigault) — active lyrics wrapping
 - [@MarkusAbtion](https://github.com/MarkusAbtion) — opt-in section navigation
 - [@fengalin](https://github.com/fengalin) — crypto-provider test coverage
+- [@luukvanderduim](https://github.com/luukvanderduim) — applied-filter visibility
 
 ## License
 

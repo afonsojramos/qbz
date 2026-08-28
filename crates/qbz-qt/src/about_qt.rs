@@ -107,6 +107,7 @@ const CONTRIBUTORS: &[&str] = &[
     "Alexandre-Menigault",
     "MarkusAbtion",
     "fengalin",
+    "luukvanderduim",
 ];
 
 /// How many contributor chips per wrap row (`about.rs:76`). Slint has no
