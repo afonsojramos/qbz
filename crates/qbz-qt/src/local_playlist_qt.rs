@@ -1246,6 +1246,33 @@ pub async fn play_shuffled(runtime: &Runtime) {
     play_in(runtime, "", true).await
 }
 
+/// Header context-menu queueing for a local or mixed OPEN playlist.
+///
+/// These details already own a source-aware resolved snapshot. Re-fetching by
+/// numeric playlist id would lose local/Plex sidecars and cannot represent a
+/// `local:<uuid>` at all, so all three insertion modes consume that snapshot
+/// just like header Play and Shuffle do.
+pub async fn enqueue_all(runtime: &Runtime, mode: &str) -> Result<(), String> {
+    let (queue, playlist_id) = {
+        let queue = CURRENT_QUEUE
+            .lock()
+            .map_err(|_| "open playlist queue is unavailable".to_string())?
+            .clone();
+        let playlist_id = CURRENT_META
+            .lock()
+            .map_err(|_| "open playlist metadata is unavailable".to_string())?
+            .as_ref()
+            .map(|(id, _)| id.clone())
+            .unwrap_or_default();
+        (queue, playlist_id)
+    };
+    let queue = crate::playback_qt::stamped(
+        queue,
+        crate::playback_qt::PlayContext::playlist(&playlist_id),
+    );
+    crate::playback_qt::enqueue_track_list_mode(runtime, queue, mode).await
+}
+
 async fn play_in(runtime: &Runtime, start_row_id: &str, shuffle: bool) {
     let (queue, offline_only, playlist_id) = {
         let Ok(q) = CURRENT_QUEUE.lock() else { return };

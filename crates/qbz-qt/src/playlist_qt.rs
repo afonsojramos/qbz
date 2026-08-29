@@ -40,7 +40,7 @@
 //! - The custom drag order persists to a per-user `playlist_orders.json`
 //!   in the user dir (the Slint uses `playlist_orders.db` with
 //!   `(u64, bool, i32)` rows — same behavior, simpler backend for the POC).
-//! - Suggested Songs and whole-playlist offline download are not ported.
+//! - Suggested Songs are not ported.
 //! - Custom covers, multi-select/bulk actions and public-link sharing are live.
 //!   Copying a foreign playlist still does not clone its source artwork into a
 //!   new custom-cover override.
@@ -2162,6 +2162,17 @@ async fn play_queue_at(
 pub async fn play_all(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<(), String> {
     let tracks = current_queue();
     play_queue_at(runtime, tracks, 0, open_context()).await
+}
+
+/// Header context-menu queueing: insert the OPEN playlist without fetching it
+/// again. Stamping happens while the open playlist id is still in scope, so
+/// the appended rows keep their playlist origin when playback reaches them.
+pub async fn enqueue_all(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    mode: &str,
+) -> Result<(), String> {
+    let tracks = crate::playback_qt::stamped(current_queue(), open_context());
+    crate::playback_qt::enqueue_track_list_mode(runtime, tracks, mode).await
 }
 
 /// Header Shuffle: reorder THIS list and play the top of the shuffled order.

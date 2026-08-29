@@ -7,12 +7,12 @@
 // which also supplies the placeholder glyph),
 // "PLAYLIST" eyebrow, name, description-short + Read
 // more (the shared AppShell text modal), owner • N tracks • duration,
-// the action row: Play / Shuffle / heart (owned, wired) / pin (wired) /
-// follow (foreign, subscribe API) / copy (foreign, create+add) / edit
-// (owner: opens the SHARED controls/PlaylistEditModal.qml through
-// QbzPlaylistEdit — this view mounts no editor of its own; the inline
-// rename+delete Popup that used to live at the bottom of this file is gone,
-// contract D20). Right edge: in-playlist search + the
+// the action row: Play / Shuffle / heart / follow (foreign, subscribe API) /
+// copy (foreign, create+add) / multi-select / context menu. The context menu
+// owns whole-playlist queueing plus pin, share, edit and offline download;
+// edit opens the SHARED controls/PlaylistEditModal.qml through QbzPlaylistEdit
+// (this view mounts no editor of its own; contract D20). Right edge:
+// in-playlist search + the
 // sort dropdown (Default/Title/Artist/Album/Duration/Date added/Custom).
 //
 // Track list: the exact PlaylistView row (# / 36px art / title+artist /
@@ -36,9 +36,10 @@
 // is coming (the Slint mounts a bare LoadingSpinner), plus a per-item cover
 // placeholder that clears when the playlist's own cover lands.
 //
-// Known remaining parity deltas (playlist_qt.rs has the full list):
-// Suggested Songs are not ported. Whole-playlist offline download lives on
-// the cloud glyph in the table header and shares the album preflight.
+// Known remaining parity delta (playlist_qt.rs has the full list): Suggested
+// Songs are not ported. Whole-playlist offline download is available both in
+// the header context menu and on the table-header cloud glyph; both share the
+// album preflight.
 
 import QtQuick
 import QtQuick.Controls
@@ -312,6 +313,58 @@ Rectangle {
             : QbzSession.tr("Default", QbzSession.trRev)
     }
 
+    function headerMenuModel() {
+        var t = QbzSession.tr
+        var r = QbzSession.trRev
+        var playable = root.allTracks.length > 0
+        var m = [
+            { "label": t("Play", r), "icon": "play-fill", "action": "play",
+              "enabled": playable },
+            { "label": t("Play next", r), "icon": "list-start", "action": "next",
+              "enabled": playable },
+            { "label": t("Play later", r), "icon": "list-plus", "action": "later",
+              "enabled": playable },
+            { "label": t("Add to queue", r), "icon": "list-end", "action": "queue",
+              "enabled": playable },
+            { "sep": true },
+            { "label": root.headerPinned ? t("Unpin", r) : t("Pin", r),
+              "icon": root.headerPinned ? "pin-filled" : "pin", "action": "pin" },
+        ]
+        if (!root.isLocal)
+            m.push({ "label": t("Share", r), "icon": "link", "action": "share" })
+        if (root.isOwner)
+            m.push({ "label": t("Edit playlist", r), "icon": "pen-line", "action": "edit" })
+        if (!root.isLocal) {
+            var preflighting = QbzOffline.collectionPreflightLoading
+                && QbzOffline.collectionPreflightKey === "playlist:" + String(root.doc.id || "")
+            m.push({ "sep": true })
+            m.push({ "label": t("Make available offline", r), "icon": "cloud-download",
+                     "action": "offline",
+                     "enabled": root.online && playable && !preflighting })
+        }
+        return m
+    }
+
+    function headerMenuAction(action) {
+        if (action === "play") QbzBridge.playlistPlayAll()
+        else if (action === "next" || action === "later" || action === "queue")
+            QbzBridge.playlistEnqueueAll(action)
+        else if (action === "pin") QbzBridge.playlistTogglePin()
+        else if (action === "share")
+            QbzBridge.playlistShare(String(root.doc.id || ""))
+        else if (action === "edit")
+            QbzPlaylistEdit.open(String(root.doc.id || ""))
+        else if (action === "offline")
+            QbzOffline.cachePlaylist(String(root.doc.id || ""))
+    }
+
+    CardMenu {
+        id: playlistHeaderMenu
+        menuWidth: 224
+        entries: root.headerMenuModel()
+        onPicked: function (action) { root.headerMenuAction(action) }
+    }
+
     // --- Reorder state (the view-level half of the shared drag) ----------
     property int reorderFrom: -1
     property int reorderOver: -1
@@ -384,7 +437,7 @@ Rectangle {
         Item { width: 1; height: 22 }
 
         // Header placeholder — the SHAPE of the header that is coming
-        // (150px cover + eyebrow/title/description/meta bars + the 8 round
+        // (150px cover + eyebrow/title/description/meta bars + the round
         // action buttons), not a spinner. Replaced wholesale by the real
         // header the moment the document lands.
         QbzSkeleton {
@@ -394,7 +447,7 @@ Rectangle {
             height: 150
             coverSize: 150
             coverGap: 24
-            actionCount: 8
+            actionCount: 6
             phase: root.skelPhase
         }
 
@@ -589,88 +642,74 @@ Rectangle {
                 Row {
                     width: parent.width
                     spacing: 12
-                    QbzCircleAction {
-                        name: "play-fill"
-                        primary: true
-                        btnEnabled: root.allTracks.length > 0
-                        anchors.verticalCenter: parent.verticalCenter
-                        onClicked: QbzBridge.playlistPlayAll()
-                    }
-                    QbzCircleAction {
-                        name: "shuffle"
-                        btnEnabled: root.allTracks.length > 0
-                        anchors.verticalCenter: parent.verticalCenter
-                        onClicked: QbzBridge.playlistShuffle()
-                    }
-                    QbzCircleAction {
-                        name: root.headerFavorite ? "heart-filled" : "heart"
-                        active: root.headerFavorite
-                        anchors.verticalCenter: parent.verticalCenter
-                        onClicked: QbzBridge.playlistToggleFavorite()
-                    }
-                    QbzCircleAction {
-                        name: root.headerPinned ? "pin-filled" : "pin"
-                        active: root.headerPinned
-                        anchors.verticalCenter: parent.verticalCenter
-                        onClicked: QbzBridge.playlistTogglePin()
-                    }
-                    // Follow / unfollow and Copy are Qobuz WRITES
-                    // (`playlist/subscribe`, `playlist/create`): offline they
-                    // cannot succeed, and the port let them be clicked anyway —
-                    // the request was gate-refused and the only trace was a log
-                    // line. They stay visible and go inert (0.4 opacity, no
-                    // hover, arrow cursor), which is the reference's read-only
-                    // treatment of the offline hearts rather than a control
-                    // that vanishes and leaves the row jumping.
-                    QbzCircleAction {
-                        visible: !root.isOwner
-                        btnEnabled: root.online
-                        name: (doc.isFollowing === true) ? "check" : "user-plus"
-                        active: doc.isFollowing === true
-                        anchors.verticalCenter: parent.verticalCenter
-                        onClicked: QbzBridge.playlistToggleFollow()
-                    }
-                    QbzCircleAction {
-                        visible: !root.isOwner && doc.isCopied !== true
-                        btnEnabled: root.online
-                        name: "copy"
-                        anchors.verticalCenter: parent.verticalCenter
-                        onClicked: QbzBridge.playlistCopy()
-                    }
-                    QbzCircleAction {
-                        visible: !root.isLocal
-                        name: "link"
-                        anchors.verticalCenter: parent.verticalCenter
-                        onClicked: QbzBridge.playlistShare(String(root.doc.id || ""))
-                    }
-                    QbzCircleAction {
-                        visible: root.isOwner
-                        name: "pen-line"
-                        anchors.verticalCenter: parent.verticalCenter
-                        // The ONE shared editor (controls/PlaylistEditModal.qml,
-                        // mounted in AppShell), which replaced the inline Popup
-                        // that used to live at the bottom of this file: that one
-                        // could express neither a description nor the
-                        // offline-only flag, and it wiped nothing only because
-                        // it never sent one (contract D20).
-                        //
-                        // The id comes from `root.doc.id`. This view has no
-                        // dedicated id property of its own, and a missing one
-                        // would read `undefined`, convert to an empty QString
-                        // and open the editor on no playlist, silently.
-                        onClicked: QbzPlaylistEdit.open(String(root.doc.id || ""))
-                    }
-                    // Multi-select toggle (AlbumView's button, here for the
-                    // playlist's track list).
-                    QbzCircleAction {
-                        name: "square-check-big"
-                        active: root.multiSelect
-                        btnEnabled: root.tracks.length > 0
-                        anchors.verticalCenter: parent.verticalCenter
-                        onClicked: root.setMultiSelect(!root.multiSelect)
+                    Row {
+                        id: playlistHeaderActions
+                        width: implicitWidth
+                        height: 44
+                        spacing: 12
+                        QbzCircleAction {
+                            name: "play-fill"
+                            primary: true
+                            btnEnabled: root.allTracks.length > 0
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzBridge.playlistPlayAll()
+                        }
+                        QbzCircleAction {
+                            name: "shuffle"
+                            btnEnabled: root.allTracks.length > 0
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzBridge.playlistShuffle()
+                        }
+                        QbzCircleAction {
+                            name: root.headerFavorite ? "heart-filled" : "heart"
+                            active: root.headerFavorite
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzBridge.playlistToggleFavorite()
+                        }
+                        // Follow / unfollow and Copy are Qobuz WRITES
+                        // (`playlist/subscribe`, `playlist/create`): offline
+                        // they stay visible but inert, matching the reference's
+                        // read-only treatment.
+                        QbzCircleAction {
+                            visible: !root.isOwner
+                            btnEnabled: root.online
+                            name: (doc.isFollowing === true) ? "check" : "user-plus"
+                            active: doc.isFollowing === true
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzBridge.playlistToggleFollow()
+                        }
+                        QbzCircleAction {
+                            visible: !root.isOwner && doc.isCopied !== true
+                            btnEnabled: root.online
+                            name: "copy"
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzBridge.playlistCopy()
+                        }
+                        // Multi-select toggle (AlbumView's button, here for
+                        // the playlist's track list).
+                        QbzCircleAction {
+                            name: "square-check-big"
+                            active: root.multiSelect
+                            btnEnabled: root.tracks.length > 0
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: root.setMultiSelect(!root.multiSelect)
+                        }
+                        QbzCircleAction {
+                            id: playlistHeaderMenuButton
+                            name: "ellipsis"
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: function (mouse) {
+                                playlistHeaderMenu.openAtCursor(
+                                    playlistHeaderMenuButton, mouse.x, mouse.y)
+                            }
+                        }
                     }
 
-                    Item { width: parent.width - 40 - 32 * 8 - 9 * 12 - 220 - 140; height: 1 }
+                    Item {
+                        width: Math.max(0, parent.width
+                            - playlistHeaderActions.width - 220 - 132 - 3 * 12)
+                        height: 1
+                    }
 
                     // In-playlist search.
                     Rectangle {

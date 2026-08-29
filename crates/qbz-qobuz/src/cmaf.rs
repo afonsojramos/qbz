@@ -34,6 +34,7 @@
 //!   playback time. This is the security-sensitive path.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use qbz_models::{Quality, StreamQualityInfo};
 
@@ -44,6 +45,15 @@ use crate::error::Result;
 /// empirically-determined sweet spot — Akamai CDN rate-limits with 1s windows
 /// past ~5 parallel requests per client IP.
 pub const CMAF_PREFETCH_CONCURRENCY: usize = 3;
+
+/// Total deadline for one CMAF CDN fetch attempt, from connect through the
+/// complete response body. Qobuz audio segments are independently retryable;
+/// leaving a single body read unbounded can strand both the live feeder and
+/// the gapless successor fetch long after the audible buffer has run dry.
+///
+/// The retry layer makes up to three attempts, so this is deliberately an
+/// attempt deadline rather than a whole-track deadline.
+pub const CMAF_FETCH_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Progress callback shape for the download helpers. Each call reports
 /// "k of n segments complete" with the bytes received for that segment,
@@ -144,7 +154,7 @@ pub async fn setup_streaming(
     let init_start = std::time::Instant::now();
 
     log::info!("[CMAF] Fetching init segment for track {}", track_id);
-    let init_data = fetch_bytes_with_retry(&http, &init_url, "CMAF init")
+    let init_data = fetch_cdn_bytes_with_retry(&http, &init_url, "CMAF init")
         .await
         .map_err(|e| format!("Failed to fetch init segment: {}", e))?;
 
@@ -380,16 +390,31 @@ fn build_cdn_client() -> std::result::Result<reqwest::Client, String> {
 /// 5xx, 429) with exponential backoff. A terminal status (404/403) fails
 /// immediately. Without this a single transient segment failure aborted the
 /// whole track download and the frontend skipped it — issue #467.
-async fn fetch_bytes_with_retry(
+pub async fn fetch_cdn_bytes_with_retry(
     http: &reqwest::Client,
     url: &str,
     log_tag: &str,
 ) -> std::result::Result<Vec<u8>, String> {
-    use crate::retry::{
-        classify_reqwest, classify_status, retry_transient, FetchError, DEFAULT_MAX_ATTEMPTS,
-    };
+    fetch_cdn_bytes_with_retry_config(
+        http,
+        url,
+        log_tag,
+        CMAF_FETCH_ATTEMPT_TIMEOUT,
+        crate::retry::DEFAULT_MAX_ATTEMPTS,
+    )
+    .await
+}
+
+async fn fetch_cdn_bytes_with_retry_config(
+    http: &reqwest::Client,
+    url: &str,
+    log_tag: &str,
+    attempt_timeout: Duration,
+    max_attempts: u32,
+) -> std::result::Result<Vec<u8>, String> {
+    use crate::retry::{classify_reqwest, classify_status, retry_transient, FetchError};
     retry_transient(
-        DEFAULT_MAX_ATTEMPTS,
+        max_attempts,
         log_tag,
         FetchError::is_transient,
         |_attempt| async move {
@@ -404,6 +429,10 @@ async fn fetch_bytes_with_retry(
             let response = http
                 .get(url)
                 .header("User-Agent", "Mozilla/5.0")
+                // reqwest applies this from the start of connect until the
+                // response body completes. The deadline is recreated on each
+                // retry, so one stalled segment cannot monopolize a feeder.
+                .timeout(attempt_timeout)
                 .send()
                 .await
                 .map_err(|e| classify_reqwest(&e, "fetch"))?;
@@ -446,7 +475,11 @@ async fn fetch_all_segments(
 ) -> std::result::Result<Vec<Vec<u8>>, String> {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(CMAF_PREFETCH_CONCURRENCY));
     let seg_indices: Vec<u8> = (1..=n_segments).collect();
-    let mut handles = Vec::with_capacity(seg_indices.len());
+    // JoinSet owns every segment task: dropping this fetch (for example when
+    // engine-empty recovery advances the queue) aborts the children too.
+    // Plain JoinHandles detach on drop and would keep the abandoned gapless
+    // download competing with the replacement track.
+    let mut fetches = tokio::task::JoinSet::new();
 
     let completed_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
@@ -458,12 +491,15 @@ async fn fetch_all_segments(
         let progress = on_progress.clone();
         let counter = completed_count.clone();
 
-        handles.push(tokio::spawn(async move {
+        fetches.spawn(async move {
             let permit = sem.acquire_owned().await.map_err(|e| format!("semaphore: {}", e))?;
-            let seg_data =
-                fetch_bytes_with_retry(&http, &seg_url, &format!("{} seg {}", log_tag, seg_idx))
-                    .await
-                    .map_err(|e| format!("[{}] seg {} fetch: {}", log_tag, seg_idx, e))?;
+            let seg_data = fetch_cdn_bytes_with_retry(
+                &http,
+                &seg_url,
+                &format!("{} seg {}", log_tag, seg_idx),
+            )
+            .await
+            .map_err(|e| format!("[{}] seg {} fetch: {}", log_tag, seg_idx, e))?;
             let bytes_this_segment = seg_data.len() as u64;
             if let Some(cb) = progress {
                 let done = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -478,14 +514,13 @@ async fn fetch_all_segments(
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             drop(permit);
             Ok::<(u8, Vec<u8>), String>((seg_idx, seg_data))
-        }));
+        });
     }
 
     // Collect results in arrival order, then re-sort by segment index
-    let mut segments: Vec<(u8, Vec<u8>)> = Vec::with_capacity(handles.len());
-    for handle in handles {
-        let (idx, data) = handle
-            .await
+    let mut segments: Vec<(u8, Vec<u8>)> = Vec::with_capacity(n_segments as usize);
+    while let Some(result) = fetches.join_next().await {
+        let (idx, data) = result
             .map_err(|e| format!("[{}] task panic: {}", log_tag, e))?
             .map_err(|e| format!("[{}] download failed: {}", log_tag, e))?;
         segments.push((idx, data));
@@ -547,4 +582,121 @@ pub fn decrypt_segments_into(
 #[allow(dead_code)]
 fn _type_assertions() {
     let _: fn() -> Result<()> = || Ok(());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Once};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn install_tls_provider() {
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| {
+            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        });
+    }
+
+    #[tokio::test]
+    async fn stalled_segment_body_times_out_and_retries() {
+        install_tls_provider();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let accepts = Arc::new(AtomicU32::new(0));
+        let server_accepts = accepts.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                server_accepts.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut request = [0u8; 1024];
+                    let _ = socket.read(&mut request).await;
+                    let _ = socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n",
+                        )
+                        .await;
+                    // Headers arrive immediately; the body never does within
+                    // the attempt deadline. This reproduces the 52 s body stall
+                    // from the 2026-08-28 session without a live CDN.
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                });
+            }
+        });
+
+        let client = reqwest::Client::builder().build().unwrap();
+        let url = format!("http://{address}/segment");
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            fetch_cdn_bytes_with_retry_config(
+                &client,
+                &url,
+                "CMAF timeout test",
+                Duration::from_millis(50),
+                2,
+            ),
+        )
+        .await
+        .expect("bounded segment attempts must not hang");
+
+        let error = result.expect_err("both stalled attempts must time out");
+        assert!(
+            error.contains("read:"),
+            "stalled response must fail while reading its body: {error}"
+        );
+        assert_eq!(accepts.load(Ordering::SeqCst), 2);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn aborting_full_fetch_cancels_its_segment_tasks() {
+        install_tls_provider();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let (headers_tx, headers_rx) = tokio::sync::oneshot::channel();
+        let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request).await;
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            let _ = headers_tx.send(());
+
+            let mut trailing_request = [0u8; 1024];
+            while socket.read(&mut trailing_request).await.unwrap_or(0) != 0 {
+                // Drain any request bytes left after the server's first read.
+            }
+            let _ = closed_tx.send(());
+        });
+
+        let client = reqwest::Client::builder().build().unwrap();
+        let url_template = format!("http://{address}/segment-$SEGMENT$");
+        let fetch = tokio::spawn(async move {
+            fetch_all_segments(&client, &url_template, 1, "CMAF abort test", None).await
+        });
+        tokio::time::timeout(Duration::from_secs(1), headers_rx)
+            .await
+            .expect("segment request must reach the body stall")
+            .unwrap();
+
+        fetch.abort();
+        let _ = fetch.await;
+        tokio::time::timeout(Duration::from_secs(1), closed_rx)
+            .await
+            .expect("aborting the owner must close its in-flight segment")
+            .unwrap();
+        server.await.unwrap();
+    }
 }

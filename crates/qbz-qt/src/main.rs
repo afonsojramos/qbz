@@ -1901,6 +1901,24 @@ pub(crate) fn playlist_shuffle() {
     });
 }
 
+pub(crate) fn playlist_enqueue_all(mode: String) {
+    let runtime = app();
+    spawn(async move {
+        // Same source-aware routing as header Play / Shuffle: a first-class
+        // local detail and a mixed Qobuz detail both carry an already-resolved
+        // queue snapshot whose local/Plex rows cannot be rebuilt by the
+        // catalog-id-only card seam.
+        let result = if local_playlist_qt::open_id().is_some() {
+            local_playlist_qt::enqueue_all(&runtime, &mode).await
+        } else {
+            playlist_qt::enqueue_all(&runtime, &mode).await
+        };
+        if let Err(e) = result {
+            log::error!("[qbz-qt] playlist enqueue-all ({mode}) failed: {e}");
+        }
+    });
+}
+
 pub(crate) fn playlist_toggle_follow() {
     let runtime = app();
     spawn(async move { playlist_qt::toggle_follow(&runtime).await });
