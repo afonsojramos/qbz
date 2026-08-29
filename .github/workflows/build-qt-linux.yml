@@ -67,14 +67,18 @@ on:
 # 6.8 is the LTS line and the floor the tree needs once the six macOS-only
 # SafeArea/padding lines are guarded (contracts §1 / §4 #0). Keep in sync
 # with the same pin in test-crates.yml.
-env:
-  QT_VERSION: ${{ vars.QT_VERSION_LINUX || '6.8.3' }}
-
 jobs:
   build:
     name: build (${{ inputs.arch }})
     runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
     timeout-minutes: 120
+    env:
+      # x86_64 keeps the 6.8 LTS floor. aarch64 pins its own: aqt's 6.8.3
+      # linux_gcc_arm64 qmake SEGFAULTS on ubuntu-22.04-arm (2026-08-29 run,
+      # exit 139 on `qmake -query`), so the arm line takes 6.9.3 until an
+      # arm64 6.8.x that runs there exists. `vars.QT_VERSION_LINUX_ARM64`
+      # overrides without a commit.
+      QT_VERSION: ${{ inputs.arch == 'aarch64' && (vars.QT_VERSION_LINUX_ARM64 || '6.9.3') || (vars.QT_VERSION_LINUX || '6.8.3') }}
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -152,6 +156,10 @@ jobs:
           QMAKE: ${{ env.QT_ROOT_DIR }}/bin/qmake
           CMAKE_PREFIX_PATH: ${{ env.QT_ROOT_DIR }}
         run: |
+          # Diagnostics first: a qmake that cannot run here is the arm64
+          # failure mode (segfault), and cxx-qt-build only says "QtMissing".
+          file "$QMAKE" || true
+          ldd "$QMAKE" | grep -E 'not found' || true
           "$QMAKE" -query QT_VERSION
           cargo build --release --manifest-path crates/Cargo.toml -p qbz-qt
           cp crates/target/release/qbz qbz-unstripped
