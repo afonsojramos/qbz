@@ -71,6 +71,8 @@ fn plex_queue_track(track: &PlexCachedTrack) -> QueueTrack {
         source_item_id_hint: None,
         context_kind: None,
         context_id: None,
+        isrc: None,
+        recording_mbid: None,
     }
 }
 
