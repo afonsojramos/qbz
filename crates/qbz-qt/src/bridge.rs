@@ -125,6 +125,11 @@ pub mod qbz_bridge {
         fn playlist_play_all(self: Pin<&mut QbzBridge>);
         #[qinvokable]
         fn playlist_shuffle(self: Pin<&mut QbzBridge>);
+        /// Header context-menu queue actions for the OPEN playlist. Unlike
+        /// the card-level by-id seam, this also serves local and mixed
+        /// playlists from their already-resolved queue snapshot.
+        #[qinvokable]
+        fn playlist_enqueue_all(self: Pin<&mut QbzBridge>, mode: QString);
         #[qinvokable]
         fn playlist_toggle_favorite(self: Pin<&mut QbzBridge>);
         #[qinvokable]
@@ -313,6 +318,10 @@ impl qbz_bridge::QbzBridge {
 
     pub fn playlist_shuffle(self: Pin<&mut Self>) {
         crate::playlist_shuffle();
+    }
+
+    pub fn playlist_enqueue_all(self: Pin<&mut Self>, mode: QString) {
+        crate::playlist_enqueue_all(mode.to_string());
     }
 
     pub fn playlist_toggle_favorite(self: Pin<&mut Self>) {
