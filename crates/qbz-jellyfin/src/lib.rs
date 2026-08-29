@@ -182,6 +182,9 @@ pub struct JellyfinTrack {
     /// (21 %). Its absence does not mean the album has no image: Jellyfin's
     /// primary-image endpoint remains addressable by `album_id` without a tag.
     pub album_image_tag: Option<String>,
+    /// MusicBrainz recording id from `ProviderIds.MusicBrainzTrack`, when the
+    /// server has one. Cross-source identity for the listen log.
+    pub recording_mbid: Option<String>,
     /// This audio item's own primary-image tag. Jellyfin/Navidrome can expose
     /// a different embedded or folder cover for each disc while still grouping
     /// every row under one `MusicAlbum`; this must outrank the collection art.
@@ -279,6 +282,11 @@ struct AudioDto {
     image_tags: HashMap<String, String>,
     #[serde(default)]
     media_sources: Vec<MediaSourceDto>,
+    /// `ProviderIds` — Jellyfin's own name for external ids; for an audio
+    /// item `MusicBrainzTrack` is the RECORDING id (its scanner writes the
+    /// file's MUSICBRAINZ_TRACKID there). Requested via `Fields=ProviderIds`.
+    #[serde(default)]
+    provider_ids: HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -399,6 +407,12 @@ impl AudioDto {
             album_image_tag: self.album_primary_image_tag,
             item_image_tag,
             server_path: self.path,
+            recording_mbid: self
+                .provider_ids
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("MusicBrainzTrack"))
+                .map(|(_, value)| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
         }
     }
 }
@@ -726,13 +740,15 @@ fn tracks_page_path(
     let delta = min_date_last_saved
         .map(|date| format!("&minDateLastSaved={date}"))
         .unwrap_or_default();
+    // ProviderIds on both: a handful of bytes per item, and it is the only
+    // cross-source identity a media server can hand us.
     let fields = if include_quality {
-        "Path,MediaSources,ParentId,ProductionYear,Genres"
+        "Path,MediaSources,ParentId,ProductionYear,Genres,ProviderIds"
     } else {
         // A server-side filesystem path is neither useful nor safe catalog
         // metadata on a client. The compatibility path keeps exposing it, but
         // the cheap persistent-library pass does not request or store it.
-        "ParentId,ProductionYear,Genres"
+        "ParentId,ProductionYear,Genres,ProviderIds"
     };
     format!(
         "/Items?userId={user_id}&IncludeItemTypes=Audio&Recursive=true\

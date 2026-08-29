@@ -451,6 +451,8 @@ fn jellyfin_row(t: &qbz_jellyfin::JellyfinTrack, server_id: &str, library_id: &s
         bitrate_kbps: t.bitrate_bps.map(|b| b / 1000),
         artwork_token,
         collection_artwork_token,
+        isrc: None,
+        recording_mbid: t.recording_mbid.clone(),
         size_bytes: None,
     }
 }
@@ -983,6 +985,8 @@ fn subsonic_row(
         // The OPAQUE coverArt id, verbatim. Never parsed, never built.
         artwork_token: t.cover_art.clone(),
         collection_artwork_token: collection_artwork_token.map(str::to_string),
+        isrc: t.isrc.clone(),
+        recording_mbid: t.recording_mbid.clone(),
         size_bytes: t.size,
     }
 }
@@ -1240,6 +1244,7 @@ mod tests {
             bitrate_bps: None,
             album_image_tag: Some("tag".into()),
             item_image_tag: None,
+            recording_mbid: None,
             server_path: None,
         };
         let row = jellyfin_row(&t, "srv", "lib");
@@ -1288,6 +1293,7 @@ mod tests {
             bitrate_bps: Some(3_120_281),
             album_image_tag: None,
             item_image_tag: None,
+            recording_mbid: None,
             server_path: None,
         };
         assert_eq!(jellyfin_row(&jf, "s", "l").bitrate_kbps, Some(3120));
