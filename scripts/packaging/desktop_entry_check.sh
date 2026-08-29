@@ -64,7 +64,8 @@ while [[ $# -gt 0 ]]; do
       [[ -f "$d/$ENTRY.desktop" ]] || say_fail "$d has no $ENTRY.desktop at its root"
       aicon=$(icon_of "$d/$ENTRY.desktop")
       [[ -f "$d/$aicon.png" || -L "$d/$aicon.png" ]] || say_fail "$d: Icon=$aicon but no $aicon.png at the root"
-      [[ -e "$d/.DirIcon" ]] || say_fail "$d has no .DirIcon"
+      # No .DirIcon assertion: linuxdeploy does not write it (appimagetool
+      # does, at packaging time) — asserting it here failed a green build.
       echo "AppDir OK: $d"; shift 2 ;;
     *) echo "unknown arg $1"; exit 2 ;;
   esac
