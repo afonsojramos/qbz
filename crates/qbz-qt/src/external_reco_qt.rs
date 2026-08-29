@@ -23,7 +23,6 @@ use qbz_external_reco::{
     RecoInputs,
 };
 use qbz_integrations::lastfm::LastFmClient;
-use qbz_integrations::musicbrainz::MusicBrainzClient;
 use qbz_models::{Album, Artist, Track};
 
 /// Same 30-day TTL as the Slint side.
@@ -150,7 +149,9 @@ pub async fn similar_albums(
     }
 
     let lastfm_client = LastFmClient::new();
-    let mb_client = MusicBrainzClient::new();
+    // The core's client (respects the MusicBrainz opt-out) — see the same
+    // note in `recommendations_qt::run`.
+    let mb_client = runtime.core().musicbrainz_client();
     let catalog = CoreRecoCatalog {
         runtime: runtime.clone(),
     };
@@ -160,7 +161,7 @@ pub async fn similar_albums(
             client: &lastfm_client,
         }),
         listenbrainz: None,
-        musicbrainz: &mb_client,
+        musicbrainz: mb_client.as_ref(),
         catalog: &catalog,
         cache: cache.as_ref(),
         local: LocalHistory::default(),

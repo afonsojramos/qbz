@@ -2243,6 +2243,14 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         self.musicbrainz.set_enabled(enabled).await;
     }
 
+    /// The core's shared MusicBrainz client — the ONE instance whose enabled
+    /// flag `musicbrainz_set_enabled` toggles. Frontend code that needs a
+    /// client must borrow this one: a private `MusicBrainzClient::new()`
+    /// starts enabled and silently ignores the user's opt-out.
+    pub fn musicbrainz_client(&self) -> Arc<MusicBrainzClient> {
+        Arc::clone(&self.musicbrainz)
+    }
+
     /// Resolve an artist name to a MusicBrainz id. Returns `None` if no
     /// confident match is found.
     pub async fn musicbrainz_resolve_artist(
