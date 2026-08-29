@@ -260,6 +260,36 @@ pub fn all_albums() -> Vec<AlbumPlayRow> {
     with_db(|conn| Some(query_on(conn, None))).unwrap_or_default()
 }
 
+/// Drop every trace of the given albums — the twin of
+/// `playlist_play_history::prune_playlists`, for albums whose library folder
+/// was removed. Until this existed "Most Played Albums" kept cards that
+/// opened onto deleted tracks while Recently Played had already pruned them.
+/// Returns how many meta rows went.
+pub fn prune_albums(album_ids: &[String]) -> usize {
+    if album_ids.is_empty() {
+        return 0;
+    }
+    with_db(|conn| Some(prune_on(conn, album_ids)))
+        .unwrap_or(0)
+}
+
+fn prune_on(conn: &Connection, album_ids: &[String]) -> usize {
+    let mut gone = 0usize;
+    for id in album_ids {
+        let _ = conn.execute(
+            "DELETE FROM album_play_events WHERE album_id = ?",
+            rusqlite::params![id],
+        );
+        gone += conn
+            .execute(
+                "DELETE FROM album_meta WHERE album_id = ?",
+                rusqlite::params![id],
+            )
+            .unwrap_or(0);
+    }
+    gone
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
