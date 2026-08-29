@@ -191,10 +191,14 @@ jobs:
           curl -fsSL -o linuxdeploy-plugin-qt \
             "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-${ARCH_TAG}.AppImage"
           chmod +x linuxdeploy linuxdeploy-plugin-qt
-          cp packaging/linux/qbz.desktop qbz.desktop
+          # The desktop file goes in under the MPRIS DesktopEntry basename
+          # (com.blitzfc.qbz.desktop), so an integrated AppImage resolves the
+          # media-widget icon like the deb/rpm do. Icon=qbz -> qbz.png.
+          cp packaging/linux/qbz.desktop com.blitzfc.qbz.desktop
           cp packaging/icons/256x256.png qbz.png
           ./linuxdeploy --appimage-extract-and-run --appdir AppDir \
-            -e qbz -d qbz.desktop -i qbz.png --plugin qt
+            -e qbz -d com.blitzfc.qbz.desktop -i qbz.png --plugin qt
+          scripts/packaging/desktop_entry_check.sh --appdir AppDir
           # Nothing in the app uses Qt SQL / network-information plugins.
           rm -rf AppDir/usr/plugins/sqldrivers AppDir/usr/plugins/networkinformation
           echo "platforms: $(ls AppDir/usr/plugins/platforms | tr '\n' ' ')"

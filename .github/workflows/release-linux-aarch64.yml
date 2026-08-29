@@ -104,6 +104,12 @@ jobs:
             exit 1
           fi
 
+      # The media-widget icon invariant (DesktopEntry == installed .desktop
+      # basename, Icon= installed) — regressed more than once, so it is a
+      # gate at the recipe level here and on the built packages below.
+      - name: Gate — desktop entry / icon invariant (recipes)
+        run: scripts/packaging/desktop_entry_check.sh
+
       # No workflow may build the frozen Slint binary: same bin name, same
       # target dir, last build wins the file — a smoke against "the wrong
       # qbz" is silent.
@@ -224,6 +230,16 @@ jobs:
           nfpm package -f packaging/nfpm/nfpm-qbzd.yaml -p rpm \
             -t "dist/qbzd-${VERSION}-1.${RPM_ARCH}.rpm"
           ls -la dist
+
+      # The same invariant on the ARTIFACTS: the deb/rpm must install
+      # /usr/share/applications/<DesktopEntry>.desktop and its Icon=.
+      - name: Gate — desktop entry / icon invariant (packages)
+        run: |
+          sudo apt-get install -y --no-install-recommends rpm
+          scripts/packaging/desktop_entry_check.sh \
+            --deb "dist/QBZ_${VERSION}_${DEB_ARCH}.deb" \
+            --rpm "dist/QBZ-${VERSION}-1.${RPM_ARCH}.rpm" \
+            --appdir AppDir
 
       - name: Build AppImage
         run: |

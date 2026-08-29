@@ -56,8 +56,9 @@ jobs:
             cxxflags: "-include arm_acle.h"
           - target: x86_64-apple-darwin
             # macos-latest is arm64; Intel needs an Intel runner (arm_acle.h
-            # is ARM-only, so no CXXFLAGS here).
-            runner: macos-15-intel
+            # is ARM-only, so no CXXFLAGS here). macos-26-intel so both legs
+            # carry Xcode 26's actool for the Icon Composer app icon.
+            runner: macos-26-intel
             artifact: qbz-macos-x86_64
             # Historical dmg naming: intel assets ship as "x64".
             arch: x64
@@ -165,6 +166,30 @@ jobs:
           cp "crates/target/${{ matrix.target }}/release/qbz" "$APP/Contents/MacOS/qbz"
           chmod +x "$APP/Contents/MacOS/qbz"
           cp packaging/icons/icon.icns "$APP/Contents/Resources/icon.icns"
+          # The Liquid Glass app icon (packaging/icons/QBZ.icon, Icon Composer
+          # source, issue #712): compiled by Xcode 26's actool into
+          # Assets.car + CFBundleIconName=QBZ. macOS 26 renders the layered
+          # icon; older macOS and a runner without Xcode 26 fall back to
+          # icon.icns via CFBundleIconFile, which is always written.
+          ICON_NAME_KEY=""
+          if xcrun --find actool >/dev/null 2>&1 \
+             && [[ "$(xcodebuild -version | head -1 | grep -oE '[0-9]+' | head -1)" -ge 26 ]]; then
+            xcrun actool packaging/icons/QBZ.icon \
+              --compile "$APP/Contents/Resources" \
+              --app-icon QBZ \
+              --platform macosx --minimum-deployment-target 12.0 \
+              --include-all-app-icons \
+              --output-partial-info-plist icon-partial.plist \
+              --errors --warnings --notices 2>&1 | tee actool.log
+            test -f "$APP/Contents/Resources/Assets.car" \
+              || { echo "::error::actool produced no Assets.car"; exit 1; }
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' icon-partial.plist \
+              || { echo "::error::actool partial plist has no CFBundleIconName"; exit 1; }
+            ICON_NAME_KEY='<key>CFBundleIconName</key><string>QBZ</string>'
+            echo "app icon: Icon Composer source compiled (Assets.car)"
+          else
+            echo "::warning::Xcode 26 actool not available — shipping icon.icns only"
+          fi
           cat > "$APP/Contents/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -176,6 +201,7 @@ jobs:
             <key>CFBundleDisplayName</key><string>QBZ</string>
             <key>CFBundleExecutable</key><string>qbz</string>
             <key>CFBundleIconFile</key><string>icon</string>
+            ${ICON_NAME_KEY}
             <key>CFBundleShortVersionString</key><string>${VERSION}</string>
             <key>CFBundleVersion</key><string>${VERSION}</string>
             <key>LSMinimumSystemVersion</key><string>12.0</string>
