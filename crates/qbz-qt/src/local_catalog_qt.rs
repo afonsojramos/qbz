@@ -9,8 +9,71 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use qbz_local_catalog::{
-    ActiveCatalog, BootstrapLayout, BootstrapOutcome, CatalogError, ProjectionOutcome,
+    ActiveCatalog, BootstrapLayout, BootstrapOutcome, BootstrapProgress, CatalogError,
+    ProjectionOutcome, ProjectionProgress,
 };
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogProgressDoc<'a> {
+    active: bool,
+    phase: &'a str,
+    source: &'a str,
+    source_instance: &'a str,
+    source_done: u64,
+    source_total: u64,
+    overall_done: u64,
+    overall_total: u64,
+    source_index: usize,
+    source_count: usize,
+}
+
+fn publish_progress(doc: CatalogProgressDoc<'_>) {
+    let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{\"active\":false}".to_string());
+    crate::local_bridge::ui(move |mut bridge| {
+        bridge
+            .as_mut()
+            .set_local_catalog_progress_json(cxx_qt_lib::QString::from(json.as_str()));
+    });
+}
+
+fn publish_bootstrap_progress(progress: &BootstrapProgress) {
+    publish_progress(CatalogProgressDoc {
+        active: true,
+        phase: "bootstrap",
+        source: progress.source.source.as_str(),
+        source_instance: &progress.source.source_instance,
+        source_done: progress.committed_rows,
+        source_total: progress.source_rows_total,
+        overall_done: progress.overall_rows_written,
+        overall_total: progress.overall_rows_total,
+        source_index: progress.source_index,
+        source_count: progress.source_count,
+    });
+}
+
+fn publish_projection_progress(progress: &ProjectionProgress) {
+    publish_progress(CatalogProgressDoc {
+        active: true,
+        phase: "reconcile",
+        source: progress.source.source.as_str(),
+        source_instance: &progress.source.source_instance,
+        source_done: progress.rows_written,
+        source_total: progress.source_rows_total,
+        overall_done: progress.overall_rows_written,
+        overall_total: progress.overall_rows_total,
+        source_index: progress.source_index,
+        source_count: progress.source_count,
+    });
+}
+
+fn clear_progress() {
+    crate::local_bridge::ui(|mut bridge| {
+        bridge
+            .as_mut()
+            .set_local_catalog_progress_json(cxx_qt_lib::QString::from("{\"active\":false}"));
+    });
+}
 
 enum RefreshOutcome {
     Bootstrap(BootstrapOutcome),
@@ -63,6 +126,7 @@ pub(crate) fn start() {
                 &locations,
                 &CANCELLED,
                 |progress| {
+                    publish_bootstrap_progress(progress);
                     let source_changed = last_source.as_ref() != Some(&progress.source);
                     if source_changed
                         || progress.source_complete
@@ -90,6 +154,7 @@ pub(crate) fn start() {
                     &locations,
                     &CANCELLED,
                     |progress| {
+                        publish_projection_progress(progress);
                         let source_changed =
                             last_projection_source.as_ref() != Some(&progress.source);
                         if source_changed
@@ -160,6 +225,7 @@ pub(crate) fn start() {
             Ok(Err(error)) => log::warn!("[local-catalog] fallback=bootstrap-error error={error}"),
             Err(error) => log::warn!("[local-catalog] fallback=worker-join error={error}"),
         }
+        clear_progress();
         worker_finished();
     });
 }
@@ -188,10 +254,20 @@ pub(crate) fn request_catch_up() {
                 BootstrapLayout::new(&locations.catalog_dir).open_active(),
                 ActiveCatalog::Ready { .. }
             ) {
+                let mut last_progress = std::time::Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .unwrap_or_else(std::time::Instant::now);
                 return qbz_local_catalog::bootstrap_legacy_caches_at_with_progress(
                     &locations,
                     &CANCELLED,
-                    |_| {},
+                    |progress| {
+                        if progress.source_complete
+                            || last_progress.elapsed() >= Duration::from_millis(100)
+                        {
+                            publish_bootstrap_progress(progress);
+                            last_progress = std::time::Instant::now();
+                        }
+                    },
                 )
                 .map(RefreshOutcome::Bootstrap);
             }
@@ -201,6 +277,7 @@ pub(crate) fn request_catch_up() {
                 &locations,
                 &CANCELLED,
                 |progress| {
+                    publish_projection_progress(progress);
                     let source_changed = last_source.as_ref() != Some(&progress.source);
                     if source_changed
                         || progress.source_complete
@@ -274,6 +351,7 @@ pub(crate) fn request_catch_up() {
             Ok(Err(error)) => log::warn!("[local-catalog] fallback=catch-up-error error={error}"),
             Err(error) => log::warn!("[local-catalog] fallback=catch-up-join error={error}"),
         }
+        clear_progress();
         worker_finished();
     });
 }

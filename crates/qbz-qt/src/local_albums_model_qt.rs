@@ -12,12 +12,12 @@ use qbz_local_catalog::{
     ActiveCatalog, AlbumCursor, AlbumRecord, BootstrapLayout, QueryDescriptor, SourceKey,
     SourceKind, TrackGroup, TrackSort,
 };
-use qbz_source::SourceId;
 use serde::Serialize;
 
 use crate::local_bridge::ui;
 use crate::local_rows::{
-    album_favorite_source, badge_source, badge_source_raw, detail_of, total_duration, AlbumRow,
+    album_favorite_source, badge_source, badge_source_raw, catalog_album_sources, detail_of,
+    total_duration, AlbumRow,
 };
 
 const PAGE_ENTRIES: usize = 100;
@@ -243,9 +243,14 @@ pub(crate) fn requested() -> bool {
     if SESSION_FAILED.load(Ordering::Acquire) {
         return false;
     }
-    std::env::var("QBZ_LOCAL_CATALOG_ALBUMS")
+    !std::env::var("QBZ_LOCAL_CATALOG_ALBUMS")
         .ok()
-        .is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
 }
 
 pub(crate) fn reset(
@@ -1018,9 +1023,11 @@ fn map_album(record: &AlbumRecord, index: usize) -> NativeAlbum {
     let id = album_action_id(record);
     let art_key = format!("catalog-album:{}", record.edition_id);
     if !record.artwork_token.is_empty() {
-        if let Some(source) = SourceId::from_word(&record.artwork_source) {
+        if let Some(reference) =
+            crate::local_rows::art_token(Some(&record.artwork_source), &record.artwork_token)
+        {
             crate::local_state::with_art(|art| {
-                art.insert(art_key.clone(), (source, record.artwork_token.clone()));
+                art.insert(art_key.clone(), reference);
             });
         }
     }
@@ -1037,11 +1044,7 @@ fn map_album(record: &AlbumRecord, index: usize) -> NativeAlbum {
     );
     let source = badge_source(Some(record.source_raw_or_kind()));
     let source_raw = badge_source_raw(Some(record.source_raw_or_kind()));
-    let sources = vec![if source_raw.is_empty() {
-        source.clone()
-    } else {
-        source_raw.clone()
-    }];
+    let sources = catalog_album_sources(record);
     let favoriteable = album_favorite_source(&sources).is_some();
     NativeAlbum {
         row: AlbumRow {
@@ -1413,6 +1416,7 @@ mod tests {
                 source: SourceKind::Local,
                 native_album_id: format!("album-{index:05}"),
                 source_raw: "local".to_string(),
+                source_words: vec!["local".to_string()],
                 title: format!("Album {index:05}"),
                 artist: format!("Artist {:03}", index % 17),
                 all_artists: format!("Artist {:03}", index % 17),

@@ -842,6 +842,52 @@ fn identical_native_ids_from_distinct_sources_never_collide() {
 }
 
 #[test]
+fn album_records_preserve_their_physical_source_words() {
+    let mut catalog = Catalog::open_in_memory(1).unwrap();
+    let mut local = projected(1, SourceKind::Local);
+    local.source_raw = "user".to_string();
+    let mut jellyfin = projected(2, SourceKind::Jellyfin);
+    jellyfin.source_raw = "jellyfin".to_string();
+    for (source, track) in [
+        (
+            SourceKey {
+                source: SourceKind::Local,
+                source_instance: source_instance(SourceKind::Local).to_string(),
+            },
+            local,
+        ),
+        (
+            SourceKey {
+                source: SourceKind::Jellyfin,
+                source_instance: source_instance(SourceKind::Jellyfin).to_string(),
+            },
+            jellyfin,
+        ),
+    ] {
+        catalog
+            .apply_bootstrap_batch(&BootstrapBatch {
+                source,
+                snapshot_version: "source-words".to_string(),
+                expected_cursor: String::new(),
+                next_cursor: "1".to_string(),
+                tracks: vec![track],
+                complete: true,
+            })
+            .unwrap();
+    }
+    catalog.rebuild_materialized_views().unwrap();
+
+    let rows = collect_all_albums(&catalog, &QueryDescriptor::albums(), 20);
+    assert_eq!(rows.len(), 2);
+    assert!(rows
+        .iter()
+        .any(|row| row.source_words == vec!["user".to_string()]));
+    assert!(rows
+        .iter()
+        .any(|row| row.source_words == vec!["jellyfin".to_string()]));
+}
+
+#[test]
 fn upsert_retains_identity_and_fts_tracks_updates_and_deletes() {
     let mut catalog = Catalog::open_in_memory(1).unwrap();
     let mut track = projected(1, SourceKind::Jellyfin);
@@ -1103,6 +1149,71 @@ fn search_source_format_availability_and_group_are_descriptor_scoped() {
 }
 
 #[test]
+fn track_source_bucket_quality_and_other_format_filters_match_the_ui_funnel() {
+    let mut catalog = Catalog::open_in_memory(1).unwrap();
+    insert_fixture(&mut catalog, 2_500);
+
+    // Downloaded Qobuz copies can be owned by the Local catalog source. The
+    // UI nevertheless presents them through Offline, based on source_raw.
+    let mut purchased = projected(9_999, SourceKind::Local);
+    purchased.track_ref.native_id = "local-qobuz-purchase".to_string();
+    purchased.source_raw = "qobuz_purchase".to_string();
+    purchased.available = true;
+    catalog.upsert_tracks(&[purchased]).unwrap();
+
+    let local = QueryDescriptor::tracks().with_source_buckets(vec!["local".to_string()]);
+    let local_rows = collect_all(&catalog, &local);
+    assert!(!local_rows.is_empty());
+    assert!(local_rows.iter().all(|row| {
+        row.track_ref.source == SourceKind::Local
+            && !matches!(row.source_raw.as_str(), "qobuz_download" | "qobuz_purchase")
+    }));
+    assert_eq!(
+        catalog.count_tracks(&local).unwrap(),
+        local_rows.len() as u64
+    );
+
+    let offline = QueryDescriptor::tracks().with_source_buckets(vec!["offline".to_string()]);
+    let offline_rows = collect_all(&catalog, &offline);
+    assert!(offline_rows
+        .iter()
+        .any(|row| row.source_raw == "qobuz_purchase"));
+    assert!(offline_rows.iter().all(|row| {
+        row.track_ref.source == SourceKind::Offline
+            || matches!(row.source_raw.as_str(), "qobuz_download" | "qobuz_purchase")
+    }));
+    assert_eq!(
+        catalog.count_tracks(&offline).unwrap(),
+        offline_rows.len() as u64
+    );
+
+    let plex_hires_flac = QueryDescriptor::tracks()
+        .with_source_buckets(vec!["plex".to_string()])
+        .with_formats(vec!["flac".to_string()])
+        .with_quality_tiers(vec!["hires".to_string()]);
+    let plex_rows = collect_all(&catalog, &plex_hires_flac);
+    assert!(!plex_rows.is_empty());
+    assert!(plex_rows.iter().all(|row| {
+        row.track_ref.source == SourceKind::Plex
+            && row.format == "flac"
+            && row.bit_depth.is_some_and(|depth| depth >= 24)
+    }));
+    assert_eq!(
+        catalog.count_tracks(&plex_hires_flac).unwrap(),
+        plex_rows.len() as u64
+    );
+
+    let other = QueryDescriptor::tracks().including_other_formats(true);
+    let other_rows = collect_all(&catalog, &other);
+    assert!(!other_rows.is_empty());
+    assert!(other_rows.iter().all(|row| row.format == "dsf"));
+    assert_eq!(
+        catalog.count_tracks(&other).unwrap(),
+        other_rows.len() as u64
+    );
+}
+
+#[test]
 fn artist_group_uses_track_artist_globally_across_keyset_pages() {
     let mut catalog = Catalog::open_in_memory(1).unwrap();
     let mut zed = projected(1, SourceKind::Local);
@@ -1172,10 +1283,7 @@ fn sort_indices_match_the_actual_order_by_without_temp_sort() {
             "idx_tracks_default",
             "sort_album,sort_artist,disc_sort,track_sort,sort_title,catalog_id",
         ),
-        (
-            "idx_tracks_title_asc",
-            "sort_title,sort_artist,catalog_id",
-        ),
+        ("idx_tracks_title_asc", "sort_title,sort_artist,catalog_id"),
         (
             "idx_tracks_title_desc",
             "sort_title DESC,sort_artist,catalog_id",

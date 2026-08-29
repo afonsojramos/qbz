@@ -12,12 +12,12 @@ use qbz_local_catalog::{
     ActiveCatalog, AlbumCursor, AlbumRecord, ArtistCursor, ArtistRecord, BootstrapLayout,
     QueryDescriptor, SourceKey, SourceKind,
 };
-use qbz_source::SourceId;
 use serde::Serialize;
 
 use crate::local_bridge::ui;
 use crate::local_rows::{
-    badge_source, badge_source_raw, detail_of, total_duration, AlbumRow, ArtistRow,
+    badge_source, badge_source_raw, catalog_album_sources, detail_of, total_duration, AlbumRow,
+    ArtistRow,
 };
 
 const PAGE_ENTRIES: usize = 100;
@@ -279,9 +279,14 @@ pub(crate) fn requested() -> bool {
     if SESSION_FAILED.load(Ordering::Acquire) {
         return false;
     }
-    std::env::var("QBZ_LOCAL_CATALOG_ARTISTS")
+    !std::env::var("QBZ_LOCAL_CATALOG_ARTISTS")
         .ok()
-        .is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
 }
 
 pub(crate) fn reset(search: String, sort: String, filter_json: String) -> bool {
@@ -1318,12 +1323,21 @@ fn finish_detail_anchors(
 
 fn map_artist(record: &ArtistRecord) -> NativeArtist {
     let art_key = format!("catalog-artist:{}", record.artist_key);
-    if !record.artwork_token.is_empty() {
-        if let Some(source) = SourceId::from_word(&record.artwork_source) {
-            crate::local_state::with_art(|art| {
-                art.insert(art_key.clone(), (source, record.artwork_token.clone()));
-            });
-        }
+    let cached = crate::local_artist_images_qt::register(
+        &art_key,
+        &record.display_name,
+        !record.artwork_token.is_empty(),
+    );
+    let reference = cached
+        .as_deref()
+        .and_then(|path| crate::local_rows::art_token(Some("local"), path))
+        .or_else(|| {
+            crate::local_rows::art_token(Some(&record.artwork_source), &record.artwork_token)
+        });
+    if let Some(reference) = reference {
+        crate::local_state::with_art(|art| {
+            art.insert(art_key.clone(), reference);
+        });
     }
     NativeArtist {
         row: ArtistRow {
@@ -1347,9 +1361,11 @@ fn map_album(record: &AlbumRecord, index: usize) -> NativeAlbum {
     let id = album_action_id(record);
     let art_key = format!("catalog-album:{}", record.edition_id);
     if !record.artwork_token.is_empty() {
-        if let Some(source) = SourceId::from_word(&record.artwork_source) {
+        if let Some(reference) =
+            crate::local_rows::art_token(Some(&record.artwork_source), &record.artwork_token)
+        {
             crate::local_state::with_art(|art| {
-                art.insert(art_key.clone(), (source, record.artwork_token.clone()));
+                art.insert(art_key.clone(), reference);
             });
         }
     }
@@ -1366,11 +1382,7 @@ fn map_album(record: &AlbumRecord, index: usize) -> NativeAlbum {
     );
     let source = badge_source(Some(source_word(record)));
     let source_raw = badge_source_raw(Some(source_word(record)));
-    let sources = vec![if source_raw.is_empty() {
-        source.clone()
-    } else {
-        source_raw.clone()
-    }];
+    let sources = catalog_album_sources(record);
     let favoriteable = crate::local_rows::album_favorite_source(&sources).is_some();
     NativeAlbum {
         row: AlbumRow {

@@ -341,7 +341,14 @@ pub fn purge_cache(kind: MediaServerKind) {
 ///   one the grid's SQL union publishes, so "go to album" from a track row
 ///   lands on the same page the card opens.
 pub fn cached_to_local_track(t: qbz_media_cache::CachedTrack) -> qbz_library::LocalTrack {
-    qbz_library::LocalTrack {
+    let source = t.source.clone();
+    let source_instance = if t.server_id.trim().is_empty() {
+        "default".to_string()
+    } else {
+        t.server_id.clone()
+    };
+    let album_id = t.album_id.clone();
+    let mut track = qbz_library::LocalTrack {
         id: t.id,
         file_path: t.item_id,
         title: t.title,
@@ -361,7 +368,9 @@ pub fn cached_to_local_track(t: qbz_media_cache::CachedTrack) -> qbz_library::Lo
         collection_artwork_path: t.collection_artwork_token,
         source: Some(t.source),
         ..Default::default()
-    }
+    };
+    crate::remote_metadata_qt::apply(&mut track, &source, &source_instance, &album_id);
+    track
 }
 
 /// Container/codec name -> the enum the quality badge derives from.

@@ -1376,6 +1376,12 @@ Rectangle {
                         showDownload: true
                         favoriteGlyph: true
                         downloadGlyph: true
+                        downloadActionEnabled: (albumHeader.id || "") !== ""
+                            && (root.album.tracks || []).length > 0
+                            && QbzSession.offlineMode === 0
+                        downloadActionLoading: QbzOffline.collectionPreflightLoading
+                            && QbzOffline.collectionPreflightKey === "album:" + (albumHeader.id || "")
+                        onDownloadClicked: QbzOffline.cacheAlbum(albumHeader.id)
                     }
 
                 }

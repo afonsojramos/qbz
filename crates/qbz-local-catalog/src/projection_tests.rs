@@ -377,6 +377,148 @@ fn legacy_catch_up_detects_authoritative_updates_and_then_is_a_no_op() {
     assert_eq!(catalog.stats().unwrap().track_count, 3);
 }
 
+#[test]
+fn remote_metadata_sidecar_overlays_bootstrap_and_triggers_catch_up() {
+    let temp = tempdir().unwrap();
+    let remote_path = temp.path().join("remote_cache.db");
+    Connection::open(&remote_path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE remote_cache_tracks (
+                 id INTEGER PRIMARY KEY, source TEXT NOT NULL, item_id TEXT NOT NULL,
+                 server_id TEXT, title TEXT, artist TEXT, album_artist TEXT,
+                 album TEXT, duration_ms INTEGER, codec TEXT, container TEXT,
+                 bit_depth INTEGER, sample_rate_hz INTEGER, artwork_token TEXT,
+                 updated_at INTEGER, year INTEGER, disc_number INTEGER,
+                 track_number INTEGER, album_id TEXT
+             );
+             INSERT INTO remote_cache_tracks VALUES
+                 (1,'jellyfin','track-1','server-a','Original title','Original artist',
+                  'Original album artist','Original album',220000,'flac','flac',24,
+                  96000,'remote-art',30,2022,1,1,'album-9');",
+        )
+        .unwrap();
+
+    let sidecar_path = temp.path().join("metadata_sidecars.db");
+    let sidecar = Connection::open(&sidecar_path).unwrap();
+    sidecar
+        .execute_batch(
+            "CREATE TABLE remote_album_tag_sidecars (
+                 source TEXT NOT NULL, source_instance TEXT NOT NULL,
+                 album_id TEXT NOT NULL, payload_json TEXT NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 PRIMARY KEY(source,source_instance,album_id)
+             );",
+        )
+        .unwrap();
+    let payload = serde_json::json!({
+        "version": 2,
+        "updatedAt": 100,
+        "album": {
+            "albumTitle": "Edited album",
+            "albumArtist": "Edited album artist",
+            "year": 2025,
+            "genre": "Progressive rock",
+            "catalogNumber": "CAT-9"
+        },
+        "tracks": [{
+            "filePath": "track-1",
+            "cueStartSecs": null,
+            "title": "Edited title",
+            "discNumber": 2,
+            "trackNumber": 7
+        }],
+        "extendedAlbum": {
+            "albumArtists": ["Edited album artist"],
+            "compilation": false,
+            "musicbrainzReleaseId": "release-9",
+            "musicbrainzReleaseGroupId": "group-9",
+            "musicbrainzAlbumArtistIds": ["artist-9"],
+            "discogsReleaseId": "99",
+            "artworkPath": "/cache/edited-cover.jpg"
+        },
+        "extendedTracks": [{
+            "filePath": "track-1",
+            "cueStartSecs": null,
+            "artistCredit": "Edited track artist",
+            "artists": ["Edited track artist"],
+            "composers": ["Composer"],
+            "performers": ["Player (guitar)"],
+            "musicbrainzRecordingId": "recording-1",
+            "musicbrainzTrackId": "mb-track-1",
+            "musicbrainzArtistIds": ["artist-1"]
+        }]
+    })
+    .to_string();
+    sidecar
+        .execute(
+            "INSERT INTO remote_album_tag_sidecars VALUES
+             ('jellyfin','server-a','album-9',?1,100)",
+            [&payload],
+        )
+        .unwrap();
+    drop(sidecar);
+
+    assert!(matches!(
+        bootstrap_legacy_caches(temp.path(), &AtomicBool::new(false)).unwrap(),
+        BootstrapOutcome::Activated {
+            generation: 1,
+            track_count: 1,
+            ..
+        }
+    ));
+    let layout = BootstrapLayout::new(temp.path());
+    let track_ref = TrackRef {
+        source: SourceKind::Jellyfin,
+        source_instance: "server-a".to_string(),
+        native_id: "track-1".to_string(),
+    };
+    let ActiveCatalog::Ready { catalog, .. } = layout.open_active() else {
+        panic!("sidecar bootstrap did not activate")
+    };
+    let projected = catalog.resolve(&track_ref).unwrap().unwrap();
+    assert_eq!(projected.title, "Edited title");
+    assert_eq!(projected.artist, "Edited track artist");
+    assert_eq!(projected.album, "Edited album");
+    assert_eq!(projected.album_artist, "Edited album artist");
+    assert_eq!(projected.year, Some(2025));
+    assert_eq!(projected.disc_number, Some(2));
+    assert_eq!(projected.track_number, Some(7));
+    assert_eq!(
+        projected.artwork_token.as_deref(),
+        Some("qbz-local-art:/cache/edited-cover.jpg")
+    );
+    drop(catalog);
+
+    let changed = payload.replace("Edited title", "Changed from sidecar");
+    Connection::open(&sidecar_path)
+        .unwrap()
+        .execute(
+            "UPDATE remote_album_tag_sidecars
+                SET payload_json=?1,updated_at=101
+              WHERE source='jellyfin' AND source_instance='server-a'
+                AND album_id='album-9'",
+            [&changed],
+        )
+        .unwrap();
+    assert!(matches!(
+        reconcile_legacy_caches(temp.path(), &AtomicBool::new(false)).unwrap(),
+        ProjectionOutcome::Activated {
+            generation: 2,
+            track_count: 1,
+            changed_sources: 1,
+            ..
+        }
+    ));
+    let ActiveCatalog::Ready { catalog, .. } = layout.open_active() else {
+        panic!("sidecar catch-up did not activate")
+    };
+    assert_eq!(
+        catalog.resolve(&track_ref).unwrap().unwrap().title,
+        "Changed from sidecar"
+    );
+}
+
 fn create_local(path: &std::path::Path) {
     let conn = Connection::open(path).unwrap();
     conn.execute_batch(

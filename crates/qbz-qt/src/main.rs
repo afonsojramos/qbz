@@ -148,6 +148,10 @@ mod source_wiring;
 // Jellyfin / Subsonic: the per-user settings store plus the two gates the
 // Local Library union reads. The credential glue itself is in `source_wiring`.
 mod media_servers_qt;
+// Profile-scoped metadata overlays for Plex/Jellyfin/Subsonic. Physical files
+// keep using `.qbz.json`; this module is the read-through cache for servers
+// that have no local directory to put that document beside.
+mod remote_metadata_qt;
 // The library sweep. Lives in the frontend because it needs the tokio runtime
 // and a channel to the progress UI; it writes through the cache handle the
 // SOURCE owns, so sweep and reads can never point at different users.
@@ -191,6 +195,7 @@ mod library_db_qt;
 mod library_prefs;
 mod library_qt;
 mod library_sidepanel;
+mod local_artist_images_qt;
 mod local_artist_match;
 mod local_catalog_qt;
 mod local_filter;
@@ -270,6 +275,7 @@ mod disc_identity;
 mod disc_meta_bridge;
 mod disc_meta_qt;
 mod label_qt;
+mod local_media_info_qt;
 mod nav_qt;
 mod now_playing;
 mod offline_fwd;
@@ -3194,8 +3200,7 @@ fn apply_renderer_preference() {
     // backend must be undone even when this one is being overridden by env.
     let reverted = renderer_qt::revert_if_previous_launch_died();
 
-    if qt_backend_env_overrides("QSG_RHI_BACKEND") || qt_backend_env_overrides("QT_QUICK_BACKEND")
-    {
+    if qt_backend_env_overrides("QSG_RHI_BACKEND") || qt_backend_env_overrides("QT_QUICK_BACKEND") {
         log::info!("[renderer] explicit Qt backend env present; leaving the choice to it");
         return;
     }
@@ -3232,7 +3237,9 @@ fn apply_renderer_preference() {
                 // d3d11 is Qt's healthy default here; desktop GL / ANGLE is a
                 // downgrade, not the GPU tier this pref means. Same remap as
                 // macOS: honour the intent (GPU path), not the literal backend.
-                log::info!("[renderer] '{choice}' on Windows -> d3d11 default (the Slint GL remap)");
+                log::info!(
+                    "[renderer] '{choice}' on Windows -> d3d11 default (the Slint GL remap)"
+                );
                 false
             } else {
                 std::env::set_var("QSG_RHI_BACKEND", "opengl");

@@ -299,11 +299,12 @@ Item {
             }
         }
         QbzAlphaStrip {
-            visible: root.alphaJumps.length > 0
+            visible: root.entries.length > 0
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             jumps: root.alphaJumps
+            completeAlphabet: true
             onJump: function (ordinal, index) {
                 railList.positionViewAtIndex(index, ListView.Beginning)
             }

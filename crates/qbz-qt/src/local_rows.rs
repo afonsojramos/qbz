@@ -23,6 +23,7 @@
 use std::collections::HashMap;
 
 use qbz_library::{AudioFormat, LocalAlbum, LocalTrack};
+use qbz_local_catalog::AlbumRecord;
 use qbz_source::SourceId;
 use serde::Serialize;
 
@@ -74,9 +75,9 @@ pub struct AlbumRow {
     /// Heart state from the shared LocalFavoritesService.
     #[serde(rename = "isFavorite")]
     pub is_favorite: bool,
-    /// True only when the logical album includes a genuine local or Plex
-    /// copy. Jellyfin/Subsonic and Qobuz-offline-only rows are intentionally
-    /// outside the existing local-favorites database contract.
+    /// True when the logical album belongs to the Local Library favorite
+    /// domain: a genuine local copy or a configured media-server copy.
+    /// Qobuz-offline-only rows stay in the catalog-favorite domain.
     pub favoriteable: bool,
 }
 
@@ -462,6 +463,9 @@ pub fn art_token(source_word: Option<&str>, token: &str) -> Option<(SourceId, St
     if token.is_empty() {
         return None;
     }
+    if let Some(path) = crate::remote_metadata_qt::local_art_path(token) {
+        return Some((SourceId::LOCAL, path.to_string()));
+    }
     // No word at all is the LOCAL case in practice (`local_tracks.source` is
     // empty for a plain scanned file, §3.1's vocabulary table).
     let id = SourceId::from_word(source_word.unwrap_or("")).unwrap_or(SourceId::LOCAL);
@@ -550,8 +554,8 @@ pub fn map_album_with_artists(
 }
 
 /// Resolve the source word accepted by `local_favorites.db`. Prefer a real
-/// local copy when a logical album spans both local and Plex; both are valid,
-/// but the local snapshot remains usable if the server is later disconnected.
+/// local copy when a logical album spans several sources; otherwise retain a
+/// server source so remote-only albums get the same heart affordance.
 pub fn album_favorite_source(sources: &[String]) -> Option<&'static str> {
     if sources
         .iter()
@@ -563,9 +567,52 @@ pub fn album_favorite_source(sources: &[String]) -> Option<&'static str> {
         .any(|source| source.eq_ignore_ascii_case("plex"))
     {
         Some("plex")
+    } else if sources
+        .iter()
+        .any(|source| source.eq_ignore_ascii_case("jellyfin"))
+    {
+        Some("jellyfin")
+    } else if sources.iter().any(|source| {
+        matches!(
+            source.to_ascii_lowercase().as_str(),
+            "subsonic" | "navidrome" | "gonic" | "airsonic" | "astiga"
+        )
+    }) {
+        Some("subsonic")
     } else {
         None
     }
+}
+
+/// Normalize every physical source carried by a native catalog album into
+/// the exact words consumed by QML.  `AlbumRecord::source` is intentionally a
+/// single routing choice; using only it made a mixed Plex/server card lose
+/// the Plex favorite affordance depending on which copy won materialization.
+pub fn catalog_album_sources(record: &AlbumRecord) -> Vec<String> {
+    let fallback;
+    let words: &[String] = if record.source_words.is_empty() {
+        fallback = vec![if record.source_raw.trim().is_empty() {
+            record.source.as_str().to_string()
+        } else {
+            record.source_raw.clone()
+        }];
+        &fallback
+    } else {
+        &record.source_words
+    };
+    let mut normalized = Vec::with_capacity(words.len());
+    for word in words {
+        let raw = badge_source_raw(Some(word));
+        let value = if raw.is_empty() {
+            badge_source(Some(word))
+        } else {
+            raw
+        };
+        if !normalized.iter().any(|known| known == &value) {
+            normalized.push(value);
+        }
+    }
+    normalized
 }
 
 pub fn map_track(t: &LocalTrack, art: &mut HashMap<String, (SourceId, String)>) -> TrackRow {
@@ -574,11 +621,7 @@ pub fn map_track(t: &LocalTrack, art: &mut HashMap<String, (SourceId, String)>) 
         .artwork_path
         .as_ref()
         .filter(|p| !p.is_empty())
-        .or_else(|| {
-            t.collection_artwork_path
-                .as_ref()
-                .filter(|p| !p.is_empty())
-        })
+        .or_else(|| t.collection_artwork_path.as_ref().filter(|p| !p.is_empty()))
     {
         if let Some(tok) = art_token(t.source.as_deref(), p) {
             art.insert(key.clone(), tok);
@@ -636,14 +679,17 @@ mod tests {
     }
 
     #[test]
-    fn album_favorite_refuses_remote_and_offline_only() {
+    fn album_favorite_accepts_media_servers_but_refuses_offline_only() {
         assert_eq!(
-            album_favorite_source(&sources(&[
-                "jellyfin",
-                "subsonic",
-                "qobuz_purchase",
-                "offline",
-            ])),
+            album_favorite_source(&sources(&["jellyfin"])),
+            Some("jellyfin")
+        );
+        assert_eq!(
+            album_favorite_source(&sources(&["navidrome"])),
+            Some("subsonic")
+        );
+        assert_eq!(
+            album_favorite_source(&sources(&["qobuz_purchase", "offline"])),
             None
         );
     }

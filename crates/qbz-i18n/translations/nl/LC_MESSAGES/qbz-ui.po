@@ -164,9 +164,6 @@ msgstr "Nummers zoeken..."
 msgid "Title"
 msgstr "Titel"
 
-msgid "Duration"
-msgstr "Duur"
-
 msgid "Quality"
 msgstr "Kwaliteit"
 
@@ -795,9 +792,6 @@ msgstr "CD"
 
 msgid "Lossy"
 msgstr "Lossy"
-
-msgid "Format"
-msgstr "Formaat"
 
 msgid "Other"
 msgstr "Overige"
@@ -6070,3 +6064,121 @@ msgstr "Toetsenschema"
 
 msgid "Vim"
 msgstr "Vim"
+
+# Local Library QoL: Explorer, scan progress, and per-track metadata editor
+msgid "All years"
+msgstr "Alle jaren"
+
+msgid "Explorer columns"
+msgstr "Verkennerkolommen"
+
+msgid "Genre and year"
+msgstr "Genre en jaar"
+
+msgid "Years"
+msgstr "Jaren"
+
+msgid "Edit track metadata"
+msgstr "Trackmetadata bewerken"
+
+msgid "Building library index"
+msgstr "Bibliotheekindex opbouwen"
+
+msgid "Local folders"
+msgstr "Lokale mappen"
+
+msgid "Next track"
+msgstr "Volgende track"
+
+msgid "Overall"
+msgstr "Totaal"
+
+msgid "Previous track"
+msgstr "Vorige track"
+
+msgid "Scanning library"
+msgstr "Bibliotheek scannen"
+
+msgid "The track is no longer in the library."
+msgstr "De track staat niet meer in de bibliotheek."
+
+msgid "Updating library index"
+msgstr "Bibliotheekindex bijwerken"
+
+msgid "Edit album"
+msgstr "Album bewerken"
+
+msgid "Editing a local metadata sidecar"
+msgstr "Een lokaal metadata-sidecarbestand bewerken"
+
+msgid "Media-server metadata is stored in a local sidecar."
+msgstr "Metagegevens van de mediaserver worden opgeslagen in een lokaal sidecarbestand."
+
+msgid "Media-server metadata can only be edited with a sidecar."
+msgstr "Metagegevens van de mediaserver kunnen alleen via een sidecarbestand worden bewerkt."
+
+msgid "Network file"
+msgstr "Netwerkbestand"
+
+msgid "Offline download"
+msgstr "Offline download"
+
+msgid "File path"
+msgstr "Bestandspad"
+
+msgid "Containing folder"
+msgstr "Bovenliggende map"
+
+msgid "Media item ID"
+msgstr "Media-item-ID"
+
+msgid "Album ID"
+msgstr "Album-ID"
+
+msgid "Server"
+msgstr "Server"
+
+msgid "Duration"
+msgstr "Duur"
+
+msgid "Format"
+msgstr "Formaat"
+
+msgid "Channels"
+msgstr "Kanalen"
+
+msgid "File size"
+msgstr "Bestandsgrootte"
+
+msgid "Location"
+msgstr "Locatie"
+
+msgid "The media item is no longer available."
+msgstr "Het media-item is niet meer beschikbaar."
+
+msgid "The local album folder is not currently available."
+msgstr "De lokale albummap is momenteel niet beschikbaar."
+
+msgid "Everything is already available offline"
+msgstr "Alles is al offline beschikbaar"
+
+msgid "Some tracks are already available offline"
+msgstr "Sommige nummers zijn al offline beschikbaar"
+
+msgid "{} of {} tracks in “{}” are already available offline."
+msgstr "{} van {} nummers in ‘{}’ zijn al offline beschikbaar."
+
+msgid "Download the entire playlist again"
+msgstr "De volledige playlist opnieuw downloaden"
+
+msgid "Download the entire album again"
+msgstr "Het volledige album opnieuw downloaden"
+
+msgid "Re-downloads every track and can repair corrupt offline copies."
+msgstr "Downloadt elk nummer opnieuw en kan beschadigde offlinekopieën herstellen."
+
+msgid "Only missing tracks"
+msgstr "Alleen ontbrekende nummers"
+
+msgid "Keeps existing offline copies and downloads tracks that are not available yet."
+msgstr "Behoudt bestaande offlinekopieën en downloadt nummers die nog niet beschikbaar zijn."

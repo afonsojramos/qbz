@@ -172,6 +172,7 @@ pub fn apply_sidecar_to_track(track: &mut LocalTrack, sidecar: &AlbumTagSidecar)
 
     if let Some(genre) = sidecar.album.genre.as_ref() {
         track.genre = normalize(genre);
+        track.genres = track.genre.iter().cloned().collect();
     }
 
     if let Some(catalog_number) = sidecar.album.catalog_number.as_ref() {

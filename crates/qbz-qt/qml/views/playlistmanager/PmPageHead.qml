@@ -41,6 +41,8 @@ Item {
     property string viewMode: "grid"
     property bool folderMode: true
     property bool foldersCollapsed: false
+    property string currentFolderId: ""
+    property string currentFolderName: ""
     property bool canReorder: false
     /// `managerJson.folderCount` — equal to `folders.length` by construction,
     /// and what the COUNTER row reads (the section header reads the array).
@@ -53,6 +55,7 @@ Item {
     QbzTheme { id: theme }
 
     readonly property bool foldersVisible: !root.loading && root.folderMode
+        && root.currentFolderId === ""
         && root.viewMode !== "tree" && (root.folders || []).length > 0
 
     implicitHeight: 6 + col.height
@@ -76,9 +79,14 @@ Item {
                 // ONE string with TWO placeholders (`:1314`), not two strings.
                 // `String.replace` with a string pattern replaces only the
                 // FIRST occurrence, so the two calls chain.
-                text: QbzSession.tr("{} folders, {} playlists", QbzSession.trRev)
-                    .replace("{}", root.folderCount)
-                    .replace("{}", root.playlistCount)
+                text: root.currentFolderId !== ""
+                    ? (root.playlistCount === 1
+                        ? QbzSession.tr("1 playlist", QbzSession.trRev)
+                        : QbzSession.tr("{} playlists", QbzSession.trRev)
+                            .replace("{}", root.playlistCount))
+                    : QbzSession.tr("{} folders, {} playlists", QbzSession.trRev)
+                        .replace("{}", root.folderCount)
+                        .replace("{}", root.playlistCount)
                 color: theme.textMuted
                 font.pixelSize: theme.fontLegal
             }
@@ -106,6 +114,41 @@ Item {
                 anchors.centerIn: parent
                 size: 36
             }
+        }
+
+        // Grid/list folder drill-down. The manager keeps the selected view
+        // mode; this compact breadcrumb is the explicit route back to the
+        // folders + root-playlists surface.
+        Item {
+            visible: !root.loading && root.currentFolderId !== ""
+            width: parent.width
+            height: visible ? 40 : 0
+
+            QbzToolButton {
+                id: folderBack
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                name: "chevron-left"
+                label: QbzSession.tr("Back", QbzSession.trRev)
+                large: true
+                onClicked: QbzPlaylistManager.closeFolder()
+            }
+            Text {
+                anchors.left: folderBack.right
+                anchors.leftMargin: 12
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.currentFolderName
+                color: theme.textPrimary
+                font.pixelSize: theme.fontBody
+                font.weight: theme.weightSemibold
+                elide: Text.ElideRight
+            }
+        }
+        Item {
+            visible: !root.loading && root.currentFolderId !== ""
+            width: 1
+            height: visible ? 14 : 0
         }
 
         // ---- FOLDERS section ----------------------------------------------
@@ -152,7 +195,8 @@ Item {
                         x: (index % folderGrid.cols) * 176
                         y: Math.floor(index / folderGrid.cols) * 166
                         folder: modelData
-                        onOpenRequested: QbzFolderEdit.openEditor(String(modelData.id || ""))
+                        onOpenRequested: QbzPlaylistManager.openFolder(String(modelData.id || ""))
+                        onEditRequested: QbzFolderEdit.openEditor(String(modelData.id || ""))
                     }
                 }
             }
@@ -177,7 +221,8 @@ Item {
                         y: Math.floor(index / folderChips.cols) * 60
                         width: 184
                         folder: modelData
-                        onOpenRequested: QbzFolderEdit.openEditor(String(modelData.id || ""))
+                        onOpenRequested: QbzPlaylistManager.openFolder(String(modelData.id || ""))
+                        onEditRequested: QbzFolderEdit.openEditor(String(modelData.id || ""))
                     }
                 }
             }

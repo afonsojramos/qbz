@@ -39,6 +39,7 @@ Item {
         width: parent.width
         height: 46
         Row {
+            id: headerActions
             x: 32
             anchors.verticalCenter: parent.verticalCenter
             spacing: 12
@@ -176,6 +177,20 @@ Item {
                 }
             }
         }
+
+        // The unused centre of the title row carries scan state without
+        // changing the 91px chrome contract. It reads counters only; no model
+        // row or delegate is created, so large-library virtualization remains
+        // untouched. On a narrow window the toolbar keeps priority and the
+        // compact indicator yields rather than overlapping controls.
+        LocalScanProgress {
+            anchors.left: headerActions.right
+            anchors.leftMargin: 28
+            anchors.right: parent.right
+            anchors.rightMargin: 32
+            anchors.verticalCenter: parent.verticalCenter
+            visible: active && width >= 260
+        }
     }
 
     // ---- Row 2: tabs (left) + per-tab toolbar (right) ----
@@ -202,7 +217,7 @@ Item {
                 var byId = {
                     "albums": { "id": "albums", "label": QbzSession.tr("Albums", QbzSession.trRev), "count": root.view.counts.albums || 0 },
                     "artists": { "id": "artists", "label": QbzSession.tr("Artists", QbzSession.trRev), "count": root.view.counts.artists || 0 },
-                    "genres": { "id": "genres", "label": QbzSession.tr("Library Explorer", QbzSession.trRev), "count": root.view.genreNames.length },
+                    "genres": { "id": "genres", "label": QbzSession.tr("Library Explorer", QbzSession.trRev), "count": root.view.explorerLeadingCount },
                     "folders": { "id": "folders", "label": QbzSession.tr("Folders", QbzSession.trRev), "count": root.view.counts.folders || 0 },
                     "tracks": { "id": "tracks", "label": QbzSession.tr("Tracks", QbzSession.trRev), "count": root.view.counts.tracks || 0 }
                 }

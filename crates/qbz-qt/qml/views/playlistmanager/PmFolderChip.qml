@@ -3,7 +3,7 @@
 // forces `width: 184` (`:1382`) so every cell in the wrapping grid has the same
 // pitch; the component's own intrinsic width is never used.
 //
-// Body and pencil both open the folder EDITOR (contract D7), like the card.
+// The body enters the folder; only the pencil opens the folder editor.
 //
 // Two hover-revealed children — the count and the pencil — at opacity 0/1 with
 // the reference's 150 ms fade. OPACITY, not visibility: the count keeps its
@@ -32,6 +32,7 @@ Rectangle {
     /// One `QbzPlaylistManager.foldersJson` entry (contract §4.1).
     property var folder: ({})
     signal openRequested()
+    signal editRequested()
 
     QbzTheme { id: theme }
 
@@ -121,7 +122,7 @@ Rectangle {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.openRequested()
+            onClicked: root.editRequested()
         }
     }
 }

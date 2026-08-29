@@ -151,7 +151,7 @@ Item {
             }
             QbzAlphaStrip {
                 visible: root.view.albumsGroup === "alpha"
-                    && collection.alphaJumps.length > 0
+                    && root.albumTotal > 0
                 anchors.right: parent.right
                 // Out past the tab's 32 padding to 12 from the window edge,
                 // which is where LibraryView.qml:1269 puts the same strip.
@@ -159,6 +159,7 @@ Item {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 jumps: collection.alphaJumps
+                completeAlphabet: true
                 onJump: function (ordinal, index) { collection.jumpToEntry(index) }
             }
         }

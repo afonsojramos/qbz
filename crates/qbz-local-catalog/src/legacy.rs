@@ -1,10 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rusqlite::types::ValueRef;
 use rusqlite::{params, Connection, OpenFlags, Row};
+use serde::Deserialize;
 
 use crate::{
     ActiveCatalog, ArtistCredit, BootstrapBatch, BootstrapLayout, BootstrapOutcome,
@@ -99,9 +100,10 @@ pub fn bootstrap_legacy_caches_at_with_progress(
     }
 
     let specs = discover_legacy_sources_at(locations)?;
+    let sidecars = locations.catalog_dir.join("metadata_sidecars.db");
     let mut readers = specs
         .into_iter()
-        .map(LegacyReader::open)
+        .map(|spec| LegacyReader::open(spec, &sidecars))
         .collect::<Result<Vec<_>>>()?;
     let probes = readers
         .iter()
@@ -110,8 +112,11 @@ pub fn bootstrap_legacy_caches_at_with_progress(
     let (mut session, _) = layout.prepare(&probes, None)?;
     let mut resumed_rows = 0_u64;
     let mut committed_rows = 0_u64;
+    let overall_rows_total = probes.iter().map(|probe| probe.row_count).sum::<u64>();
+    let source_count = readers.len();
+    let mut overall_rows_before_source = 0_u64;
 
-    for reader in &mut readers {
+    for (source_offset, reader) in readers.iter_mut().enumerate() {
         let mut checkpoint = session.checkpoint(&reader.spec.source)?;
         if let Some(saved) = &checkpoint {
             if saved.checkpoint_version != reader.probe.snapshot_version
@@ -128,6 +133,8 @@ pub fn bootstrap_legacy_caches_at_with_progress(
             .as_ref()
             .is_some_and(|saved| saved.complete && saved.checkpoint_rows == reader.probe.row_count)
         {
+            overall_rows_before_source =
+                overall_rows_before_source.saturating_add(reader.probe.row_count);
             continue;
         }
 
@@ -150,6 +157,12 @@ pub fn bootstrap_legacy_caches_at_with_progress(
                 generation: session.generation(),
                 source: reader.spec.source.clone(),
                 committed_rows: saved.checkpoint_rows,
+                source_rows_total: reader.probe.row_count,
+                overall_rows_written: overall_rows_before_source
+                    .saturating_add(saved.checkpoint_rows.min(reader.probe.row_count)),
+                overall_rows_total,
+                source_index: source_offset + 1,
+                source_count,
                 checkpoint_cursor: cursor.clone(),
                 source_complete: saved.complete,
             });
@@ -159,6 +172,8 @@ pub fn bootstrap_legacy_caches_at_with_progress(
             std::thread::yield_now();
             std::thread::sleep(Duration::from_millis(1));
         }
+        overall_rows_before_source =
+            overall_rows_before_source.saturating_add(reader.probe.row_count);
     }
 
     if cancelled.load(Ordering::Acquire) {
@@ -211,9 +226,10 @@ pub fn reconcile_legacy_caches_at_with_progress(
         }
     };
     let specs = discover_legacy_sources_at(locations)?;
+    let sidecars = locations.catalog_dir.join("metadata_sidecars.db");
     let mut readers = specs
         .into_iter()
-        .map(LegacyReader::open)
+        .map(|spec| LegacyReader::open(spec, &sidecars))
         .collect::<Result<Vec<_>>>()?;
     let probes = readers
         .iter()
@@ -247,9 +263,16 @@ pub fn reconcile_legacy_caches_at_with_progress(
     let (mut session, _) = layout.prepare_projection(&probes, None)?;
     let mut resumed_rows = 0_u64;
     let mut committed_rows = 0_u64;
-    for reader in readers
+    let overall_rows_total = changed_probes
+        .iter()
+        .map(|probe| probe.row_count)
+        .sum::<u64>();
+    let source_count = changed_probes.len();
+    let mut overall_rows_before_source = 0_u64;
+    for (source_offset, reader) in readers
         .iter_mut()
         .filter(|reader| changed_keys.contains(&reader.spec.source))
+        .enumerate()
     {
         let checkpoint = session.checkpoint(&reader.spec.source)?;
         let mut cursor = if let Some(checkpoint) = checkpoint {
@@ -257,6 +280,8 @@ pub fn reconcile_legacy_caches_at_with_progress(
                 && checkpoint.checkpoint_version == reader.probe.snapshot_version
                 && checkpoint.checkpoint_rows == reader.probe.row_count
             {
+                overall_rows_before_source =
+                    overall_rows_before_source.saturating_add(reader.probe.row_count);
                 continue;
             } else if checkpoint.checkpoint_version == reader.probe.snapshot_version
                 && !checkpoint.complete
@@ -296,6 +321,12 @@ pub fn reconcile_legacy_caches_at_with_progress(
                 generation: session.generation(),
                 source: reader.spec.source.clone(),
                 rows_written: saved.checkpoint_rows,
+                source_rows_total: reader.probe.row_count,
+                overall_rows_written: overall_rows_before_source
+                    .saturating_add(saved.checkpoint_rows.min(reader.probe.row_count)),
+                overall_rows_total,
+                source_index: source_offset + 1,
+                source_count,
                 checkpoint_cursor: cursor.clone(),
                 source_complete: saved.complete,
                 prune_authorized: saved.complete,
@@ -306,6 +337,8 @@ pub fn reconcile_legacy_caches_at_with_progress(
             std::thread::yield_now();
             std::thread::sleep(Duration::from_millis(1));
         }
+        overall_rows_before_source =
+            overall_rows_before_source.saturating_add(reader.probe.row_count);
     }
     let stats = session.stats()?;
     let manifest = session.activate(&changed_probes)?;
@@ -425,10 +458,11 @@ struct LegacyReader {
     spec: LegacySourceSpec,
     conn: Connection,
     probe: SourceProbe,
+    overrides: RemoteOverrides,
 }
 
 impl LegacyReader {
-    fn open(spec: LegacySourceSpec) -> Result<Self> {
+    fn open(spec: LegacySourceSpec, sidecar_path: &Path) -> Result<Self> {
         let conn = open_read_only(&spec.database_path)?;
         conn.execute_batch("PRAGMA query_only=ON; BEGIN;")?;
         let quick_check: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
@@ -437,8 +471,11 @@ impl LegacyReader {
         let schema_version: i64 = conn.query_row("PRAGMA schema_version", [], |row| row.get(0))?;
         let (row_count, maximum_id, maximum_updated) = source_summary(&conn, &spec)?;
         let file_epoch = sqlite_file_epoch(&spec.database_path)?;
-        let snapshot_version =
-            format!("v1:{schema_version}:{page_count}:{row_count}:{maximum_id}:{maximum_updated}:{file_epoch}");
+        let overrides = RemoteOverrides::load(sidecar_path, &spec.source)?;
+        let snapshot_version = format!(
+            "v2:{schema_version}:{page_count}:{row_count}:{maximum_id}:{maximum_updated}:{file_epoch}:{}",
+            overrides.revision
+        );
         let probe = SourceProbe {
             source: spec.source.clone(),
             source_path: spec.database_path.clone(),
@@ -447,7 +484,12 @@ impl LegacyReader {
             page_bytes: (page_size.max(0) as u64).saturating_mul(page_count.max(0) as u64),
             integrity_ok: quick_check == "ok",
         };
-        Ok(Self { spec, conn, probe })
+        Ok(Self {
+            spec,
+            conn,
+            probe,
+            overrides,
+        })
     }
 
     fn read_batch(&self, cursor: &str) -> Result<BootstrapBatch> {
@@ -463,6 +505,9 @@ impl LegacyReader {
             LegacyTable::Plex => read_plex(&self.conn, &self.spec, after)?,
             LegacyTable::Remote => read_remote(&self.conn, &self.spec, after)?,
         };
+        for (_, track) in &mut tracks {
+            self.overrides.apply(track);
+        }
         let complete = tracks.len() <= BOOTSTRAP_BATCH_ROWS;
         tracks.truncate(BOOTSTRAP_BATCH_ROWS);
         let next_cursor = tracks
@@ -477,6 +522,162 @@ impl LegacyReader {
             tracks: tracks.into_iter().map(|(_, track)| track).collect(),
             complete,
         })
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SidecarAlbum {
+    album_title: Option<String>,
+    album_artist: Option<String>,
+    year: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SidecarTrack {
+    file_path: String,
+    title: Option<String>,
+    disc_number: Option<u32>,
+    track_number: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SidecarExtendedAlbum {
+    artwork_path: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SidecarExtendedTrack {
+    file_path: String,
+    artist_credit: String,
+    musicbrainz_recording_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SidecarDocument {
+    #[serde(default)]
+    album: SidecarAlbum,
+    #[serde(default)]
+    tracks: Vec<SidecarTrack>,
+    extended_album: Option<SidecarExtendedAlbum>,
+    #[serde(default)]
+    extended_tracks: Vec<SidecarExtendedTrack>,
+}
+
+#[derive(Default)]
+struct RemoteOverrides {
+    by_album: HashMap<String, SidecarDocument>,
+    revision: String,
+}
+
+impl RemoteOverrides {
+    fn load(path: &Path, source: &SourceKey) -> Result<Self> {
+        if matches!(source.source, SourceKind::Local | SourceKind::Offline) || !path.is_file() {
+            return Ok(Self::default());
+        }
+        let conn = open_read_only(path)?;
+        if !table_exists(&conn, "remote_album_tag_sidecars")? {
+            return Ok(Self::default());
+        }
+        let mut stmt = conn.prepare(
+            "SELECT album_id,payload_json,updated_at
+               FROM remote_album_tag_sidecars
+              WHERE source=?1 AND source_instance=?2",
+        )?;
+        let rows = stmt.query_map(
+            params![source.source.as_str(), source.source_instance],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )?;
+        let mut by_album = HashMap::new();
+        let mut count = 0_u64;
+        let mut maximum_updated = 0_i64;
+        for row in rows {
+            let (album_id, json, updated_at) = row?;
+            count = count.saturating_add(1);
+            maximum_updated = maximum_updated.max(updated_at);
+            if let Ok(document) = serde_json::from_str(&json) {
+                by_album.insert(album_id, document);
+            }
+        }
+        let file_epoch = sqlite_file_epoch(path)?;
+        Ok(Self {
+            by_album,
+            revision: format!("{count}:{maximum_updated}:{file_epoch}"),
+        })
+    }
+
+    fn apply(&self, track: &mut ProjectedTrack) {
+        let Some(album_id) = track.native_album_id.as_deref() else {
+            return;
+        };
+        let Some(sidecar) = self.by_album.get(album_id) else {
+            return;
+        };
+        if let Some(title) = sidecar
+            .album
+            .album_title
+            .as_deref()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+        {
+            track.album = title.to_string();
+        }
+        if let Some(artist) = sidecar.album.album_artist.as_deref() {
+            track.album_artist = artist.trim().to_string();
+        }
+        if let Some(year) = sidecar.album.year {
+            track.year = (year != 0).then_some(year);
+        }
+        if let Some(path) = sidecar
+            .extended_album
+            .as_ref()
+            .and_then(|album| album.artwork_path.as_deref())
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            track.artwork_token = Some(format!("{}{path}", crate::SIDECAR_LOCAL_ART_PREFIX));
+        }
+        if let Some(row) = sidecar
+            .tracks
+            .iter()
+            .find(|row| row.file_path == track.track_ref.native_id)
+        {
+            if let Some(title) = row
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+            {
+                track.title = title.to_string();
+            }
+            if let Some(number) = row.disc_number {
+                track.disc_number = (number != 0).then_some(number);
+            }
+            if let Some(number) = row.track_number {
+                track.track_number = (number != 0).then_some(number);
+            }
+        }
+        if let Some(row) = sidecar
+            .extended_tracks
+            .iter()
+            .find(|row| row.file_path == track.track_ref.native_id)
+        {
+            if !row.artist_credit.trim().is_empty() {
+                track.artist = row.artist_credit.trim().to_string();
+            }
+            track.musicbrainz_recording_id = row.musicbrainz_recording_id.clone();
+        }
+        track.credits = credits(&track.artist, &track.album_artist);
     }
 }
 
@@ -552,6 +753,25 @@ fn read_plex(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result<V
         &["rating_key", "title", "artist", "album", "duration_ms"],
         "plex_cache_tracks",
     )?;
+    let item_art = optional_column(&columns, "artwork_path", "NULL");
+    let collection_art = optional_column(&columns, "collection_artwork_path", "NULL");
+    let metadata_art = if columns.contains("parent_rating_key")
+        && table_exists(conn, "plex_cache_album_artwork")?
+    {
+        "(SELECT NULLIF(album_art.artwork_path,'')
+            FROM plex_cache_album_artwork album_art
+           WHERE album_art.server_id =
+                 COALESCE(NULLIF(plex_cache_tracks.server_id,''),'default')
+             AND album_art.parent_rating_key = plex_cache_tracks.parent_rating_key)"
+            .to_string()
+    } else {
+        "NULL".to_string()
+    };
+    // Track art keeps its existing precedence on track surfaces. Parent art
+    // and the album-metadata repair are fallback-only, so filling a missing
+    // card cannot replace a legitimate disc/track-specific image.
+    let effective_art =
+        format!("COALESCE(NULLIF({item_art},''),NULLIF({collection_art},''),{metadata_art})");
     let sql = format!(
         "SELECT rowid, rating_key, title, COALESCE(artist,''), COALESCE(album,''),
                 COALESCE(duration_ms,0), {year}, {disc}, {track}, {format}, {depth},
@@ -567,7 +787,7 @@ fn read_plex(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result<V
         format = format_expression(&columns),
         depth = optional_column(&columns, "bit_depth", "NULL"),
         rate = optional_column(&columns, "sampling_rate_hz", "NULL"),
-        art = optional_column(&columns, "artwork_path", "NULL"),
+        art = effective_art,
         updated = optional_column(&columns, "updated_at", "0"),
         album_id = if columns.contains("parent_rating_key") {
             "parent_rating_key".to_string()
@@ -691,6 +911,14 @@ fn map_remote_like(
 }
 
 fn source_summary(conn: &Connection, spec: &LegacySourceSpec) -> Result<(u64, i64, i64)> {
+    let plex_artwork_updated =
+        if spec.table == LegacyTable::Plex && table_exists(conn, "plex_cache_album_artwork")? {
+            "(SELECT COALESCE(MAX(checked_at),0)
+            FROM plex_cache_album_artwork
+           WHERE server_id=?1)"
+        } else {
+            "0"
+        };
     let (sql, params) = match spec.table {
         LegacyTable::Local => (
             "SELECT COUNT(*), COALESCE(MAX(id),0), COALESCE(MAX(indexed_at),0)
@@ -699,10 +927,12 @@ fn source_summary(conn: &Connection, spec: &LegacySourceSpec) -> Result<(u64, i6
             Vec::new(),
         ),
         LegacyTable::Plex => (
-            "SELECT COUNT(*), COALESCE(MAX(rowid),0), COALESCE(MAX(updated_at),0)
+            format!(
+                "SELECT COUNT(*), COALESCE(MAX(rowid),0),
+                        MAX(COALESCE(MAX(updated_at),0),{plex_artwork_updated})
                FROM plex_cache_tracks
               WHERE COALESCE(NULLIF(server_id,''),'default') = ?1"
-                .to_string(),
+            ),
             vec![spec.source.source_instance.clone()],
         ),
         LegacyTable::Remote => (

@@ -1228,11 +1228,11 @@ impl Catalog {
             "artist_source_stats",
             "edition_artists",
         ] {
-            let result: String = self.conn.query_row(
-                &format!("PRAGMA quick_check('{table}')"),
-                [],
-                |row| row.get(0),
-            )?;
+            let result: String =
+                self.conn
+                    .query_row(&format!("PRAGMA quick_check('{table}')"), [], |row| {
+                        row.get(0)
+                    })?;
             if result != "ok" {
                 sqlite_ok = false;
                 failures.push(format!("{table}: {result}"));
@@ -1696,15 +1696,79 @@ fn filter_parts(
         }
         predicates.push(format!("({})", source_predicates.join(" OR ")));
     }
-    if !descriptor.formats().is_empty() {
-        predicates.push(format!(
-            "{alias}.format IN ({})",
-            std::iter::repeat("?")
-                .take(descriptor.formats().len())
-                .collect::<Vec<_>>()
-                .join(",")
-        ));
-        values.extend(descriptor.formats().iter().cloned().map(Value::Text));
+    if !descriptor.source_buckets().is_empty() {
+        let mut source_arms = Vec::new();
+        for bucket in descriptor.source_buckets() {
+            source_arms.push(match bucket.as_str() {
+                // A scanned file is owned by the Local catalog source and is
+                // normally spelled `user` in source_raw. Qobuz downloads can
+                // share that ownership, so raw provenance must remove them
+                // from Local and expose them through the Offline chip instead.
+                "local" => format!(
+                    "({alias}.source_kind='local' AND {alias}.source_raw NOT IN ('qobuz_download','qobuz_purchase'))"
+                ),
+                "offline" => format!(
+                    "({alias}.source_kind='offline' OR {alias}.source_raw IN ('qobuz_download','qobuz_purchase'))"
+                ),
+                "plex" => format!("{alias}.source_kind='plex'"),
+                "jellyfin" => format!("{alias}.source_kind='jellyfin'"),
+                "subsonic" => format!("{alias}.source_kind='subsonic'"),
+                _ => {
+                    return Err(CatalogError::InvalidInput(format!(
+                        "unknown track source bucket {bucket}"
+                    )))
+                }
+            });
+        }
+        predicates.push(format!("({})", source_arms.join(" OR ")));
+    }
+    if !descriptor.formats().is_empty() || descriptor.other_formats() {
+        let mut format_arms = Vec::new();
+        if !descriptor.formats().is_empty() {
+            format_arms.push(format!(
+                "{alias}.format IN ({})",
+                std::iter::repeat("?")
+                    .take(descriptor.formats().len())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+            values.extend(descriptor.formats().iter().cloned().map(Value::Text));
+        }
+        if descriptor.other_formats() {
+            format_arms.push(format!(
+                "{alias}.format NOT IN ('flac','alac','ape','wav','wave','mp3','aac')"
+            ));
+        }
+        predicates.push(format!("({})", format_arms.join(" OR ")));
+    }
+    if !descriptor.quality_tiers().is_empty() {
+        // Keep this expression in lockstep with qbz-qt's `tier_of` and the
+        // albums_materialized quality_tier projection. Tracks deliberately do
+        // not materialize a second quality column just for this filter.
+        let tier = format!(
+            "CASE \
+                WHEN LOWER({alias}.format)='mp3' THEN 'mp3' \
+                WHEN LOWER({alias}.format) IN ('dsd','dsf','dff') THEN 'hires' \
+                WHEN {alias}.bit_depth>=24 AND {alias}.sample_rate_hz>96000 THEN 'max' \
+                WHEN {alias}.bit_depth>=24 THEN 'hires' \
+                WHEN {alias}.bit_depth IS NOT NULL THEN 'cd' \
+                WHEN {alias}.sample_rate_hz>=44100 THEN 'cd' \
+                ELSE '' END"
+        );
+        let mut quality_arms = Vec::new();
+        for quality in descriptor.quality_tiers() {
+            quality_arms.push(match quality.as_str() {
+                "hires" => format!("({tier}) IN ('hires','max')"),
+                "cd" => format!("({tier})='cd'"),
+                "lossy" => format!("({tier}) IN ('mp3','lossy')"),
+                _ => {
+                    return Err(CatalogError::InvalidInput(format!(
+                        "unknown track quality tier {quality}"
+                    )))
+                }
+            });
+        }
+        predicates.push(format!("({})", quality_arms.join(" OR ")));
     }
 
     if let Some(cursor) = cursor {
@@ -2276,6 +2340,12 @@ fn map_album_row(row: &Row<'_>) -> rusqlite::Result<AlbumRowWithCursor> {
             source,
             native_album_id: row.get(2)?,
             source_raw: row.get(3)?,
+            source_words: row
+                .get::<_, String>(23)?
+                .split('\u{1f}')
+                .filter(|word| !word.is_empty())
+                .map(str::to_string)
+                .collect(),
             title: row.get(4)?,
             artist: row.get(5)?,
             all_artists: row.get(6)?,
@@ -2310,7 +2380,26 @@ const ALBUM_COLUMNS: &str = "
     am.quality_tier,am.format,am.bit_depth,am.sample_rate_hz,
     am.artwork_source,am.artwork_token,am.directory_path,am.folder_count,am.added_at,
     am.sort_title,am.sort_artist,
-    CASE WHEN am.year IS NULL THEN 1 ELSE 0 END,COALESCE(am.year,0)";
+    CASE WHEN am.year IS NULL THEN 1 ELSE 0 END,COALESCE(am.year,0),
+    COALESCE((
+        SELECT group_concat(source_word,char(31))
+          FROM (
+              SELECT DISTINCT
+                     CASE WHEN TRIM(t_sources.source_raw) != ''
+                          THEN LOWER(TRIM(t_sources.source_raw))
+                          ELSE sc_sources.source_kind END AS source_word,
+                     CASE sc_sources.source_kind
+                         WHEN 'local' THEN 0 WHEN 'offline' THEN 1
+                         WHEN 'plex' THEN 2 WHEN 'jellyfin' THEN 3 ELSE 4 END
+                         AS source_order
+                FROM source_copies sc_sources
+                JOIN tracks t_sources
+                  ON t_sources.source_copy_id=sc_sources.source_copy_id
+               WHERE sc_sources.edition_id=am.edition_id
+                 AND t_sources.available=1
+               ORDER BY source_order,source_word
+          )
+    ),'')";
 
 struct ArtistQueryParts {
     from_sql: String,

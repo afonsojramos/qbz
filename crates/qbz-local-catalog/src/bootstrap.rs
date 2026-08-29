@@ -163,6 +163,12 @@ pub struct BootstrapProgress {
     pub generation: u64,
     pub source: SourceKey,
     pub committed_rows: u64,
+    pub source_rows_total: u64,
+    pub overall_rows_written: u64,
+    pub overall_rows_total: u64,
+    /// One-based position of this source in the current bootstrap.
+    pub source_index: usize,
+    pub source_count: usize,
     pub checkpoint_cursor: String,
     pub source_complete: bool,
 }

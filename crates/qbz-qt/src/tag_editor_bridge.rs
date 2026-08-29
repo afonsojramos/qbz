@@ -24,6 +24,8 @@ pub mod qbz_tag_editor_bridge {
         #[qml_element]
         #[qml_singleton]
         #[qproperty(bool, editor_open)]
+        #[qproperty(bool, track_editor_open)]
+        #[qproperty(i32, track_editor_initial_index)]
         #[qproperty(bool, editor_loading)]
         #[qproperty(bool, editor_saving)]
         #[qproperty(i32, editor_progress_current)]
@@ -50,6 +52,11 @@ pub mod qbz_tag_editor_bridge {
         /// Unlike `close`, this must not mutate history a second time.
         #[qinvokable]
         fn leave(self: Pin<&mut QbzTagEditor>);
+
+        /// Promote the current track-modal snapshot into the existing full
+        /// album editor without resolving the album a second time.
+        #[qinvokable]
+        fn promote_to_album_editor(self: Pin<&mut QbzTagEditor>);
 
         /// The entire validated draft, encoded as JSON. File paths never come
         /// back from QML; Rust resolves row ids against the open session.
@@ -96,6 +103,8 @@ use qbz_tag_editor_bridge::QbzTagEditor;
 
 pub struct QbzTagEditorRust {
     editor_open: bool,
+    track_editor_open: bool,
+    track_editor_initial_index: i32,
     editor_loading: bool,
     editor_saving: bool,
     editor_progress_current: i32,
@@ -113,6 +122,8 @@ impl Default for QbzTagEditorRust {
     fn default() -> Self {
         Self {
             editor_open: false,
+            track_editor_open: false,
+            track_editor_initial_index: -1,
             editor_loading: false,
             editor_saving: false,
             editor_progress_current: 0,
@@ -151,6 +162,10 @@ impl qbz_tag_editor_bridge::QbzTagEditor {
 
     pub fn leave(self: Pin<&mut Self>) {
         crate::tag_editor_qt::leave();
+    }
+
+    pub fn promote_to_album_editor(self: Pin<&mut Self>) {
+        crate::tag_editor_qt::promote_to_album_editor();
     }
 
     pub fn save(self: Pin<&mut Self>, draft_json: QString) {

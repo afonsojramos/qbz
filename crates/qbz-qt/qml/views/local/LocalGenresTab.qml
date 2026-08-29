@@ -1,5 +1,6 @@
-// Local Library Genres — a retractable three-stage browser over the logical
-// album set, surrounding grid/list/expanded-details results from any edge.
+// Local Library Explorer — a retractable three- or four-stage browser over
+// the logical album set, surrounding grid/list/expanded-details results from
+// any edge. The leading facet is Genre, Year, or both.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -18,39 +19,60 @@ Item {
     readonly property int collapsedThickness: 24
     readonly property int horizontalHeight: 266
 
+    readonly property var facetKinds: root.view && root.view.explorerColumns === "both"
+        ? ["genre", "year", "artist", "album"]
+        : root.view && root.view.explorerColumns === "year"
+            ? ["year", "artist", "album"]
+            : ["genre", "artist", "album"]
+    function facetKind(index) { return facetKinds[index] || "album" }
+
     function facetTitle(index) {
-        if (index === 0) return QbzSession.tr("Genres", QbzSession.trRev)
-        if (index === 1) return QbzSession.tr("Artists", QbzSession.trRev)
+        var kind = facetKind(index)
+        if (kind === "genre") return QbzSession.tr("Genres", QbzSession.trRev)
+        if (kind === "year") return QbzSession.tr("Years", QbzSession.trRev)
+        if (kind === "artist") return QbzSession.tr("Artists", QbzSession.trRev)
         return QbzSession.tr("Albums", QbzSession.trRev)
     }
     function facetAllLabel(index) {
-        if (index === 0) return QbzSession.tr("All genres", QbzSession.trRev)
-        if (index === 1) return QbzSession.tr("All artists", QbzSession.trRev)
+        var kind = facetKind(index)
+        if (kind === "genre") return QbzSession.tr("All genres", QbzSession.trRev)
+        if (kind === "year") return QbzSession.tr("All years", QbzSession.trRev)
+        if (kind === "artist") return QbzSession.tr("All artists", QbzSession.trRev)
         return QbzSession.tr("All albums", QbzSession.trRev)
     }
     function facetQuery(index) {
-        if (index === 0) return root.view.genresSearch
-        if (index === 1) return root.view.genreArtistsSearch
+        var kind = facetKind(index)
+        if (kind === "genre") return root.view.genresSearch
+        if (kind === "year") return root.view.genreYearsSearch
+        if (kind === "artist") return root.view.genreArtistsSearch
         return root.view.genreAlbumsSearch
     }
     function facetOptions(index) {
-        if (index === 0) return root.view.genreNames
-        if (index === 1) return root.view.genreArtistOptions
+        var kind = facetKind(index)
+        if (kind === "genre") return root.view.genreNames
+        if (kind === "year") return root.view.genreYearOptions
+        if (kind === "artist") return root.view.genreArtistOptions
         return root.view.genreAlbumOptions
     }
     function facetSelected(index) {
-        if (index === 0) return root.view.selectedGenres
-        if (index === 1) return root.view.selectedGenreArtists
+        var kind = facetKind(index)
+        if (kind === "genre") return root.view.selectedGenres
+        if (kind === "year") return root.view.selectedGenreYears
+        if (kind === "artist") return root.view.selectedGenreArtists
         return root.view.selectedGenreAlbums
     }
     function setFacetQuery(index, value) {
-        if (index === 0) root.view.genresSearch = value
-        else if (index === 1) root.view.genreArtistsSearch = value
+        var kind = facetKind(index)
+        if (kind === "genre") root.view.genresSearch = value
+        else if (kind === "year") root.view.genreYearsSearch = value
+        else if (kind === "artist") root.view.genreArtistsSearch = value
         else root.view.genreAlbumsSearch = value
     }
     function toggleFacet(index, key, modifiers) {
-        if (index === 0) root.view.toggleGenre(key, modifiers)
-        else if (index === 1) root.view.toggleGenreArtist(key, modifiers)
+        var kind = facetKind(index)
+        if (kind === "genre") root.view.toggleGenre(key, modifiers)
+        else if (kind === "year") root.view.toggleGenreYear(key, modifiers)
+        else if (kind === "artist") root.view.toggleGenreArtist(key, modifiers)
         else {
             // The details Loader already exists while the third column is
             // visible. Ask it immediately instead of waiting for the filtered
@@ -68,7 +90,7 @@ Item {
         // A query can hide a selected option from its own column. Resolve
         // albums against the unfiltered logical set; genre/artist keys are
         // already readable names, merely normalized to lower case.
-        if (index === 2) {
+        if (facetKind(index) === "album") {
             for (var j = 0; j < root.view.albums.length; j++)
                 if (root.view.albums[j].id === key)
                     return root.view.albums[j].title || key
@@ -78,7 +100,7 @@ Item {
     function buildActiveFilterChips() {
         if (!root.view) return []
         var out = []
-        for (var facet = 0; facet < 3; facet++) {
+        for (var facet = 0; facet < root.facetKinds.length; facet++) {
             var query = root.facetQuery(facet).trim()
             if (query !== "")
                 out.push({ kind: "query", facet: facet,
@@ -121,8 +143,15 @@ Item {
         else root.view.toggleFilter(chip.key)
     }
     function clearAllActiveFilters() {
-        for (var i = 0; i < 3; i++) root.setFacetQuery(i, "")
+        // Clear all four backing queries, including a currently hidden Genre
+        // or Year facet. Switching column layouts later must not resurrect a
+        // stale search that the visible Clear action appeared to remove.
+        root.view.genresSearch = ""
+        root.view.genreYearsSearch = ""
+        root.view.genreArtistsSearch = ""
+        root.view.genreAlbumsSearch = ""
         root.view.selectedGenres = ({})
+        root.view.selectedGenreYears = ({})
         root.view.selectedGenreArtists = ({})
         root.view.selectedGenreAlbums = ({})
         root.view.clearFilter()
@@ -148,7 +177,7 @@ Item {
         // the GUI thread and makes the next keystroke feel stuck. The edit
         // itself remains immediate; only the derived result waits for the
         // short typing pause.
-        debounceMs: facetIndex === 2 ? 140 : 90
+        debounceMs: root.facetKind(facetIndex) === "album" ? 140 : 90
         onQueryEdited: function(value) { root.setFacetQuery(facetIndex, value) }
         onToggled: function(key, modifiers) { root.toggleFacet(facetIndex, key, modifiers) }
     }
@@ -158,11 +187,12 @@ Item {
         Row {
             spacing: 8
             Repeater {
-                model: 3
+                model: root.facetKinds.length
                 delegate: GenreFacet {
                     required property int index
                     facetIndex: index
-                    width: (parent.width - 16) / 3
+                    width: (parent.width - 8 * (root.facetKinds.length - 1))
+                        / root.facetKinds.length
                     height: parent.height
                 }
             }
@@ -174,12 +204,13 @@ Item {
         Column {
             spacing: 8
             Repeater {
-                model: 3
+                model: root.facetKinds.length
                 delegate: GenreFacet {
                     required property int index
                     facetIndex: index
                     width: parent.width
-                    height: (parent.height - 16) / 3
+                    height: (parent.height - 8 * (root.facetKinds.length - 1))
+                        / root.facetKinds.length
                 }
             }
         }

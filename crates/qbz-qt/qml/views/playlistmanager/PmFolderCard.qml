@@ -3,10 +3,9 @@
 // folder is hidden (the ONLY hidden affordance on a folder — no eye glyph, no
 // badge).
 //
-// BOTH click targets open the folder EDITOR (contract D7): the reference wires
-// `open =>` and `edit =>` to the SAME callback, `edit-folder(folder.id)`
-// (`:1364-1365`). You cannot enter a folder from the grid — folder navigation
-// is the tree. Do not "fix" this into a drill-down.
+// The body enters the folder in the current grid/list presentation. Only the
+// top-right pencil opens the editor; conflating the two made ordinary folder
+// navigation impossible (owner correction, 2026-08-28).
 //
 // Hover semantics are the reference's OR (`ta.has-hover || edit-ta.has-hover`,
 // `:349`): the pencil's own MouseArea sits above the card's and would otherwise
@@ -25,8 +24,9 @@ Rectangle {
 
     /// One `QbzPlaylistManager.foldersJson` entry (contract §4.1).
     property var folder: ({})
-    /// Emitted by the body AND by the pencil — one action, two targets (D7).
+    /// Body navigation and pencil editing are deliberately distinct targets.
     signal openRequested()
+    signal editRequested()
 
     QbzTheme { id: theme }
 
@@ -114,7 +114,7 @@ Rectangle {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.openRequested()
+            onClicked: root.editRequested()
         }
     }
 }

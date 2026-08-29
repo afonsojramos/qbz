@@ -506,6 +506,29 @@ pub(crate) fn visible_playlist_rows(
     entries.iter().map(|e| e.item()).collect()
 }
 
+/// The filtered + sorted members of one opened folder in grid/list mode.
+///
+/// Build the same merged Qobuz/local set as the flat surface first, then
+/// constrain it by the already-normalised folder id carried on every wire
+/// row. This keeps search, visibility, offline and ordering semantics exactly
+/// aligned with the root view while allowing folder cards to be genuine
+/// navigation targets instead of aliases for Edit.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn visible_folder_playlist_rows(
+    data: &PmData,
+    folder_id: &str,
+    query: &str,
+    filter: &str,
+    sort: &str,
+    asc: bool,
+    offline: bool,
+) -> Vec<PlaylistRow> {
+    visible_playlist_rows(data, query, filter, sort, asc, false, "grid", offline)
+        .into_iter()
+        .filter(|row| row.folder_id == folder_id)
+        .collect()
+}
+
 /// Flatten folders + their (expanded) members + the root run into the tree.
 ///
 /// `expanded` is passed IN rather than read from a global so this stays pure:
@@ -808,6 +831,25 @@ mod tests {
         // Tree mode publishes the flat set unconditionally too (§4.2).
         let tree_mode = visible_playlist_rows(&data, "", "all", "name", true, true, "tree", false);
         assert_eq!(ids(&tree_mode).len(), 4);
+    }
+
+    #[test]
+    fn opened_folder_contains_only_its_qobuz_and_local_members() {
+        let mut qobuz_member = pl(1, "Qobuz member");
+        qobuz_member.folder_id = Some("f1".into());
+        let mut local_member = local("l1", "Local member");
+        local_member.folder_id = Some("f1".into());
+        let mut other = pl(2, "Other folder");
+        other.folder_id = Some("f2".into());
+        let data = PmData {
+            playlists: vec![qobuz_member, other, pl(3, "Root")],
+            locals: vec![local_member, local("l2", "Root local")],
+            folders: vec![folder("f1", "One"), folder("f2", "Two")],
+        };
+
+        let rows = visible_folder_playlist_rows(&data, "f1", "", "all", "name", true, false);
+        assert_eq!(ids(&rows), vec!["local:l1", "1"]);
+        assert!(rows.iter().all(|row| row.folder_id == "f1"));
     }
 
     #[test]

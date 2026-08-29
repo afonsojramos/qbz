@@ -20,7 +20,7 @@
 //! ([`pick_and_add_folder`]). Kept as a record because the note was load
 //! bearing: it justified a downgrade for weeks after its premise expired.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use qbz_library::{LibraryDatabase, ScanEvent};
@@ -119,6 +119,19 @@ pub struct Snapshot {
     pub scanning: bool,
     pub processed: i32,
     pub total: i32,
+    /// Progress within the currently scanned folder/root. These counters are
+    /// derived from the streaming scanner's global offsets; no second tree
+    /// walk is introduced merely to paint UI.
+    #[serde(rename = "sourceProcessed")]
+    pub source_processed: i32,
+    #[serde(rename = "sourceTotal")]
+    pub source_total: i32,
+    #[serde(rename = "currentRootId")]
+    pub current_root_id: i64,
+    #[serde(rename = "sourceIndex")]
+    pub source_index: i32,
+    #[serde(rename = "sourceCount")]
+    pub source_count: i32,
     pub file: String,
     pub cleaning: bool,
     #[serde(rename = "cleanupStatus")]
@@ -203,6 +216,12 @@ static SCANNING: AtomicBool = AtomicBool::new(false);
 static CANCEL: AtomicBool = AtomicBool::new(false);
 static PROCESSED: AtomicU32 = AtomicU32::new(0);
 static TOTAL: AtomicU32 = AtomicU32::new(0);
+static SOURCE_PROCESSED: AtomicU32 = AtomicU32::new(0);
+static SOURCE_TOTAL: AtomicU32 = AtomicU32::new(0);
+static SOURCE_BASE: AtomicU32 = AtomicU32::new(0);
+static CURRENT_ROOT_ID: AtomicI64 = AtomicI64::new(0);
+static SOURCE_INDEX: AtomicU32 = AtomicU32::new(0);
+static SOURCE_COUNT: AtomicU32 = AtomicU32::new(0);
 static CURRENT_FILE: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
 static CLEANING: AtomicBool = AtomicBool::new(false);
 static CLEANUP_STATUS: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
@@ -298,6 +317,11 @@ pub fn snapshot() -> Snapshot {
         scanning: SCANNING.load(Ordering::SeqCst),
         processed: PROCESSED.load(Ordering::SeqCst) as i32,
         total: TOTAL.load(Ordering::SeqCst) as i32,
+        source_processed: SOURCE_PROCESSED.load(Ordering::SeqCst) as i32,
+        source_total: SOURCE_TOTAL.load(Ordering::SeqCst) as i32,
+        current_root_id: CURRENT_ROOT_ID.load(Ordering::SeqCst),
+        source_index: SOURCE_INDEX.load(Ordering::SeqCst) as i32,
+        source_count: SOURCE_COUNT.load(Ordering::SeqCst) as i32,
         file: CURRENT_FILE
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -688,7 +712,7 @@ pub async fn toggle_folder_enabled(id: i64) {
 
 /// Scan every enabled folder (`None`) or exactly one (`Some(id)`).
 ///
-/// Progress rides the statics; a 2 s ticker republishes the settings document
+/// Progress rides the statics; a short ticker republishes the settings document
 /// while the scan runs (the document is the only transport this port has, and
 /// republishing per FILE would rebuild the whole snapshot thousands of times).
 pub fn scan(folder_id: Option<i64>) -> bool {
@@ -698,13 +722,23 @@ pub fn scan(folder_id: Option<i64>) -> bool {
     CANCEL.store(false, Ordering::SeqCst);
     PROCESSED.store(0, Ordering::SeqCst);
     TOTAL.store(0, Ordering::SeqCst);
+    SOURCE_PROCESSED.store(0, Ordering::SeqCst);
+    SOURCE_TOTAL.store(0, Ordering::SeqCst);
+    SOURCE_BASE.store(0, Ordering::SeqCst);
+    CURRENT_ROOT_ID.store(0, Ordering::SeqCst);
+    SOURCE_INDEX.store(0, Ordering::SeqCst);
+    SOURCE_COUNT.store(0, Ordering::SeqCst);
     *CURRENT_FILE.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
 
     crate::spawn(async move {
+        // Paint the scanning state immediately. The ticker deliberately stays
+        // independent of per-file events so a large library never turns QML
+        // publication into work proportional to its track count.
+        super::publish_snapshot().await;
         // Progress ticker.
         crate::spawn(async {
             while SCANNING.load(Ordering::SeqCst) {
-                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(750)).await;
                 super::publish_snapshot().await;
             }
         });
@@ -715,9 +749,28 @@ pub fn scan(folder_id: Option<i64>) -> bool {
             };
             let cache = qbz_library::get_artwork_cache_dir();
             let ids = folder_id.map(|id| vec![id]);
+            let source_count = db
+                .get_folders_with_metadata()
+                .map(|folders| {
+                    folders
+                        .into_iter()
+                        .filter(|folder| {
+                            folder.enabled
+                                && ids
+                                    .as_ref()
+                                    .map_or(true, |wanted| wanted.contains(&folder.id))
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+            SOURCE_COUNT.store(source_count.min(u32::MAX as usize) as u32, Ordering::SeqCst);
             let on_event = move |event: ScanEvent| match event {
                 ScanEvent::TotalsAdded { total } => {
                     TOTAL.store(total, Ordering::SeqCst);
+                    SOURCE_TOTAL.store(
+                        total.saturating_sub(SOURCE_BASE.load(Ordering::SeqCst)),
+                        Ordering::SeqCst,
+                    );
                 }
                 ScanEvent::FileStarted { path } => {
                     let name = basename(&path);
@@ -726,6 +779,37 @@ pub fn scan(folder_id: Option<i64>) -> bool {
                 ScanEvent::FileDone { processed, total } => {
                     PROCESSED.store(processed, Ordering::SeqCst);
                     TOTAL.store(total, Ordering::SeqCst);
+                    let base = SOURCE_BASE.load(Ordering::SeqCst);
+                    SOURCE_PROCESSED.store(processed.saturating_sub(base), Ordering::SeqCst);
+                    SOURCE_TOTAL.store(total.saturating_sub(base), Ordering::SeqCst);
+                }
+                ScanEvent::RootStarted { root_id, .. } => {
+                    CURRENT_ROOT_ID.store(root_id, Ordering::SeqCst);
+                    // `TOTAL`, rather than processed, is the next root's
+                    // streaming offset even when a malformed file in the
+                    // previous root was discovered but could not be emitted.
+                    SOURCE_BASE.store(TOTAL.load(Ordering::SeqCst), Ordering::SeqCst);
+                    SOURCE_PROCESSED.store(0, Ordering::SeqCst);
+                    SOURCE_TOTAL.store(0, Ordering::SeqCst);
+                    SOURCE_INDEX.fetch_add(1, Ordering::SeqCst);
+                }
+                ScanEvent::RootFinished {
+                    root_id,
+                    discovered,
+                    ..
+                } => {
+                    // An unavailable root finishes without `RootStarted`
+                    // (the scanner cannot prepare a generation for it). Keep
+                    // the source ordinal/name honest instead of leaving the
+                    // previous folder painted for this slot.
+                    if CURRENT_ROOT_ID.load(Ordering::SeqCst) != root_id {
+                        CURRENT_ROOT_ID.store(root_id, Ordering::SeqCst);
+                        SOURCE_BASE.store(TOTAL.load(Ordering::SeqCst), Ordering::SeqCst);
+                        SOURCE_INDEX.fetch_add(1, Ordering::SeqCst);
+                    }
+                    let value = discovered.min(u32::MAX as u64) as u32;
+                    SOURCE_PROCESSED.store(value, Ordering::SeqCst);
+                    SOURCE_TOTAL.store(value, Ordering::SeqCst);
                 }
                 // The missing-file cleanup phase. The reference puts it in the
                 // SAME slot the per-file name occupies, so the progress line

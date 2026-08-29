@@ -14,6 +14,10 @@ use serde::{Deserialize, Serialize};
 
 const MAX_PLEX_TRACK_PAGE_BYTES: usize = 32 * 1024 * 1024;
 const DEFAULT_PLEX_TRACK_PAGE_SIZE: u64 = 250;
+/// Album metadata is LAN-local and cheap, but a missing cover must not turn
+/// into one request on every boot forever. Positive and negative results are
+/// both rechecked weekly so a cover added later in Plex eventually appears.
+pub const PLEX_ALBUM_ARTWORK_MAX_AGE_SECS: u64 = 7 * 24 * 60 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -331,6 +335,18 @@ fn open_plex_cache_db() -> Result<Connection, String> {
             observed_rows INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'idle',
             updated_at INTEGER NOT NULL DEFAULT 0
+        );
+
+        -- `/library/sections/<id>/all?type=10` does not always put
+        -- `parentThumb` on Track rows, even when the album has a cover. Keep
+        -- the authoritative album-metadata answer separately: it is scoped by
+        -- server because Plex rating keys are only server-local identities.
+        CREATE TABLE IF NOT EXISTS plex_cache_album_artwork (
+            server_id TEXT NOT NULL,
+            parent_rating_key TEXT NOT NULL,
+            artwork_path TEXT,
+            checked_at INTEGER NOT NULL,
+            PRIMARY KEY(server_id, parent_rating_key)
         );
         ",
     )
@@ -757,6 +773,29 @@ fn parse_music_sections(xml: &str) -> Vec<PlexMusicSection> {
     sections
 }
 
+/// The track listing is not an artwork authority: Plex may omit both `thumb`
+/// and `parentThumb` there while `/library/metadata/<parentRatingKey>` still
+/// exposes the album cover (and that cover can point at a *different* rating
+/// key). Read the returned token instead of synthesizing a URL from the album
+/// id; the latter is a real 404 for inherited/default Plex artwork.
+fn parse_album_artwork_path(xml: &str) -> Option<String> {
+    let directory_thumb = collect_start_tags(xml, "Directory")
+        .into_iter()
+        .find(|tag| get_attr(tag, "type").as_deref() == Some("album"))
+        .and_then(|tag| get_attr(&tag, "thumb"));
+    directory_thumb
+        .or_else(|| {
+            collect_start_tags(xml, "Image")
+                .into_iter()
+                .find(|tag| get_attr(tag, "type").as_deref() == Some("coverPoster"))
+                .and_then(|tag| get_attr(&tag, "url"))
+        })
+        .map(|path| path.trim().to_string())
+        .filter(|path| {
+            !path.is_empty() && (path.starts_with("/library/") || path.starts_with("/photo/"))
+        })
+}
+
 fn parse_track_block(start_tag: &str, inner_xml: &str) -> Option<PlexTrack> {
     // Plex exposes album release year via parentYear on the Track element
     // (same structure that drives the Plex client's year display); fall back
@@ -1131,6 +1170,35 @@ pub async fn plex_get_section_tracks_page(
     parse_track_page(&xml, start, page_size)
 }
 
+/// Fetch the album-level cover Plex omitted from its flat track listing.
+/// `parent_rating_key` is a path segment supplied by the same Plex server; it
+/// is still validated before interpolation so malformed cache data cannot
+/// escape the metadata endpoint.
+pub async fn plex_get_album_artwork_path(
+    base_url: String,
+    token: String,
+    parent_rating_key: String,
+) -> Result<Option<String>, String> {
+    let key = parent_rating_key.trim();
+    if key.is_empty() || key.chars().any(|ch| matches!(ch, '/' | '?' | '#')) {
+        return Err("Invalid Plex album rating key".to_string());
+    }
+    let client = build_plex_client()?;
+    let base = normalize_base_url(&base_url);
+    let url = with_token(&format!("{base}/library/metadata/{key}"), &token);
+    let xml = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| safe_http_error("Plex album metadata request", &e))?
+        .error_for_status()
+        .map_err(|e| safe_http_error("Plex album metadata request", &e))?
+        .text()
+        .await
+        .map_err(|e| safe_http_error("Failed to read Plex album metadata response", &e))?;
+    Ok(parse_album_artwork_path(&xml))
+}
+
 pub async fn plex_get_track_metadata(
     base_url: String,
     token: String,
@@ -1337,6 +1405,111 @@ pub fn plex_cache_save_sections(
     Ok(sections.len())
 }
 
+/// Collection artwork as seen by every cache reader. Direct `parentThumb`
+/// remains authoritative; the metadata table only fills the hole left by the
+/// flat track endpoint. Keep this expression centralized so Albums, Tracks,
+/// playlists and the source registry cannot disagree about the same row.
+const EFFECTIVE_COLLECTION_ARTWORK_SQL: &str =
+    "COALESCE(NULLIF(plex_cache_tracks.collection_artwork_path,''),
+       (SELECT NULLIF(album_art.artwork_path,'')
+          FROM plex_cache_album_artwork album_art
+         WHERE album_art.server_id =
+               COALESCE(NULLIF(plex_cache_tracks.server_id,''),'default')
+           AND album_art.parent_rating_key = plex_cache_tracks.parent_rating_key))";
+
+fn album_artwork_candidates_in(
+    conn: &Connection,
+    server_id: &str,
+    stale_before: i64,
+) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT tracks.parent_rating_key
+               FROM plex_cache_tracks tracks
+               LEFT JOIN plex_cache_album_artwork album_art
+                 ON album_art.server_id = COALESCE(NULLIF(tracks.server_id,''),'default')
+                AND album_art.parent_rating_key = tracks.parent_rating_key
+              WHERE COALESCE(NULLIF(tracks.server_id,''),'default') = ?1
+                AND COALESCE(tracks.parent_rating_key,'') != ''
+                AND COALESCE(tracks.artwork_path,'') = ''
+                AND COALESCE(tracks.collection_artwork_path,'') = ''
+                AND (album_art.parent_rating_key IS NULL OR album_art.checked_at <= ?2)
+              ORDER BY tracks.parent_rating_key",
+        )
+        .map_err(|e| format!("Failed to prepare Plex album artwork candidates: {e}"))?;
+    let rows = stmt
+        .query_map(params![server_id, stale_before], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|e| format!("Failed to query Plex album artwork candidates: {e}"))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("Failed to read Plex album artwork candidate: {e}"))
+}
+
+/// Album ids whose track rows omit both item and parent art, excluding recent
+/// positive *and* negative metadata checks.
+pub fn plex_cache_album_artwork_candidates(
+    server_id: Option<String>,
+) -> Result<Vec<String>, String> {
+    let conn = open_plex_cache_db()?;
+    let server_id = server_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default");
+    let stale_before = now_epoch_secs()
+        .saturating_sub(i64::try_from(PLEX_ALBUM_ARTWORK_MAX_AGE_SECS).unwrap_or(i64::MAX));
+    album_artwork_candidates_in(&conn, server_id, stale_before)
+}
+
+fn save_album_artwork_in(
+    conn: &mut Connection,
+    server_id: &str,
+    rows: &[(String, Option<String>)],
+    checked_at: i64,
+) -> Result<usize, String> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("Failed to start Plex album artwork transaction: {e}"))?;
+    let mut saved = 0usize;
+    for (parent_rating_key, artwork_path) in rows {
+        saved = saved.saturating_add(
+            tx.execute(
+                "INSERT INTO plex_cache_album_artwork(
+                     server_id,parent_rating_key,artwork_path,checked_at
+                 ) VALUES (?1,?2,?3,?4)
+                 ON CONFLICT(server_id,parent_rating_key) DO UPDATE SET
+                     artwork_path=excluded.artwork_path,
+                     checked_at=excluded.checked_at",
+                params![server_id, parent_rating_key, artwork_path, checked_at],
+            )
+            .map_err(|e| format!("Failed to save Plex album artwork: {e}"))?,
+        );
+    }
+    tx.commit()
+        .map_err(|e| format!("Failed to commit Plex album artwork: {e}"))?;
+    Ok(saved)
+}
+
+/// Persist successful metadata responses. `None` is intentional negative
+/// caching, not an error: it prevents a genuinely coverless album from being
+/// fetched on every application start.
+pub fn plex_cache_save_album_artwork(
+    server_id: Option<String>,
+    rows: Vec<(String, Option<String>)>,
+) -> Result<usize, String> {
+    let mut conn = open_plex_cache_db()?;
+    let server_id = server_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default");
+    save_album_artwork_in(&mut conn, server_id, &rows, now_epoch_secs())
+}
+
 pub fn plex_cache_get_tracks(
     section_key: Option<String>,
     limit: Option<u32>,
@@ -1347,15 +1520,15 @@ pub fn plex_cache_get_tracks(
 
     if let Some(section) = section_key {
         let mut stmt = conn
-            .prepare(
+            .prepare(&format!(
                 "SELECT rating_key, title, artist, album, duration_ms, artwork_path, part_key, container,
                         codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth, track_number, disc_number,
-                        year, genre, genres_json, parent_rating_key, collection_artwork_path
+                        year, genre, genres_json, parent_rating_key, {EFFECTIVE_COLLECTION_ARTWORK_SQL}
                  FROM plex_cache_tracks
                  WHERE section_key = ?1
                  ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number, title COLLATE NOCASE
                  LIMIT ?2",
-            )
+            ))
             .map_err(|e| format!("Failed to prepare Plex cache tracks query: {}", e))?;
         let rows = stmt
             .query_map(params![section, max], |row| {
@@ -1395,14 +1568,14 @@ pub fn plex_cache_get_tracks(
         }
     } else {
         let mut stmt = conn
-            .prepare(
+            .prepare(&format!(
                 "SELECT rating_key, title, artist, album, duration_ms, artwork_path, part_key, container,
                         codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth, track_number, disc_number,
-                        year, genre, genres_json, parent_rating_key, collection_artwork_path
+                        year, genre, genres_json, parent_rating_key, {EFFECTIVE_COLLECTION_ARTWORK_SQL}
                  FROM plex_cache_tracks
                  ORDER BY updated_at DESC
                  LIMIT ?1",
-            )
+            ))
             .map_err(|e| format!("Failed to prepare Plex cache tracks query: {}", e))?;
         let rows = stmt
             .query_map(params![max], |row| {
@@ -1464,10 +1637,9 @@ pub fn plex_cache_get_tracks_by_keys(rating_keys: &[String]) -> Result<Vec<PlexT
     let sql = format!(
         "SELECT rating_key, title, artist, album, duration_ms, artwork_path, part_key, container,
                 codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth, track_number, disc_number,
-                year, genre, genres_json, parent_rating_key, collection_artwork_path
+                year, genre, genres_json, parent_rating_key, {EFFECTIVE_COLLECTION_ARTWORK_SQL}
          FROM plex_cache_tracks
-         WHERE rating_key IN ({})",
-        placeholders
+         WHERE rating_key IN ({placeholders})"
     );
     let mut stmt = conn
         .prepare(&sql)
@@ -1516,11 +1688,11 @@ pub fn plex_cache_get_tracks_by_keys(rating_keys: &[String]) -> Result<Vec<PlexT
 pub fn plex_cache_get_albums() -> Result<Vec<PlexCachedAlbum>, String> {
     let conn = open_plex_cache_db()?;
     let mut stmt = conn
-        .prepare(
-            "SELECT artist, album, duration_ms, artwork_path, collection_artwork_path,
+        .prepare(&format!(
+            "SELECT artist, album, duration_ms, artwork_path, {EFFECTIVE_COLLECTION_ARTWORK_SQL},
                     container, sampling_rate_hz, bit_depth, year, genre
              FROM plex_cache_tracks",
-        )
+        ))
         .map_err(|e| {
             format!(
                 "Failed to prepare Plex cache album aggregation query: {}",
@@ -1671,9 +1843,10 @@ pub fn plex_cache_count_tracks() -> Result<usize, String> {
 pub fn plex_cache_get_artists() -> Result<Vec<PlexCachedArtist>, String> {
     let conn = open_plex_cache_db()?;
     let mut stmt = conn
-        .prepare(
-            "SELECT artist, album, artwork_path, collection_artwork_path FROM plex_cache_tracks",
-        )
+        .prepare(&format!(
+            "SELECT artist, album, artwork_path, {EFFECTIVE_COLLECTION_ARTWORK_SQL}
+               FROM plex_cache_tracks"
+        ))
         .map_err(|e| {
             format!(
                 "Failed to prepare Plex cache artist aggregation query: {}",
@@ -1772,7 +1945,7 @@ fn plex_cache_get_album_tracks_in(
     let sql = format!(
         "SELECT rating_key, title, artist, album, duration_ms, container, bit_depth,
                 sampling_rate_hz, artwork_path, track_number, disc_number, parent_rating_key,
-                collection_artwork_path
+                {EFFECTIVE_COLLECTION_ARTWORK_SQL}
            FROM plex_cache_tracks
           WHERE {column} = ?1
           ORDER BY disc_number, track_number, title COLLATE NOCASE"
@@ -1936,7 +2109,7 @@ fn plex_cache_search_tracks_page_filtered_in(
         .prepare(&format!(
             "SELECT rating_key, title, artist, album, duration_ms, container, bit_depth,
                     sampling_rate_hz, artwork_path, track_number, disc_number, year,
-                    collection_artwork_path,
+                    {EFFECTIVE_COLLECTION_ARTWORK_SQL},
                     TRIM(title) AS sort_title,
                     COALESCE(NULLIF(TRIM(artist), ''), 'Unknown Artist') AS sort_artist,
                     CASE
@@ -2120,10 +2293,9 @@ pub fn plex_cache_get_cached_tracks_by_keys(
     let sql = format!(
         "SELECT rating_key, title, artist, album, duration_ms, container, bit_depth,
                 sampling_rate_hz, artwork_path, track_number, disc_number, parent_rating_key,
-                collection_artwork_path
+                {EFFECTIVE_COLLECTION_ARTWORK_SQL}
          FROM plex_cache_tracks
-         WHERE rating_key IN ({})",
-        placeholders
+         WHERE rating_key IN ({placeholders})"
     );
     let mut stmt = conn
         .prepare(&sql)
@@ -2755,6 +2927,8 @@ pub fn plex_cache_clear() -> Result<(), String> {
         .map_err(|e| format!("Failed to clear Plex cache sections: {}", e))?;
     tx.execute("DELETE FROM plex_cache_section_sync", [])
         .map_err(|e| format!("Failed to clear Plex sync state: {}", e))?;
+    tx.execute("DELETE FROM plex_cache_album_artwork", [])
+        .map_err(|e| format!("Failed to clear Plex album artwork cache: {}", e))?;
     tx.commit()
         .map_err(|e| format!("Failed to commit Plex cache clear: {}", e))?;
     Ok(())
@@ -2779,6 +2953,8 @@ pub fn plex_cache_prune_sections(keep: &[String]) -> Result<usize, String> {
             .map_err(|e| format!("Failed to prune Plex cache tracks: {}", e))?;
         tx.execute("DELETE FROM plex_cache_section_sync", [])
             .map_err(|e| format!("Failed to prune Plex sync state: {}", e))?;
+        tx.execute("DELETE FROM plex_cache_album_artwork", [])
+            .map_err(|e| format!("Failed to prune Plex album artwork cache: {}", e))?;
         tx.commit()
             .map_err(|e| format!("Failed to commit Plex section selection prune: {}", e))?;
         return Ok(removed);
@@ -2795,6 +2971,17 @@ pub fn plex_cache_prune_sections(keep: &[String]) -> Result<usize, String> {
         .map_err(|e| format!("Failed to prune Plex cache tracks: {}", e))?;
     tx.execute(&state_sql, params.as_slice())
         .map_err(|e| format!("Failed to prune Plex sync state: {}", e))?;
+    tx.execute(
+        "DELETE FROM plex_cache_album_artwork
+          WHERE NOT EXISTS (
+              SELECT 1 FROM plex_cache_tracks tracks
+               WHERE COALESCE(NULLIF(tracks.server_id,''),'default') =
+                     plex_cache_album_artwork.server_id
+                 AND tracks.parent_rating_key = plex_cache_album_artwork.parent_rating_key
+          )",
+        [],
+    )
+    .map_err(|e| format!("Failed to prune orphan Plex album artwork: {}", e))?;
     tx.commit()
         .map_err(|e| format!("Failed to commit Plex section selection prune: {}", e))?;
     Ok(removed)
@@ -2972,8 +3159,14 @@ mod tests {
                 rating_key TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT,
                 album TEXT, duration_ms INTEGER, container TEXT, bit_depth INTEGER,
                 sampling_rate_hz INTEGER, artwork_path TEXT, collection_artwork_path TEXT,
+                server_id TEXT, parent_rating_key TEXT,
                 track_number INTEGER,
                 disc_number INTEGER, year INTEGER
+            );
+            CREATE TABLE plex_cache_album_artwork (
+                server_id TEXT NOT NULL, parent_rating_key TEXT NOT NULL,
+                artwork_path TEXT, checked_at INTEGER NOT NULL,
+                PRIMARY KEY(server_id,parent_rating_key)
             );",
         )
         .unwrap();
@@ -3033,6 +3226,13 @@ mod tests {
                  sync_generation INTEGER NOT NULL DEFAULT 0
              );
              CREATE INDEX idx_sync_tracks_section ON plex_cache_tracks(section_key);
+             CREATE TABLE plex_cache_album_artwork (
+                 server_id TEXT NOT NULL,
+                 parent_rating_key TEXT NOT NULL,
+                 artwork_path TEXT,
+                 checked_at INTEGER NOT NULL,
+                 PRIMARY KEY(server_id,parent_rating_key)
+             );
              CREATE TABLE plex_cache_section_sync (
                  section_key TEXT PRIMARY KEY,
                  server_id TEXT,
@@ -3108,6 +3308,85 @@ mod tests {
         let sections = parse_music_sections(xml);
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].key, "1");
+    }
+
+    #[test]
+    fn album_artwork_uses_the_metadata_token_instead_of_inventing_one() {
+        let xml = r#"<MediaContainer size="1">
+            <Directory ratingKey="60335" type="album" title="1994"
+                thumb="/library/metadata/60320/thumb/1665204207">
+                <Image type="coverPoster" url="/library/metadata/60320/thumb/1665204207"/>
+            </Directory>
+        </MediaContainer>"#;
+        assert_eq!(
+            parse_album_artwork_path(xml).as_deref(),
+            Some("/library/metadata/60320/thumb/1665204207")
+        );
+        assert_ne!(
+            parse_album_artwork_path(xml).as_deref(),
+            Some("/library/metadata/60335/thumb")
+        );
+    }
+
+    #[test]
+    fn album_artwork_cache_is_server_scoped_negative_cached_and_resolved() {
+        let mut conn = sync_db();
+        conn.execute(
+            "INSERT INTO plex_cache_tracks(
+                 rating_key,section_key,server_id,title,artist,album,parent_rating_key,
+                 updated_at,sync_generation
+             ) VALUES ('track-1','music','server-a','Song','Artist','Album','album-1',1,1)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            album_artwork_candidates_in(&conn, "server-a", 100).unwrap(),
+            ["album-1"]
+        );
+        assert!(album_artwork_candidates_in(&conn, "server-b", 100)
+            .unwrap()
+            .is_empty());
+
+        save_album_artwork_in(
+            &mut conn,
+            "server-a",
+            &[(
+                "album-1".into(),
+                Some("/library/metadata/cover/thumb/7".into()),
+            )],
+            200,
+        )
+        .unwrap();
+        assert!(album_artwork_candidates_in(&conn, "server-a", 199)
+            .unwrap()
+            .is_empty());
+        let effective: Option<String> = conn
+            .query_row(
+                &format!(
+                    "SELECT {EFFECTIVE_COLLECTION_ARTWORK_SQL}
+                       FROM plex_cache_tracks WHERE rating_key='track-1'"
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            effective.as_deref(),
+            Some("/library/metadata/cover/thumb/7")
+        );
+
+        save_album_artwork_in(&mut conn, "server-a", &[("album-1".into(), None)], 300).unwrap();
+        let effective: Option<String> = conn
+            .query_row(
+                &format!(
+                    "SELECT {EFFECTIVE_COLLECTION_ARTWORK_SQL}
+                       FROM plex_cache_tracks WHERE rating_key='track-1'"
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(effective, None);
     }
 
     #[test]
@@ -3475,8 +3754,14 @@ mod tests {
                 rating_key TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT,
                 album TEXT, duration_ms INTEGER, container TEXT, bit_depth INTEGER,
                 sampling_rate_hz INTEGER, artwork_path TEXT, collection_artwork_path TEXT,
+                server_id TEXT,
                 track_number INTEGER,
                 disc_number INTEGER, album_key TEXT, parent_rating_key TEXT
+            );
+            CREATE TABLE plex_cache_album_artwork (
+                server_id TEXT NOT NULL, parent_rating_key TEXT NOT NULL,
+                artwork_path TEXT, checked_at INTEGER NOT NULL,
+                PRIMARY KEY(server_id,parent_rating_key)
             );
             INSERT INTO plex_cache_tracks
                 (rating_key,title,artist,album,duration_ms,container,bit_depth,

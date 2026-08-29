@@ -378,6 +378,12 @@ pub struct AlbumRecord {
     pub source: SourceKind,
     pub native_album_id: String,
     pub source_raw: String,
+    /// Distinct presentation source words contributed by every physical copy
+    /// of this edition.  Unlike `source`, which selects one copy for routing,
+    /// this list is for multi-source badges and capabilities such as local
+    /// favorites.  Raw words (for example `qobuz_purchase` or a Subsonic
+    /// brand) are preserved.
+    pub source_words: Vec<String>,
     pub title: String,
     pub artist: String,
     pub all_artists: String,

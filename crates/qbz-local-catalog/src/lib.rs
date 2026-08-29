@@ -36,6 +36,11 @@ pub use projection::{
 };
 pub use schema::SCHEMA_VERSION;
 
+/// Artwork stored locally by a media-server metadata sidecar. Qt strips this
+/// marker and routes the remainder through the Local artwork provider instead
+/// of handing a filesystem path back to Plex/Jellyfin/Subsonic as a token.
+pub const SIDECAR_LOCAL_ART_PREFIX: &str = "qbz-local-art:";
+
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
     #[error("catalog sqlite error: {0}")]

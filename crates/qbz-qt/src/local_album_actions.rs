@@ -567,8 +567,8 @@ fn album_header(id: &str, tracks: &[LocalTrack]) -> AlbumRow {
 
 /// Toggle a Local Library album using the card's denormalized display
 /// snapshot. This is the Qt port of Slint's `toggle_album_favorite`, with the
-/// source guard made explicit so a remote-only row cannot write a bogus local
-/// favorite.
+/// source guard made explicit so a Qobuz-offline row cannot write a duplicate
+/// local-library favorite. Media-server rows are valid snapshots here.
 pub(crate) fn toggle_album_favorite(
     id: String,
     title: String,
@@ -578,7 +578,7 @@ pub(crate) fn toggle_album_favorite(
 ) {
     let sources: Vec<String> = serde_json::from_str(&sources_json).unwrap_or_default();
     let Some(source) = album_favorite_source(&sources) else {
-        log::warn!("[qbz-qt] local favorite refused for remote-only album {id}");
+        log::warn!("[qbz-qt] local favorite refused for unsupported album {id}");
         return;
     };
     let item = LocalFavItem {
@@ -929,14 +929,9 @@ pub fn add_to_mixtape(id: String) {
         // Subsonic tokens carry their source prefix without credentials. The
         // collection layer wins because this payload represents an ALBUM, not
         // one disc/track.
-        artwork_url: tracks
-            .iter()
-            .find_map(|track| {
-                crate::local_rows::portable_artwork_ref(
-                    track,
-                    crate::local_rows::ArtworkScope::Album,
-                )
-            }),
+        artwork_url: tracks.iter().find_map(|track| {
+            crate::local_rows::portable_artwork_ref(track, crate::local_rows::ArtworkScope::Album)
+        }),
         year: None,
         track_count: Some(tracks.len() as i32),
     };
@@ -1118,19 +1113,22 @@ mod version_tests {
         };
         let versions = vec![(
             "subsonic:eternal-box".to_string(),
-            vec![track(910_001, 1, "dc-disc-one"), track(910_002, 2, "dc-disc-two")],
+            vec![
+                track(910_001, 1, "dc-disc-one"),
+                track(910_002, 2, "dc-disc-two"),
+            ],
         )];
         let doc = genre_detail_doc("test:remote-disc-art", &versions, 0);
 
         assert_eq!(doc.discs.len(), 2);
         assert_eq!(doc.discs[0].art_key, "track:910001");
         assert_eq!(doc.discs[1].art_key, "track:910002");
-        state(|s| {
-            assert_eq!(s.art_index["track:910001"].1, "dc-disc-one");
-            assert_eq!(s.art_index["track:910002"].1, "dc-disc-two");
-            s.art_index.remove("track:910001");
-            s.art_index.remove("track:910002");
-            s.art_index.remove(&doc.art_key);
+        with_art(|art| {
+            assert_eq!(art["track:910001"].1, "dc-disc-one");
+            assert_eq!(art["track:910002"].1, "dc-disc-two");
+            art.remove("track:910001");
+            art.remove("track:910002");
+            art.remove(&doc.art_key);
         });
     }
 

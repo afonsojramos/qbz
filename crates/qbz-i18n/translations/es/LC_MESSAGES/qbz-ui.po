@@ -6088,3 +6088,115 @@ msgstr "Mapa de teclas"
 
 msgid "Vim"
 msgstr "Vim"
+
+# Local Library QoL: Explorer, scan progress, and per-track metadata editor
+msgid "All years"
+msgstr "Todos los años"
+
+msgid "Explorer columns"
+msgstr "Columnas del explorador"
+
+msgid "Genre and year"
+msgstr "Género y año"
+
+msgid "Years"
+msgstr "Años"
+
+msgid "Edit track metadata"
+msgstr "Editar metadatos de la pista"
+
+msgid "Building library index"
+msgstr "Creando el índice de la biblioteca"
+
+msgid "Local folders"
+msgstr "Carpetas locales"
+
+msgid "Next track"
+msgstr "Pista siguiente"
+
+msgid "Overall"
+msgstr "Total"
+
+msgid "Previous track"
+msgstr "Pista anterior"
+
+msgid "Scanning library"
+msgstr "Escaneando la biblioteca"
+
+msgid "The track is no longer in the library."
+msgstr "La pista ya no está en la biblioteca."
+
+msgid "Updating library index"
+msgstr "Actualizando el índice de la biblioteca"
+
+msgid "Edit album"
+msgstr "Editar álbum"
+
+msgid "Editing a local metadata sidecar"
+msgstr "Editando un sidecar de metadatos local"
+
+msgid "Media-server metadata is stored in a local sidecar."
+msgstr "Los metadatos del servidor multimedia se guardan en un sidecar local."
+
+msgid "Media-server metadata can only be edited with a sidecar."
+msgstr "Los metadatos del servidor multimedia solo pueden editarse mediante un sidecar."
+
+msgid "Network file"
+msgstr "Archivo de red"
+
+msgid "Offline download"
+msgstr "Descarga sin conexión"
+
+msgid "File path"
+msgstr "Ruta del archivo"
+
+msgid "Containing folder"
+msgstr "Carpeta contenedora"
+
+msgid "Media item ID"
+msgstr "ID del elemento multimedia"
+
+msgid "Album ID"
+msgstr "ID del álbum"
+
+msgid "Server"
+msgstr "Servidor"
+
+msgid "Channels"
+msgstr "Canales"
+
+msgid "File size"
+msgstr "Tamaño del archivo"
+
+msgid "Location"
+msgstr "Ubicación"
+
+msgid "The media item is no longer available."
+msgstr "El elemento multimedia ya no está disponible."
+
+msgid "The local album folder is not currently available."
+msgstr "La carpeta local del álbum no está disponible en este momento."
+
+msgid "Everything is already available offline"
+msgstr "Todo ya está disponible sin conexión"
+
+msgid "Some tracks are already available offline"
+msgstr "Algunas pistas ya están disponibles sin conexión"
+
+msgid "{} of {} tracks in “{}” are already available offline."
+msgstr "{} de {} pistas de “{}” ya están disponibles sin conexión."
+
+msgid "Download the entire playlist again"
+msgstr "Descargar toda la playlist de nuevo"
+
+msgid "Download the entire album again"
+msgstr "Descargar todo el álbum de nuevo"
+
+msgid "Re-downloads every track and can repair corrupt offline copies."
+msgstr "Vuelve a descargar cada pista y puede reparar copias sin conexión corruptas."
+
+msgid "Only missing tracks"
+msgstr "Solo las pistas faltantes"
+
+msgid "Keeps existing offline copies and downloads tracks that are not available yet."
+msgstr "Conserva las copias sin conexión existentes y descarga las pistas que aún no están disponibles."

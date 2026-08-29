@@ -109,7 +109,7 @@ pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
 
 /// Resolve which persisted local-favorite album ids still belong to the
 /// active Local Library.  A favorite is only a display snapshot; it is not
-/// proof that the underlying local/Plex album still exists.
+/// proof that the underlying local/media-server album still exists.
 ///
 /// The common case checks the handful of favorite ids on one DB connection.
 /// A `logical:*` id represents several physical copies and can only be
@@ -133,9 +133,18 @@ pub fn existing_favorite_album_ids_blocking(
         }
     }
 
+    for (id, _) in candidates
+        .iter()
+        .filter(|(_, source)| matches!(source.as_str(), "jellyfin" | "subsonic"))
+    {
+        if crate::media_servers_qt::album_tracks(id).is_some_and(|tracks| !tracks.is_empty()) {
+            existing.insert(id.clone());
+        }
+    }
+
     let local_ids = candidates
         .iter()
-        .filter(|(_, source)| source != "plex")
+        .filter(|(_, source)| source == "local")
         .map(|(id, _)| id.clone())
         .collect::<Vec<_>>();
     if local_ids.is_empty() {
@@ -475,7 +484,8 @@ pub fn load_folders_blocking() -> Result<Vec<AlbumRow>, String> {
     let exclude_network = crate::offline_fwd::exclude_network_folders_now();
     let albums = with_db(|db| {
         db.get_albums_with_full_filter(
-            /* include_hidden */ false, /* include_qobuz_downloads */ true,
+            /* include_hidden */ false,
+            /* include_qobuz_downloads */ true,
             exclude_network,
         )
     })
@@ -523,10 +533,8 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
     // SAME query the Albums tab runs (Plex-aware union when the toggle is on),
     // so an artist's album count matches the grid the user sees.
     let (artists, albums, custom) = with_db(|db| {
-        let artists = db.get_artists_with_filter(
-            /* include_qobuz_downloads */ true,
-            exclude_network,
-        )?;
+        let artists =
+            db.get_artists_with_filter(/* include_qobuz_downloads */ true, exclude_network)?;
         let albums = if plex_on || remote_on {
             db.get_albums_metadata_page(
                 0,
@@ -544,7 +552,8 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
             .albums
         } else {
             db.get_albums_with_full_filter(
-                /* include_hidden */ false, /* include_qobuz_downloads */ true,
+                /* include_hidden */ false,
+                /* include_qobuz_downloads */ true,
                 exclude_network,
             )?
         };
@@ -638,10 +647,19 @@ pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
             .into_iter()
             .map(|m| {
                 let key = artist_key(&m.name);
-                if !m.image_path.is_empty() {
-                    if let Some(t) =
-                        crate::local_rows::art_token(Some(&m.image_source), &m.image_path)
-                    {
+                let cached = crate::local_artist_images_qt::register(
+                    &key,
+                    &m.name,
+                    !m.image_path.is_empty(),
+                );
+                let image_path = cached.as_deref().unwrap_or(&m.image_path);
+                let image_source = if cached.is_some() {
+                    "local"
+                } else {
+                    m.image_source.as_str()
+                };
+                if !image_path.is_empty() {
+                    if let Some(t) = crate::local_rows::art_token(Some(image_source), image_path) {
                         art.insert(key.clone(), t);
                     }
                 }
@@ -1086,10 +1104,7 @@ fn fetch_source_album_tracks_blocking(id: &str) -> Vec<LocalTrack> {
 /// The routed Local Library detail, constrained to the media funnel that was
 /// active at the click site. A logical card may represent several sources;
 /// opening it must not make filtered-out physical versions selectable again.
-pub fn load_album_detail_filtered_blocking(
-    id: &str,
-    filter_json: &str,
-) -> Option<AlbumDetailDoc> {
+pub fn load_album_detail_filtered_blocking(id: &str, filter_json: &str) -> Option<AlbumDetailDoc> {
     let mut tracks = fetch_album_tracks_blocking(id);
     if tracks.is_empty() {
         return None;

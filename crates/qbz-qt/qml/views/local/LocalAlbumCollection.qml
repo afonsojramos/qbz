@@ -503,6 +503,15 @@ Item {
                                 isFavorite: root.view
                                     ? root.view.albumFavorite(cardCell.slot)
                                     : cardCell.slot.isFavorite === true
+                                extraMenuEntries: [
+                                    { "label": QbzSession.tr("Album info", QbzSession.trRev),
+                                      "icon": "info", "action": "album-info" }
+                                ]
+                                onExtraMenuAction: function (action) {
+                                    if (action === "album-info")
+                                        QbzLocal.bulkAction("album",
+                                            JSON.stringify([String(cardCell.slot.id)]), action)
+                                }
                                 onFavoriteRequested: if (root.view) {
                                     root.view.toggleAlbumFavorite(
                                         cardCell.slot, albumCard.artSource)

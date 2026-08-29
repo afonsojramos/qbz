@@ -174,6 +174,9 @@ pub struct LocalState {
     pub art_index: HashMap<String, (SourceId, String)>,
     /// Album identity ("folder" | "metadata") — persisted (locallibrary_ui).
     pub album_mode: String,
+    /// Library Explorer leading columns ("genre" | "year" | "both") —
+    /// persisted beside the other Local Library presentation choices.
+    pub explorer_columns: String,
     pub counts: LocalCounts,
     /// Synthetic logical album id -> strongly-associated authoritative album
     /// ids. Rebuilt with each Albums query; never persisted and therefore
@@ -192,9 +195,28 @@ pub struct LocalState {
 }
 
 static LOCAL: Mutex<Option<LocalState>> = Mutex::new(None);
+// Serializes the take/map/restore artwork transaction without retaining the
+// much broader LocalState lock while a large album/artist page is mapped.
+// Every production read/write of `art_index` goes through this gate.
+static ART_INDEX_GATE: Mutex<()> = Mutex::new(());
+
+struct ArtIndexTransaction {
+    art: Option<HashMap<String, (SourceId, String)>>,
+}
+
+impl Drop for ArtIndexTransaction {
+    fn drop(&mut self) {
+        if let Some(art) = self.art.take() {
+            state(|state| state.art_index = art);
+        }
+    }
+}
 
 pub fn state<R>(f: impl FnOnce(&mut LocalState) -> R) -> R {
-    let mut guard = LOCAL.lock().unwrap();
+    // A failed assertion in one Rust test must not make every subsequent
+    // Local Library operation panic. Production closures are deliberately
+    // panic-free, but recovering the owned state is safer than abandoning it.
+    let mut guard = LOCAL.lock().unwrap_or_else(|error| error.into_inner());
     let s = guard.get_or_insert_with(|| {
         let prefs = read_prefs();
         LocalState {
@@ -202,23 +224,58 @@ pub fn state<R>(f: impl FnOnce(&mut LocalState) -> R) -> R {
             tracks_sort: prefs.tracks_sort,
             tracks_group: prefs.tracks_group,
             tracks_filter: prefs.tracks_filter,
+            explorer_columns: normalize_explorer_columns(&prefs.explorer_columns).to_string(),
             ..LocalState::default()
         }
     });
     f(s)
 }
 
-/// Take the art index out, run `f` with it, put it back — the shape every
-/// loader uses so mapping can register covers without a second lock.
+/// Mutate the artwork index as one serialized transaction.
+///
+/// Mapping runs on several native paging workers at once (Artists alone has
+/// an artist rail and an album grid).  Taking the map out and restoring it in
+/// two separate critical sections lets two workers both observe an empty map;
+/// whichever one restores last then discards every artwork reference the
+/// other worker registered. The dedicated gate makes that transaction atomic
+/// while releasing the broader LocalState lock during potentially large pure
+/// mapping work, so artwork correctness does not stall unrelated UI reads.
 pub fn with_art<R>(f: impl FnOnce(&mut HashMap<String, (SourceId, String)>) -> R) -> R {
-    let mut art = state(|s| std::mem::take(&mut s.art_index));
-    let out = f(&mut art);
-    state(|s| s.art_index = art);
-    out
+    let _gate = ART_INDEX_GATE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut transaction = ArtIndexTransaction {
+        art: Some(state(|state| std::mem::take(&mut state.art_index))),
+    };
+    // `ArtIndexTransaction::drop` restores the map on both the normal and
+    // panic paths, before `_gate` is released.
+    f(transaction.art.as_mut().expect("art transaction is active"))
+}
+
+/// Snapshot the requested artwork references while respecting an in-flight
+/// mapping transaction. Readers must never observe the deliberate empty map
+/// between `take` and restore.
+pub fn artwork_sources(keys: &[String]) -> Vec<(String, SourceId, String)> {
+    let _gate = ART_INDEX_GATE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    state(|state| {
+        keys.iter()
+            .filter_map(|key| {
+                state
+                    .art_index
+                    .get(key)
+                    .map(|(source, token)| (key.clone(), *source, token.clone()))
+            })
+            .collect()
+    })
 }
 
 /// Drop every cached document (logout / user switch).
 pub fn reset() {
+    let _gate = ART_INDEX_GATE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     *LOCAL.lock().unwrap() = None;
 }
 
@@ -237,6 +294,8 @@ pub struct Prefs {
     pub tracks_filter: String,
     #[serde(default = "d_folder")]
     pub albums_id_mode: String,
+    #[serde(default = "d_genre")]
+    pub explorer_columns: String,
     #[serde(default)]
     pub ephemeral_folder: Option<String>,
 }
@@ -250,6 +309,17 @@ fn d_default() -> String {
 fn d_folder() -> String {
     "folder".into()
 }
+fn d_genre() -> String {
+    "genre".into()
+}
+
+fn normalize_explorer_columns(value: &str) -> &'static str {
+    match value {
+        "year" => "year",
+        "both" => "both",
+        _ => "genre",
+    }
+}
 
 impl Default for Prefs {
     fn default() -> Self {
@@ -258,6 +328,7 @@ impl Default for Prefs {
             tracks_sort: d_default(),
             tracks_filter: String::new(),
             albums_id_mode: d_folder(),
+            explorer_columns: d_genre(),
             ephemeral_folder: None,
         }
     }
@@ -277,7 +348,7 @@ pub fn read_prefs() -> Prefs {
     }
 }
 
-/// Merge this struct's four keys into the on-disk document and publish it
+/// Merge this struct's owned keys into the on-disk document and publish it
 /// ATOMICALLY (`settings_qt::write_json_object_atomic`).
 ///
 /// Two changes from the old whole-struct `std::fs::write`, both because this
@@ -368,6 +439,16 @@ pub fn album_mode() -> String {
     state(|s| s.album_mode.clone())
 }
 
+pub fn set_explorer_columns(mode: &str) {
+    let mode = normalize_explorer_columns(mode);
+    state(|state| state.explorer_columns = mode.to_string());
+    update_prefs(|prefs| prefs.explorer_columns = mode.to_string());
+}
+
+pub fn explorer_columns() -> String {
+    state(|state| state.explorer_columns.clone())
+}
+
 pub fn set_tracks_sort(sort: &str) {
     state(|s| s.tracks_sort = sort.to_string());
     update_prefs(|p| p.tracks_sort = sort.to_string());
@@ -454,6 +535,9 @@ pub fn commit_tracks_page(
     consumed: TrackSourceOffsets,
     has_more: bool,
 ) -> Option<Vec<TrackRow>> {
+    let _gate = ART_INDEX_GATE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     state(|s| {
         if !tracks_request_is_current(s.tracks_generation, s.tracks_offsets, request) {
             return None;
@@ -504,10 +588,61 @@ fn library_sources_available(
 mod phase_a_tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{mpsc, Arc};
+    use std::time::Duration;
+
+    use qbz_source::SourceId;
 
     use super::{
-        library_sources_available, tracks_request_is_current, TrackSourceOffsets, TracksLoadRequest,
+        library_sources_available, normalize_explorer_columns, tracks_request_is_current,
+        with_art, Prefs, TrackSourceOffsets, TracksLoadRequest,
     };
+
+    #[test]
+    fn artwork_index_mutations_are_one_atomic_critical_section() {
+        let first_key = "test:atomic-art:first".to_string();
+        let second_key = "test:atomic-art:second".to_string();
+        with_art(|art| {
+            art.remove(&first_key);
+            art.remove(&second_key);
+        });
+
+        let (first_entered_tx, first_entered_rx) = mpsc::channel();
+        let (release_first_tx, release_first_rx) = mpsc::channel();
+        let first = first_key.clone();
+        let first_worker = std::thread::spawn(move || {
+            with_art(|art| {
+                first_entered_tx.send(()).unwrap();
+                release_first_rx.recv().unwrap();
+                art.insert(first, (SourceId::LOCAL, "first".to_string()));
+            });
+        });
+        first_entered_rx.recv().unwrap();
+
+        let (second_entered_tx, second_entered_rx) = mpsc::channel();
+        let second = second_key.clone();
+        let second_worker = std::thread::spawn(move || {
+            with_art(|art| {
+                second_entered_tx.send(()).unwrap();
+                art.insert(second, (SourceId::LOCAL, "second".to_string()));
+            });
+        });
+
+        assert!(matches!(
+            second_entered_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        release_first_tx.send(()).unwrap();
+        first_worker.join().unwrap();
+        second_entered_rx.recv().unwrap();
+        second_worker.join().unwrap();
+
+        with_art(|art| {
+            assert_eq!(art.get(&first_key).unwrap().1, "first");
+            assert_eq!(art.get(&second_key).unwrap().1, "second");
+            art.remove(&first_key);
+            art.remove(&second_key);
+        });
+    }
 
     #[test]
     fn remote_only_installation_has_a_library() {
@@ -650,7 +785,9 @@ mod phase_a_tests {
         assert!(details.contains("interval: 16"));
         assert!(!details.contains("Qt.callLater"));
         assert!(column.contains("interval: root.debounceMs"));
-        assert!(tab.contains("debounceMs: facetIndex === 2 ? 140 : 90"));
+        assert!(tab.contains("root.facetKind(facetIndex) === \"album\" ? 140 : 90"));
+        assert!(tab.contains("[\"genre\", \"year\", \"artist\", \"album\"]"));
+        assert!(tab.contains("root.view.selectedGenreYears = ({})"));
         assert!(details.contains("maxConcurrentDetailRequests: 2"));
         assert!(details.contains("maxConcurrentDetailRequests - currentPendingCount()"));
         assert!(details.contains("property var detailFilters: ({})"));
@@ -667,7 +804,8 @@ mod phase_a_tests {
             .nth(1)
             .and_then(|tail| tail.split("crate::spawn").next())
             .expect("genre album cache-hit path");
-        assert!(cache_path.contains("queue_genre_album_ready(id, json, filter_json, \"cache-hit\", started)"));
+        assert!(cache_path
+            .contains("queue_genre_album_ready(id, json, filter_json, \"cache-hit\", started)"));
         assert!(!cache_path.contains("local_genre_album_ready"));
         assert!(
             details.contains("id: discMenuLoader\n                                active: false")
@@ -703,5 +841,41 @@ mod phase_a_tests {
         let column = include_str!("../qml/views/local/LocalGenreColumn.qml");
         assert!(column.contains("radius: theme.radiusSm"));
         assert!(column.contains("clip: true"));
+    }
+
+    #[test]
+    fn track_group_indices_are_complete_and_do_not_depend_on_delegates() {
+        let local = include_str!("../qml/views/local/LocalTracksTab.qml");
+        let library = include_str!("../qml/views/LibraryView.qml");
+        let strip = include_str!("../qml/controls/QbzAlphaStrip.qml");
+        assert!(local.contains("visible: root.view.tracksGroup !== \"off\""));
+        assert!(local.contains("completeAlphabet: true"));
+        assert!(library.contains("activeTab === \"tracks\" && tracksGroup !== \"off\""));
+        assert!(library.contains("completeAlphabet: true"));
+        assert!(strip.contains("model: root.completeAlphabet ? 27"));
+        assert!(strip.contains("\"#ABCDEFGHIJKLMNOPQRSTUVWXYZ\".charAt(position)"));
+        assert!(strip.contains("enabled: cell.entry.index >= 0"));
+    }
+
+    #[test]
+    fn local_header_scan_progress_uses_bounded_counters_only() {
+        let chrome = include_str!("../qml/views/local/LocalChrome.qml");
+        let progress = include_str!("../qml/views/local/LocalScanProgress.qml");
+        assert!(chrome.contains("LocalScanProgress"));
+        assert!(progress.contains("localScan.sourceProcessed"));
+        assert!(progress.contains("catalog.overallDone"));
+        assert!(!progress.contains("QbzLocalTracks"));
+        assert!(!progress.contains("ListView"));
+        assert!(!progress.contains("Repeater"));
+    }
+
+    #[test]
+    fn explorer_column_preference_is_persisted_and_normalized() {
+        assert_eq!(normalize_explorer_columns("genre"), "genre");
+        assert_eq!(normalize_explorer_columns("year"), "year");
+        assert_eq!(normalize_explorer_columns("both"), "both");
+        assert_eq!(normalize_explorer_columns("future-value"), "genre");
+        let json = serde_json::to_value(Prefs::default()).expect("serializes prefs");
+        assert_eq!(json["explorer_columns"], "genre");
     }
 }

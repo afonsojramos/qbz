@@ -1031,6 +1031,16 @@ ApplicationWindow {
         onLoaded: if (screenLoader.item) screenLoader.item.hostWindow = window
     }
 
+    // Compact per-track metadata editor. It lives above the routed shell so a
+    // successful save can republish Local Library without destroying the
+    // modal halfway through its own transaction.
+    Loader {
+        anchors.fill: parent
+        active: QbzTagEditor.trackEditorOpen
+        source: "controls/TrackMetadataModal.qml"
+        z: 4000
+    }
+
     // Frameless hairline (app.slint's no-frame 1px edge) — paints at the
     // very rim, over everything. SQUARE (the app draws no corner rounding).
     Rectangle {

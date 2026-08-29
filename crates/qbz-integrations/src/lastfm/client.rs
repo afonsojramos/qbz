@@ -791,6 +791,44 @@ impl LastFmClient {
         Ok(albums)
     }
 
+    /// Public `artist.getInfo` lookup used by Local Library's conservative
+    /// portrait enrichment. No Last.fm user session is required; the proxy
+    /// supplies the application key. `autocorrect` is returned to the caller
+    /// as the canonical `name`, but consumers must still validate identity
+    /// before attaching the image to a local tag spelling.
+    pub async fn get_artist_info(&self, artist: &str) -> IntegrationResult<LastFmArtist> {
+        let url = format!("{}/artist.getInfo", LASTFM_PROXY_URL);
+        let response = self
+            .client
+            .post(&url)
+            .json(&json!({
+                "artist": artist,
+                "autocorrect": 1,
+            }))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(IntegrationError::internal(format!(
+                "Last.fm artist.getInfo failed: {text}"
+            )));
+        }
+        let data: serde_json::Value = response.json().await?;
+        if let Some(error) = data.get("error") {
+            return Err(IntegrationError::api(
+                error.as_u64().unwrap_or(0) as u32,
+                data.get("message")
+                    .and_then(|message| message.as_str())
+                    .unwrap_or("Unknown error")
+                    .to_string(),
+            ));
+        }
+        let value = data.get("artist").ok_or_else(|| {
+            IntegrationError::internal("Last.fm returned no artist object".to_string())
+        })?;
+        parse_artist_info(value, artist)
+    }
+
     /// Public `album.getInfo` lookup used by the local metadata editor for a
     /// conservative artwork candidate. No Last.fm user session is required;
     /// the existing proxy supplies the application key.
@@ -974,4 +1012,43 @@ fn parse_u64(value: Option<&serde_json::Value>) -> u64 {
                 .or_else(|| v.as_u64())
         })
         .unwrap_or(0)
+}
+
+fn parse_artist_info(
+    value: &serde_json::Value,
+    fallback_name: &str,
+) -> IntegrationResult<LastFmArtist> {
+    Ok(LastFmArtist {
+        name: value
+            .get("name")
+            .and_then(|name| name.as_str())
+            .unwrap_or(fallback_name)
+            .to_string(),
+        mbid: extract_mbid(value),
+        playcount: parse_u64(value.get("stats").and_then(|stats| stats.get("playcount"))),
+        image: extract_image(value),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn artist_info_keeps_autocorrected_identity_and_largest_image() {
+        let value = serde_json::json!({
+            "name": "Beyoncé",
+            "mbid": "859d0860-d480-4efd-970c-c05d5f1776b8",
+            "stats": { "playcount": "42" },
+            "image": [
+                { "#text": "https://img/small.jpg", "size": "small" },
+                { "#text": "https://img/large.jpg", "size": "extralarge" }
+            ]
+        });
+        let parsed = parse_artist_info(&value, "Beyonce").unwrap();
+        assert_eq!(parsed.name, "Beyoncé");
+        assert_eq!(parsed.playcount, 42);
+        assert_eq!(parsed.image.as_deref(), Some("https://img/large.jpg"));
+        assert!(parsed.mbid.is_some());
+    }
 }
