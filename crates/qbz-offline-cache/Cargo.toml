@@ -14,7 +14,7 @@ qbz-secrets = { path = "../qbz-secrets" }
 qbz-library = { path = "../qbz-library" }
 
 # SQLite index (match qbz-library's version/features)
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # Async runtime + HTTP (download pipeline + artwork)
 tokio = { workspace = true }

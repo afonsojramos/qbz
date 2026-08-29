@@ -1568,7 +1568,7 @@ pub fn plex_cache_get_tracks(
                     album: row
                         .get::<_, Option<String>>(3)?
                         .map(|v| decode_xml_entities(v.trim())),
-                    duration_ms: row.get(4)?,
+                    duration_ms: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
                     artwork_path: row.get(5)?,
                     collection_artwork_path: row.get(19)?,
                     part_key: row.get(6)?,
@@ -1616,7 +1616,7 @@ pub fn plex_cache_get_tracks(
                     album: row
                         .get::<_, Option<String>>(3)?
                         .map(|v| decode_xml_entities(v.trim())),
-                    duration_ms: row.get(4)?,
+                    duration_ms: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
                     artwork_path: row.get(5)?,
                     collection_artwork_path: row.get(19)?,
                     part_key: row.get(6)?,
@@ -1685,7 +1685,7 @@ pub fn plex_cache_get_tracks_by_keys(rating_keys: &[String]) -> Result<Vec<PlexT
                 album: row
                     .get::<_, Option<String>>(3)?
                     .map(|v| decode_xml_entities(v.trim())),
-                duration_ms: row.get(4)?,
+                duration_ms: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
                 artwork_path: row.get(5)?,
                 collection_artwork_path: row.get(19)?,
                 part_key: row.get(6)?,

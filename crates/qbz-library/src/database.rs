@@ -1369,12 +1369,12 @@ impl LibraryDatabase {
                         track.genre,
                         genres_json,
                         track.catalog_number,
-                        track.duration_secs,
+                        track.duration_secs as i64,
                         track.format.to_string(),
                         track.bit_depth,
                         track.sample_rate,
                         track.channels,
-                        track.file_size_bytes,
+                        track.file_size_bytes as i64,
                         track.cue_file_path,
                         track.cue_start_secs,
                         track.cue_end_secs,
@@ -1416,12 +1416,12 @@ impl LibraryDatabase {
                     track.genre,
                     genres_json,
                     track.catalog_number,
-                    track.duration_secs,
+                    track.duration_secs as i64,
                     track.format.to_string(),
                     track.bit_depth,
                     track.sample_rate,
                     track.channels,
-                    track.file_size_bytes,
+                    track.file_size_bytes as i64,
                     track.cue_file_path,
                     track.cue_start_secs,
                     track.cue_end_secs,
@@ -1804,7 +1804,7 @@ impl LibraryDatabase {
                     artwork_path,
                     artwork_source: None,
                     track_count: row.get(7)?,
-                    total_duration_secs: row.get(8)?,
+                    total_duration_secs: row.get::<_, i64>(8)? as u64,
                     format: Self::parse_format(
                         &row.get::<_, Option<String>>(9)?.unwrap_or_default(),
                     ),
@@ -2302,7 +2302,7 @@ impl LibraryDatabase {
                     artwork_path,
                     artwork_source: None,
                     track_count: row.get(7)?,
-                    total_duration_secs: row.get(8)?,
+                    total_duration_secs: row.get::<_, i64>(8)? as u64,
                     format: Self::parse_format(
                         &row.get::<_, Option<String>>(9)?.unwrap_or_default(),
                     ),
@@ -2855,7 +2855,7 @@ impl LibraryDatabase {
                             artwork_path,
                             artwork_source: None,
                             track_count: row.get(7)?,
-                            total_duration_secs: row.get(8)?,
+                            total_duration_secs: row.get::<_, i64>(8)? as u64,
                             format: Self::parse_format(
                                 &row.get::<_, Option<String>>(9)?.unwrap_or_default(),
                             ),
@@ -3778,8 +3778,8 @@ impl LibraryDatabase {
                 track_count: row.get(0)?,
                 album_count: row.get(1)?,
                 artist_count: row.get(2)?,
-                total_duration_secs: row.get(3)?,
-                total_size_bytes: row.get(4)?,
+                total_duration_secs: row.get::<_, i64>(3)? as u64,
+                total_size_bytes: row.get::<_, i64>(4)? as u64,
             })
         })
         .map_err(|e| LibraryError::Database(e.to_string()))
@@ -3862,12 +3862,12 @@ impl LibraryDatabase {
             year: row.get(8)?,         // year
             genre,
             genres,
-            duration_secs: row.get(11)?, // duration_secs
+            duration_secs: row.get::<_, i64>(11)? as u64, // duration_secs
             format: Self::parse_format(&row.get::<_, String>(12)?), // format
             bit_depth: row.get(13)?,     // bit_depth
             sample_rate: row.get::<_, f64>(14)?, // sample_rate
             channels: row.get(15)?,      // channels
-            file_size_bytes: row.get(16)?, // file_size_bytes
+            file_size_bytes: row.get::<_, i64>(16)? as u64, // file_size_bytes
             cue_file_path: row.get(17)?, // cue_file_path
             cue_start_secs: row.get(18)?, // cue_start_secs
             cue_end_secs: row.get(19)?,  // cue_end_secs
@@ -5104,12 +5104,12 @@ impl LibraryDatabase {
                         row.get::<_, Option<String>>(11)?.as_deref(),
                     ),
                     catalog_number: None,
-                    duration_secs: row.get(13)?,
+                    duration_secs: row.get::<_, i64>(13)? as u64,
                     format: Self::parse_format(&row.get::<_, String>(14)?),
                     bit_depth: row.get(15)?,
                     sample_rate: row.get::<_, f64>(16)?,
                     channels: row.get(17)?,
-                    file_size_bytes: row.get(18)?,
+                    file_size_bytes: row.get::<_, i64>(18)? as u64,
                     cue_file_path: row.get(19)?,
                     cue_start_secs: row.get(20)?,
                     cue_end_secs: row.get(21)?,
@@ -5179,12 +5179,12 @@ impl LibraryDatabase {
                             row.get::<_, Option<String>>(11)?.as_deref(),
                         ),
                         catalog_number: None,
-                        duration_secs: row.get(13)?,
+                        duration_secs: row.get::<_, i64>(13)? as u64,
                         format: Self::parse_format(&row.get::<_, String>(14)?),
                         bit_depth: row.get(15)?,
                         sample_rate: row.get::<_, f64>(16)?,
                         channels: row.get(17)?,
-                        file_size_bytes: row.get(18)?,
+                        file_size_bytes: row.get::<_, i64>(18)? as u64,
                         cue_file_path: row.get(19)?,
                         cue_start_secs: row.get(20)?,
                         cue_end_secs: row.get(21)?,

@@ -7,7 +7,7 @@ description = "Plex LAN-only integration for QBZ: HTTP client, XML metadata pars
 
 [dependencies]
 # SQLite cache (match the workspace's bundled SQLite usage)
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # HTTP client for the Plex Media Server LAN API
 reqwest = { workspace = true }

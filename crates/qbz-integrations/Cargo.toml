@@ -30,7 +30,7 @@ urlencoding = "2"
 discord-rich-presence = "1.1.0"
 
 # SQLite for caching (optional, enabled by default)
-rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 
 # Time handling for cache TTL
 chrono = { version = "0.4", optional = true }

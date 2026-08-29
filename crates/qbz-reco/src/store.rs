@@ -221,7 +221,7 @@ impl ArtistVectorStore {
             .execute(
                 "INSERT OR REPLACE INTO vector_metadata (artist_idx, updated_at, nnz)
                  VALUES (?1, ?2, ?3)",
-                params![artist_idx, now, vector.nnz()],
+                params![artist_idx, now, vector.nnz() as i64],
             )
             .map_err(|e| format!("Failed to update metadata: {}", e))?;
 

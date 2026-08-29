@@ -335,11 +335,11 @@ impl RecoStore {
                 params![
                     event.event_type.as_str(),
                     event.item_type.as_str(),
-                    event.track_id,
+                    event.track_id.map(|v| v as i64),
                     event.album_id.as_deref(),
-                    event.artist_id,
-                    event.playlist_id,
-                    event.genre_id,
+                    event.artist_id.map(|v| v as i64),
+                    event.playlist_id.map(|v| v as i64),
+                    event.genre_id.map(|v| v as i64),
                     now_ts(),
                 ],
             )
@@ -405,7 +405,7 @@ impl RecoStore {
             .map_err(|e| format!("Failed to prepare recent tracks query: {}", e))?;
 
         let rows = stmt
-            .query_map(params![limit], |row| row.get::<_, u64>(0))
+            .query_map(params![limit], |row| row.get::<_, i64>(0).map(|v| v as u64))
             .map_err(|e| format!("Failed to query recent tracks: {}", e))?;
 
         let mut tracks = Vec::new();
@@ -439,7 +439,7 @@ impl RecoStore {
             .map_err(|e| format!("Failed to prepare windowed recent tracks query: {}", e))?;
 
         let rows = stmt
-            .query_map(params![since_ts, limit], |row| row.get::<_, u64>(0))
+            .query_map(params![since_ts, limit], |row| row.get::<_, i64>(0).map(|v| v as u64))
             .map_err(|e| format!("Failed to query windowed recent tracks: {}", e))?;
 
         let mut tracks = Vec::new();
@@ -467,7 +467,7 @@ impl RecoStore {
             .map_err(|e| format!("Failed to prepare favorite tracks query: {}", e))?;
 
         let rows = stmt
-            .query_map(params![limit], |row| row.get::<_, u64>(0))
+            .query_map(params![limit], |row| row.get::<_, i64>(0).map(|v| v as u64))
             .map_err(|e| format!("Failed to query favorite tracks: {}", e))?;
 
         let mut tracks = Vec::new();
@@ -542,7 +542,7 @@ impl RecoStore {
         let rows = stmt
             .query_map(params![limit], |row| {
                 Ok(TopArtistSeed {
-                    artist_id: row.get::<_, u64>(0)?,
+                    artist_id: row.get::<_, i64>(0).map(|v| v as u64)?,
                     play_count: row.get::<_, u32>(1)?,
                 })
             })
@@ -576,7 +576,7 @@ impl RecoStore {
             )
             .map_err(|e| format!("Failed to prepare known artists query: {}", e))?;
         let rows = stmt
-            .query_map(params![play_threshold], |row| row.get::<_, u64>(0))
+            .query_map(params![play_threshold], |row| row.get::<_, i64>(0).map(|v| v as u64))
             .map_err(|e| format!("Failed to query known artists: {}", e))?;
         let mut ids = std::collections::HashSet::new();
         for row in rows {
@@ -604,7 +604,7 @@ impl RecoStore {
             .map_err(|e| format!("Failed to prepare top genres query: {}", e))?;
         let rows = stmt
             .query_map(params![limit], |row| {
-                Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?))
+                Ok((row.get::<_, i64>(0).map(|v| v as u64)?, row.get::<_, String>(1)?))
             })
             .map_err(|e| format!("Failed to query top genres: {}", e))?;
         let mut genres = Vec::new();
@@ -703,7 +703,7 @@ impl RecoStore {
             )
             .map_err(|e| format!("Failed to prepare scored tracks query: {}", e))?;
         let rows = stmt
-            .query_map(params![score_type, limit], |row| row.get::<_, u64>(0))
+            .query_map(params![score_type, limit], |row| row.get::<_, i64>(0).map(|v| v as u64))
             .map_err(|e| format!("Failed to query scored tracks: {}", e))?;
         let mut out = Vec::new();
         for row in rows {
@@ -729,7 +729,7 @@ impl RecoStore {
             .map_err(|e| format!("Failed to prepare scored artists query: {}", e))?;
         let rows = stmt
             .query_map(params![score_type, limit], |row| {
-                Ok((row.get::<_, u64>(0)?, row.get::<_, f64>(1)?))
+                Ok((row.get::<_, i64>(0).map(|v| v as u64)?, row.get::<_, f64>(1)?))
             })
             .map_err(|e| format!("Failed to query scored artists: {}", e))?;
         let mut out = Vec::new();
@@ -761,10 +761,10 @@ impl RecoStore {
                 Ok(RecoEventRecord {
                     event_type: row.get(0)?,
                     item_type: row.get(1)?,
-                    track_id: row.get(2)?,
+                    track_id: row.get::<_, Option<i64>>(2)?.map(|v| v as u64),
                     album_id: row.get(3)?,
-                    artist_id: row.get(4)?,
-                    genre_id: row.get(5)?,
+                    artist_id: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
+                    genre_id: row.get::<_, Option<i64>>(5)?.map(|v| v as u64),
                     created_at: row.get(6)?,
                 })
             })
@@ -808,9 +808,9 @@ impl RecoStore {
                 stmt.execute(params![
                     score_type,
                     item_type,
-                    entry.track_id,
+                    entry.track_id.map(|v| v as i64),
                     entry.album_id.as_deref(),
-                    entry.artist_id,
+                    entry.artist_id.map(|v| v as i64),
                     entry.score,
                     updated_at,
                 ])
@@ -1071,7 +1071,7 @@ impl RecoStore {
             .conn
             .execute(
                 "UPDATE reco_events SET genre_id = ? WHERE album_id = ? AND genre_id IS NULL",
-                params![genre_id, album_id],
+                params![genre_id as i64, album_id],
             )
             .map_err(|e| format!("Failed to update genre for album: {}", e))?;
         Ok(affected as u64)
@@ -1147,7 +1147,7 @@ mod tests {
                 r#"INSERT INTO reco_events
                    (event_type, item_type, track_id, album_id, artist_id, playlist_id, genre_id, created_at)
                    VALUES (?, ?, ?, ?, ?, NULL, ?, ?)"#,
-                params![event_type, item_type, track_id, album_id, artist_id, genre_id, created_at],
+                params![event_type, item_type, track_id.map(|v| v as i64), album_id, artist_id.map(|v| v as i64), genre_id.map(|v| v as i64), created_at],
             )
             .expect("insert event at ts");
     }
