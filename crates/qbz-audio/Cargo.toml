@@ -34,7 +34,7 @@ rustfft = "6.4"
 spectrum-analyzer = "1.5"
 
 # Database for loudness cache
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # System directories
 dirs = "6"

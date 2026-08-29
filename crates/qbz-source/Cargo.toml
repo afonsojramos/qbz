@@ -24,7 +24,7 @@ qbz-subsonic = { path = "../qbz-subsonic" }
 qbz-media-cache = { path = "../qbz-media-cache" }
 # Only to hold the cache's `Connection`. This crate never writes SQL of its own
 # — every statement lives in `qbz-media-cache` or `qbz-library`.
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 # `ItemResolver` — this crate IMPLEMENTS it (mixtape_adapter.rs). qbz-mixtape is
 # provider-agnostic and the dependency remains one-directional, so the Qt
 # application can consume the adapter without coupling qbz-mixtape to sources.

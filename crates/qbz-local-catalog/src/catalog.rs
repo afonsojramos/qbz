@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::types::Value;
 use rusqlite::{
-    params, params_from_iter, Connection, DatabaseName, OpenFlags, OptionalExtension, Row,
+    params, params_from_iter, Connection, OpenFlags, OptionalExtension, Row,
     Statement,
 };
 
@@ -96,7 +96,7 @@ impl Catalog {
     }
 
     pub(crate) fn backup_to(&self, path: &Path) -> Result<()> {
-        self.conn.backup(DatabaseName::Main, path, None)?;
+        self.conn.backup(rusqlite::MAIN_DB, path, None)?;
         Ok(())
     }
 
@@ -495,7 +495,10 @@ impl Catalog {
                     )",
                 params![batch.source.source.as_str(), batch.source.source_instance],
             )?;
-            tx.execute(
+            // Two statements, two calls: rusqlite < 0.32 silently ran only the
+            // FIRST statement of a multi-statement `execute` (the logical_albums
+            // prune below never happened); 0.40 refuses it outright.
+            tx.execute_batch(
                 "DELETE FROM editions
                   WHERE NOT EXISTS (
                         SELECT 1 FROM source_copies sc
@@ -506,7 +509,6 @@ impl Catalog {
                         SELECT 1 FROM editions e
                          WHERE e.logical_album_id=logical_albums.logical_album_id
                   );",
-                [],
             )?;
         }
         tx.execute(

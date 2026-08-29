@@ -94,7 +94,11 @@ impl DeviceDiscovery {
                             .unwrap_or("Unknown")
                             .to_string();
 
-                        let ip = pick_ip(info.get_addresses())
+                        // mdns-sd 0.21 scopes addresses by interface (ScopedIp);
+                        // the pick only ever needed the bare IpAddr.
+                        let addrs: std::collections::HashSet<IpAddr> =
+                            info.get_addresses().iter().map(|a| a.to_ip_addr()).collect();
+                        let ip = pick_ip(&addrs)
                             .unwrap_or_else(|| "127.0.0.1".to_string());
 
                         let device = DiscoveredDevice {

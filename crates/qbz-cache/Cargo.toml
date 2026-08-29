@@ -17,5 +17,5 @@ dirs = "6"
 filetime = "0.2"
 
 # Image cache index + URL hashing
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 md-5 = "0.10"

@@ -2,7 +2,7 @@
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
-use rand::RngCore;
+use rand::RngExt;
 
 use crate::envelope::{WrappedSecret, NONCE_LEN};
 use crate::error::SecretError;
@@ -15,7 +15,7 @@ pub(crate) fn wrap_with_key(
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
-    rand::rng().fill_bytes(&mut nonce_bytes);
+    rand::rng().fill(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let ciphertext = cipher

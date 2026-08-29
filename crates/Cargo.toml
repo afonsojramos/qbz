@@ -80,7 +80,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # HTTP
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots-no-provider", "cookies", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "form", "rustls-no-provider", "cookies", "stream"] }
 
 # Logging
 log = "0.4"
@@ -92,7 +92,7 @@ anyhow = "1"
 
 # Crypto (Qobuz auth)
 md-5 = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 
 # Time
 chrono = "0.4"

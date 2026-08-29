@@ -37,7 +37,7 @@ urlencoding = "2"
 windows-sys = { version = "0.61", features = ["Win32_System_Power"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-mpris-server = "0.8"
+mpris-server = "0.10"
 async-channel = "2"
 # XDG notification portal (goes over D-Bus). async-io, NOT tokio: zbus 5's
 # "tokio" feature unifies graph-wide and its executor then requires a tokio
