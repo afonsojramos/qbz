@@ -72,8 +72,8 @@ jobs:
     name: build (${{ inputs.arch }})
     # aarch64 on 24.04-arm: aqt's arm64 Qt host tools (6.8.3 AND 6.9.3 qmake)
     # SIGSEGV on ubuntu-22.04-arm with a clean ldd (2026-08-29, two runs).
-    # EXPERIMENT — the glibc floor gate below only warns for aarch64 until
-    # the owner rules on the Pi (bookworm = 2.36) floor.
+    # Accepted 2026-08-29: the arm64 DESKTOP floor is glibc 2.39; qbzd keeps
+    # 2.35 (Pi OS bookworm) — see the floor gate below.
     runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-22.04' }}
     timeout-minutes: 120
     env:
@@ -181,20 +181,19 @@ jobs:
           [ -z "$hits" ] || { echo "::error::qbz-qt graph resolves Slint crates:"; echo "$hits"; exit 1; }
 
       # The empirical-verification rule: the README/website say what objdump
-      # says, not what the runner image advertises.
-      - name: glibc floor gate (<= 2.35)
+      # says, not what the runner image advertises. Two floors, decided
+      # 2026-08-29: x86_64 2.35 (ubuntu-22.04 runner); aarch64 2.39 — the
+      # arm64 Qt host tools only run on ubuntu-24.04-arm — while qbzd stays at
+      # 2.35 on both (its own job, 22.04-arm) for the 1 GB Pi OS boards.
+      # README "Requires glibc" + the website glibcNote must match these.
+      - name: glibc floor gate (x86_64 <= 2.35, aarch64 <= 2.39)
         run: |
           set -euo pipefail
           floor=$(objdump -T qbz | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu | tail -1)
-          echo "glibc floor: $floor"
-          highest=$(printf '%s\n' "$floor" "GLIBC_2.35" | sort -V | tail -1)
-          if [ "$highest" != "GLIBC_2.35" ]; then
-            if [ "${{ inputs.arch }}" = aarch64 ]; then
-              echo "::warning::aarch64 glibc floor $floor exceeds 2.35 (24.04-arm runner experiment; owner decision pending)"
-            else
-              echo "::error::glibc floor $floor exceeds 2.35"; exit 1
-            fi
-          fi
+          limit=$([ "${{ inputs.arch }}" = aarch64 ] && echo GLIBC_2.39 || echo GLIBC_2.35)
+          echo "glibc floor: $floor (limit $limit)"
+          highest=$(printf '%s\n' "$floor" "$limit" | sort -V | tail -1)
+          [ "$highest" = "$limit" ] || { echo "::error::glibc floor $floor exceeds $limit"; exit 1; }
 
       # Self-contained AppDir. The plugin scans QML_SOURCES_PATHS for imports
       # and copies exactly the Qt QML modules the app uses (Effects, labs,

@@ -152,15 +152,19 @@ EOF
 sudo apt update && sudo apt install qbz
 ```
 
-> Requires glibc 2.39+ (Ubuntu 24.04+, Debian 13+). For older releases use
-> Flatpak, Snap, or AppImage.
+> **x86_64:** glibc 2.35+ (Ubuntu 22.04+, Debian 12+, Mint 21+).
+> **arm64 (desktop app):** glibc 2.39+ (Ubuntu 24.04+, Debian 13+) — the Qt
+> arm64 build needs it; Raspberry Pi OS *bookworm* is 2.36, so use `qbzd`
+> there (2.35+, see below). Older releases: Flatpak, Snap, or AppImage.
 
 ### RPM (Fedora / openSUSE)
 
 Download from [Releases](https://github.com/vicrodh/qbz/releases):
 `sudo dnf install ./qbz-*.rpm`
 
-> Requires glibc 2.39+ (Fedora 40+, openSUSE Tumbleweed).
+> **x86_64:** glibc 2.35+ (Fedora 36+, openSUSE Leap 15.6+ / Tumbleweed).
+> **arm64 (desktop app):** glibc 2.39+ (Fedora 40+). `qbzd` packages stay at
+> 2.35+ on both architectures.
 
 ### Gentoo
 
@@ -379,7 +383,9 @@ Run QBZ without a screen: `qbzd` is a standalone ~25 MB binary (shipped inside
 the deb/rpm packages and as its own tarball) that turns any Linux box — a
 Raspberry Pi, a NAS, the living-room mini-PC — into a bit-perfect **Qobuz
 Connect endpoint** that appears in the official Qobuz apps like a hardware
-streamer.
+streamer. It needs only **glibc 2.35+ on x86_64 and arm64** (Raspberry Pi OS
+*bookworm* and *trixie*, 1 GB boards included) — deliberately lower than the
+arm64 desktop app's 2.39, so a trimmed Pi image stays a valid target.
 
 - Daemon + full CLI + terminal setup wizard (TUI) in one binary
 - Browser-based login that works over SSH; one-file settings hand-off from
