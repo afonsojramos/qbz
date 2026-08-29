@@ -276,6 +276,8 @@ pub async fn resolve_qobuz_album(
                 source_item_id_hint: None,
                 context_kind: None,
                 context_id: None,
+                isrc: None,
+                recording_mbid: None,
             }
         })
         .collect();
@@ -370,6 +372,8 @@ pub fn track_to_queue_track_from_api(track: &ApiTrack) -> CoreQueueTrack {
         source_item_id_hint: None,
         context_kind: None,
         context_id: None,
+        isrc: None,
+        recording_mbid: None,
     }
 }
 
@@ -416,6 +420,8 @@ mod tests {
                     source_item_id_hint: None, // stamped by resolve_collection_tracks
                     context_kind: None,
                     context_id: None,
+                    isrc: None,
+                    recording_mbid: None,
                 })
                 .collect())
         }
@@ -512,6 +518,8 @@ mod tests {
             source_item_id_hint: item.map(String::from),
             context_kind: None,
             context_id: None,
+            isrc: None,
+            recording_mbid: None,
         }
     }
 

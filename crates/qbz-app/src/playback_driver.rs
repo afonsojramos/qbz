@@ -893,6 +893,8 @@ fn from_persisted(t: PersistedQueueTrack) -> QueueTrack {
         source_item_id_hint: t.source_item_id_hint,
         context_kind: None,
         context_id: None,
+        isrc: None,
+        recording_mbid: None,
     }
 }
 

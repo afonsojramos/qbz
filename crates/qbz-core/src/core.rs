@@ -3614,6 +3614,7 @@ mod tests {
             title: String::new(),
             version: None,
             isrc: None,
+            audio_info: None,
             duration: 0,
             track_number: 0,
             media_number: None,

@@ -103,6 +103,8 @@ pub fn model_track_to_core_queue_track(track: &Track) -> QueueTrack {
         source_item_id_hint: album_id,
         context_kind: None,
         context_id: None,
+        isrc: None,
+        recording_mbid: None,
     }
 }
 

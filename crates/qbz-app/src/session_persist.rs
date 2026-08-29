@@ -247,6 +247,8 @@ fn from_persisted(t: PersistedQueueTrack) -> QueueTrack {
         // track's own album until the next container play re-stamps the queue.
         context_kind: None,
         context_id: None,
+        isrc: None,
+        recording_mbid: None,
     }
 }
 

@@ -2084,6 +2084,8 @@ mod tests {
             maximum_sampling_rate: rate,
             maximum_bit_depth: depth,
             maximum_channel_count: None,
+            replaygain_track_gain: None,
+            replaygain_track_peak: None,
         }
     }
 

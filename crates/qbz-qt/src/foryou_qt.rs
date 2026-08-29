@@ -1157,6 +1157,8 @@ pub(crate) fn to_queue_track(track: &Track) -> QueueTrack {
         source_item_id_hint: album_key,
         context_kind: None,
         context_id: None,
+        isrc: track.isrc.clone(),
+        recording_mbid: None,
     }
 }
 

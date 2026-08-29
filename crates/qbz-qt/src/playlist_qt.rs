@@ -875,6 +875,8 @@ fn row_to_queue(row: &PlaylistTrackRow) -> QueueTrack {
         // the playlist id is in scope instead (`open_context` / `queue_for`).
         context_kind: None,
         context_id: None,
+        isrc: None,
+        recording_mbid: None,
     }
 }
 
