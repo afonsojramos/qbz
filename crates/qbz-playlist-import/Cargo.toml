@@ -31,7 +31,7 @@ log = { workspace = true }
 #               which the 16 MiB byte wall forecloses.
 #   encoding_rs: the utf8-then-Windows-1252 fallback for legacy .m3u / .pls,
 #               which is what keeps "Björk" and "Sigur Rós" matchable.
-roxmltree = "0.20"
+roxmltree = "0.21"
 encoding_rs = "0.8"
 
 # Async runtime + concurrency
