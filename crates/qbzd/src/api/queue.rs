@@ -510,6 +510,8 @@ pub(crate) fn track_to_queue_track(track: &Track) -> QueueTrack {
         source_item_id_hint: None,
         context_kind: None,
         context_id: None,
+        isrc: None,
+        recording_mbid: None,
     }
 }
 
@@ -539,6 +541,8 @@ mod tests {
             source_item_id_hint: None,
             context_kind: None,
             context_id: None,
+            isrc: None,
+            recording_mbid: None,
         }
     }
 

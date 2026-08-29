@@ -154,6 +154,12 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //      outside the #521/§8.2 ordering — aborted for a clean shutdown below.
     let scrobbler = crate::scrobble_engine::spawn(roots.clone(), booted.bus.subscribe());
 
+    // 10c¼. Listen log (§12.1): the scrobbler's sibling on the same bus,
+    //       WITHOUT its enabled gate — the log is local and on by default, so
+    //       a headless streamer finally contributes history. Holds no
+    //       Arc<AppRuntime>; stopped (abort + close the open row) below.
+    let listen_log = crate::listen_log_engine::spawn(&roots, booted.bus.subscribe()).await;
+
     // 10c½. Events bridge: translate the driver's transition edges into the
     //       playback CoreEvents the bus consumers above (and SSE, and the event
     //       hook below) are written for — TrackStarted / PlaybackStateChanged /
@@ -268,6 +274,8 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     // Stop the scrobble-on-play subscriber (holds no Arc<AppRuntime>; order-free).
     scrobbler.abort();
     let _ = scrobbler.await;
+    // Stop the listen log: abort, then close the row in flight as `shutdown`.
+    listen_log.stop().await;
     // Stop the memory-pressure watchdog and JOIN it: it holds an Arc<Player>
     // clone, which must drop before `drop(booted)` can release the audio
     // device — the same ordering constraint as the driver (§8.2).
