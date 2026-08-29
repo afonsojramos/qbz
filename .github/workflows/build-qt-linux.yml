@@ -145,7 +145,14 @@ jobs:
           # Keep symbols in this build: the unstripped copy is archived for
           # crash symbolication, then stripped for every shipped artifact.
           CARGO_PROFILE_RELEASE_STRIP: "none"
+          # EXPLICIT qmake, as the macOS/Windows recipes do. On the arm64
+          # runner cxx-qt-build failed with "Could not find Qt installation:
+          # QtMissing" although QT_ROOT_DIR was correct (2026-08-29 run) —
+          # the PATH lookup is not something to rely on across hosts.
+          QMAKE: ${{ env.QT_ROOT_DIR }}/bin/qmake
+          CMAKE_PREFIX_PATH: ${{ env.QT_ROOT_DIR }}
         run: |
+          "$QMAKE" -query QT_VERSION
           cargo build --release --manifest-path crates/Cargo.toml -p qbz-qt
           cp crates/target/release/qbz qbz-unstripped
           strip -o qbz crates/target/release/qbz
