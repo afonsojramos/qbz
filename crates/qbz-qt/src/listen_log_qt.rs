@@ -90,7 +90,14 @@ pub async fn on_track_edge(track: &QueueTrack, event: &PlaybackEvent) {
         .bit_perfect_mode
         .map(|m| format!("{m:?}").to_ascii_lowercase());
     let meta = meta_from_queue_track(track, event.bit_depth, event.sample_rate, backend);
-    logger.track_started(meta, false).await;
+    // `infer_end = true`: under GAPLESS the engine hands off to the next
+    // track without ever reporting a not-playing tick, so the poll loop's
+    // `track_ended` predicate never fires and the previous row would close
+    // as a skip although it played to its last second (smoke 2026-08-28:
+    // 229 s of 230 s recorded as skip). The tracker's 2 s window on the last
+    // observed position tells the two apart; when the explicit natural-end
+    // edge DID fire first, no row is open and the flag is moot.
+    logger.track_started(meta, true).await;
 }
 
 /// One poll tick. `position_secs` is the engine's whole-second position;
