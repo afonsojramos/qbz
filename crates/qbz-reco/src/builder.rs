@@ -15,7 +15,9 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
 use qbz_integrations::musicbrainz::cache::MusicBrainzCache;
-use qbz_integrations::musicbrainz::{ArtistFullResponse, ArtistRelationships, Period, RelatedArtist};
+use qbz_integrations::musicbrainz::{
+    ArtistFullResponse, ArtistRelationships, Period, RelatedArtist,
+};
 use qbz_integrations::MusicBrainzClient;
 use qbz_qobuz::QobuzClient;
 
@@ -68,6 +70,16 @@ impl ArtistVectorBuilder {
             qobuz_client,
             weights,
         }
+    }
+
+    /// Shared MusicBrainz client used by identity validation in suggestions.
+    pub(crate) fn musicbrainz_client(&self) -> Arc<MusicBrainzClient> {
+        self.mb_client.clone()
+    }
+
+    /// Optional persistent match cache used before any name-based lookup.
+    pub(crate) fn musicbrainz_cache(&self) -> Arc<std::sync::Mutex<Option<MusicBrainzCache>>> {
+        self.mb_cache.clone()
     }
 
     /// Build a vector for an artist, fetching data from all sources.
