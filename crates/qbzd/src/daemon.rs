@@ -355,10 +355,15 @@ async fn boot(roots: &ProfileRoots, cfg: &QbzdConfig, warn_count: usize) -> Resu
     // at the DAEMON root — mirrors qbz/src/auth.rs:145-149, but slint-free and
     // session-independent. The store is a CACHE the suggestions engine reads/
     // writes; vectors are built on demand from MusicBrainz + Qobuz, so this
-    // needs no listening history. Best-effort: a failed open leaves
-    // `generate_playlist_suggestions` working un-cached (artist_vectors = None).
-    if let Ok(store) = qbz_reco::ArtistVectorStore::open_at(&roots.data) {
-        runtime.core().set_artist_vectors(store).await;
+    // needs no listening history. NOT optional for the feature, though: with
+    // `artist_vectors = None` the engine does not run un-cached — both
+    // `suggestions.rs` and `builder.rs` answer "No active session" — so a
+    // failed open is logged loudly instead of leaving a silent, dead route.
+    match qbz_reco::ArtistVectorStore::open_at(&roots.data) {
+        Ok(store) => runtime.core().set_artist_vectors(store).await,
+        Err(e) => log::warn!(
+            "artist-vector store open failed ({e}); playlist suggestions answer \"No active session\" until it opens"
+        ),
     }
 
     let shared = new_shared(cfg);
