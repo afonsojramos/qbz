@@ -66,6 +66,11 @@ pub struct PlexTrack {
     /// physical album/edition, so it separates two albums that share the same
     /// title+artist (which `album_key`, a title+artist hash, collapses into one).
     pub parent_rating_key: Option<String>,
+    /// MusicBrainz recording id from the item's `<Guid id="mbid://…"/>`
+    /// child (requires `includeGuids=1`; only the Plex Music agent writes
+    /// it). `None` otherwise — never synthesised.
+    #[serde(default)]
+    pub recording_mbid: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +243,7 @@ struct TrackBuilder {
     genres: Vec<String>,
     genre: Option<String>,
     parent_rating_key: Option<String>,
+    recording_mbid: Option<String>,
 }
 
 fn normalize_base_url(base_url: &str) -> String {
@@ -371,6 +377,9 @@ fn open_plex_cache_db() -> Result<Connection, String> {
         // Generation 0 is the legacy snapshot. The first completed paged sync
         // promotes observed rows to generation 1 and only then prunes 0.
         "sync_generation INTEGER NOT NULL DEFAULT 0",
+        // Identity (2026-08-28): the MusicBrainz recording id from the item's
+        // Guid. NULL until the next sync re-reads the section with Guids.
+        "recording_mbid TEXT",
     ] {
         let stmt = format!("ALTER TABLE plex_cache_tracks ADD COLUMN {col}");
         let _ = conn.execute(&stmt, []);
@@ -916,6 +925,21 @@ fn parse_track_block(start_tag: &str, inner_xml: &str) -> Option<PlexTrack> {
         }
     }
 
+    // `<Guid id="mbid://<uuid>"/>` — present only with includeGuids=1 and
+    // only for tracks the Plex Music agent matched. Other schemes (plex://)
+    // are not identities anyone else can join on, so they are ignored.
+    for guid_tag in collect_start_tags(inner_xml, "Guid") {
+        if let Some(mbid) = get_attr(&guid_tag, "id")
+            .as_deref()
+            .and_then(|id| id.strip_prefix("mbid://"))
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            t.recording_mbid = Some(mbid.to_string());
+            break;
+        }
+    }
+
     let (Some(rating_key), Some(title)) = (t.rating_key, t.title) else {
         return None;
     };
@@ -941,6 +965,7 @@ fn parse_track_block(start_tag: &str, inner_xml: &str) -> Option<PlexTrack> {
         genres: t.genres,
         genre: t.genre,
         parent_rating_key: t.parent_rating_key,
+        recording_mbid: t.recording_mbid,
     })
 }
 
@@ -1132,7 +1157,9 @@ pub async fn plex_get_section_tracks_page(
     }
     let client = build_plex_client()?;
     let base = normalize_base_url(&base_url);
-    let list_url = format!("{base}/library/sections/{section_key}/all?type=10");
+    // includeGuids=1: the item's external ids (`<Guid id="mbid://…"/>`)
+    // travel with the row; without it Plex omits them from listings.
+    let list_url = format!("{base}/library/sections/{section_key}/all?type=10&includeGuids=1");
     let url = with_token(&list_url, &token);
     let mut response = client
         .get(url)
@@ -1523,7 +1550,7 @@ pub fn plex_cache_get_tracks(
             .prepare(&format!(
                 "SELECT rating_key, title, artist, album, duration_ms, artwork_path, part_key, container,
                         codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth, track_number, disc_number,
-                        year, genre, genres_json, parent_rating_key, {EFFECTIVE_COLLECTION_ARTWORK_SQL}
+                        year, genre, genres_json, parent_rating_key, {EFFECTIVE_COLLECTION_ARTWORK_SQL}, recording_mbid
                  FROM plex_cache_tracks
                  WHERE section_key = ?1
                  ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number, title COLLATE NOCASE
@@ -1560,6 +1587,7 @@ pub fn plex_cache_get_tracks(
                     ),
                     genre: row.get(16)?,
                     parent_rating_key: row.get(18)?,
+                recording_mbid: row.get(20)?,
                 })
             })
             .map_err(|e| format!("Failed to query Plex cache tracks: {}", e))?;
@@ -1571,7 +1599,7 @@ pub fn plex_cache_get_tracks(
             .prepare(&format!(
                 "SELECT rating_key, title, artist, album, duration_ms, artwork_path, part_key, container,
                         codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth, track_number, disc_number,
-                        year, genre, genres_json, parent_rating_key, {EFFECTIVE_COLLECTION_ARTWORK_SQL}
+                        year, genre, genres_json, parent_rating_key, {EFFECTIVE_COLLECTION_ARTWORK_SQL}, recording_mbid
                  FROM plex_cache_tracks
                  ORDER BY updated_at DESC
                  LIMIT ?1",
@@ -1607,6 +1635,7 @@ pub fn plex_cache_get_tracks(
                     ),
                     genre: row.get(16)?,
                     parent_rating_key: row.get(18)?,
+                recording_mbid: row.get(20)?,
                 })
             })
             .map_err(|e| format!("Failed to query Plex cache tracks: {}", e))?;
@@ -1637,7 +1666,7 @@ pub fn plex_cache_get_tracks_by_keys(rating_keys: &[String]) -> Result<Vec<PlexT
     let sql = format!(
         "SELECT rating_key, title, artist, album, duration_ms, artwork_path, part_key, container,
                 codec, channels, bitrate_kbps, sampling_rate_hz, bit_depth, track_number, disc_number,
-                year, genre, genres_json, parent_rating_key, {EFFECTIVE_COLLECTION_ARTWORK_SQL}
+                year, genre, genres_json, parent_rating_key, {EFFECTIVE_COLLECTION_ARTWORK_SQL}, recording_mbid
          FROM plex_cache_tracks
          WHERE rating_key IN ({placeholders})"
     );
@@ -1675,6 +1704,7 @@ pub fn plex_cache_get_tracks_by_keys(rating_keys: &[String]) -> Result<Vec<PlexT
                 ),
                 genre: row.get(16)?,
                 parent_rating_key: row.get(18)?,
+                recording_mbid: row.get(20)?,
             })
         })
         .map_err(|e| format!("Failed to query Plex cache tracks by keys: {}", e))?;
@@ -2512,12 +2542,13 @@ fn apply_section_page_in(
                  collection_artwork_path,part_key,container,codec,channels,bitrate_kbps,
                  sampling_rate_hz,bit_depth,
                  track_number,disc_number,album_key,year,genre,genres_json,parent_rating_key,updated_at,
-                 sync_generation
+                 sync_generation,recording_mbid
              ) VALUES (
                  ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,
-                 ?19,?20,?21,?22,?23,?24,?25
+                 ?19,?20,?21,?22,?23,?24,?25,?26
              )
              ON CONFLICT(rating_key) DO UPDATE SET
+                 recording_mbid=COALESCE(excluded.recording_mbid,plex_cache_tracks.recording_mbid),
                  section_key=excluded.section_key,server_id=excluded.server_id,
                  title=excluded.title,artist=excluded.artist,album=excluded.album,
                  duration_ms=excluded.duration_ms,artwork_path=excluded.artwork_path,
@@ -2580,6 +2611,7 @@ fn apply_section_page_in(
                 track.parent_rating_key,
                 now,
                 generation_i64,
+                track.recording_mbid.clone(),
             ])
             .map_err(|e| format!("Failed to upsert Plex page track: {}", e))?;
     }
@@ -2811,8 +2843,9 @@ pub fn plex_cache_save_tracks(
              (rating_key, section_key, server_id, title, artist, album, duration_ms, artwork_path,
               collection_artwork_path, part_key, container, codec, channels, bitrate_kbps,
               sampling_rate_hz, bit_depth,
-              track_number, disc_number, album_key, year, genre, genres_json, parent_rating_key, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+              track_number, disc_number, album_key, year, genre, genres_json, parent_rating_key, updated_at,
+              recording_mbid)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
             params![
                 track.rating_key,
                 section_key,
@@ -2838,6 +2871,7 @@ pub fn plex_cache_save_tracks(
                 plex_genres_json(track),
                 track.parent_rating_key.clone(),
                 now,
+                track.recording_mbid.clone(),
             ],
         )
         .map_err(|e| format!("Failed to insert Plex cache track: {}", e))?;
@@ -3223,7 +3257,8 @@ mod tests {
                  genres_json TEXT NOT NULL DEFAULT '[]',
                  parent_rating_key TEXT,
                  updated_at INTEGER NOT NULL,
-                 sync_generation INTEGER NOT NULL DEFAULT 0
+                 sync_generation INTEGER NOT NULL DEFAULT 0,
+                 recording_mbid TEXT
              );
              CREATE INDEX idx_sync_tracks_section ON plex_cache_tracks(section_key);
              CREATE TABLE plex_cache_album_artwork (
@@ -3270,6 +3305,7 @@ mod tests {
             genres: vec!["Fixture".to_string()],
             genre: Some("Fixture".to_string()),
             parent_rating_key: Some(format!("album-{}", index / 10)),
+            recording_mbid: None,
         }
     }
 
