@@ -135,7 +135,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 # rfd's "tokio" feature: it would switch the shared zbus 5 executor choice.
 # `default-features = false` keeps the GTK3 backend out; the xdg-portal path
 # is the Wayland-correct one and needs no extra system libs.
-rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
 # Linux system tray via StatusNotifierItem (src/tray_linux.rs). macOS and
 # Windows use their native implementations in src/tray_macos.rs and
