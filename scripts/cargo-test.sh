@@ -11,6 +11,10 @@
 #
 # Default (job `test`, no Qt):
 #   cargo test --workspace --exclude qbz-qt
+#   + the listen-log suite check: `qbz-app::listen_log` must list >= 25 tests
+#     and pass (schema migration, accumulator: paused/seek/stall deltas add
+#     nothing, natural/skip/stop/shutdown closes, orphan close on reopen,
+#     paused writes nothing, clear + VACUUM, is_play/is_skip bounds).
 #   --workspace today = the 42 members of crates/Cargo.toml minus qbz-qt: the
 #   audio/player/cache/DSD/disc/rip core, qbz-app/core/models/theme/i18n,
 #   the Qobuz client and the source seam, Plex/Jellyfin/Subsonic + media
@@ -48,6 +52,16 @@ cargo test \
   --exclude qbz-qt \
   --no-fail-fast \
   "$@"
+
+say "gate: listen log suite present and green (qbz-app::listen_log)"
+# The workspace run above already executes these; this step exists so a
+# refactor that silently drops the module's tests (a renamed mod, a cfg gate)
+# fails the gate instead of shrinking coverage without a trace. Cheap: the
+# test binary is already built.
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-app --lib -- --list listen_log:: 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 25 )) || { echo "listen_log suite has $n tests (expected >= 25)"; exit 1; }
+cargo test --manifest-path crates/Cargo.toml -p qbz-app --lib -- listen_log::
 
 say "gate: qbzd resolves no Slint crate"
 hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbzd -e normal \
