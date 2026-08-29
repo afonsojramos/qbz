@@ -141,6 +141,9 @@ where
         // playback prefs inside init_for_user, so it works before Settings has
         // published anything.
         qbz_app::session_persist::init_for_user(&dir);
+        // Listen log (per-user listen_log.db) — opens async; rows start
+        // once the store is bound.
+        crate::listen_log_qt::init_for_user(&dir);
         // Phase 5: local-favorites store (Library show-local + hearts).
         crate::library_qt::init_local_favorites(&dir);
         // Qobuz favourite-id cache (favorites_cache.db, shared with the Slint
@@ -318,6 +321,9 @@ where
                 crate::local_plex::init_for_user(&dir);
                 // Session persistence — see the fresh-login path.
                 qbz_app::session_persist::init_for_user(&dir);
+                // Listen log (per-user listen_log.db) — opens async; rows start
+                // once the store is bound.
+                crate::listen_log_qt::init_for_user(&dir);
                 crate::library_qt::init_local_favorites(&dir);
                 // Qobuz favourite-id cache — see the fresh-login path.
                 crate::fav_cache_qt::init_for_user(&dir);
@@ -393,6 +399,9 @@ where
         // playback prefs inside init_for_user, so it works before Settings has
         // published anything.
         qbz_app::session_persist::init_for_user(&dir);
+        // Listen log (per-user listen_log.db) — opens async; rows start
+        // once the store is bound.
+        crate::listen_log_qt::init_for_user(&dir);
         // Phase 5: local-favorites store (Library show-local + hearts).
         crate::library_qt::init_local_favorites(&dir);
         // Qobuz favourite-id cache. The disk seed is the ONLY source offline
@@ -439,6 +448,8 @@ where
     crate::local_plex::reset();
     crate::playlist_qt::teardown();
     crate::integrations_qt::unbind_qobuz_user();
+    // Listen log: close the row in flight and drop the per-user binding.
+    crate::listen_log_qt::teardown().await;
     // Intelligent Search: the LEARNED ranking is per-user. Without this the
     // next account inherits a stranger's most-clicked results as its promoted
     // top result, and keeps writing into their buckets.
