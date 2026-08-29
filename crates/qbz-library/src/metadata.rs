@@ -733,6 +733,31 @@ impl MetadataExtractor {
                     .unwrap_or(0),
                 source: None,
                 qobuz_track_id: None,
+                // Identity tags as Picard writes them (lofty maps
+                // MUSICBRAINZ_TRACKID -> MusicBrainzRecordingId and
+                // MUSICBRAINZ_RELEASETRACKID -> MusicBrainzTrackId; ISRC/TSRC
+                // -> Isrc). Same cross-tag fallback as every other field.
+                isrc: Self::string_across_tags(&tagged_file, &ItemKey::Isrc),
+                musicbrainz_recording_id: Self::string_across_tags(
+                    &tagged_file,
+                    &ItemKey::MusicBrainzRecordingId,
+                ),
+                musicbrainz_track_id: Self::string_across_tags(
+                    &tagged_file,
+                    &ItemKey::MusicBrainzTrackId,
+                ),
+                musicbrainz_release_id: Self::string_across_tags(
+                    &tagged_file,
+                    &ItemKey::MusicBrainzReleaseId,
+                ),
+                musicbrainz_release_group_id: Self::string_across_tags(
+                    &tagged_file,
+                    &ItemKey::MusicBrainzReleaseGroupId,
+                ),
+                musicbrainz_artist_id: Self::string_across_tags(
+                    &tagged_file,
+                    &ItemKey::MusicBrainzArtistId,
+                ),
                 is_network_mount: false,
             }
         } else {
@@ -776,6 +801,12 @@ impl MetadataExtractor {
                     .unwrap_or(0),
                 source: None,
                 qobuz_track_id: None,
+                isrc: None,
+                musicbrainz_recording_id: None,
+                musicbrainz_track_id: None,
+                musicbrainz_release_id: None,
+                musicbrainz_release_group_id: None,
+                musicbrainz_artist_id: None,
                 is_network_mount: false,
             }
         };
@@ -858,6 +889,12 @@ impl MetadataExtractor {
                 .unwrap_or(0),
             source: None,
             qobuz_track_id: None,
+            isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_track_id: None,
+            musicbrainz_release_id: None,
+            musicbrainz_release_group_id: None,
+            musicbrainz_artist_id: None,
             is_network_mount: false,
         })
     }

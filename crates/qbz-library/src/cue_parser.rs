@@ -322,6 +322,12 @@ pub fn cue_to_tracks(
             indexed_at: now,
             source: None,
             qobuz_track_id: None,
+            isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_track_id: None,
+            musicbrainz_release_id: None,
+            musicbrainz_release_group_id: None,
+            musicbrainz_artist_id: None,
             is_network_mount: false,
         });
     }

@@ -641,6 +641,10 @@ impl LibraryDatabase {
                 .map_err(|e| LibraryError::Database(format!("Migration failed: {}", e)))?;
         }
 
+        // Migration: cross-source identity tags (ISRC + MusicBrainz ids).
+        // Additive; NULL until the next scan re-reads the file's tags.
+        self.ensure_identity_columns()?;
+
         // Migration: Change sample_rate from INTEGER to REAL for decimal precision (44.1kHz, 88.2kHz, etc.)
         // Check if sample_rate is currently INTEGER
         let sample_rate_type: String = self
@@ -791,6 +795,8 @@ impl LibraryDatabase {
                         LibraryError::Database(format!("Failed to re-add catalog_number: {}", e))
                     })?;
             }
+            // Same for the identity columns (they post-date the rebuild too).
+            self.ensure_identity_columns()?;
 
             log::info!("Migration completed: sample_rate is now REAL");
         }
@@ -1393,8 +1399,11 @@ impl LibraryDatabase {
                 disc_number, year, genre, genres_json, catalog_number, duration_secs, format, bit_depth,
                 sample_rate, channels, file_size_bytes, cue_file_path,
                 cue_start_secs, cue_end_secs, artwork_path, last_modified, indexed_at,
-                album_group_key, album_group_title, source, is_network_mount)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                album_group_key, album_group_title, source, is_network_mount,
+                isrc, musicbrainz_recording_id, musicbrainz_track_id,
+                musicbrainz_release_id, musicbrainz_release_group_id, musicbrainz_artist_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?, ?)"#,
                 params![
                     track.file_path,
                     track.title,
@@ -1423,11 +1432,49 @@ impl LibraryDatabase {
                     track.album_group_title,
                     source,
                     is_network_mount as i64,
+                    track.isrc,
+                    track.musicbrainz_recording_id,
+                    track.musicbrainz_track_id,
+                    track.musicbrainz_release_id,
+                    track.musicbrainz_release_group_id,
+                    track.musicbrainz_artist_id,
                 ],
             )
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Add the ISRC + MusicBrainz id columns when absent (idempotent, cheap:
+    /// one `pragma_table_info` probe). Called from the migration chain AND
+    /// after the sample_rate table rebuild, which recreates `local_tracks`
+    /// without any column added by a later ALTER.
+    fn ensure_identity_columns(&self) -> Result<(), LibraryError> {
+        let has_isrc: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('local_tracks') WHERE name = 'isrc'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .unwrap_or(false);
+        if !has_isrc {
+            log::info!("Running migration: adding identity columns (isrc, musicbrainz_*) to local_tracks");
+            self.conn
+                .execute_batch(
+                    "ALTER TABLE local_tracks ADD COLUMN isrc TEXT;
+                     ALTER TABLE local_tracks ADD COLUMN musicbrainz_recording_id TEXT;
+                     ALTER TABLE local_tracks ADD COLUMN musicbrainz_track_id TEXT;
+                     ALTER TABLE local_tracks ADD COLUMN musicbrainz_release_id TEXT;
+                     ALTER TABLE local_tracks ADD COLUMN musicbrainz_release_group_id TEXT;
+                     ALTER TABLE local_tracks ADD COLUMN musicbrainz_artist_id TEXT;
+                     CREATE INDEX IF NOT EXISTS idx_tracks_isrc ON local_tracks(isrc);
+                     CREATE INDEX IF NOT EXISTS idx_tracks_mb_recording ON local_tracks(musicbrainz_recording_id);",
+                )
+                .map_err(|e| LibraryError::Database(format!("Migration failed: {}", e)))?;
+        }
+        Ok(())
     }
 
     /// Get a track by ID
@@ -3747,7 +3794,9 @@ impl LibraryDatabase {
          bit_depth, sample_rate, channels, file_size_bytes, \
          cue_file_path, cue_start_secs, cue_end_secs, artwork_path, \
          last_modified, indexed_at, album_group_key, album_group_title, \
-         source, qobuz_track_id, catalog_number, is_network_mount";
+         source, qobuz_track_id, catalog_number, is_network_mount, \
+         isrc, musicbrainz_recording_id, musicbrainz_track_id, \
+         musicbrainz_release_id, musicbrainz_release_group_id, musicbrainz_artist_id";
 
     fn track_genres_json(track: &LocalTrack) -> String {
         let mut genres = Vec::<String>::new();
@@ -3831,6 +3880,12 @@ impl LibraryDatabase {
             source: row.get(25).ok().flatten(),                                       // source
             qobuz_track_id: row.get(26).ok().flatten(), // qobuz_track_id
             catalog_number: row.get(27).ok().flatten(), // catalog_number
+            isrc: row.get(29).ok().flatten(),
+            musicbrainz_recording_id: row.get(30).ok().flatten(),
+            musicbrainz_track_id: row.get(31).ok().flatten(),
+            musicbrainz_release_id: row.get(32).ok().flatten(),
+            musicbrainz_release_group_id: row.get(33).ok().flatten(),
+            musicbrainz_artist_id: row.get(34).ok().flatten(),
             is_network_mount: row
                 .get::<_, Option<i64>>(28)
                 .ok()
@@ -5064,6 +5119,12 @@ impl LibraryDatabase {
                     indexed_at: row.get(24)?,
                     source: row.get(25)?,
                     qobuz_track_id: row.get(26)?,
+                    isrc: None,
+                    musicbrainz_recording_id: None,
+                    musicbrainz_track_id: None,
+                    musicbrainz_release_id: None,
+                    musicbrainz_release_group_id: None,
+                    musicbrainz_artist_id: None,
                     is_network_mount: row.get::<_, i64>(27)? != 0,
                 })
             })
@@ -5133,6 +5194,12 @@ impl LibraryDatabase {
                         indexed_at: row.get(24)?,
                         source: row.get(25)?,
                         qobuz_track_id: row.get(26)?,
+                        isrc: None,
+                        musicbrainz_recording_id: None,
+                        musicbrainz_track_id: None,
+                        musicbrainz_release_id: None,
+                        musicbrainz_release_group_id: None,
+                        musicbrainz_artist_id: None,
                         is_network_mount: row.get::<_, i64>(27)? != 0,
                     },
                     playlist_position: row.get(28)?,
