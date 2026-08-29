@@ -1941,8 +1941,8 @@ msgstr "Dadurch werden alle {} gesperrten Künstler entfernt. Dies kann nicht r�
 msgid "SCROBBLERS"
 msgstr "SCROBBLER"
 
-msgid "Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks."
-msgstr "Senden Sie Ihre Wiedergaben an Last.fm und ListenBrainz. Funktioniert für Qobuz-, lokale und Plex-Titel."
+msgid "Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks. This switch also decides whether Recommendations may read your listening history from those services."
+msgstr "Senden Sie Ihre Wiedergaben an Last.fm und ListenBrainz. Funktioniert für Qobuz-, lokale und Plex-Titel. Dieser Schalter entscheidet auch, ob Empfehlungen Ihren Hörverlauf von diesen Diensten lesen dürfen."
 
 msgid "LAST.FM"
 msgstr "LAST.FM"
@@ -6194,3 +6194,24 @@ msgstr "Nur fehlende Titel"
 
 msgid "Keeps existing offline copies and downloads tracks that are not available yet."
 msgstr "Behält vorhandene Offline-Kopien bei und lädt noch nicht verfügbare Titel herunter."
+
+msgid "PRIVACY"
+msgstr "DATENSCHUTZ"
+
+msgid "Listening history"
+msgstr "Hörverlauf"
+
+msgid "Keep a local log of what you play: track, source, how much of it you heard and when. It stays on this machine, per account, and never leaves it unless you enable a scrobbler."
+msgstr "Führt ein lokales Protokoll Ihrer Wiedergaben: Titel, Quelle, wie viel davon Sie gehört haben und wann. Es bleibt auf diesem Rechner, pro Konto, und verlässt ihn nie, sofern Sie keinen Scrobbler aktivieren."
+
+msgid "Clear listening history"
+msgstr "Hörverlauf löschen"
+
+msgid "Deletes every play recorded on this machine for this account. Scrobbles already sent are not affected."
+msgstr "Löscht jede auf diesem Rechner für dieses Konto aufgezeichnete Wiedergabe. Bereits gesendete Scrobbles sind nicht betroffen."
+
+msgid "Listening history cleared."
+msgstr "Hörverlauf gelöscht."
+
+msgid "Couldn't clear listening history."
+msgstr "Hörverlauf konnte nicht gelöscht werden."

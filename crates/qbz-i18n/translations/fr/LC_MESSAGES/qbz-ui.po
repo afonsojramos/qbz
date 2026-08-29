@@ -1941,8 +1941,8 @@ msgstr "Cela supprimera les {} artistes de la liste noire. Cette action est irr�
 msgid "SCROBBLERS"
 msgstr "SCROBBLERS"
 
-msgid "Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks."
-msgstr "Envoyez vos écoutes vers Last.fm et ListenBrainz. Fonctionne pour les titres Qobuz, locaux et Plex."
+msgid "Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks. This switch also decides whether Recommendations may read your listening history from those services."
+msgstr "Envoyez vos écoutes vers Last.fm et ListenBrainz. Fonctionne pour les titres Qobuz, locaux et Plex. Cet interrupteur décide aussi si les Recommandations peuvent lire votre historique d’écoute depuis ces services."
 
 msgid "LAST.FM"
 msgstr "LAST.FM"
@@ -6192,3 +6192,24 @@ msgstr "Uniquement les pistes manquantes"
 
 msgid "Keeps existing offline copies and downloads tracks that are not available yet."
 msgstr "Conserve les copies hors ligne existantes et télécharge les pistes qui ne sont pas encore disponibles."
+
+msgid "PRIVACY"
+msgstr "CONFIDENTIALITÉ"
+
+msgid "Listening history"
+msgstr "Historique d’écoute"
+
+msgid "Keep a local log of what you play: track, source, how much of it you heard and when. It stays on this machine, per account, and never leaves it unless you enable a scrobbler."
+msgstr "Conserve un journal local de ce que vous écoutez : titre, source, durée écoutée et moment. Il reste sur cette machine, par compte, et ne la quitte jamais sauf si vous activez un scrobbler."
+
+msgid "Clear listening history"
+msgstr "Effacer l’historique d’écoute"
+
+msgid "Deletes every play recorded on this machine for this account. Scrobbles already sent are not affected."
+msgstr "Supprime toutes les écoutes enregistrées sur cette machine pour ce compte. Les scrobbles déjà envoyés ne sont pas concernés."
+
+msgid "Listening history cleared."
+msgstr "Historique d’écoute effacé."
+
+msgid "Couldn't clear listening history."
+msgstr "Impossible d’effacer l’historique d’écoute."

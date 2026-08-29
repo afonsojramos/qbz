@@ -1811,3 +1811,27 @@ msgstr "Only missing tracks"
 
 msgid "Keeps existing offline copies and downloads tracks that are not available yet."
 msgstr "Keeps existing offline copies and downloads tracks that are not available yet."
+
+msgid "Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks. This switch also decides whether Recommendations may read your listening history from those services."
+msgstr "Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks. This switch also decides whether Recommendations may read your listening history from those services."
+
+msgid "PRIVACY"
+msgstr "PRIVACY"
+
+msgid "Listening history"
+msgstr "Listening history"
+
+msgid "Keep a local log of what you play: track, source, how much of it you heard and when. It stays on this machine, per account, and never leaves it unless you enable a scrobbler."
+msgstr "Keep a local log of what you play: track, source, how much of it you heard and when. It stays on this machine, per account, and never leaves it unless you enable a scrobbler."
+
+msgid "Clear listening history"
+msgstr "Clear listening history"
+
+msgid "Deletes every play recorded on this machine for this account. Scrobbles already sent are not affected."
+msgstr "Deletes every play recorded on this machine for this account. Scrobbles already sent are not affected."
+
+msgid "Listening history cleared."
+msgstr "Listening history cleared."
+
+msgid "Couldn't clear listening history."
+msgstr "Couldn't clear listening history."

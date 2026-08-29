@@ -4054,8 +4054,8 @@ msgstr "Исполнители из чёрного списка скрыты и�
 msgid "Blacklist filtering is disabled. Blacklisted artists are shown everywhere until you re-enable it."
 msgstr "Фильтрация по чёрному списку отключена. Исполнители из чёрного списка показываются везде, пока вы её снова не включите."
 
-msgid "Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks."
-msgstr "Отправляйте свои прослушивания в Last.fm и ListenBrainz. Работает для треков Qobuz, локальных и Plex."
+msgid "Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks. This switch also decides whether Recommendations may read your listening history from those services."
+msgstr "Отправляйте свои прослушивания в Last.fm и ListenBrainz. Работает для треков Qobuz, локальных и Plex. Этот переключатель также определяет, может ли раздел «Рекомендации» читать вашу историю прослушиваний из этих сервисов."
 
 msgid "Show what you're listening to as your Discord status. Opt-in — Discord must be running."
 msgstr "Показывать, что вы слушаете, в статусе Discord. По желанию — Discord должен быть запущен."
@@ -6212,3 +6212,24 @@ msgstr "Только недостающие треки"
 
 msgid "Keeps existing offline copies and downloads tracks that are not available yet."
 msgstr "Сохраняет существующие офлайн-копии и загружает ещё недоступные треки."
+
+msgid "PRIVACY"
+msgstr "КОНФИДЕНЦИАЛЬНОСТЬ"
+
+msgid "Listening history"
+msgstr "История прослушиваний"
+
+msgid "Keep a local log of what you play: track, source, how much of it you heard and when. It stays on this machine, per account, and never leaves it unless you enable a scrobbler."
+msgstr "Ведёт локальный журнал того, что вы слушаете: трек, источник, сколько из него вы прослушали и когда. Он хранится на этом компьютере, отдельно для каждой учётной записи, и никогда не покидает его, если вы не включите скробблер."
+
+msgid "Clear listening history"
+msgstr "Очистить историю прослушиваний"
+
+msgid "Deletes every play recorded on this machine for this account. Scrobbles already sent are not affected."
+msgstr "Удаляет все прослушивания, записанные на этом компьютере для этой учётной записи. Уже отправленные скробблы не затрагиваются."
+
+msgid "Listening history cleared."
+msgstr "История прослушиваний очищена."
+
+msgid "Couldn't clear listening history."
+msgstr "Не удалось очистить историю прослушиваний."

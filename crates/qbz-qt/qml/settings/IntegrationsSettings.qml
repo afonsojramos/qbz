@@ -19,6 +19,9 @@ Column {
     id: root
 
     property var doc: ({})
+    /// The view-level SettingsConfirmHost (SettingsView.qml), for the
+    /// destructive "Clear listening history" row. Null in previews.
+    property var confirmHost: null
 
     QbzTheme { id: theme }
 
@@ -65,6 +68,42 @@ Column {
 
     SettingsSpacer { }
 
+    // ============================ PRIVACY ================================
+    // The local listen log (qbz_app::listen_log): one row per play, on this
+    // disk only, per account. Default ON. "Clear" is DELETE + VACUUM. The
+    // toggle's state comes from the per-user store (`listen_meta.paused`),
+    // not from a pref, so it follows the account.
+    GroupHeader { text: QbzSession.tr("PRIVACY", QbzSession.trRev) }
+    SettingRow {
+        label: QbzSession.tr("Listening history", QbzSession.trRev)
+        description: QbzSession.tr("Keep a local log of what you play: track, source, how much of it you heard and when. It stays on this machine, per account, and never leaves it unless you enable a scrobbler.", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.listenHistoryEnabled !== false
+            onToggled: function (v) { QbzBridge.settingsBool("listen-history", v) }
+        }
+    }
+    SettingRow {
+        label: QbzSession.tr("Clear listening history", QbzSession.trRev)
+        description: QbzSession.tr("Deletes every play recorded on this machine for this account. Scrobbles already sent are not affected.", QbzSession.trRev)
+        SettingsButton {
+            danger: true
+            text: QbzSession.tr("Clear", QbzSession.trRev)
+            onClicked: {
+                if (!root.confirmHost) {
+                    QbzBridge.integrationsAction("listen-history-clear")
+                    return
+                }
+                root.confirmHost.ask(
+                    QbzSession.tr("Clear listening history", QbzSession.trRev),
+                    QbzSession.tr("Deletes every play recorded on this machine for this account. Scrobbles already sent are not affected.", QbzSession.trRev),
+                    QbzSession.tr("Clear", QbzSession.trRev),
+                    function () { QbzBridge.integrationsAction("listen-history-clear") })
+            }
+        }
+    }
+
+    SettingsSpacer { }
+
     // ========================== SCROBBLERS ===============================
     // Master header row (toggle + collapse chevron), then the body gated
     // on enabled && !collapsed (IntegrationsSettings.slint:113-169).
@@ -88,7 +127,7 @@ Column {
             }
             Text {
                 width: parent.width
-                text: QbzSession.tr("Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks.", QbzSession.trRev)
+                text: QbzSession.tr("Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks. This switch also decides whether Recommendations may read your listening history from those services.", QbzSession.trRev)
                 color: theme.textMuted
                 font.pixelSize: 12
                 wrapMode: Text.WordWrap

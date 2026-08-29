@@ -509,6 +509,16 @@ pub async fn listenbrainz_set_token(token: &str) {
 /// integrations_action dispatch (non-toggle rows).
 pub async fn handle_action(_runtime: &Arc<AppRuntime<LoggingAdapter>>, action: &str) {
     match action {
+        // Privacy: "Clear listening history" (confirmed in QML first).
+        // DELETE + VACUUM on the per-user listen_log.db; the toggle state and
+        // the install's origin id survive.
+        "listen-history-clear" => match crate::listen_log_qt::clear().await {
+            Ok(()) => crate::toast_qt::success(qbz_i18n::t("Listening history cleared.")),
+            Err(e) => {
+                log::warn!("[qbz-qt] clear listening history failed: {e}");
+                crate::toast_qt::error(qbz_i18n::t("Couldn't clear listening history."));
+            }
+        },
         // Last.fm two-step browser auth (scrobble.rs `lastfm_connect`):
         // request token -> authorize URL in the browser -> Finish exchanges
         // it for a session.

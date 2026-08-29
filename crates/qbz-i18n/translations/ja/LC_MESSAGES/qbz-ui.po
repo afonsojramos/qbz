@@ -4027,8 +4027,8 @@ msgstr "ブラックリストに登録されたアーティストは、検索結
 msgid "Blacklist filtering is disabled. Blacklisted artists are shown everywhere until you re-enable it."
 msgstr "ブラックリストフィルタリングは無効です。再度有効にするまで、ブラックリストに登録されたアーティストはあらゆる場所に表示されます。"
 
-msgid "Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks."
-msgstr "再生履歴をLast.fmとListenBrainzに送信します。Qobuz、ローカル、Plexのトラックに対応しています。"
+msgid "Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks. This switch also decides whether Recommendations may read your listening history from those services."
+msgstr "再生履歴をLast.fmとListenBrainzに送信します。Qobuz、ローカル、Plexのトラックに対応しています。このスイッチは、おすすめがそれらのサービスから再生履歴を読み取れるかどうかも決めます。"
 
 msgid "Show what you're listening to as your Discord status. Opt-in — Discord must be running."
 msgstr "聴いている曲をDiscordのステータスとして表示します。オプトイン制で、Discordが起動している必要があります。"
@@ -6176,3 +6176,24 @@ msgstr "不足しているトラックのみ"
 
 msgid "Keeps existing offline copies and downloads tracks that are not available yet."
 msgstr "既存のオフラインコピーを保持し、まだ利用できないトラックだけをダウンロードします。"
+
+msgid "PRIVACY"
+msgstr "プライバシー"
+
+msgid "Listening history"
+msgstr "再生履歴"
+
+msgid "Keep a local log of what you play: track, source, how much of it you heard and when. It stays on this machine, per account, and never leaves it unless you enable a scrobbler."
+msgstr "再生した内容（トラック、ソース、どれだけ聴いたか、いつ聴いたか）をローカルに記録します。この記録はアカウントごとにこのマシンに保存され、スクロブラーを有効にしない限り外部には送信されません。"
+
+msgid "Clear listening history"
+msgstr "再生履歴を消去"
+
+msgid "Deletes every play recorded on this machine for this account. Scrobbles already sent are not affected."
+msgstr "このアカウントについてこのマシンに記録されたすべての再生を削除します。送信済みのスクロブルには影響しません。"
+
+msgid "Listening history cleared."
+msgstr "再生履歴を消去しました。"
+
+msgid "Couldn't clear listening history."
+msgstr "再生履歴を消去できませんでした。"
