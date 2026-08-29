@@ -818,6 +818,12 @@ Rectangle {
     PlaylistCreateModal {
         anchors.fill: parent
     }
+    // Whole-album / whole-playlist offline preflight. Mounted once at shell
+    // level because either detail view can open it and the retained track
+    // snapshot lives in QbzOffline, not in the page that launched it.
+    OfflineCacheChoiceModal {
+        anchors.fill: parent
+    }
     // The hotkeys pair (2026-08-03 hotkeys-port contract §4.4/§4.5, block
     // B3): the read-only cheatsheet (`?` / the HeaderBar menu row) and the
     // editable customize editor. Same declaration-order convention as their

@@ -164,9 +164,6 @@ msgstr "Titel suchen..."
 msgid "Title"
 msgstr "Titel"
 
-msgid "Duration"
-msgstr "Dauer"
-
 msgid "Quality"
 msgstr "Qualität"
 
@@ -795,9 +792,6 @@ msgstr "CD"
 
 msgid "Lossy"
 msgstr "Verlustbehaftet"
-
-msgid "Format"
-msgstr "Format"
 
 msgid "Other"
 msgstr "Andere"
@@ -6082,3 +6076,121 @@ msgstr "Tastenschema"
 
 msgid "Vim"
 msgstr "Vim"
+
+# Local Library QoL: Explorer, scan progress, and per-track metadata editor
+msgid "All years"
+msgstr "Alle Jahre"
+
+msgid "Explorer columns"
+msgstr "Explorer-Spalten"
+
+msgid "Genre and year"
+msgstr "Genre und Jahr"
+
+msgid "Years"
+msgstr "Jahre"
+
+msgid "Edit track metadata"
+msgstr "Track-Metadaten bearbeiten"
+
+msgid "Building library index"
+msgstr "Bibliotheksindex wird erstellt"
+
+msgid "Local folders"
+msgstr "Lokale Ordner"
+
+msgid "Next track"
+msgstr "Nächster Titel"
+
+msgid "Overall"
+msgstr "Gesamt"
+
+msgid "Previous track"
+msgstr "Vorheriger Titel"
+
+msgid "Scanning library"
+msgstr "Bibliothek wird gescannt"
+
+msgid "The track is no longer in the library."
+msgstr "Der Titel befindet sich nicht mehr in der Bibliothek."
+
+msgid "Updating library index"
+msgstr "Bibliotheksindex wird aktualisiert"
+
+msgid "Edit album"
+msgstr "Album bearbeiten"
+
+msgid "Editing a local metadata sidecar"
+msgstr "Lokale Metadaten-Sidecar-Datei wird bearbeitet"
+
+msgid "Media-server metadata is stored in a local sidecar."
+msgstr "Metadaten des Medienservers werden in einer lokalen Sidecar-Datei gespeichert."
+
+msgid "Media-server metadata can only be edited with a sidecar."
+msgstr "Metadaten des Medienservers können nur über eine Sidecar-Datei bearbeitet werden."
+
+msgid "Network file"
+msgstr "Netzwerkdatei"
+
+msgid "Offline download"
+msgstr "Offline-Download"
+
+msgid "File path"
+msgstr "Dateipfad"
+
+msgid "Containing folder"
+msgstr "Übergeordneter Ordner"
+
+msgid "Media item ID"
+msgstr "Medienobjekt-ID"
+
+msgid "Album ID"
+msgstr "Album-ID"
+
+msgid "Server"
+msgstr "Server"
+
+msgid "Duration"
+msgstr "Dauer"
+
+msgid "Format"
+msgstr "Format"
+
+msgid "Channels"
+msgstr "Kanäle"
+
+msgid "File size"
+msgstr "Dateigröße"
+
+msgid "Location"
+msgstr "Speicherort"
+
+msgid "The media item is no longer available."
+msgstr "Das Medienobjekt ist nicht mehr verfügbar."
+
+msgid "The local album folder is not currently available."
+msgstr "Der lokale Albumordner ist derzeit nicht verfügbar."
+
+msgid "Everything is already available offline"
+msgstr "Alles ist bereits offline verfügbar"
+
+msgid "Some tracks are already available offline"
+msgstr "Einige Titel sind bereits offline verfügbar"
+
+msgid "{} of {} tracks in “{}” are already available offline."
+msgstr "{} von {} Titeln in „{}“ sind bereits offline verfügbar."
+
+msgid "Download the entire playlist again"
+msgstr "Gesamte Playlist erneut herunterladen"
+
+msgid "Download the entire album again"
+msgstr "Gesamtes Album erneut herunterladen"
+
+msgid "Re-downloads every track and can repair corrupt offline copies."
+msgstr "Lädt jeden Titel erneut herunter und kann beschädigte Offline-Kopien reparieren."
+
+msgid "Only missing tracks"
+msgstr "Nur fehlende Titel"
+
+msgid "Keeps existing offline copies and downloads tracks that are not available yet."
+msgstr "Behält vorhandene Offline-Kopien bei und lädt noch nicht verfügbare Titel herunter."

@@ -50,9 +50,9 @@ pub use crate::local_rows::to_json;
 
 // --- state / prefs ---------------------------------------------------------
 pub use crate::local_state::{
-    album_mode, begin_tracks_load, counts, has_library, set_album_mode, set_tracks_filter,
-    set_tracks_group, set_tracks_query, set_tracks_sort, state, tracks_filter, tracks_generation,
-    tracks_group, tracks_has_more, tracks_sort,
+    album_mode, begin_tracks_load, counts, explorer_columns, has_library, set_album_mode,
+    set_explorer_columns, set_tracks_filter, set_tracks_group, set_tracks_query, set_tracks_sort,
+    state, tracks_filter, tracks_generation, tracks_group, tracks_has_more, tracks_sort,
 };
 
 // --- queries ---------------------------------------------------------------

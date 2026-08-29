@@ -163,9 +163,6 @@ msgstr "Поиск треков..."
 msgid "Title"
 msgstr "Название"
 
-msgid "Duration"
-msgstr "Длительность"
-
 msgid "Quality"
 msgstr "Качество"
 
@@ -795,9 +792,6 @@ msgstr "CD"
 
 msgid "Lossy"
 msgstr "С потерями"
-
-msgid "Format"
-msgstr "Формат"
 
 msgid "Other"
 msgstr "Другое"
@@ -6100,3 +6094,121 @@ msgstr "Раскладка клавиш"
 
 msgid "Vim"
 msgstr "Vim"
+
+# Local Library QoL: Explorer, scan progress, and per-track metadata editor
+msgid "All years"
+msgstr "Все годы"
+
+msgid "Explorer columns"
+msgstr "Столбцы обозревателя"
+
+msgid "Genre and year"
+msgstr "Жанр и год"
+
+msgid "Years"
+msgstr "Годы"
+
+msgid "Edit track metadata"
+msgstr "Изменить метаданные трека"
+
+msgid "Building library index"
+msgstr "Создание индекса медиатеки"
+
+msgid "Local folders"
+msgstr "Локальные папки"
+
+msgid "Next track"
+msgstr "Следующий трек"
+
+msgid "Overall"
+msgstr "Всего"
+
+msgid "Previous track"
+msgstr "Предыдущий трек"
+
+msgid "Scanning library"
+msgstr "Сканирование медиатеки"
+
+msgid "The track is no longer in the library."
+msgstr "Трека больше нет в медиатеке."
+
+msgid "Updating library index"
+msgstr "Обновление индекса медиатеки"
+
+msgid "Edit album"
+msgstr "Изменить альбом"
+
+msgid "Editing a local metadata sidecar"
+msgstr "Редактирование локального sidecar-файла метаданных"
+
+msgid "Media-server metadata is stored in a local sidecar."
+msgstr "Метаданные медиасервера хранятся в локальном sidecar-файле."
+
+msgid "Media-server metadata can only be edited with a sidecar."
+msgstr "Метаданные медиасервера можно редактировать только через sidecar-файл."
+
+msgid "Network file"
+msgstr "Сетевой файл"
+
+msgid "Offline download"
+msgstr "Офлайн-загрузка"
+
+msgid "File path"
+msgstr "Путь к файлу"
+
+msgid "Containing folder"
+msgstr "Содержащая папка"
+
+msgid "Media item ID"
+msgstr "ID медиафайла"
+
+msgid "Album ID"
+msgstr "ID альбома"
+
+msgid "Server"
+msgstr "Сервер"
+
+msgid "Duration"
+msgstr "Длительность"
+
+msgid "Format"
+msgstr "Формат"
+
+msgid "Channels"
+msgstr "Каналы"
+
+msgid "File size"
+msgstr "Размер файла"
+
+msgid "Location"
+msgstr "Расположение"
+
+msgid "The media item is no longer available."
+msgstr "Медиафайл больше недоступен."
+
+msgid "The local album folder is not currently available."
+msgstr "Локальная папка альбома сейчас недоступна."
+
+msgid "Everything is already available offline"
+msgstr "Всё уже доступно офлайн"
+
+msgid "Some tracks are already available offline"
+msgstr "Некоторые треки уже доступны офлайн"
+
+msgid "{} of {} tracks in “{}” are already available offline."
+msgstr "{} из {} треков в «{}» уже доступны офлайн."
+
+msgid "Download the entire playlist again"
+msgstr "Скачать весь плейлист заново"
+
+msgid "Download the entire album again"
+msgstr "Скачать весь альбом заново"
+
+msgid "Re-downloads every track and can repair corrupt offline copies."
+msgstr "Повторно загружает каждый трек и может исправить повреждённые офлайн-копии."
+
+msgid "Only missing tracks"
+msgstr "Только недостающие треки"
+
+msgid "Keeps existing offline copies and downloads tracks that are not available yet."
+msgstr "Сохраняет существующие офлайн-копии и загружает ещё недоступные треки."

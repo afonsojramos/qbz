@@ -32,18 +32,19 @@ pub mod album_grouping;
 mod cue_parser;
 mod database;
 pub mod ephemeral;
-pub mod local_playlists;
-pub mod qobuz_playlist_snapshot;
 mod errors;
+pub mod local_playlists;
 mod metadata;
 mod models;
 mod mount_info;
+pub mod qobuz_playlist_snapshot;
 pub mod reachability;
+mod remote_tag_sidecar;
+mod sacd;
 mod scan;
 mod scanner;
-mod sacd;
-mod tag_writer;
 mod tag_sidecar;
+mod tag_writer;
 mod thumbnails;
 mod watcher;
 
@@ -58,19 +59,18 @@ pub use metadata::MetadataExtractor;
 pub use models::*;
 pub use mount_info::{is_network_path, network_fs_label};
 pub use reachability::{probe, probe_default, Reach, DEFAULT_PROBE};
-pub use scan::{scan_with_progress, ScanEvent};
 pub use sacd::{SacdImageImport, SacdImportResult};
+pub use scan::{scan_with_progress, ScanEvent};
+pub use scanner::{
+    LibraryScanner, ScanEntry, ScanFileKind, ScanResult, ScanStream, ScanWalkError, SymlinkPolicy,
+};
 pub use tag_writer::{
     compute_track_artist_match, inspect_album_tag_layers, read_editor_tag_snapshots,
-    write_album_tags_to_files, write_album_tags_to_files_extended, write_folder_front_cover,
-    write_album_tags_to_files_with_options, write_purchase_tags, AlbumTagInspection,
-    AlbumTagWrite, DirectTagWriteOptions, EditorTrackTagSnapshot, ExtendedAlbumTagWrite,
-    ExtendedTrackTagWrite, FrontCoverWrite, Id3v2WriteVersion, PurchaseTagWrite,
-    TagLayerInspection, TrackTagWrite,
-};
-pub use scanner::{
-    LibraryScanner, ScanEntry, ScanFileKind, ScanResult, ScanStream, ScanWalkError,
-    SymlinkPolicy,
+    write_album_tags_to_files, write_album_tags_to_files_extended,
+    write_album_tags_to_files_with_options, write_folder_front_cover, write_purchase_tags,
+    AlbumTagInspection, AlbumTagWrite, DirectTagWriteOptions, EditorTrackTagSnapshot,
+    ExtendedAlbumTagWrite, ExtendedTrackTagWrite, FrontCoverWrite, Id3v2WriteVersion,
+    PurchaseTagWrite, TagLayerInspection, TrackTagWrite,
 };
 pub use thumbnails::{
     clear_thumbnails, generate_thumbnail, generate_thumbnail_from_bytes, get_cache_size,
@@ -84,6 +84,7 @@ pub use watcher::{LocalRootWatcher, RootWatchEvent};
 pub mod database_exports {
     pub use crate::database::*;
 }
+pub use remote_tag_sidecar::*;
 pub use tag_sidecar::*;
 
 use std::path::PathBuf;

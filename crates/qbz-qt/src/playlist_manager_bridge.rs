@@ -103,6 +103,15 @@ pub mod qbz_playlist_manager_bridge {
         #[qinvokable]
         fn toggle_folders_collapsed(self: Pin<&mut QbzPlaylistManager>);
 
+        /// Grid/list folder-card navigation. Editing remains a separate
+        /// QbzFolderEdit action owned exclusively by the pencil affordance.
+        #[qinvokable]
+        fn open_folder(self: Pin<&mut QbzPlaylistManager>, folder_id: QString);
+
+        /// Return from the current grid/list folder to the manager root.
+        #[qinvokable]
+        fn close_folder(self: Pin<&mut QbzPlaylistManager>);
+
         /// Expand / collapse one folder in the tree.
         #[qinvokable]
         fn toggle_tree_folder(self: Pin<&mut QbzPlaylistManager>, folder_id: QString);
@@ -214,6 +223,14 @@ impl qbz_playlist_manager_bridge::QbzPlaylistManager {
 
     pub fn toggle_folders_collapsed(self: Pin<&mut Self>) {
         crate::playlist_manager_qt::toggle_folders_collapsed();
+    }
+
+    pub fn open_folder(self: Pin<&mut Self>, folder_id: QString) {
+        crate::playlist_manager_qt::open_folder(&folder_id.to_string());
+    }
+
+    pub fn close_folder(self: Pin<&mut Self>) {
+        crate::playlist_manager_qt::close_folder();
     }
 
     pub fn toggle_tree_folder(self: Pin<&mut Self>, folder_id: QString) {

@@ -163,9 +163,6 @@ msgstr "トラックを検索..."
 msgid "Title"
 msgstr "タイトル"
 
-msgid "Duration"
-msgstr "再生時間"
-
 msgid "Quality"
 msgstr "音質"
 
@@ -6064,3 +6061,118 @@ msgstr "キーマップ"
 
 msgid "Vim"
 msgstr "Vim"
+
+# Local Library QoL: Explorer, scan progress, and per-track metadata editor
+msgid "All years"
+msgstr "すべての年"
+
+msgid "Explorer columns"
+msgstr "エクスプローラーの列"
+
+msgid "Genre and year"
+msgstr "ジャンルと年"
+
+msgid "Years"
+msgstr "年"
+
+msgid "Edit track metadata"
+msgstr "トラックのメタデータを編集"
+
+msgid "Building library index"
+msgstr "ライブラリインデックスを作成中"
+
+msgid "Local folders"
+msgstr "ローカルフォルダー"
+
+msgid "Next track"
+msgstr "次のトラック"
+
+msgid "Overall"
+msgstr "全体"
+
+msgid "Previous track"
+msgstr "前のトラック"
+
+msgid "Scanning library"
+msgstr "ライブラリをスキャン中"
+
+msgid "The track is no longer in the library."
+msgstr "このトラックはライブラリに存在しません。"
+
+msgid "Updating library index"
+msgstr "ライブラリインデックスを更新中"
+
+msgid "Edit album"
+msgstr "アルバムを編集"
+
+msgid "Editing a local metadata sidecar"
+msgstr "ローカルのメタデータサイドカーを編集中"
+
+msgid "Media-server metadata is stored in a local sidecar."
+msgstr "メディアサーバーのメタデータはローカルのサイドカーファイルに保存されます。"
+
+msgid "Media-server metadata can only be edited with a sidecar."
+msgstr "メディアサーバーのメタデータはサイドカーファイルでのみ編集できます。"
+
+msgid "Network file"
+msgstr "ネットワークファイル"
+
+msgid "Offline download"
+msgstr "オフラインダウンロード"
+
+msgid "File path"
+msgstr "ファイルパス"
+
+msgid "Containing folder"
+msgstr "保存フォルダー"
+
+msgid "Media item ID"
+msgstr "メディア項目 ID"
+
+msgid "Album ID"
+msgstr "アルバム ID"
+
+msgid "Server"
+msgstr "サーバー"
+
+msgid "Duration"
+msgstr "再生時間"
+
+msgid "Channels"
+msgstr "チャンネル"
+
+msgid "File size"
+msgstr "ファイルサイズ"
+
+msgid "Location"
+msgstr "場所"
+
+msgid "The media item is no longer available."
+msgstr "メディア項目は利用できなくなりました。"
+
+msgid "The local album folder is not currently available."
+msgstr "ローカルのアルバムフォルダーは現在利用できません。"
+
+msgid "Everything is already available offline"
+msgstr "すべてオフラインで利用できます"
+
+msgid "Some tracks are already available offline"
+msgstr "一部のトラックはすでにオフラインで利用できます"
+
+msgid "{} of {} tracks in “{}” are already available offline."
+msgstr "{} / {} 曲（“{}”）はすでにオフラインで利用できます。"
+
+msgid "Download the entire playlist again"
+msgstr "プレイリスト全体を再ダウンロード"
+
+msgid "Download the entire album again"
+msgstr "アルバム全体を再ダウンロード"
+
+msgid "Re-downloads every track and can repair corrupt offline copies."
+msgstr "全トラックを再ダウンロードし、破損したオフラインコピーを修復できます。"
+
+msgid "Only missing tracks"
+msgstr "不足しているトラックのみ"
+
+msgid "Keeps existing offline copies and downloads tracks that are not available yet."
+msgstr "既存のオフラインコピーを保持し、まだ利用できないトラックだけをダウンロードします。"

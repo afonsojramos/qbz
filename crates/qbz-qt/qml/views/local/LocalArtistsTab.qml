@@ -280,11 +280,12 @@ Item {
                         }
                     }
                     QbzAlphaStrip {
-                        visible: root.alphaJumps.length > 0
+                        visible: root.artistTotal > 0
                         anchors.right: parent.right
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
                         jumps: root.alphaJumps
+                        completeAlphabet: true
                         onJump: function (ordinal, index) {
                             rail.positionViewAtIndex(index, ListView.Beginning)
                         }

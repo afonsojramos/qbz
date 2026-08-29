@@ -106,6 +106,9 @@ struct Toolbar {
     view_mode: String,
     folder_mode: bool,
     folders_collapsed: bool,
+    /// Grid/list drill-down. `None` is the root beside the folder cards;
+    /// tree mode owns its own expand state and never reads this value.
+    current_folder_id: Option<String>,
 }
 
 impl Default for Toolbar {
@@ -118,6 +121,7 @@ impl Default for Toolbar {
             view_mode: "grid".into(),
             folder_mode: true,
             folders_collapsed: false,
+            current_folder_id: None,
         }
     }
 }
@@ -138,6 +142,8 @@ struct ManagerDoc {
     view_mode: String,
     folder_mode: bool,
     folders_collapsed: bool,
+    current_folder_id: String,
+    current_folder_name: String,
     can_reorder: bool,
     /// Always equal to `foldersJson.length` — same source, same closure (D5).
     folder_count: i32,
@@ -192,16 +198,35 @@ fn build_document() -> (String, String) {
         FOLDERS_CACHE.lock().unwrap().clone()
     };
 
-    let playlists = rows::visible_playlist_rows(
-        &data,
-        &query,
-        &tb.filter,
-        &tb.sort,
-        tb.sort_asc,
-        tb.folder_mode,
-        &tb.view_mode,
-        offline,
-    );
+    let current_folder = (tb.folder_mode && tb.view_mode != "tree")
+        .then_some(tb.current_folder_id.as_deref())
+        .flatten()
+        .and_then(|id| data.folders.iter().find(|folder| folder.id == id));
+    let (current_folder_id, current_folder_name) = current_folder
+        .map(|folder| (folder.id.clone(), folder.name.clone()))
+        .unwrap_or_default();
+    let playlists = if current_folder_id.is_empty() {
+        rows::visible_playlist_rows(
+            &data,
+            &query,
+            &tb.filter,
+            &tb.sort,
+            tb.sort_asc,
+            tb.folder_mode,
+            &tb.view_mode,
+            offline,
+        )
+    } else {
+        rows::visible_folder_playlist_rows(
+            &data,
+            &current_folder_id,
+            &query,
+            &tb.filter,
+            &tb.sort,
+            tb.sort_asc,
+            offline,
+        )
+    };
 
     let tree = if tb.folder_mode && tb.view_mode == "tree" {
         ensure_tree_init(&data);
@@ -227,6 +252,8 @@ fn build_document() -> (String, String) {
         view_mode: tb.view_mode.clone(),
         folder_mode: tb.folder_mode,
         folders_collapsed: tb.folders_collapsed,
+        current_folder_id,
+        current_folder_name,
         // D9: the DIRECTION is part of the gate. The reference omits it, and
         // under custom+descending its arrows renumber `position = 0..n` over
         // the REVERSED order — one press silently rewrites the user's whole
@@ -462,7 +489,12 @@ pub(crate) fn set_view_mode(value: &str) {
         "grid" | "list" | "tree" => value,
         _ => "grid",
     };
-    TOOLBAR.lock().unwrap().view_mode = mode.to_string();
+    let mut toolbar = TOOLBAR.lock().unwrap();
+    toolbar.view_mode = mode.to_string();
+    if mode == "tree" {
+        toolbar.current_folder_id = None;
+    }
+    drop(toolbar);
     publish_document();
 }
 
@@ -474,6 +506,9 @@ pub(crate) fn toggle_folder_mode() {
         tb.folder_mode = !tb.folder_mode;
         if !tb.folder_mode && tb.view_mode == "tree" {
             tb.view_mode = "grid".into();
+        }
+        if !tb.folder_mode {
+            tb.current_folder_id = None;
         }
     }
     publish_document();
@@ -490,6 +525,42 @@ pub(crate) fn toggle_folders_collapsed() {
         let mut tb = TOOLBAR.lock().unwrap();
         tb.folders_collapsed = !tb.folders_collapsed;
     }
+    publish_document();
+}
+
+/// Enter one folder without changing the user's grid/list presentation.
+/// Invalid/stale ids are ignored rather than publishing an inescapable empty
+/// drill-down after a concurrent folder deletion.
+pub(crate) fn open_folder(folder_id: &str) {
+    let folder_id = folder_id.trim();
+    if folder_id.is_empty() {
+        return;
+    }
+    let exists = CACHE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .is_some_and(|data| data.folders.iter().any(|folder| folder.id == folder_id));
+    if !exists {
+        return;
+    }
+    {
+        let mut toolbar = TOOLBAR.lock().unwrap_or_else(|error| error.into_inner());
+        toolbar.folder_mode = true;
+        if toolbar.view_mode == "tree" {
+            toolbar.view_mode = "grid".into();
+        }
+        toolbar.current_folder_id = Some(folder_id.to_string());
+    }
+    publish_document();
+}
+
+/// Return from a grid/list folder drill-down to the root folders + playlists.
+pub(crate) fn close_folder() {
+    TOOLBAR
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .current_folder_id = None;
     publish_document();
 }
 
@@ -535,19 +606,35 @@ pub(crate) fn visible_qobuz_ids() -> Vec<u64> {
     let tb = TOOLBAR.lock().unwrap().clone();
     let query = tb.search.trim().to_lowercase();
     let offline = crate::offline_fwd::engine().status().is_offline();
-    rows::visible_playlist_rows(
-        &data,
-        &query,
-        &tb.filter,
-        &tb.sort,
-        tb.sort_asc,
-        tb.folder_mode,
-        &tb.view_mode,
-        offline,
-    )
-    .iter()
-    .filter_map(|r| r.id.parse::<u64>().ok())
-    .collect()
+    let current_folder = (tb.folder_mode && tb.view_mode != "tree")
+        .then_some(tb.current_folder_id.as_deref())
+        .flatten()
+        .filter(|id| data.folders.iter().any(|folder| folder.id == *id));
+    let rows = if let Some(folder_id) = current_folder {
+        rows::visible_folder_playlist_rows(
+            &data,
+            folder_id,
+            &query,
+            &tb.filter,
+            &tb.sort,
+            tb.sort_asc,
+            offline,
+        )
+    } else {
+        rows::visible_playlist_rows(
+            &data,
+            &query,
+            &tb.filter,
+            &tb.sort,
+            tb.sort_asc,
+            tb.folder_mode,
+            &tb.view_mode,
+            offline,
+        )
+    };
+    rows.iter()
+        .filter_map(|r| r.id.parse::<u64>().ok())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

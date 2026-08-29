@@ -52,6 +52,11 @@ Item {
     /// which is what PlaylistView.slint and MixView.slint do.
     property bool favoriteGlyph: false
     property bool downloadGlyph: false
+    /// When enabled, the cloud header becomes the whole-collection cache
+    /// button. It remains an inert column label everywhere else.
+    property bool downloadActionEnabled: false
+    property bool downloadActionLoading: false
+    signal downloadClicked()
 
     /// Label band height. 0 = the label's own line height, which is what the
     /// playlist / mix headers use (Slint gives those HorizontalLayouts no
@@ -171,12 +176,27 @@ Item {
             width: cols.colDownload
             height: root.bandH
             QbzIcon {
-                visible: root.downloadGlyph
+                visible: root.downloadGlyph && !root.downloadActionLoading
                 anchors.centerIn: parent
                 name: "cloud-download"
                 width: 14
                 height: 14
-                tintName: "muted"
+                tintName: downloadArea.containsMouse && root.downloadActionEnabled
+                    ? "accent" : "muted"
+            }
+            QbzSpinner {
+                visible: root.downloadActionLoading
+                anchors.centerIn: parent
+                size: 14
+            }
+            MouseArea {
+                id: downloadArea
+                anchors.fill: parent
+                enabled: root.downloadGlyph && root.downloadActionEnabled
+                    && !root.downloadActionLoading
+                hoverEnabled: enabled
+                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                onClicked: root.downloadClicked()
             }
         }
         // ⋯ column.

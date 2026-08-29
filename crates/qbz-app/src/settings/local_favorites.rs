@@ -1,13 +1,15 @@
 //! Headless local-favorites service.
 //!
-//! Frontend-agnostic store for favoriting LOCAL library items (genuine local
-//! files + Plex — never the Qobuz offline cache). Mirrors `pinned_items.rs`
+//! Frontend-agnostic store for favoriting LOCAL LIBRARY items (genuine local
+//! files plus configured media servers — never the Qobuz offline cache).
+//! Mirrors `pinned_items.rs`
 //! (same pragmas, error style, in-memory `(kind, id)` set) per ADR-006; the
 //! per-user lifecycle lives in the `qbz` crate wrapper (`crate::local_favorites`).
 //!
 //! Rows carry a display snapshot (title/subtitle/artwork) taken at favorite
 //! time plus a denormalized `artist` (for per-artist counts) and `source`
-//! (`local` | `plex`). The `CHECK` on `source` refuses `qobuz_download` at
+//! (`local` | `plex` | `jellyfin` | `subsonic`). The `CHECK` on `source`
+//! refuses `qobuz_download` at
 //! write time, so the mixed-library feed built from this store is inherently
 //! free of Qobuz-offline duplicates.
 
@@ -22,9 +24,9 @@ pub const DB_FILE_NAME: &str = "local_favorites.db";
 
 /// A favorited local item with its display snapshot.
 ///
-/// Ids are Strings: album = the local group key (`plex:…` / contains `|`/`/`),
-/// artist = the artist NAME (local artists have no numeric id), track =
-/// `file_path` (local) or `plex:<file_path>` (Plex) — the stable key.
+/// Ids are Strings: album = the source-aware group key (`plex:…`,
+/// `jellyfin:…`, `subsonic:…` or a local key containing `|`/`/`), artist =
+/// the artist NAME, track = a source-aware stable key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalFavItem {
     /// "album" | "artist" | "track".
@@ -35,7 +37,8 @@ pub struct LocalFavItem {
     pub artwork_url: String,
     /// Denormalized artist name (for per-artist counts); empty for kind="artist".
     pub artist: String,
-    /// "local" | "plex" — never "qobuz_download".
+    /// "local" | "plex" | "jellyfin" | "subsonic" — never a Qobuz
+    /// download spelling.
     pub source: String,
     /// Unix seconds; the ordering key (newest first).
     pub favorited_at: i64,
@@ -56,8 +59,10 @@ impl LocalFavoritesService {
         let conn = Connection::open(db_path)
             .map_err(|e| format!("Failed to open local favorites database: {}", e))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
-            .map_err(|e| format!("Failed to set WAL mode: {}", e))?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;",
+        )
+        .map_err(|e| format!("Failed to set WAL mode: {}", e))?;
 
         let service = Self {
             conn,
@@ -97,17 +102,68 @@ impl LocalFavoritesService {
                     subtitle TEXT,
                     artwork_url TEXT,
                     artist TEXT,
-                    source TEXT NOT NULL CHECK (source IN ('local','plex')),
+                    source TEXT NOT NULL CHECK (
+                        source IN ('local','plex','jellyfin','subsonic')
+                    ),
                     favorited_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
                     PRIMARY KEY (kind, id)
                 );
+                "#,
+            )
+            .map_err(|e| format!("Failed to initialize local favorites schema: {}", e))?;
+
+        // v1 accepted only local/Plex. SQLite cannot widen a CHECK in place,
+        // so rebuild the tiny snapshot table atomically while preserving every
+        // existing favorite. Index creation deliberately follows the rebuild:
+        // ALTER TABLE carries the old index names to the legacy table.
+        let table_sql = self
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='local_favorites'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|e| format!("Failed to inspect local favorites schema: {e}"))?;
+        if !table_sql.contains("'jellyfin'") || !table_sql.contains("'subsonic'") {
+            self.conn
+                .execute_batch(
+                    r#"
+                    BEGIN IMMEDIATE;
+                    ALTER TABLE local_favorites RENAME TO local_favorites_v1;
+                    CREATE TABLE local_favorites (
+                        kind TEXT NOT NULL CHECK (kind IN ('album','artist','track')),
+                        id TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        subtitle TEXT,
+                        artwork_url TEXT,
+                        artist TEXT,
+                        source TEXT NOT NULL CHECK (
+                            source IN ('local','plex','jellyfin','subsonic')
+                        ),
+                        favorited_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+                        PRIMARY KEY (kind, id)
+                    );
+                    INSERT INTO local_favorites(
+                        kind,id,title,subtitle,artwork_url,artist,source,favorited_at
+                    )
+                    SELECT kind,id,title,subtitle,artwork_url,artist,source,favorited_at
+                      FROM local_favorites_v1;
+                    DROP TABLE local_favorites_v1;
+                    COMMIT;
+                    "#,
+                )
+                .map_err(|e| format!("Failed to migrate local favorites schema: {e}"))?;
+        }
+        self.conn
+            .execute_batch(
+                r#"
                 CREATE INDEX IF NOT EXISTS idx_local_favorites_at
                     ON local_favorites(favorited_at);
                 CREATE INDEX IF NOT EXISTS idx_local_favorites_artist
                     ON local_favorites(kind, artist);
                 "#,
             )
-            .map_err(|e| format!("Failed to initialize local favorites schema: {}", e))?;
+            .map_err(|e| format!("Failed to index local favorites schema: {e}"))?;
 
         Ok(())
     }
@@ -298,10 +354,48 @@ mod tests {
     #[test]
     fn source_check_rejects_offline() {
         let s = LocalFavoritesService::new_in_memory().expect("svc");
+        s.favorite(&item("album", "jf", "J", "A", "jellyfin"))
+            .expect("Jellyfin belongs to the Local Library favorite domain");
+        s.favorite(&item("album", "sub", "S", "A", "subsonic"))
+            .expect("Subsonic belongs to the Local Library favorite domain");
         assert!(
             s.favorite(&item("album", "x", "X", "A", "qobuz_download"))
                 .is_err(),
             "the source CHECK refuses qobuz-offline rows"
         );
+    }
+
+    #[test]
+    fn v1_schema_migrates_without_losing_existing_favorites() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE local_favorites (
+                kind TEXT NOT NULL CHECK (kind IN ('album','artist','track')),
+                id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                subtitle TEXT,
+                artwork_url TEXT,
+                artist TEXT,
+                source TEXT NOT NULL CHECK (source IN ('local','plex')),
+                favorited_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+                PRIMARY KEY (kind, id)
+            );
+            INSERT INTO local_favorites(
+                kind,id,title,subtitle,artwork_url,artist,source,favorited_at
+            ) VALUES ('album','plex:old','Old','','','Artist','plex',42);
+            "#,
+        )
+        .unwrap();
+        let service = LocalFavoritesService {
+            conn,
+            keys: RwLock::new(HashSet::new()),
+        };
+        service.init_schema().unwrap();
+        service.load_from_db().unwrap();
+        assert!(service.is_favorite("album", "plex:old"));
+        service
+            .favorite(&item("album", "jellyfin:new", "New", "Artist", "jellyfin"))
+            .unwrap();
     }
 }

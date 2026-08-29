@@ -141,12 +141,20 @@ Rectangle {
     // Genres column browser. Selections are maps so Ctrl/Cmd toggles stay
     // O(1), and an empty map is the explicit All state.
     property string genresSearch: ""
+    property string genreYearsSearch: ""
     property string genreArtistsSearch: ""
     property string genreAlbumsSearch: ""
     property var selectedGenres: ({})
+    property var selectedGenreYears: ({})
     property var selectedGenreArtists: ({})
     property var selectedGenreAlbums: ({})
+    // Which leading Library Explorer facet is mounted. Genre remains the
+    // default; "both" deliberately adds a fourth column for larger screens.
+    // Seeded from locallibrary_ui.json; navigation-state restoration may
+    // temporarily reassign it while rebuilding a Back/Forward snapshot.
+    property string explorerColumns: QbzLocal.localExplorerColumns // genre | year | both
     readonly property int selectedGenreCount: Object.keys(selectedGenres).length
+    readonly property int selectedGenreYearCount: Object.keys(selectedGenreYears).length
     readonly property int selectedGenreArtistCount: Object.keys(selectedGenreArtists).length
     readonly property int selectedGenreAlbumCount: Object.keys(selectedGenreAlbums).length
     property bool genresBrowserCollapsed: false
@@ -182,11 +190,14 @@ Rectangle {
         selectedArtist: root.selectedArtist,
         tracksSearch: root.tracksSearch,
         genresSearch: root.genresSearch,
+        genreYearsSearch: root.genreYearsSearch,
         genreArtistsSearch: root.genreArtistsSearch,
         genreAlbumsSearch: root.genreAlbumsSearch,
         selectedGenres: root.selectedGenres,
+        selectedGenreYears: root.selectedGenreYears,
         selectedGenreArtists: root.selectedGenreArtists,
         selectedGenreAlbums: root.selectedGenreAlbums,
+        explorerColumns: root.explorerColumns,
         genresBrowserCollapsed: root.genresBrowserCollapsed,
         genresView: root.genresView,
         genresSort: root.genresSort
@@ -248,14 +259,20 @@ Rectangle {
         root.selectedArtist = text("selectedArtist", root.selectedArtist)
         root.tracksSearch = text("tracksSearch", root.tracksSearch)
         root.genresSearch = text("genresSearch", root.genresSearch)
+        root.genreYearsSearch = text("genreYearsSearch", root.genreYearsSearch)
         root.genreArtistsSearch = text("genreArtistsSearch", root.genreArtistsSearch)
         root.genreAlbumsSearch = text("genreAlbumsSearch", root.genreAlbumsSearch)
         if (saved.selectedGenres && typeof saved.selectedGenres === "object")
             root.selectedGenres = saved.selectedGenres
+        if (saved.selectedGenreYears && typeof saved.selectedGenreYears === "object")
+            root.selectedGenreYears = saved.selectedGenreYears
         if (saved.selectedGenreArtists && typeof saved.selectedGenreArtists === "object")
             root.selectedGenreArtists = saved.selectedGenreArtists
         if (saved.selectedGenreAlbums && typeof saved.selectedGenreAlbums === "object")
             root.selectedGenreAlbums = saved.selectedGenreAlbums
+        var savedExplorerColumns = text("explorerColumns", root.explorerColumns)
+        if (["genre", "year", "both"].indexOf(savedExplorerColumns) >= 0)
+            root.explorerColumns = savedExplorerColumns
         if (typeof saved.genresBrowserCollapsed === "boolean")
             root.genresBrowserCollapsed = saved.genresBrowserCollapsed
         root.genresView = text("genresView", root.genresView)
@@ -976,10 +993,21 @@ Rectangle {
     }
 
     function albumHasSelectedGenre(album) {
+        if (explorerColumns === "year") return true
         if (selectedGenreCount === 0) return true
         var genres = album.genres || []
         for (var i = 0; i < genres.length; i++)
             if (selectedGenres[(genres[i] || "").toLowerCase()] === true) return true
+        return false
+    }
+
+    function albumHasSelectedYear(album) {
+        if (explorerColumns === "genre") return true
+        if (selectedGenreYearCount === 0) return true
+        var years = album.years && album.years.length > 0
+            ? album.years : [album.year || ""]
+        for (var i = 0; i < years.length; i++)
+            if (selectedGenreYears[String(years[i])] === true) return true
         return false
     }
 
@@ -1009,11 +1037,31 @@ Rectangle {
         return out
     }
 
+    readonly property var genreYearOptions: {
+        var values = ({})
+        for (var i = 0; i < genreBaseAlbums.length; i++) {
+            var album = genreBaseAlbums[i]
+            if (!albumHasSelectedGenre(album)) continue
+            var years = album.years && album.years.length > 0
+                ? album.years : [album.year || ""]
+            for (var j = 0; j < years.length; j++) {
+                var key = String(years[j] || "").trim()
+                if (key !== "") values[key] = true
+            }
+        }
+        var out = [], q = genreYearsSearch.trim().toLowerCase()
+        for (var key in values)
+            if (q === "" || key.toLowerCase().indexOf(q) >= 0)
+                out.push({ "key": key, "label": key })
+        out.sort(function(a, b) { return Number(b.key) - Number(a.key) })
+        return out
+    }
+
     readonly property var genreArtistOptions: {
         var values = {}, display = {}
         for (var i = 0; i < genreBaseAlbums.length; i++) {
             var album = genreBaseAlbums[i]
-            if (!albumHasSelectedGenre(album)) continue
+            if (!albumHasSelectedGenre(album) || !albumHasSelectedYear(album)) continue
             var names = albumArtistNames(album)
             for (var j = 0; j < names.length; j++) {
                 var key = names[j].toLowerCase()
@@ -1032,7 +1080,8 @@ Rectangle {
         var out = [], q = genreAlbumsSearch.trim().toLowerCase()
         for (var i = 0; i < genreBaseAlbums.length; i++) {
             var album = genreBaseAlbums[i]
-            if (!albumHasSelectedGenre(album) || !albumHasSelectedArtist(album)) continue
+            if (!albumHasSelectedGenre(album) || !albumHasSelectedYear(album)
+                    || !albumHasSelectedArtist(album)) continue
             if (q !== "" && (album.title || "").toLowerCase().indexOf(q) < 0) continue
             out.push({ "key": album.id, "label": album.title || "", "album": album })
         }
@@ -1052,6 +1101,12 @@ Rectangle {
 
     function toggleGenre(key, modifiers) {
         selectedGenres = nextFacetSelection(selectedGenres, key, modifiers)
+        selectedGenreYears = ({})
+        selectedGenreArtists = ({})
+        selectedGenreAlbums = ({})
+    }
+    function toggleGenreYear(key, modifiers) {
+        selectedGenreYears = nextFacetSelection(selectedGenreYears, key, modifiers)
         selectedGenreArtists = ({})
         selectedGenreAlbums = ({})
     }
@@ -1062,6 +1117,20 @@ Rectangle {
     function toggleGenreAlbum(key, modifiers) {
         selectedGenreAlbums = nextFacetSelection(selectedGenreAlbums, key, modifiers)
     }
+    function setExplorerColumns(mode) {
+        if (["genre", "year", "both"].indexOf(mode) < 0 || mode === explorerColumns)
+            return
+        explorerColumns = mode
+        QbzLocal.setExplorerColumns(mode)
+        // A hidden facet must never keep filtering the visible chain.
+        if (mode === "genre") selectedGenreYears = ({})
+        else if (mode === "year") selectedGenres = ({})
+        selectedGenreArtists = ({})
+        selectedGenreAlbums = ({})
+    }
+    readonly property int explorerFacetCount: explorerColumns === "both" ? 4 : 3
+    readonly property int explorerLeadingCount: explorerColumns === "year"
+        ? genreYearOptions.length : genreNames.length
     function nextFacetSelection(current, key, modifiers) {
         if (key === "") return ({})
         var additive = (modifiers & Qt.ControlModifier) !== 0
@@ -1561,4 +1630,6 @@ Rectangle {
             && ["albums", "artists", "genres", "tracks"].indexOf(root.activeTab) >= 0
         view: root
     }
+
+    LocalMediaInfoModal { }
 }

@@ -23,6 +23,12 @@ pub struct ProjectionProgress {
     pub generation: u64,
     pub source: SourceKey,
     pub rows_written: u64,
+    pub source_rows_total: u64,
+    pub overall_rows_written: u64,
+    pub overall_rows_total: u64,
+    /// One-based position among sources whose authoritative snapshot changed.
+    pub source_index: usize,
+    pub source_count: usize,
     pub checkpoint_cursor: String,
     pub source_complete: bool,
     pub prune_authorized: bool,

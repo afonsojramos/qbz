@@ -37,7 +37,8 @@
 // placeholder that clears when the playlist's own cover lands.
 //
 // Known remaining parity deltas (playlist_qt.rs has the full list):
-// Suggested Songs and whole-playlist offline download are not ported.
+// Suggested Songs are not ported. Whole-playlist offline download lives on
+// the cloud glyph in the table header and shares the album preflight.
 
 import QtQuick
 import QtQuick.Controls
@@ -859,6 +860,12 @@ Rectangle {
             showSource: root.isLocal || !root.online
             showAlbum: true
             showDownload: true
+            downloadGlyph: !root.isLocal
+            downloadActionEnabled: !root.isLocal && root.online
+                && root.allTracks.length > 0
+            downloadActionLoading: QbzOffline.collectionPreflightLoading
+                && QbzOffline.collectionPreflightKey === "playlist:" + String(root.doc.id || "")
+            onDownloadClicked: QbzOffline.cachePlaylist(String(root.doc.id || ""))
             // MIRROR the delegate's arm, or the labels slide by 22 + 14 the
             // moment the list becomes reorderable (TrackListHeader's rule 2).
             showReorder: root.canReorder
@@ -904,6 +911,7 @@ Rectangle {
                     showArtwork: true
                     showSource: root.isLocal || !root.online
                     showAlbum: true
+                    artistLink: true
                     showDownload: true
                     // Alternating row tint, like the local album page
                     // (LocalAlbumView.qml). TrackRow already owns the stripe —

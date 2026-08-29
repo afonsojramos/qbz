@@ -358,6 +358,114 @@ fn legacy_fixture_bootstraps_all_sources_read_only_and_is_idempotent() {
     assert!(!BootstrapLayout::new(temp.path()).building_path(2).exists());
 }
 
+#[test]
+fn plex_album_metadata_art_fills_missing_track_art_and_reconciles() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("plex_cache.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE plex_cache_tracks (
+             rating_key TEXT PRIMARY KEY, server_id TEXT, title TEXT NOT NULL,
+             artist TEXT, album TEXT, duration_ms INTEGER, container TEXT,
+             bit_depth INTEGER, sampling_rate_hz INTEGER, artwork_path TEXT,
+             collection_artwork_path TEXT, updated_at INTEGER, year INTEGER,
+             disc_number INTEGER, track_number INTEGER, parent_rating_key TEXT
+         );
+         CREATE TABLE plex_cache_album_artwork (
+             server_id TEXT NOT NULL, parent_rating_key TEXT NOT NULL,
+             artwork_path TEXT, checked_at INTEGER NOT NULL,
+             PRIMARY KEY(server_id,parent_rating_key)
+         );
+         INSERT INTO plex_cache_tracks VALUES
+             ('track-1','plex-server','Song','Rammstein','1994',180000,'flac',
+              16,44100,NULL,NULL,10,2002,1,1,'60335');
+         INSERT INTO plex_cache_album_artwork VALUES
+             ('plex-server','60335','/library/metadata/60320/thumb/1',20);",
+    )
+    .unwrap();
+    drop(conn);
+
+    assert!(matches!(
+        bootstrap_legacy_caches(temp.path(), &AtomicBool::new(false)).unwrap(),
+        BootstrapOutcome::Activated { track_count: 1, .. }
+    ));
+    let track_ref = TrackRef {
+        source: SourceKind::Plex,
+        source_instance: "plex-server".to_string(),
+        native_id: "track-1".to_string(),
+    };
+    let layout = BootstrapLayout::new(temp.path());
+    let ActiveCatalog::Ready { catalog, .. } = layout.open_active() else {
+        panic!("Plex artwork fixture did not activate")
+    };
+    assert_eq!(
+        catalog
+            .resolve(&track_ref)
+            .unwrap()
+            .unwrap()
+            .artwork_token
+            .as_deref(),
+        Some("/library/metadata/60320/thumb/1")
+    );
+    drop(catalog);
+
+    Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE plex_cache_album_artwork
+                SET artwork_path='/library/metadata/60320/thumb/2',checked_at=21
+              WHERE server_id='plex-server' AND parent_rating_key='60335'",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        crate::reconcile_legacy_caches(temp.path(), &AtomicBool::new(false)).unwrap(),
+        ProjectionOutcome::Activated {
+            changed_sources: 1,
+            ..
+        }
+    ));
+    let ActiveCatalog::Ready { catalog, .. } = layout.open_active() else {
+        panic!("Plex artwork refresh did not activate")
+    };
+    assert_eq!(
+        catalog
+            .resolve(&track_ref)
+            .unwrap()
+            .unwrap()
+            .artwork_token
+            .as_deref(),
+        Some("/library/metadata/60320/thumb/2")
+    );
+}
+
+#[test]
+fn one_source_bootstrap_reports_identical_source_and_overall_progress() {
+    let temp = tempdir().unwrap();
+    create_local_fixture(&temp.path().join("library.db"));
+    let mut progress = Vec::new();
+
+    let outcome = bootstrap_legacy_caches_at_with_progress(
+        &LegacyLocations::co_located(temp.path()),
+        &AtomicBool::new(false),
+        |event| progress.push(event.clone()),
+    )
+    .unwrap();
+
+    assert!(matches!(outcome, BootstrapOutcome::Activated { .. }));
+    assert!(!progress.is_empty());
+    assert!(progress.iter().all(|event| {
+        event.source_index == 1
+            && event.source_count == 1
+            && event.source_rows_total == event.overall_rows_total
+            && event.committed_rows == event.overall_rows_written
+    }));
+    let final_event = progress.last().unwrap();
+    assert!(final_event.source_complete);
+    assert_eq!(final_event.source_rows_total, 2);
+    assert_eq!(final_event.overall_rows_total, 2);
+}
+
 /// Explicit recovery-cost gate using the production Rust legacy reader,
 /// projector, materialized views, FTS activation check and side-by-side rename.
 /// Ordinary unit runs skip it because the 200k case intentionally creates a
@@ -405,11 +513,8 @@ fn legacy_recovery_cost_uses_the_real_projector_at_scale() {
         drop(source);
         let changed_source = fs::read(&source_path).unwrap();
         let reconcile_started = Instant::now();
-        let projection = crate::reconcile_legacy_caches(
-            temp.path(),
-            &AtomicBool::new(false),
-        )
-        .unwrap();
+        let projection =
+            crate::reconcile_legacy_caches(temp.path(), &AtomicBool::new(false)).unwrap();
         let reconcile_elapsed = reconcile_started.elapsed();
         assert!(matches!(
             projection,

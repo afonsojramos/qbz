@@ -1681,3 +1681,133 @@ msgstr "Keymap"
 
 msgid "Vim"
 msgstr "Vim"
+
+# Local Library QoL: Explorer, scan progress, and per-track metadata editor
+msgid "All years"
+msgstr "All years"
+
+msgid "Explorer columns"
+msgstr "Explorer columns"
+
+msgid "Genre and year"
+msgstr "Genre and year"
+
+msgid "Years"
+msgstr "Years"
+
+msgid "Edit track metadata"
+msgstr "Edit track metadata"
+
+msgid "Building library index"
+msgstr "Building library index"
+
+msgid "Local folders"
+msgstr "Local folders"
+
+msgid "Next track"
+msgstr "Next track"
+
+msgid "Overall"
+msgstr "Overall"
+
+msgid "Previous track"
+msgstr "Previous track"
+
+msgid "Scanning library"
+msgstr "Scanning library"
+
+msgid "Source"
+msgstr "Source"
+
+msgid "The track is no longer in the library."
+msgstr "The track is no longer in the library."
+
+msgid "Updating library index"
+msgstr "Updating library index"
+
+msgid "Edit album"
+msgstr "Edit album"
+
+msgid "Editing a local metadata sidecar"
+msgstr "Editing a local metadata sidecar"
+
+msgid "Media-server metadata is stored in a local sidecar."
+msgstr "Media-server metadata is stored in a local sidecar."
+
+msgid "Media-server metadata can only be edited with a sidecar."
+msgstr "Media-server metadata can only be edited with a sidecar."
+
+msgid "Network file"
+msgstr "Network file"
+
+msgid "Offline download"
+msgstr "Offline download"
+
+msgid "File path"
+msgstr "File path"
+
+msgid "Containing folder"
+msgstr "Containing folder"
+
+msgid "Media item ID"
+msgstr "Media item ID"
+
+msgid "Album ID"
+msgstr "Album ID"
+
+msgid "Server"
+msgstr "Server"
+
+msgid "Duration"
+msgstr "Duration"
+
+msgid "Format"
+msgstr "Format"
+
+msgid "Quality"
+msgstr "Quality"
+
+msgid "Channels"
+msgstr "Channels"
+
+msgid "File size"
+msgstr "File size"
+
+msgid "Location"
+msgstr "Location"
+
+msgid "The media item is no longer available."
+msgstr "The media item is no longer available."
+
+msgid "The local album folder is not currently available."
+msgstr "The local album folder is not currently available."
+
+msgid "Everything is already available offline"
+msgstr "Everything is already available offline"
+
+msgid "Couldn't load that playlist"
+msgstr "Couldn't load that playlist"
+
+msgid "This playlist has no playable tracks"
+msgstr "This playlist has no playable tracks"
+
+msgid "Some tracks are already available offline"
+msgstr "Some tracks are already available offline"
+
+msgid "{} of {} tracks in “{}” are already available offline."
+msgstr "{} of {} tracks in “{}” are already available offline."
+
+msgid "Download the entire playlist again"
+msgstr "Download the entire playlist again"
+
+msgid "Download the entire album again"
+msgstr "Download the entire album again"
+
+msgid "Re-downloads every track and can repair corrupt offline copies."
+msgstr "Re-downloads every track and can repair corrupt offline copies."
+
+msgid "Only missing tracks"
+msgstr "Only missing tracks"
+
+msgid "Keeps existing offline copies and downloads tracks that are not available yet."
+msgstr "Keeps existing offline copies and downloads tracks that are not available yet."

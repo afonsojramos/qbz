@@ -6,9 +6,9 @@
 // column and the trailing ⋯ overflow. Multi-select puts the shared checkbox
 // in front of the cover, as the collection view does.
 //
-// The ⋯ menu carries the same local/Plex favorite as the grid overlay. Remote-
-// only rows omit it because the shared LocalFavoritesService deliberately
-// accepts genuine local and Plex snapshots only.
+// The ⋯ menu carries the same Local Library favorite as the grid overlay.
+// Genuine local and configured media-server albums are snapshot-backed;
+// Qobuz-offline-only rows stay in the catalog-favorite domain.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -96,7 +96,8 @@ Rectangle {
                     { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
                     { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
                     { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
-                    { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" }
+                    { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+                    { "label": QbzSession.tr("Album info", QbzSession.trRev), "icon": "info", "action": "album-info" }
                 ]
                 if (root.item.favoriteable === true) {
                     rows.push({
@@ -113,6 +114,8 @@ Rectangle {
                 if (a === "open") root.opened()
                 else if (a === "play") root.playRequested()
                 else if (a === "favorite") root.favoriteRequested()
+                else if (a === "album-info")
+                    QbzLocal.bulkAction("album", JSON.stringify([String(root.item.id)]), a)
                 else root.enqueueRequested(a)
             }
         }

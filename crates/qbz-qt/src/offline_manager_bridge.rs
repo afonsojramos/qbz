@@ -58,6 +58,15 @@ pub mod qbz_offline_manager_bridge {
         /// spinner — on the one screen whose whole job is to show you that you
         /// DO have downloads.
         #[qproperty(bool, manager_loading)]
+        /// Shared album/playlist offline-cache preflight.  The key is
+        /// `album:<id>` / `playlist:<id>` so only the button that launched the
+        /// request draws a busy state.  The choice document is deliberately
+        /// tiny; Rust retains the fetched track snapshot while the modal is
+        /// open instead of serialising a potentially huge playlist to QML.
+        #[qproperty(bool, collection_preflight_loading)]
+        #[qproperty(QString, collection_preflight_key)]
+        #[qproperty(bool, collection_choice_open)]
+        #[qproperty(QString, collection_choice_json)]
         type QbzOffline = super::QbzOfflineRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain
@@ -95,6 +104,17 @@ pub mod qbz_offline_manager_bridge {
         #[qinvokable]
         fn clear_all(self: Pin<&mut QbzOffline>);
 
+        // --- Album / playlist entry-point preflight -----------------------
+        #[qinvokable]
+        fn cache_album(self: Pin<&mut QbzOffline>, album_id: QString);
+        #[qinvokable]
+        fn cache_playlist(self: Pin<&mut QbzOffline>, playlist_id: QString);
+        /// `mode`: `all` (also repairs existing copies) | `missing`.
+        #[qinvokable]
+        fn confirm_collection_cache(self: Pin<&mut QbzOffline>, mode: QString);
+        #[qinvokable]
+        fn cancel_collection_cache(self: Pin<&mut QbzOffline>);
+
         // --- Per-row ------------------------------------------------------
         #[qinvokable]
         fn remove_track(self: Pin<&mut QbzOffline>, track_id: QString);
@@ -124,6 +144,10 @@ use qbz_offline_manager_bridge::QbzOffline;
 pub struct QbzOfflineRust {
     manager_json: QString,
     manager_loading: bool,
+    collection_preflight_loading: bool,
+    collection_preflight_key: QString,
+    collection_choice_open: bool,
+    collection_choice_json: QString,
 }
 
 impl Default for QbzOfflineRust {
@@ -131,6 +155,10 @@ impl Default for QbzOfflineRust {
         Self {
             manager_json: QString::from("{}"),
             manager_loading: true,
+            collection_preflight_loading: false,
+            collection_preflight_key: QString::default(),
+            collection_choice_open: false,
+            collection_choice_json: QString::from("{}"),
         }
     }
 }
@@ -193,6 +221,19 @@ impl qbz_offline_manager_bridge::QbzOffline {
     }
     pub fn clear_all(self: Pin<&mut Self>) {
         crate::offline_cache_qt::clear_all();
+    }
+
+    pub fn cache_album(self: Pin<&mut Self>, album_id: QString) {
+        crate::offline_cache_qt::cache_album(album_id.to_string());
+    }
+    pub fn cache_playlist(self: Pin<&mut Self>, playlist_id: QString) {
+        crate::offline_cache_qt::cache_playlist(playlist_id.to_string());
+    }
+    pub fn confirm_collection_cache(self: Pin<&mut Self>, mode: QString) {
+        crate::offline_cache_qt::confirm_collection_cache(mode.to_string());
+    }
+    pub fn cancel_collection_cache(self: Pin<&mut Self>) {
+        crate::offline_cache_qt::cancel_collection_cache();
     }
 
     pub fn remove_track(self: Pin<&mut Self>, track_id: QString) {

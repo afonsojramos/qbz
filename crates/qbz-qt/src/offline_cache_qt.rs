@@ -16,10 +16,12 @@
 //! flip its glyph live; views also seed from `offline_qt::is_cached` at
 //! document build time.
 
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
-use qbz_offline_cache::OfflineCacheState;
 use qbz_offline_cache::{CacheEvent, CacheEventSink, TrackCacheInfo};
+use qbz_offline_cache::{OfflineCacheState, OfflineCacheStatus};
 
 use crate::offline_qt;
 use crate::shell_bridge;
@@ -133,6 +135,254 @@ fn spawn_download(off: &Arc<OfflineCacheState>, track_id: u64) {
     );
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CollectionCacheMode {
+    All,
+    Missing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CollectionKind {
+    Album,
+    Playlist,
+}
+
+impl CollectionKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Album => "album",
+            Self::Playlist => "playlist",
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CacheCollection {
+    kind: CollectionKind,
+    key: String,
+    title: String,
+    tracks: Vec<qbz_models::Track>,
+    album_fallback: Option<(String, String)>,
+}
+
+struct PendingCollection {
+    generation: u64,
+    collection: CacheCollection,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectionChoiceDoc<'a> {
+    kind: &'a str,
+    title: &'a str,
+    total_tracks: usize,
+    cached_tracks: usize,
+    missing_tracks: usize,
+}
+
+static COLLECTION_REQUEST_GENERATION: AtomicU64 = AtomicU64::new(0);
+static PENDING_COLLECTION: OnceLock<tokio::sync::Mutex<Option<PendingCollection>>> =
+    OnceLock::new();
+
+fn pending_collection() -> &'static tokio::sync::Mutex<Option<PendingCollection>> {
+    PENDING_COLLECTION.get_or_init(|| tokio::sync::Mutex::new(None))
+}
+
+fn publish_collection_ui(loading: bool, key: String, open: bool, json: String) {
+    crate::offline_manager_bridge::ui(move |mut bridge| {
+        bridge.as_mut().set_collection_preflight_loading(loading);
+        bridge
+            .as_mut()
+            .set_collection_preflight_key(QString::from(key.as_str()));
+        bridge.as_mut().set_collection_choice_open(open);
+        bridge
+            .as_mut()
+            .set_collection_choice_json(QString::from(json.as_str()));
+    });
+}
+
+fn begin_collection_request(key: &str) -> u64 {
+    let generation = COLLECTION_REQUEST_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    publish_collection_ui(true, key.to_string(), false, "{}".to_string());
+    generation
+}
+
+fn finish_collection_request(generation: u64) {
+    if COLLECTION_REQUEST_GENERATION.load(Ordering::Acquire) == generation {
+        publish_collection_ui(false, String::new(), false, "{}".to_string());
+    }
+}
+
+fn fail_collection_request(generation: u64, message: &'static str) {
+    if COLLECTION_REQUEST_GENERATION.load(Ordering::Acquire) == generation {
+        finish_collection_request(generation);
+        crate::toast_qt::error(qbz_i18n::t(message));
+    }
+}
+
+fn unique_tracks(tracks: Vec<qbz_models::Track>) -> Vec<qbz_models::Track> {
+    let mut seen = HashSet::with_capacity(tracks.len());
+    tracks
+        .into_iter()
+        .filter(|track| track.id != 0 && seen.insert(track.id))
+        .collect()
+}
+
+fn should_queue_collection_track(
+    status: Option<OfflineCacheStatus>,
+    mode: CollectionCacheMode,
+) -> bool {
+    match (mode, status) {
+        // Never duplicate an active job. It already satisfies either choice.
+        (_, Some(OfflineCacheStatus::Queued | OfflineCacheStatus::Downloading)) => false,
+        (CollectionCacheMode::All, _) => true,
+        (CollectionCacheMode::Missing, None | Some(OfflineCacheStatus::Failed)) => true,
+        (CollectionCacheMode::Missing, Some(OfflineCacheStatus::Ready)) => false,
+    }
+}
+
+async fn cached_statuses(
+    off: &Arc<OfflineCacheState>,
+) -> Result<HashMap<u64, OfflineCacheStatus>, String> {
+    let guard = off.db.lock().await;
+    let db = guard
+        .as_ref()
+        .ok_or_else(|| "offline cache database is not open".to_string())?;
+    Ok(db
+        .get_all_tracks()?
+        .into_iter()
+        .map(|track| (track.track_id, track.status))
+        .collect())
+}
+
+async fn execute_collection_cache(collection: CacheCollection, mode: CollectionCacheMode) {
+    let Some(off) = offline_qt::get().await else {
+        crate::toast_qt::error(qbz_i18n::t("Log in to cache tracks offline"));
+        return;
+    };
+
+    let statuses = match cached_statuses(&off).await {
+        Ok(statuses) => statuses,
+        Err(error) => {
+            log::warn!("[qbz-qt] collection cache status read failed: {error}");
+            crate::toast_qt::error(qbz_i18n::t("Offline caching failed"));
+            return;
+        }
+    };
+    let targets: Vec<&qbz_models::Track> = collection
+        .tracks
+        .iter()
+        .filter(|track| should_queue_collection_track(statuses.get(&track.id).copied(), mode))
+        .collect();
+    if targets.is_empty() {
+        crate::toast_qt::success(qbz_i18n::t("Everything is already available offline"));
+        return;
+    }
+
+    let prepared: Vec<(TrackCacheInfo, String)> = targets
+        .iter()
+        .map(|track| {
+            let id = track.id;
+            (
+                track_cache_info(track, collection.album_fallback.as_ref()),
+                off.track_file_path(id, "flac")
+                    .to_string_lossy()
+                    .to_string(),
+            )
+        })
+        .collect();
+
+    {
+        let limit = *off.limit_bytes.lock().await;
+        let guard = off.db.lock().await;
+        let Some(db) = guard.as_ref() else {
+            return;
+        };
+        let root = std::path::PathBuf::from(off.get_cache_path());
+        if let Err(error) = qbz_offline_cache::maintenance::check_cache_limit(db, &root, limit) {
+            log::warn!("[qbz-qt] collection cache limit reached: {error}");
+            crate::toast_qt::error(qbz_i18n::t(
+                "Offline cache is full — free space or raise the limit",
+            ));
+            return;
+        }
+        let rows: Vec<(&TrackCacheInfo, String)> = prepared
+            .iter()
+            .map(|(info, path)| (info, path.clone()))
+            .collect();
+        if let Err(error) = db.insert_tracks_batch(&rows) {
+            log::error!("[qbz-qt] collection cache insert failed: {error}");
+            crate::toast_qt::error(qbz_i18n::t("Offline caching failed"));
+            return;
+        }
+    }
+
+    for (info, _) in &prepared {
+        offline_qt::mark_cached(info.track_id, false);
+        push_status(info.track_id, 1, 0.0);
+        spawn_download(&off, info.track_id);
+    }
+    let count = prepared.len();
+    crate::toast_qt::success(qbz_i18n::tf(
+        "Caching {} track offline…",
+        "Caching {} tracks offline…",
+        count as i64,
+        &[&count.to_string()],
+    ));
+    crate::offline_manager_qt::refresh_if_open().await;
+}
+
+async fn preflight_collection(generation: u64, collection: CacheCollection) {
+    if COLLECTION_REQUEST_GENERATION.load(Ordering::Acquire) != generation {
+        return;
+    }
+    let Some(off) = offline_qt::get().await else {
+        fail_collection_request(generation, "Log in to cache tracks offline");
+        return;
+    };
+    let statuses = match cached_statuses(&off).await {
+        Ok(statuses) => statuses,
+        Err(error) => {
+            log::warn!("[qbz-qt] collection preflight failed: {error}");
+            fail_collection_request(generation, "Offline caching failed");
+            return;
+        }
+    };
+    let cached_tracks = collection
+        .tracks
+        .iter()
+        .filter(|track| statuses.get(&track.id) == Some(&OfflineCacheStatus::Ready))
+        .count();
+
+    // No ready copy exists: the requested fast path queues the collection
+    // immediately. Failed rows are repaired and in-flight rows are left alone.
+    if cached_tracks == 0 {
+        finish_collection_request(generation);
+        execute_collection_cache(collection, CollectionCacheMode::All).await;
+        return;
+    }
+
+    let doc = CollectionChoiceDoc {
+        kind: collection.kind.as_str(),
+        title: &collection.title,
+        total_tracks: collection.tracks.len(),
+        cached_tracks,
+        missing_tracks: collection.tracks.len().saturating_sub(cached_tracks),
+    };
+    let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".to_string());
+    {
+        let mut pending = pending_collection().lock().await;
+        if COLLECTION_REQUEST_GENERATION.load(Ordering::Acquire) != generation {
+            return;
+        }
+        *pending = Some(PendingCollection {
+            generation,
+            collection,
+        });
+    }
+    publish_collection_ui(false, String::new(), true, json);
+}
+
 /// Cache a single track for offline playback (Slint `cache_track`).
 pub fn cache_track(id: u64) {
     crate::spawn(async move {
@@ -244,28 +494,131 @@ pub fn cache_tracks_with_album(
     });
 }
 
-/// Cache a whole album for offline playback (Slint `cache_album`): fetch its
-/// tracks, then batch them.
+/// Cache a whole album for offline playback. Every whole-collection entry
+/// point first checks the ready cache rows. A wholly new album takes the fast
+/// path; a partial/existing one opens the shared all-vs-missing chooser.
 pub fn cache_album(album_id: String) {
+    let key = format!("album:{album_id}");
+    let generation = begin_collection_request(&key);
     crate::spawn(async move {
+        {
+            let mut pending = pending_collection().lock().await;
+            if COLLECTION_REQUEST_GENERATION.load(Ordering::Acquire) != generation {
+                return;
+            }
+            *pending = None;
+        }
         let runtime = crate::app();
         let album = match runtime.core().get_album(&album_id).await {
             Ok(a) => a,
             Err(e) => {
                 log::error!("[qbz-qt] cache: get_album {album_id} failed: {e}");
-                crate::toast_qt::error(qbz_i18n::t("Couldn't load that album"));
+                fail_collection_request(generation, "Couldn't load that album");
                 return;
             }
         };
-        let tracks: Vec<qbz_models::Track> = album.tracks.map(|c| c.items).unwrap_or_default();
+        let tracks = unique_tracks(album.tracks.map(|c| c.items).unwrap_or_default());
         if tracks.is_empty() {
-            crate::toast_qt::error(qbz_i18n::t("This album has no playable tracks"));
+            fail_collection_request(generation, "This album has no playable tracks");
             return;
         }
-        // Stamp the album identity from the document we just fetched. Without
-        // it every row lands with a NULL album_id and the album becomes
-        // unremovable, unrefreshable and ungroupable — see `track_cache_info`.
-        cache_tracks_with_album(tracks, Some((album.id.clone(), album.title.clone())));
+        let album_fallback = Some((album.id.clone(), album.title.clone()));
+        preflight_collection(
+            generation,
+            CacheCollection {
+                kind: CollectionKind::Album,
+                key,
+                title: album.title,
+                tracks,
+                album_fallback,
+            },
+        )
+        .await;
+    });
+}
+
+/// Cache every Qobuz member of a playlist. The Qobuz client resolves all
+/// pagination before returning, so the retained snapshot is the complete
+/// playlist rather than only the visible page. Repeated track ids are queued
+/// once because the offline index is keyed by track id.
+pub fn cache_playlist(playlist_id: String) {
+    let Ok(id) = playlist_id.parse::<u64>() else {
+        crate::toast_qt::error(qbz_i18n::t("Couldn't load that playlist"));
+        return;
+    };
+    let key = format!("playlist:{id}");
+    let generation = begin_collection_request(&key);
+    crate::spawn(async move {
+        {
+            let mut pending = pending_collection().lock().await;
+            if COLLECTION_REQUEST_GENERATION.load(Ordering::Acquire) != generation {
+                return;
+            }
+            *pending = None;
+        }
+        let playlist = match crate::app().core().get_playlist(id).await {
+            Ok(playlist) => playlist,
+            Err(error) => {
+                log::error!("[qbz-qt] cache: get_playlist {id} failed: {error}");
+                fail_collection_request(generation, "Couldn't load that playlist");
+                return;
+            }
+        };
+        let tracks = unique_tracks(playlist.tracks.map(|c| c.items).unwrap_or_default());
+        if tracks.is_empty() {
+            fail_collection_request(generation, "This playlist has no playable tracks");
+            return;
+        }
+        preflight_collection(
+            generation,
+            CacheCollection {
+                kind: CollectionKind::Playlist,
+                key,
+                title: playlist.name,
+                tracks,
+                album_fallback: None,
+            },
+        )
+        .await;
+    });
+}
+
+pub fn confirm_collection_cache(mode: String) {
+    let mode = match mode.as_str() {
+        "all" => CollectionCacheMode::All,
+        "missing" => CollectionCacheMode::Missing,
+        _ => return,
+    };
+    let generation = COLLECTION_REQUEST_GENERATION.load(Ordering::Acquire);
+    COLLECTION_REQUEST_GENERATION.fetch_add(1, Ordering::AcqRel);
+    publish_collection_ui(false, String::new(), false, "{}".to_string());
+    crate::spawn(async move {
+        let collection = {
+            let mut pending = pending_collection().lock().await;
+            match pending.take() {
+                Some(pending) if pending.generation == generation => Some(pending.collection),
+                _ => None,
+            }
+        };
+        if let Some(collection) = collection {
+            log::info!(
+                "[qbz-qt] offline collection choice: {} mode={mode:?}",
+                collection.key
+            );
+            execute_collection_cache(collection, mode).await;
+        }
+    });
+}
+
+pub fn cancel_collection_cache() {
+    let generation = COLLECTION_REQUEST_GENERATION.load(Ordering::Acquire);
+    COLLECTION_REQUEST_GENERATION.fetch_add(1, Ordering::AcqRel);
+    publish_collection_ui(false, String::new(), false, "{}".to_string());
+    crate::spawn(async move {
+        let mut pending = pending_collection().lock().await;
+        if pending.as_ref().map(|p| p.generation) == Some(generation) {
+            *pending = None;
+        }
     });
 }
 
@@ -475,5 +828,59 @@ async fn remove_cached_inner(id: u64, toast: bool) {
     push_status(id, 0, 0.0);
     if toast {
         crate::toast_qt::success(qbz_i18n::t("Removed from offline"));
+    }
+}
+
+#[cfg(test)]
+mod collection_tests {
+    use super::{should_queue_collection_track, unique_tracks, CollectionCacheMode};
+    use qbz_offline_cache::OfflineCacheStatus;
+
+    #[test]
+    fn playlist_snapshot_deduplicates_cache_keys_without_reordering() {
+        let tracks = [4, 9, 4, 12]
+            .into_iter()
+            .map(|id| qbz_models::Track {
+                id,
+                ..Default::default()
+            })
+            .collect();
+        let ids: Vec<u64> = unique_tracks(tracks)
+            .into_iter()
+            .map(|track| track.id)
+            .collect();
+        assert_eq!(ids, vec![4, 9, 12]);
+    }
+
+    #[test]
+    fn missing_mode_preserves_ready_and_in_flight_rows() {
+        assert!(!should_queue_collection_track(
+            Some(OfflineCacheStatus::Ready),
+            CollectionCacheMode::Missing
+        ));
+        assert!(!should_queue_collection_track(
+            Some(OfflineCacheStatus::Downloading),
+            CollectionCacheMode::Missing
+        ));
+        assert!(should_queue_collection_track(
+            Some(OfflineCacheStatus::Failed),
+            CollectionCacheMode::Missing
+        ));
+        assert!(should_queue_collection_track(
+            None,
+            CollectionCacheMode::Missing
+        ));
+    }
+
+    #[test]
+    fn all_mode_requeues_ready_but_never_duplicates_an_active_job() {
+        assert!(should_queue_collection_track(
+            Some(OfflineCacheStatus::Ready),
+            CollectionCacheMode::All
+        ));
+        assert!(!should_queue_collection_track(
+            Some(OfflineCacheStatus::Queued),
+            CollectionCacheMode::All
+        ));
     }
 }

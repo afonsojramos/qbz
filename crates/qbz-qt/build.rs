@@ -125,7 +125,11 @@ fn find_qsb() -> Option<std::path::PathBuf> {
     }
     // Windows: `qsb.exe`, and `Path::is_file()` does NOT append `.exe` (Rust's
     // std only does that for a full path handed to `Command`), so probe both.
-    let names: &[&str] = if cfg!(windows) { &["qsb.exe", "qsb"] } else { &["qsb"] };
+    let names: &[&str] = if cfg!(windows) {
+        &["qsb.exe", "qsb"]
+    } else {
+        &["qsb"]
+    };
     if let Ok(path) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path) {
             for name in names {
@@ -605,6 +609,9 @@ fn main() {
                 "qml/controls/TrackReplacementModal.qml",
                 "qml/controls/DiscMetaModal.qml",
                 "qml/controls/TagEditorModal.qml",
+                "qml/controls/TrackMetadataModal.qml",
+                "qml/controls/LocalMediaInfoModal.qml",
+                "qml/controls/OfflineCacheChoiceModal.qml",
                 "qml/controls/TagEditorWorkspace.qml",
                 "qml/controls/RipWizardModal.qml",
                 "qml/controls/RipProgressModal.qml",
@@ -825,6 +832,7 @@ fn main() {
                 "qml/views/local/LocalArtistRow.qml",
                 "qml/views/local/LocalArtistsTab.qml",
                 "qml/views/local/LocalChrome.qml",
+                "qml/views/local/LocalScanProgress.qml",
                 "qml/views/local/LocalEphemeralPane.qml",
                 "qml/views/local/LocalFilterPopup.qml",
                 "qml/views/local/LocalFilterButton.qml",

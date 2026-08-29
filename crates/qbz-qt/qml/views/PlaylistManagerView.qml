@@ -91,6 +91,8 @@ Rectangle {
     readonly property string viewMode: root.doc.viewMode || "grid"
     readonly property bool folderMode: root.doc.folderMode !== false
     readonly property bool foldersCollapsed: root.doc.foldersCollapsed === true
+    readonly property string currentFolderId: root.doc.currentFolderId || ""
+    readonly property string currentFolderName: root.doc.currentFolderName || ""
     /// Computed in RUST (`sort == "custom" && sortAsc && query empty`, D9);
     /// QML must never re-derive it.
     readonly property bool canReorder: root.doc.canReorder === true
@@ -205,6 +207,8 @@ Rectangle {
                 viewMode: root.viewMode
                 folderMode: root.folderMode
                 foldersCollapsed: root.foldersCollapsed
+                currentFolderId: root.currentFolderId
+                currentFolderName: root.currentFolderName
                 canReorder: root.canReorder
                 folderCount: root.folderCount
                 playlistCount: root.playlistCount

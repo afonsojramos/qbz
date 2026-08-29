@@ -244,9 +244,10 @@ impl qbz_album_bridge::QbzAlbum {
         crate::offline_cache_qt::cache_album(album_id.to_string());
     }
     pub fn album_refresh_offline(self: Pin<&mut Self>, album_id: QString) {
-        // The menu's "Refresh offline copy" re-downloads the WHOLE album,
-        // not just the failed rows (Slint main.rs:12204).
-        crate::offline_cache_qt::redownload_album(album_id.to_string(), false);
+        // Compatibility entry point for older QML. Whole-album access now
+        // always runs the same preflight so the user chooses between repairing
+        // every copy and downloading only what is missing.
+        crate::offline_cache_qt::cache_album(album_id.to_string());
     }
     pub fn album_bulk_action(
         self: Pin<&mut Self>,

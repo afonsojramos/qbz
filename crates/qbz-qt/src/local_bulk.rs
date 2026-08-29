@@ -131,6 +131,9 @@ pub fn bulk_action(scope: String, ids_json: String, action: String) {
         log::debug!("[qbz-qt] local bulk {action}: empty {scope} selection, ignored");
         return;
     }
+    if matches!(action.as_str(), "track-info" | "album-info") {
+        crate::local_media_info_qt::begin();
+    }
     crate::spawn(async move {
         let rows = tokio::task::spawn_blocking(move || resolve_blocking(&scope, &ids))
             .await
@@ -190,6 +193,24 @@ pub(crate) fn resolve_album_ids_blocking(ids: &[String]) -> Vec<LocalTrack> {
 /// and keeps it while a picker is still open.
 pub(crate) async fn apply(rows: Vec<LocalTrack>, action: &str) -> bool {
     match action {
+        "track-info" => {
+            if let Some(track) = rows.into_iter().next() {
+                crate::local_media_info_qt::open_track(track);
+            } else {
+                crate::local_media_info_qt::open_empty("track");
+            }
+            false
+        }
+        "album-info" => {
+            crate::local_media_info_qt::open_album(rows);
+            false
+        }
+        "edit-metadata" => {
+            if let Some(track) = rows.into_iter().next() {
+                crate::tag_editor_qt::open_track(track);
+            }
+            false
+        }
         "queue" | "play-next" | "play-later" => {
             if rows.is_empty() {
                 return false;

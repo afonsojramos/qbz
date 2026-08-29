@@ -1,7 +1,8 @@
-// Full-page local album metadata editor. The historical filename is retained
-// so existing qrc registrations stay stable; ContentRouter is its only mount.
-// The selected physical version is immutable for the lifetime of this view:
-// QML edits row ids and values only; Rust owns paths and verifies direct writes.
+// Shared full-depth metadata editor. ContentRouter mounts it as the album
+// workspace; TrackMetadataModal mounts the same component as a dialog with
+// sibling navigation. The selected source version is immutable for the
+// lifetime of the view: QML edits row ids and values only; Rust owns physical
+// paths/server identities and verifies the chosen persistence mode.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -11,6 +12,9 @@ Item {
     id: root
     visible: true
     enabled: true
+
+    property bool trackMode: false
+    property bool leaveOnDestruction: true
 
     property string albumTitle: ""
     property string albumArtist: ""
@@ -26,6 +30,7 @@ Item {
     property var inspection: ({})
     property bool canDirectWrite: false
     property string directReason: ""
+    property bool remoteSidecarOnly: false
     property bool seeded: false
     property var remoteResults: []
     property var remoteMetadata: null
@@ -38,6 +43,9 @@ Item {
     property var artworkResults: []
     property string artworkProvider: "musicbrainz"
     property int selectedTrackIndex: -1
+    readonly property var currentTrack: selectedTrackIndex >= 0
+        && selectedTrackIndex < tracks.length ? tracks[selectedTrackIndex] : null
+    readonly property bool busy: QbzTagEditor.editorLoading || QbzTagEditor.editorSaving
 
     function tr(s) { return QbzSession.tr(s, QbzSession.trRev) }
     function parse(value) {
@@ -100,12 +108,16 @@ Item {
         inspection = doc.inspection || ({})
         canDirectWrite = doc.canDirectWrite === true
         directReason = doc.directWriteReason || ""
+        remoteSidecarOnly = doc.remoteSidecarOnly === true
         persistence = "sidecar"
         id3Version = "2.4"
         syncSecondary = false
         remoteResults = []
         remoteMetadata = null
-        selectedTrackIndex = tracks.length > 0 ? 0 : -1
+        var requestedIndex = trackMode
+            ? Number(QbzTagEditor.trackEditorInitialIndex || 0) : 0
+        selectedTrackIndex = tracks.length > 0
+            ? Math.max(0, Math.min(tracks.length - 1, requestedIndex)) : -1
         seeded = true
         keyScope.forceActiveFocus()
     }
@@ -223,7 +235,8 @@ Item {
             seed(parse(QbzTagEditor.editorJson))
     }
     Component.onDestruction: {
-        QbzTagEditor.leave()
+        if (root.leaveOnDestruction)
+            QbzTagEditor.leave()
         restoreShellFocus()
     }
 
@@ -268,11 +281,28 @@ Item {
     }
 
     Rectangle {
-        id: panel
         anchors.fill: parent
-        radius: 0
+        visible: root.trackMode
+        color: "#bf000000"
+        MouseArea {
+            anchors.fill: parent
+            enabled: !root.busy
+            onClicked: root.closeEditor()
+        }
+    }
+
+    Rectangle {
+        id: panel
+        anchors.centerIn: parent
+        width: root.trackMode ? Math.min(parent.width - 48, 1280) : parent.width
+        height: root.trackMode ? Math.min(parent.height - 48, 840) : parent.height
+        radius: root.trackMode ? theme.radiusLg : 0
         color: theme.surfaceMain
+        border.width: root.trackMode ? 1 : 0
+        border.color: theme.borderStrong
         clip: true
+
+        MouseArea { anchors.fill: parent }
 
         Item {
             id: header
@@ -281,13 +311,14 @@ Item {
             Column {
                 anchors.left: parent.left
                 anchors.leftMargin: 24
-                anchors.right: closeButton.left
+                anchors.right: headerActions.left
                 anchors.rightMargin: 16
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 3
                 Text {
                     width: parent.width
-                    text: root.tr("Edit metadata")
+                    text: root.trackMode
+                        ? root.tr("Edit track metadata") : root.tr("Edit metadata")
                     color: theme.textPrimary
                     font.pixelSize: theme.fontHeading
                     font.weight: theme.weightSemibold
@@ -295,21 +326,64 @@ Item {
                 }
                 Text {
                     width: parent.width
-                    text: root.tr("Editing the selected physical version")
+                    text: root.remoteSidecarOnly
+                        ? root.tr("Editing a local metadata sidecar")
+                        : root.trackMode && root.currentTrack
+                            ? root.currentTrack.fileName
+                            : root.tr("Editing the selected physical version")
                     color: theme.textMuted
                     font.pixelSize: theme.fontLegal
                     elide: Text.ElideRight
                 }
             }
-            QbzIconButton {
-                id: closeButton
+            Row {
+                id: headerActions
                 anchors.right: parent.right
-                anchors.rightMargin: 20
+                anchors.rightMargin: 16
                 anchors.verticalCenter: parent.verticalCenter
-                name: "x"
-                tooltipText: root.tr("Close without saving")
-                btnEnabled: !QbzTagEditor.editorSaving
-                onClicked: root.closeEditor()
+                spacing: 6
+
+                SettingsButton {
+                    visible: root.trackMode
+                    text: root.tr("Edit album")
+                    iconName: "disc-3"
+                    minWidth: 0
+                    enabled: !root.busy
+                    onClicked: QbzTagEditor.promoteToAlbumEditor()
+                }
+                QbzIconButton {
+                    visible: root.trackMode
+                    name: "chevron-left"
+                    tooltipText: root.tr("Previous track")
+                    btnEnabled: !root.busy && root.selectedTrackIndex > 0
+                    onClicked: root.selectedTrackIndex--
+                }
+                Text {
+                    visible: root.trackMode
+                    width: 54
+                    height: 32
+                    text: root.tracks.length > 0
+                        ? (root.selectedTrackIndex + 1) + " / " + root.tracks.length
+                        : "0 / 0"
+                    color: theme.textSecondary
+                    font.pixelSize: theme.fontBody
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                QbzIconButton {
+                    visible: root.trackMode
+                    name: "chevron-right"
+                    tooltipText: root.tr("Next track")
+                    btnEnabled: !root.busy
+                        && root.selectedTrackIndex + 1 < root.tracks.length
+                    onClicked: root.selectedTrackIndex++
+                }
+                QbzIconButton {
+                    name: "x"
+                    tooltipText: root.tr("Close without saving")
+                    btnEnabled: !QbzTagEditor.editorSaving
+                    onClicked: root.closeEditor()
+                }
             }
         }
         Rectangle { y: header.height; width: parent.width; height: 1; color: theme.borderSubtle }

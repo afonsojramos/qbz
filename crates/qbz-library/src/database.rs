@@ -6018,6 +6018,39 @@ impl LibraryDatabase {
         Ok(result)
     }
 
+    /// Whether an artist-image lookup (positive or negative) was completed
+    /// within `max_age_secs`.
+    ///
+    /// Negative rows deliberately keep `image_url` NULL.  Remembering those
+    /// misses is what prevents every visit to a long Artists rail from
+    /// repeating the same Qobuz/Last.fm/Discogs requests.  Custom artwork is
+    /// a positive answer regardless of the remote lookup timestamp.
+    pub fn artist_image_resolution_is_fresh(
+        &self,
+        artist_name: &str,
+        max_age_secs: i64,
+    ) -> Result<bool, LibraryError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let cutoff = now.saturating_sub(max_age_secs.max(0));
+        self.conn
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM artist_images
+                      WHERE artist_name = ?1
+                        AND (custom_image_path IS NOT NULL OR fetched_at >= ?2)
+                 )",
+                params![artist_name, cutoff],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value != 0)
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to query artist image freshness: {e}"))
+            })
+    }
+
     /// Get all custom artist images (for bulk lookup)
     pub fn get_all_custom_artist_images(
         &self,
@@ -6137,9 +6170,18 @@ impl LibraryDatabase {
             .as_secs() as i64;
 
         self.conn.execute(
-            "INSERT OR REPLACE INTO artist_images
+            "INSERT INTO artist_images
              (artist_name, image_url, source, custom_image_path, canonical_name, fetched_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(artist_name) DO UPDATE SET
+                 image_url = excluded.image_url,
+                 source = excluded.source,
+                 custom_image_path = COALESCE(excluded.custom_image_path,
+                                               artist_images.custom_image_path),
+                 canonical_name = COALESCE(excluded.canonical_name,
+                                           artist_images.canonical_name),
+                 fetched_at = excluded.fetched_at,
+                 updated_at = excluded.updated_at",
             params![artist_name, image_url, source, custom_image_path, canonical_name, now, now],
         )
         .map_err(|e| LibraryError::Database(format!("Failed to cache artist image: {}", e)))?;
@@ -8445,5 +8487,51 @@ mod metadata_editor_transaction_tests {
             )
             .unwrap();
         assert_eq!(after, first_row);
+    }
+}
+
+#[cfg(test)]
+mod artist_image_cache_tests {
+    use super::*;
+
+    #[test]
+    fn remote_refresh_preserves_custom_art_and_negative_results_are_fresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
+
+        db.cache_artist_image_with_canonical(
+            "Beyonce",
+            None,
+            "custom",
+            Some("/pictures/beyonce.jpg"),
+            Some("Beyoncé"),
+        )
+        .unwrap();
+        db.cache_artist_image_with_canonical(
+            "Beyonce",
+            Some("https://cdn.example/beyonce.jpg"),
+            "qobuz",
+            None,
+            None,
+        )
+        .unwrap();
+        let image = db.get_artist_image("Beyonce").unwrap().unwrap();
+        assert_eq!(
+            image.custom_image_path.as_deref(),
+            Some("/pictures/beyonce.jpg")
+        );
+        assert_eq!(image.canonical_name.as_deref(), Some("Beyoncé"));
+
+        db.cache_artist_image_with_canonical("No Portrait", None, "miss", None, None)
+            .unwrap();
+        assert!(db
+            .artist_image_resolution_is_fresh("No Portrait", 60)
+            .unwrap());
+        assert!(db
+            .get_artist_image("No Portrait")
+            .unwrap()
+            .unwrap()
+            .image_url
+            .is_none());
     }
 }

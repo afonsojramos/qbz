@@ -97,6 +97,14 @@ Item {
     // routes are name/key routes, so each entry is gated on its own datum.
     readonly property bool canGoAlbum: (item.albumId || "") !== ""
     readonly property bool canGoArtist: (item.artist || "") !== ""
+    // Local/network files may write a sidecar or their canonical tag layer;
+    // media-server rows use the same editor but are deliberately sidecar-only.
+    // Offline Qobuz copies are excluded: their cache file is not user-owned
+    // library metadata and has no stable server-album identity.
+    readonly property bool canEditMetadata: [
+        "local", "plex", "jellyfin", "subsonic", "navidrome",
+        "gonic", "airsonic", "astiga"
+    ].indexOf(String(item.source || "").toLowerCase()) >= 0
 
     // Zebra is painted HERE, not forwarded to the shared row. TrackRow tints
     // its own background rectangle, which is `parent.width` wide — and this
@@ -248,6 +256,8 @@ Item {
                 ]
                 if (root.canGoAlbum) m.push({ "label": QbzSession.tr("Go to album", QbzSession.trRev), "icon": "disc-3", "action": "go-album" })
                 if (root.canGoArtist) m.push({ "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" })
+                m.push({ "label": QbzSession.tr("Track info", QbzSession.trRev), "icon": "info", "action": "track-info" })
+                if (root.canEditMetadata) m.push({ "label": QbzSession.tr("Edit metadata", QbzSession.trRev), "icon": "pen-line", "action": "edit-metadata" })
                 return m
             }
             onPicked: function (a) {
@@ -255,7 +265,8 @@ Item {
                 // LOCAL-mode adds: one-element selection through the bulk entry
                 // point, which owns the only source-aware row -> ref resolver
                 // (see the file header).
-                else if (a === "add-to-playlist" || a === "add-to-mixtape") {
+                else if (a === "add-to-playlist" || a === "add-to-mixtape"
+                        || a === "edit-metadata" || a === "track-info") {
                     if (root.nativeActions)
                         QbzLocal.tracksNativeRowAction(root.nativeIndex, a)
                     else

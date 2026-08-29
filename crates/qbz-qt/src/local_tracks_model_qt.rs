@@ -209,9 +209,21 @@ pub(crate) fn requested() -> bool {
     if SESSION_FAILED.load(Ordering::Acquire) {
         return false;
     }
-    std::env::var("QBZ_LOCAL_CATALOG_TRACKS")
+    // The rollout switch used to be opt-in while the native model was being
+    // proved. Keeping that default after the model shipped silently routes a
+    // normal launch through the legacy accumulated-page document: the A-Z
+    // rail can then only know about letters in the current 500-row prefix.
+    // Native is the production path now. An explicit false value remains a
+    // diagnostic escape hatch, and SESSION_FAILED still provides the
+    // per-session automatic rollback after a real model/catalog failure.
+    !std::env::var("QBZ_LOCAL_CATALOG_TRACKS")
         .ok()
-        .is_some_and(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
 }
 
 /// Start a new immutable native query. Returns `false` when the runtime flag
@@ -379,6 +391,9 @@ pub(crate) fn row_action(index: i64, action: String) {
     let Some((generation, record)) = resident_record(index) else {
         return;
     };
+    if action == "track-info" {
+        crate::local_media_info_qt::begin();
+    }
     crate::spawn(async move {
         let rows = tokio::task::spawn_blocking(move || resolve_records_blocking(&[record]))
             .await
@@ -720,10 +735,11 @@ fn activate_query(opened: OpenedQuery) {
         );
         return;
     }
-    let name_group = opened.descriptor.group() == TrackGroup::Name;
-    let group = group_word(opened.descriptor.group()).to_string();
-    let initial_jumps = jumps_json(if name_group {
-        name_jumps(&opened.page.records, 0)
+    let track_group = opened.descriptor.group();
+    let grouped = track_group != TrackGroup::Off;
+    let group = group_word(track_group).to_string();
+    let initial_jumps = jumps_json(if grouped {
+        group_jumps(&opened.page.records, 0, track_group)
     } else {
         Vec::new()
     });
@@ -783,7 +799,12 @@ fn activate_query(opened: OpenedQuery) {
             wire.len()
         );
     });
-    if opened.total > ANCHOR_STRIDE_ROWS as u64 || (name_group && opened.total > PAGE_ROWS as u64) {
+    // Group navigation is metadata of the immutable query, not of the pages
+    // the ListView happened to make resident. Build it in the same bounded
+    // keyset walk as the sparse anchors whenever page zero is not the whole
+    // result. This is what keeps the complete # A-Z rail independent from
+    // delegate creation and scrolling.
+    if opened.total > ANCHOR_STRIDE_ROWS as u64 || (grouped && opened.total > PAGE_ROWS as u64) {
         build_anchors(generation);
     }
 }
@@ -1016,7 +1037,7 @@ fn build_anchors(generation: u64) {
             let mut row = 0usize;
             let mut anchors = Vec::new();
             let mut jumps = Vec::new();
-            let mut previous_letter = String::new();
+            let mut seen_letters = HashSet::new();
             loop {
                 if QUERY_GENERATION.load(Ordering::Acquire) != generation {
                     return Err("superseded");
@@ -1024,10 +1045,9 @@ fn build_anchors(generation: u64) {
                 let page = catalog
                     .query_tracks(&descriptor, cursor.as_ref(), 500)
                     .map_err(|_| "anchor-query")?;
-                if descriptor.group() == TrackGroup::Name {
-                    for jump in name_jumps(&page.rows, row) {
-                        if jump.letter != previous_letter {
-                            previous_letter = jump.letter.clone();
+                if descriptor.group() != TrackGroup::Off {
+                    for jump in group_jumps(&page.rows, row, descriptor.group()) {
+                        if seen_letters.insert(jump.letter.clone()) {
                             jumps.push(jump);
                         }
                     }
@@ -1155,8 +1175,8 @@ fn map_record(record: &TrackRecord, art: &mut HashMap<String, (SourceId, String)
         .as_deref()
         .filter(|value| !value.is_empty())
     {
-        if let Some(source) = SourceId::from_word(raw) {
-            art.insert(art_key.clone(), (source, token.to_string()));
+        if let Some(reference) = crate::local_rows::art_token(Some(raw), token) {
+            art.insert(art_key.clone(), reference);
         }
     }
     let format = audio_format(&record.format);
@@ -1244,11 +1264,30 @@ fn record_group_label(record: &TrackRecord, group: TrackGroup) -> String {
     }
 }
 
-fn name_jumps(records: &[TrackRecord], base: usize) -> Vec<NativeJump> {
+fn alpha_bucket(value: &str) -> String {
+    let initial = qbz_local_catalog::normalize_sort_key(value)
+        .chars()
+        .next()
+        .unwrap_or('#')
+        .to_ascii_uppercase();
+    if initial.is_ascii_alphabetic() {
+        initial.to_string()
+    } else {
+        "#".to_string()
+    }
+}
+
+fn group_jumps(records: &[TrackRecord], base: usize, group: TrackGroup) -> Vec<NativeJump> {
     let mut previous = String::new();
     let mut jumps = Vec::new();
     for (offset, record) in records.iter().enumerate() {
-        let letter = record_group_label(record, TrackGroup::Name);
+        let value = match group {
+            TrackGroup::Album => record.album.as_str(),
+            TrackGroup::Artist => record.artist.as_str(),
+            TrackGroup::Name => record.title.as_str(),
+            TrackGroup::Off => continue,
+        };
+        let letter = alpha_bucket(value);
         if letter != previous {
             previous = letter.clone();
             jumps.push(NativeJump {
@@ -1457,7 +1496,7 @@ mod tests {
     }
 
     #[test]
-    fn name_jump_metadata_is_bounded_and_uses_global_row_indices() {
+    fn grouped_jump_metadata_is_bounded_and_uses_global_row_indices() {
         let records = ["Alpha", "Another", "Beta", "Zulu"]
             .into_iter()
             .enumerate()
@@ -1472,12 +1511,45 @@ mod tests {
                 10,
             )
             .unwrap();
-        let jumps = name_jumps(&page.rows, 10_000);
+        let jumps = group_jumps(&page.rows, 10_000, TrackGroup::Name);
         assert_eq!(jumps.len(), 3);
         assert_eq!(jumps[0].letter, "A");
         assert_eq!(jumps[0].index, 10_000);
         assert_eq!(jumps[2].letter, "Z");
         assert_eq!(jumps[2].index, 10_003);
+    }
+
+    #[test]
+    fn grouped_jumps_use_the_selected_field_and_fold_numbers_and_symbols() {
+        let mut records = vec![
+            metric_track(1, SourceKind::Local, "Zulu"),
+            metric_track(2, SourceKind::Local, "Alpha"),
+            metric_track(3, SourceKind::Local, "Beta"),
+        ];
+        records[0].album = "1999".to_string();
+        records[1].album = "Abbey Road".to_string();
+        records[2].album = "Blue".to_string();
+        let mut catalog = Catalog::open_in_memory(1).unwrap();
+        catalog.upsert_tracks(&records).unwrap();
+        let page = catalog
+            .query_tracks(
+                &QueryDescriptor::tracks().with_group(TrackGroup::Album),
+                None,
+                10,
+            )
+            .unwrap();
+        let jumps = group_jumps(&page.rows, 50, TrackGroup::Album);
+        assert_eq!(
+            jumps
+                .iter()
+                .map(|jump| jump.letter.as_str())
+                .collect::<Vec<_>>(),
+            vec!["#", "A", "B"]
+        );
+        assert_eq!(
+            jumps.iter().map(|jump| jump.index).collect::<Vec<_>>(),
+            vec![50, 51, 52]
+        );
     }
 
     #[test]

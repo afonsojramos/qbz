@@ -585,7 +585,7 @@ Rectangle {
     // on the letter's FIRST card instead of near it. Same strip, same
     // buckets, an exact landing.
     readonly property bool alphaActive:
-        (activeTab === "tracks" && tracksGroup === "name")
+        (activeTab === "tracks" && tracksGroup !== "off")
         || (activeTab === "albums" && albumsGroup === "alpha")
         || (activeTab === "artists" && artistsGroup === "alpha" && artistsView === "grid")
     readonly property var alphaJumps: {
@@ -599,7 +599,10 @@ Rectangle {
             // itself at the top of the viewport.
             if (activeTab === "tracks") {
                 if (rows[i].kind !== "group-header") continue
-                out.push({ "letter": rows[i].title, "index": i })
+                var trackKey = root.alphaKey(rows[i].title)
+                if (trackKey === last) continue
+                out.push({ "letter": trackKey, "index": i })
+                last = trackKey
                 continue
             }
             var key = root.alphaKey(rows[i].title)
@@ -1427,6 +1430,7 @@ Rectangle {
                 anchors.topMargin: 16
                 anchors.bottom: parent.bottom
                 jumps: root.alphaJumps
+                completeAlphabet: true
                 onJump: function (ordinal, index) { root.alphaJumpTo(index) }
             }
 

@@ -21,7 +21,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone)]
 enum EditorTarget {
     Library,
-    Ephemeral { session_path: String },
+    Ephemeral {
+        session_path: String,
+    },
+    Remote {
+        target: qbz_library::RemoteTagTarget,
+    },
 }
 
 #[derive(Clone)]
@@ -64,9 +69,47 @@ static ARTWORK_GEN: AtomicU64 = AtomicU64::new(0);
 static REMOTE_SEQ: AtomicI32 = AtomicI32::new(0);
 static ARTWORK_SEQ: AtomicU64 = AtomicU64::new(0);
 static SAVE_ACTIVE: AtomicBool = AtomicBool::new(false);
+static TRACK_MODAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 fn session() -> &'static Mutex<Option<EditorSession>> {
     SESSION.get_or_init(|| Mutex::new(None))
+}
+
+/// Recover the physical source from the authoritative row. Older/cache rows
+/// can carry an empty or folded `source`, while their album identity remains
+/// explicitly namespaced. Treating those rows as local turns the server item
+/// id in `file_path` into a filesystem path and produces the misleading
+/// "local file versions only" toast.
+fn editor_remote_source(track: &LocalTrack) -> String {
+    let direct =
+        crate::remote_metadata_qt::canonical_source(track.source.as_deref().unwrap_or_default());
+    if !direct.is_empty() {
+        return direct.to_string();
+    }
+    track
+        .album_group_key
+        .split_once(':')
+        .map(|(prefix, _)| crate::remote_metadata_qt::canonical_source(prefix))
+        .filter(|source| !source.is_empty())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Sidecars belong to an album directory, not to the album identity string.
+/// Folder grouping normally makes both values equal, but metadata grouping
+/// deliberately does not. Prefer a real group directory, then the selected
+/// file's containing folder. Requiring the selected path itself to be a file
+/// was unnecessarily strict (a renamed/missing row can still be corrected in
+/// a valid album sidecar) and broke mounted network libraries in particular.
+fn editor_directory(track: &LocalTrack) -> Option<String> {
+    let group = Path::new(&track.album_group_key);
+    if group.is_dir() {
+        return Some(group.to_string_lossy().into_owned());
+    }
+    Path::new(&track.file_path)
+        .parent()
+        .filter(|directory| directory.is_dir())
+        .map(|directory| directory.to_string_lossy().into_owned())
 }
 
 #[derive(Serialize)]
@@ -184,6 +227,7 @@ struct EditorSeed {
     discogs_release_id: String,
     artwork: ArtworkSeed,
     sidecar_exists: bool,
+    remote_sidecar_only: bool,
     can_direct_write: bool,
     direct_write_reason: String,
     inspection: InspectionDoc,
@@ -192,30 +236,63 @@ struct EditorSeed {
 
 fn build_seed(open: &EditorSession) -> EditorSeed {
     let tracks = &open.tracks;
+    let remote_target = match &open.target {
+        EditorTarget::Remote { target } => Some(target),
+        _ => None,
+    };
     let cue_based = tracks
         .iter()
         .any(|track| track.cue_file_path.is_some() || track.cue_start_secs.is_some());
-    let paths = tracks
-        .iter()
-        .map(|track| track.file_path.clone())
-        .collect::<Vec<_>>();
-    let inspection = InspectionDoc::from_result(qbz_library::inspect_album_tag_layers(&paths));
-    let snapshots = qbz_library::read_editor_tag_snapshots(&paths);
+    let paths = if remote_target.is_some() {
+        Vec::new()
+    } else {
+        tracks
+            .iter()
+            .map(|track| track.file_path.clone())
+            .collect::<Vec<_>>()
+    };
+    let inspection = if remote_target.is_some() {
+        InspectionDoc {
+            file_count: 0,
+            canonical_layers: Vec::new(),
+            present_layers: Vec::new(),
+            conflicting_files: 0,
+            writable_files: 0,
+            direct_write_supported: false,
+            error: String::new(),
+        }
+    } else {
+        InspectionDoc::from_result(qbz_library::inspect_album_tag_layers(&paths))
+    };
+    let snapshots = if remote_target.is_some() {
+        Vec::new()
+    } else {
+        qbz_library::read_editor_tag_snapshots(&paths)
+    };
     let snapshot_by_path = snapshots
         .iter()
         .map(|snapshot| (snapshot.file_path.as_str(), snapshot))
         .collect::<HashMap<_, _>>();
-    let sidecar = qbz_library::read_album_sidecar(Path::new(&open.directory))
-        .ok()
-        .flatten();
+    let sidecar = remote_target
+        .and_then(crate::remote_metadata_qt::sidecar)
+        .or_else(|| {
+            (remote_target.is_none())
+                .then(|| qbz_library::read_album_sidecar(Path::new(&open.directory)))
+                .and_then(Result::ok)
+                .flatten()
+        });
     let extended_sidecar = sidecar
         .as_ref()
         .and_then(|sidecar| sidecar.extended_album.as_ref());
-    let local_files = tracks
-        .iter()
-        .all(|track| Path::new(&track.file_path).is_file());
-    let can_direct_write = !cue_based && local_files && inspection.direct_write_supported;
-    let direct_write_reason = if cue_based {
+    let local_files = remote_target.is_none()
+        && tracks
+            .iter()
+            .all(|track| Path::new(&track.file_path).is_file());
+    let can_direct_write =
+        remote_target.is_none() && !cue_based && local_files && inspection.direct_write_supported;
+    let direct_write_reason = if remote_target.is_some() {
+        qbz_i18n::t("Media-server metadata is stored in a local sidecar.")
+    } else if cue_based {
         qbz_i18n::t("CUE-based albums use sidecar metadata.")
     } else if !local_files {
         qbz_i18n::t("One or more audio files are unavailable.")
@@ -285,6 +362,13 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
         .staged_artwork
         .as_ref()
         .map(|artwork| artwork.preview_path.clone())
+        .or_else(|| {
+            sidecar
+                .as_ref()
+                .and_then(|sidecar| sidecar.extended_album.as_ref())
+                .and_then(|album| album.artwork_path.clone())
+                .filter(|path| Path::new(path).is_file())
+        })
         .or_else(|| {
             tracks
                 .iter()
@@ -356,7 +440,12 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
         musicbrainz_album_artist_ids,
         discogs_release_id,
         artwork,
-        sidecar_exists: qbz_library::sidecar_path(Path::new(&open.directory)).exists(),
+        sidecar_exists: if remote_target.is_some() {
+            sidecar.is_some()
+        } else {
+            qbz_library::sidecar_path(Path::new(&open.directory)).exists()
+        },
+        remote_sidecar_only: remote_target.is_some(),
         can_direct_write,
         direct_write_reason,
         inspection,
@@ -388,11 +477,15 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
                     .unwrap_or_else(|| vec![artist_credit.clone()]);
                 TrackSeed {
                     id: track.id.to_string(),
-                    file_name: Path::new(&track.file_path)
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or(&track.file_path)
-                        .to_string(),
+                    file_name: if remote_target.is_some() {
+                        track.file_path.clone()
+                    } else {
+                        Path::new(&track.file_path)
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or(&track.file_path)
+                            .to_string()
+                    },
                     title: track.title.clone(),
                     track_number: track
                         .track_number
@@ -444,15 +537,17 @@ fn open_session(
     directory: String,
     tracks: Vec<LocalTrack>,
     target: EditorTarget,
+    track_index: Option<usize>,
 ) {
     if SAVE_ACTIVE.load(Ordering::Acquire) {
         return;
     }
-    if tracks.is_empty() || directory.trim().is_empty() {
+    if tracks.is_empty() {
         crate::toast_qt::error(qbz_i18n::t("No local album version is selected."));
         return;
     }
-    if !Path::new(&directory).is_dir() {
+    let remote = matches!(target, EditorTarget::Remote { .. });
+    if !remote && (directory.trim().is_empty() || !Path::new(&directory).is_dir()) {
         crate::toast_qt::info(qbz_i18n::t(
             "Metadata editing is available for local file versions only.",
         ));
@@ -471,8 +566,15 @@ fn open_session(
         artwork_candidates: HashMap::new(),
     };
     *session().lock().expect("tag editor session lock") = Some(open.clone());
-    crate::tag_editor_bridge::ui(|mut bridge| {
-        bridge.as_mut().set_editor_open(true);
+    crate::tag_editor_bridge::ui(move |mut bridge| {
+        let modal = track_index.is_some();
+        bridge.as_mut().set_editor_open(!modal);
+        bridge.as_mut().set_track_editor_open(modal);
+        bridge.as_mut().set_track_editor_initial_index(
+            track_index
+                .and_then(|index| i32::try_from(index).ok())
+                .unwrap_or(-1),
+        );
         bridge.as_mut().set_editor_loading(true);
         bridge.as_mut().set_editor_saving(false);
         bridge.as_mut().set_editor_progress_current(0);
@@ -484,7 +586,10 @@ fn open_session(
         bridge.as_mut().set_artwork_searching(false);
         bridge.as_mut().set_artwork_loading(false);
     });
-    crate::nav_qt::record("metadataeditor");
+    TRACK_MODAL_ACTIVE.store(track_index.is_some(), Ordering::Release);
+    if track_index.is_none() {
+        crate::nav_qt::record("metadataeditor");
+    }
 
     crate::spawn(async move {
         let started = std::time::Instant::now();
@@ -526,6 +631,7 @@ pub fn open(album_id: String) {
         group_key,
         tracks,
         EditorTarget::Library,
+        None,
     );
 }
 
@@ -544,7 +650,102 @@ pub fn open_ephemeral(group_key: String) {
         directory,
         tracks,
         EditorTarget::Ephemeral { session_path },
+        None,
     );
+}
+
+/// Open the compact per-track editor on a real local row. The album siblings
+/// are resolved from the authoritative library database, never from the
+/// resident/paged QML model, so previous/next remains complete regardless of
+/// virtualization or the active sort.
+pub fn open_track(track: LocalTrack) {
+    let selected_id = track.id;
+    let group_key = track.album_group_key.clone();
+    let source = editor_remote_source(&track);
+    let remote = !source.is_empty();
+    if group_key.trim().is_empty() {
+        crate::toast_qt::info(qbz_i18n::t(
+            "Metadata editing is available for local file versions only.",
+        ));
+        return;
+    }
+    let local_directory = (!remote).then(|| editor_directory(&track)).flatten();
+    crate::spawn(async move {
+        let lookup_key = group_key.clone();
+        let tracks = tokio::task::spawn_blocking(move || {
+            if remote {
+                crate::local_albums::fetch_album_tracks_blocking(&lookup_key)
+            } else {
+                crate::local_state::with_db(|db| db.get_album_tracks(&lookup_key))
+                    .unwrap_or_default()
+            }
+        })
+        .await
+        .unwrap_or_default();
+        if !remote && local_directory.is_none() {
+            crate::toast_qt::info(qbz_i18n::t(
+                "The local album folder is not currently available.",
+            ));
+            return;
+        }
+        let Some(index) = tracks.iter().position(|row| row.id == selected_id) else {
+            crate::toast_qt::info(qbz_i18n::t("The track is no longer in the library."));
+            return;
+        };
+        let target = if remote {
+            let effective_group = tracks
+                .first()
+                .map(|track| track.album_group_key.as_str())
+                .filter(|key| !key.is_empty())
+                .unwrap_or(&group_key);
+            let album_id = if source == "plex" {
+                effective_group
+                    .strip_prefix("plex:album:")
+                    .map(str::to_string)
+                    .unwrap_or_else(|| effective_group.to_string())
+            } else {
+                effective_group
+                    .strip_prefix(&format!("{source}:"))
+                    .unwrap_or(effective_group)
+                    .to_string()
+            };
+            EditorTarget::Remote {
+                target: crate::remote_metadata_qt::target(
+                    &source,
+                    &crate::remote_metadata_qt::active_source_instance(&source),
+                    &album_id,
+                ),
+            }
+        } else {
+            EditorTarget::Library
+        };
+        open_session(
+            group_key.clone(),
+            group_key.clone(),
+            if remote {
+                String::new()
+            } else {
+                local_directory.unwrap_or(group_key)
+            },
+            tracks,
+            target,
+            Some(index),
+        );
+    });
+}
+
+pub fn promote_to_album_editor() {
+    if session().lock().expect("tag editor session lock").is_none()
+        || SAVE_ACTIVE.load(Ordering::Acquire)
+    {
+        return;
+    }
+    TRACK_MODAL_ACTIVE.store(false, Ordering::Release);
+    crate::tag_editor_bridge::ui(|mut bridge| {
+        bridge.as_mut().set_track_editor_open(false);
+        bridge.as_mut().set_editor_open(true);
+    });
+    crate::nav_qt::record("metadataeditor");
 }
 
 fn clear_session() {
@@ -555,6 +756,7 @@ fn clear_session() {
     REMOTE_GEN.fetch_add(1, Ordering::SeqCst);
     ARTWORK_GEN.fetch_add(1, Ordering::SeqCst);
     let prior = session().lock().expect("tag editor session lock").take();
+    TRACK_MODAL_ACTIVE.store(false, Ordering::Release);
     if let Some(path) = prior
         .and_then(|session| session.staged_artwork)
         .map(|artwork| artwork.preview_path)
@@ -569,6 +771,8 @@ fn clear_session() {
     }
     crate::tag_editor_bridge::ui(|mut bridge| {
         bridge.as_mut().set_editor_open(false);
+        bridge.as_mut().set_track_editor_open(false);
+        bridge.as_mut().set_track_editor_initial_index(-1);
         bridge.as_mut().set_editor_loading(false);
         bridge.as_mut().set_remote_searching(false);
         bridge.as_mut().set_remote_loading(false);
@@ -724,6 +928,11 @@ fn validate_draft(draft: SaveDraft, open: EditorSession) -> Result<SavePayload, 
     let direct = draft.persistence == "direct";
     if !matches!(draft.persistence.as_str(), "sidecar" | "direct") {
         return Err(qbz_i18n::t("Unknown metadata persistence mode."));
+    }
+    if direct && matches!(&open.target, EditorTarget::Remote { .. }) {
+        return Err(qbz_i18n::t(
+            "Media-server metadata can only be edited with a sidecar.",
+        ));
     }
     if direct
         && open
@@ -967,6 +1176,7 @@ enum SaveOutcome {
         tracks: Vec<LocalTrack>,
     },
     Ephemeral,
+    Remote,
 }
 
 pub fn save(draft_json: &str) {
@@ -1002,7 +1212,32 @@ pub fn save(draft_json: &str) {
         let result = tokio::task::spawn_blocking(move || {
             let mut payload = payload;
             let mut artwork_path = None::<String>;
-            if payload.direct {
+            let remote_target = match &payload.session.target {
+                EditorTarget::Remote { target } => Some(target.clone()),
+                _ => None,
+            };
+            if let Some(target) = remote_target.as_ref() {
+                if payload.direct {
+                    return Err(qbz_library::LibraryError::Other(qbz_i18n::t(
+                        "Media-server metadata can only be edited with a sidecar.",
+                    )));
+                }
+                if let Some(cover) = payload.front_cover.as_ref() {
+                    artwork_path =
+                        qbz_library::MetadataExtractor::cache_artwork_bytes(&cover.bytes);
+                    if artwork_path.is_none() {
+                        return Err(qbz_library::LibraryError::Other(
+                            "edited artwork could not be projected into the thumbnail cache"
+                                .to_string(),
+                        ));
+                    }
+                    if let Some(extended) = payload.sidecar.extended_album.as_mut() {
+                        extended.artwork_path = artwork_path.clone();
+                    }
+                }
+                crate::remote_metadata_qt::save(target, &payload.sidecar)
+                    .map_err(qbz_library::LibraryError::Other)?;
+            } else if payload.direct {
                 let total = payload.direct_tracks.len() as i32;
                 crate::tag_editor_bridge::ui(move |mut bridge| {
                     bridge.as_mut().set_editor_progress_total(total);
@@ -1071,6 +1306,7 @@ pub fn save(draft_json: &str) {
                     crate::local_ephemeral::apply_editor_update(session_path, &tracks)?;
                     SaveOutcome::Ephemeral
                 }
+                EditorTarget::Remote { .. } => SaveOutcome::Remote,
             };
             Ok::<_, qbz_library::LibraryError>(outcome)
         })
@@ -1082,7 +1318,8 @@ pub fn save(draft_json: &str) {
         });
 
         SAVE_ACTIVE.store(false, Ordering::Release);
-        let editor_visible = crate::nav_qt::current_view() == "metadataeditor";
+        let editor_visible = crate::nav_qt::current_view() == "metadataeditor"
+            || TRACK_MODAL_ACTIVE.load(Ordering::Acquire);
         if SAVE_GEN.load(Ordering::SeqCst) != save_generation {
             if !editor_visible {
                 clear_session();
@@ -1117,6 +1354,18 @@ pub fn save(draft_json: &str) {
                 crate::toast_qt::success(qbz_i18n::t("Album metadata saved."));
             }
             Ok(SaveOutcome::Ephemeral) => {
+                if OPEN_GEN.load(Ordering::SeqCst) == open_generation {
+                    close();
+                }
+                crate::toast_qt::success(qbz_i18n::t("Album metadata saved."));
+            }
+            Ok(SaveOutcome::Remote) => {
+                // The remote caches remain authoritative and untouched. Their
+                // derived catalog projection notices the sidecar revision and
+                // rebuilds the affected source; direct mappers already see the
+                // refreshed in-process overlay immediately.
+                crate::local_catalog_qt::request_catch_up();
+                crate::local_bridge_ops::reload_browse();
                 if OPEN_GEN.load(Ordering::SeqCst) == open_generation {
                     close();
                 }
@@ -1693,6 +1942,39 @@ mod tests {
     }
 
     #[test]
+    fn editor_source_recovers_remote_rows_from_album_namespace() {
+        let mut track = LocalTrack {
+            source: None,
+            album_group_key: "jellyfin:album-9".to_string(),
+            file_path: "opaque-server-item".to_string(),
+            ..LocalTrack::default()
+        };
+        assert_eq!(editor_remote_source(&track), "jellyfin");
+
+        track.album_group_key = "navidrome:album-4".to_string();
+        assert_eq!(editor_remote_source(&track), "subsonic");
+
+        track.source = Some("plex".to_string());
+        track.album_group_key.clear();
+        assert_eq!(editor_remote_source(&track), "plex");
+    }
+
+    #[test]
+    fn editor_directory_uses_real_parent_for_non_path_group_identity() {
+        let directory = std::env::temp_dir();
+        let file = directory.join("qbz-editor-location-fixture.flac");
+        let track = LocalTrack {
+            file_path: file.to_string_lossy().into_owned(),
+            album_group_key: "metadata:artist|album".to_string(),
+            ..LocalTrack::default()
+        };
+        assert_eq!(
+            editor_directory(&track).as_deref(),
+            Some(directory.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
     fn year_validation_does_not_accept_sentinels_from_qml() {
         assert_eq!(parse_year("").unwrap(), None);
         assert_eq!(parse_year("2026").unwrap(), Some(2026));
@@ -1813,6 +2095,37 @@ mod tests {
     }
 
     #[test]
+    fn media_server_sessions_preserve_full_drafts_but_reject_direct_writes() {
+        let mut remote = session_fixture();
+        remote.directory.clear();
+        remote.target = EditorTarget::Remote {
+            target: qbz_library::RemoteTagTarget::new("jellyfin", "server-a", "album-9"),
+        };
+        for (index, track) in remote.tracks.iter_mut().enumerate() {
+            track.file_path = format!("native-track-{}", index + 1);
+            track.source = Some("jellyfin".to_string());
+        }
+        let rows = r#"[
+            {"id":"10","title":"First","trackNumber":"1","discNumber":"1",
+             "artistCredit":"Alpha","artists":["Alpha"],"composers":["Composer"],
+             "performers":["Player"],"musicbrainzRecordingId":"recording-1",
+             "musicbrainzTrackId":"track-1","musicbrainzArtistIds":["artist-1"]},
+            {"id":"20","title":"Second","trackNumber":"2","discNumber":"1",
+             "artistCredit":"Beta","artists":["Beta"]}
+        ]"#;
+        let sidecar: SaveDraft = serde_json::from_str(&draft_json(rows)).unwrap();
+        let payload = validate_draft(sidecar, remote.clone()).unwrap();
+        assert!(!payload.direct);
+        assert_eq!(payload.sidecar.extended_tracks[0].composers, ["Composer"]);
+        assert_eq!(payload.sidecar.tracks[0].file_path, "native-track-1");
+
+        let direct_json =
+            draft_json(rows).replace("\"persistence\":\"sidecar\"", "\"persistence\":\"direct\"");
+        let direct: SaveDraft = serde_json::from_str(&direct_json).unwrap();
+        assert!(validate_draft(direct, remote).is_err());
+    }
+
+    #[test]
     fn artwork_staging_rejects_non_images_and_uses_an_opaque_token() {
         assert!(prepare_staged_artwork(99, b"not an image".to_vec(), "test".into()).is_err());
 
@@ -1854,5 +2167,27 @@ mod tests {
         // `primary` property. An unknown assignment invalidates the entire QML
         // type lazily, so neither AlbumView nor ephemeral can mount the editor.
         assert!(!workspace.contains("primary: true"));
+    }
+
+    #[test]
+    fn track_editor_reuses_every_album_field_and_persistence_control() {
+        let wrapper = include_str!("../qml/controls/TrackMetadataModal.qml");
+        let shared = include_str!("../qml/controls/TagEditorModal.qml");
+        let workspace = include_str!("../qml/controls/TagEditorWorkspace.qml");
+        assert!(wrapper.contains("TagEditorModal"));
+        assert!(wrapper.contains("trackMode: true"));
+        assert!(wrapper.contains("leaveOnDestruction: false"));
+        assert!(shared.contains("onClicked: root.selectedTrackIndex--"));
+        assert!(shared.contains("onClicked: root.selectedTrackIndex++"));
+        assert!(shared.contains("QbzTagEditor.promoteToAlbumEditor()"));
+        assert!(shared.contains("root.persistence = index === 1 ? \"direct\" : \"sidecar\""));
+        assert!(shared.contains("QbzTagEditor.save(draft())"));
+        assert!(workspace.contains("workspace.editor.albumTitle"));
+        assert!(workspace.contains("workspace.editor.musicbrainzReleaseId"));
+        assert!(
+            workspace.contains("workspace.editor.musicbrainzRecordingId")
+                || workspace.contains("rowData.musicbrainzRecordingId")
+        );
+        assert!(!wrapper.contains("filePath"));
     }
 }

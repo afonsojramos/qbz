@@ -73,7 +73,7 @@ use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use qbz_source::{ArtRef, ArtSize};
 
 use crate::artwork_qt;
-use crate::local_state::state;
+use crate::local_state::artwork_sources;
 
 /// Memo ceiling, mirroring `artwork_qt::MEMO_CAP`: an accelerator, cleared
 /// wholesale rather than carrying LRU bookkeeping.
@@ -129,15 +129,7 @@ pub struct ArtworkWindow {
 /// Keys with no cover are dropped, so the QML map only ever grows with real
 /// hits.
 pub fn resolve_window_blocking(keys: Vec<String>) -> ArtworkWindow {
-    let sources: Vec<(String, qbz_source::SourceId, String)> = state(|s| {
-        keys.iter()
-            .filter_map(|k| {
-                s.art_index
-                    .get(k)
-                    .map(|(src, tok)| (k.clone(), *src, tok.clone()))
-            })
-            .collect()
-    });
+    let sources = artwork_sources(&keys);
     let mut hits = Vec::with_capacity(sources.len());
     let mut plex_misses = Vec::new();
     let mut cold = Vec::new();

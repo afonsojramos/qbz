@@ -121,6 +121,10 @@ pub fn init_for_user(base_dir: &std::path::Path) {
         return;
     }
     *BOUND.lock().unwrap() = UserDataPaths::load_last_user_id();
+    // Repair only the rare Plex rows whose flat track response omitted art.
+    // It is background/LAN-only and the derived catalog receives one coalesced
+    // catch-up when new covers land.
+    start_album_artwork_repair();
 }
 
 /// Forget the binding (logout) so the next read re-binds to the new user.
@@ -335,7 +339,13 @@ fn parse_audio_format(s: &str) -> qbz_library::AudioFormat {
 /// thumb path (tokenized at fetch time), `source` is `"plex"`, and the id is
 /// namespaced so it cannot collide with a local row.
 pub fn map_cached_to_local_track(t: qbz_plex::PlexCachedTrack) -> LocalTrack {
-    LocalTrack {
+    let native_album_id = t
+        .parent_rating_key
+        .clone()
+        .filter(|key| !key.is_empty())
+        .unwrap_or_else(|| t.album_key.clone());
+    let source_instance = crate::remote_metadata_qt::active_source_instance("plex");
+    let mut track = LocalTrack {
         id: (PLEX_TRACK_ID_FLOOR | (t.id & (PLEX_TRACK_ID_FLOOR - 1))) as i64,
         file_path: t.rating_key,
         title: t.title,
@@ -361,7 +371,9 @@ pub fn map_cached_to_local_track(t: qbz_plex::PlexCachedTrack) -> LocalTrack {
         collection_artwork_path: t.collection_artwork_path,
         source: Some("plex".to_string()),
         ..Default::default()
-    }
+    };
+    crate::remote_metadata_qt::apply(&mut track, "plex", &source_instance, &native_album_id);
+    track
 }
 
 /// The full Plex track set matching `query`, in the `LocalTrack` shape.
@@ -543,6 +555,7 @@ pub fn disconnect() {
 
 static SYNCING: AtomicBool = AtomicBool::new(false);
 static SYNC_CANCEL: AtomicBool = AtomicBool::new(false);
+static ALBUM_ARTWORK_REPAIRING: AtomicBool = AtomicBool::new(false);
 const SYNC_PAGE_SIZE: u64 = 250;
 
 pub fn is_syncing() -> bool {
@@ -569,7 +582,91 @@ pub async fn sync_now() -> Result<usize, String> {
     SYNC_CANCEL.store(false, Ordering::Release);
     let result = sync_inner().await;
     SYNCING.store(false, Ordering::SeqCst);
+    if result.is_ok() {
+        start_album_artwork_repair();
+    }
     result
+}
+
+/// Hydrate album art only for parent ids whose Track rows omit both `thumb`
+/// and `parentThumb`. Plex's own album metadata is the authority; in
+/// particular, inherited artwork can point at another rating key, so a URL
+/// synthesized from `parentRatingKey` is not safe.
+fn start_album_artwork_repair() {
+    if SYNCING.load(Ordering::Acquire) || ALBUM_ARTWORK_REPAIRING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let cfg = settings();
+    if !cfg.enabled
+        || !is_local_address(&cfg.base_url)
+        || resolve_base_url(&cfg.base_url).is_empty()
+        || cfg.token.trim().is_empty()
+    {
+        ALBUM_ARTWORK_REPAIRING.store(false, Ordering::Release);
+        return;
+    }
+    let server_id = (!cfg.machine_id.trim().is_empty()).then_some(cfg.machine_id.clone());
+    crate::spawn(async move {
+        let candidate_server = server_id.clone();
+        let candidates = tokio::task::spawn_blocking(move || {
+            qbz_plex::plex_cache_album_artwork_candidates(candidate_server)
+        })
+        .await;
+        let candidates = match candidates {
+            Ok(Ok(candidates)) => candidates,
+            Ok(Err(error)) => {
+                log::warn!("[plex-art] candidate query failed: {error}");
+                ALBUM_ARTWORK_REPAIRING.store(false, Ordering::Release);
+                return;
+            }
+            Err(error) => {
+                log::warn!("[plex-art] candidate worker failed: {error}");
+                ALBUM_ARTWORK_REPAIRING.store(false, Ordering::Release);
+                return;
+            }
+        };
+        if candidates.is_empty() {
+            ALBUM_ARTWORK_REPAIRING.store(false, Ordering::Release);
+            return;
+        }
+
+        let mut resolved = Vec::with_capacity(candidates.len());
+        let mut fetch_failures = 0usize;
+        for parent_rating_key in candidates {
+            match qbz_plex::plex_get_album_artwork_path(
+                cfg.base_url.clone(),
+                cfg.token.clone(),
+                parent_rating_key.clone(),
+            )
+            .await
+            {
+                Ok(path) => resolved.push((parent_rating_key, path)),
+                Err(error) => {
+                    fetch_failures = fetch_failures.saturating_add(1);
+                    log::debug!("[plex-art] album metadata skipped: {error}");
+                }
+            }
+        }
+        let covers = resolved.iter().filter(|(_, path)| path.is_some()).count();
+        let save_server = server_id.clone();
+        let saved = tokio::task::spawn_blocking(move || {
+            qbz_plex::plex_cache_save_album_artwork(save_server, resolved)
+        })
+        .await;
+        match saved {
+            Ok(Ok(checked)) => {
+                log::info!(
+                    "[plex-art] metadata checked={checked} covers={covers} failures={fetch_failures}"
+                );
+                if covers > 0 {
+                    crate::local_catalog_qt::request_catch_up();
+                }
+            }
+            Ok(Err(error)) => log::warn!("[plex-art] cache update failed: {error}"),
+            Err(error) => log::warn!("[plex-art] cache worker failed: {error}"),
+        }
+        ALBUM_ARTWORK_REPAIRING.store(false, Ordering::Release);
+    });
 }
 
 async fn interrupt_section(section_key: String, generation: u64, restart: bool) {

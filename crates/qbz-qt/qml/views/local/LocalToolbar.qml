@@ -350,6 +350,22 @@ Row {
         height: parent.height
         LocalIconSelect {
             anchors.verticalCenter: parent.verticalCenter
+            iconName: "layout-grid"
+            label: QbzSession.tr("Explorer columns", QbzSession.trRev)
+            menuWidth: 190
+            options: [
+                QbzSession.tr("Genre", QbzSession.trRev),
+                QbzSession.tr("Year", QbzSession.trRev),
+                QbzSession.tr("Genre and year", QbzSession.trRev),
+            ]
+            currentIndex: Math.max(0, ["genre", "year", "both"]
+                .indexOf(root.view.explorerColumns))
+            onSelected: function(i) {
+                root.view.setExplorerColumns(["genre", "year", "both"][i])
+            }
+        }
+        LocalIconSelect {
+            anchors.verticalCenter: parent.verticalCenter
             iconName: "arrow-up-down"
             label: root.sortTip
             menuWidth: 180

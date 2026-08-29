@@ -206,6 +206,12 @@ Item {
     // --------------------------- entry model ------------------------------
     property var entries: []
     property var alphaJumps: []
+    function alphaKey(value) {
+        var text = String(value || "").trim()
+        if (text.length === 0) return "#"
+        var first = text.charAt(0).toUpperCase()
+        return first >= "A" && first <= "Z" ? first : "#"
+    }
     /// entry index -> index into `view.tracksVisible`, -1 for a group header.
     /// Group headers inflate the entry indices, so reporting them straight
     /// into the row array asked for the covers of tracks BELOW the ones on
@@ -233,6 +239,7 @@ Item {
         var mode = view ? view.tracksGroup : "off"
         var out = []
         var jumps = []
+        var jumpSeen = ({})
         var idx = []
         var prev = null
         for (var i = 0; i < rows.length; i++) {
@@ -242,7 +249,11 @@ Item {
                     : mode === "name" ? (t.title || "").slice(0, 1).toUpperCase()
                     : ""
             if (mode !== "off" && key !== "" && key !== prev) {
-                if (mode === "name") jumps.push({ "letter": key, "index": out.length })
+                var letter = root.alphaKey(key)
+                if (jumpSeen[letter] !== true) {
+                    jumpSeen[letter] = true
+                    jumps.push({ "letter": letter, "index": out.length })
+                }
                 out.push({ "t": 0, "label": key })
                 idx.push(-1)
                 prev = key
@@ -407,7 +418,11 @@ Item {
             ListView {
                 id: list
                 anchors.fill: parent
-                anchors.rightMargin: root.view.tracksGroup === "name" ? 20 : 0
+                // The tab's 32px content inset already is the rail lane. Keep
+                // rows aligned with every other Local Library surface, then
+                // place A-Z and the scrollbar *inside that existing gutter*
+                // below instead of shrinking the rows by another 42px.
+                anchors.rightMargin: 0
                 clip: true
                 cacheBuffer: 50 * 12
                 boundsBehavior: Flickable.StopAtBounds
@@ -566,11 +581,17 @@ Item {
                 }
             }
             QbzAlphaStrip {
-                visible: root.view.tracksGroup === "name" && root.alphaJumps.length > 0
+                visible: root.view.tracksGroup !== "off"
                 anchors.right: parent.right
+                // This parent ends 32px before the view edge. A negative
+                // margin consumes that outer gutter: the 18px alphabet ends
+                // 12px before the window edge, leaving a distinct 8px lane
+                // for the auto-hiding scrollbar at 4px.
+                anchors.rightMargin: -20
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 jumps: root.alphaJumps
+                completeAlphabet: true
                 onJump: function (ordinal, index) {
                     list.positionViewAtIndex(index, ListView.Beginning)
                 }
@@ -585,13 +606,7 @@ Item {
                 // empty channel with nothing in it (owner, 2026-08-16). The
                 // negative margin cancels the inset and leaves the same 4px
                 // gap the other lists have; the ROWS keep their inset.
-                //
-                // The "name" arm is untouched on purpose: there the alpha
-                // strip owns the right edge at the inset, and 22 is what
-                // clears it. Pushing the bar out there would jump it past the
-                // strip.
-                anchors.rightMargin: root.view.tracksGroup === "name"
-                    ? 22 : 4 - root.sideInset
+                anchors.rightMargin: 4 - root.sideInset
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 target: list
