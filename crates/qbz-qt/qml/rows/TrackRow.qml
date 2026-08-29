@@ -99,6 +99,8 @@ Rectangle {
     property bool zebra: false
     property bool artistLink: false
     property bool clickPlays: true
+    // Debounce for clickPlays rows (see onReleased).
+    property real _lastPlayRequestMs: 0
     /// RETIRED and INERT. primitives/TrackRow.slint has exactly ONE quality
     /// form (the bare QualityBadgeFull below) — there was never an icon/text
     /// split to arm. Kept declared ONLY so the two existing call sites that
@@ -1554,7 +1556,18 @@ Rectangle {
             if (wasDragging) {
                 mouse.accepted = true
             } else if (root.clickPlays) {
-                root.playRequested()
+                // ONE play per gesture. A double-click is two releases plus
+                // the doubleClicked handler: three `playRequested`s within
+                // ~300 ms, i.e. three restarts of the same track (2026-08-29
+                // smoke: three "served from OFFLINE cache" in 230 ms). The
+                // second release inside the double-click window is dropped
+                // here; the doubleClicked arm below already yields to
+                // clickPlays rows.
+                const now = Date.now()
+                if (now - root._lastPlayRequestMs > 400) {
+                    root._lastPlayRequestMs = now
+                    root.playRequested()
+                }
             } else {
                 mouse.accepted = false
             }
@@ -1573,6 +1586,10 @@ Rectangle {
             // The album view plays on DOUBLE-click (clickPlays:false there),
             // so the single-click block above is not enough on its own.
             if (root.pulledDead)
+                return
+            // A clickPlays row already played on the first release; a third
+            // emission here restarted the track a third time.
+            if (root.clickPlays)
                 return
             if (mouse.button === Qt.LeftButton)
                 root.playRequested()
