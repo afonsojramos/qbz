@@ -1064,6 +1064,21 @@ pub struct PlaybackEvent {
     /// the track is fully buffered — drives the seek-bar cache overlay.
     #[serde(default)]
     pub buffer_progress: Option<f32>,
+    /// Monotonic edge raised when the audio engine consumes every queued
+    /// source. Pollers compare generations instead of trying to sample a
+    /// potentially sub-tick `playing -> stopped` transition.
+    #[serde(default)]
+    pub engine_empty_generation: u64,
+    /// Track whose engine-empty edge raised `engine_empty_generation`.
+    #[serde(default)]
+    pub engine_empty_track_id: u64,
+    /// Monotonic edge raised after the live CMAF feeder exhausts its bounded
+    /// fetch retries. This also covers failure before playback ever starts.
+    #[serde(default)]
+    pub source_failure_generation: u64,
+    /// Track whose feeder raised `source_failure_generation`.
+    #[serde(default)]
+    pub source_failure_track_id: u64,
 }
 
 /// Shared state between main thread and audio thread
@@ -1120,6 +1135,16 @@ pub struct SharedState {
     /// can detect that a queued `PlayStreaming` was superseded by a newer play
     /// and stop waiting on its initial buffer instead of blocking ~60s (#591).
     play_generation: Arc<AtomicU64>,
+    /// Monotonic engine-empty notification plus the track that raised it.
+    /// This is durable across polling intervals; a boolean pulse would have
+    /// the same sampling race as the old `was_playing` predicate.
+    engine_empty_generation: Arc<AtomicU64>,
+    engine_empty_track_id: Arc<AtomicU64>,
+    /// Monotonic terminal source-data failure notification. Kept separate
+    /// from `stream_error`, which also represents output-device failures that
+    /// must never cause the queue to skip a healthy track.
+    source_failure_generation: Arc<AtomicU64>,
+    source_failure_track_id: Arc<AtomicU64>,
     /// Handle of the live CMAF segment feeder — the background task that
     /// keeps downloading the currently-streaming track after playback has
     /// started. Stored so a superseding play intent can stop the download
@@ -1171,6 +1196,10 @@ impl SharedState {
             buffer_progress: Arc::new(AtomicU32::new(0)),
             bit_perfect_mode: Arc::new(AtomicU8::new(0)),
             play_generation: Arc::new(AtomicU64::new(0)),
+            engine_empty_generation: Arc::new(AtomicU64::new(0)),
+            engine_empty_track_id: Arc::new(AtomicU64::new(0)),
+            source_failure_generation: Arc::new(AtomicU64::new(0)),
+            source_failure_track_id: Arc::new(AtomicU64::new(0)),
             stream_feeder: Arc::new(std::sync::Mutex::new(None)),
             gapless_stream_feeder: Arc::new(std::sync::Mutex::new(None)),
         }
@@ -1244,6 +1273,26 @@ impl SharedState {
     /// uses this to abandon buffer waits for superseded plays (#591).
     pub(crate) fn is_current_play(&self, gen: u64) -> bool {
         self.current_play_generation() == gen
+    }
+
+    /// Publish a durable engine-empty edge for frontend/headless pollers.
+    /// Store the identity first, then advance the generation so a reader that
+    /// observes the new generation also observes its matching track id.
+    fn record_engine_empty(&self, track_id: u64) {
+        self.engine_empty_track_id.store(track_id, Ordering::SeqCst);
+        self.engine_empty_generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Publish a terminal CMAF feeder failure only while its play intent is
+    /// still current. A superseded feeder is cancellation, not a bad track.
+    fn record_source_failure(&self, track_id: u64, play_gen: u64) {
+        if !self.is_current_play(play_gen) {
+            return;
+        }
+        self.source_failure_track_id
+            .store(track_id, Ordering::SeqCst);
+        self.source_failure_generation
+            .fetch_add(1, Ordering::SeqCst);
     }
 
     /// Cancel the in-flight segment feeder's download, if any. Called on
@@ -4542,6 +4591,9 @@ impl Player {
                                         && thread_state.is_playing.load(Ordering::SeqCst)
                                     {
                                         log::info!("Audio thread: track finished (engine empty)");
+                                        let ended_track_id = thread_state
+                                            .current_track_id
+                                            .load(Ordering::SeqCst);
                                         thread_state.is_playing.store(false, Ordering::SeqCst);
                                         let duration = thread_state.duration.load(Ordering::SeqCst);
                                         thread_state.position.store(duration, Ordering::SeqCst);
@@ -4557,6 +4609,11 @@ impl Player {
                                         log::info!("[gapless-trace] clear (engine-empty) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
                                         gapless_pending = None;
                                         gapless_request_armed = false;
+                                        // Publish only after every stopped/end
+                                        // field above is coherent. The
+                                        // generation is the release edge the
+                                        // pollers key on.
+                                        thread_state.record_engine_empty(ended_track_id);
                                     }
                                 }
                             }
@@ -4850,6 +4907,7 @@ impl Player {
                 let flac_header = cmaf_info.flac_header;
                 let n_segments = cmaf_info.n_segments;
                 let cache = self.audio_cache.clone();
+                let feeder_state = self.state.clone();
                 let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
                 let slot_writer = buffer_writer.clone();
 
@@ -4875,11 +4933,14 @@ impl Player {
                             track_id
                         ),
                         Ok(false) => {}
-                        Err(e) => log::error!(
-                            "[CMAF-STREAM ERROR] Track {}: {}",
-                            track_id,
-                            e
-                        ),
+                        Err(e) => {
+                            feeder_state.record_source_failure(track_id, gen);
+                            log::error!(
+                                "[CMAF-STREAM ERROR] Track {}: {} — queue recovery armed",
+                                track_id,
+                                e
+                            );
+                        }
                     }
                 });
                 // Register for cancel-on-supersede: the next `begin_play`
@@ -5472,17 +5533,12 @@ impl Player {
 
         for seg_idx in 1..=n_segments {
             let seg_url = url_template.replace("$SEGMENT$", &seg_idx.to_string());
-            let fetch = async {
-                client
-                    .get(&seg_url)
-                    .header("User-Agent", "Mozilla/5.0")
-                    .send()
-                    .await
-                    .map_err(|e| format!("CMAF segment {} fetch: {}", seg_idx, e))?
-                    .bytes()
-                    .await
-                    .map_err(|e| format!("CMAF segment {} read: {}", seg_idx, e))
-            };
+            let fetch_tag = format!("CMAF-STREAM track {track_id} seg {seg_idx}");
+            let fetch = qbz_qobuz::cmaf::fetch_cdn_bytes_with_retry(
+                &client,
+                &seg_url,
+                &fetch_tag,
+            );
             let seg_data = tokio::select! {
                 biased;
                 // Superseded by a newer play (or stop): drop the in-flight
@@ -6317,6 +6373,16 @@ impl Player {
             gapless_next_track_id: self.state.get_gapless_next_track_id(),
             bit_perfect_mode: self.state.get_bit_perfect_mode(),
             buffer_progress: self.state.get_buffer_progress(),
+            engine_empty_generation: self
+                .state
+                .engine_empty_generation
+                .load(Ordering::SeqCst),
+            engine_empty_track_id: self.state.engine_empty_track_id.load(Ordering::SeqCst),
+            source_failure_generation: self
+                .state
+                .source_failure_generation
+                .load(Ordering::SeqCst),
+            source_failure_track_id: self.state.source_failure_track_id.load(Ordering::SeqCst),
         }
     }
 }
@@ -6394,6 +6460,7 @@ mod tests {
     use super::compute_needs_new_stream;
     use super::external_content_type;
     use super::{BufferedMediaSource, DsdErrorReport, SharedState, StreamingConfig};
+    use std::sync::atomic::Ordering;
 
     struct FakeDsdSource {
         words: std::vec::IntoIter<i32>,
@@ -6445,6 +6512,34 @@ mod tests {
         assert_eq!(wrapped.next(), None);
         assert!(!state.has_stream_error());
         assert_eq!(state.take_stream_error_message(), None);
+    }
+
+    #[test]
+    fn engine_empty_edges_are_monotonic_and_keep_the_track_identity() {
+        let state = SharedState::new();
+        state.record_engine_empty(41);
+        assert_eq!(state.engine_empty_generation.load(Ordering::SeqCst), 1);
+        assert_eq!(state.engine_empty_track_id.load(Ordering::SeqCst), 41);
+
+        state.record_engine_empty(42);
+        assert_eq!(state.engine_empty_generation.load(Ordering::SeqCst), 2);
+        assert_eq!(state.engine_empty_track_id.load(Ordering::SeqCst), 42);
+    }
+
+    #[test]
+    fn superseded_feeder_cannot_publish_a_source_failure() {
+        let state = SharedState::new();
+        let old_generation = state.current_play_generation();
+        state.begin_play();
+        state.record_source_failure(41, old_generation);
+
+        assert_eq!(state.source_failure_generation.load(Ordering::SeqCst), 0);
+        assert_eq!(state.source_failure_track_id.load(Ordering::SeqCst), 0);
+
+        let current_generation = state.current_play_generation();
+        state.record_source_failure(42, current_generation);
+        assert_eq!(state.source_failure_generation.load(Ordering::SeqCst), 1);
+        assert_eq!(state.source_failure_track_id.load(Ordering::SeqCst), 42);
     }
 
     #[test]

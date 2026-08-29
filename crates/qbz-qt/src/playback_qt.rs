@@ -41,6 +41,7 @@ use cxx_qt_lib::QString;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
 use qbz_models::{PageArtistTrack, Quality, QueueTrack, RepeatMode};
+use qbz_player::PlaybackEvent;
 
 /// The request tier for every play. Persisted in ui_prefs.json ("streaming_quality")
 /// and applied here from Settings > Audio (settings_qt). Default "hires_plus".
@@ -1660,6 +1661,42 @@ fn stream_error_text(msg: &str, sandboxed: bool) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlaybackRecoveryCause {
+    SourceFailure,
+    EngineEmpty,
+    SampledNaturalEnd,
+}
+
+/// Resolve one queue-recovery edge. Explicit player generations win over the
+/// legacy sampled predicate: a 100 ms late-gapless resume/empty pulse can fit
+/// entirely between this frontend's 1 s polls, while the generations remain
+/// observable until the next tick. Track-id checks reject a stale feeder/end
+/// edge after a manual play has already moved the queue.
+fn playback_recovery_cause(
+    event: &PlaybackEvent,
+    queue_track_id: u64,
+    seen_engine_empty_generation: u64,
+    seen_source_failure_generation: u64,
+    sampled_track_end: bool,
+) -> Option<PlaybackRecoveryCause> {
+    if event.source_failure_generation != seen_source_failure_generation
+        && event.source_failure_track_id != 0
+        && event.source_failure_track_id == queue_track_id
+    {
+        return Some(PlaybackRecoveryCause::SourceFailure);
+    }
+    if event.engine_empty_generation != seen_engine_empty_generation
+        && event.engine_empty_track_id != 0
+        && event.engine_empty_track_id == queue_track_id
+        && !event.is_playing
+        && event.gapless_next_track_id == 0
+    {
+        return Some(PlaybackRecoveryCause::EngineEmpty);
+    }
+    sampled_track_end.then_some(PlaybackRecoveryCause::SampledNaturalEnd)
+}
+
 /// Play a pre-built queue starting at `start` (ArtistView Popular Tracks:
 /// the visible list becomes the queue, anchored at the clicked track).
 ///
@@ -3102,6 +3139,15 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         // does not re-request it on every tick while the download is in flight
         // (playback.rs:5049-5051).
         let mut gapless_requested_for: u64 = 0;
+        // Own the frontend's gapless fetch so an engine-empty recovery can
+        // abort a segment body that is still monopolizing the link. The
+        // player's incremental successor feeder has its own cancellation slot;
+        // this handle covers the outer tier-walk task.
+        let mut gapless_fetch_task: Option<tokio::task::JoinHandle<()>> = None;
+        // Durable player edges consumed by this poller. Both begin at zero;
+        // the player generations are monotonic for the process lifetime.
+        let mut seen_engine_empty_generation: u64 = 0;
+        let mut seen_source_failure_generation: u64 = 0;
         // Immediate full-cache warming has a distinct edge because it follows
         // both the local engine and the cast cursor. Unlike the gapless guard,
         // it names the NEW current track whose two successors are being warmed.
@@ -3138,6 +3184,19 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
             ticker.tick().await;
+
+            if gapless_fetch_task
+                .as_ref()
+                .is_some_and(|task| task.is_finished())
+            {
+                if let Some(task) = gapless_fetch_task.take() {
+                    if let Err(error) = task.await {
+                        if !error.is_cancelled() {
+                            log::warn!("[qbz-qt] gapless fetch task failed: {error}");
+                        }
+                    }
+                }
+            }
 
             // --- Stream-failure toast (PARITY-DEBT #7) -------------------
             // Surface audio-stream failures as a toast, 1:1 with
@@ -3420,6 +3479,14 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 // hand-off, in which case the arming guard still names the
                 // track that just ended. Clear it so the NEW current track can
                 // arm its own prefetch (playback.rs:5353).
+                if let Some(task) = gapless_fetch_task.take() {
+                    if !task.is_finished() {
+                        log::info!(
+                            "[qbz-qt] [GAPLESS] aborting stale fetch after track changed to {track_id}"
+                        );
+                        task.abort();
+                    }
+                }
                 gapless_requested_for = 0;
             }
 
@@ -3504,7 +3571,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                         gapless_requested_for = track_id;
                         let runtime = runtime.clone();
                         let next_id = next.id;
-                        tokio::spawn(async move {
+                        let task = tokio::spawn(async move {
                             let quality = local_playback_quality().0;
                             let streaming_only =
                                 crate::settings_qt::audio_settings().streaming_only;
@@ -3599,6 +3666,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                                 }
                             }
                         });
+                        if let Some(stale) = gapless_fetch_task.replace(task) {
+                            stale.abort();
+                        }
                     } else if next.id != track_id && next.is_local {
                         // Source-owned gapless. `is_local` means "does not use
                         // Qobuz's tier walk", NOT "has a filesystem path": it
@@ -3608,7 +3678,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                         // DSD and remote streams into `play_next`.
                         gapless_requested_for = track_id;
                         let runtime = runtime.clone();
-                        tokio::spawn(async move {
+                        let task = tokio::spawn(async move {
                             let next_id = next.id;
                             match crate::audible_qt::queue_gapless_successor(
                                 &runtime, track_id, &next,
@@ -3626,6 +3696,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                                 ),
                             }
                         });
+                        if let Some(stale) = gapless_fetch_task.replace(task) {
+                            stale.abort();
+                        }
                     }
                 }
             }
@@ -3676,25 +3749,74 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 }
             }
 
-            // --- End-of-track edge (playback.rs condition, verbatim) ------
-            let track_ended = was_playing
+            // --- End-of-track / source-failure recovery -------------------
+            // Keep the sampled predicate for source types that do not publish
+            // a stronger signal. CMAF and engine-empty recovery use durable
+            // generations, so a playing pulse shorter than this 1 s poll is
+            // still observed exactly once.
+            let sampled_track_end = was_playing
                 && !is_playing
                 && last_track_id != 0
                 && (track_id == 0 || track_id == last_track_id)
                 && duration > 0
                 && seen_position + 2 >= duration;
-            if track_ended {
-                // Listen log: the natural end, before anything moves the
-                // cursor (the next edge must find no open row).
-                crate::listen_log_qt::on_natural_end().await;
-                // Seed for InfiniteRadio, read BEFORE anything moves the
-                // cursor: the track that just ended is still the current one.
-                let ended_track_id = runtime
+            let explicit_recovery_edge = event.engine_empty_generation
+                != seen_engine_empty_generation
+                || event.source_failure_generation != seen_source_failure_generation;
+            let queue_track_id = if explicit_recovery_edge || sampled_track_end {
+                runtime
                     .core()
                     .current_track()
                     .await
                     .map(|t| t.id)
-                    .unwrap_or(0);
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            let recovery_cause = playback_recovery_cause(
+                &event,
+                queue_track_id,
+                seen_engine_empty_generation,
+                seen_source_failure_generation,
+                sampled_track_end,
+            );
+            // Consume every observed generation, including a stale edge whose
+            // track id no longer matches after a manual play. It must not wake
+            // up again if that id appears later in the session.
+            seen_engine_empty_generation = event.engine_empty_generation;
+            seen_source_failure_generation = event.source_failure_generation;
+
+            if let Some(recovery_cause) = recovery_cause {
+                match recovery_cause {
+                    PlaybackRecoveryCause::SourceFailure => {
+                        log::warn!(
+                            "[qbz-qt] recovery: source retries exhausted for track {queue_track_id}; continuing the queue"
+                        );
+                        crate::listen_log_qt::on_error().await;
+                    }
+                    PlaybackRecoveryCause::EngineEmpty => {
+                        log::info!(
+                            "[qbz-qt] recovery: engine empty for track {queue_track_id} with no gapless successor; continuing the queue"
+                        );
+                        crate::listen_log_qt::on_natural_end().await;
+                    }
+                    PlaybackRecoveryCause::SampledNaturalEnd => {
+                        crate::listen_log_qt::on_natural_end().await;
+                    }
+                }
+
+                if let Some(task) = gapless_fetch_task.take() {
+                    if !task.is_finished() {
+                        log::info!(
+                            "[qbz-qt] [GAPLESS] aborting unfinished successor fetch during recovery"
+                        );
+                        task.abort();
+                    }
+                }
+
+                // Seed for InfiniteRadio, read BEFORE anything moves the
+                // cursor: the track that just ended is still the current one.
+                let ended_track_id = queue_track_id;
                 // Stop-after-this-song: if the track that just ended carries
                 // the marker, HALT here — do not advance, do not refill. The
                 // queue stays intact and the finished track stays parked in
@@ -3799,11 +3921,13 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_queue_with, gapless_edge_matches, prefetch_track_ids, quality_badge_from,
-        reconcile_device_cap, should_stream_gapless_successor, stream_error_text,
-        xorshift_shuffle_seeded, PrefetchCandidate, PrefetchTrackEdge,
+        filter_queue_with, gapless_edge_matches, playback_recovery_cause, prefetch_track_ids,
+        quality_badge_from, reconcile_device_cap, should_stream_gapless_successor,
+        stream_error_text, xorshift_shuffle_seeded, PlaybackRecoveryCause, PrefetchCandidate,
+        PrefetchTrackEdge,
     };
     use qbz_models::{Quality, QualityLimit, QueueTrack};
+    use qbz_player::PlaybackEvent;
     use qbz_source::QualityHint;
 
     fn remote(id: u64) -> PrefetchCandidate {
@@ -3815,6 +3939,74 @@ mod tests {
 
     fn local(id: u64) -> PrefetchCandidate {
         PrefetchCandidate { id, is_local: true }
+    }
+
+    fn playback_event(track_id: u64, is_playing: bool) -> PlaybackEvent {
+        PlaybackEvent {
+            is_playing,
+            position: 0,
+            duration: 0,
+            track_id,
+            volume: 1.0,
+            sample_rate: None,
+            bit_depth: None,
+            shuffle: None,
+            repeat: None,
+            normalization_gain: None,
+            gapless_ready: false,
+            gapless_next_track_id: 0,
+            bit_perfect_mode: None,
+            buffer_progress: None,
+            engine_empty_generation: 0,
+            engine_empty_track_id: 0,
+            source_failure_generation: 0,
+            source_failure_track_id: 0,
+        }
+    }
+
+    #[test]
+    fn engine_empty_edge_survives_a_missed_playing_pulse() {
+        let mut event = playback_event(41, false);
+        event.engine_empty_generation = 1;
+        event.engine_empty_track_id = 41;
+
+        assert_eq!(
+            playback_recovery_cause(&event, 41, 0, 0, false),
+            Some(PlaybackRecoveryCause::EngineEmpty)
+        );
+    }
+
+    #[test]
+    fn source_failure_recovers_a_track_that_never_started() {
+        let mut event = playback_event(0, false);
+        event.source_failure_generation = 1;
+        event.source_failure_track_id = 41;
+
+        assert_eq!(
+            playback_recovery_cause(&event, 41, 0, 0, false),
+            Some(PlaybackRecoveryCause::SourceFailure)
+        );
+    }
+
+    #[test]
+    fn stale_recovery_edge_cannot_skip_a_new_queue_track() {
+        let mut event = playback_event(42, false);
+        event.source_failure_generation = 3;
+        event.source_failure_track_id = 41;
+        event.engine_empty_generation = 2;
+        event.engine_empty_track_id = 41;
+
+        assert_eq!(playback_recovery_cause(&event, 42, 1, 2, false), None);
+    }
+
+    #[test]
+    fn late_gapless_rescue_consumes_engine_edge_without_advancing() {
+        let mut event = playback_event(41, true);
+        event.engine_empty_generation = 1;
+        event.engine_empty_track_id = 41;
+        event.gapless_next_track_id = 42;
+
+        assert_eq!(playback_recovery_cause(&event, 41, 0, 0, false), None);
     }
 
     fn queue_track() -> QueueTrack {

@@ -86,6 +86,8 @@ pub struct LastTick {
     pub position: u64,
     pub duration: u64,
     pub is_playing: bool,
+    pub engine_empty_generation: u64,
+    pub source_failure_generation: u64,
 }
 
 impl LastTick {
@@ -95,6 +97,8 @@ impl LastTick {
             position: ev.position,
             duration: ev.duration,
             is_playing: ev.is_playing,
+            engine_empty_generation: ev.engine_empty_generation,
+            source_failure_generation: ev.source_failure_generation,
         }
     }
 }
@@ -223,17 +227,25 @@ pub fn plan_tick(
         }
     }
 
-    // 5. End-of-track edge (playback.rs:4489-4496): the previous tick was
-    //    playing, this tick is not, the track id held (or went to 0), and the
-    //    previous position was within 2 s of the (current) duration. Uses the
-    //    live `ev.duration` guard + previous `last.position` exactly as the
-    //    desktop's `duration > 0 && seen_position + 2 >= duration`.
-    let track_ended = last.is_playing
+    // 5. End-of-track/recovery edge. The engine and CMAF feeder now publish
+    //    durable generations because a complete playing -> stopped pulse can
+    //    fit between two 450 ms ticks. Keep the sampled predicate as a fallback
+    //    for non-CMAF sources, but never require it for an explicit edge.
+    let engine_empty = ev.engine_empty_generation != last.engine_empty_generation
+        && ev.engine_empty_track_id != 0
+        && ev.engine_empty_track_id == queue.current
+        && !ev.is_playing
+        && ev.gapless_next_track_id == 0;
+    let source_failed = ev.source_failure_generation != last.source_failure_generation
+        && ev.source_failure_track_id != 0
+        && ev.source_failure_track_id == queue.current;
+    let sampled_track_end = last.is_playing
         && !ev.is_playing
         && last.track_id != 0
         && (ev.track_id == 0 || ev.track_id == last.track_id)
         && ev.duration > 0
         && last.position + 2 >= ev.duration;
+    let track_ended = source_failed || engine_empty || sampled_track_end;
 
     // 6. QConnect report edge (playback.rs:4648-4673): report on a track/play
     //    transition OR the ~2 s periodic cadence while playing. Runs regardless
@@ -327,6 +339,8 @@ pub fn advance_state(
             position: prev.last.position,
             duration: prev.last.duration,
             is_playing: ev.is_playing,
+            engine_empty_generation: ev.engine_empty_generation,
+            source_failure_generation: ev.source_failure_generation,
         }
     };
     let mut gapless_requested_for = if armed {
@@ -338,7 +352,15 @@ pub fn advance_state(
     // Track-end handler resets the edge trackers + the gapless guard
     // (playback.rs:4728-4742, both the stop-after and advance branches).
     if ended {
-        last = LastTick::default();
+        // Keep the durable player generations consumed while resetting the
+        // sampled edge fields. Resetting the generations to zero would replay
+        // the same engine-empty/source-failure edge on every tick until the
+        // next track surfaced.
+        last = LastTick {
+            engine_empty_generation: ev.engine_empty_generation,
+            source_failure_generation: ev.source_failure_generation,
+            ..LastTick::default()
+        };
         gapless_requested_for = 0;
     }
 
@@ -920,6 +942,10 @@ mod tests {
             gapless_next_track_id: 0,
             bit_perfect_mode: None,
             buffer_progress: None,
+            engine_empty_generation: 0,
+            engine_empty_track_id: 0,
+            source_failure_generation: 0,
+            source_failure_track_id: 0,
         }
     }
 
@@ -946,6 +972,87 @@ mod tests {
         let a = plan_tick(&s, &ev(1, false, 581, 581), &q(1, &[(2, true)], "off", None), None);
         assert!(a.contains(&DriverAction::AdvanceAndPlay));
         assert!(a.contains(&DriverAction::ReportEdge)); // play-state edge
+    }
+
+    #[test]
+    fn engine_empty_generation_advances_when_playing_pulse_was_missed() {
+        // Both sampled ticks are stopped. This is the observed 2026-08-28
+        // failure: a late gapless resume and engine-empty happened inside one
+        // polling interval, so `last.is_playing` never became true.
+        let s = DriverState::after(&ev(1, false, 580, 581));
+        let mut current = ev(1, false, 581, 581);
+        current.engine_empty_generation = 1;
+        current.engine_empty_track_id = 1;
+
+        let actions = plan_tick(
+            &s,
+            &current,
+            &q(1, &[(2, true)], "off", None),
+            None,
+        );
+        assert!(actions.contains(&DriverAction::AdvanceAndPlay));
+    }
+
+    #[test]
+    fn source_failure_advances_even_when_track_never_started() {
+        let s = DriverState::after(&ev(0, false, 0, 0));
+        let mut current = ev(0, false, 0, 0);
+        current.source_failure_generation = 1;
+        current.source_failure_track_id = 1;
+
+        let actions = plan_tick(
+            &s,
+            &current,
+            &q(1, &[(2, true)], "off", None),
+            Some("CMAF segment retries exhausted"),
+        );
+        assert!(actions.contains(&DriverAction::LatchError(
+            "CMAF segment retries exhausted".to_string()
+        )));
+        assert!(actions.contains(&DriverAction::AdvanceAndPlay));
+    }
+
+    #[test]
+    fn stale_source_failure_cannot_skip_the_new_queue_track() {
+        let s = DriverState::after(&ev(2, false, 0, 581));
+        let mut current = ev(2, false, 0, 581);
+        current.source_failure_generation = 1;
+        current.source_failure_track_id = 1;
+
+        let actions = plan_tick(&s, &current, &q(2, &[(3, true)], "off", None), None);
+        assert!(!actions.contains(&DriverAction::AdvanceAndPlay));
+    }
+
+    #[test]
+    fn consumed_engine_empty_generation_does_not_advance_twice() {
+        let s = DriverState::after(&ev(1, false, 580, 581));
+        let mut current = ev(1, false, 581, 581);
+        current.engine_empty_generation = 1;
+        current.engine_empty_track_id = 1;
+        let queue = q(1, &[(2, true)], "off", None);
+        let first = plan_tick(&s, &current, &queue, None);
+        assert!(first.contains(&DriverAction::AdvanceAndPlay));
+
+        let advanced = advance_state(&s, &current, &first);
+        let second = plan_tick(&advanced, &current, &queue, None);
+        assert!(!second.contains(&DriverAction::AdvanceAndPlay));
+    }
+
+    #[test]
+    fn late_gapless_rescue_consumes_engine_empty_without_advancing() {
+        let s = DriverState::after(&ev(1, false, 580, 581));
+        let mut current = ev(1, true, 581, 581);
+        current.engine_empty_generation = 1;
+        current.engine_empty_track_id = 1;
+        current.gapless_next_track_id = 2;
+
+        let queue = q(1, &[(2, true)], "off", None);
+        let first = plan_tick(&s, &current, &queue, None);
+        assert!(!first.contains(&DriverAction::AdvanceAndPlay));
+
+        let advanced = advance_state(&s, &current, &first);
+        let second = plan_tick(&advanced, &current, &queue, None);
+        assert!(!second.contains(&DriverAction::AdvanceAndPlay));
     }
 
     #[test]

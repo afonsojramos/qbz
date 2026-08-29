@@ -512,6 +512,10 @@ mod tests {
             gapless_next_track_id: 0,
             bit_perfect_mode: None,
             buffer_progress: None,
+            engine_empty_generation: 0,
+            engine_empty_track_id: 0,
+            source_failure_generation: 0,
+            source_failure_track_id: 0,
         }
     }
 
