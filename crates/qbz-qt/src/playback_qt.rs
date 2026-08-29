@@ -946,6 +946,13 @@ pub(crate) async fn play_resolved_offline_aware(
     track_id: u64,
     start_position_secs: u64,
 ) -> Result<(), String> {
+    // TRIPWIRE for the funnel: this is the LOCAL Qobuz/offline step and must
+    // never run while a renderer owns playback. A hit here means an entry
+    // point skipped `route_play_remote` — it is a bug, and this line is how
+    // the next one gets caught in a log instead of in a smoke.
+    if crate::cast_qt::is_casting().await {
+        log::warn!("[play] LOCAL PLAY WHILE CASTING (bug): track {track_id} reached play_resolved_offline_aware");
+    }
     // SOURCE FIRST (design 02 §9 stage 3). Everything below this block is the
     // QOBUZ entry: the tier walk, the offline cache, the quality request. A row
     // a different source owns has no business in it, and until now it went
@@ -1028,7 +1035,39 @@ pub(crate) async fn play_resolved_offline_aware(
 /// clears the spinner via its position push (`has_audio = true`) on the next
 /// tick, but a REFUSED routed play (mixed queue) never primes the peer — a
 /// paused+idle peer would leave the spinner latched (sign-off F1).
-pub(crate) async fn route_play_to_peer(
+/// THE remote-renderer gate — the one place every audible start passes
+/// before any local backend is touched: CAST first (a connected renderer
+/// owns playback), then the QConnect PEER (controller mode), else `false`
+/// = play locally. Same order as the queue funnel always had.
+///
+/// Why one seam: the cast gate lived ONLY in `play_queue_track`, while the
+/// peer gate had been added to every other entry (`play_single_track`,
+/// `play_album*`, `play_artist`, `play_track_list_in`, playlist, MyQBZ, the
+/// Local Library funnel) as `route_play_to_peer` — so a track CLICK while
+/// casting started the local backend beside the renderer (2026-08-29 smoke,
+/// twice). Nothing may call `route_play_to_peer` directly any more; `entry`
+/// names the caller in the log so the next missing gate is visible.
+pub(crate) async fn route_play_remote(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track_id: u64,
+    entry: &'static str,
+) -> bool {
+    if crate::cast_qt::play_current_if_cast(runtime).await {
+        log::info!("[play] entry={entry} track={track_id} -> cast renderer");
+        crate::now_playing::clear_loading();
+        refresh_now_playing(runtime).await;
+        publish_queue(runtime).await;
+        return true;
+    }
+    if route_play_to_peer(runtime, track_id).await {
+        log::info!("[play] entry={entry} track={track_id} -> qconnect peer");
+        return true;
+    }
+    log::debug!("[play] entry={entry} track={track_id} -> local");
+    false
+}
+
+async fn route_play_to_peer(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     track_id: u64,
 ) -> bool {
@@ -1370,7 +1409,7 @@ pub async fn play_artist(
         publish_queue(runtime).await;
         // QConnect CONTROLLER mode (§7): a peer owns playback — route the play
         // to it AFTER the funnel, never run the local audible step.
-        if route_play_to_peer(runtime, first_id).await {
+        if route_play_remote(runtime, first_id, "play_artist").await {
             return Ok(());
         }
         play_resolved_offline_aware(runtime, first_id, 0)
@@ -1433,7 +1472,7 @@ pub async fn play_artist(
     publish_queue(runtime).await;
     // QConnect CONTROLLER mode (§7): route the play to the peer (after the
     // funnel, before the local audible step).
-    if route_play_to_peer(runtime, first_id).await {
+    if route_play_remote(runtime, first_id, "play_artist").await {
         return Ok(());
     }
     play_resolved_offline_aware(runtime, first_id, 0)
@@ -1557,7 +1596,7 @@ pub async fn play_album_from(
     log::info!("[qbz-qt] play_album: queue set ({count} tracks), playing track {first_id}");
     // QConnect CONTROLLER mode (§7): route the play to the peer (after the
     // funnel, before the local audible step).
-    if route_play_to_peer(runtime, first_id).await {
+    if route_play_remote(runtime, first_id, "play_album_from").await {
         return Ok(());
     }
     play_resolved_offline_aware(runtime, first_id, 0)
@@ -1602,7 +1641,7 @@ pub async fn play_album_from_track(
     publish_queue(runtime).await;
     // QConnect CONTROLLER mode (§7): route the play to the peer (after the
     // funnel, before the local audible step).
-    if route_play_to_peer(runtime, first_id).await {
+    if route_play_remote(runtime, first_id, "play_album_from_track").await {
         return Ok(());
     }
     play_resolved_offline_aware(runtime, first_id, 0)
@@ -1763,7 +1802,7 @@ pub async fn play_track_list_in(
     publish_queue(runtime).await;
     // QConnect CONTROLLER mode (§7): route the play to the peer (after the
     // funnel, before the local audible step).
-    if route_play_to_peer(runtime, first_id).await {
+    if route_play_remote(runtime, first_id, "play_track_list_in").await {
         return Ok(());
     }
     play_resolved_offline_aware(runtime, first_id, 0)
@@ -2220,7 +2259,7 @@ pub async fn play_single_track(
     log::info!("[qbz-qt] play_single_track: playing {first_id}");
     // QConnect CONTROLLER mode (§7): route the play to the peer (after the
     // funnel, before the local audible step).
-    if route_play_to_peer(runtime, first_id).await {
+    if route_play_remote(runtime, first_id, "play_single_track").await {
         return Ok(());
     }
     play_resolved_offline_aware(runtime, first_id, 0)
@@ -2500,18 +2539,10 @@ async fn play_queue_track(
     track_id: u64,
     start_position_secs: u64,
 ) {
-    // CAST owns playback while a renderer is connected: route the new track to
-    // it instead of starting the local backend, or both would play.
-    if crate::cast_qt::play_current_if_cast(runtime).await {
-        refresh_now_playing(runtime).await;
-        publish_queue(runtime).await;
-        return;
-    }
-    // QConnect CONTROLLER mode (Slint playback.rs:638-651, AFTER the cast
-    // gate, BEFORE the local arms): a peer renderer owns playback — route the
-    // play to it (it pushes the current core queue, which the caller's cursor
-    // move already updated) and never start the local backend.
-    if route_play_to_peer(runtime, track_id).await {
+    // A connected renderer (cast, then QConnect peer) owns playback: route
+    // the new track to it and never start the local backend, or both play.
+    // Same seam as every other entry point — see `route_play_remote`.
+    if route_play_remote(runtime, track_id, "play_queue_track").await {
         return;
     }
     // Source-aware audible step: a LOCAL file plays from disk through the

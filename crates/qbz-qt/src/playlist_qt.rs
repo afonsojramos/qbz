@@ -2148,7 +2148,7 @@ async fn play_queue_at(
     crate::queue_qt::publish(runtime).await;
     // QConnect CONTROLLER mode (§7): route the play to the peer (after the
     // funnel, before the local audible step).
-    if crate::playback_qt::route_play_to_peer(runtime, first_id).await {
+    if crate::playback_qt::route_play_remote(runtime, first_id, "play_queue_at").await {
         return Ok(());
     }
     crate::playback_qt::play_resolved_offline_aware(runtime, first_id, 0)
