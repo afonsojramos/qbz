@@ -174,6 +174,9 @@ pub(crate) fn cached_to_queue_track(t: &CachedTrack, source: SourceId) -> QueueT
         source_item_id_hint: Some(t.item_id.clone()),
         context_kind: None,
         context_id: None,
+        // Whatever the server exposed (Jellyfin ProviderIds / OpenSubsonic).
+        isrc: t.isrc.clone(),
+        recording_mbid: t.recording_mbid.clone(),
     }
 }
 

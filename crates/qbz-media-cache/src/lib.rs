@@ -177,6 +177,11 @@ pub struct CachedTrack {
     pub sample_rate_hz: Option<u32>,
     pub channels: Option<u32>,
     pub bitrate_kbps: Option<u32>,
+    /// Cross-source identity when the server exposes it (Jellyfin
+    /// `ProviderIds.MusicBrainzTrack`, OpenSubsonic `musicBrainzId` /
+    /// `isrc`). `None` otherwise; never synthesised.
+    pub isrc: Option<String>,
+    pub recording_mbid: Option<String>,
     /// The RAW artwork token as the server issued it — a Jellyfin image tag, a
     /// Subsonic `coverArt` id. Never a URL: a URL embeds credentials and a
     /// size, and both change while the token does not.
@@ -334,6 +339,10 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         "quality_hydrated INTEGER NOT NULL DEFAULT 0",
         "quality_retry_at INTEGER NOT NULL DEFAULT 0",
         "collection_artwork_token TEXT",
+        // Identity (2026-08-28): the server's MusicBrainz recording id and
+        // ISRC when it has them. NULL until the next sync re-reads the rows.
+        "isrc TEXT",
+        "recording_mbid TEXT",
     ] {
         let statement = format!("ALTER TABLE remote_cache_tracks ADD COLUMN {column}");
         let _ = conn.execute(&statement, []);
@@ -398,6 +407,10 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<CachedTrack> {
             .map(|v| v as u32),
         channels: row.get::<_, Option<i64>>("channels")?.map(|v| v as u32),
         bitrate_kbps: row.get::<_, Option<i64>>("bitrate_kbps")?.map(|v| v as u32),
+        isrc: row.get::<_, Option<String>>("isrc")?.filter(|v| !v.is_empty()),
+        recording_mbid: row
+            .get::<_, Option<String>>("recording_mbid")?
+            .filter(|v| !v.is_empty()),
         artwork_token: row.get("artwork_token")?,
         collection_artwork_token: row.get("collection_artwork_token")?,
         size_bytes: row.get::<_, Option<i64>>("size_bytes")?.map(|v| v as u64),
@@ -407,7 +420,7 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<CachedTrack> {
 const SELECT: &str = "SELECT id, source, item_id, server_id, library_id, title, artist, \
      album_artist, album, album_id, track_number, disc_number, duration_ms, year, genre, genres_json, \
      container, codec, bit_depth, sample_rate_hz, channels, bitrate_kbps, artwork_token, \
-     collection_artwork_token, size_bytes FROM remote_cache_tracks";
+     collection_artwork_token, size_bytes, isrc, recording_mbid FROM remote_cache_tracks";
 
 fn genres_json(track: &CachedTrack) -> String {
     let mut genres = Vec::<String>::new();
@@ -449,9 +462,12 @@ pub fn save_tracks(
                    (source, item_id, server_id, library_id, title, artist, album_artist, album,
                     album_id, track_number, disc_number, duration_ms, year, genre, genres_json, container,
                     codec, bit_depth, sample_rate_hz, channels, bitrate_kbps, artwork_token,
-                    collection_artwork_token, size_bytes, quality_hydrated, quality_retry_at, updated_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,1,0,?25)
+                    collection_artwork_token, size_bytes, quality_hydrated, quality_retry_at, updated_at,
+                    isrc, recording_mbid)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,1,0,?25,?26,?27)
                  ON CONFLICT(source, item_id) DO UPDATE SET
+                    isrc=COALESCE(excluded.isrc, remote_cache_tracks.isrc),
+                    recording_mbid=COALESCE(excluded.recording_mbid, remote_cache_tracks.recording_mbid),
                     server_id=excluded.server_id, library_id=excluded.library_id,
                     title=excluded.title, artist=excluded.artist,
                     album_artist=excluded.album_artist, album=excluded.album,
@@ -495,6 +511,8 @@ pub fn save_tracks(
                 t.collection_artwork_token,
                 t.size_bytes.map(|v| v as i64),
                 ts,
+                t.isrc,
+                t.recording_mbid,
             ])
             .map_err(map_err("insert track"))?;
         }
@@ -617,10 +635,13 @@ fn save_source_generation_page(
                    (source,item_id,server_id,library_id,title,artist,album_artist,album,
                     album_id,track_number,disc_number,duration_ms,year,genre,genres_json,container,
                     codec,bit_depth,sample_rate_hz,channels,bitrate_kbps,artwork_token,
-                    collection_artwork_token,size_bytes,observed_generation,quality_hydrated,quality_retry_at,updated_at)
+                    collection_artwork_token,size_bytes,observed_generation,quality_hydrated,quality_retry_at,updated_at,
+                    isrc,recording_mbid)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,
-                         ?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,0,?27)
+                         ?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,0,?27,?28,?29)
                  ON CONFLICT(source,item_id) DO UPDATE SET
+                    isrc=COALESCE(excluded.isrc,remote_cache_tracks.isrc),
+                    recording_mbid=COALESCE(excluded.recording_mbid,remote_cache_tracks.recording_mbid),
                     server_id=excluded.server_id,library_id=excluded.library_id,
                     title=excluded.title,artist=excluded.artist,
                     album_artist=excluded.album_artist,album=excluded.album,
@@ -682,6 +703,8 @@ fn save_source_generation_page(
                 generation,
                 i64::from(complete_quality),
                 revision,
+                track.isrc,
+                track.recording_mbid,
             ])
             .map_err(map_err("write essential track"))?;
         }

@@ -7,6 +7,7 @@ mod config;
 mod daemon;
 mod events_bridge;
 mod hooks;
+mod listen_log_engine;
 mod lock;
 mod login;
 mod mpris;

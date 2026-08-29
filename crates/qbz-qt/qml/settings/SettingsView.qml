@@ -353,6 +353,7 @@ Item {
                                 IntegrationsSettings {
                                     width: parent.width
                                     doc: root.doc
+                                    confirmHost: confirmHost
                                 }
                             }
                         }

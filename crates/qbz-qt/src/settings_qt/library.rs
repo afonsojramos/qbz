@@ -683,6 +683,12 @@ pub async fn remove_folders(ids: Vec<i64>) {
     if removed > 0 {
         log::info!("[qbz-qt] pruned {removed} recently-played entries with the removed folder(s)");
     }
+    // "Most Played Albums" is a THIRD store (album_play_history.db) with the
+    // same album keys; prune it too or its cards outlive the folder.
+    let removed = qbz_app::settings::album_play_history::prune_albums(&keys);
+    if removed > 0 {
+        log::info!("[qbz-qt] pruned {removed} most-played entries with the removed folder(s)");
+    }
     refresh_browse();
 }
 

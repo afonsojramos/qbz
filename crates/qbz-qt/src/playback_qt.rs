@@ -1160,6 +1160,8 @@ pub(crate) async fn fetch_album_queue(
             source_item_id_hint: Some(album.id.clone()),
             context_kind: Some("album".to_string()),
             context_id: Some(album.id.clone()),
+            isrc: track.isrc.clone(),
+            recording_mbid: None,
         })
         .collect();
     Ok(tracks)
@@ -1248,6 +1250,8 @@ async fn offline_album_queue(album_id: &str) -> Result<Vec<QueueTrack>, String> 
                 source_item_id_hint: local.map(|row| row.id.to_string()),
                 context_kind: Some("album".to_string()),
                 context_id: Some(album_id.to_string()),
+                isrc: None,
+                recording_mbid: None,
             }
         })
         .collect())
@@ -1314,6 +1318,8 @@ fn artist_top_queue_tracks(
                 source_item_id_hint: album_id,
                 context_kind: Some("artist".to_string()),
                 context_id: Some(artist_id.to_string()),
+                isrc: None,
+                recording_mbid: None,
             }
         })
         .collect()
@@ -2054,6 +2060,8 @@ fn feed_queue_track(track_id: u64) -> Result<QueueTrack, String> {
         source_item_id_hint: None,
         context_kind: None,
         context_id: None,
+        isrc: None,
+        recording_mbid: None,
     })
 }
 
@@ -2126,6 +2134,8 @@ async fn catalog_queue_track(
         source_item_id_hint: album_key,
         context_kind: None,
         context_id: None,
+        isrc: track.isrc.clone(),
+        recording_mbid: None,
     })
 }
 
@@ -3145,6 +3155,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                     qbz_audio::health::Sandbox::None
                 );
                 crate::toast_qt::error(stream_error_text(&msg, sandboxed));
+                // Listen log: a stream that died mid-track closes as `error`
+                // (a track that never started has no row to close).
+                crate::listen_log_qt::on_error().await;
             }
 
             // --- QConnect CONTROLLER mode: peer-state reflection ----------
@@ -3388,6 +3401,10 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                     if let Some(track) = runtime.core().get_queue_state().await.current_track {
                         crate::recently_qt::record_queue_track(&track);
                         crate::home_qt::note_recent_store_changed();
+                        // Listen log: open the row for this track (and close
+                        // the previous one as a skip if it is still open).
+                        // Runs BESIDE the old stores, never instead of them.
+                        crate::listen_log_qt::on_track_edge(&track, &event).await;
                     }
                 }
                 // Persist the session (queue + current track + position) so a
@@ -3417,6 +3434,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             if track_id != 0 {
                 log::debug!("[qbz-qt] poll: id={track_id} pos={position}/{duration} playing={is_playing} cache={cache:.2}");
             }
+            // Listen log accumulator: credits audible seconds only (playing,
+            // monotonic, <= 5 s per tick); a run of empty ticks is the stop.
+            crate::listen_log_qt::on_tick(track_id, position, is_playing).await;
 
             // --- Position / state push ------------------------------------
             // Seek lock first, so the bar never renders a position push whose
@@ -3664,6 +3684,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 && duration > 0
                 && seen_position + 2 >= duration;
             if track_ended {
+                // Listen log: the natural end, before anything moves the
+                // cursor (the next edge must find no open row).
+                crate::listen_log_qt::on_natural_end().await;
                 // Seed for InfiniteRadio, read BEFORE anything moves the
                 // cursor: the track that just ended is still the current one.
                 let ended_track_id = runtime
@@ -3816,6 +3839,8 @@ mod tests {
             source_item_id_hint: None,
             context_kind: None,
             context_id: None,
+            isrc: None,
+            recording_mbid: None,
         }
     }
 

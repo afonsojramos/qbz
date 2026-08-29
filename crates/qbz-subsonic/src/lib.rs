@@ -379,6 +379,10 @@ pub struct SubsonicTrack {
     /// File size in bytes, as reported. Useful as a sanity check against a
     /// stream's `Content-Length`.
     pub size: Option<u64>,
+    /// OpenSubsonic `musicBrainzId` (recording) and the first `isrc`, when
+    /// the server exposes them. Cross-source identity for the listen log.
+    pub recording_mbid: Option<String>,
+    pub isrc: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -421,6 +425,12 @@ struct SongDto {
     cover_art: Option<String>,
     #[serde(default)]
     size: Option<u64>,
+    /// OpenSubsonic: the MusicBrainz RECORDING id of the song.
+    #[serde(default, rename = "musicBrainzId")]
+    music_brainz_id: Option<String>,
+    /// OpenSubsonic: ISRCs, a list (a recording can carry several).
+    #[serde(default)]
+    isrc: Vec<String>,
 }
 
 impl From<SongDto> for SubsonicTrack {
@@ -454,6 +464,15 @@ impl From<SongDto> for SubsonicTrack {
             channels: s.channel_count.filter(|c| *c > 0),
             bitrate_kbps: s.bit_rate.filter(|b| *b > 0),
             cover_art: s.cover_art.filter(|c| !c.is_empty()),
+            recording_mbid: s
+                .music_brainz_id
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
+            isrc: s
+                .isrc
+                .into_iter()
+                .map(|v| v.trim().to_string())
+                .find(|v| !v.is_empty()),
             size: s.size,
         }
     }

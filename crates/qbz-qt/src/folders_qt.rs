@@ -76,11 +76,20 @@ pub fn playlist_settings_map() -> HashMap<u64, PlaylistSettingsLite> {
 }
 
 /// playlist id -> play count (the "Play Count" sort + the list badge).
+///
+/// Read from `playlist_play_history.db` — the store the track-start edge
+/// actually writes (`recently_qt::record_queue_track`). The library's
+/// `playlist_stats.play_count` has NO writer in the whole workspace
+/// (`increment_playlist_play_count` has zero callers), so the badge and the
+/// sort were 0 for everyone, always. One play event per track start, so a
+/// 40-track playlist played through counts 40 — the same number the
+/// "Recently Played Playlists" card shows. Local playlists (`local:<uuid>`)
+/// are not numeric ids and are not counted here (their row type has no
+/// badge).
 pub fn playlist_play_counts() -> HashMap<u64, u32> {
-    with_db(false, |db| db.get_all_playlist_stats())
-        .unwrap_or_default()
+    qbz_app::settings::playlist_play_history::all_recent_playlists()
         .into_iter()
-        .map(|s| (s.qobuz_playlist_id, s.play_count))
+        .filter_map(|row| row.playlist_id.parse::<u64>().ok().map(|id| (id, row.plays)))
         .collect()
 }
 

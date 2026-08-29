@@ -293,6 +293,8 @@ mod tests {
             source_item_id_hint: None,
             context_kind: None,
             context_id: None,
+            isrc: None,
+            recording_mbid: None,
         }
     }
 

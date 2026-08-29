@@ -67,6 +67,8 @@ fn queue_track(id: u64, hint: &str, source: &str) -> qbz_models::QueueTrack {
         source_item_id_hint: (!hint.is_empty()).then(|| hint.to_string()),
         context_kind: None,
         context_id: None,
+        isrc: None,
+        recording_mbid: None,
     }
 }
 
@@ -182,6 +184,8 @@ async fn jellyfin_walks_from_a_sweep_to_real_audio() {
                     t.album_image_tag.as_deref().unwrap_or_default()
                 )
             }),
+            isrc: None,
+            recording_mbid: None,
             size_bytes: None,
         })
         .collect();
@@ -349,6 +353,8 @@ async fn subsonic_walks_from_a_sweep_to_real_audio() {
             // The OPAQUE coverArt id, verbatim.
             artwork_token: t.cover_art.clone(),
             collection_artwork_token: None,
+            isrc: None,
+            recording_mbid: None,
             size_bytes: t.size,
         })
         .collect();

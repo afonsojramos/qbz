@@ -95,6 +95,23 @@ pub struct LocalTrack {
     /// which is common under Flatpak / Snap sandboxes.
     #[serde(default)]
     pub is_network_mount: bool,
+
+    // Cross-source identity, straight from the file's tags (Picard writes
+    // them; lofty reads them). `None` when the file is untagged. The
+    // recording id + ISRC are the JOIN keys the listen log stamps so a play
+    // of a local file and a play of the same recording on Qobuz can meet.
+    #[serde(default)]
+    pub isrc: Option<String>,
+    #[serde(default)]
+    pub musicbrainz_recording_id: Option<String>,
+    #[serde(default)]
+    pub musicbrainz_track_id: Option<String>,
+    #[serde(default)]
+    pub musicbrainz_release_id: Option<String>,
+    #[serde(default)]
+    pub musicbrainz_release_group_id: Option<String>,
+    #[serde(default)]
+    pub musicbrainz_artist_id: Option<String>,
 }
 
 impl Default for LocalTrack {
@@ -129,6 +146,12 @@ impl Default for LocalTrack {
             indexed_at: 0,
             source: None,
             qobuz_track_id: None,
+            isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_track_id: None,
+            musicbrainz_release_id: None,
+            musicbrainz_release_group_id: None,
+            musicbrainz_artist_id: None,
             is_network_mount: false,
         }
     }

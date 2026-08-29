@@ -734,6 +734,8 @@ pub(crate) fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueT
                 source_item_id_hint: None,
                 context_kind: None,
                 context_id: None,
+                isrc: None,
+                recording_mbid: None,
             };
             (row, Some(queue))
         }

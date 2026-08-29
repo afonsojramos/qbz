@@ -329,6 +329,9 @@ Multi-device playback control using Qobuz's real-time streaming protocol. Full
   telemetry — one-way pull)
 - **Discogs** artwork and metadata for the local library
 - Desktop notifications with artwork
+- **Listening history** is stored only on your disk, per Qobuz account; it
+  never leaves the machine unless you enable a scrobbler (Settings ›
+  Integrations › Privacy to pause or clear it)
 
 ### Immersive player
 

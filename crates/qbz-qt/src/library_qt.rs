@@ -2040,6 +2040,8 @@ pub(crate) fn feed_track_to_queue(item: &FeedItem) -> Option<QueueTrack> {
         source_item_id_hint: None,
         context_kind: None,
         context_id: None,
+        isrc: None,
+        recording_mbid: None,
     })
 }
 

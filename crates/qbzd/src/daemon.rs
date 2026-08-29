@@ -154,6 +154,12 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //      outside the #521/§8.2 ordering — aborted for a clean shutdown below.
     let scrobbler = crate::scrobble_engine::spawn(roots.clone(), booted.bus.subscribe());
 
+    // 10c¼. Listen log (§12.1): the scrobbler's sibling on the same bus,
+    //       WITHOUT its enabled gate — the log is local and on by default, so
+    //       a headless streamer finally contributes history. Holds no
+    //       Arc<AppRuntime>; stopped (abort + close the open row) below.
+    let listen_log = crate::listen_log_engine::spawn(&roots, booted.bus.subscribe()).await;
+
     // 10c½. Events bridge: translate the driver's transition edges into the
     //       playback CoreEvents the bus consumers above (and SSE, and the event
     //       hook below) are written for — TrackStarted / PlaybackStateChanged /
@@ -268,6 +274,8 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     // Stop the scrobble-on-play subscriber (holds no Arc<AppRuntime>; order-free).
     scrobbler.abort();
     let _ = scrobbler.await;
+    // Stop the listen log: abort, then close the row in flight as `shutdown`.
+    listen_log.stop().await;
     // Stop the memory-pressure watchdog and JOIN it: it holds an Arc<Player>
     // clone, which must drop before `drop(booted)` can release the audio
     // device — the same ordering constraint as the driver (§8.2).
@@ -355,10 +363,15 @@ async fn boot(roots: &ProfileRoots, cfg: &QbzdConfig, warn_count: usize) -> Resu
     // at the DAEMON root — mirrors qbz/src/auth.rs:145-149, but slint-free and
     // session-independent. The store is a CACHE the suggestions engine reads/
     // writes; vectors are built on demand from MusicBrainz + Qobuz, so this
-    // needs no listening history. Best-effort: a failed open leaves
-    // `generate_playlist_suggestions` working un-cached (artist_vectors = None).
-    if let Ok(store) = qbz_reco::ArtistVectorStore::open_at(&roots.data) {
-        runtime.core().set_artist_vectors(store).await;
+    // needs no listening history. NOT optional for the feature, though: with
+    // `artist_vectors = None` the engine does not run un-cached — both
+    // `suggestions.rs` and `builder.rs` answer "No active session" — so a
+    // failed open is logged loudly instead of leaving a silent, dead route.
+    match qbz_reco::ArtistVectorStore::open_at(&roots.data) {
+        Ok(store) => runtime.core().set_artist_vectors(store).await,
+        Err(e) => log::warn!(
+            "artist-vector store open failed ({e}); playlist suggestions answer \"No active session\" until it opens"
+        ),
     }
 
     let shared = new_shared(cfg);

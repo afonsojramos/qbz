@@ -62,7 +62,6 @@ use qbz_external_reco::{
 };
 use qbz_integrations::lastfm::LastFmClient;
 use qbz_integrations::listenbrainz::ListenBrainzClient;
-use qbz_integrations::musicbrainz::MusicBrainzClient;
 use qbz_models::Artist;
 
 use crate::home_qt::{HomeCard, HomeSection};
@@ -659,9 +658,15 @@ fn apply_artist_rails(
 async fn run(force: bool) {
     let cfg = crate::integrations_qt::scrobble_settings();
 
+    use qbz_app::settings::scrobblers::HistoryService;
     let lastfm_client = LastFmClient::new();
     let lb_client = ListenBrainzClient::new();
-    if cfg.listenbrainz_is_authed() {
+    // History READ gate = the scrobbling gate (`*_active()`): a connected
+    // account with scrobbling off is not read either. One rule, both
+    // directions; the toggle's Settings text names it.
+    let lastfm_allowed = cfg.history_read_allowed(HistoryService::LastFm);
+    let lb_allowed = cfg.history_read_allowed(HistoryService::ListenBrainz);
+    if lb_allowed {
         lb_client
             .restore_token(
                 cfg.listenbrainz_token.clone(),
@@ -669,11 +674,15 @@ async fn run(force: bool) {
             )
             .await;
     }
-    let mb_client = MusicBrainzClient::new();
+    // The core's client, not a private one: only the core instance carries
+    // the `musicbrainz_enabled` opt-out (integrations_qt::start applies it),
+    // and a disabled client answers every lookup with an error the builders
+    // already treat as "no MusicBrainz" — zero requests leave the machine.
+    let mb_client = crate::app().core().musicbrainz_client();
 
-    // CONNECTED, not merely enabled: a `None` handle is what makes the row
+    // CONNECTED AND scrobbling on: a `None` handle is what makes the row
     // absent AND silent (the builders early-return before any request).
-    let lastfm = if cfg.lastfm_is_authed() && !cfg.lastfm_username.is_empty() {
+    let lastfm = if lastfm_allowed && !cfg.lastfm_username.is_empty() {
         Some(LastFmHandle {
             username: cfg.lastfm_username.clone(),
             client: &lastfm_client,
@@ -681,7 +690,7 @@ async fn run(force: bool) {
     } else {
         None
     };
-    let listenbrainz = if cfg.listenbrainz_is_authed() && !cfg.listenbrainz_username.is_empty() {
+    let listenbrainz = if lb_allowed && !cfg.listenbrainz_username.is_empty() {
         Some(ListenBrainzHandle {
             username: cfg.listenbrainz_username.clone(),
             client: &lb_client,
@@ -717,7 +726,7 @@ async fn run(force: bool) {
     let inputs = RecoInputs {
         lastfm,
         listenbrainz,
-        musicbrainz: &mb_client,
+        musicbrainz: mb_client.as_ref(),
         catalog: &catalog,
         cache: cache.as_ref(),
         local: LocalHistory {

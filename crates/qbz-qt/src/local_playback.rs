@@ -329,6 +329,9 @@ pub fn local_queue_track(t: &LocalTrack) -> QueueTrack {
         // nothing and falls back per track to the same key.
         context_kind: None,
         context_id: None,
+        // Identity straight from the scanned tags (None on untagged files).
+        isrc: t.isrc.clone(),
+        recording_mbid: t.musicbrainz_recording_id.clone(),
     }
 }
 

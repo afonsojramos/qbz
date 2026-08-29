@@ -397,6 +397,7 @@ mod tests {
             version: None,
             work: None,
             isrc: None,
+            audio_info: None,
             duration: 0,
             track_number: 0,
             media_number: None,

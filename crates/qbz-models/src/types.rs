@@ -477,6 +477,10 @@ pub struct Track {
     /// headers on the album view, mirroring the official Qobuz player (PR #536).
     pub work: Option<String>,
     pub isrc: Option<String>,
+    /// `audio_info` on the wire: replaygain gain/peak (always present in the
+    /// captured samples). Absent on older cached payloads → `None`.
+    #[serde(default)]
+    pub audio_info: Option<DiscoverAudioInfo>,
     #[serde(default)]
     pub duration: u32,
     #[serde(default)]
@@ -1426,12 +1430,20 @@ pub struct DiscoverAlbumDates {
     pub stream: Option<String>,
 }
 
-/// Audio info from discover album
+/// Audio info from discover album (and, since 2026-08-28, from tracks)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoverAudioInfo {
     pub maximum_sampling_rate: Option<f64>,
     pub maximum_bit_depth: Option<u32>,
     pub maximum_channel_count: Option<u32>,
+    /// ReplayGain track gain (dB) and peak, as Qobuz ships them on every
+    /// track in search/album envelopes
+    /// (`qbz-nix-docs/qobuz-api/search-results-response.json`, 15 samples).
+    /// Modelled only — no reader yet; the loudness analyser stays as is.
+    #[serde(default)]
+    pub replaygain_track_gain: Option<f64>,
+    #[serde(default)]
+    pub replaygain_track_peak: Option<f64>,
 }
 
 // ============ Artist Page Types (/artist/page) ============

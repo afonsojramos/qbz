@@ -4,16 +4,22 @@
 //! crate so the Slint frontend (and any headless caller) can produce a
 //! playlist's "Suggested Songs" without a `tauri::State` dependency.
 //!
-//! Modules are ported 1:1 from the Tauri source. The dead cosine-similarity /
-//! `find_nearest` ranking path is dropped (production ranks by summed
-//! relationship weight via the vector store) per the epic's decision D3.
+//! The vector modules originated in the Tauri implementation. The dead
+//! cosine-similarity / `find_nearest` path is dropped (production ranks by
+//! summed relationship weight), and artist resolution uses seed-relative
+//! identity evidence rather than a global genre blocklist.
 
+mod artist_guardrail;
 mod builder;
 mod sparse_vector;
 mod store;
 mod suggestions;
 mod weights;
 
+pub use artist_guardrail::{
+    resolve_candidate, resolve_seed_context, validate_candidate, ArtistFacts, ArtistLookup,
+    ArtistLookupFuture, SeedContext,
+};
 pub use builder::{ArtistVectorBuilder, BuildResult};
 pub use sparse_vector::SparseVector;
 pub use store::{ArtistVectorStore, SimilarArtist, VECTOR_TTL_SECS};

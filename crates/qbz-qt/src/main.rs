@@ -13,6 +13,7 @@
 //! async work; results hop back to Qt through the bridge's `CxxQtThread`.
 
 mod auth_qt;
+mod listen_log_qt;
 mod deep_link_qt;
 #[cfg(target_os = "linux")]
 mod single_instance_qt;
@@ -441,6 +442,8 @@ extern "C" fn on_session_commit_data() {
                 // bound at shell entry. Safe from a plain thread; it would
                 // panic only from inside an async context, which this is not.
                 qbz_app::session_persist::save_on_exit();
+                // Listen log: the row in flight closes as `shutdown` here too.
+                listen_log_qt::shutdown_blocking();
                 let _ = tx.send(());
             });
         if let Err(e) = spawned {
@@ -3650,6 +3653,10 @@ fn main() {
         // app with no window that only `kill -9` ends — the 2026-08-04 quit
         // incident exactly. No-op unless `persist_session` is on.
         qbz_app::session_persist::save_on_exit();
+        // Listen log: close the row in flight as `shutdown`. Same placement
+        // and the same reasoning as the session flush above (one SQLite
+        // write on the main thread, behind the watchdog).
+        listen_log_qt::shutdown_blocking();
 
         // Same reason as logout: leaving the app must stop the renderer.
         //

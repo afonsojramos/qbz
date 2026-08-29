@@ -509,6 +509,16 @@ pub async fn listenbrainz_set_token(token: &str) {
 /// integrations_action dispatch (non-toggle rows).
 pub async fn handle_action(_runtime: &Arc<AppRuntime<LoggingAdapter>>, action: &str) {
     match action {
+        // Privacy: "Clear listening history" (confirmed in QML first).
+        // DELETE + VACUUM on the per-user listen_log.db; the toggle state and
+        // the install's origin id survive.
+        "listen-history-clear" => match crate::listen_log_qt::clear().await {
+            Ok(()) => crate::toast_qt::success(qbz_i18n::t("Listening history cleared.")),
+            Err(e) => {
+                log::warn!("[qbz-qt] clear listening history failed: {e}");
+                crate::toast_qt::error(qbz_i18n::t("Couldn't clear listening history."));
+            }
+        },
         // Last.fm two-step browser auth (scrobble.rs `lastfm_connect`):
         // request token -> authorize URL in the browser -> Finish exchanges
         // it for a session.
@@ -769,8 +779,17 @@ pub fn meta_from_queue_track(track: &QueueTrack) -> ScrobbleMeta {
 
 /// Monotonic generation, bumped on every track change so a delayed scrobble
 /// timer that fires after the user skipped is dropped (the Svelte
-/// `clearTimeout` equivalent). Like Tauri, pause/stop do NOT cancel it.
+/// `clearTimeout` equivalent).
+///
+/// The wait itself is NOT wall-clock any more: it is timed by the player's
+/// own position while it is playing, so a pause holds the scrobble and a
+/// stop drops it (`qbzd/src/scrobble_engine.rs` — `Playing{started_at,..}`
+/// + `PositionUpdated` — is the reference; the old `sleep(wait)` scrobbled a
+/// track the user had paused two minutes in).
 static SCROBBLE_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// How often the delayed-scrobble task samples the player while waiting.
+const SCROBBLE_TICK: Duration = Duration::from_secs(1);
 
 /// Track-change entry point. Fires now-playing immediately for each enabled +
 /// authed service, then arms a delayed scrobble at `min(50% of duration,
@@ -785,6 +804,10 @@ pub fn on_track_changed(meta: ScrobbleMeta) {
     if !cfg.lastfm_active() && !cfg.listenbrainz_active() {
         return;
     }
+    // Last.fm wants the time the track STARTED, captured here on the edge —
+    // never the time the threshold fired (a 240 s wait on a long track put
+    // every scrobble four minutes late).
+    let started_at = unix_now();
     crate::spawn(async move {
         // Now-playing is never queued. It may use the independent network in
         // manual-offline immediate mode or an opted-in logged-out session.
@@ -801,14 +824,32 @@ pub fn on_track_changed(meta: ScrobbleMeta) {
             );
             return;
         };
-        if wait > 0 {
-            tokio::time::sleep(Duration::from_secs(wait)).await;
+        // Wait for the PLAYER to reach the threshold, not the clock: sample
+        // its position once a second and only count it while playing. A
+        // pause simply keeps waiting; a stop (no track loaded) ends the wait
+        // without a scrobble; a newer track edge self-cancels via the
+        // generation, as before. Seeks move the position and therefore the
+        // moment this fires — the same rule the daemon applies.
+        let rt = crate::app();
+        let mut ticker = tokio::time::interval(SCROBBLE_TICK);
+        loop {
+            ticker.tick().await;
+            if SCROBBLE_GEN.load(Ordering::SeqCst) != my_gen {
+                return;
+            }
+            let ev = rt.core().player().get_playback_event();
+            if ev.track_id == 0 {
+                log::debug!(
+                    "[qbz-qt] scrobble: stopped before the threshold, dropping '{}'",
+                    meta.track
+                );
+                return;
+            }
+            if ev.is_playing && ev.position >= wait {
+                break;
+            }
         }
-        // Self-cancel if a newer track change superseded us.
-        if SCROBBLE_GEN.load(Ordering::SeqCst) != my_gen {
-            return;
-        }
-        send_scrobble(&meta).await;
+        send_scrobble(&meta, started_at).await;
     });
 }
 
@@ -909,10 +950,13 @@ async fn send_now_playing(meta: &ScrobbleMeta, cfg: &ScrobblerSettings) {
 /// Fire, retain or drop the actual scrobble according to the restored offline
 /// policy plus the logged-out opt-out. Settings are re-read in case the user
 /// changed a policy or disconnected while the timer waited.
-async fn send_scrobble(meta: &ScrobbleMeta) {
+///
+/// `started_at` is the unix time the track STARTED (captured on the track
+/// edge), which is what both services define as the listen's timestamp.
+async fn send_scrobble(meta: &ScrobbleMeta, started_at: i64) {
     let cfg = scrobble_settings();
     let album = meta.album.as_deref();
-    let timestamp = unix_now();
+    let timestamp = started_at;
     let policy = current_scrobble_policy(&cfg).await;
 
     if cfg.lastfm_active() {

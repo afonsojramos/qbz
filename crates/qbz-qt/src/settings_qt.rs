@@ -1956,6 +1956,9 @@ pub struct SettingsDoc {
     pub scrobble_ui_collapsed: bool,
     #[serde(rename = "allowLoggedOutScrobbling")]
     pub allow_logged_out_scrobbling: bool,
+    /// Privacy: the local listen log (`listen_log.db`) is recording.
+    #[serde(rename = "listenHistoryEnabled")]
+    pub listen_history_enabled: bool,
     #[serde(rename = "lastfmEnabled")]
     pub lastfm_enabled: bool,
     #[serde(rename = "lastfmAuthed")]
@@ -2422,6 +2425,7 @@ pub async fn publish_snapshot() {
             scrobble_enabled: scrobble_snap.enabled,
             scrobble_ui_collapsed: scrobble_snap.ui_collapsed,
             allow_logged_out_scrobbling: scrobble_snap.allow_logged_out_scrobbling,
+            listen_history_enabled: crate::listen_log_qt::is_enabled(),
             lastfm_enabled: scrobble_snap.lastfm_enabled,
             lastfm_authed: scrobble_snap.lastfm_is_authed(),
             lastfm_username: scrobble_snap.lastfm_username.clone(),
@@ -2912,6 +2916,10 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         "scrobble-logged-out" => {
             crate::integrations_qt::set_logged_out_scrobbling(value).map(|_| Apply::None)
         }
+        // --- Privacy: the local listen log ------------------------------
+        "listen-history" => crate::listen_log_qt::set_enabled(value)
+            .await
+            .map(|_| Apply::None),
         "lastfm-enable" => crate::integrations_qt::set_lastfm_enabled(value).map(|_| Apply::None),
         "listenbrainz-enable" => {
             crate::integrations_qt::set_listenbrainz_enabled(value).map(|_| Apply::None)

@@ -98,6 +98,25 @@ impl ScrobblerSettings {
     pub fn listenbrainz_active(&self) -> bool {
         self.enabled && self.listenbrainz_enabled && self.listenbrainz_is_authed()
     }
+
+    /// Whether QBZ may READ the user's listening history from an external
+    /// service (Recommendations). ONE rule, the same as sending: connected
+    /// AND scrobbling on. A connected-but-disabled account used to be read
+    /// silently through `*_is_authed()`; the scrobbling toggle now governs
+    /// both directions, and its Settings text says so.
+    pub fn history_read_allowed(&self, service: HistoryService) -> bool {
+        match service {
+            HistoryService::LastFm => self.lastfm_active(),
+            HistoryService::ListenBrainz => self.listenbrainz_active(),
+        }
+    }
+}
+
+/// The external services whose history Recommendations may read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryService {
+    LastFm,
+    ListenBrainz,
 }
 
 pub struct ScrobblerSettingsStore {

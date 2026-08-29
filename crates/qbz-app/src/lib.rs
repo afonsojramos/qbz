@@ -3,6 +3,7 @@ pub mod diagnostics;
 pub mod memory_watchdog;
 pub mod offline_mode;
 pub mod graphics_autoconfig;
+pub mod listen_log;
 pub mod playback_context;
 pub mod playback_driver;
 pub mod qconnect_identity;

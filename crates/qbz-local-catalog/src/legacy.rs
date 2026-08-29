@@ -683,6 +683,12 @@ impl RemoteOverrides {
 
 type LegacyRow = (i64, ProjectedTrack);
 
+/// An identity column is either an id or nothing — an empty string must not
+/// become a key that joins every untagged row to every other one.
+fn nonempty(value: Option<String>) -> Option<String> {
+    value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
 fn legacy_cursor(row: &LegacyRow) -> i64 {
     row.0
 }
@@ -691,11 +697,15 @@ fn read_local(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result<
     let columns = table_columns(conn, "local_tracks")?;
     let album_id = optional_column(&columns, "album_group_key", "NULL");
     let source_raw = optional_column(&columns, "source", "''");
+    // Identity columns post-date the library schema; NULL on a db that has
+    // not migrated yet (the upsert already binds both).
+    let isrc = optional_column(&columns, "isrc", "NULL");
+    let mbid = optional_column(&columns, "musicbrainz_recording_id", "NULL");
     let sql = format!(
         "SELECT id, file_path, title, artist, COALESCE(album_artist,''), album,
                       duration_secs, year, disc_number, track_number, format, bit_depth,
                       CAST(sample_rate AS INTEGER), artwork_path, indexed_at, {album_id},
-                      COALESCE({source_raw},'')
+                      COALESCE({source_raw},''), {isrc}, {mbid}
                  FROM local_tracks
                 WHERE id > ?1
                 ORDER BY id
@@ -733,8 +743,8 @@ fn read_local(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result<
                 bit_depth: optional_u32(row, 11)?,
                 sample_rate_hz: optional_u32(row, 12)?,
                 artwork_token: row.get(13)?,
-                isrc: None,
-                musicbrainz_recording_id: None,
+                isrc: nonempty(row.get(17)?),
+                musicbrainz_recording_id: nonempty(row.get(18)?),
                 added_at: row.get::<_, Option<i64>>(14)?.unwrap_or(0),
                 available: true,
                 observed_generation: 0,
@@ -775,7 +785,7 @@ fn read_plex(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result<V
     let sql = format!(
         "SELECT rowid, rating_key, title, COALESCE(artist,''), COALESCE(album,''),
                 COALESCE(duration_ms,0), {year}, {disc}, {track}, {format}, {depth},
-                {rate}, {art}, {updated}, {album_id}
+                {rate}, {art}, {updated}, {album_id}, {mbid}
            FROM plex_cache_tracks
           WHERE rowid > ?1
             AND COALESCE(NULLIF(server_id,''),'default') = ?2
@@ -794,6 +804,7 @@ fn read_plex(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result<V
         } else {
             optional_column(&columns, "album_key", "NULL")
         },
+        mbid = optional_column(&columns, "recording_mbid", "NULL"),
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
@@ -805,6 +816,7 @@ fn read_plex(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result<V
         |row| {
             let mut mapped = map_remote_like(row, spec, SourceKind::Plex)?;
             mapped.1.native_album_id = row.get(14)?;
+            mapped.1.musicbrainz_recording_id = nonempty(row.get(15)?);
             Ok(mapped)
         },
     )?;
@@ -829,7 +841,8 @@ fn read_remote(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result
     )?;
     let sql = format!(
         "SELECT id, item_id, title, artist, album, duration_ms, {year}, {disc}, {track},
-                {format}, {depth}, {rate}, {art}, {updated}, album_artist, {album_id}
+                {format}, {depth}, {rate}, {art}, {updated}, album_artist, {album_id},
+                {isrc}, {mbid}
            FROM remote_cache_tracks
           WHERE id > ?1 AND source = ?2
             AND COALESCE(NULLIF(server_id,''),'default') = ?3
@@ -844,6 +857,8 @@ fn read_remote(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result
         art = optional_column(&columns, "artwork_token", "NULL"),
         updated = optional_column(&columns, "updated_at", "0"),
         album_id = optional_column(&columns, "album_id", "NULL"),
+        isrc = optional_column(&columns, "isrc", "NULL"),
+        mbid = optional_column(&columns, "recording_mbid", "NULL"),
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
@@ -857,6 +872,8 @@ fn read_remote(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result
             let mut mapped = map_remote_like(row, spec, spec.source.source)?;
             mapped.1.album_artist = row.get(14)?;
             mapped.1.native_album_id = row.get(15)?;
+            mapped.1.isrc = nonempty(row.get(16)?);
+            mapped.1.musicbrainz_recording_id = nonempty(row.get(17)?);
             mapped.1.credits = credits(&mapped.1.artist, &mapped.1.album_artist);
             Ok(mapped)
         },
