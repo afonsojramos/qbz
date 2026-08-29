@@ -23,7 +23,7 @@ use std::path::Path;
 use hkdf::Hkdf;
 // Only the keyring path mints a random master key; the KDF path derives one.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-use rand::RngCore;
+use rand::RngExt;
 use sha2::Sha256;
 
 use crate::cipher::{unwrap_with_key, wrap_with_key};
@@ -177,7 +177,7 @@ fn try_open_keyring(service_name: &str) -> Result<[u8; MASTER_KEY_LEN], SecretEr
         }
         Err(keyring::Error::NoEntry) => {
             let mut key = [0u8; MASTER_KEY_LEN];
-            rand::rng().fill_bytes(&mut key);
+            rand::rng().fill(&mut key);
             let encoded = B64.encode(key);
             entry
                 .set_password(&encoded)

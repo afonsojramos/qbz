@@ -1573,7 +1573,7 @@ impl QueueManager {
         let mut order: Vec<usize> = (0..state.tracks.len()).collect();
 
         // Fisher-Yates shuffle with proper PRNG
-        use rand::{Rng, SeedableRng};
+        use rand::{RngExt, SeedableRng};
         use std::time::{SystemTime, UNIX_EPOCH};
 
         let seed = SystemTime::now()

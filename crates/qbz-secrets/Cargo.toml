@@ -14,7 +14,7 @@ hkdf = "0.12"
 sha2 = "0.10"
 
 # RNG for nonces + install UUID generation
-rand = "0.9"
+rand = "0.10"
 
 # UUID for the persistent install identifier (salt component for fallback)
 uuid = { version = "1", features = ["v4", "serde"] }
