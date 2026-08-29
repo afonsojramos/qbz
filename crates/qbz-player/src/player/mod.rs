@@ -620,6 +620,10 @@ impl StreamType {
     fn output_sample_rate(&self) -> u32 {
         match self {
             StreamType::Rodio { sink, .. } => sink.config().sample_rate().get(),
+            // `Direct` is deliberately not cfg-gated (see the enum), so this
+            // macOS-only match must name it: a direct sink reports the rate it
+            // was opened at. Without this arm the macOS build does not compile.
+            StreamType::Direct(sink) => sink.sample_rate(),
         }
     }
 }
