@@ -244,9 +244,17 @@ jobs:
           test -f "$APP/Contents/PlugIns/platforms/libqcocoa.dylib"
           test -d "$APP/Contents/Resources/qml/QtQuick/Effects"
           test -f "$APP/Contents/Resources/qt.conf"
-          # Every Qt reference must now be bundle-relative.
-          if otool -L "$APP/Contents/MacOS/qbz" | grep -E 'Qt.*\.framework' | grep -vq '@executable_path'; then
-            otool -L "$APP/Contents/MacOS/qbz"; echo "::error::binary still links Qt outside the bundle"; exit 1
+          # Every Qt reference must now be bundle-relative. Qt 6.9's
+          # macdeployqt leaves the install names as @rpath/Qt*.framework and
+          # resolves them through an LC_RPATH of @executable_path/../Frameworks
+          # (measured 2026-08-29, macos-26 runner) — so the assert is: no
+          # ABSOLUTE Qt path survives, and that rpath is present. The offscreen
+          # smoke below (Qt install hidden) is the end-to-end proof.
+          if otool -L "$APP/Contents/MacOS/qbz" | grep -E 'Qt.*\.framework' | grep -Eq '^\s*/'; then
+            otool -L "$APP/Contents/MacOS/qbz"; echo "::error::binary still links Qt by absolute path outside the bundle"; exit 1
+          fi
+          if ! otool -l "$APP/Contents/MacOS/qbz" | grep -A2 LC_RPATH | grep -Eq '@(executable|loader)_path/\.\./Frameworks'; then
+            otool -l "$APP/Contents/MacOS/qbz" | grep -A2 LC_RPATH; echo "::error::no bundle-relative LC_RPATH for the Qt frameworks"; exit 1
           fi
           # offscreen platform plugin: only for the smoke below (macdeployqt
           # deploys cocoa alone). Removed again before signing/packing.
