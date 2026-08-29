@@ -92,7 +92,7 @@ anyhow = "1"
 
 # Crypto (Qobuz auth)
 md-5 = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 
 # Time
 chrono = "0.4"
