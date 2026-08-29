@@ -59,6 +59,13 @@ pub enum DriverAction {
     /// Pre-queue this upcoming track's bytes for a gapless transition
     /// (`playback.rs:4387`).
     ArmGapless(u64),
+    /// A track started (by ANY entry: API, QConnect, CLI, natural advance or
+    /// a seamless hand-off) — warm its successor into the player cache now,
+    /// while the whole track duration is still ahead. Fired once per current
+    /// track id. Without it the daemon only warmed after a gapped advance, so
+    /// every edge after a seamless one was cold and had to fit a whole-file
+    /// download inside the fixed 10 s gapless window (#699 follow-up, 1 GB Pi).
+    WarmSuccessor,
     /// The current track ended and there is a next playable track — run the
     /// full advance ritual (`playback.rs:4743`).
     AdvanceAndPlay,
@@ -115,6 +122,8 @@ pub struct DriverState {
     /// Track id an `ArmGapless` already fired for, so the ticker does not
     /// re-request it every tick (`gapless_requested_for`).
     pub gapless_requested_for: u64,
+    /// Track id a `WarmSuccessor` already fired for (once per current track).
+    pub warmed_for: u64,
     /// ~4-tick throttle counter for the periodic QConnect report.
     pub report_tick: u64,
     /// Last track id we emitted a `ReportEdge` for (`last_reported_track_id`).
@@ -132,6 +141,7 @@ impl DriverState {
             last: LastTick::from_event(ev),
             save_pos_tick: 0,
             gapless_requested_for: 0,
+            warmed_for: 0,
             report_tick: 0,
             last_reported_track_id: ev.track_id,
             last_reported_playing: ev.is_playing,
@@ -193,6 +203,13 @@ pub fn plan_tick(
     let next_save_tick = state.save_pos_tick.wrapping_add(1);
     if ev.is_playing && ev.track_id != 0 && next_save_tick % SAVE_POSITION_EVERY_N_TICKS == 0 {
         actions.push(DriverAction::SavePosition(ev.position));
+    }
+
+    // 2b. Successor warm-up: a new current track is audible — warm the next
+    //     one once, regardless of which entry started it. Placed BEFORE the
+    //     seamless early-return so a hand-off warms its own successor too.
+    if ev.is_playing && ev.track_id != 0 && state.warmed_for != ev.track_id {
+        actions.push(DriverAction::WarmSuccessor);
     }
 
     // 3. Seamless gapless transition (playback.rs:4324-4371): the engine advanced
@@ -301,6 +318,10 @@ pub fn advance_state(
         )
     });
     let reported = actions.iter().any(|a| matches!(a, DriverAction::ReportEdge));
+    let warmed = actions
+        .iter()
+        .any(|a| matches!(a, DriverAction::WarmSuccessor));
+    let warmed_for = if warmed { ev.track_id } else { prev.warmed_for };
 
     // save_pos_tick advances every tick — playback.rs:4305 runs before the
     // seamless `continue`.
@@ -314,6 +335,7 @@ pub fn advance_state(
             last: LastTick::from_event(ev),
             save_pos_tick,
             gapless_requested_for: 0,
+            warmed_for,
             report_tick: prev.report_tick,
             last_reported_track_id: prev.last_reported_track_id,
             last_reported_playing: prev.last_reported_playing,
@@ -368,6 +390,7 @@ pub fn advance_state(
         last,
         save_pos_tick,
         gapless_requested_for,
+        warmed_for,
         report_tick,
         last_reported_track_id,
         last_reported_playing,
@@ -413,6 +436,9 @@ struct GaplessFetchResult {
     predecessor_id: u64,
     successor_id: u64,
     bytes: Option<Vec<u8>>,
+    /// The successor was appended as an incremental CMAF stream by the
+    /// player itself (`queue_gapless_streaming`); nothing left to hand over.
+    streamed: bool,
 }
 
 /// A completed gapless fetch is usable only while both playback and the queue
@@ -435,6 +461,14 @@ async fn finish_gapless_fetch<A: FrontendAdapter + Send + Sync + 'static>(
     runtime: &Arc<AppRuntime<A>>,
     result: GaplessFetchResult,
 ) {
+    if result.streamed {
+        log::info!(
+            "[qbzd] driver: successor {} queued as a gapless stream after {}",
+            result.successor_id,
+            result.predecessor_id
+        );
+        return;
+    }
     if result.bytes.is_none() {
         log::warn!(
             "[qbzd] driver: gapless fetch for track {} failed",
@@ -487,6 +521,9 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
     // queue. JoinSet keeps those tasks owned by the driver so shutdown can
     // abort and drain them before AppRuntime is dropped (#521 ordering).
     let mut gapless_fetches = tokio::task::JoinSet::new();
+    // Successor warm-ups (cache prefetch) are best-effort downloads owned by
+    // the driver for the same shutdown reason; they never block a tick.
+    let mut warm_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
     loop {
         tokio::select! {
@@ -507,6 +544,14 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
                         log::warn!("[qbzd] driver: gapless fetch task failed: {error}");
                     }
                     None => {}
+                }
+                continue;
+            }
+            reaped = warm_tasks.join_next(), if !warm_tasks.is_empty() => {
+                if let Some(Err(error)) = reaped {
+                    if !error.is_cancelled() {
+                        log::warn!("[qbzd] driver: successor warm-up task failed: {error}");
+                    }
                 }
                 continue;
             }
@@ -550,16 +595,47 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
                     log::info!(
                         "[qbzd] driver: fetching gapless track {successor_id} after {predecessor_id}"
                     );
+                    let cached = player.is_track_cached(successor_id);
                     gapless_fetches.spawn(async move {
-                        let bytes = task_runtime
-                            .core()
+                        let core = task_runtime.core();
+                        // COLD successor: append its initial CMAF buffer as an
+                        // incremental source (the desktop's streaming
+                        // hand-off) instead of materializing the whole file —
+                        // a Hi-Res track cannot reliably download inside the
+                        // 10 s window on a Pi, and the whole-file `Vec` is
+                        // exactly what a 1 GB box cannot afford. Cached
+                        // successors keep the byte path (no network at all).
+                        if !cached {
+                            match core.queue_gapless_streaming(successor_id, quality).await {
+                                Ok(()) => {
+                                    return GaplessFetchResult {
+                                        predecessor_id,
+                                        successor_id,
+                                        bytes: None,
+                                        streamed: true,
+                                    }
+                                }
+                                Err(error) => log::warn!(
+                                    "[qbzd] driver: gapless stream setup for {successor_id} failed: {error}; trying byte fallback"
+                                ),
+                            }
+                        }
+                        let bytes = core
                             .fetch_for_gapless_resolved(successor_id, quality, None, None)
                             .await;
                         GaplessFetchResult {
                             predecessor_id,
                             successor_id,
                             bytes,
+                            streamed: false,
                         }
+                    });
+                }
+                DriverAction::WarmSuccessor => {
+                    let quality = (deps.quality)();
+                    let task_runtime = Arc::clone(&runtime);
+                    warm_tasks.spawn(async move {
+                        prefetch_successors(task_runtime.as_ref(), quality).await;
                     });
                 }
                 DriverAction::PauseStopAfter => {
@@ -610,6 +686,8 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
         state = advance_state(&state, &ev, &actions);
         (deps.on_tick)();
     }
+    warm_tasks.abort_all();
+    while warm_tasks.join_next().await.is_some() {}
     gapless_fetches.abort_all();
     while let Some(result) = gapless_fetches.join_next().await {
         if let Err(error) = result {
@@ -686,8 +764,9 @@ pub async fn advance_and_play<A: FrontendAdapter + Send + Sync + 'static>(
     let track_id = track.id;
     core.play_track_resolved(track_id, quality, None, None, 0)
         .await?;
-    // Warm the successors so the next transition can be gapless (best-effort).
-    prefetch_successors(runtime, quality).await;
+    // The successor warm-up is the driver's `WarmSuccessor` action (fired on
+    // the first tick that sees the new track, for EVERY entry point) — never
+    // awaited here, where a full download used to stall the control loop.
     // Persist the session (queue + current + position) so a restart resumes.
     save_session_now(runtime).await;
     Ok(Some(track))
@@ -1077,6 +1156,42 @@ mod tests {
     }
 
     #[test]
+    fn warm_successor_fires_once_per_track_for_any_entry() {
+        // A track appears playing (started by API/QConnect/CLI — the driver
+        // does not care which): warm once, then stay quiet for that id.
+        let e = ev(1, true, 3, 581);
+        let s = DriverState::after(&ev(1, true, 2, 581));
+        let queue = q(1, &[(2, true)], "off", None);
+        let a1 = plan_tick(&s, &e, &queue, None);
+        assert!(a1.contains(&DriverAction::WarmSuccessor));
+        let s2 = advance_state(&s, &e, &a1);
+        assert_eq!(s2.warmed_for, 1);
+        let a2 = plan_tick(&s2, &e, &queue, None);
+        assert!(!a2.contains(&DriverAction::WarmSuccessor));
+        // Paused: no warm for a track that is not audible yet.
+        let paused = ev(5, false, 0, 581);
+        let a3 = plan_tick(&s2, &paused, &q(5, &[(6, true)], "off", None), None);
+        assert!(!a3.contains(&DriverAction::WarmSuccessor));
+    }
+
+    #[test]
+    fn seamless_edge_warms_the_new_successor() {
+        // 1 -> 2 hand-off without a stop: the cursor sync AND a warm for 2's
+        // successor fire on the same tick (the #699 follow-up: every edge
+        // after a seamless one used to be cold).
+        let prev = ev(1, true, 580, 581);
+        let mut s = DriverState::after(&prev);
+        s.warmed_for = 1;
+        let e = ev(2, true, 0, 300);
+        let a = plan_tick(&s, &e, &q(1, &[(2, true), (3, true)], "off", None), None);
+        assert!(a.contains(&DriverAction::SyncCursorTo(2)));
+        assert!(a.contains(&DriverAction::WarmSuccessor));
+        let s2 = advance_state(&s, &e, &a);
+        assert_eq!(s2.warmed_for, 2);
+        assert_eq!(s2.gapless_requested_for, 0);
+    }
+
+    #[test]
     fn gapless_arms_exactly_once() {
         let mut e = ev(1, true, 300, 581);
         e.gapless_ready = true;
@@ -1113,6 +1228,7 @@ mod tests {
             predecessor_id: 1,
             successor_id: 2,
             bytes: None,
+            streamed: false,
         };
         let mut current = ev(1, true, 575, 581);
         current.gapless_ready = true;
@@ -1145,6 +1261,7 @@ mod tests {
             predecessor_id: 1,
             successor_id: 2,
             bytes: None,
+            streamed: false,
         };
         let mut current = ev(1, true, 575, 581);
         current.gapless_ready = true;
