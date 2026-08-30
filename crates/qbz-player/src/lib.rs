@@ -38,7 +38,7 @@ pub mod queue;
 // Re-export main types
 pub use player::{
     BufferWriter, BufferedMediaSource, ExternalStreamHandle, IncrementalStreamingSource,
-    PlaybackEvent, PlaybackState,
+    InMemorySource, PlaybackEvent, PlaybackState,
     Player, SharedState, StreamingConfig,
 };
 pub use queue::QueueManager;

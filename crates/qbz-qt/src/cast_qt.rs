@@ -128,6 +128,9 @@ struct CastAssetInfo {
     requested: Option<Quality>,
     /// Request-time cause paired with `requested` (#638 fix 4).
     request_cause: QualityLimit,
+    /// The same bytes, for the visualizer's shadow decoder (None when the
+    /// renderer is fed by proxy — nothing local to decode).
+    shadow: Option<crate::cast_viz::ShadowSource>,
 }
 
 // ---------------------------------------------------------------------------
@@ -498,6 +501,7 @@ impl CastService {
     pub(crate) async fn disconnect(&self) {
         // Free the `inner` lock from the poll before anything below waits on it.
         self.abort_poll();
+        crate::cast_viz::stop();
         // Stop the renderer first (disconnect alone leaves it playing).
         let _ = self.stop_renderer().await;
 
@@ -602,6 +606,7 @@ impl CastService {
 
         // The previous track's progressive download (if any) is dead weight
         // from here on: the renderer is about to be handed a new URI.
+        crate::cast_viz::stop();
         if let Some(cancel) = self.inner.lock().await.stream_cancel.take() {
             let _ = cancel.send(true);
         }
@@ -612,7 +617,7 @@ impl CastService {
         // disk is served from disk, a server-streamed item (Plex / Jellyfin /
         // Subsonic) is PROXIED to the renderer with the source's own request
         // contract — the media-server arm the Slint service left as a TODO.
-        let info = match source {
+        let mut info = match source {
             "qobuz" | "qobuz_download" => self.register_qobuz(track.id).await?,
             _ => match resolve_castable(track).await? {
                 Castable::File(path) => self.register_local(track.id, &path).await?,
@@ -681,6 +686,12 @@ impl CastService {
             inner.cast_premature_stop_polls = 0;
             inner.lost_polls = 0;
         }
+        // The visualizer keeps moving: decode the same bytes silently, paced
+        // to the renderer's reported position (see `cast_viz`).
+        match (info.shadow.take(), self.runtime.visualizer_tap()) {
+            (Some(shadow), Some(tap)) => crate::cast_viz::start(shadow, tap.clone()),
+            _ => crate::cast_viz::stop(),
+        }
         // Delivered quality for the picker line (#638 fix 1): MEASURED from
         // the served bytes when the probe can read them, catalog fallback
         // otherwise (non-FLAC / local files).
@@ -747,6 +758,7 @@ impl CastService {
                         origin: Some(AssetOrigin::Network),
                         requested: Some(quality),
                         request_cause,
+                        shadow: Some(crate::cast_viz::ShadowSource::Buffered(handle.source)),
                     });
                 }
                 Err(e) => log::warn!(
@@ -772,10 +784,11 @@ impl CastService {
         let origin = asset.origin;
 
         self.ensure_media_server().await?;
+        let bytes = Arc::new(asset.bytes);
         {
             let mut inner = self.inner.lock().await;
             let server = inner.media_server.as_mut().ok_or("Media server gone")?;
-            server.register_audio(track_id, asset.bytes, &content_type);
+            server.register_audio_shared(track_id, Arc::clone(&bytes), &content_type);
         }
         Ok(CastAssetInfo {
             content_type,
@@ -783,6 +796,7 @@ impl CastService {
             origin: Some(origin),
             requested: Some(quality),
             request_cause,
+            shadow: Some(crate::cast_viz::ShadowSource::Bytes(bytes)),
         })
     }
 
@@ -805,6 +819,7 @@ impl CastService {
             origin: None,
             requested: None,
             request_cause: QualityLimit::None,
+            shadow: Some(crate::cast_viz::ShadowSource::File(path.into())),
         })
     }
 
@@ -860,6 +875,7 @@ impl CastService {
             origin: None,
             requested: None,
             request_cause: QualityLimit::None,
+            shadow: None,
         })
     }
 
@@ -1304,6 +1320,7 @@ impl CastService {
         // The cast poll drives the bar while connected.
         crate::now_playing::set_position(position as i32, duration as i32, playing, 0.0, true);
         push_position(position as f32, duration as f32, playing);
+        crate::cast_viz::anchor(position, playing);
 
         if ended {
             log::info!(
@@ -1342,6 +1359,7 @@ impl CastService {
     pub(crate) async fn shutdown(&self) {
         // Poll first, without the lock — see `poll_task`.
         self.abort_poll();
+        crate::cast_viz::stop();
         let _ = self.stop_renderer().await;
         let mut inner = self.inner.lock().await;
         if let Some(cancel) = inner.stream_cancel.take() {

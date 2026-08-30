@@ -880,17 +880,28 @@ impl Iterator for IncrementalStreamingSource {
     }
 }
 
+/// Shared, immutable audio bytes: lets several readers (the player, the cast
+/// media server, the cast visualizer's shadow decoder) sit on ONE copy of a
+/// 100 MB track instead of cloning it per consumer.
+pub struct SharedBytes(pub Arc<Vec<u8>>);
+
+impl AsRef<[u8]> for SharedBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
 /// Cursor-backed MediaSource for in-memory audio data.
 struct InMemoryMediaSource {
-    inner: Cursor<Vec<u8>>,
+    inner: Cursor<SharedBytes>,
     len: u64,
 }
 
 impl InMemoryMediaSource {
-    fn new(data: Vec<u8>) -> Self {
+    fn shared(data: Arc<Vec<u8>>) -> Self {
         let len = data.len() as u64;
         Self {
-            inner: Cursor::new(data),
+            inner: Cursor::new(SharedBytes(data)),
             len,
         }
     }
@@ -944,7 +955,12 @@ pub struct InMemorySource {
 
 impl InMemorySource {
     pub fn new(data: Vec<u8>) -> Result<Self, String> {
-        let source = Box::new(InMemoryMediaSource::new(data)) as Box<dyn MediaSource>;
+        Self::from_shared(Arc::new(data))
+    }
+
+    /// Decode bytes that another consumer keeps alive too (no copy).
+    pub fn from_shared(data: Arc<Vec<u8>>) -> Result<Self, String> {
+        let source = Box::new(InMemoryMediaSource::shared(data)) as Box<dyn MediaSource>;
         let mss = MediaSourceStream::new(source, Default::default());
 
         let hint = Hint::new();
@@ -985,6 +1001,14 @@ impl InMemorySource {
             track_id,
             finished: false,
         })
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    pub fn channels(&self) -> u16 {
+        self.channels
     }
 
     pub fn seek_to(&mut self, time: Duration) -> Result<(), String> {

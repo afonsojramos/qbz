@@ -194,10 +194,20 @@ impl MediaServer {
 
     /// Register audio data to serve (returns path like "/audio/<token>/123")
     pub fn register_audio(&mut self, id: u64, data: Vec<u8>, content_type: &str) -> String {
+        self.register_audio_shared(id, Arc::new(data), content_type)
+    }
+
+    /// Same, for bytes another consumer keeps alive as well (no copy).
+    pub fn register_audio_shared(
+        &mut self,
+        id: u64,
+        data: Arc<Vec<u8>>,
+        content_type: &str,
+    ) -> String {
         let entry = MediaEntry {
             content_type: content_type.to_string(),
             size: data.len() as u64,
-            source: MediaSource::Data(std::sync::Arc::new(data)),
+            source: MediaSource::Data(data),
         };
 
         if let Ok(mut entries) = self.entries.lock() {

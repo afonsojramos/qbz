@@ -271,6 +271,7 @@ mod toast_qt;
 // through QbzArtist.share (artist_bridge.rs).
 mod browse_qt;
 mod cast_qt;
+mod cast_viz;
 mod cdda_qt;
 mod disc_identity;
 mod disc_meta_bridge;
