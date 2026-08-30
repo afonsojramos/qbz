@@ -37,6 +37,7 @@ pub mod local_playlists;
 mod metadata;
 mod models;
 mod mount_info;
+pub mod playlist_membership;
 pub mod qobuz_playlist_snapshot;
 pub mod reachability;
 mod remote_tag_sidecar;

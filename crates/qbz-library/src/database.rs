@@ -264,6 +264,11 @@ impl LibraryDatabase {
             CREATE INDEX IF NOT EXISTS idx_playlist_local_tracks_playlist
                 ON playlist_local_tracks(qobuz_playlist_id);
 
+            -- The Add-to-Playlist picker asks the inverse question — "which
+            -- playlists hold this track" (playlist_membership.rs).
+            CREATE INDEX IF NOT EXISTS idx_playlist_local_tracks_track
+                ON playlist_local_tracks(local_track_id, qobuz_playlist_id);
+
             -- Plex tracks added to playlists. Kept in its own table because
             -- Plex tracks live on a remote server and have a TEXT rating key,
             -- not the i64 filesystem id used by local_tracks. No foreign key
@@ -281,6 +286,9 @@ impl LibraryDatabase {
 
             CREATE INDEX IF NOT EXISTS idx_playlist_plex_tracks_playlist
                 ON playlist_plex_tracks(qobuz_playlist_id);
+
+            CREATE INDEX IF NOT EXISTS idx_playlist_plex_tracks_key
+                ON playlist_plex_tracks(plex_rating_key, qobuz_playlist_id);
 
             -- Custom track order per playlist (user-defined arrangement)
             CREATE TABLE IF NOT EXISTS playlist_track_custom_order (

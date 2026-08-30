@@ -154,6 +154,19 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_local_playlist_tracks_playlist
             ON local_playlist_tracks(playlist_id, position);
+
+        -- Inverse direction for the Add-to-Playlist picker's containment
+        -- question (playlist_membership.rs). Partial: each row fills exactly
+        -- one of the three identity columns.
+        CREATE INDEX IF NOT EXISTS idx_local_playlist_tracks_qobuz
+            ON local_playlist_tracks(qobuz_track_id, playlist_id)
+            WHERE qobuz_track_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_local_playlist_tracks_path
+            ON local_playlist_tracks(local_path, playlist_id)
+            WHERE local_path IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_local_playlist_tracks_plex
+            ON local_playlist_tracks(plex_key, playlist_id)
+            WHERE plex_key IS NOT NULL;
         "#,
     )?;
     // Additive migration (B3): DBs created before the favorite/hidden
