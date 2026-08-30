@@ -66,6 +66,7 @@ Rectangle {
     }
     function optHasBadges() {
         return options.length > 0 && typeof options[0] !== "string"
+            && options[0] && options[0].bp !== undefined
     }
     function optBp(i) {
         const o = options[i]
@@ -74,6 +75,18 @@ Rectangle {
     function optGroup(i) {
         const o = options[i]
         return (o && o.group !== undefined) ? o.group : ""
+    }
+    function optDetail(i) {
+        const o = options[i]
+        return (o && o.detail !== undefined) ? o.detail : ""
+    }
+    function openPopup() {
+        if (!selectRoot.enabled || selectRoot.options.length === 0)
+            return
+        selectRoot.filter = ""
+        popup.open()
+        if (selectRoot.searchable)
+            searchInput.forceActiveFocus()
     }
 
     Row {
@@ -132,8 +145,7 @@ Rectangle {
         cursorShape: selectRoot.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
         onClicked: {
             if (selectRoot.enabled) {
-                selectRoot.filter = ""
-                popup.open()
+                selectRoot.openPopup()
             }
         }
     }
@@ -254,22 +266,39 @@ Rectangle {
                     Rectangle {
                         visible: optRow.shown
                         width: parent.width
-                        height: visible ? selectRoot.rowHeight : 0
+                        height: visible
+                            ? (selectRoot.optDetail(optRow.index) !== "" ? 50 : selectRoot.rowHeight)
+                            : 0
                         color: optArea.containsMouse ? theme.surfaceHover : "transparent"
                         Row {
                             anchors.fill: parent
                             anchors.leftMargin: 12
                             anchors.rightMargin: 12
                             spacing: 8
-                            Text {
+                            Column {
                                 width: parent.width - rowBadge.width - (rowBadge.visible ? 8 : 0)
                                 height: parent.height
-                                text: optRow.label
-                                color: optRow.index === selectRoot.currentIndex
-                                    ? theme.accent : theme.textSecondary
-                                font.pixelSize: selectRoot.sm ? 12 : theme.fontBody
-                                verticalAlignment: Text.AlignVCenter
-                                elide: Text.ElideRight
+                                anchors.verticalCenter: parent.verticalCenter
+                                Text {
+                                    width: parent.width
+                                    height: selectRoot.optDetail(optRow.index) !== "" ? 26 : parent.height
+                                    text: optRow.label
+                                    color: optRow.index === selectRoot.currentIndex
+                                        ? theme.accent : theme.textSecondary
+                                    font.pixelSize: selectRoot.sm ? 12 : theme.fontBody
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                }
+                                Text {
+                                    visible: selectRoot.optDetail(optRow.index) !== ""
+                                    width: parent.width
+                                    height: visible ? 18 : 0
+                                    text: selectRoot.optDetail(optRow.index)
+                                    color: theme.textMuted
+                                    font.pixelSize: theme.fontLegal
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                }
                             }
                             Item {
                                 id: rowBadge

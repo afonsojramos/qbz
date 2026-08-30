@@ -6233,3 +6233,36 @@ msgstr "История прослушиваний очищена."
 
 msgid "Couldn't clear listening history."
 msgstr "Не удалось очистить историю прослушиваний."
+
+msgid "Checking ALSA mixer controls…"
+msgstr "Проверка регуляторов микшера ALSA…"
+
+msgid "This device exposes multiple playback controls. Choose which one QBZ should use."
+msgstr "Это устройство предоставляет несколько регуляторов воспроизведения. Выберите, какой из них должен использовать QBZ."
+
+msgid "The saved mixer control is no longer available. Choose another control."
+msgstr "Сохранённый регулятор микшера больше недоступен. Выберите другой регулятор."
+
+msgid "QBZ does not have permission to read this device's ALSA mixer."
+msgstr "У QBZ нет разрешения на чтение микшера ALSA этого устройства."
+
+msgid "The ALSA mixer is busy. Close the app using it and try again."
+msgstr "Микшер ALSA занят. Закройте использующее его приложение и повторите попытку."
+
+msgid "The selected ALSA device is no longer available."
+msgstr "Выбранное устройство ALSA больше недоступно."
+
+msgid "This ALSA device does not expose a mixer."
+msgstr "Это устройство ALSA не предоставляет микшер."
+
+msgid "QBZ could not write the selected ALSA mixer control. Direct playback remains fixed at 100%."
+msgstr "QBZ не удалось изменить выбранный регулятор микшера ALSA. Громкость прямого воспроизведения остаётся на уровне 100 %."
+
+msgid "Selected mixer control"
+msgstr "Выбранный регулятор микшера"
+
+msgid "Choose mixer control"
+msgstr "Выбрать регулятор микшера"
+
+msgid "Change mixer control"
+msgstr "Изменить регулятор микшера"

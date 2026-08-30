@@ -706,6 +706,26 @@ fn build_system_rows(
 
 fn build_audio_rows(g: &Gathered) -> Vec<Row> {
     let d = &g.diag;
+    let selected_mixer = d
+        .audio_alsa_hardware_volume_probe
+        .as_ref()
+        .and_then(|probe| probe.route_key.as_ref())
+        .and_then(|route| d.audio_alsa_hardware_volume_controls.get(route))
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "—".to_string());
+    let mixer_probe = d
+        .audio_alsa_hardware_volume_probe
+        .as_ref()
+        .map(|probe| {
+            let valid = probe.valid_candidates().count();
+            let rejected = probe.candidates.len().saturating_sub(valid);
+            if let Some(error) = &probe.error {
+                format!("{:?}: {}", error.kind, error.message)
+            } else {
+                format!("{valid} valid · {rejected} rejected")
+            }
+        })
+        .unwrap_or_else(|| "—".to_string());
     let sample_rate = match d.audio_preferred_sample_rate {
         Some(hz) => format!("{hz} Hz"),
         None => "Auto".to_string(),
@@ -763,6 +783,7 @@ fn build_audio_rows(g: &Gathered) -> Vec<Row> {
         row("Active Format", "—", active_fmt, 0),
         row("ALSA Plugin", &opt(&d.audio_alsa_plugin), "—", 0),
         row("ALSA HW Volume", yn(d.audio_alsa_hardware_volume), "—", 0),
+        row("ALSA HW Control", &selected_mixer, &mixer_probe, 0),
         row("Normalization", yn(d.audio_normalization_enabled), "—", 0),
         row(
             "Normalization Target",
@@ -1067,6 +1088,8 @@ fn build_export_json(g: &Gathered) -> Value {
             "preferredSampleRate": d.audio_preferred_sample_rate,
             "alsaPlugin": d.audio_alsa_plugin,
             "alsaHardwareVolume": d.audio_alsa_hardware_volume,
+            "alsaHardwareVolumeControls": d.audio_alsa_hardware_volume_controls,
+            "alsaHardwareVolumeProbe": d.audio_alsa_hardware_volume_probe,
             "normalizationEnabled": d.audio_normalization_enabled,
             "normalizationTargetLufs": d.audio_normalization_target_lufs,
             "gaplessEnabled": d.audio_gapless_enabled,

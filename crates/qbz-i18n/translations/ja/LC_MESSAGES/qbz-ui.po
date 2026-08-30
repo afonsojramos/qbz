@@ -6197,3 +6197,36 @@ msgstr "再生履歴を消去しました。"
 
 msgid "Couldn't clear listening history."
 msgstr "再生履歴を消去できませんでした。"
+
+msgid "Checking ALSA mixer controls…"
+msgstr "ALSA ミキサーコントロールを確認しています…"
+
+msgid "This device exposes multiple playback controls. Choose which one QBZ should use."
+msgstr "このデバイスには複数の再生コントロールがあります。QBZ が使用するものを選択してください。"
+
+msgid "The saved mixer control is no longer available. Choose another control."
+msgstr "保存されたミキサーコントロールは利用できなくなりました。別のコントロールを選択してください。"
+
+msgid "QBZ does not have permission to read this device's ALSA mixer."
+msgstr "QBZ にはこのデバイスの ALSA ミキサーを読み取る権限がありません。"
+
+msgid "The ALSA mixer is busy. Close the app using it and try again."
+msgstr "ALSA ミキサーは使用中です。使用しているアプリを閉じて、もう一度お試しください。"
+
+msgid "The selected ALSA device is no longer available."
+msgstr "選択した ALSA デバイスは利用できなくなりました。"
+
+msgid "This ALSA device does not expose a mixer."
+msgstr "この ALSA デバイスにはミキサーがありません。"
+
+msgid "QBZ could not write the selected ALSA mixer control. Direct playback remains fixed at 100%."
+msgstr "選択した ALSA ミキサーコントロールに書き込めませんでした。ダイレクト再生は 100% に固定されます。"
+
+msgid "Selected mixer control"
+msgstr "選択中のミキサーコントロール"
+
+msgid "Choose mixer control"
+msgstr "ミキサーコントロールを選択"
+
+msgid "Change mixer control"
+msgstr "ミキサーコントロールを変更"

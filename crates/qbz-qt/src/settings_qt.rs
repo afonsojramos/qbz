@@ -30,6 +30,12 @@ use qbz_app::settings::playback::{
     AutoplayMode, PlaybackPreferencesState, PlaybackPreferencesStore,
 };
 use qbz_app::shell::AppRuntime;
+use qbz_audio::alsa_hardware_volume::{
+    AlsaMixerControlId, HardwareVolumeCandidate, HardwareVolumeChoiceReason,
+    HardwareVolumeDecision, HardwareVolumeProbe, HardwareVolumeProbeErrorKind,
+    HardwareVolumeSelection, HardwareVolumeSelectionSource, HardwareVolumeSnapshot,
+    HardwareVolumeUnsupportedReason, StableAlsaRouteKey,
+};
 use qbz_audio::backend::{AlsaPlugin, AudioBackendType, BackendManager};
 use qbz_audio::settings::{AudioSettingsState, AudioSettingsStore};
 use qbz_core::LoggingAdapter;
@@ -1687,6 +1693,206 @@ pub struct DeviceOption {
     pub group: String,
 }
 
+#[derive(Clone, Default, Serialize)]
+pub struct HardwareVolumeOption {
+    pub label: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum HardwareVolumeUiStatus {
+    #[default]
+    Disabled,
+    Probing,
+    Selected,
+    Ambiguous,
+    Stale,
+    PermissionDenied,
+    DeviceBusy,
+    DeviceUnavailable,
+    NoMixer,
+    Unsupported,
+    WriteFailed,
+}
+
+impl HardwareVolumeUiStatus {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Probing => "probing",
+            Self::Selected => "selected",
+            Self::Ambiguous => "ambiguous",
+            Self::Stale => "stale",
+            Self::PermissionDenied => "permission_denied",
+            Self::DeviceBusy => "device_busy",
+            Self::DeviceUnavailable => "device_unavailable",
+            Self::NoMixer => "no_mixer",
+            Self::Unsupported => "unsupported",
+            Self::WriteFailed => "write_failed",
+        }
+    }
+
+    fn message(self) -> String {
+        match self {
+            Self::Disabled | Self::Selected => String::new(),
+            Self::Probing => qbz_i18n::t("Checking ALSA mixer controls…"),
+            Self::Ambiguous => qbz_i18n::t(
+                "This device exposes multiple playback controls. Choose which one QBZ should use.",
+            ),
+            Self::Stale => qbz_i18n::t(
+                "The saved mixer control is no longer available. Choose another control.",
+            ),
+            Self::PermissionDenied => {
+                qbz_i18n::t("QBZ does not have permission to read this device's ALSA mixer.")
+            }
+            Self::DeviceBusy => {
+                qbz_i18n::t("The ALSA mixer is busy. Close the app using it and try again.")
+            }
+            Self::DeviceUnavailable => {
+                qbz_i18n::t("The selected ALSA device is no longer available.")
+            }
+            Self::NoMixer => qbz_i18n::t("This ALSA device does not expose a mixer."),
+            Self::Unsupported => qbz_i18n::t(
+                "This ALSA device has no compatible hardware volume control. Direct playback remains fixed at 100%.",
+            ),
+            Self::WriteFailed => qbz_i18n::t(
+                "QBZ could not write the selected ALSA mixer control. Direct playback remains fixed at 100%.",
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct HardwareVolumeUiState {
+    device_id: Option<String>,
+    route_key: Option<StableAlsaRouteKey>,
+    candidates: Vec<HardwareVolumeCandidate>,
+    selected: Option<AlsaMixerControlId>,
+    status: HardwareVolumeUiStatus,
+}
+
+#[derive(Default)]
+struct HardwareVolumeUiSnapshot {
+    options: Vec<HardwareVolumeOption>,
+    selected_index: i32,
+    selected: String,
+    status: &'static str,
+    message: String,
+    can_change: bool,
+    choice_token: String,
+}
+
+static HARDWARE_VOLUME_UI: Mutex<HardwareVolumeUiState> = Mutex::new(HardwareVolumeUiState {
+    device_id: None,
+    route_key: None,
+    candidates: Vec::new(),
+    selected: None,
+    status: HardwareVolumeUiStatus::Disabled,
+});
+
+fn hardware_volume_candidate_detail(candidate: &HardwareVolumeCandidate) -> String {
+    let range = if let Some(range) = candidate.db_range {
+        format!(
+            "{:.2}–{:.2} dB",
+            range.min as f64 / 100.0,
+            range.max as f64 / 100.0
+        )
+    } else if let Some(range) = candidate.raw_range {
+        format!("{}–{}", range.min, range.max)
+    } else {
+        String::new()
+    };
+    let channels = candidate.channels.join(", ");
+    match (candidate.recommended, range.is_empty(), channels.is_empty()) {
+        (true, false, false) => format!("★ {range} · {channels}"),
+        (true, false, true) => format!("★ {range}"),
+        (true, true, false) => format!("★ {channels}"),
+        (true, true, true) => "★".to_string(),
+        (false, false, false) => format!("{range} · {channels}"),
+        (false, false, true) => range,
+        (false, true, false) => channels,
+        (false, true, true) => String::new(),
+    }
+}
+
+fn hardware_volume_ui_snapshot(
+    audio: &qbz_audio::settings::AudioSettings,
+) -> HardwareVolumeUiSnapshot {
+    let Ok(state) = HARDWARE_VOLUME_UI.lock() else {
+        return HardwareVolumeUiSnapshot::default();
+    };
+    if state.device_id.as_deref() != audio.output_device.as_deref() {
+        return HardwareVolumeUiSnapshot {
+            status: if audio.alsa_hardware_volume {
+                HardwareVolumeUiStatus::Probing.key()
+            } else {
+                HardwareVolumeUiStatus::Disabled.key()
+            },
+            message: if audio.alsa_hardware_volume {
+                HardwareVolumeUiStatus::Probing.message()
+            } else {
+                String::new()
+            },
+            ..Default::default()
+        };
+    }
+
+    let options = state
+        .candidates
+        .iter()
+        .map(|candidate| HardwareVolumeOption {
+            label: candidate.id.to_string(),
+            detail: hardware_volume_candidate_detail(candidate),
+        })
+        .collect::<Vec<_>>();
+    let selected_index = state
+        .selected
+        .as_ref()
+        .and_then(|selected| {
+            state
+                .candidates
+                .iter()
+                .position(|candidate| candidate.id == *selected)
+        })
+        .map(|index| index as i32)
+        .unwrap_or(-1);
+    let choice_token = if matches!(
+        state.status,
+        HardwareVolumeUiStatus::Ambiguous | HardwareVolumeUiStatus::Stale
+    ) {
+        format!(
+            "{}|{}",
+            state
+                .route_key
+                .as_ref()
+                .map(StableAlsaRouteKey::as_str)
+                .unwrap_or_default(),
+            state
+                .candidates
+                .iter()
+                .map(|candidate| candidate.id.to_string())
+                .collect::<Vec<_>>()
+                .join("|")
+        )
+    } else {
+        String::new()
+    };
+
+    HardwareVolumeUiSnapshot {
+        selected: state
+            .selected
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        status: state.status.key(),
+        message: state.status.message(),
+        can_change: state.candidates.len() > 1 && state.selected.is_some(),
+        choice_token,
+        options,
+        selected_index,
+    }
+}
+
 #[derive(Default, Serialize)]
 pub struct SettingsDoc {
     // Audio
@@ -1721,6 +1927,20 @@ pub struct SettingsDoc {
     pub alsa_direct_selected: bool,
     #[serde(rename = "alsaHardwareVolume")]
     pub alsa_hardware_volume: bool,
+    #[serde(rename = "alsaHardwareVolumeOptions")]
+    pub alsa_hardware_volume_options: Vec<HardwareVolumeOption>,
+    #[serde(rename = "alsaHardwareVolumeIndex")]
+    pub alsa_hardware_volume_index: i32,
+    #[serde(rename = "alsaHardwareVolumeSelected")]
+    pub alsa_hardware_volume_selected: String,
+    #[serde(rename = "alsaHardwareVolumeStatus")]
+    pub alsa_hardware_volume_status: &'static str,
+    #[serde(rename = "alsaHardwareVolumeMessage")]
+    pub alsa_hardware_volume_message: String,
+    #[serde(rename = "alsaHardwareVolumeCanChange")]
+    pub alsa_hardware_volume_can_change: bool,
+    #[serde(rename = "alsaHardwareVolumeChoiceToken")]
+    pub alsa_hardware_volume_choice_token: String,
     #[serde(rename = "dsdModes")]
     pub dsd_modes: Vec<String>,
     #[serde(rename = "dsdModeIndex")]
@@ -2202,6 +2422,7 @@ pub async fn publish_snapshot() {
             .iter()
             .position(|k| *k == streaming_key)
             .unwrap_or(STREAMING_QUALITY_KEYS.len() - 1);
+        let hardware_volume_ui = hardware_volume_ui_snapshot(&audio_settings);
 
         let mut maps = MAPS.lock().unwrap();
         maps.0 = backend_types.clone();
@@ -2228,6 +2449,13 @@ pub async fn publish_snapshot() {
             alsa_plugin_is_hw: alsa_plugin == AlsaPlugin::Hw,
             alsa_direct_selected: qbz_audio::alsa_direct::uses_alsa_direct_route(&audio_settings),
             alsa_hardware_volume: audio_settings.alsa_hardware_volume,
+            alsa_hardware_volume_options: hardware_volume_ui.options,
+            alsa_hardware_volume_index: hardware_volume_ui.selected_index,
+            alsa_hardware_volume_selected: hardware_volume_ui.selected,
+            alsa_hardware_volume_status: hardware_volume_ui.status,
+            alsa_hardware_volume_message: hardware_volume_ui.message,
+            alsa_hardware_volume_can_change: hardware_volume_ui.can_change,
+            alsa_hardware_volume_choice_token: hardware_volume_ui.choice_token,
             dsd_modes: DSD_MODE_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             dsd_mode_index: DSD_MODE_VALUES
                 .iter()
@@ -2465,7 +2693,7 @@ enum Apply {
 
 async fn probe_selected_hardware_volume(
     audio: &qbz_audio::settings::AudioSettings,
-) -> Result<qbz_audio::alsa_direct::HardwareVolumeInfo, String> {
+) -> Result<(HardwareVolumeProbe, HardwareVolumeDecision), String> {
     if !qbz_audio::alsa_direct::uses_alsa_direct_route(audio) {
         return Err(
             "hardware volume requires an explicitly selected ALSA Direct device".to_string(),
@@ -2475,27 +2703,165 @@ async fn probe_selected_hardware_volume(
         .output_device
         .clone()
         .ok_or_else(|| "ALSA Direct device is missing".to_string())?;
-    tokio::task::spawn_blocking(move || qbz_audio::alsa_direct::probe_hardware_volume(&device_id))
-        .await
-        .map_err(|error| format!("ALSA hardware-volume probe task failed: {error}"))?
+    let persisted = audio.alsa_hardware_volume_controls.clone();
+    tokio::task::spawn_blocking(move || {
+        let probe = qbz_audio::alsa_hardware_volume::enumerate_hardware_volume_controls(&device_id);
+        let decision = qbz_audio::alsa_hardware_volume::decide_hardware_volume(&probe, &persisted);
+        (probe, decision)
+    })
+    .await
+    .map_err(|error| format!("ALSA hardware-volume probe task failed: {error}"))
 }
 
 fn seed_hardware_volume(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
-    info: &qbz_audio::alsa_direct::HardwareVolumeInfo,
+    control: &AlsaMixerControlId,
+    volume: f32,
 ) {
     // Update SharedState without touching the old output. The new direct
     // engine reads this after Reinit and writes back the same level the probe
     // sampled, instead of copying the locked path's synthetic 100% into the
     // physical mixer (or writing the new device's level through the old one).
-    runtime.core().player().seed_volume_state(info.volume);
-    save_pref("volume", serde_json::json!(info.volume));
-    crate::now_playing::set_volume(info.volume);
+    runtime.core().player().seed_volume_state(volume);
+    save_pref("volume", serde_json::json!(volume));
+    crate::now_playing::set_volume(volume);
     log::info!(
         "[qbz-qt] ALSA hardware volume: '{}' available at {:.0}%",
-        info.control_name,
-        info.volume * 100.0
+        control,
+        volume * 100.0
     );
+}
+
+fn set_hardware_volume_ui_status(device_id: Option<String>, status: HardwareVolumeUiStatus) {
+    if let Ok(mut state) = HARDWARE_VOLUME_UI.lock() {
+        if state.device_id != device_id {
+            *state = HardwareVolumeUiState {
+                device_id,
+                status,
+                ..Default::default()
+            };
+        } else {
+            state.status = status;
+        }
+    }
+}
+
+fn set_hardware_volume_ui_probe(
+    device_id: String,
+    probe: &HardwareVolumeProbe,
+    selected: Option<AlsaMixerControlId>,
+    status: HardwareVolumeUiStatus,
+) {
+    if let Ok(mut state) = HARDWARE_VOLUME_UI.lock() {
+        *state = HardwareVolumeUiState {
+            device_id: Some(device_id),
+            route_key: probe.route_key.clone(),
+            candidates: probe.valid_candidates().cloned().collect(),
+            selected,
+            status,
+        };
+    }
+}
+
+fn hardware_volume_unsupported_status(
+    reason: &HardwareVolumeUnsupportedReason,
+) -> HardwareVolumeUiStatus {
+    match reason {
+        HardwareVolumeUnsupportedReason::Probe(error) => match error.kind {
+            HardwareVolumeProbeErrorKind::PermissionDenied => {
+                HardwareVolumeUiStatus::PermissionDenied
+            }
+            HardwareVolumeProbeErrorKind::DeviceBusy => HardwareVolumeUiStatus::DeviceBusy,
+            HardwareVolumeProbeErrorKind::DeviceUnavailable => {
+                HardwareVolumeUiStatus::DeviceUnavailable
+            }
+            HardwareVolumeProbeErrorKind::NoMixer => HardwareVolumeUiStatus::NoMixer,
+            HardwareVolumeProbeErrorKind::InvalidDevice
+            | HardwareVolumeProbeErrorKind::UnsupportedPlatform
+            | HardwareVolumeProbeErrorKind::Other => HardwareVolumeUiStatus::Unsupported,
+        },
+        // No valid alternative exists in this decision variant. Reserve the
+        // actionable Stale state for NeedsChoice, where a closed selector can
+        // actually offer another enumerated control.
+        HardwareVolumeUnsupportedReason::PersistedSelectionStale(_) => {
+            HardwareVolumeUiStatus::Unsupported
+        }
+        HardwareVolumeUnsupportedReason::NoValidControls => HardwareVolumeUiStatus::Unsupported,
+    }
+}
+
+fn hardware_volume_choice_status(reason: HardwareVolumeChoiceReason) -> HardwareVolumeUiStatus {
+    match reason {
+        HardwareVolumeChoiceReason::PersistedSelectionStale => HardwareVolumeUiStatus::Stale,
+        HardwareVolumeChoiceReason::Ambiguous | HardwareVolumeChoiceReason::UcmAmbiguous => {
+            HardwareVolumeUiStatus::Ambiguous
+        }
+    }
+}
+
+fn current_hardware_volume_route_is(
+    expected_device_id: &str,
+) -> Result<qbz_audio::settings::AudioSettings, String> {
+    let current = with_audio(|store| store.get_settings())?;
+    if !qbz_audio::alsa_direct::uses_alsa_direct_route(&current)
+        || current.output_device.as_deref() != Some(expected_device_id)
+    {
+        return Err(
+            "the selected ALSA route changed while its mixer was being checked".to_string(),
+        );
+    }
+    Ok(current)
+}
+
+async fn activate_hardware_volume_selection(
+    device_id: &str,
+    control: &AlsaMixerControlId,
+) -> Result<HardwareVolumeSnapshot, String> {
+    let device_id = device_id.to_string();
+    let control = control.clone();
+    tokio::task::spawn_blocking(move || {
+        qbz_audio::alsa_hardware_volume::activate_hardware_volume_control(&device_id, &control)
+    })
+    .await
+    .map_err(|error| format!("ALSA hardware-volume validation task failed: {error}"))?
+}
+
+async fn enable_hardware_volume_selection(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    device_id: String,
+    probe: HardwareVolumeProbe,
+    selection: HardwareVolumeSelection,
+) -> Result<Apply, String> {
+    current_hardware_volume_route_is(&device_id)?;
+    let snapshot = match activate_hardware_volume_selection(&device_id, &selection.control).await {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            log::warn!(
+                "[qbz-qt] ALSA hardware-volume control '{}' failed enable validation: {error}",
+                selection.control
+            );
+            with_audio(|store| store.set_alsa_hardware_volume(false))?;
+            set_hardware_volume_ui_probe(
+                device_id,
+                &probe,
+                Some(selection.control),
+                HardwareVolumeUiStatus::WriteFailed,
+            );
+            return Ok(Apply::Reinit);
+        }
+    };
+    current_hardware_volume_route_is(&device_id)?;
+    with_audio(|store| {
+        store.enable_alsa_hardware_volume(selection.route_key, selection.control.clone())
+    })?;
+    set_hardware_volume_ui_probe(
+        device_id,
+        &probe,
+        Some(selection.control.clone()),
+        HardwareVolumeUiStatus::Selected,
+    );
+    seed_hardware_volume(runtime, &selection.control, snapshot.volume);
+    Ok(Apply::Reinit)
 }
 
 async fn set_alsa_hardware_volume(
@@ -2503,22 +2869,53 @@ async fn set_alsa_hardware_volume(
     enabled: bool,
 ) -> Result<Apply, String> {
     if !enabled {
-        return with_audio(|store| store.set_alsa_hardware_volume(false)).map(|_| Apply::Reinit);
+        let audio = with_audio(|store| {
+            store.set_alsa_hardware_volume(false)?;
+            store.get_settings()
+        })?;
+        set_hardware_volume_ui_status(audio.output_device, HardwareVolumeUiStatus::Disabled);
+        return Ok(Apply::Reinit);
     }
 
     let audio = with_audio(|store| store.get_settings())?;
-    let info = match probe_selected_hardware_volume(&audio).await {
-        Ok(info) => info,
+    let device_id = audio
+        .output_device
+        .clone()
+        .ok_or_else(|| "ALSA Direct device is missing".to_string())?;
+    set_hardware_volume_ui_status(Some(device_id.clone()), HardwareVolumeUiStatus::Probing);
+    publish_snapshot().await;
+
+    let (probe, decision) = match probe_selected_hardware_volume(&audio).await {
+        Ok(result) => result,
         Err(error) => {
-            // An old build or an external settings edit may already have left
-            // this true. Fail closed so the UI cannot advertise an enabled,
-            // inert slider after the probe rejects the device.
             let _ = with_audio(|store| store.set_alsa_hardware_volume(false));
-            return Err(error);
+            set_hardware_volume_ui_status(Some(device_id), HardwareVolumeUiStatus::Unsupported);
+            log::warn!("[qbz-qt] ALSA hardware-volume probe failed: {error}");
+            return Ok(Apply::Reinit);
         }
     };
-    seed_hardware_volume(runtime, &info);
-    with_audio(|store| store.set_alsa_hardware_volume(true)).map(|_| Apply::Reinit)
+    current_hardware_volume_route_is(&device_id)?;
+    match decision {
+        HardwareVolumeDecision::Selected { selection } => {
+            enable_hardware_volume_selection(runtime, device_id, probe, selection).await
+        }
+        HardwareVolumeDecision::NeedsChoice { reason, .. } => {
+            with_audio(|store| store.set_alsa_hardware_volume(false))?;
+            let status = hardware_volume_choice_status(reason);
+            set_hardware_volume_ui_probe(device_id, &probe, None, status);
+            log::info!(
+                "[qbz-qt] ALSA hardware volume needs an explicit control choice ({reason:?}); no mixer write performed"
+            );
+            Ok(Apply::Reinit)
+        }
+        HardwareVolumeDecision::Unsupported { reason, .. } => {
+            with_audio(|store| store.set_alsa_hardware_volume(false))?;
+            let status = hardware_volume_unsupported_status(&reason);
+            set_hardware_volume_ui_probe(device_id, &probe, None, status);
+            log::warn!("[qbz-qt] ALSA hardware volume is unavailable: {reason:?}");
+            Ok(Apply::Reinit)
+        }
+    }
 }
 
 fn apply_audio(runtime: &Arc<AppRuntime<LoggingAdapter>>, apply: Apply) {
@@ -2618,27 +3015,181 @@ pub(crate) async fn reconcile_alsa_hardware_volume(
             return None;
         }
     };
-    if !audio.alsa_hardware_volume || !qbz_audio::alsa_direct::uses_alsa_direct_route(&audio) {
+    if !qbz_audio::alsa_direct::uses_alsa_direct_route(&audio) {
+        if audio.alsa_hardware_volume {
+            if let Err(error) = with_audio(|store| store.set_alsa_hardware_volume(false)) {
+                log::error!("[qbz-qt] failed to disable hardware volume off ALSA Direct: {error}");
+            }
+        }
+        set_hardware_volume_ui_status(None, HardwareVolumeUiStatus::Disabled);
         return None;
     }
 
-    match probe_selected_hardware_volume(&audio).await {
-        Ok(info) => {
-            seed_hardware_volume(runtime, &info);
-            Some(info.volume)
+    let device_id = audio
+        .output_device
+        .clone()
+        .expect("direct route has a device");
+    if !audio.alsa_hardware_volume {
+        let has_saved_control = qbz_audio::alsa_hardware_volume::stable_alsa_route_key(&device_id)
+            .ok()
+            .is_some_and(|route| audio.alsa_hardware_volume_controls.contains_key(&route));
+        if !has_saved_control {
+            set_hardware_volume_ui_status(Some(device_id), HardwareVolumeUiStatus::Disabled);
+            return None;
         }
+    }
+
+    set_hardware_volume_ui_status(Some(device_id.clone()), HardwareVolumeUiStatus::Probing);
+    let (probe, decision) = match probe_selected_hardware_volume(&audio).await {
+        Ok(result) => result,
         Err(error) => {
-            log::warn!("[qbz-qt] ALSA hardware volume unavailable; disabling the setting: {error}");
-            if let Err(persist_error) = with_audio(|store| store.set_alsa_hardware_volume(false)) {
-                log::error!(
-                    "[qbz-qt] failed to disable unavailable hardware volume: {persist_error}"
+            log::warn!("[qbz-qt] ALSA hardware-volume reconciliation failed: {error}");
+            if audio.alsa_hardware_volume {
+                let _ = with_audio(|store| store.set_alsa_hardware_volume(false));
+            }
+            set_hardware_volume_ui_status(Some(device_id), HardwareVolumeUiStatus::Unsupported);
+            if audio.alsa_hardware_volume {
+                apply_audio(runtime, Apply::Reinit);
+            }
+            return None;
+        }
+    };
+
+    if !audio.alsa_hardware_volume {
+        match decision {
+            HardwareVolumeDecision::Selected { selection }
+                if selection.source == HardwareVolumeSelectionSource::Persisted =>
+            {
+                set_hardware_volume_ui_probe(
+                    device_id,
+                    &probe,
+                    Some(selection.control),
+                    HardwareVolumeUiStatus::Disabled,
                 );
+            }
+            HardwareVolumeDecision::NeedsChoice { reason, .. } => {
+                log::warn!(
+                    "[qbz-qt] saved ALSA hardware-volume control needs a new choice ({reason:?})"
+                );
+                set_hardware_volume_ui_probe(
+                    device_id,
+                    &probe,
+                    None,
+                    HardwareVolumeUiStatus::Disabled,
+                );
+            }
+            HardwareVolumeDecision::Unsupported { reason, .. } => {
+                log::warn!(
+                    "[qbz-qt] saved ALSA hardware-volume control no longer validates: {reason:?}"
+                );
+                set_hardware_volume_ui_probe(
+                    device_id,
+                    &probe,
+                    None,
+                    HardwareVolumeUiStatus::Disabled,
+                );
+            }
+            HardwareVolumeDecision::Selected { .. } => {
+                set_hardware_volume_ui_probe(
+                    device_id,
+                    &probe,
+                    None,
+                    HardwareVolumeUiStatus::Disabled,
+                );
+            }
+        }
+        publish_snapshot().await;
+        return None;
+    }
+
+    match decision {
+        HardwareVolumeDecision::Selected { selection } => {
+            let Some(volume) = selection.candidate.current_volume else {
+                log::warn!(
+                    "[qbz-qt] selected ALSA control '{}' had no readable level",
+                    selection.control
+                );
+                let _ = with_audio(|store| store.set_alsa_hardware_volume(false));
+                set_hardware_volume_ui_probe(
+                    device_id,
+                    &probe,
+                    Some(selection.control),
+                    HardwareVolumeUiStatus::Unsupported,
+                );
+                apply_audio(runtime, Apply::Reinit);
+                return None;
+            };
+            let migrated = selection.source != HardwareVolumeSelectionSource::Persisted;
+            if migrated {
+                if let Err(error) = with_audio(|store| {
+                    store.set_alsa_hardware_volume_control(
+                        selection.route_key.clone(),
+                        selection.control.clone(),
+                    )
+                }) {
+                    log::error!(
+                        "[qbz-qt] failed to migrate ALSA hardware-volume selection: {error}"
+                    );
+                    let _ = with_audio(|store| store.set_alsa_hardware_volume(false));
+                    set_hardware_volume_ui_probe(
+                        device_id,
+                        &probe,
+                        Some(selection.control),
+                        HardwareVolumeUiStatus::Unsupported,
+                    );
+                    apply_audio(runtime, Apply::Reinit);
+                    return None;
+                }
+            }
+            set_hardware_volume_ui_probe(
+                device_id,
+                &probe,
+                Some(selection.control.clone()),
+                HardwareVolumeUiStatus::Selected,
+            );
+            seed_hardware_volume(runtime, &selection.control, volume);
+            if migrated {
+                // Legacy `alsa_hardware_volume=true` had no exact identity in
+                // the Player's startup snapshot. Reload the newly migrated map
+                // without reopening the protected PCM route.
+                apply_audio(runtime, Apply::Reload);
+            } else {
+                publish_snapshot().await;
+            }
+            Some(volume)
+        }
+        HardwareVolumeDecision::NeedsChoice { reason, .. } => {
+            log::warn!(
+                "[qbz-qt] persisted ALSA hardware volume needs an explicit choice ({reason:?}); disabling without writing"
+            );
+            if let Err(error) = with_audio(|store| store.set_alsa_hardware_volume(false)) {
+                log::error!("[qbz-qt] failed to disable ambiguous hardware volume: {error}");
                 return None;
             }
+            set_hardware_volume_ui_probe(
+                device_id,
+                &probe,
+                None,
+                hardware_volume_choice_status(reason),
+            );
             apply_audio(runtime, Apply::Reinit);
-            crate::toast_qt::error(qbz_i18n::t(
-                "This ALSA device has no compatible hardware volume control. Direct playback remains fixed at 100%.",
-            ));
+            None
+        }
+        HardwareVolumeDecision::Unsupported { reason, .. } => {
+            log::warn!(
+                "[qbz-qt] persisted ALSA hardware volume is unavailable; disabling: {reason:?}"
+            );
+            if let Err(error) = with_audio(|store| store.set_alsa_hardware_volume(false)) {
+                log::error!("[qbz-qt] failed to disable unavailable hardware volume: {error}");
+                return None;
+            }
+            set_hardware_volume_ui_probe(
+                device_id,
+                &probe,
+                None,
+                hardware_volume_unsupported_status(&reason),
+            );
+            apply_audio(runtime, Apply::Reinit);
             None
         }
     }
@@ -2997,8 +3548,108 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
     }
 }
 
+async fn select_alsa_hardware_volume_control(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    index: usize,
+) {
+    let audio = match with_audio(|store| store.get_settings()) {
+        Ok(audio) => audio,
+        Err(error) => {
+            log::error!("[qbz-qt] read audio settings for mixer selection failed: {error}");
+            return;
+        }
+    };
+    if !qbz_audio::alsa_direct::uses_alsa_direct_route(&audio) {
+        log::warn!("[qbz-qt] ignored mixer selection outside ALSA Direct");
+        return;
+    }
+    let device_id = audio
+        .output_device
+        .clone()
+        .expect("ALSA Direct route has a device id");
+    let requested = HARDWARE_VOLUME_UI.lock().ok().and_then(|state| {
+        (state.device_id.as_deref() == Some(device_id.as_str()))
+            .then(|| {
+                state
+                    .candidates
+                    .get(index)
+                    .map(|candidate| candidate.id.clone())
+            })
+            .flatten()
+    });
+    let Some(requested) = requested else {
+        log::warn!("[qbz-qt] ignored stale ALSA mixer option index {index}");
+        publish_snapshot().await;
+        return;
+    };
+
+    set_hardware_volume_ui_status(Some(device_id.clone()), HardwareVolumeUiStatus::Probing);
+    publish_snapshot().await;
+
+    let (probe, _) = match probe_selected_hardware_volume(&audio).await {
+        Ok(result) => result,
+        Err(error) => {
+            log::warn!("[qbz-qt] ALSA mixer revalidation failed: {error}");
+            let _ = with_audio(|store| store.set_alsa_hardware_volume(false));
+            set_hardware_volume_ui_status(Some(device_id), HardwareVolumeUiStatus::Unsupported);
+            apply_audio(runtime, Apply::Reinit);
+            publish_snapshot().await;
+            return;
+        }
+    };
+    if let Err(error) = current_hardware_volume_route_is(&device_id) {
+        log::warn!("[qbz-qt] discarded stale ALSA mixer selection: {error}");
+        publish_snapshot().await;
+        return;
+    }
+    let candidate = probe
+        .valid_candidates()
+        .find(|candidate| candidate.id == requested)
+        .cloned();
+    let Some(candidate) = candidate else {
+        log::warn!(
+            "[qbz-qt] ALSA mixer control '{}' disappeared before selection; no fallback chosen",
+            requested
+        );
+        let _ = with_audio(|store| store.set_alsa_hardware_volume(false));
+        set_hardware_volume_ui_probe(device_id, &probe, None, HardwareVolumeUiStatus::Stale);
+        apply_audio(runtime, Apply::Reinit);
+        publish_snapshot().await;
+        return;
+    };
+    let Some(route_key) = probe.route_key.clone() else {
+        log::warn!("[qbz-qt] ALSA mixer selection has no stable route identity");
+        let _ = with_audio(|store| store.set_alsa_hardware_volume(false));
+        set_hardware_volume_ui_probe(device_id, &probe, None, HardwareVolumeUiStatus::Unsupported);
+        apply_audio(runtime, Apply::Reinit);
+        publish_snapshot().await;
+        return;
+    };
+    let selection = HardwareVolumeSelection {
+        route_key,
+        control: requested,
+        candidate,
+        source: HardwareVolumeSelectionSource::UserChoice,
+    };
+    match enable_hardware_volume_selection(runtime, device_id, probe, selection).await {
+        Ok(apply) => {
+            apply_audio(runtime, apply);
+            maybe_force_bitperfect_volume(runtime).await;
+        }
+        Err(error) => {
+            log::error!("[qbz-qt] persist ALSA mixer selection failed: {error}");
+            let _ = with_audio(|store| store.set_alsa_hardware_volume(false));
+            apply_audio(runtime, Apply::Reinit);
+        }
+    }
+    publish_snapshot().await;
+}
+
 pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str, index: usize) {
     match key {
+        "alsa-hardware-volume-control" => {
+            select_alsa_hardware_volume_control(runtime, index).await;
+        }
         "streaming-quality" => {
             let Some(key) = STREAMING_QUALITY_KEYS.get(index) else {
                 return;
@@ -3535,6 +4186,31 @@ pub async fn refresh_devices(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 mod local_tab_order_tests {
     use super::*;
 
+    fn mixer_candidate() -> HardwareVolumeCandidate {
+        HardwareVolumeCandidate {
+            id: AlsaMixerControlId {
+                name: "D50 III".to_string(),
+                index: 2,
+            },
+            label: "D50 III,2".to_string(),
+            channels: vec!["front_left".to_string(), "front_right".to_string()],
+            raw_range: Some(qbz_audio::alsa_hardware_volume::HardwareVolumeRange {
+                min: 0,
+                max: 255,
+            }),
+            db_range: Some(qbz_audio::alsa_hardware_volume::HardwareVolumeRange {
+                min: -12_700,
+                max: 0,
+            }),
+            current_values: Vec::new(),
+            current_volume: Some(0.5),
+            has_playback_switch: true,
+            recommended: true,
+            writability: qbz_audio::alsa_hardware_volume::HardwareVolumeWritability::Verified,
+            rejection_reason: None,
+        }
+    }
+
     #[test]
     fn absent_or_invalid_order_uses_the_complete_default() {
         let expected: Vec<String> = LOCAL_TAB_DEFAULT_ORDER
@@ -3584,6 +4260,48 @@ mod local_tab_order_tests {
         assert_eq!(large_spectrum_mode_for_tier(4, false), 0);
         assert_eq!(large_spectrum_mode_for_tier(3, true), 3);
         assert_eq!(large_spectrum_mode_for_tier(4, true), 4);
+    }
+
+    #[test]
+    fn hardware_volume_statuses_are_typed_and_user_visible() {
+        let statuses = [
+            HardwareVolumeUiStatus::Probing,
+            HardwareVolumeUiStatus::Ambiguous,
+            HardwareVolumeUiStatus::Stale,
+            HardwareVolumeUiStatus::PermissionDenied,
+            HardwareVolumeUiStatus::DeviceBusy,
+            HardwareVolumeUiStatus::DeviceUnavailable,
+            HardwareVolumeUiStatus::NoMixer,
+            HardwareVolumeUiStatus::Unsupported,
+            HardwareVolumeUiStatus::WriteFailed,
+        ];
+        let mut keys = std::collections::HashSet::new();
+        for status in statuses {
+            assert!(keys.insert(status.key()), "duplicate status key");
+            assert!(!status.message().is_empty(), "missing status message");
+        }
+    }
+
+    #[test]
+    fn hardware_volume_option_exposes_exact_identity_range_and_channels() {
+        let candidate = mixer_candidate();
+        assert_eq!(candidate.id.to_string(), "D50 III,2");
+        let detail = hardware_volume_candidate_detail(&candidate);
+        assert!(detail.contains("-127.00–0.00 dB"), "{detail}");
+        assert!(detail.contains("front_left"), "{detail}");
+        assert!(detail.starts_with('★'), "{detail}");
+    }
+
+    #[test]
+    fn qml_uses_the_shared_closed_select_for_mixer_identity() {
+        let audio_qml = include_str!("../qml/settings/AudioSettings.qml");
+        let select_qml = include_str!("../qml/controls/QbzSelect.qml");
+        assert!(audio_qml.contains("alsaHardwareVolumeOptions"));
+        assert!(audio_qml.contains("QbzSelect"));
+        assert!(!audio_qml.contains("TextInput"));
+        assert!(select_qml.contains("function openPopup"));
+        assert!(select_qml.contains("function optDetail"));
+        assert!(select_qml.contains("selectRoot.optDetail(optRow.index)"));
     }
 
     #[test]
