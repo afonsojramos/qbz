@@ -25,8 +25,8 @@ use std::sync::Arc;
 use qbz_app::shell::AppRuntime;
 use qconnect_app::renderer::PLAYING_STATE_STOPPED;
 use qconnect_app::{
-    QconnectLifecycleState, QconnectRemoteSyncState, QueueCommandType, RendererReport,
-    RendererReportType, SessionLoopHost, JOIN_SESSION_REASON_RECONNECTION,
+    QconnectLifecycleState, QconnectRemoteSyncState, QueueCommandType, RendererBufferState,
+    RendererReport, RendererReportType, SessionLoopHost, JOIN_SESSION_REASON_RECONNECTION,
 };
 use serde_json::json;
 use tokio::sync::Mutex;
@@ -38,7 +38,7 @@ use super::engine::VolumeMode; // T10 (OD4): join-time volume report honors the 
 use super::sink::{DaemonEventSink, DaemonQconnectApp};
 use super::transport::{
     default_qconnect_device_info, default_qconnect_device_info_with_name, resolve_transport_config,
-    QconnectJoinSessionRequest, AUDIO_QUALITY_HIRES_LEVEL2, BUFFER_STATE_OK,
+    QconnectJoinSessionRequest, AUDIO_QUALITY_HIRES_LEVEL2,
 };
 use super::{update_lifecycle_state_if_running, DaemonQconnectInner};
 
@@ -231,7 +231,7 @@ pub async fn deferred_renderer_join(
         "reason": join_reason,
         "initial_state": {
             "playing_state": PLAYING_STATE_STOPPED,
-            "buffer_state": BUFFER_STATE_OK,
+            "buffer_state": RendererBufferState::Ok.as_i32(),
             "current_position": 0,
             "duration": 0,
             "queue_version": {
@@ -273,7 +273,7 @@ pub async fn deferred_renderer_join(
     };
     let mut state_report_payload = json!({
         "playing_state": PLAYING_STATE_STOPPED,
-        "buffer_state": BUFFER_STATE_OK,
+        "buffer_state": RendererBufferState::Ok.as_i32(),
         "current_position": 0,
         "duration": duration_ms,
         "queue_version": {

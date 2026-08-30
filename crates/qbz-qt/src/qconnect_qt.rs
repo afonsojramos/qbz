@@ -45,6 +45,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
+use qbz_player::player::PlaybackBufferState;
 use qconnect_app::queue_resolution::{
     find_cursor_index_by_queue_item_id, find_cursor_index_by_track_id, ordered_queue_cursors,
     resolve_controller_queue_item_from_snapshots, resolve_queue_item_ids_from_queue_state,
@@ -52,11 +53,13 @@ use qconnect_app::queue_resolution::{
 };
 use qconnect_app::renderer::{PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING, PLAYING_STATE_STOPPED};
 use qconnect_app::{
-    build_effective_renderer_snapshot, ensure_session_renderer_state, is_local_renderer_active,
-    is_peer_renderer_active, queue_item_snapshot_for_cursor, renderer_allows_remote_volume,
-    QConnectQueueState, QConnectRendererState, QconnectApp, QconnectAppEvent, QconnectEventSink,
+    build_effective_renderer_snapshot, build_renderer_playback_report,
+    ensure_session_renderer_state, is_local_renderer_active, is_peer_renderer_active,
+    queue_item_snapshot_for_cursor, renderer_allows_remote_volume, QConnectQueueState,
+    QConnectRendererState, QconnectApp, QconnectAppEvent, QconnectEventSink,
     QconnectFileAudioQualitySnapshot, QconnectLifecycleState, QconnectRemoteSyncState,
-    QconnectSessionState, QueueCommandType, RendererReport, RendererReportType, SessionLoopHost,
+    QconnectSessionState, QueueCommandType, RendererBufferState, RendererPlaybackSnapshot,
+    RendererReport, RendererReportType, SessionLoopHost,
 };
 use qconnect_transport_ws::{NativeWsTransport, WsTransportConfig};
 use serde_json::{json, Value};
@@ -70,7 +73,7 @@ use crate::qconnect_transport_qt::{
     default_qconnect_device_info_with_name, load_persisted_device_name, resolve_transport_config,
     QconnectJoinSessionRequest, QconnectMuteVolumeRequest, QconnectQueueVersionPayload,
     QconnectSetPlayerStateQueueItemPayload, QconnectSetPlayerStateRequest,
-    QconnectSetVolumeRequest, AUDIO_QUALITY_HIRES_LEVEL2, BUFFER_STATE_OK,
+    QconnectSetVolumeRequest, AUDIO_QUALITY_HIRES_LEVEL2,
 };
 
 const QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS: u64 = 1_500;
@@ -892,6 +895,7 @@ impl QtQconnectService {
         position_ms: i64,
         duration_ms: i64,
         track_id: u64,
+        buffer_state: PlaybackBufferState,
     ) {
         let (app, sync_state) = {
             let guard = self.inner.lock().await;
@@ -932,22 +936,17 @@ impl QtQconnectService {
         }
         let queue_version = app.queue_state_snapshot().await.version;
 
-        let report = RendererReport::new(
-            RendererReportType::RndrSrvrStateUpdated,
+        let report = build_renderer_playback_report(
             Uuid::new_v4().to_string(),
             queue_version,
-            json!({
-                "playing_state": playing_state,
-                "buffer_state": BUFFER_STATE_OK,
-                "current_position": position_ms,
-                "duration": duration_ms,
-                "current_queue_item_id": current_qid,
-                "next_queue_item_id": next_qid,
-                "queue_version": {
-                    "major": queue_version.major,
-                    "minor": queue_version.minor
-                }
-            }),
+            RendererPlaybackSnapshot {
+                playing_state,
+                buffer_state,
+                position_ms: Some(position_ms),
+                duration_ms: Some(duration_ms),
+                current_queue_item_id: current_qid,
+                next_queue_item_id: next_qid,
+            },
         );
         if let Err(err) = app.send_renderer_report_command(report).await {
             log::warn!("[QConnect] Failed to report playback state: {err}");
@@ -3176,7 +3175,7 @@ async fn deferred_renderer_join(
         "reason": join_reason,
         "initial_state": {
             "playing_state": PLAYING_STATE_STOPPED,
-            "buffer_state": BUFFER_STATE_OK,
+            "buffer_state": RendererBufferState::Ok.as_i32(),
             "current_position": 0,
             "duration": 0,
             "queue_version": {
@@ -3218,7 +3217,7 @@ async fn deferred_renderer_join(
     };
     let mut state_report_payload = json!({
         "playing_state": PLAYING_STATE_STOPPED,
-        "buffer_state": BUFFER_STATE_OK,
+        "buffer_state": RendererBufferState::Ok.as_i32(),
         "current_position": 0,
         "duration": duration_ms,
         "queue_version": {

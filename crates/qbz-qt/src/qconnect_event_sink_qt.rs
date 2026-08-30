@@ -31,7 +31,7 @@ use qconnect_app::{
     build_session_renderer_snapshot, cache_renderer_snapshot, is_peer_renderer_active,
     renderer_allows_remote_volume, QconnectApp, QconnectAppEvent, QconnectEventSink,
     QconnectRemoteSyncState, QconnectRendererEngine, RendererCommand, RendererReport,
-    RendererReportType,
+    RendererBufferState, RendererReportType,
 };
 use qconnect_transport_ws::NativeWsTransport;
 use serde_json::Value;
@@ -39,7 +39,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::qconnect_engine_qt::QtRendererEngine;
-use crate::qconnect_transport_qt::{resolve_local_identity, BUFFER_STATE_OK};
+use crate::qconnect_transport_qt::resolve_local_identity;
 
 /// Concrete `QconnectApp` type used by the Qt adapter.
 pub type QtQconnectApp = QconnectApp<NativeWsTransport, QtQconnectEventSink>;
@@ -278,7 +278,7 @@ impl QtQconnectEventSink {
             queue_version,
             serde_json::json!({
                 "is_active": true,
-                "buffer_state": BUFFER_STATE_OK,
+                "buffer_state": RendererBufferState::Ok.as_i32(),
                 "queue_version": {
                     "major": queue_version.major,
                     "minor": queue_version.minor

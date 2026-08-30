@@ -112,7 +112,6 @@ pub const AUDIO_QUALITY_MP3: i32 = 1;
 pub const AUDIO_QUALITY_HIRES_LEVEL2: i32 = 4;
 const VOLUME_REMOTE_CONTROL_ALLOWED: i32 = 2;
 /// Renderer buffer-state wire value for OK/ready (mirrors the Tauri adapter).
-pub const BUFFER_STATE_OK: i32 = 2;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QconnectDeviceCapabilitiesPayload {

@@ -38,6 +38,8 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::default::{get_codecs, get_probe};
 
+use super::{PlaybackBufferReporter, PlaybackBufferState};
+
 /// Configuration for the streaming buffer
 #[derive(Debug, Clone)]
 pub struct StreamingConfig {
@@ -649,6 +651,8 @@ pub struct IncrementalStreamingSource {
     stalled: bool,
     /// Reference to the buffered source (for cache retrieval after playback)
     buffered_source: Arc<BufferedMediaSource>,
+    /// Optional generation-safe side channel into the player's buffer state.
+    buffer_reporter: Option<PlaybackBufferReporter>,
 }
 
 impl IncrementalStreamingSource {
@@ -659,6 +663,20 @@ impl IncrementalStreamingSource {
     ///
     /// Returns the source along with detected sample_rate and channels.
     pub fn new(buffered_source: Arc<BufferedMediaSource>) -> Result<Self, String> {
+        Self::new_inner(buffered_source, None)
+    }
+
+    pub(super) fn new_for_play(
+        buffered_source: Arc<BufferedMediaSource>,
+        buffer_reporter: PlaybackBufferReporter,
+    ) -> Result<Self, String> {
+        Self::new_inner(buffered_source, Some(buffer_reporter))
+    }
+
+    fn new_inner(
+        buffered_source: Arc<BufferedMediaSource>,
+        buffer_reporter: Option<PlaybackBufferReporter>,
+    ) -> Result<Self, String> {
         // Create a reader from the buffered source
         let reader = buffered_source.create_reader();
         let media_source = Box::new(reader) as Box<dyn MediaSource>;
@@ -712,6 +730,7 @@ impl IncrementalStreamingSource {
             packets_decoded: 0,
             stalled: false,
             buffered_source,
+            buffer_reporter,
         })
     }
 
@@ -782,6 +801,9 @@ impl IncrementalStreamingSource {
                         // mode so the live stream gets the pipe to itself (#591).
                         self.stalled = true;
                         qbz_audio::network_throttle::state().record_underrun();
+                        if let Some(reporter) = &self.buffer_reporter {
+                            reporter.report(PlaybackBufferState::Underrun);
+                        }
                     }
                     std::thread::sleep(Duration::from_millis(5));
                     continue;
@@ -793,11 +815,19 @@ impl IncrementalStreamingSource {
                         self.packets_decoded
                     );
                     self.finished = true;
+                    if self.buffered_source.download_error().is_some() {
+                        if let Some(reporter) = &self.buffer_reporter {
+                            reporter.report(PlaybackBufferState::Error);
+                        }
+                    }
                     return;
                 }
                 Err(err) => {
                     log::error!("Symphonia read error in stream: {}", err);
                     self.finished = true;
+                    if let Some(reporter) = &self.buffer_reporter {
+                        reporter.report(PlaybackBufferState::Error);
+                    }
                     return;
                 }
             };
@@ -825,6 +855,9 @@ impl IncrementalStreamingSource {
                     // Successful decode ends any stall episode; the next
                     // WouldBlock streak records a fresh underrun.
                     self.stalled = false;
+                    if let Some(reporter) = &self.buffer_reporter {
+                        reporter.report(PlaybackBufferState::Ready);
+                    }
                 }
                 Err(SymphoniaError::DecodeError(e)) => {
                     log::warn!("Decode error (skipping packet): {}", e);
@@ -837,6 +870,9 @@ impl IncrementalStreamingSource {
                 Err(err) => {
                     log::error!("Symphonia decode error: {}", err);
                     self.finished = true;
+                    if let Some(reporter) = &self.buffer_reporter {
+                        reporter.report(PlaybackBufferState::Error);
+                    }
                     return;
                 }
             }

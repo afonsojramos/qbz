@@ -9,6 +9,7 @@ mod feature_flags;
 pub mod queue_resolution;
 pub mod renderer;
 mod renderer_engine;
+mod reporting;
 pub mod session;
 mod state;
 pub mod startup;
@@ -43,8 +44,14 @@ pub use qconnect_core::{
     AdmissionDecision, HandoffIntent, QConnectQueueState, QConnectRendererState, QueueVersion,
     RendererCommand, TrackOrigin,
 };
-pub use qconnect_protocol::{QueueCommandType, RendererReport, RendererReportType};
+pub use qconnect_protocol::{
+    QueueCommandType, RendererBufferState, RendererReport, RendererReportType,
+};
 pub use renderer_engine::QconnectRendererEngine;
+pub use reporting::{
+    build_renderer_playback_report, qconnect_report_track_id, renderer_buffer_state,
+    RendererPlaybackSnapshot,
+};
 pub use state::QconnectRuntimeState;
 pub use sync_state::{
     cache_renderer_snapshot, ensure_session_renderer_state, sync_session_renderer_active_flags,

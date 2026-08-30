@@ -513,6 +513,8 @@ mod tests {
             gapless_next_track_id: 0,
             bit_perfect_mode: None,
             buffer_progress: None,
+            buffer_state: qbz_player::player::PlaybackBufferState::Ready,
+            buffer_track_id: 42,
             engine_empty_generation: 0,
             engine_empty_track_id: 0,
             source_failure_generation: 0,

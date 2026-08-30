@@ -3214,6 +3214,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         // 1:1, translate by wall time.
         let mut last_reported_track_id: u64 = 0;
         let mut last_reported_playing = false;
+        let mut last_reported_buffer_state = qbz_player::player::PlaybackBufferState::Idle;
         let mut report_tick: u64 = 0;
         const QCONNECT_REPORT_EVERY_N_TICKS: u64 = 2;
 
@@ -3781,10 +3782,18 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // controller or not connected) and resolves the queue_item_ids —
             // no extra gates.
             report_tick = report_tick.wrapping_add(1);
-            if track_id != 0 {
-                let transition =
-                    track_id != last_reported_track_id || is_playing != last_reported_playing;
-                let periodic = is_playing && report_tick % QCONNECT_REPORT_EVERY_N_TICKS == 0;
+            let report_track_id = qconnect_app::qconnect_report_track_id(&event);
+            if report_track_id != 0 {
+                let transition = report_track_id != last_reported_track_id
+                    || is_playing != last_reported_playing
+                    || event.buffer_state != last_reported_buffer_state;
+                let buffer_active = matches!(
+                    event.buffer_state,
+                    qbz_player::player::PlaybackBufferState::InitialBuffering
+                        | qbz_player::player::PlaybackBufferState::Underrun
+                );
+                let periodic = (is_playing || buffer_active)
+                    && report_tick % QCONNECT_REPORT_EVERY_N_TICKS == 0;
                 if transition || periodic {
                     if let Some(svc) = crate::qconnect_qt::service() {
                         let playing_state = if is_playing {
@@ -3798,7 +3807,8 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                             playing_state,
                             position_ms,
                             duration_ms,
-                            track_id,
+                            report_track_id,
+                            event.buffer_state,
                         )
                         .await;
                         // On a track change, also reconcile the session queue:
@@ -3809,8 +3819,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                             svc.sync_local_queue_if_changed().await;
                         }
                     }
-                    last_reported_track_id = track_id;
+                    last_reported_track_id = report_track_id;
                     last_reported_playing = is_playing;
+                    last_reported_buffer_state = event.buffer_state;
                 }
             }
 
@@ -4023,6 +4034,8 @@ mod tests {
             gapless_next_track_id: 0,
             bit_perfect_mode: None,
             buffer_progress: None,
+            buffer_state: qbz_player::player::PlaybackBufferState::Idle,
+            buffer_track_id: 0,
             engine_empty_generation: 0,
             engine_empty_track_id: 0,
             source_failure_generation: 0,

@@ -19,6 +19,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use async_trait::async_trait;
+use qbz_player::player::PlaybackBufferState;
 
 use crate::session::{
     compute_connection_state, deferred_join_reason, is_local_renderer_active,
@@ -29,8 +30,9 @@ use crate::session::{
     QCONNECT_RENDERER_LOST_TIMEOUT_MS,
 };
 use crate::{
-    ensure_session_renderer_state, sync_session_renderer_active_flags, QconnectAppError,
-    QconnectAppEvent, QconnectEventSink, QconnectRemoteSyncState, QconnectRuntimeState,
+    build_renderer_playback_report, ensure_session_renderer_state,
+    sync_session_renderer_active_flags, QconnectAppError, QconnectAppEvent, QconnectEventSink,
+    QconnectRemoteSyncState, QconnectRuntimeState, RendererPlaybackSnapshot,
 };
 
 pub struct QconnectApp<TTransport, TSink>
@@ -669,22 +671,22 @@ where
                         queue_version_ref.major,
                         queue_version_ref.minor
                     );
-                    let report = RendererReport::new(
-                        RendererReportType::RndrSrvrStateUpdated,
+                    let buffer_state = if renderer.playing_state == Some(PLAYING_STATE_PLAYING) {
+                        PlaybackBufferState::InitialBuffering
+                    } else {
+                        PlaybackBufferState::Ready
+                    };
+                    let report = build_renderer_playback_report(
                         self.next_action_uuid(),
                         queue_version_ref,
-                        serde_json::json!({
-                            "playing_state": renderer.playing_state,
-                            "buffer_state": infer_buffer_state(renderer.playing_state),
-                            "current_position": renderer.current_position_ms,
-                            "duration": Option::<u64>::None,
-                            "queue_version": {
-                                "major": queue_version_ref.major,
-                                "minor": queue_version_ref.minor
-                            },
-                            "current_queue_item_id": Option::<i32>::None,
-                            "next_queue_item_id": Option::<i32>::None
-                        }),
+                        RendererPlaybackSnapshot {
+                            playing_state: renderer.playing_state.unwrap_or(PLAYING_STATE_UNKNOWN),
+                            buffer_state,
+                            position_ms: renderer.current_position_ms.map(|value| value as i64),
+                            duration_ms: None,
+                            current_queue_item_id: None,
+                            next_queue_item_id: None,
+                        },
                     );
                     self.send_renderer_report(report).await?;
                 } else {
@@ -741,15 +743,6 @@ where
         let envelope = build_qconnect_renderer_outbound_envelope(report)?;
         self.transport.send(envelope).await?;
         Ok(())
-    }
-}
-
-fn infer_buffer_state(playing_state: Option<i32>) -> Option<i32> {
-    match playing_state {
-        Some(2) | Some(3) => Some(2),
-        Some(1) => Some(1),
-        Some(value) => Some(value),
-        None => None,
     }
 }
 

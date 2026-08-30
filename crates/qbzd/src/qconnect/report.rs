@@ -17,17 +17,16 @@
 use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
+use qbz_player::player::PlaybackBufferState;
 use qconnect_app::{
-    is_local_renderer_active, QconnectFileAudioQualitySnapshot, QconnectRemoteSyncState,
-    RendererReport, RendererReportType,
+    build_renderer_playback_report, is_local_renderer_active, qconnect_report_track_id,
+    QconnectFileAudioQualitySnapshot, QconnectRemoteSyncState, RendererPlaybackSnapshot,
 };
-use serde_json::json;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::adapter::DaemonAdapter;
 use super::sink::DaemonQconnectApp;
-use super::transport::BUFFER_STATE_OK;
 
 pub const QCONNECT_RENDERER_CHANNELS: i32 = 2;
 const AUDIO_QUALITY_UNKNOWN: i32 = 0;
@@ -50,6 +49,7 @@ pub async fn report_playback_state(
     position_ms: i64,
     duration_ms: i64,
     track_id: u64,
+    buffer_state: PlaybackBufferState,
 ) {
     // Only report when WE are the active renderer. When a peer renderer owns
     // playback (the daemon is acting as a controller) the renderer reports come
@@ -65,22 +65,17 @@ pub async fn report_playback_state(
         resolve_queue_item_ids_by_track_id(app, sync_state, track_id).await;
     let queue_version = app.queue_state_snapshot().await.version;
 
-    let report = RendererReport::new(
-        RendererReportType::RndrSrvrStateUpdated,
+    let report = build_renderer_playback_report(
         Uuid::new_v4().to_string(),
         queue_version,
-        json!({
-            "playing_state": playing_state,
-            "buffer_state": BUFFER_STATE_OK,
-            "current_position": position_ms,
-            "duration": duration_ms,
-            "current_queue_item_id": current_qid,
-            "next_queue_item_id": next_qid,
-            "queue_version": {
-                "major": queue_version.major,
-                "minor": queue_version.minor
-            }
-        }),
+        RendererPlaybackSnapshot {
+            playing_state,
+            buffer_state,
+            position_ms: Some(position_ms),
+            duration_ms: Some(duration_ms),
+            current_queue_item_id: current_qid,
+            next_queue_item_id: next_qid,
+        },
     );
     if let Err(err) = app.send_renderer_report_command(report).await {
         log::warn!("[QConnect] Failed to report playback state: {err}");
@@ -218,12 +213,19 @@ pub async fn run_report_scheduler(
 
         // Read the live player state. Nothing loaded -> nothing to report.
         let ev = runtime.core().player().get_playback_event();
-        if ev.track_id == 0 {
+        let report_track_id = qconnect_report_track_id(&ev);
+        if report_track_id == 0 {
             continue;
         }
         // The periodic floor only fires while actually playing; edge notifications
         // (transitions + the driver's periodic) always report.
-        if via_interval && !ev.is_playing {
+        if via_interval
+            && !ev.is_playing
+            && matches!(
+                ev.buffer_state,
+                PlaybackBufferState::Idle | PlaybackBufferState::Ready
+            )
+        {
             continue;
         }
 
@@ -252,7 +254,8 @@ pub async fn run_report_scheduler(
             playing_state,
             position_ms,
             duration_ms,
-            ev.track_id,
+            report_track_id,
+            ev.buffer_state,
         )
         .await;
     }

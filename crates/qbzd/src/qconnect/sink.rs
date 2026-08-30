@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use qconnect_app::{
     build_session_renderer_snapshot, cache_renderer_snapshot, is_peer_renderer_active, QconnectApp,
     QconnectAppEvent, QconnectEventSink, QconnectRemoteSyncState, QconnectRendererEngine,
-    RendererCommand, RendererReport, RendererReportType,
+    RendererBufferState, RendererCommand, RendererReport, RendererReportType,
 };
 use qconnect_transport_ws::NativeWsTransport;
 use serde_json::Value;
@@ -31,7 +31,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::engine::DaemonRendererEngine;
-use super::transport::{resolve_local_identity, BUFFER_STATE_OK};
+use super::transport::resolve_local_identity;
 
 /// Concrete `QconnectApp` type used by the daemon adapter.
 pub type DaemonQconnectApp = QconnectApp<NativeWsTransport, DaemonEventSink>;
@@ -88,7 +88,7 @@ impl DaemonEventSink {
             queue_version,
             serde_json::json!({
                 "is_active": true,
-                "buffer_state": BUFFER_STATE_OK,
+                "buffer_state": RendererBufferState::Ok.as_i32(),
                 "queue_version": {
                     "major": queue_version.major,
                     "minor": queue_version.minor

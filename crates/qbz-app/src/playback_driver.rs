@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use qbz_core::{FrontendAdapter, QbzCore};
 use qbz_models::{Quality, QueueTrack, RepeatMode};
-use qbz_player::PlaybackEvent;
+use qbz_player::{PlaybackBufferState, PlaybackEvent};
 
 use crate::session_store::{
     PersistedPlaybackSession, PersistedQueueTrack, PersistedSessionSnapshot,
@@ -110,6 +110,14 @@ impl LastTick {
     }
 }
 
+fn report_track_id(ev: &PlaybackEvent) -> u64 {
+    if !matches!(ev.buffer_state, PlaybackBufferState::Idle) && ev.buffer_track_id != 0 {
+        ev.buffer_track_id
+    } else {
+        ev.track_id
+    }
+}
+
 /// The driver's carried-over state between ticks — the loop-local `mut`
 /// variables of `start_poll_loop`, hoisted into a value so the decision is a
 /// pure function of it.
@@ -130,6 +138,8 @@ pub struct DriverState {
     pub last_reported_track_id: u64,
     /// Last play-state we emitted a `ReportEdge` for (`last_reported_playing`).
     pub last_reported_playing: bool,
+    /// Last player-owned buffer state emitted to QConnect.
+    pub last_reported_buffer_state: PlaybackBufferState,
 }
 
 impl DriverState {
@@ -143,8 +153,9 @@ impl DriverState {
             gapless_requested_for: 0,
             warmed_for: 0,
             report_tick: 0,
-            last_reported_track_id: ev.track_id,
+            last_reported_track_id: report_track_id(ev),
             last_reported_playing: ev.is_playing,
+            last_reported_buffer_state: ev.buffer_state,
         }
     }
 }
@@ -268,10 +279,17 @@ pub fn plan_tick(
     //    transition OR the ~2 s periodic cadence while playing. Runs regardless
     //    of `track_ended` (the desktop report block precedes the advance block).
     let next_report_tick = state.report_tick.wrapping_add(1);
-    if ev.track_id != 0 {
-        let transition = ev.track_id != state.last_reported_track_id
-            || ev.is_playing != state.last_reported_playing;
-        let periodic = ev.is_playing && next_report_tick % QCONNECT_REPORT_EVERY_N_TICKS == 0;
+    let report_track_id = report_track_id(ev);
+    if report_track_id != 0 {
+        let transition = report_track_id != state.last_reported_track_id
+            || ev.is_playing != state.last_reported_playing
+            || ev.buffer_state != state.last_reported_buffer_state;
+        let buffer_active = matches!(
+            ev.buffer_state,
+            PlaybackBufferState::InitialBuffering | PlaybackBufferState::Underrun
+        );
+        let periodic = (ev.is_playing || buffer_active)
+            && next_report_tick % QCONNECT_REPORT_EVERY_N_TICKS == 0;
         if transition || periodic {
             actions.push(DriverAction::ReportEdge);
         }
@@ -339,16 +357,22 @@ pub fn advance_state(
             report_tick: prev.report_tick,
             last_reported_track_id: prev.last_reported_track_id,
             last_reported_playing: prev.last_reported_playing,
+            last_reported_buffer_state: prev.last_reported_buffer_state,
         };
     }
 
     // Non-seamless: the report block runs (playback.rs:4648) so report_tick
     // advances; the report trackers move only when a ReportEdge fired.
     let report_tick = prev.report_tick.wrapping_add(1);
-    let (last_reported_track_id, last_reported_playing) = if reported {
-        (ev.track_id, ev.is_playing)
+    let report_track_id = report_track_id(ev);
+    let (last_reported_track_id, last_reported_playing, last_reported_buffer_state) = if reported {
+        (report_track_id, ev.is_playing, ev.buffer_state)
     } else {
-        (prev.last_reported_track_id, prev.last_reported_playing)
+        (
+            prev.last_reported_track_id,
+            prev.last_reported_playing,
+            prev.last_reported_buffer_state,
+        )
     };
 
     // Edge trackers (playback.rs:4676-4700): last_track_id/seen_position update
@@ -394,6 +418,7 @@ pub fn advance_state(
         report_tick,
         last_reported_track_id,
         last_reported_playing,
+        last_reported_buffer_state,
     }
 }
 
@@ -1022,6 +1047,8 @@ mod tests {
             gapless_next_track_id: 0,
             bit_perfect_mode: None,
             buffer_progress: None,
+            buffer_state: PlaybackBufferState::Idle,
+            buffer_track_id: 0,
             engine_empty_generation: 0,
             engine_empty_track_id: 0,
             source_failure_generation: 0,
@@ -1141,6 +1168,25 @@ mod tests {
         let a = plan_tick(&s, &ev(1, false, 100, 581), &q(1, &[(2, true)], "off", None), None);
         assert!(!a.contains(&DriverAction::AdvanceAndPlay));
         assert!(a.contains(&DriverAction::ReportEdge));
+    }
+
+    #[test]
+    fn buffer_transition_emits_qconnect_report_edge() {
+        let mut ready = ev(41, true, 100, 581);
+        ready.buffer_state = PlaybackBufferState::Ready;
+        ready.buffer_track_id = 41;
+        let state = DriverState::after(&ready);
+
+        let mut underrun = ready.clone();
+        underrun.buffer_state = PlaybackBufferState::Underrun;
+        let actions = plan_tick(
+            &state,
+            &underrun,
+            &q(41, &[(42, true)], "off", None),
+            None,
+        );
+
+        assert!(actions.contains(&DriverAction::ReportEdge));
     }
 
     #[test]
