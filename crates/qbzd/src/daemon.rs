@@ -334,6 +334,79 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
 /// Steps 6-9 of §8.1: open the daemon-root stores, compose the runtime with the
 /// two NORMATIVE substitutions (`with_audio_settings` + `activate_at`), and
 /// restore the saved session per the §6.2 clearing taxonomy.
+fn revalidate_alsa_hardware_volume(
+    store: &qbz_audio::settings::AudioSettingsStore,
+) -> Result<(qbz_audio::settings::AudioSettings, Option<f32>), String> {
+    use qbz_audio::alsa_hardware_volume::{
+        HardwareVolumeDecision, HardwareVolumeSelectionSource, HardwareVolumeUnsupportedReason,
+    };
+
+    let audio = store.get_settings()?;
+    if !audio.alsa_hardware_volume {
+        return Ok((audio, None));
+    }
+    if !qbz_audio::alsa_direct::uses_alsa_direct_route(&audio) {
+        log::warn!(
+            "[ALSA HW Volume] enabled outside ALSA Direct; disabling without touching a mixer"
+        );
+        store.set_alsa_hardware_volume(false)?;
+        return Ok((store.get_settings()?, None));
+    }
+    let device_id = audio
+        .output_device
+        .as_deref()
+        .expect("ALSA Direct route has a device id");
+    let probe = qbz_audio::alsa_hardware_volume::enumerate_hardware_volume_controls(device_id);
+    let decision = qbz_audio::alsa_hardware_volume::decide_hardware_volume(
+        &probe,
+        &audio.alsa_hardware_volume_controls,
+    );
+    match decision {
+        HardwareVolumeDecision::Selected { selection } => {
+            let Some(volume) = selection.candidate.current_volume else {
+                log::warn!(
+                    "[ALSA HW Volume] selected control '{}' has no readable level; disabling",
+                    selection.control
+                );
+                store.set_alsa_hardware_volume(false)?;
+                return Ok((store.get_settings()?, None));
+            };
+            if selection.source != HardwareVolumeSelectionSource::Persisted {
+                // Backward-compatible migration for an old bare boolean. The
+                // probe is read-only; persist only an unequivocal identity.
+                store.set_alsa_hardware_volume_control(
+                    selection.route_key,
+                    selection.control.clone(),
+                )?;
+            }
+            log::info!(
+                "[ALSA HW Volume] validated '{}' at {:.0}%",
+                selection.control,
+                volume * 100.0
+            );
+            Ok((store.get_settings()?, Some(volume)))
+        }
+        HardwareVolumeDecision::NeedsChoice { reason, .. } => {
+            log::warn!(
+                "[ALSA HW Volume] explicit mixer choice required ({reason:?}); disabling without writing"
+            );
+            store.set_alsa_hardware_volume(false)?;
+            Ok((store.get_settings()?, None))
+        }
+        HardwareVolumeDecision::Unsupported { reason, .. } => {
+            let detail = match &reason {
+                HardwareVolumeUnsupportedReason::Probe(error) => error.message.clone(),
+                other => format!("{other:?}"),
+            };
+            log::warn!(
+                "[ALSA HW Volume] saved mixer control unavailable ({detail}); disabling without fallback"
+            );
+            store.set_alsa_hardware_volume(false)?;
+            Ok((store.get_settings()?, None))
+        }
+    }
+}
+
 async fn boot(roots: &ProfileRoots, cfg: &QbzdConfig, warn_count: usize) -> Result<BootedRuntime, String> {
     // 6.+7. stores + runtime composition. The two substitutions (01 §2.2):
     //   - with_audio_settings, NOT AppRuntime::new (which hardcodes the
@@ -342,7 +415,7 @@ async fn boot(roots: &ProfileRoots, cfg: &QbzdConfig, warn_count: usize) -> Resu
     //     UserDataPaths — shell.rs:195-203).
     // Everything routes through the T2 daemon roots.
     let store = qbz_audio::settings::AudioSettingsStore::new_at(&roots.data)?; // settings.rs:263
-    let settings = store.get_settings()?;
+    let (settings, hardware_volume) = revalidate_alsa_hardware_volume(&store)?;
     let (adapter, _rx) = DaemonAdapter::new();
     let bus = adapter.sender();
     let runtime = Arc::new(AppRuntime::with_audio_settings(
@@ -351,6 +424,9 @@ async fn boot(roots: &ProfileRoots, cfg: &QbzdConfig, warn_count: usize) -> Resu
         settings,
         None,
     )); // shell.rs:64
+    if let Some(volume) = hardware_volume {
+        runtime.core().player().seed_volume_state(volume);
+    }
 
     // Offline-tolerant (§8.1-8): a network failure here still leaves a locally
     // usable core; a missing DAC is likewise non-fatal (Player starts deviceless
@@ -846,14 +922,19 @@ pub(crate) async fn reload(state: &crate::api::ApiState) {
 /// 87-94`, per-key classification `:877-967,1134-1290`; 03-setup-tui.md §4.3
 /// lists the same 9 fields).
 pub(crate) fn reload_audio(state: &crate::api::ApiState) {
-    let fresh = match state.audio.get_settings() {
-        Ok(s) => s,
+    let (fresh, hardware_volume) = match revalidate_alsa_hardware_volume(&state.audio) {
+        Ok(result) => result,
         Err(e) => {
             log::warn!("[reload] could not re-read audio settings: {e}");
             return;
         }
     };
     let player = state.runtime.core().player();
+    if let Some(volume) = hardware_volume {
+        // Seed before a routing-critical reinit so the new engine starts at
+        // the physical level just read, never at synthetic unity.
+        player.seed_volume_state(volume);
+    }
     if let Err(e) = player.reload_settings(fresh.clone()) {
         log::warn!("[reload] player.reload_settings failed: {e}");
     }
@@ -886,6 +967,7 @@ pub(crate) fn audio_routing_changed(
         || old.output_device != new.output_device
         || old.alsa_plugin != new.alsa_plugin
         || old.alsa_hardware_volume != new.alsa_hardware_volume
+        || old.alsa_hardware_volume_controls != new.alsa_hardware_volume_controls
         || old.exclusive_mode != new.exclusive_mode
         || old.dac_passthrough != new.dac_passthrough
         || old.skip_sink_switch != new.skip_sink_switch
@@ -1193,6 +1275,21 @@ mod tests {
         let mut hw_vol = base.clone();
         hw_vol.alsa_hardware_volume = !base.alsa_hardware_volume;
         assert!(audio_routing_changed(&base, &hw_vol), "alsa_hardware_volume");
+
+        let mut hw_control = base.clone();
+        let route = serde_json::from_str("\"alsa-route-v1|card=card:D50|pcm=hw|DEV=0\"")
+            .expect("stable route key");
+        hw_control.alsa_hardware_volume_controls.insert(
+            route,
+            qbz_audio::alsa_hardware_volume::AlsaMixerControlId {
+                name: "D50 III".to_string(),
+                index: 0,
+            },
+        );
+        assert!(
+            audio_routing_changed(&base, &hw_control),
+            "alsa_hardware_volume_controls"
+        );
 
         let mut excl = base.clone();
         excl.exclusive_mode = !base.exclusive_mode;

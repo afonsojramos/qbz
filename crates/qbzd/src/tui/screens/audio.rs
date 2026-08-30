@@ -11,6 +11,13 @@
 //      `device_is_bit_perfect` / `group_alsa_devices` 1:1, including the
 //      is_default-vs-section badge edge case.
 
+use std::collections::HashMap;
+
+use qbz_audio::alsa_hardware_volume::{
+    AlsaMixerControlId, HardwareVolumeCandidate, HardwareVolumeChoiceReason,
+    HardwareVolumeDecision, HardwareVolumeProbe, HardwareVolumeSelectionSource,
+    HardwareVolumeUnsupportedReason, StableAlsaRouteKey,
+};
 use qbz_audio::settings::AudioSettings;
 use qbz_audio::{AlsaPlugin, AudioBackendType, AudioDevice, BackendManager};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -31,6 +38,8 @@ pub struct StagedAudio {
     pub output_device: Option<String>,
     pub alsa_plugin: AlsaPlugin,
     pub alsa_hardware_volume: bool,
+    pub alsa_hardware_volume_control: Option<AlsaMixerControlId>,
+    pub alsa_hardware_volume_controls: HashMap<StableAlsaRouteKey, AlsaMixerControlId>,
     pub dsd_mode: String,
     pub exclusive_mode: bool,
     pub reserve_dac: bool,
@@ -47,11 +56,18 @@ pub struct StagedAudio {
 
 impl StagedAudio {
     pub fn from_settings(a: &AudioSettings) -> Self {
+        let alsa_hardware_volume_control = a
+            .output_device
+            .as_deref()
+            .and_then(|device| qbz_audio::alsa_hardware_volume::stable_alsa_route_key(device).ok())
+            .and_then(|route| a.alsa_hardware_volume_controls.get(&route).cloned());
         Self {
             backend: a.backend_type.unwrap_or_default(),
             output_device: a.output_device.clone(),
             alsa_plugin: a.alsa_plugin.unwrap_or_default(),
             alsa_hardware_volume: a.alsa_hardware_volume,
+            alsa_hardware_volume_control,
+            alsa_hardware_volume_controls: a.alsa_hardware_volume_controls.clone(),
             dsd_mode: a.dsd_mode.clone(),
             exclusive_mode: a.exclusive_mode,
             reserve_dac: a.reserve_dac_while_running,
@@ -74,6 +90,7 @@ pub enum AField {
     Device,
     AlsaPlugin,
     HwVolume,
+    HwVolumeControl,
     Dsd,
     Exclusive,
     Reserve,
@@ -95,14 +112,29 @@ pub fn row_state(field: AField, a: &StagedAudio) -> (bool, bool, Option<&'static
         Device => (true, true, None),
         AlsaPlugin => (alsa, true, None), // shown only on ALSA
         // NB: `use AField::*` shadows the AlsaPlugin type here — qualify it.
-        HwVolume => (alsa && a.alsa_plugin == qbz_audio::AlsaPlugin::Hw, true, None),
+        HwVolume => (
+            alsa && a.alsa_plugin != qbz_audio::AlsaPlugin::Pcm,
+            true,
+            None,
+        ),
+        HwVolumeControl => (
+            alsa && a.alsa_plugin != qbz_audio::AlsaPlugin::Pcm
+                && a.alsa_hardware_volume
+                && a.alsa_hardware_volume_control.is_some(),
+            true,
+            None,
+        ),
         Dsd => (alsa, true, None),
         Exclusive => (true, alsa, if alsa { None } else { Some(s::R_ALSA_ONLY) }),
         Reserve => (true, true, None),
         Passthrough => (
             true,
             pipewire,
-            if pipewire { None } else { Some(s::R_PIPEWIRE_ONLY) },
+            if pipewire {
+                None
+            } else {
+                Some(s::R_PIPEWIRE_ONLY)
+            },
         ),
         // shown only when passthrough on AND PipeWire.
         ForceBp => (a.dac_passthrough && pipewire, true, None),
@@ -110,7 +142,11 @@ pub fn row_state(field: AField, a: &StagedAudio) -> (bool, bool, Option<&'static
         LockOutput => (
             pipewire,
             !a.dac_passthrough,
-            if a.dac_passthrough { Some(s::R_PASSTHROUGH_OFF) } else { None },
+            if a.dac_passthrough {
+                Some(s::R_PASSTHROUGH_OFF)
+            } else {
+                None
+            },
         ),
         StreamUncached => (true, true, None),
         Buffer => (a.stream_first_track, true, None), // shown when stream uncached on
@@ -122,8 +158,20 @@ pub fn row_state(field: AField, a: &StagedAudio) -> (bool, bool, Option<&'static
 pub fn visible_fields(a: &StagedAudio) -> Vec<AField> {
     use AField::*;
     [
-        Backend, Device, AlsaPlugin, HwVolume, Dsd, Exclusive, Reserve, Passthrough, ForceBp,
-        LockOutput, StreamUncached, Buffer, StreamingOnly,
+        Backend,
+        Device,
+        AlsaPlugin,
+        HwVolume,
+        HwVolumeControl,
+        Dsd,
+        Exclusive,
+        Reserve,
+        Passthrough,
+        ForceBp,
+        LockOutput,
+        StreamUncached,
+        Buffer,
+        StreamingOnly,
     ]
     .into_iter()
     .filter(|f| row_state(*f, a).0)
@@ -165,6 +213,8 @@ pub fn cascade_on_backend_change(a: &mut StagedAudio) {
         a.gapless_enabled = false; // item 6
     }
     a.output_device = None; // item 7: never carry the old backend's device id
+    a.alsa_hardware_volume = false;
+    a.alsa_hardware_volume_control = None;
 }
 
 // ============================ device picker grouping (§3.2.2) ============================
@@ -285,9 +335,13 @@ enum Editor {
     Backend(SelectPopup),
     Device(SelectPopup),
     AlsaPlugin(SelectPopup),
+    HardwareVolume(SelectPopup),
     Dsd(SelectPopup),
     /// The §3.2.4 DSD guard: `prev` is restored on Esc.
-    DsdConfirm { new: String, prev: String },
+    DsdConfirm {
+        new: String,
+        prev: String,
+    },
 }
 
 pub struct AudioState {
@@ -296,6 +350,11 @@ pub struct AudioState {
     focus: usize,
     devices: Vec<DeviceEntry>,
     scanning: bool,
+    hardware_volume_candidates: Vec<HardwareVolumeCandidate>,
+    hardware_volume_route_key: Option<StableAlsaRouteKey>,
+    hardware_volume_status: Option<String>,
+    hardware_volume_probing: bool,
+    probe_for_control_change: bool,
     editor: Option<Editor>,
 }
 
@@ -308,6 +367,11 @@ impl AudioState {
             focus: 0,
             devices: Vec::new(),
             scanning: true,
+            hardware_volume_candidates: Vec::new(),
+            hardware_volume_route_key: None,
+            hardware_volume_status: None,
+            hardware_volume_probing: false,
+            probe_for_control_change: false,
             editor: None,
         }
     }
@@ -330,6 +394,107 @@ impl AudioState {
         self.scanning = true;
     }
 
+    pub fn hardware_volume_probe_request(
+        &self,
+    ) -> Result<(String, HashMap<StableAlsaRouteKey, AlsaMixerControlId>), String> {
+        if self.staged.backend != AudioBackendType::Alsa
+            || self.staged.alsa_plugin == AlsaPlugin::Pcm
+        {
+            return Err("hardware volume requires ALSA Direct (hw or plughw)".to_string());
+        }
+        let device_id = self
+            .staged
+            .output_device
+            .clone()
+            .ok_or_else(|| "select an explicit ALSA Direct device first".to_string())?;
+        if !qbz_audio::alsa_direct::AlsaDirectStream::is_hw_device(&device_id) {
+            return Err("the selected output is not an ALSA Direct route".to_string());
+        }
+        Ok((device_id, self.staged.alsa_hardware_volume_controls.clone()))
+    }
+
+    pub fn begin_hardware_volume_probe(&mut self, for_control_change: bool) {
+        self.hardware_volume_probing = true;
+        self.hardware_volume_status = Some("checking ALSA mixer controls…".to_string());
+        self.probe_for_control_change = for_control_change;
+    }
+
+    pub fn set_hardware_volume_probe(
+        &mut self,
+        result: Result<(HardwareVolumeProbe, HardwareVolumeDecision), String>,
+    ) {
+        self.hardware_volume_probing = false;
+        let (probe, decision) = match result {
+            Ok(result) => result,
+            Err(error) => {
+                self.staged.alsa_hardware_volume = false;
+                self.hardware_volume_status = Some(error);
+                self.probe_for_control_change = false;
+                return;
+            }
+        };
+        self.hardware_volume_candidates = probe.valid_candidates().cloned().collect();
+        self.hardware_volume_route_key = probe.route_key.clone();
+        match decision {
+            HardwareVolumeDecision::Selected { selection } => {
+                let change =
+                    self.probe_for_control_change && self.hardware_volume_candidates.len() > 1;
+                self.staged
+                    .alsa_hardware_volume_controls
+                    .insert(selection.route_key, selection.control.clone());
+                self.staged.alsa_hardware_volume_control = Some(selection.control);
+                self.staged.alsa_hardware_volume = true;
+                self.hardware_volume_status = Some(match selection.source {
+                    HardwareVolumeSelectionSource::Persisted => {
+                        "saved mixer control validated".to_string()
+                    }
+                    HardwareVolumeSelectionSource::Ucm => {
+                        "mixer control resolved from ALSA UCM".to_string()
+                    }
+                    HardwareVolumeSelectionSource::OnlyCandidate => {
+                        "only compatible mixer control selected".to_string()
+                    }
+                    HardwareVolumeSelectionSource::UserChoice => {
+                        "mixer control selected".to_string()
+                    }
+                });
+                if change {
+                    self.open_hardware_volume_picker();
+                }
+            }
+            HardwareVolumeDecision::NeedsChoice {
+                route_key: _,
+                reason,
+                ..
+            } => {
+                self.staged.alsa_hardware_volume = false;
+                self.hardware_volume_status = Some(match reason {
+                    HardwareVolumeChoiceReason::PersistedSelectionStale => {
+                        "saved control is unavailable — choose another".to_string()
+                    }
+                    HardwareVolumeChoiceReason::Ambiguous
+                    | HardwareVolumeChoiceReason::UcmAmbiguous => {
+                        "multiple playback controls — choose one".to_string()
+                    }
+                });
+                self.open_hardware_volume_picker();
+            }
+            HardwareVolumeDecision::Unsupported { reason, .. } => {
+                self.staged.alsa_hardware_volume = false;
+                self.hardware_volume_status = Some(match reason {
+                    HardwareVolumeUnsupportedReason::Probe(error) => error.message,
+                    HardwareVolumeUnsupportedReason::NoValidControls => {
+                        "no compatible playback-volume control".to_string()
+                    }
+                    HardwareVolumeUnsupportedReason::PersistedSelectionStale(control) => {
+                        format!("saved mixer control '{control}' is unavailable")
+                    }
+                });
+            }
+        }
+        self.probe_for_control_change = false;
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.staged != self.baseline
     }
@@ -345,6 +510,7 @@ impl AudioState {
             Some(Editor::Backend(_)) => Some(s::A_BACKEND),
             Some(Editor::Device(_)) => Some(s::A_DEVICE),
             Some(Editor::AlsaPlugin(_)) => Some(s::A_ALSA_PLUGIN),
+            Some(Editor::HardwareVolume(_)) => Some(s::A_HW_VOLUME_CONTROL),
             Some(Editor::Dsd(_)) | Some(Editor::DsdConfirm { .. }) => Some(s::A_DSD),
             None => None,
         }
@@ -372,11 +538,24 @@ impl AudioState {
         if a.output_device != b.output_device {
             push(
                 "device",
-                a.output_device.clone().unwrap_or_else(|| "system".to_string()),
+                a.output_device
+                    .clone()
+                    .unwrap_or_else(|| "system".to_string()),
             );
         }
         if a.alsa_plugin != b.alsa_plugin {
             push("alsa_plugin", alsa_plugin_value(a.alsa_plugin).to_string());
+        }
+        if a.alsa_hardware_volume_control != b.alsa_hardware_volume_control
+            && a.alsa_hardware_volume_control.is_some()
+        {
+            push(
+                "alsa_hardware_volume_control",
+                a.alsa_hardware_volume_control
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .expect("checked above"),
+            );
         }
         if a.alsa_hardware_volume != b.alsa_hardware_volume {
             push("alsa_hardware_volume", a.alsa_hardware_volume.to_string());
@@ -473,7 +652,7 @@ impl AudioState {
             KeyCode::Enter | KeyCode::Char(' ') => {
                 let field = fields.get(self.focus).copied();
                 if let Some(f) = field {
-                    self.activate(f);
+                    return self.activate(f);
                 }
                 ScreenAction::Consumed
             }
@@ -485,17 +664,29 @@ impl AudioState {
     /// Act on the focused field (toggle in place / open a popup). Any device
     /// re-enumeration triggered by a backend change is returned from
     /// `handle_editor_key` when the picker resolves, not here.
-    fn activate(&mut self, field: AField) {
+    fn activate(&mut self, field: AField) -> ScreenAction {
         let (_, enabled, _) = row_state(field, &self.staged);
         if !enabled && !matches!(field, AField::Backend | AField::Device) {
-            return; // disabled row: inert
+            return ScreenAction::Consumed; // disabled row: inert
         }
         match field {
             AField::Backend => self.open_backend_picker(),
             AField::Device => self.open_device_picker(false),
             AField::AlsaPlugin => self.open_alsa_plugin_picker(),
             AField::Dsd => self.open_dsd_picker(),
-            AField::HwVolume => self.staged.alsa_hardware_volume ^= true,
+            AField::HwVolume => {
+                if self.staged.alsa_hardware_volume {
+                    self.staged.alsa_hardware_volume = false;
+                    self.hardware_volume_status = None;
+                } else {
+                    self.begin_hardware_volume_probe(false);
+                    return ScreenAction::ProbeHardwareVolume;
+                }
+            }
+            AField::HwVolumeControl => {
+                self.begin_hardware_volume_probe(true);
+                return ScreenAction::ProbeHardwareVolume;
+            }
             AField::Reserve => self.staged.reserve_dac ^= true,
             AField::Exclusive => self.staged.exclusive_mode ^= true,
             AField::Passthrough => {
@@ -511,12 +702,16 @@ impl AudioState {
             }
             AField::Buffer => {}
         }
+        ScreenAction::Consumed
     }
 
     fn open_backend_picker(&mut self) {
         let backends = BackendManager::available_backends();
         let options: Vec<String> = backends.iter().map(|b| backend_label(*b)).collect();
-        let sel = backends.iter().position(|b| *b == self.staged.backend).unwrap_or(0);
+        let sel = backends
+            .iter()
+            .position(|b| *b == self.staged.backend)
+            .unwrap_or(0);
         self.editor = Some(Editor::Backend(SelectPopup::new(
             s::A_BACKEND,
             options,
@@ -529,15 +724,25 @@ impl AudioState {
         let options: Vec<String> = self
             .devices
             .iter()
-            .map(|d| if d.bp { format!("{} {}", d.label, s::BP_BADGE) } else { d.label.clone() })
+            .map(|d| {
+                if d.bp {
+                    format!("{} {}", d.label, s::BP_BADGE)
+                } else {
+                    d.label.clone()
+                }
+            })
             .collect();
         let headers: Vec<Option<String>> = self.devices.iter().map(|d| d.header.clone()).collect();
         let sel = self
             .devices
             .iter()
-            .position(|d| Some(&d.id) == self.staged.output_device.as_ref() || (d.id.is_empty() && self.staged.output_device.is_none()))
+            .position(|d| {
+                Some(&d.id) == self.staged.output_device.as_ref()
+                    || (d.id.is_empty() && self.staged.output_device.is_none())
+            })
             .unwrap_or(0);
-        let mut popup = SelectPopup::new(s::DEVICE_PICKER_TITLE, options, sel, true).with_headers(headers);
+        let mut popup =
+            SelectPopup::new(s::DEVICE_PICKER_TITLE, options, sel, true).with_headers(headers);
         if filter {
             popup.filter = String::new();
         }
@@ -545,17 +750,57 @@ impl AudioState {
     }
 
     fn open_alsa_plugin_picker(&mut self) {
-        let opts = vec![s::ALSA_HW.to_string(), s::ALSA_PLUGHW.to_string(), s::ALSA_PCM.to_string()];
+        let opts = vec![
+            s::ALSA_HW.to_string(),
+            s::ALSA_PLUGHW.to_string(),
+            s::ALSA_PCM.to_string(),
+        ];
         let sel = match self.staged.alsa_plugin {
             AlsaPlugin::Hw => 0,
             AlsaPlugin::PlugHw => 1,
             AlsaPlugin::Pcm => 2,
         };
-        self.editor = Some(Editor::AlsaPlugin(SelectPopup::new(s::A_ALSA_PLUGIN, opts, sel, false)));
+        self.editor = Some(Editor::AlsaPlugin(SelectPopup::new(
+            s::A_ALSA_PLUGIN,
+            opts,
+            sel,
+            false,
+        )));
+    }
+
+    fn open_hardware_volume_picker(&mut self) {
+        if self.hardware_volume_candidates.is_empty() {
+            return;
+        }
+        let options = self
+            .hardware_volume_candidates
+            .iter()
+            .map(hardware_volume_candidate_label)
+            .collect::<Vec<_>>();
+        let selected = self
+            .staged
+            .alsa_hardware_volume_control
+            .as_ref()
+            .and_then(|control| {
+                self.hardware_volume_candidates
+                    .iter()
+                    .position(|candidate| candidate.id == *control)
+            })
+            .unwrap_or(0);
+        self.editor = Some(Editor::HardwareVolume(SelectPopup::new(
+            s::A_HW_VOLUME_CONTROL,
+            options,
+            selected,
+            self.hardware_volume_candidates.len() > 8,
+        )));
     }
 
     fn open_dsd_picker(&mut self) {
-        let opts = vec![s::DSD_CONVERT.to_string(), s::DSD_DOP.to_string(), s::DSD_NATIVE.to_string()];
+        let opts = vec![
+            s::DSD_CONVERT.to_string(),
+            s::DSD_DOP.to_string(),
+            s::DSD_NATIVE.to_string(),
+        ];
         let sel = match self.staged.dsd_mode.as_str() {
             "dop" => 1,
             "native" => 2,
@@ -610,8 +855,19 @@ impl AudioState {
             Editor::Device(mut p) => match p.handle_key(key) {
                 SelectOutcome::Chosen(i) => {
                     if let Some(d) = self.devices.get(i) {
-                        self.staged.output_device =
-                            if d.id.is_empty() { None } else { Some(d.id.clone()) };
+                        let output_device = if d.id.is_empty() {
+                            None
+                        } else {
+                            Some(d.id.clone())
+                        };
+                        if output_device != self.staged.output_device {
+                            self.staged.output_device = output_device;
+                            self.staged.alsa_hardware_volume = false;
+                            self.staged.alsa_hardware_volume_control = None;
+                            self.hardware_volume_candidates.clear();
+                            self.hardware_volume_route_key = None;
+                            self.hardware_volume_status = None;
+                        }
                     }
                     ScreenAction::Consumed
                 }
@@ -623,16 +879,45 @@ impl AudioState {
             },
             Editor::AlsaPlugin(mut p) => match p.handle_key(key) {
                 SelectOutcome::Chosen(i) => {
-                    self.staged.alsa_plugin = match i {
+                    let plugin = match i {
                         1 => AlsaPlugin::PlugHw,
                         2 => AlsaPlugin::Pcm,
                         _ => AlsaPlugin::Hw,
                     };
+                    if plugin != self.staged.alsa_plugin {
+                        self.staged.alsa_plugin = plugin;
+                        self.staged.alsa_hardware_volume = false;
+                        self.staged.alsa_hardware_volume_control = None;
+                        self.hardware_volume_candidates.clear();
+                        self.hardware_volume_route_key = None;
+                        self.hardware_volume_status = None;
+                    }
                     ScreenAction::Consumed
                 }
                 SelectOutcome::Cancelled => ScreenAction::Consumed,
                 SelectOutcome::Pending => {
                     self.editor = Some(Editor::AlsaPlugin(p));
+                    ScreenAction::Consumed
+                }
+            },
+            Editor::HardwareVolume(mut p) => match p.handle_key(key) {
+                SelectOutcome::Chosen(i) => {
+                    if let (Some(candidate), Some(route_key)) = (
+                        self.hardware_volume_candidates.get(i),
+                        self.hardware_volume_route_key.clone(),
+                    ) {
+                        self.staged.alsa_hardware_volume_control = Some(candidate.id.clone());
+                        self.staged
+                            .alsa_hardware_volume_controls
+                            .insert(route_key, candidate.id.clone());
+                        self.staged.alsa_hardware_volume = true;
+                        self.hardware_volume_status = Some(format!("selected {}", candidate.id));
+                    }
+                    ScreenAction::Consumed
+                }
+                SelectOutcome::Cancelled => ScreenAction::Consumed,
+                SelectOutcome::Pending => {
+                    self.editor = Some(Editor::HardwareVolume(p));
                     ScreenAction::Consumed
                 }
             },
@@ -672,7 +957,9 @@ impl AudioState {
         let fields = visible_fields(&self.staged);
         let focused_field = fields.get(self.focus).copied();
         let active = |members: &[AField]| {
-            focused_field.map(|ff| members.contains(&ff)).unwrap_or(false)
+            focused_field
+                .map(|ff| members.contains(&ff))
+                .unwrap_or(false)
         };
         // ONE control column for the whole screen (owner's "misma área de columna").
         let labels: Vec<&str> = fields.iter().map(|f| self.field_display(*f).0).collect();
@@ -682,25 +969,49 @@ impl AudioState {
         let mut secs: Vec<widgets::Section> = Vec::new();
         let mut anchor: Option<widgets::FocusAnchor> = None;
 
-        let out_members: &[AField] = &[Backend, Device, AlsaPlugin, HwVolume, Dsd];
-        let (mut out_lines, out_a) = self.group_block(&fields, out_members, focused_field, ctrl_col, width);
+        let out_members: &[AField] = &[Backend, Device, AlsaPlugin, HwVolume, HwVolumeControl, Dsd];
+        let (mut out_lines, out_a) =
+            self.group_block(&fields, out_members, focused_field, ctrl_col, width);
         if self.staged.backend == AudioBackendType::Jack {
             out_lines.extend(widgets::wrapped_note(s::JACK_WARNING, width, theme::warn()));
         }
         if !out_lines.is_empty() {
-            widgets::push_section(&mut secs, &mut anchor, s::AUDIO_GROUP_OUTPUT, active(out_members), out_lines, out_a);
+            widgets::push_section(
+                &mut secs,
+                &mut anchor,
+                s::AUDIO_GROUP_OUTPUT,
+                active(out_members),
+                out_lines,
+                out_a,
+            );
         }
 
         let bp_members: &[AField] = &[Exclusive, Reserve, Passthrough, ForceBp, LockOutput];
-        let (bp_lines, bp_a) = self.group_block(&fields, bp_members, focused_field, ctrl_col, width);
+        let (bp_lines, bp_a) =
+            self.group_block(&fields, bp_members, focused_field, ctrl_col, width);
         if !bp_lines.is_empty() {
-            widgets::push_section(&mut secs, &mut anchor, s::AUDIO_GROUP_BITPERFECT, active(bp_members), bp_lines, bp_a);
+            widgets::push_section(
+                &mut secs,
+                &mut anchor,
+                s::AUDIO_GROUP_BITPERFECT,
+                active(bp_members),
+                bp_lines,
+                bp_a,
+            );
         }
 
         let tr_members: &[AField] = &[StreamUncached, Buffer, StreamingOnly];
-        let (tr_lines, tr_a) = self.group_block(&fields, tr_members, focused_field, ctrl_col, width);
+        let (tr_lines, tr_a) =
+            self.group_block(&fields, tr_members, focused_field, ctrl_col, width);
         if !tr_lines.is_empty() {
-            widgets::push_section(&mut secs, &mut anchor, s::AUDIO_GROUP_TRANSPORT, active(tr_members), tr_lines, tr_a);
+            widgets::push_section(
+                &mut secs,
+                &mut anchor,
+                s::AUDIO_GROUP_TRANSPORT,
+                active(tr_members),
+                tr_lines,
+                tr_a,
+            );
         }
 
         widgets::sections_scroll(f, area, &secs, anchor);
@@ -709,19 +1020,32 @@ impl AudioState {
         match &self.editor {
             Some(Editor::Backend(p))
             | Some(Editor::AlsaPlugin(p))
+            | Some(Editor::HardwareVolume(p))
             | Some(Editor::Dsd(p)) => p.draw(f, area),
             Some(Editor::Device(p)) => {
                 if self.scanning {
                     widgets::busy_overlay(f, area, s::AUDIO_SCANNING, 0);
                 } else if self.devices.len() <= 1 {
                     // Only the synthetic "System default" — the §5.1 hint panel.
-                    widgets::modal(f, area, s::DEVICE_PICKER_TITLE, s::NO_DEVICES, s::HELP_SELECT);
+                    widgets::modal(
+                        f,
+                        area,
+                        s::DEVICE_PICKER_TITLE,
+                        s::NO_DEVICES,
+                        s::HELP_SELECT,
+                    );
                 } else {
                     p.draw(f, area);
                 }
             }
             Some(Editor::DsdConfirm { .. }) => {
-                widgets::modal(f, area, s::DSD_GUARD_TITLE, s::DSD_GUARD_BODY, s::DSD_GUARD_HINT);
+                widgets::modal(
+                    f,
+                    area,
+                    s::DSD_GUARD_TITLE,
+                    s::DSD_GUARD_BODY,
+                    s::DSD_GUARD_HINT,
+                );
             }
             None => {}
         }
@@ -753,7 +1077,13 @@ impl AudioState {
         (lines, within)
     }
 
-    fn field_block(&self, field: AField, focus_pos: usize, ctrl_col: u16, width: u16) -> Vec<Line<'static>> {
+    fn field_block(
+        &self,
+        field: AField,
+        focus_pos: usize,
+        ctrl_col: u16,
+        width: u16,
+    ) -> Vec<Line<'static>> {
         let (_, enabled, reason) = row_state(field, &self.staged);
         let focused = focus_pos == self.focus && self.editor.is_none();
         let (label, value, widget) = self.field_display(field);
@@ -771,7 +1101,13 @@ impl AudioState {
 
     fn field_display(&self, field: AField) -> (&'static str, String, &'static str) {
         let a = &self.staged;
-        let on_off = |b: bool| if b { "on".to_string() } else { "off".to_string() };
+        let on_off = |b: bool| {
+            if b {
+                "on".to_string()
+            } else {
+                "off".to_string()
+            }
+        };
         match field {
             AField::Backend => (s::A_BACKEND, backend_label(a.backend), "[select]"),
             AField::Device => {
@@ -782,16 +1118,45 @@ impl AudioState {
                 };
                 (s::A_DEVICE, dev, "[select]")
             }
-            AField::AlsaPlugin => (s::A_ALSA_PLUGIN, alsa_plugin_label(a.alsa_plugin).to_string(), "[select]"),
-            AField::HwVolume => (s::A_HW_VOLUME, on_off(a.alsa_hardware_volume), "[toggle]"),
+            AField::AlsaPlugin => (
+                s::A_ALSA_PLUGIN,
+                alsa_plugin_label(a.alsa_plugin).to_string(),
+                "[select]",
+            ),
+            AField::HwVolume => {
+                let value = if self.hardware_volume_probing {
+                    "checking…".to_string()
+                } else if let Some(status) = &self.hardware_volume_status {
+                    format!("{} · {status}", on_off(a.alsa_hardware_volume))
+                } else {
+                    on_off(a.alsa_hardware_volume)
+                };
+                (s::A_HW_VOLUME, value, "[toggle]")
+            }
+            AField::HwVolumeControl => (
+                s::A_HW_VOLUME_CONTROL,
+                a.alsa_hardware_volume_control
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "none".to_string()),
+                "[select]",
+            ),
             AField::Dsd => (s::A_DSD, dsd_label(&a.dsd_mode).to_string(), "[select]"),
             AField::Exclusive => (s::A_EXCLUSIVE, on_off(a.exclusive_mode), "[toggle]"),
             AField::Reserve => (s::A_RESERVE, on_off(a.reserve_dac), "[toggle]"),
             AField::Passthrough => (s::A_PASSTHROUGH, on_off(a.dac_passthrough), "[toggle]"),
             AField::ForceBp => (s::A_FORCE_BP, on_off(a.pw_force_bitperfect), "[toggle]"),
             AField::LockOutput => (s::A_LOCK_OUTPUT, on_off(a.skip_sink_switch), "[toggle]"),
-            AField::StreamUncached => (s::A_STREAM_UNCACHED, on_off(a.stream_first_track), "[toggle]"),
-            AField::Buffer => (s::A_BUFFER, format!("{} s", a.stream_buffer_seconds), "[slider]"),
+            AField::StreamUncached => (
+                s::A_STREAM_UNCACHED,
+                on_off(a.stream_first_track),
+                "[toggle]",
+            ),
+            AField::Buffer => (
+                s::A_BUFFER,
+                format!("{} s", a.stream_buffer_seconds),
+                "[slider]",
+            ),
             AField::StreamingOnly => (s::A_STREAMING_ONLY, on_off(a.streaming_only), "[toggle]"),
         }
     }
@@ -803,7 +1168,13 @@ impl AudioState {
                 .devices
                 .iter()
                 .find(|d| &d.id == id)
-                .map(|d| if d.bp { format!("{} {}", d.label, s::BP_BADGE) } else { d.label.clone() })
+                .map(|d| {
+                    if d.bp {
+                        format!("{} {}", d.label, s::BP_BADGE)
+                    } else {
+                        d.label.clone()
+                    }
+                })
                 .unwrap_or_else(|| short_device(id)),
         }
     }
@@ -857,6 +1228,32 @@ fn dsd_label(mode: &str) -> &'static str {
     }
 }
 
+fn hardware_volume_candidate_label(candidate: &HardwareVolumeCandidate) -> String {
+    let range = candidate
+        .db_range
+        .map(|range| {
+            format!(
+                "{:.2}..{:.2} dB",
+                range.min as f64 / 100.0,
+                range.max as f64 / 100.0
+            )
+        })
+        .or_else(|| {
+            candidate
+                .raw_range
+                .map(|range| format!("raw {}..{}", range.min, range.max))
+        })
+        .unwrap_or_else(|| "range unavailable".to_string());
+    let recommended = if candidate.recommended { " ★" } else { "" };
+    format!(
+        "{}{} · {} · {}",
+        candidate.id,
+        recommended,
+        range,
+        candidate.channels.join(", ")
+    )
+}
+
 /// Compact a long device id for menu/summary lines (char-safe).
 fn short_device(id: &str) -> String {
     let count = id.chars().count();
@@ -889,6 +1286,52 @@ mod tests {
         StagedAudio::from_settings(&AudioSettings::default())
     }
 
+    fn route_key() -> StableAlsaRouteKey {
+        serde_json::from_str(r#""alsa-route-v1|card=card:D50|pcm=hw|DEV=0""#)
+            .expect("valid opaque route key")
+    }
+
+    fn mixer_candidate(name: &str, index: u32) -> HardwareVolumeCandidate {
+        HardwareVolumeCandidate {
+            id: AlsaMixerControlId {
+                name: name.to_string(),
+                index,
+            },
+            label: format!("{name},{index}"),
+            channels: vec!["front_left".to_string(), "front_right".to_string()],
+            raw_range: Some(qbz_audio::alsa_hardware_volume::HardwareVolumeRange {
+                min: 0,
+                max: 100,
+            }),
+            db_range: None,
+            current_values: Vec::new(),
+            current_volume: Some(0.5),
+            has_playback_switch: false,
+            recommended: name == "Master",
+            writability: qbz_audio::alsa_hardware_volume::HardwareVolumeWritability::Verified,
+            rejection_reason: None,
+        }
+    }
+
+    fn mixer_probe(candidates: Vec<HardwareVolumeCandidate>) -> HardwareVolumeProbe {
+        HardwareVolumeProbe {
+            device_id: "hw:CARD=D50,DEV=0".to_string(),
+            ctl_name: "hw:CARD=D50".to_string(),
+            route_key: Some(route_key()),
+            candidates,
+            ucm_controls: Vec::new(),
+            error: None,
+        }
+    }
+
+    fn alsa_screen() -> AudioState {
+        let mut settings = AudioSettings::default();
+        settings.backend_type = Some(AudioBackendType::Alsa);
+        settings.output_device = Some("hw:CARD=D50,DEV=0".to_string());
+        settings.alsa_plugin = Some(AlsaPlugin::Hw);
+        AudioState::new(&settings)
+    }
+
     // ---- cascades §3.2.3 items 1-3 (toggle) ----
 
     #[test]
@@ -897,7 +1340,10 @@ mod tests {
         a.skip_sink_switch = true;
         a.dac_passthrough = true;
         cascade_on_toggle(&mut a, AField::Passthrough);
-        assert!(!a.skip_sink_switch, "item 1: passthrough ON forces lock-output off");
+        assert!(
+            !a.skip_sink_switch,
+            "item 1: passthrough ON forces lock-output off"
+        );
     }
 
     #[test]
@@ -906,7 +1352,10 @@ mod tests {
         a.pw_force_bitperfect = true;
         a.dac_passthrough = false;
         cascade_on_toggle(&mut a, AField::Passthrough);
-        assert!(!a.pw_force_bitperfect, "item 2: passthrough OFF forces force-BP off");
+        assert!(
+            !a.pw_force_bitperfect,
+            "item 2: passthrough OFF forces force-BP off"
+        );
     }
 
     #[test]
@@ -915,7 +1364,10 @@ mod tests {
         a.gapless_enabled = true;
         a.streaming_only = true;
         cascade_on_toggle(&mut a, AField::StreamingOnly);
-        assert!(!a.gapless_enabled, "item 3: streaming-only ON forces gapless off");
+        assert!(
+            !a.gapless_enabled,
+            "item 3: streaming-only ON forces gapless off"
+        );
     }
 
     // ---- cascades §3.2.3 items 4-7 (backend switch) ----
@@ -956,7 +1408,10 @@ mod tests {
         a.output_device = Some("hw:CARD=D30,DEV=0".to_string());
         a.backend = AudioBackendType::PipeWire;
         cascade_on_backend_change(&mut a);
-        assert_eq!(a.output_device, None, "item 7: stale device id must never survive");
+        assert_eq!(
+            a.output_device, None,
+            "item 7: stale device id must never survive"
+        );
     }
 
     // ---- constraint matrix §3.2.3 ----
@@ -986,9 +1441,15 @@ mod tests {
         let mut a = base();
         a.backend = AudioBackendType::PipeWire;
         a.dac_passthrough = false;
-        assert!(!row_state(AField::ForceBp, &a).0, "hidden when passthrough off");
+        assert!(
+            !row_state(AField::ForceBp, &a).0,
+            "hidden when passthrough off"
+        );
         a.dac_passthrough = true;
-        assert!(row_state(AField::ForceBp, &a).0, "shown when passthrough on + PW");
+        assert!(
+            row_state(AField::ForceBp, &a).0,
+            "shown when passthrough on + PW"
+        );
         a.backend = AudioBackendType::Alsa;
         assert!(!row_state(AField::ForceBp, &a).0, "hidden off PW");
     }
@@ -1012,11 +1473,22 @@ mod tests {
         a.backend = AudioBackendType::Alsa;
         a.alsa_plugin = AlsaPlugin::Hw;
         assert!(row_state(AField::AlsaPlugin, &a).0);
-        assert!(row_state(AField::HwVolume, &a).0, "hw volume shown on ALSA hw");
+        assert!(
+            row_state(AField::HwVolume, &a).0,
+            "hw volume shown on ALSA hw"
+        );
         a.alsa_plugin = AlsaPlugin::PlugHw;
-        assert!(!row_state(AField::HwVolume, &a).0, "hw volume hidden off hw plugin");
+        assert!(
+            row_state(AField::HwVolume, &a).0,
+            "hardware volume remains available on the direct plughw route"
+        );
+        a.alsa_plugin = AlsaPlugin::Pcm;
+        assert!(!row_state(AField::HwVolume, &a).0, "hidden for named PCM");
         a.backend = AudioBackendType::PipeWire;
-        assert!(!row_state(AField::AlsaPlugin, &a).0, "alsa plugin hidden off ALSA");
+        assert!(
+            !row_state(AField::AlsaPlugin, &a).0,
+            "alsa plugin hidden off ALSA"
+        );
     }
 
     #[test]
@@ -1035,7 +1507,10 @@ mod tests {
         let devices = vec![dev("pw-node-1", "USB DAC", false, true)];
         let rows = group_devices(AudioBackendType::PipeWire, devices);
         assert_eq!(rows[0].id, "", "System default leads");
-        assert!(rows.iter().all(|r| r.header.is_none()), "no headers off ALSA");
+        assert!(
+            rows.iter().all(|r| r.header.is_none()),
+            "no headers off ALSA"
+        );
         assert!(rows[1].bp, "PipeWire hardware node is BP");
     }
 
@@ -1094,6 +1569,56 @@ mod tests {
         assert!(st.save_keys().is_empty(), "clean screen writes nothing");
         st.staged.exclusive_mode = true;
         let keys = st.save_keys();
-        assert_eq!(keys, vec![("audio.exclusive_mode".to_string(), "true".to_string())]);
+        assert_eq!(
+            keys,
+            vec![("audio.exclusive_mode".to_string(), "true".to_string())]
+        );
+    }
+
+    #[test]
+    fn ambiguous_probe_opens_a_closed_choice_without_staging_a_write() {
+        let mut state = alsa_screen();
+        let probe = mixer_probe(vec![
+            mixer_candidate("Master", 0),
+            mixer_candidate("PCM", 1),
+        ]);
+        let decision =
+            qbz_audio::alsa_hardware_volume::decide_hardware_volume(&probe, &HashMap::new());
+
+        state.set_hardware_volume_probe(Ok((probe, decision)));
+
+        assert!(!state.staged.alsa_hardware_volume);
+        assert!(state.staged.alsa_hardware_volume_control.is_none());
+        assert!(matches!(state.editor, Some(Editor::HardwareVolume(_))));
+        assert!(state.save_keys().is_empty(), "probing alone must not write");
+    }
+
+    #[test]
+    fn unique_probe_stages_exact_identity_before_enabling() {
+        let mut state = alsa_screen();
+        let expected = AlsaMixerControlId {
+            name: "D50 III".to_string(),
+            index: 7,
+        };
+        let probe = mixer_probe(vec![mixer_candidate(&expected.name, expected.index)]);
+        let decision =
+            qbz_audio::alsa_hardware_volume::decide_hardware_volume(&probe, &HashMap::new());
+
+        state.set_hardware_volume_probe(Ok((probe, decision)));
+
+        assert!(state.staged.alsa_hardware_volume);
+        assert_eq!(
+            state.staged.alsa_hardware_volume_control.as_ref(),
+            Some(&expected)
+        );
+        assert_eq!(
+            state.staged.alsa_hardware_volume_controls.get(&route_key()),
+            Some(&expected)
+        );
+        let keys = state.save_keys();
+        assert_eq!(keys[0].0, "audio.alsa_hardware_volume_control");
+        assert_eq!(keys[0].1, "D50 III,7");
+        assert_eq!(keys[1].0, "audio.alsa_hardware_volume");
+        assert_eq!(keys[1].1, "true");
     }
 }

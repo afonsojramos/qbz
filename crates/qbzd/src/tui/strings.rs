@@ -160,6 +160,7 @@ pub const A_BACKEND: &str = "Backend";
 pub const A_DEVICE: &str = "Output device";
 pub const A_ALSA_PLUGIN: &str = "ALSA plugin";
 pub const A_HW_VOLUME: &str = "Hardware volume";
+pub const A_HW_VOLUME_CONTROL: &str = "Mixer control";
 pub const A_DSD: &str = "DSD playback";
 pub const A_EXCLUSIVE: &str = "Exclusive mode";
 pub const A_RESERVE: &str = "Reserve DAC";

@@ -32,6 +32,10 @@ use qbz_app::settings::bundle::{
 };
 use qbz_app::settings::daemon_prefs;
 use qbz_app::settings::playback::{AutoplayMode, PlaybackPreferencesStore};
+use qbz_audio::alsa_hardware_volume::{
+    AlsaMixerControlId, HardwareVolumeDecision, HardwareVolumeProbe,
+    HardwareVolumeUnsupportedReason,
+};
 use qbz_audio::settings::AudioSettingsStore;
 use qbz_audio::{AlsaPlugin, AudioBackendType, BackendManager};
 
@@ -64,6 +68,7 @@ const KEY_TABLE: &[(&str, ApplyClass)] = &[
     ("audio.device", ApplyClass::Reinit),
     ("audio.alsa_plugin", ApplyClass::Reinit),
     ("audio.alsa_hardware_volume", ApplyClass::Reinit),
+    ("audio.alsa_hardware_volume_control", ApplyClass::Reinit),
     ("audio.exclusive_mode", ApplyClass::Reinit),
     ("audio.dac_passthrough", ApplyClass::Reinit),
     ("audio.skip_sink_switch", ApplyClass::Reinit),
@@ -181,6 +186,42 @@ fn render_alsa_plugin(v: Option<AlsaPlugin>) -> String {
     }
 }
 
+/// Canonical simple-mixer identity printed by `settings mixer-controls`.
+/// Split at the final comma so names containing commas remain round-trippable.
+fn parse_alsa_mixer_control(v: &str) -> Result<Option<AlsaMixerControlId>, String> {
+    let trimmed = v.trim();
+    if trimmed.eq_ignore_ascii_case("none") || trimmed.is_empty() {
+        return Ok(None);
+    }
+    let (name, index) = trimmed.rsplit_once(',').ok_or_else(|| {
+        format!(
+            "invalid ALSA mixer control '{trimmed}' — expected NAME,INDEX from `qbzd settings mixer-controls`"
+        )
+    })?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("invalid ALSA mixer control — NAME cannot be empty".to_string());
+    }
+    let index = index.trim().parse::<u32>().map_err(|_| {
+        format!("invalid ALSA mixer control '{trimmed}' — INDEX must be an unsigned integer")
+    })?;
+    Ok(Some(AlsaMixerControlId {
+        name: name.to_string(),
+        index,
+    }))
+}
+
+fn render_alsa_mixer_control(audio: &qbz_audio::settings::AudioSettings) -> String {
+    let selected = audio
+        .output_device
+        .as_deref()
+        .and_then(|device| qbz_audio::alsa_hardware_volume::stable_alsa_route_key(device).ok())
+        .and_then(|route| audio.alsa_hardware_volume_controls.get(&route));
+    selected
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "none".to_string())
+}
+
 /// `audio.device`: empty / "system" / "default" clears to `None` (system
 /// default); anything else is the device id verbatim (`hw:CARD=D30,DEV=0`,
 /// a PipeWire node name, ...) — free text, not validated against a live
@@ -188,7 +229,9 @@ fn render_alsa_plugin(v: Option<AlsaPlugin>) -> String {
 /// must work with no device attached to check against).
 fn parse_output_device(v: &str) -> Option<String> {
     let trimmed = v.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("system") || trimmed.eq_ignore_ascii_case("default")
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("system")
+        || trimmed.eq_ignore_ascii_case("default")
     {
         None
     } else {
@@ -224,13 +267,13 @@ fn parse_opt_u32(v: &str) -> Result<Option<u32>, String> {
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
         return Ok(None);
     }
-    trimmed
-        .parse::<u32>()
-        .map(Some)
-        .map_err(|_| format!("invalid sample rate '{trimmed}' — expected a Hz integer (e.g. 192000) or none"))
+    trimmed.parse::<u32>().map(Some).map_err(|_| {
+        format!("invalid sample rate '{trimmed}' — expected a Hz integer (e.g. 192000) or none")
+    })
 }
 fn render_opt_u32(v: Option<u32>) -> String {
-    v.map(|r| r.to_string()).unwrap_or_else(|| "none".to_string())
+    v.map(|r| r.to_string())
+        .unwrap_or_else(|| "none".to_string())
 }
 
 fn parse_dsd_mode(v: &str) -> Result<String, String> {
@@ -329,6 +372,7 @@ fn read_all(roots: &ProfileRoots) -> Result<Vec<(&'static str, String)>, String>
             "audio.device" => render_opt_string(&audio.output_device),
             "audio.alsa_plugin" => render_alsa_plugin(audio.alsa_plugin),
             "audio.alsa_hardware_volume" => render_bool(audio.alsa_hardware_volume),
+            "audio.alsa_hardware_volume_control" => render_alsa_mixer_control(&audio),
             "audio.exclusive_mode" => render_bool(audio.exclusive_mode),
             "audio.dac_passthrough" => render_bool(audio.dac_passthrough),
             "audio.skip_sink_switch" => render_bool(audio.skip_sink_switch),
@@ -391,19 +435,184 @@ impl std::fmt::Display for SetError {
     }
 }
 
+fn hardware_volume_probe_for(
+    audio: &qbz_audio::settings::AudioSettings,
+) -> Result<(String, HardwareVolumeProbe, HardwareVolumeDecision), SetError> {
+    if !qbz_audio::alsa_direct::uses_alsa_direct_route(audio) {
+        return Err(SetError::Usage(
+            "hardware volume requires audio.backend=alsa, a direct ALSA device, and alsa_plugin=hw or plughw"
+                .to_string(),
+        ));
+    }
+    let device_id = audio.output_device.clone().ok_or_else(|| {
+        SetError::Usage("hardware volume requires an explicitly selected ALSA device".to_string())
+    })?;
+    let probe = qbz_audio::alsa_hardware_volume::enumerate_hardware_volume_controls(&device_id);
+    let decision = qbz_audio::alsa_hardware_volume::decide_hardware_volume(
+        &probe,
+        &audio.alsa_hardware_volume_controls,
+    );
+    Ok((device_id, probe, decision))
+}
+
+fn unsupported_hardware_volume_message(reason: &HardwareVolumeUnsupportedReason) -> String {
+    match reason {
+        HardwareVolumeUnsupportedReason::Probe(error) => error.message.clone(),
+        HardwareVolumeUnsupportedReason::NoValidControls => {
+            "the selected ALSA route exposes no compatible playback-volume controls".to_string()
+        }
+        HardwareVolumeUnsupportedReason::PersistedSelectionStale(control) => format!(
+            "saved ALSA mixer control '{control}' is no longer available; run `qbzd settings mixer-controls`"
+        ),
+    }
+}
+
+fn valid_control_list(probe: &HardwareVolumeProbe) -> String {
+    let controls = probe
+        .valid_candidates()
+        .map(|candidate| candidate.id.to_string())
+        .collect::<Vec<_>>();
+    if controls.is_empty() {
+        "none".to_string()
+    } else {
+        controls.join(", ")
+    }
+}
+
+fn write_alsa_hardware_volume_enabled(roots: &ProfileRoots, enabled: bool) -> Result<(), SetError> {
+    let store = open_audio(roots).map_err(SetError::Io)?;
+    if !enabled {
+        return store.set_alsa_hardware_volume(false).map_err(SetError::Io);
+    }
+    let audio = store.get_settings().map_err(SetError::Io)?;
+    let (device_id, _probe, decision) = match hardware_volume_probe_for(&audio) {
+        Ok(result) => result,
+        Err(error) => {
+            store
+                .set_alsa_hardware_volume(false)
+                .map_err(SetError::Io)?;
+            return Err(error);
+        }
+    };
+    match decision {
+        HardwareVolumeDecision::Selected { selection } => {
+            if let Err(error) = qbz_audio::alsa_hardware_volume::activate_hardware_volume_control(
+                &device_id,
+                &selection.control,
+            ) {
+                store
+                    .set_alsa_hardware_volume(false)
+                    .map_err(SetError::Io)?;
+                return Err(SetError::Io(error));
+            }
+            store
+                .enable_alsa_hardware_volume(selection.route_key, selection.control)
+                .map_err(SetError::Io)
+        }
+        HardwareVolumeDecision::NeedsChoice { reason, .. } => {
+            store
+                .set_alsa_hardware_volume(false)
+                .map_err(SetError::Io)?;
+            Err(SetError::Usage(format!(
+                "multiple ALSA playback-volume controls require an explicit choice ({reason:?})\n  → list: qbzd settings mixer-controls\n  → choose: qbzd settings set audio.alsa_hardware_volume_control NAME,INDEX"
+            )))
+        }
+        HardwareVolumeDecision::Unsupported { reason, .. } => {
+            store
+                .set_alsa_hardware_volume(false)
+                .map_err(SetError::Io)?;
+            Err(SetError::Io(unsupported_hardware_volume_message(&reason)))
+        }
+    }
+}
+
+fn write_alsa_hardware_volume_control(roots: &ProfileRoots, raw: &str) -> Result<(), SetError> {
+    let requested = parse_alsa_mixer_control(raw).map_err(SetError::Usage)?;
+    let store = open_audio(roots).map_err(SetError::Io)?;
+    let audio = store.get_settings().map_err(SetError::Io)?;
+    if requested.is_none() && !qbz_audio::alsa_direct::uses_alsa_direct_route(&audio) {
+        // The canonical default (`none`) must round-trip on a system-default
+        // route. There is no route-scoped selection to clear in this case.
+        store
+            .set_alsa_hardware_volume(false)
+            .map_err(SetError::Io)?;
+        return Ok(());
+    }
+    if !qbz_audio::alsa_direct::uses_alsa_direct_route(&audio) {
+        return Err(SetError::Usage(
+            "an ALSA mixer control can only be selected for the current ALSA Direct route"
+                .to_string(),
+        ));
+    }
+    let device_id = audio.output_device.clone().ok_or_else(|| {
+        SetError::Usage(
+            "select an ALSA Direct device before choosing its mixer control".to_string(),
+        )
+    })?;
+    let route =
+        qbz_audio::alsa_hardware_volume::stable_alsa_route_key(&device_id).map_err(SetError::Io)?;
+    let Some(requested) = requested else {
+        // Never leave an enabled preference without its exact identity.
+        store
+            .set_alsa_hardware_volume(false)
+            .map_err(SetError::Io)?;
+        return store
+            .clear_alsa_hardware_volume_control(&route)
+            .map_err(SetError::Io);
+    };
+
+    let probe = qbz_audio::alsa_hardware_volume::enumerate_hardware_volume_controls(&device_id);
+    if let Some(error) = &probe.error {
+        return Err(SetError::Io(error.message.clone()));
+    }
+    if probe.route_key.as_ref() != Some(&route) {
+        return Err(SetError::Io(
+            "the ALSA route identity changed during mixer validation".to_string(),
+        ));
+    }
+    let candidate = probe
+        .valid_candidates()
+        .find(|candidate| candidate.id == requested)
+        .cloned()
+        .ok_or_else(|| {
+            SetError::Usage(format!(
+                "ALSA mixer control '{requested}' was not enumerated as valid for this route\n  → valid controls: {}",
+                valid_control_list(&probe)
+            ))
+        })?;
+    qbz_audio::alsa_hardware_volume::activate_hardware_volume_control(&device_id, &candidate.id)
+        .map_err(SetError::Io)?;
+    if audio.alsa_hardware_volume {
+        store
+            .enable_alsa_hardware_volume(route, candidate.id)
+            .map_err(SetError::Io)
+    } else {
+        store
+            .set_alsa_hardware_volume_control(route, candidate.id)
+            .map_err(SetError::Io)
+    }
+}
+
 /// Validate + write ONE canonical key. Returns its [`ApplyClass`] on success
 /// (the CLI's own success-line hint — see module doc). `pub(crate)` so the T13
 /// setup TUI persists every screen through this SAME validated writer (03 §6 —
 /// the TUI adds no persistence of its own). Every arm parses (`Usage` on
 /// failure) BEFORE it opens/writes a store (`Io` on failure) — see [`SetError`].
-pub(crate) fn write_one(roots: &ProfileRoots, key: &str, raw: &str) -> Result<ApplyClass, SetError> {
+pub(crate) fn write_one(
+    roots: &ProfileRoots,
+    key: &str,
+    raw: &str,
+) -> Result<ApplyClass, SetError> {
     let Some(class) = classify(key) else {
         return Err(SetError::Usage(unknown_key_error(key)));
     };
     match key {
         "audio.backend" => {
             let v = parse_backend(raw).map_err(SetError::Usage)?;
-            open_audio(roots).map_err(SetError::Io)?.set_backend_type(v).map_err(SetError::Io)?
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_backend_type(v)
+                .map_err(SetError::Io)?
         }
         "audio.device" => {
             let v = parse_output_device(raw);
@@ -414,22 +623,29 @@ pub(crate) fn write_one(roots: &ProfileRoots, key: &str, raw: &str) -> Result<Ap
         }
         "audio.alsa_plugin" => {
             let v = parse_alsa_plugin(raw).map_err(SetError::Usage)?;
-            open_audio(roots).map_err(SetError::Io)?.set_alsa_plugin(v).map_err(SetError::Io)?
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_alsa_plugin(v)
+                .map_err(SetError::Io)?
         }
         "audio.alsa_hardware_volume" => {
             let v = parse_bool(raw).map_err(SetError::Usage)?;
-            open_audio(roots)
-                .map_err(SetError::Io)?
-                .set_alsa_hardware_volume(v)
-                .map_err(SetError::Io)?
+            write_alsa_hardware_volume_enabled(roots, v)?
         }
+        "audio.alsa_hardware_volume_control" => write_alsa_hardware_volume_control(roots, raw)?,
         "audio.exclusive_mode" => {
             let v = parse_bool(raw).map_err(SetError::Usage)?;
-            open_audio(roots).map_err(SetError::Io)?.set_exclusive_mode(v).map_err(SetError::Io)?
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_exclusive_mode(v)
+                .map_err(SetError::Io)?
         }
         "audio.dac_passthrough" => {
             let v = parse_bool(raw).map_err(SetError::Usage)?;
-            open_audio(roots).map_err(SetError::Io)?.set_dac_passthrough(v).map_err(SetError::Io)?
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_dac_passthrough(v)
+                .map_err(SetError::Io)?
         }
         "audio.skip_sink_switch" => {
             let v = parse_bool(raw).map_err(SetError::Usage)?;
@@ -440,7 +656,10 @@ pub(crate) fn write_one(roots: &ProfileRoots, key: &str, raw: &str) -> Result<Ap
         }
         "audio.dsd_mode" => {
             let v = parse_dsd_mode(raw).map_err(SetError::Usage)?;
-            open_audio(roots).map_err(SetError::Io)?.set_dsd_mode(&v).map_err(SetError::Io)?
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_dsd_mode(&v)
+                .map_err(SetError::Io)?
         }
         "audio.device_max_sample_rate" => {
             let v = parse_opt_u32(raw).map_err(SetError::Usage)?;
@@ -465,7 +684,10 @@ pub(crate) fn write_one(roots: &ProfileRoots, key: &str, raw: &str) -> Result<Ap
         }
         "audio.streaming_only" => {
             let v = parse_bool(raw).map_err(SetError::Usage)?;
-            open_audio(roots).map_err(SetError::Io)?.set_streaming_only(v).map_err(SetError::Io)?
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_streaming_only(v)
+                .map_err(SetError::Io)?
         }
         "audio.limit_quality_to_device" => {
             let v = parse_bool(raw).map_err(SetError::Usage)?;
@@ -490,7 +712,10 @@ pub(crate) fn write_one(roots: &ProfileRoots, key: &str, raw: &str) -> Result<Ap
         }
         "audio.gapless_enabled" => {
             let v = parse_bool(raw).map_err(SetError::Usage)?;
-            open_audio(roots).map_err(SetError::Io)?.set_gapless_enabled(v).map_err(SetError::Io)?
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_gapless_enabled(v)
+                .map_err(SetError::Io)?
         }
         "audio.normalization_enabled" => {
             let v = parse_bool(raw).map_err(SetError::Usage)?;
@@ -541,7 +766,10 @@ pub(crate) fn write_one(roots: &ProfileRoots, key: &str, raw: &str) -> Result<Ap
         }
         "playback.autoplay" => {
             let v = parse_autoplay(raw).map_err(SetError::Usage)?;
-            open_playback(roots).map_err(SetError::Io)?.set_autoplay_mode(v).map_err(SetError::Io)?
+            open_playback(roots)
+                .map_err(SetError::Io)?
+                .set_autoplay_mode(v)
+                .map_err(SetError::Io)?
         }
         "playback.persist_session" => {
             let v = parse_bool(raw).map_err(SetError::Usage)?;
@@ -564,9 +792,10 @@ pub(crate) fn write_one(roots: &ProfileRoots, key: &str, raw: &str) -> Result<Ap
                 .set_show_context_icon(v)
                 .map_err(SetError::Io)?
         }
-        "qconnect.device_name" => {
-            qconnect_kv::persist_device_name_at(&qconnect_db(roots), parse_output_device(raw).as_deref())
-        }
+        "qconnect.device_name" => qconnect_kv::persist_device_name_at(
+            &qconnect_db(roots),
+            parse_output_device(raw).as_deref(),
+        ),
         "qconnect.startup_mode" => {
             let mode = match raw.to_ascii_lowercase().as_str() {
                 "on" => qconnect_app::QconnectStartupMode::On,
@@ -643,12 +872,108 @@ pub fn show(json: bool, roots: &ProfileRoots) -> i32 {
         for (k, v) in &values {
             map.insert((*k).to_string(), serde_json::Value::String(v.clone()));
         }
-        println!("{}", serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_default()
+        );
     } else {
         let width = values.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
         for (k, v) in &values {
             println!("{k:width$} = {v}");
         }
+    }
+    0
+}
+
+/// `qbzd settings mixer-controls [--json]` — read-only enumeration for the
+/// currently selected ALSA Direct route. The printed `id`/first column is the
+/// exact value accepted by `audio.alsa_hardware_volume_control`.
+pub fn mixer_controls(json: bool, roots: &ProfileRoots) -> i32 {
+    let audio = match open_audio(roots).and_then(|store| store.get_settings()) {
+        Ok(audio) => audio,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 1;
+        }
+    };
+    let (device_id, probe, _) = match hardware_volume_probe_for(&audio) {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return match error {
+                SetError::Usage(_) => 2,
+                SetError::Io(_) => 1,
+            };
+        }
+    };
+    if let Some(error) = &probe.error {
+        eprintln!("error: {}", error.message);
+        return 1;
+    }
+    let candidates = probe.valid_candidates().collect::<Vec<_>>();
+    if json {
+        let controls = candidates
+            .iter()
+            .map(|candidate| {
+                serde_json::json!({
+                    "id": candidate.id.to_string(),
+                    "name": candidate.id.name,
+                    "index": candidate.id.index,
+                    "channels": candidate.channels,
+                    "raw_range": candidate.raw_range,
+                    "db_range": candidate.db_range,
+                    "recommended": candidate.recommended,
+                })
+            })
+            .collect::<Vec<_>>();
+        println!(
+            "{}",
+            serde_json::json!({
+                "device": device_id,
+                "ctl": probe.ctl_name,
+                "route_key": probe.route_key.as_ref().map(ToString::to_string),
+                "controls": controls,
+            })
+        );
+        return 0;
+    }
+
+    println!("ALSA route: {device_id}");
+    println!(
+        "Stable key: {}",
+        probe
+            .route_key
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "unavailable".to_string())
+    );
+    if candidates.is_empty() {
+        println!("No compatible playback-volume controls.");
+        return 1;
+    }
+    for candidate in candidates {
+        let recommended = if candidate.recommended {
+            " [recommended]"
+        } else {
+            ""
+        };
+        println!("{}{}", candidate.id, recommended);
+        let range = candidate
+            .db_range
+            .map(|range| {
+                format!(
+                    "{:.2}..{:.2} dB",
+                    range.min as f64 / 100.0,
+                    range.max as f64 / 100.0
+                )
+            })
+            .or_else(|| {
+                candidate
+                    .raw_range
+                    .map(|range| format!("raw {}..{}", range.min, range.max))
+            })
+            .unwrap_or_else(|| "range unavailable".to_string());
+        println!("  {range} · {}", candidate.channels.join(", "));
     }
     0
 }
@@ -692,7 +1017,9 @@ pub fn qconnect_enable(roots: &ProfileRoots) -> i32 {
     let db = qconnect_db(roots);
     qconnect_kv::save_startup_mode_at(&db, qconnect_app::QconnectStartupMode::On);
     nudge(roots);
-    let name = qconnect_kv::resolve_qconnect_friendly_name(qconnect_kv::load_device_name_at(&db).as_deref());
+    let name = qconnect_kv::resolve_qconnect_friendly_name(
+        qconnect_kv::load_device_name_at(&db).as_deref(),
+    );
     println!("qconnect enabled — device \"{name}\" will appear in the Qobuz app once logged in");
     0
 }
@@ -715,7 +1042,8 @@ pub fn qconnect_name(roots: &ProfileRoots, name: &str) -> i32 {
     let db = qconnect_db(roots);
     qconnect_kv::persist_device_name_at(&db, parse_output_device(name).as_deref());
     nudge(roots);
-    let effective = qconnect_kv::resolve_qconnect_friendly_name(parse_output_device(name).as_deref());
+    let effective =
+        qconnect_kv::resolve_qconnect_friendly_name(parse_output_device(name).as_deref());
     println!("qconnect device name set to \"{effective}\" — applies on the next connection");
     0
 }
@@ -727,7 +1055,10 @@ pub fn config_path(roots: &ProfileRoots) -> i32 {
     println!("config : {}", roots.config.display());
     println!("data   : {}", roots.data.display());
     println!("cache  : {}", roots.cache.display());
-    println!("cred   : {}", roots.config.join(".qbz-oauth-token").display());
+    println!(
+        "cred   : {}",
+        roots.config.join(".qbz-oauth-token").display()
+    );
     println!("unit   : {}", unit_path().display());
     0
 }
@@ -756,14 +1087,24 @@ pub fn config_show(json: bool, roots: &ProfileRoots) -> i32 {
     }
     let present = present_keys(&path);
     let line = |label: &str, dotted: &str, value: String| {
-        let marker = if present.contains(dotted) { "" } else { " (default)" };
+        let marker = if present.contains(dotted) {
+            ""
+        } else {
+            " (default)"
+        };
         println!("{label:<24}= {value}{marker}");
     };
-    line("config_version", "config_version", cfg.config_version.to_string());
+    line(
+        "config_version",
+        "config_version",
+        cfg.config_version.to_string(),
+    );
     line(
         "data_root",
         "data_root",
-        cfg.data_root.clone().unwrap_or_else(|| "(auto)".to_string()),
+        cfg.data_root
+            .clone()
+            .unwrap_or_else(|| "(auto)".to_string()),
     );
     line("server.bind", "server.bind", cfg.server.bind.clone());
     line("server.port", "server.port", cfg.server.port.to_string());
@@ -776,7 +1117,11 @@ pub fn config_show(json: bool, roots: &ProfileRoots) -> i32 {
         },
     );
     line("log.level", "log.level", cfg.log.level.clone());
-    line("mpris.enabled", "mpris.enabled", cfg.mpris.enabled.to_string());
+    line(
+        "mpris.enabled",
+        "mpris.enabled",
+        cfg.mpris.enabled.to_string(),
+    );
     0
 }
 
@@ -916,7 +1261,10 @@ pub async fn import(
     // Steps 2–4: plan.
     let mut plan = match bundle::plan(&bundle, &target, &opts, &live) {
         Ok(p) => p,
-        Err(bundle::BundleError::VersionTooNew { bundle: b, supported }) => {
+        Err(bundle::BundleError::VersionTooNew {
+            bundle: b,
+            supported,
+        }) => {
             eprintln!("{}", crate::cli::copy::bundle_version_too_new(b, supported));
             return 1;
         }
@@ -949,8 +1297,10 @@ pub async fn import(
         match crate::login::validate_token(&token).await {
             Ok(session) => {
                 validated_uid = Some(session.user_id);
-                let mut note =
-                    format!("Qobuz token validated — logged in as user {}", session.user_id);
+                let mut note = format!(
+                    "Qobuz token validated — logged in as user {}",
+                    session.user_id
+                );
                 if let Some(bid) = plan.bundle_user_id {
                     if bid != session.user_id {
                         note.push_str(&format!(
@@ -987,8 +1337,7 @@ pub async fn import(
     // Step 7: reload-nudge a running daemon. Three states (04 §5.3 step 7):
     // reloaded / not running (fine) / up-but-refused (exit 1, restart hint).
     let outcome = nudge_outcome(roots);
-    let (done_line, stderr_msg, exit) =
-        reload_disposition(outcome, plan.routing_critical_changed);
+    let (done_line, stderr_msg, exit) = reload_disposition(outcome, plan.routing_critical_changed);
 
     print_buckets(&plan, &bundle, auth_note.as_deref(), Some(&done_line));
     if let Some(msg) = stderr_msg {
@@ -1037,7 +1386,11 @@ fn reload_disposition(
 fn build_live_system(bundle: &Bundle) -> LiveSystem {
     let backends: Vec<String> = BackendManager::available_backends()
         .into_iter()
-        .filter_map(|b| serde_json::to_value(b).ok().and_then(|v| v.as_str().map(str::to_string)))
+        .filter_map(|b| {
+            serde_json::to_value(b)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+        })
         .collect();
 
     let wanted: Option<AudioBackendType> = bundle
@@ -1147,7 +1500,11 @@ fn print_buckets(
 
     // Shared-device-name advisory: only for a desktop-sourced bundle (§2.4/§5.4).
     if bundle.source.profile == "desktop" {
-        if let Some(dn) = plan.applied.iter().find(|l| l.key == "qconnect.device_name") {
+        if let Some(dn) = plan
+            .applied
+            .iter()
+            .find(|l| l.key == "qconnect.device_name")
+        {
             println!("\nadvisory");
             println!(
                 "  qconnect.device_name \"{}\" is also the exporting desktop's Connect name — two nodes with",
@@ -1207,9 +1564,15 @@ mod tests {
         let err = write_one(&roots, "audio.bogus", "x").unwrap_err();
         // 02 §1.3: an unknown key is a USAGE mistake (exit 2), never Io.
         assert!(matches!(err, SetError::Usage(_)), "{err:?}");
-        assert!(err.message().contains("unknown setting key 'audio.bogus'"), "{err}");
+        assert!(
+            err.message().contains("unknown setting key 'audio.bogus'"),
+            "{err}"
+        );
         for (k, _) in KEY_TABLE {
-            assert!(err.message().contains(k), "missing '{k}' from the listed keys:\n{err}");
+            assert!(
+                err.message().contains(k),
+                "missing '{k}' from the listed keys:\n{err}"
+            );
         }
         cleanup(&roots);
     }
@@ -1265,7 +1628,10 @@ mod tests {
         let err = write_one(&roots, "hooks.script", "relative.sh").unwrap_err();
         assert!(matches!(err, SetError::Usage(_)), "{err:?}");
         write_one(&roots, "hooks.script", "/opt/hook.sh").expect("absolute path writes");
-        assert_eq!(daemon_prefs::load_at(&roots.data).hook_script, "/opt/hook.sh");
+        assert_eq!(
+            daemon_prefs::load_at(&roots.data).hook_script,
+            "/opt/hook.sh"
+        );
         write_one(&roots, "hooks.script", "").expect("empty clears");
         assert_eq!(daemon_prefs::load_at(&roots.data).hook_script, "");
         cleanup(&roots);
@@ -1279,7 +1645,11 @@ mod tests {
         // round-trip against temp on-disk stores, not just "same key names").
         let roots = scratch_roots("roundtrip");
         let values = read_all(&roots).expect("read_all opens fresh stores with defaults");
-        assert_eq!(values.len(), KEY_TABLE.len(), "read_all must cover every canonical key");
+        assert_eq!(
+            values.len(),
+            KEY_TABLE.len(),
+            "read_all must cover every canonical key"
+        );
         for (key, value) in &values {
             // The one documented exception (03-setup-tui.md §3.3.2): a fresh
             // (or desktop-imported) store's `quality_fallback_behavior`
@@ -1290,8 +1660,9 @@ mod tests {
             if *key == "audio.quality_fallback_behavior" && value == "ask" {
                 continue;
             }
-            write_one(&roots, key, value)
-                .unwrap_or_else(|e| panic!("show's own value for '{key}' ('{value}') was rejected by set: {e}"));
+            write_one(&roots, key, value).unwrap_or_else(|e| {
+                panic!("show's own value for '{key}' ('{value}') was rejected by set: {e}")
+            });
         }
         cleanup(&roots);
     }
@@ -1306,7 +1677,8 @@ mod tests {
         write_one(&roots, "qconnect.device_name", "Kitchen").expect("set device name");
         write_one(&roots, "qconnect.startup_mode", "on").expect("set startup mode");
 
-        let values: std::collections::HashMap<_, _> = read_all(&roots).unwrap().into_iter().collect();
+        let values: std::collections::HashMap<_, _> =
+            read_all(&roots).unwrap().into_iter().collect();
         assert_eq!(values["audio.backend"], "alsa");
         assert_eq!(values["audio.exclusive_mode"], "true");
         assert_eq!(values["playback.quality"], "cd");
@@ -1321,7 +1693,8 @@ mod tests {
         let roots = scratch_roots("qc-clear");
         write_one(&roots, "qconnect.device_name", "Studio").expect("set name");
         write_one(&roots, "qconnect.device_name", "").expect("clear name");
-        let values: std::collections::HashMap<_, _> = read_all(&roots).unwrap().into_iter().collect();
+        let values: std::collections::HashMap<_, _> =
+            read_all(&roots).unwrap().into_iter().collect();
         assert_eq!(values["qconnect.device_name"], "system");
         cleanup(&roots);
     }
@@ -1339,20 +1712,84 @@ mod tests {
     }
 
     #[test]
+    fn mixer_control_parser_round_trips_exact_name_and_index() {
+        let expected = AlsaMixerControlId {
+            name: "DAC, Playback".to_string(),
+            index: 7,
+        };
+        assert_eq!(
+            parse_alsa_mixer_control("DAC, Playback,7"),
+            Ok(Some(expected))
+        );
+        assert_eq!(parse_alsa_mixer_control("none"), Ok(None));
+        assert_eq!(parse_alsa_mixer_control(""), Ok(None));
+        assert!(parse_alsa_mixer_control("Master").is_err());
+        assert!(parse_alsa_mixer_control("Master,-1").is_err());
+        assert!(parse_alsa_mixer_control(",0").is_err());
+    }
+
+    #[test]
+    fn mixer_control_change_is_routing_critical() {
+        assert_eq!(
+            classify("audio.alsa_hardware_volume_control"),
+            Some(ApplyClass::Reinit)
+        );
+    }
+
+    #[test]
+    fn hardware_volume_enable_outside_direct_fails_closed() {
+        let roots = scratch_roots("hardware-volume-fail-closed");
+        let store = AudioSettingsStore::new_at(&roots.data).expect("open audio store");
+        store
+            .set_alsa_hardware_volume(true)
+            .expect("simulate stale enabled preference");
+
+        let error = write_one(&roots, "audio.alsa_hardware_volume", "true")
+            .expect_err("system-default output is not ALSA Direct");
+        assert!(matches!(error, SetError::Usage(_)), "{error:?}");
+        assert!(
+            !store.get_settings().unwrap().alsa_hardware_volume,
+            "a refused enable must not leave the preference active"
+        );
+        cleanup(&roots);
+    }
+
+    #[test]
     fn parse_backend_accepts_the_concrete_backends_only() {
         assert_eq!(parse_backend("alsa"), Ok(Some(AudioBackendType::Alsa)));
-        assert_eq!(parse_backend("PipeWire"), Ok(Some(AudioBackendType::PipeWire)));
-        assert_eq!(parse_backend("system"), Ok(Some(AudioBackendType::SystemDefault)));
-        assert_eq!(parse_backend("wasapi"), Ok(Some(AudioBackendType::WasapiExclusive)));
-        assert_eq!(render_backend(Some(AudioBackendType::WasapiExclusive)), "wasapi");
-        assert!(parse_backend("auto").is_err(), "Auto is omitted in v1 (03-setup-tui.md §3.2.1)");
+        assert_eq!(
+            parse_backend("PipeWire"),
+            Ok(Some(AudioBackendType::PipeWire))
+        );
+        assert_eq!(
+            parse_backend("system"),
+            Ok(Some(AudioBackendType::SystemDefault))
+        );
+        assert_eq!(
+            parse_backend("wasapi"),
+            Ok(Some(AudioBackendType::WasapiExclusive))
+        );
+        assert_eq!(
+            render_backend(Some(AudioBackendType::WasapiExclusive)),
+            "wasapi"
+        );
+        assert!(
+            parse_backend("auto").is_err(),
+            "Auto is omitted in v1 (03-setup-tui.md §3.2.1)"
+        );
         assert!(parse_backend("bogus").is_err());
     }
 
     #[test]
     fn parse_quality_fallback_behavior_rejects_ask() {
-        assert_eq!(parse_quality_fallback_behavior("always_fallback"), Ok("always_fallback".into()));
-        assert_eq!(parse_quality_fallback_behavior("always_skip"), Ok("always_skip".into()));
+        assert_eq!(
+            parse_quality_fallback_behavior("always_fallback"),
+            Ok("always_fallback".into())
+        );
+        assert_eq!(
+            parse_quality_fallback_behavior("always_skip"),
+            Ok("always_skip".into())
+        );
         let err = parse_quality_fallback_behavior("ask").unwrap_err();
         assert!(err.contains("needs a UI"), "{err}");
     }
@@ -1362,14 +1799,26 @@ mod tests {
         for ok in ["mp3", "cd", "hires", "hires_plus"] {
             assert!(parse_streaming_quality(ok).is_ok(), "{ok}");
         }
-        assert!(parse_streaming_quality("hires192").is_err(), "not a real key — see report");
+        assert!(
+            parse_streaming_quality("hires192").is_err(),
+            "not a real key — see report"
+        );
     }
 
     #[test]
     fn parse_autoplay_matches_the_playback_preferences_wire_values() {
-        assert_eq!(parse_autoplay("continue").unwrap(), AutoplayMode::ContinueWithinSource);
-        assert_eq!(parse_autoplay("track_only").unwrap(), AutoplayMode::PlayTrackOnly);
-        assert_eq!(parse_autoplay("infinite").unwrap(), AutoplayMode::InfiniteRadio);
+        assert_eq!(
+            parse_autoplay("continue").unwrap(),
+            AutoplayMode::ContinueWithinSource
+        );
+        assert_eq!(
+            parse_autoplay("track_only").unwrap(),
+            AutoplayMode::PlayTrackOnly
+        );
+        assert_eq!(
+            parse_autoplay("infinite").unwrap(),
+            AutoplayMode::InfiniteRadio
+        );
         assert!(parse_autoplay("bogus").is_err());
     }
 

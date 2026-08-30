@@ -226,6 +226,8 @@ enum SettingsCmd {
         #[arg(long)] dry_run: bool,
     },
     Show { #[arg(long)] json: bool },
+    /// List canonical ALSA playback-volume controls for the selected route
+    MixerControls { #[arg(long)] json: bool },
     Set  { key: String, value: String },
 }
 
@@ -505,6 +507,7 @@ async fn main() {
             let roots = login_roots();
             match cmd {
                 SettingsCmd::Show { json } => cli::settings::show(json, &roots),
+                SettingsCmd::MixerControls { json } => cli::settings::mixer_controls(json, &roots),
                 SettingsCmd::Set { key, value } => cli::settings::set(&roots, &key, &value),
                 SettingsCmd::Export {
                     file,
