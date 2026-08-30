@@ -700,6 +700,43 @@ mod tests {
         assert!(red.contains("***/9"));
     }
 
+    struct SliceSource(Vec<u8>);
+    impl RangeSource for SliceSource {
+        fn open(&self, start: u64, len: u64) -> std::io::Result<Box<dyn Read + Send>> {
+            let start = start as usize;
+            let end = (start + len as usize).min(self.0.len());
+            Ok(Box::new(std::io::Cursor::new(self.0[start..end].to_vec())))
+        }
+    }
+
+    #[test]
+    fn open_range_serves_a_range_source_with_exact_lengths() {
+        let data: Vec<u8> = (0..=255u8).collect();
+        let entry = MediaEntry {
+            content_type: "audio/flac".into(),
+            size: data.len() as u64,
+            source: MediaSource::Reader(Arc::new(SliceSource(data.clone()))),
+        };
+        // Whole resource.
+        let (mut r, len, code, cr) = open_range(&entry, None).unwrap();
+        let mut got = Vec::new();
+        r.read_to_end(&mut got).unwrap();
+        assert_eq!((len, code.0, cr), (256, 200, None));
+        assert_eq!(got, data);
+        // A middle range, then one that overshoots the end (clamped).
+        let (mut r, len, code, cr) = open_range(&entry, Some((10, 19))).unwrap();
+        let mut got = Vec::new();
+        r.read_to_end(&mut got).unwrap();
+        assert_eq!((len, code.0), (10, 206));
+        assert_eq!(cr.as_deref(), Some("bytes 10-19/256"));
+        assert_eq!(got, data[10..=19]);
+        let (mut r, len, _, _) = open_range(&entry, Some((250, 999))).unwrap();
+        let mut got = Vec::new();
+        r.read_to_end(&mut got).unwrap();
+        assert_eq!(len, 6);
+        assert_eq!(got, data[250..]);
+    }
+
     #[test]
     fn open_range_streams_file_and_ranges() {
         // A File entry serves the requested range straight from disk with the
