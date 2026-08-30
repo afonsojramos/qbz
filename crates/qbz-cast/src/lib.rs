@@ -22,7 +22,7 @@ pub mod media_server;
 pub use errors::{CastError, DlnaError};
 
 // Re-export media server
-pub use media_server::MediaServer;
+pub use media_server::{MediaServer, RangeSource};
 
 // Re-export Chromecast types
 pub use chromecast::{
