@@ -6248,3 +6248,9 @@ msgstr "Mixerregler auswählen"
 
 msgid "Change mixer control"
 msgstr "Mixerregler ändern"
+
+msgid "Show filter panels"
+msgstr "Filterbereiche anzeigen"
+
+msgid "Hide filter panels"
+msgstr "Filterbereiche ausblenden"

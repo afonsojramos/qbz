@@ -6266,3 +6266,9 @@ msgstr "Выбрать регулятор микшера"
 
 msgid "Change mixer control"
 msgstr "Изменить регулятор микшера"
+
+msgid "Show filter panels"
+msgstr "Показать панели фильтров"
+
+msgid "Hide filter panels"
+msgstr "Скрыть панели фильтров"

@@ -1868,3 +1868,9 @@ msgstr "Choose mixer control"
 
 msgid "Change mixer control"
 msgstr "Change mixer control"
+
+msgid "Show filter panels"
+msgstr "Show filter panels"
+
+msgid "Hide filter panels"
+msgstr "Hide filter panels"

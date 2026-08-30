@@ -157,6 +157,12 @@ Item {
         root.view.clearFilter()
     }
     readonly property var activeFilterChips: buildActiveFilterChips()
+    // The collapsed strip keeps one line of the applied filters visible, so
+    // hiding the panels never hides WHAT is currently filtering the results.
+    readonly property bool collapsedChipsActive:
+        (root.view ? root.view.genresBrowserCollapsed : false)
+        && activeFilterChips.length > 0
+    readonly property int chipRowThickness: 36
     function caretName() {
         var collapsed = root.view && root.view.genresBrowserCollapsed
         if (filterPosition === "bottom") return collapsed ? "chevron-up" : "chevron-down"
@@ -180,6 +186,48 @@ Item {
         debounceMs: root.facetKind(facetIndex) === "album" ? 140 : 90
         onQueryEdited: function(value) { root.setFacetQuery(facetIndex, value) }
         onToggled: function(key, modifiers) { root.toggleFacet(facetIndex, key, modifiers) }
+    }
+
+    // One removable applied-filter chip — shared between the collapsed strip
+    // and the "no albums match" empty state.
+    component ActiveFilterChip: Rectangle {
+        id: chip
+        required property var modelData
+        width: chipContent.implicitWidth + 18
+        height: 28
+        radius: 6
+        color: chipMouse.containsMouse
+            ? theme.surfaceHover
+            : (theme.ambientOn ? theme.surfaceElevatedA50
+                               : theme.surfaceElevated)
+        border.width: 1
+        border.color: theme.ambientOn ? theme.frostBorder : theme.borderSubtle
+
+        Row {
+            id: chipContent
+            anchors.centerIn: parent
+            spacing: 7
+            Text {
+                text: chip.modelData.label
+                color: theme.textPrimary
+                font.pixelSize: theme.fontLegal
+                elide: Text.ElideRight
+            }
+            QbzIcon {
+                name: "x"
+                width: 11
+                height: 11
+                anchors.verticalCenter: parent.verticalCenter
+                tintName: chipMouse.containsMouse ? "textPrimary" : "muted"
+            }
+        }
+        MouseArea {
+            id: chipMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.clearFilterChip(chip.modelData)
+        }
     }
 
     Component {
@@ -230,7 +278,11 @@ Item {
             : Math.max(0, root.width - 64)
         height: root.verticalFilters
             ? Math.max(0, root.height - 20)
-            : (collapsed ? root.collapsedThickness : root.horizontalHeight)
+            : (collapsed
+                ? (root.collapsedChipsActive
+                    ? root.collapsedThickness + root.chipRowThickness
+                    : root.collapsedThickness)
+                : root.horizontalHeight)
 
         Loader {
             visible: !browser.collapsed
@@ -274,8 +326,63 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.view.genresBrowserCollapsed = !root.view.genresBrowserCollapsed
+                onContainsMouseChanged: tips.hover(
+                    containsMouse, parent, "explorer-collapse",
+                    browser.collapsed
+                        ? QbzSession.tr("Show filter panels", QbzSession.trRev)
+                        : QbzSession.tr("Hide filter panels", QbzSession.trRev))
+                onClicked: {
+                    // The label flips with the state; a bubble captured before
+                    // the click would keep lying until the pointer re-enters.
+                    tips.hide("explorer-collapse")
+                    root.view.genresBrowserCollapsed = !root.view.genresBrowserCollapsed
+                }
             }
+        }
+
+        // Applied filters, one line, while the panels are hidden. Each chip
+        // removes its filter immediately; overflow stays on this line and
+        // wheel-scrolls, it never wraps into the reclaimed space.
+        Item {
+            visible: !root.verticalFilters && root.collapsedChipsActive
+            x: 0
+            y: root.filterPosition === "bottom" ? parent.height - 28 : 0
+            width: parent.width
+            height: 28
+
+            ListView {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(contentWidth, parent.width)
+                height: parent.height
+                orientation: ListView.Horizontal
+                spacing: 8
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                model: root.activeFilterChips
+                delegate: ActiveFilterChip { }
+            }
+        }
+    }
+
+    // The vertical rail is 24px wide — no room for a readable line there, so
+    // left/right layouts put the same strip across the top of the results.
+    Item {
+        visible: root.verticalFilters && root.collapsedChipsActive
+        x: results.x
+        y: 10
+        width: results.width
+        height: 28
+
+        ListView {
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: Math.min(contentWidth, parent.width)
+            height: parent.height
+            orientation: ListView.Horizontal
+            spacing: 8
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            model: root.activeFilterChips
+            delegate: ActiveFilterChip { }
         }
     }
 
@@ -288,14 +395,16 @@ Item {
         x: root.verticalFilters && root.filterPosition === "left"
             ? browser.x + browser.width + 8 : 32
         y: !root.verticalFilters && root.filterPosition === "top"
-            ? browser.y + browser.height + 8 : 10
+            ? browser.y + browser.height + 8
+            : (root.verticalFilters && root.collapsedChipsActive
+                ? 10 + root.chipRowThickness : 10)
         width: root.verticalFilters
             ? (root.filterPosition === "left"
                 ? Math.max(0, root.width - x - 32)
                 : Math.max(0, browser.x - x - 8))
             : Math.max(0, root.width - 64)
         height: root.verticalFilters
-            ? Math.max(0, root.height - 20)
+            ? Math.max(0, root.height - y - 10)
             : (root.filterPosition === "bottom"
                 ? Math.max(0, browser.y - y - 8)
                 : Math.max(0, root.height - y - 10))
@@ -342,44 +451,7 @@ Item {
 
                 Repeater {
                     model: root.activeFilterChips
-                    delegate: Rectangle {
-                        required property var modelData
-                        width: chipRow.implicitWidth + 18
-                        height: 28
-                        radius: 6
-                        color: chipArea.containsMouse
-                            ? theme.surfaceHover
-                            : (theme.ambientOn ? theme.surfaceElevatedA50
-                                               : theme.surfaceElevated)
-                        border.width: 1
-                        border.color: theme.ambientOn ? theme.frostBorder : theme.borderSubtle
-
-                        Row {
-                            id: chipRow
-                            anchors.centerIn: parent
-                            spacing: 7
-                            Text {
-                                text: parent.parent.modelData.label
-                                color: theme.textPrimary
-                                font.pixelSize: theme.fontLegal
-                                elide: Text.ElideRight
-                            }
-                            QbzIcon {
-                                name: "x"
-                                width: 11
-                                height: 11
-                                anchors.verticalCenter: parent.verticalCenter
-                                tintName: chipArea.containsMouse ? "textPrimary" : "muted"
-                            }
-                        }
-                        MouseArea {
-                            id: chipArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.clearFilterChip(parent.modelData)
-                        }
-                    }
+                    delegate: ActiveFilterChip { }
                 }
             }
 
@@ -428,5 +500,14 @@ Item {
             view: root.view
             albums: root.view.genreAlbumsVisible
         }
+    }
+
+    // Hover tooltip for the collapse caret. The overlay takes no pointer and
+    // owns no animator, so an idle one costs nothing (LocalChrome.qml does the
+    // same for the header's controls; this tab body is outside its bounds).
+    QbzTooltip {
+        id: tips
+        anchors.fill: parent
+        z: 900
     }
 }

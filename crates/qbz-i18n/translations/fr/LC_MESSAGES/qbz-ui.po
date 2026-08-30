@@ -6246,3 +6246,9 @@ msgstr "Choisir la commande de mixage"
 
 msgid "Change mixer control"
 msgstr "Changer la commande de mixage"
+
+msgid "Show filter panels"
+msgstr "Afficher les panneaux de filtres"
+
+msgid "Hide filter panels"
+msgstr "Masquer les panneaux de filtres"

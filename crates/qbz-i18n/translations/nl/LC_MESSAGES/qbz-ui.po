@@ -6236,3 +6236,9 @@ msgstr "Mixerregelaar kiezen"
 
 msgid "Change mixer control"
 msgstr "Mixerregelaar wijzigen"
+
+msgid "Show filter panels"
+msgstr "Filterpanelen tonen"
+
+msgid "Hide filter panels"
+msgstr "Filterpanelen verbergen"

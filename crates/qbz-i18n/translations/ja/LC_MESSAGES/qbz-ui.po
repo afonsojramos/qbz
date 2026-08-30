@@ -6230,3 +6230,9 @@ msgstr "ミキサーコントロールを選択"
 
 msgid "Change mixer control"
 msgstr "ミキサーコントロールを変更"
+
+msgid "Show filter panels"
+msgstr "フィルターパネルを表示"
+
+msgid "Hide filter panels"
+msgstr "フィルターパネルを非表示"
