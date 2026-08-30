@@ -868,6 +868,23 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         self.player.fetch_for_gapless(client, track_id, quality).await
     }
 
+    /// Progressive counterpart of `fetch_for_external_stream_resolved` for a
+    /// track that is NOT already cached: the bytes are served to the renderer
+    /// while they download (see `Player::open_external_stream`).
+    pub async fn open_external_stream_resolved(
+        &self,
+        track_id: u64,
+        quality: Quality,
+    ) -> Result<qbz_player::ExternalStreamHandle, String> {
+        let guard = self.client.read().await;
+        let client = guard
+            .as_ref()
+            .ok_or_else(|| "No Qobuz client available".to_string())?;
+        self.player
+            .open_external_stream(client, track_id, quality)
+            .await
+    }
+
     /// Queue a cold Qobuz successor from its initial CMAF buffer instead of
     /// materializing the whole file. Used only by the Streaming-only gapless
     /// handoff; cached and offline successors keep the byte path above.

@@ -1111,6 +1111,18 @@ fn try_init_stream_with_backend(
     }
 }
 
+/// A Qobuz track being downloaded WHILE an external renderer reads it
+/// (`Player::open_external_stream`). Sending `cancel` aborts the download;
+/// the buffer is shared with the media server's range readers.
+pub struct ExternalStreamHandle {
+    pub source: Arc<BufferedMediaSource>,
+    /// Exact final FLAC byte length (Content-Length for the renderer).
+    pub total_bytes: u64,
+    pub sample_rate: Option<u32>,
+    pub bit_depth: Option<u32>,
+    pub cancel: tokio::sync::watch::Sender<bool>,
+}
+
 /// Event payload for playback state updates
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PlaybackEvent {
@@ -5464,6 +5476,99 @@ impl Player {
     /// not known here (no metadata stored with the bytes) — the caller derives
     /// the quality label from the track's catalog metadata; the network path
     /// returns the precise resolved tier.
+    /// Open a Qobuz track as a PROGRESSIVE byte source for an external
+    /// renderer (Chromecast / DLNA): the CMAF download starts immediately,
+    /// the returned buffer exposes the bytes as they land, and the exact
+    /// final FLAC size is known up front (header + segment table) so the
+    /// media server can advertise a truthful Content-Length. Returns once the
+    /// initial buffer (first segments) is in, i.e. within ~0.3-1 s instead of
+    /// after the whole file (5-6 s for a 100 MB Hi-Res track on a fast line,
+    /// measured 2026-08-30). The finished download is cached like a played
+    /// stream, so a replay / re-cast is served from memory.
+    ///
+    /// Cached tracks should NOT come through here — `fetch_for_external_stream`
+    /// answers them from L1/L2 with no network at all.
+    pub async fn open_external_stream(
+        &self,
+        client: &QobuzClient,
+        track_id: u64,
+        quality: Quality,
+    ) -> Result<ExternalStreamHandle, String> {
+        let cmaf_info = qbz_qobuz::cmaf::setup_streaming(client, track_id, quality).await?;
+        let total_bytes = cmaf_info.flac_header.len() as u64
+            + cmaf_info
+                .segment_table
+                .iter()
+                .map(|segment| segment.byte_len as u64)
+                .sum::<u64>();
+        let (source, writer) =
+            BufferedMediaSource::new(StreamingConfig::fast_start(), Some(total_bytes));
+        let source = Arc::new(source);
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+
+        let url_template = cmaf_info.url_template;
+        let content_key = cmaf_info.content_key;
+        let flac_header = cmaf_info.flac_header;
+        let n_segments = cmaf_info.n_segments;
+        let cache = self.audio_cache.clone();
+        tokio::spawn(async move {
+            match Self::cmaf_stream_segments(
+                &url_template,
+                n_segments,
+                content_key,
+                flac_header,
+                writer,
+                track_id,
+                cache,
+                false,
+                total_bytes,
+                cancel_rx,
+            )
+            .await
+            {
+                Ok(true) => log::info!("[CAST-STREAM] Track {track_id} fully downloaded"),
+                Ok(false) => {}
+                Err(error) => log::warn!("[CAST-STREAM] Track {track_id} feeder failed: {error}"),
+            }
+        });
+
+        // Hand the source over only once the renderer's first read can be
+        // answered without stalling on the network (header + first segment).
+        const INITIAL_BUFFER_TIMEOUT: Duration = Duration::from_secs(8);
+        let waiter = Arc::clone(&source);
+        let ready = tokio::time::timeout(
+            INITIAL_BUFFER_TIMEOUT,
+            tokio::task::spawn_blocking(move || waiter.wait_for_initial_buffer()),
+        )
+        .await;
+        match ready {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(error))) => {
+                let _ = cancel_tx.send(true);
+                return Err(format!("cast stream download failed: {error}"));
+            }
+            Ok(Err(join)) => {
+                let _ = cancel_tx.send(true);
+                return Err(format!("cast stream waiter failed: {join}"));
+            }
+            Err(_) => {
+                let _ = cancel_tx.send(true);
+                return Err("cast stream initial buffer timed out".to_string());
+            }
+        }
+        log::info!(
+            "[CAST-STREAM] Track {track_id} progressive source ready ({} B buffered of {total_bytes})",
+            source.buffer_size()
+        );
+        Ok(ExternalStreamHandle {
+            source,
+            total_bytes,
+            sample_rate: cmaf_info.sampling_rate,
+            bit_depth: cmaf_info.bit_depth,
+            cancel: cancel_tx,
+        })
+    }
+
     pub async fn fetch_for_external_stream(
         &self,
         client: &QobuzClient,
