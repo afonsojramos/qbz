@@ -256,6 +256,44 @@ pub fn add_local_refs_blocking(id: &str, refs: &[String]) -> usize {
     add_inputs_blocking(id, &entries)
 }
 
+/// Resolve carried local-mode refs into the TYPED membership refs the
+/// containment index takes (`qbz_library::playlist_membership`). Shares
+/// [`local_row_input`]'s worldview: a Plex ref is its rating key, and a
+/// library row contributes its path plus — for offline copies — its catalog
+/// id. An unresolvable row id still yields a ref (row-id-only), so sidecar
+/// membership can answer even when the row vanished from the library.
+pub fn membership_refs_blocking(
+    refs: &[String],
+) -> Vec<qbz_library::playlist_membership::PlaylistTrackRef> {
+    use qbz_library::playlist_membership::PlaylistTrackRef;
+    with_db(false, |db| {
+        let mut out = Vec::new();
+        for r in refs {
+            if let Some(key) = r.strip_prefix("plex:") {
+                out.push(PlaylistTrackRef::Plex {
+                    rating_key: key.to_string(),
+                });
+            } else if let Ok(rid) = r.parse::<i64>() {
+                out.push(match db.get_track(rid)? {
+                    Some(track) => PlaylistTrackRef::from_library_row(
+                        track.source.as_deref().unwrap_or("local"),
+                        rid,
+                        &track.file_path,
+                        track.qobuz_track_id.map(|v| v as u64),
+                    ),
+                    None => PlaylistTrackRef::Library {
+                        track_id: rid,
+                        path: None,
+                        qobuz_track_id: None,
+                    },
+                });
+            }
+        }
+        Ok(out)
+    })
+    .unwrap_or_default()
+}
+
 // ──────────────────────────── custom artwork ────────────────────────────
 
 // There is deliberately NO `set_custom_artwork_blocking` twin of the clear

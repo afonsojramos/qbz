@@ -24,7 +24,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rusqlite::{params, Connection, Result};
+use rusqlite::{Connection, Result};
 
 /// One selected track at the picker/index boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

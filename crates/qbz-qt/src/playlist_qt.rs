@@ -531,6 +531,12 @@ pub fn set_user_playlists(pairs: &[(u64, u64)]) {
     }
 }
 
+/// Is the session user id known yet? Ownership answers are meaningless (all
+/// false) before it is.
+pub fn session_user_known() -> bool {
+    USER_ID.load(std::sync::atomic::Ordering::SeqCst) != 0
+}
+
 /// Does the signed-in user own this playlist, by OWNER id? The cheap arm —
 /// every card producer already has `owner.id` on the row it is mapping, so it
 /// needs no set lookup at all.
@@ -1770,6 +1776,18 @@ pub async fn delete_by_id(
         "[qbz-qt] playlist {pid} {}",
         if owned { "deleted" } else { "unsubscribed" }
     );
+    if owned {
+        // Leave the membership index's target set now instead of waiting out
+        // the authoritative-list retirement grace.
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::library_db_qt::with_db(true, |db| {
+                Ok(db.with_connection(|conn| {
+                    qbz_library::qobuz_playlist_snapshot::mark_inactive(conn, pid)
+                }))
+            })
+        })
+        .await;
+    }
     Ok(())
 }
 
@@ -1824,24 +1842,53 @@ pub async fn remove_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_tr
         return;
     };
     let Some(pid) = pid else { return };
-    // Optimistic removal; the API is the source of truth on failure.
-    with_doc(|d| {
+    // Optimistic removal; the API is the source of truth on failure. The
+    // row's CATALOG id is captured before it goes — the membership snapshot
+    // speaks track ids, not membership-row ids.
+    let removed_track_id = with_doc(|d| {
+        let track_id = d
+            .tracks
+            .iter()
+            .find(|t| t.playlist_track_id == playlist_track_id)
+            .and_then(|t| t.id.parse::<u64>().ok());
         d.tracks
             .retain(|t| t.playlist_track_id != playlist_track_id);
         d.track_count = d.tracks.len() as i32;
         d.total_duration = total_duration_label(&d.tracks);
         let doc = d.clone();
         publish(&doc);
-    });
-    if let Err(e) = runtime
+        track_id
+    })
+    .flatten();
+    match runtime
         .core()
         .remove_tracks_from_playlist(pid, &[playlist_track_id])
         .await
     {
-        log::error!("[qbz-qt] remove track {playlist_track_id} from playlist {pid} failed: {e}");
-        // Reload to reconcile (bounded-retry equivalent — the Slint
-        // reconciles the same way after failed playlist ops).
-        let _ = load(runtime, pid).await;
+        Ok(()) => {
+            if let Some(track_id) = removed_track_id {
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::library_db_qt::with_db(true, |db| {
+                        Ok(db.with_connection(|conn| {
+                            qbz_library::qobuz_playlist_snapshot::apply_removed_tracks(
+                                conn,
+                                pid,
+                                &[track_id],
+                            )
+                        }))
+                    })
+                })
+                .await;
+            }
+        }
+        Err(e) => {
+            log::error!(
+                "[qbz-qt] remove track {playlist_track_id} from playlist {pid} failed: {e}"
+            );
+            // Reload to reconcile (bounded-retry equivalent — the Slint
+            // reconciles the same way after failed playlist ops).
+            let _ = load(runtime, pid).await;
+        }
     }
 }
 

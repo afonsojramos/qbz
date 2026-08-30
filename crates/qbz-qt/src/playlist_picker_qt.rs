@@ -120,6 +120,18 @@ pub struct PickerRow {
     pub is_local: bool,
 }
 
+/// One "Already in" strip card: a writable playlist that already holds some
+/// of the carried tracks.
+#[derive(Clone, Serialize)]
+pub struct AlreadyRow {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "isLocal")]
+    pub is_local: bool,
+    /// How many of the carried tracks it holds (distinct; the "N of M" card).
+    pub contained: u32,
+}
+
 #[derive(Default, Serialize)]
 pub struct DupDoc {
     pub open: bool,
@@ -154,6 +166,19 @@ pub struct PickerDoc {
     pub creating_open: bool,
     pub creating: bool,
     pub dup: DupDoc,
+    /// The session's last successful add target, pinned above the list.
+    /// Present only while it still exists as a writable row, and retained
+    /// under a search only when it matches the query.
+    #[serde(rename = "lastUsed")]
+    pub last_used: Option<PickerRow>,
+    /// Writable playlists that already hold carried tracks — the containment
+    /// strip. Meaningful only per `already_state`.
+    #[serde(rename = "alreadyIn")]
+    pub already_in: Vec<AlreadyRow>,
+    /// "loading" | "complete" | "updating" | "unavailable" — the honest
+    /// tri-state (plus the in-flight arm) the strip renders under.
+    #[serde(rename = "alreadyState")]
+    pub already_state: String,
 }
 
 /// Everything the modal owns between opens. One mutex: every field is written
@@ -173,6 +198,13 @@ struct PickerState {
     /// answer (the reference's `DUP_CONFIRM_STASH`). `None` = sub-modal closed.
     dup: Option<DupContext>,
     dup_busy: bool,
+    /// Containment strip rows, `None` while the query is in flight.
+    already_rows: Option<Vec<AlreadyRow>>,
+    /// "complete" | "updating" | "unavailable" once resolved.
+    already_state: &'static str,
+    /// Monotonic open counter — a containment result landing after the picker
+    /// was closed and reopened must not dress the NEW payload.
+    epoch: u64,
 }
 
 struct DupContext {
@@ -188,6 +220,24 @@ struct DupContext {
 static STATE: std::sync::LazyLock<Mutex<PickerState>> =
     std::sync::LazyLock::new(|| Mutex::new(PickerState::default()));
 
+/// Session-local "Last playlist": the id of the last target an add SUCCEEDED
+/// against. Never persisted (process exit resets it, by design), never set on
+/// a mere open or a failed operation, and validated against the live row list
+/// on every publish — a deleted or no-longer-writable playlist simply stops
+/// resolving.
+static LAST_USED: Mutex<Option<String>> = Mutex::new(None);
+
+/// Record a confirmed successful add. `n` guards the "nothing actually
+/// landed" arms (0-row sidecar writes, empty diffs).
+fn set_last_used(playlist_id: &str, n: usize) {
+    if n == 0 {
+        return;
+    }
+    if let Ok(mut g) = LAST_USED.lock() {
+        *g = Some(playlist_id.to_string());
+    }
+}
+
 /// Case-insensitive substring over the playlist name — the reference's
 /// `filter-changed` rank pass reduced to a filter, because QML can drop rows
 /// directly and does not need Slint's rank-and-reorder workaround.
@@ -200,10 +250,21 @@ fn publish() {
     let doc = {
         let st = STATE.lock().unwrap();
         let query = st.filter.trim().to_lowercase();
+        // The pinned last target: resolved against the LIVE row list, so a
+        // playlist that disappeared or stopped being writable stops pinning;
+        // under a search it survives only when it matches the query.
+        let last_used: Option<PickerRow> = LAST_USED
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .and_then(|id| st.all_rows.iter().find(|r| r.id == id).cloned())
+            .filter(|r| matches(&r.name, &query));
         let playlists: Vec<PickerRow> = st
             .all_rows
             .iter()
             .filter(|r| matches(&r.name, &query))
+            // De-duplicated from the pinned row, never listed twice.
+            .filter(|r| last_used.as_ref().map(|l| l.id != r.id).unwrap_or(true))
             .cloned()
             .collect();
         PickerDoc {
@@ -225,6 +286,13 @@ fn publish() {
                     busy: st.dup_busy,
                 },
                 None => DupDoc::default(),
+            },
+            last_used,
+            already_in: st.already_rows.clone().unwrap_or_default(),
+            already_state: if st.already_rows.is_none() {
+                "loading".to_string()
+            } else {
+                st.already_state.to_string()
             },
         }
     };
@@ -259,7 +327,7 @@ fn open_payload(runtime: &Runtime, payload: Payload) {
     if payload.is_empty() {
         return;
     }
-    {
+    let epoch = {
         let mut st = STATE.lock().unwrap();
         st.open = true;
         st.loading = true;
@@ -272,7 +340,11 @@ fn open_payload(runtime: &Runtime, payload: Payload) {
         st.creating = false;
         st.dup = None;
         st.dup_busy = false;
-    }
+        st.already_rows = None;
+        st.already_state = "";
+        st.epoch += 1;
+        st.epoch
+    };
     publish();
 
     let runtime = runtime.clone();
@@ -282,13 +354,125 @@ fn open_payload(runtime: &Runtime, payload: Payload) {
             let mut st = STATE.lock().unwrap();
             // The user may have closed the picker while the fetch was in
             // flight; landing rows into a closed picker would re-open it.
-            if !st.open {
+            if !st.open || st.epoch != epoch {
                 return;
             }
             st.all_rows = rows;
             st.loading = false;
         }
         publish();
+        refresh_containment(epoch).await;
+    });
+}
+
+/// Compute the containment strip for the CURRENT payload against the live
+/// row list, and the honest tri-state it renders under. Row names come from
+/// the already-loaded picker rows, which doubles as the writability/liveness
+/// join: a containment hit whose playlist is not offered as a target (offline
+/// Qobuz half, followed list, deleted) resolves to nothing and is dropped.
+async fn refresh_containment(epoch: u64) {
+    let (payload, rows) = {
+        let st = STATE.lock().unwrap();
+        if !st.open || st.epoch != epoch || st.loading {
+            return;
+        }
+        (st.payload.clone(), st.all_rows.clone())
+    };
+    let (already, state) = tokio::task::spawn_blocking(move || {
+        use qbz_library::playlist_membership::{
+            playlists_containing, ContainmentTarget, PlaylistTrackRef,
+        };
+        use qbz_library::qobuz_playlist_snapshot::{index_state, MembershipIndexState};
+
+        let refs: Vec<PlaylistTrackRef> = match &payload {
+            Payload::Qobuz(ids) => ids.iter().map(|&id| PlaylistTrackRef::Qobuz(id)).collect(),
+            Payload::LocalRefs(strings) => {
+                crate::local_playlist_qt::membership_refs_blocking(strings)
+            }
+        };
+        // Only the Qobuz snapshot can be incomplete; the sidecar and local
+        // tables are locally authoritative (QBZ is their only writer).
+        let snapshot_dependent = refs.iter().any(|r| {
+            matches!(r, PlaylistTrackRef::Qobuz(_))
+                || matches!(
+                    r,
+                    PlaylistTrackRef::Library {
+                        qobuz_track_id: Some(_),
+                        ..
+                    }
+                )
+        });
+        let result = crate::library_db_qt::with_db(false, |db| {
+            Ok(db.with_connection(|conn| {
+                let contained = playlists_containing(conn, &refs)?;
+                let state = index_state(conn)?;
+                Ok::<_, rusqlite::Error>((contained, state))
+            }))
+        })
+        .and_then(Result::ok);
+        let Some((contained, state)) = result else {
+            return (Vec::new(), "unavailable");
+        };
+        let state = if !snapshot_dependent {
+            "complete"
+        } else {
+            match state {
+                MembershipIndexState::Complete => "complete",
+                // "Still updating" would be a lie while offline — nothing is.
+                MembershipIndexState::Updating { .. } => {
+                    if crate::offline_fwd::engine().is_offline() {
+                        "unavailable"
+                    } else {
+                        "updating"
+                    }
+                }
+                MembershipIndexState::Unavailable => "unavailable",
+            }
+        };
+        let already: Vec<AlreadyRow> = contained
+            .into_iter()
+            .filter_map(|c| {
+                let id = match &c.target {
+                    ContainmentTarget::Qobuz(pid) => pid.to_string(),
+                    ContainmentTarget::Local(id) => id.clone(),
+                };
+                rows.iter().find(|r| r.id == id).map(|r| AlreadyRow {
+                    id,
+                    name: r.name.clone(),
+                    is_local: r.is_local,
+                    contained: c.contained,
+                })
+            })
+            .take(20)
+            .collect();
+        (already, state)
+    })
+    .await
+    .unwrap_or_else(|_| (Vec::new(), "unavailable"));
+    {
+        let mut st = STATE.lock().unwrap();
+        if !st.open || st.epoch != epoch {
+            return;
+        }
+        st.already_rows = Some(already);
+        st.already_state = state;
+    }
+    publish();
+}
+
+/// Hydrator progress callback: while the picker is open, each committed
+/// membership snapshot (and the final state flip to Complete) re-answers the
+/// containment question live.
+pub fn membership_index_progressed() {
+    let epoch = {
+        let st = STATE.lock().unwrap();
+        if !st.open || st.loading {
+            return;
+        }
+        st.epoch
+    };
+    crate::spawn(async move {
+        refresh_containment(epoch).await;
     });
 }
 
@@ -316,12 +500,25 @@ async fn load(runtime: &Runtime) -> Vec<PickerRow> {
         return out;
     }
     match runtime.core().get_user_playlists().await {
-        Ok(playlists) => out.extend(playlists.into_iter().map(|p| PickerRow {
-            id: p.id.to_string(),
-            name: p.name,
-            tracks_line: tracks_line(p.tracks_count),
-            is_local: false,
-        })),
+        Ok(playlists) => out.extend(
+            playlists
+                .into_iter()
+                // Followed playlists are read-only on the API and must never
+                // be offered as add targets. Before the session user id is
+                // known ownership cannot be told apart, so the pre-existing
+                // behaviour (list everything) is kept for that window rather
+                // than blanking the Qobuz half.
+                .filter(|p| {
+                    !crate::playlist_qt::session_user_known()
+                        || crate::playlist_qt::owns(p.owner.id)
+                })
+                .map(|p| PickerRow {
+                    id: p.id.to_string(),
+                    name: p.name,
+                    tracks_line: tracks_line(p.tracks_count),
+                    is_local: false,
+                }),
+        ),
         Err(e) => log::warn!("[qbz-qt] playlist picker load failed: {e}"),
     }
     out
@@ -417,6 +614,7 @@ pub fn pick(playlist_id: &str) {
             })
             .await
             .unwrap_or(0);
+            set_last_used(&open_target, added);
             toast_added(added, &name);
             refresh_local_target(&runtime, &open_target).await;
         });
@@ -438,6 +636,7 @@ pub fn pick(playlist_id: &str) {
             let qobuz_count = crate::sidebar_qt::playlist_track_count(pid).unwrap_or(0);
             crate::spawn(async move {
                 let written = write_sidecar_refs(pid, qobuz_count, refs).await;
+                set_last_used(&pid.to_string(), written);
                 toast_added(written, &name);
                 // E12: the open detail re-merges so the rows show up now.
                 crate::playlist_qt::refresh_after_membership_change(&runtime, pid).await;
@@ -573,17 +772,22 @@ pub fn create_and_add(name: &str) {
                 crate::toast_qt::error(qbz_i18n::t("Couldn't create the playlist"));
                 return;
             };
-            let added = tokio::task::spawn_blocking(move || match payload {
-                Payload::LocalRefs(refs) => {
-                    crate::local_playlist_qt::add_local_refs_blocking(&new_id, &refs)
-                }
-                Payload::Qobuz(ids) => {
-                    crate::local_playlist_qt::add_qobuz_tracks_blocking(&new_id, &ids)
+            let added = tokio::task::spawn_blocking({
+                let new_id = new_id.clone();
+                move || match payload {
+                    Payload::LocalRefs(refs) => {
+                        crate::local_playlist_qt::add_local_refs_blocking(&new_id, &refs)
+                    }
+                    Payload::Qobuz(ids) => {
+                        crate::local_playlist_qt::add_qobuz_tracks_blocking(&new_id, &ids)
+                    }
                 }
             })
             .await
             .unwrap_or(0);
             close();
+            // Create-and-add counts as a use even when the payload was empty.
+            set_last_used(&new_id, added.max(1));
             toast_added(added, &name);
             // The new playlist has to appear in the sidebar, or the user's
             // only evidence it exists is the toast — and `reload_sidebar`
@@ -597,6 +801,28 @@ pub fn create_and_add(name: &str) {
         match runtime.core().create_playlist(&name, None, false).await {
             Ok(playlist) => {
                 let pid = playlist.id;
+                // Snapshot the newborn header FIRST (owned, empty, captured):
+                // the incremental producer below refuses playlists it has
+                // never captured, and the authoritative list will not name
+                // this one until Qobuz's post-write lag clears.
+                {
+                    let owner_name = playlist.owner.name.clone();
+                    let created_name = name.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        crate::library_db_qt::with_db(true, |db| {
+                            Ok(db.with_connection(|conn| {
+                                qbz_library::qobuz_playlist_snapshot::record_created_playlist(
+                                    conn,
+                                    pid,
+                                    &created_name,
+                                    Some(owner_name.as_str()).filter(|o| !o.is_empty()),
+                                )
+                            }))
+                        })
+                    })
+                    .await;
+                }
+                set_last_used(&pid.to_string(), 1);
                 match payload {
                     Payload::Qobuz(ids) if !ids.is_empty() => {
                         add_and_toast(&runtime, pid, ids, name).await;
@@ -681,10 +907,33 @@ async fn add_and_toast(runtime: &Runtime, pid: u64, ids: Vec<u64>, name: String)
         crate::toast_qt::error(qbz_i18n::t("Failed to add tracks"));
         return;
     }
+    set_last_used(&pid.to_string(), n);
+    snapshot_added_detached(pid, ids);
     // The sidebar's per-playlist track count is now stale, and a playlist page
     // open on this id must re-merge (the reference's E12 refresh).
     crate::playlist_qt::refresh_after_membership_change(runtime, pid).await;
     toast_added(n, &name);
+}
+
+/// Move the membership snapshot with a CONFIRMED add, off-thread, so the
+/// containment answer is already right the next time the picker opens —
+/// without waiting for the hydrator or a detail load.
+fn snapshot_added_detached(pid: u64, ids: Vec<u64>) {
+    tokio::task::spawn_blocking(move || {
+        let applied = crate::library_db_qt::with_db(true, |db| {
+            Ok(db.with_connection(|conn| {
+                qbz_library::qobuz_playlist_snapshot::apply_added_tracks(conn, pid, &ids)
+            }))
+        })
+        .and_then(Result::ok)
+        .unwrap_or(false);
+        if applied {
+            membership_index_progressed();
+        } else {
+            // Membership never captured: the hydrator owns this playlist.
+            crate::playlist_index_qt::poke();
+        }
+    });
 }
 
 /// The shared success toast (the reference's `toast_added_tracks`). Every arm

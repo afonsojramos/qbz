@@ -666,17 +666,17 @@ async fn load(runtime: &Runtime) -> PmData {
                 Vec::new()
             })
     };
-    crate::playlist_snapshot_qt::record_names_detached(
-        remote
-            .iter()
-            .map(|playlist| crate::playlist_snapshot_qt::SnapshotNameEntry {
-                qobuz_playlist_id: playlist.id,
-                name: playlist.name.clone(),
-                owner: Some(playlist.owner.name.clone()).filter(|owner| !owner.is_empty()),
-                track_count: Some(playlist.tracks_count),
-            })
-            .collect(),
-    );
+    if !(offline && remote.is_empty()) {
+        // A failed online fetch also lands here as an empty list; recording it
+        // would start the two-generation retirement clock on every playlist,
+        // so only a NON-empty list (or a genuinely deleted-everything account,
+        // which still lists a session user) is recorded.
+        if let Some(entries) = crate::playlist_snapshot_qt::authoritative_entries(&remote) {
+            if !entries.is_empty() {
+                crate::playlist_snapshot_qt::record_authoritative_detached(entries);
+            }
+        }
+    }
 
     let (folders, settings, play_counts, local_counts, locals, fav_ids) =
         tokio::task::spawn_blocking(|| {

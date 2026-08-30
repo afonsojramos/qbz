@@ -318,6 +318,7 @@ mod external_reco_qt;
 mod artist_qt;
 mod lyrics_qt;
 mod playback_qt;
+mod playlist_index_qt;
 mod playlist_picker_qt;
 mod tunnelflow_qt;
 // Playlist Importer controller (the `qbz-playlist-import` crate's frontend
