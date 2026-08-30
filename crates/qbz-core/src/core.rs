@@ -1419,6 +1419,22 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             .map_err(CoreError::Api)
     }
 
+    /// Lightweight membership fetch: one playlist's track IDS only
+    /// (`playlist/get?extra=track_ids`). The membership hydrator's probe —
+    /// no Track objects, no pagination.
+    pub async fn get_playlist_track_ids(
+        &self,
+        playlist_id: u64,
+    ) -> Result<qbz_models::PlaylistWithTrackIds, CoreError> {
+        let client = self.client.read().await;
+        let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
+
+        client
+            .get_playlist_track_ids(playlist_id)
+            .await
+            .map_err(CoreError::Api)
+    }
+
     /// Check how many of `track_ids` are already in the Qobuz playlist
     /// `playlist_id`. Mirrors Tauri's `v2_check_playlist_duplicates`
     /// (commands_v2/playlists.rs): fetch the playlist's existing track ids and

@@ -34,10 +34,7 @@ pub enum PlaylistTrackRef {
     /// A library-projected row: a local file, or a Jellyfin/Subsonic track
     /// (their playlist storage identity is the projection). `path` is the
     /// `local_tracks.file_path` value local playlists key on.
-    Library {
-        track_id: i64,
-        path: Option<String>,
-    },
+    Library { track_id: i64, path: Option<String> },
     /// A Plex track by rating key.
     Plex { rating_key: String },
 }
@@ -467,7 +464,10 @@ mod tests {
         // The Qobuz playlist holds the library row and the Plex key (2 of 3);
         // the local playlist holds all three.
         assert_eq!(contained(&rows, ContainmentTarget::Qobuz(7)), Some(2));
-        assert_eq!(contained(&rows, ContainmentTarget::Local(lp.clone())), Some(3));
+        assert_eq!(
+            contained(&rows, ContainmentTarget::Local(lp.clone())),
+            Some(3)
+        );
         assert_eq!(rows[0].target, ContainmentTarget::Local(lp));
     }
 
