@@ -53,6 +53,20 @@ enum MediaSource {
     // that is still being served (#550).
     Data(std::sync::Arc<Vec<u8>>),
     File(PathBuf),
+    /// Bytes that are still ARRIVING while they are served: a Qobuz track
+    /// being downloaded, or a Plex/Jellyfin/Subsonic stream proxied from its
+    /// server. The total size is known up front (advertised as
+    /// Content-Length); reads past the buffered edge block until the bytes
+    /// exist. This is what turns "download 100 MB, then play" into "play
+    /// after the first segment".
+    Reader(Arc<dyn RangeSource>),
+}
+
+/// A range-addressable byte source whose bytes may still be arriving.
+/// `open` returns a reader positioned at `start` that yields at most `len`
+/// bytes and BLOCKS (never errors) while a requested byte is not there yet.
+pub trait RangeSource: Send + Sync {
+    fn open(&self, start: u64, len: u64) -> std::io::Result<Box<dyn Read + Send>>;
 }
 
 /// Simple HTTP server for audio streaming to cast devices
@@ -112,14 +126,25 @@ impl MediaServer {
             while !shutdown_clone.load(Ordering::SeqCst) {
                 match server.recv_timeout(Duration::from_millis(250)) {
                     Ok(Some(request)) => {
-                        let response = handle_request(
-                            request.method(),
-                            request.url(),
-                            &request,
-                            &entries_clone,
-                            &token_clone,
-                        );
-                        let _ = request.respond(response);
+                        // ONE THREAD PER REQUEST. A media body is written at
+                        // the renderer's pace (a 100 MB track takes the whole
+                        // song to drain, and a progressive source blocks on
+                        // bytes that have not arrived), so serving inline
+                        // stalled every other request — the HEAD probe strict
+                        // renderers send before Play, a second Range request
+                        // for a seek — for the duration of the track.
+                        let entries = entries_clone.clone();
+                        let token = token_clone.clone();
+                        thread::spawn(move || {
+                            let response = handle_request(
+                                request.method(),
+                                request.url(),
+                                &request,
+                                &entries,
+                                &token,
+                            );
+                            let _ = request.respond(response);
+                        });
                     }
                     Ok(None) => {}
                     Err(e) => {
@@ -185,6 +210,29 @@ impl MediaServer {
             entries.insert(id, entry);
         }
 
+        self.audio_path(id)
+    }
+
+    /// Register a range-addressable source whose bytes may still be arriving
+    /// (see [`RangeSource`]). `size` is the FINAL byte length — it is what the
+    /// renderer is told in Content-Length, so it must be exact.
+    pub fn register_reader(
+        &mut self,
+        id: u64,
+        size: u64,
+        content_type: &str,
+        source: Arc<dyn RangeSource>,
+    ) -> String {
+        let entry = MediaEntry {
+            content_type: content_type.to_string(),
+            size,
+            source: MediaSource::Reader(source),
+        };
+        if let Ok(mut entries) = self.entries.lock() {
+            // Same eviction rule as register_audio (#550).
+            entries.retain(|k, _| *k == id);
+            entries.insert(id, entry);
+        }
         self.audio_path(id)
     }
 
@@ -444,6 +492,13 @@ fn open_range(
                 content_range,
             ))
         }
+        MediaSource::Reader(source) => {
+            let end = end.min(entry.size.saturating_sub(1));
+            let start = start.min(end);
+            let length = end - start + 1;
+            let reader = source.open(start, length)?;
+            Ok((reader, length as usize, status_code, content_range))
+        }
     }
 }
 
@@ -643,6 +698,43 @@ mod tests {
         let red = redact_media_uri(raw);
         assert!(!red.contains("aabbccddeeff0011"));
         assert!(red.contains("***/9"));
+    }
+
+    struct SliceSource(Vec<u8>);
+    impl RangeSource for SliceSource {
+        fn open(&self, start: u64, len: u64) -> std::io::Result<Box<dyn Read + Send>> {
+            let start = start as usize;
+            let end = (start + len as usize).min(self.0.len());
+            Ok(Box::new(std::io::Cursor::new(self.0[start..end].to_vec())))
+        }
+    }
+
+    #[test]
+    fn open_range_serves_a_range_source_with_exact_lengths() {
+        let data: Vec<u8> = (0..=255u8).collect();
+        let entry = MediaEntry {
+            content_type: "audio/flac".into(),
+            size: data.len() as u64,
+            source: MediaSource::Reader(Arc::new(SliceSource(data.clone()))),
+        };
+        // Whole resource.
+        let (mut r, len, code, cr) = open_range(&entry, None).unwrap();
+        let mut got = Vec::new();
+        r.read_to_end(&mut got).unwrap();
+        assert_eq!((len, code.0, cr), (256, 200, None));
+        assert_eq!(got, data);
+        // A middle range, then one that overshoots the end (clamped).
+        let (mut r, len, code, cr) = open_range(&entry, Some((10, 19))).unwrap();
+        let mut got = Vec::new();
+        r.read_to_end(&mut got).unwrap();
+        assert_eq!((len, code.0), (10, 206));
+        assert_eq!(cr.as_deref(), Some("bytes 10-19/256"));
+        assert_eq!(got, data[10..=19]);
+        let (mut r, len, _, _) = open_range(&entry, Some((250, 999))).unwrap();
+        let mut got = Vec::new();
+        r.read_to_end(&mut got).unwrap();
+        assert_eq!(len, 6);
+        assert_eq!(got, data[250..]);
     }
 
     #[test]

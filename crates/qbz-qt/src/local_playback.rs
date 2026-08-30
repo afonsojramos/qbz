@@ -392,7 +392,7 @@ pub(crate) async fn play_audible(runtime: &Runtime, track: &QueueTrack) -> bool 
     // A connected renderer owns playback — the same gate every Qobuz entry
     // passes (`route_play_remote`). Cheap when nothing is connected; without
     // it a Local Library row played beside a DLNA renderer.
-    if crate::playback_qt::route_play_remote(runtime, track.id, "play_audible").await {
+    if crate::playback_qt::route_play_remote_track(runtime, track, "play_audible").await {
         return true;
     }
     if belongs_to_the_offline_tier(track) {

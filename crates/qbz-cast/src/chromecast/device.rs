@@ -91,7 +91,14 @@ impl CastDeviceConnection {
 
     /// Disconnect from device
     pub fn disconnect(&mut self) -> Result<(), CastError> {
+        // CLOSE the media receiver app, not just our transport to it. A bare
+        // transport disconnect leaves the Default Media Receiver running on
+        // the device with our last item on its screen (and, if it was
+        // playing, still playing) — the "remote queue never clears" symptom.
+        // Tearing the app down is what the official senders do on "stop
+        // casting".
         if let Some(session) = &self.session {
+            let _ = self.device.receiver.stop_app(session.session_id.as_str());
             let _ = self
                 .device
                 .connection
@@ -285,8 +292,15 @@ impl CastDeviceConnection {
         self.launch_media_app().map(|_| ())
     }
 
+    /// Transport commands NEVER launch the receiver app: `play`/`pause`/
+    /// `stop` on a receiver with nothing loaded used to launch the Default
+    /// Media Receiver just to ask it for a media session it could not have,
+    /// which then sat there IDLE — and an IDLE report is what the poll reads
+    /// as "track ended". Only `load_media` launches the app.
     fn ensure_media_session(&mut self) -> Result<(String, i32), CastError> {
-        self.ensure_session()?;
+        if self.session.is_none() {
+            return Err(CastError::NoMediaSession);
+        }
 
         let destination = self
             .session
