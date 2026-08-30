@@ -1067,6 +1067,27 @@ pub(crate) async fn route_play_remote(
     false
 }
 
+/// `route_play_remote` for a funnel that holds the TRACK before the queue
+/// cursor moves (the Local Library stages its queue after the audible step):
+/// the renderer gets this track, not whatever the old queue pointed at.
+pub(crate) async fn route_play_remote_track(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track: &QueueTrack,
+    entry: &'static str,
+) -> bool {
+    if crate::cast_qt::play_track_if_cast(track).await {
+        log::info!("[play] entry={entry} track={} -> cast renderer", track.id);
+        crate::now_playing::clear_loading();
+        return true;
+    }
+    if route_play_to_peer(runtime, track.id).await {
+        log::info!("[play] entry={entry} track={} -> qconnect peer", track.id);
+        return true;
+    }
+    log::debug!("[play] entry={entry} track={} -> local", track.id);
+    false
+}
+
 async fn route_play_to_peer(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     track_id: u64,

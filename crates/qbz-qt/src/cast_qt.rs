@@ -60,6 +60,7 @@ use qbz_cast::{
     CastError, CastPositionInfo, ChromecastHandle, DeviceDiscovery, DiscoveredDevice,
     DiscoveredDlnaDevice,
     DlnaConnection, DlnaDiscovery, DlnaMetadata, DlnaPositionInfo, MediaMetadata, MediaServer,
+    RangeSource,
 };
 use qbz_core::LoggingAdapter;
 use qbz_models::{probe_streaminfo, AssetOrigin, AudioParams, Quality, QualityLimit, QueueTrack};
@@ -189,8 +190,10 @@ struct CastInner {
     // QConnect coexistence (§11.4): whether QConnect was on before casting,
     // so `disconnect` restores exactly the sessions `connect` suspended.
     qconnect_was_on_before_cast: bool,
-    // Position-poll task; aborted on disconnect.
-    poll_task: Option<tokio::task::JoinHandle<()>>,
+    // Cancel handle of the progressive Qobuz download feeding the media
+    // server for the current cast track (None for cached / local / proxied
+    // tracks). Fired when the track changes, on disconnect and on shutdown.
+    stream_cancel: Option<tokio::sync::watch::Sender<bool>>,
     // Device-refresh task (2 s loop while the picker is open).
     discovery_task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -198,6 +201,13 @@ struct CastInner {
 pub(crate) struct CastService {
     inner: Arc<Mutex<CastInner>>,
     runtime: Runtime,
+    // Position-poll task. OUTSIDE the async `inner` lock on purpose: the
+    // poll holds that lock across renderer round trips (a DLNA
+    // GetPositionInfo can take seconds), and `shutdown` on app exit is
+    // bounded to 2 s — when it queued behind the poll for the lock it timed
+    // out before sending Stop, and the renderer kept playing after the app
+    // was gone. Aborting the poll FIRST, without the lock, frees it.
+    poll_task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl CastService {
@@ -205,6 +215,14 @@ impl CastService {
         Self {
             inner: Arc::new(Mutex::new(CastInner::default())),
             runtime,
+            poll_task: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Abort the position poll synchronously (no lock on `inner` needed).
+    fn abort_poll(&self) {
+        if let Some(task) = self.poll_task.lock().ok().and_then(|mut p| p.take()) {
+            task.abort();
         }
     }
 
@@ -478,11 +496,16 @@ impl CastService {
     /// Disconnect: stop the renderer, drop the connection, restore the
     /// QConnect session connect() suspended (§11.4), reset state.
     pub(crate) async fn disconnect(&self) {
+        // Free the `inner` lock from the poll before anything below waits on it.
+        self.abort_poll();
         // Stop the renderer first (disconnect alone leaves it playing).
         let _ = self.stop_renderer().await;
 
-        let (poll, was_on) = {
+        let was_on = {
             let mut inner = self.inner.lock().await;
+            if let Some(cancel) = inner.stream_cancel.take() {
+                let _ = cancel.send(true);
+            }
             if let Some(h) = inner.chromecast.take() {
                 let _ = h.disconnect();
             }
@@ -503,11 +526,8 @@ impl CastService {
             inner.is_playing = false;
             inner.track_end_detected = false;
             inner.lost_polls = 0;
-            (inner.poll_task.take(), inner.qconnect_was_on_before_cast)
+            inner.qconnect_was_on_before_cast
         };
-        if let Some(task) = poll {
-            task.abort();
-        }
         // Restore the QConnect session connect() suspended (best-effort),
         // then reset the latch (cast_service.rs:435-438).
         if was_on {
@@ -580,28 +600,26 @@ impl CastService {
             track.source.as_deref().unwrap_or("qobuz")
         };
 
+        // The previous track's progressive download (if any) is dead weight
+        // from here on: the renderer is about to be handed a new URI.
+        if let Some(cancel) = self.inner.lock().await.stream_cancel.take() {
+            let _ = cancel.send(true);
+        }
+
         // Resolve + register per source. The fetch happens OUTSIDE the lock.
+        // Qobuz has its own tiers (cache / progressive download); every
+        // other source goes through the registry's playback ticket: a file on
+        // disk is served from disk, a server-streamed item (Plex / Jellyfin /
+        // Subsonic) is PROXIED to the renderer with the source's own request
+        // contract — the media-server arm the Slint service left as a TODO.
         let info = match source {
-            "local" | "ephemeral" => {
-                let path = resolve_castable_path(track).await?;
-                self.register_local(track.id, &path).await?
-            }
             "qobuz" | "qobuz_download" => self.register_qobuz(track.id).await?,
-            "plex" => {
-                // TODO(cast-plex): needs a proxy that re-serves the resolved
-                // part bytes to the renderer. `PlaybackTicket::Stream` now
-                // hands over the url that proxy would read, so what is missing
-                // is the media-server arm, not the resolve. The Slint service
-                // carries the same TODO.
-                //
-                // Kept as an EARLY refusal on purpose: `resolve_castable_path`
-                // would refuse it too — structurally, for every remote source,
-                // including ones that have no arm here — but only after paying
-                // a network round trip to build a url it is about to throw
-                // away.
-                return Err("Plex casting is not yet supported".to_string());
-            }
-            other => return Err(format!("Unsupported cast source: {other}")),
+            _ => match resolve_castable(track).await? {
+                Castable::File(path) => self.register_local(track.id, &path).await?,
+                Castable::Stream { url, headers } => {
+                    self.register_proxy(track.id, url, headers).await?
+                }
+            },
         };
         let content_type = info.content_type.clone();
 
@@ -696,9 +714,48 @@ impl CastService {
         // track so a Settings or cap change applies to the very next one.
         let cap_key = self.inner.lock().await.connected_cap_key.clone();
         let (quality, request_cause) = effective_cast_quality(cap_key.as_deref());
-        let asset = self
-            .runtime
-            .core()
+
+        // COLD track: serve it PROGRESSIVELY. The whole-file fetch below made
+        // a Hi-Res click wait for the entire download before the renderer
+        // heard anything (5.5 s for 97 MB measured 2026-08-30, on a fast
+        // line; every frontend before this one did the same). The
+        // progressive source answers the renderer after the first segments
+        // and the finished download lands in the cache like a played stream.
+        let core = self.runtime.core();
+        if !core.player().is_track_cached(track_id) {
+            match core.open_external_stream_resolved(track_id, quality).await {
+                Ok(handle) => {
+                    let head = handle.source.get_buffered_data().unwrap_or_default();
+                    let probe = probe_streaminfo(&head);
+                    let content_type = "audio/flac".to_string();
+                    self.ensure_media_server().await?;
+                    let source: Arc<dyn RangeSource> =
+                        Arc::new(BufferedRangeSource(Arc::clone(&handle.source)));
+                    {
+                        let mut inner = self.inner.lock().await;
+                        let server = inner.media_server.as_mut().ok_or("Media server gone")?;
+                        server.register_reader(track_id, handle.total_bytes, &content_type, source);
+                        inner.stream_cancel = Some(handle.cancel);
+                    }
+                    log::info!(
+                        "[qbz-qt][Cast] qobuz track {track_id} served progressively ({} B)",
+                        handle.total_bytes
+                    );
+                    return Ok(CastAssetInfo {
+                        content_type,
+                        probe,
+                        origin: Some(AssetOrigin::Network),
+                        requested: Some(quality),
+                        request_cause,
+                    });
+                }
+                Err(e) => log::warn!(
+                    "[qbz-qt][Cast] progressive stream for {track_id} failed: {e}; falling back to a full fetch"
+                ),
+            }
+        }
+
+        let asset = core
             // No offline tier / cache sink: `OfflineCacheState` is not wired
             // in the Qt port (see the module header).
             .fetch_for_external_stream_resolved(track_id, quality, None, None)
@@ -751,6 +808,61 @@ impl CastService {
         })
     }
 
+    /// Server-streamed sources (Plex / Jellyfin / Subsonic): probe the item
+    /// for its exact size + container, then PROXY it — the media server
+    /// answers the renderer's Range requests by fetching the same ranges
+    /// from the source with the ticket's request headers. The renderer
+    /// never sees the source url (it embeds credentials).
+    async fn register_proxy(
+        &self,
+        track_id: u64,
+        url: String,
+        headers: Vec<(String, String)>,
+    ) -> Result<CastAssetInfo, String> {
+        let info = qbz_player::remote_stream::probe_remote_stream_info_with_headers(&url, &headers)
+            .await
+            .map_err(|e| format!("Cannot probe track {track_id} for casting: {e}"))?;
+        if info.content_length == 0 {
+            return Err(format!(
+                "Track {track_id} cannot be cast: its server did not report a size"
+            ));
+        }
+        let content_type = match info.format {
+            "FLAC" => "audio/flac",
+            "MP3" => "audio/mpeg",
+            _ => "application/octet-stream",
+        }
+        .to_string();
+        let probe = Some(AudioParams {
+            sample_rate: info.sample_rate,
+            bits_per_sample: info.bit_depth,
+            channels: info.channels,
+        });
+        self.ensure_media_server().await?;
+        let source: Arc<dyn RangeSource> = Arc::new(HttpRangeSource {
+            url,
+            headers,
+            handle: tokio::runtime::Handle::current(),
+        });
+        {
+            let mut inner = self.inner.lock().await;
+            let server = inner.media_server.as_mut().ok_or("Media server gone")?;
+            server.register_reader(track_id, info.content_length, &content_type, source);
+        }
+        log::info!(
+            "[qbz-qt][Cast] track {track_id} proxied from its server ({} B, {})",
+            info.content_length,
+            info.format
+        );
+        Ok(CastAssetInfo {
+            content_type,
+            probe,
+            origin: None,
+            requested: None,
+            request_cause: QualityLimit::None,
+        })
+    }
+
     async fn ensure_media_server(&self) -> Result<(), String> {
         let mut inner = self.inner.lock().await;
         if inner.media_server.is_none() {
@@ -766,14 +878,24 @@ impl CastService {
     // Ok(true) = handled. Call sites live on the playback path — see the
     // report's GLUE NEEDED for `playback_qt.rs`.
 
-    pub(crate) async fn toggle_play_if_cast(&self) -> Result<bool, String> {
-        let (proto, playing) = {
+    pub(crate) async fn toggle_play_if_cast(self: &Arc<Self>) -> Result<bool, String> {
+        let (proto, playing, loaded) = {
             let inner = self.inner.lock().await;
             match inner.protocol {
-                Some(p) => (p, inner.is_playing),
+                Some(p) => (p, inner.is_playing, inner.current_track_id.is_some()),
                 None => return Ok(false),
             }
         };
+        // Connected with nothing handed to the renderer yet (connected while
+        // paused, or the last cast failed): play means "cast the current
+        // track", not "resume a media session that does not exist".
+        if !loaded {
+            match self.runtime.core().current_track().await {
+                Some(track) => self.cast_track(&track).await?,
+                None => return Err("Nothing to play".to_string()),
+            }
+            return Ok(true);
+        }
         if playing {
             self.pause_renderer(proto).await?;
         } else {
@@ -982,13 +1104,11 @@ impl CastService {
                 svc.poll_once().await;
             }
         });
-        let svc2 = self.clone();
-        crate::spawn(async move {
-            let mut inner = svc2.inner.lock().await;
-            if let Some(old) = inner.poll_task.replace(task) {
+        if let Ok(mut slot) = self.poll_task.lock() {
+            if let Some(old) = slot.replace(task) {
                 old.abort();
             }
-        });
+        }
     }
 
     async fn poll_once(self: &Arc<Self>) {
@@ -1128,7 +1248,13 @@ impl CastService {
             }
             max_position = inner.cast_max_position;
             let ended = match proto {
-                CastProtocol::Chromecast => state == "IDLE" && !inner.track_end_detected,
+                // IDLE counts as "ended" only after this track was seen
+                // PLAYING: a receiver app that is idle because nothing was
+                // ever loaded (or the load failed) reported IDLE too, and the
+                // poll auto-advanced through the whole queue on it.
+                CastProtocol::Chromecast => {
+                    state == "IDLE" && inner.cast_saw_playing && !inner.track_end_detected
+                }
                 CastProtocol::Dlna => {
                     let stopped = matches!(state.as_str(), "STOPPED" | "NO_MEDIA_PRESENT");
                     // The guard only makes sense when the position signal is
@@ -1214,10 +1340,12 @@ impl CastService {
     /// and the media server, so a cast device does not keep playing after
     /// logout or exit (Tauri parity, #32/#33).
     pub(crate) async fn shutdown(&self) {
+        // Poll first, without the lock — see `poll_task`.
+        self.abort_poll();
         let _ = self.stop_renderer().await;
         let mut inner = self.inner.lock().await;
-        if let Some(task) = inner.poll_task.take() {
-            task.abort();
+        if let Some(cancel) = inner.stream_cancel.take() {
+            let _ = cancel.send(true);
         }
         if let Some(task) = inner.discovery_task.take() {
             task.abort();
@@ -1542,6 +1670,23 @@ pub(crate) async fn is_casting() -> bool {
     service().is_casting().await
 }
 
+/// Route THIS track to the connected renderer instead of opening a local
+/// stream. false = not casting, take the local path. Used by the funnels
+/// that hold the track before the queue cursor moves (the Local Library
+/// stages its queue AFTER the audible step succeeds) — routing "the current
+/// track" there cast whatever the previous queue was pointing at.
+pub(crate) async fn play_track_if_cast(track: &QueueTrack) -> bool {
+    let svc = service();
+    if !svc.is_casting().await {
+        return false;
+    }
+    if let Err(e) = svc.cast_track(track).await {
+        log::warn!("[qbz-qt][Cast] play track {} failed: {e}", track.id);
+        set_error(e);
+    }
+    true
+}
+
 /// Route the queue's CURRENT track to the connected renderer instead of
 /// opening a local stream. Ok(false) = not casting, take the local path.
 pub(crate) async fn play_current_if_cast(runtime: &Runtime) -> bool {
@@ -1727,7 +1872,18 @@ fn cap_index_for_key(cap_key: &str) -> i32 {
 ///   need a proxy this service does not have. That is the `TODO(cast-plex)`
 ///   arm's actual content, and it now applies to every remote source by
 ///   construction instead of to the one word somebody thought to list.
-async fn resolve_castable_path(track: &QueueTrack) -> Result<String, String> {
+/// What a non-Qobuz track resolves to for the renderer.
+enum Castable {
+    /// A file on disk — served straight from disk.
+    File(String),
+    /// Served by a media server — proxied with the source's request contract.
+    Stream {
+        url: String,
+        headers: Vec<(String, String)>,
+    },
+}
+
+async fn resolve_castable(track: &QueueTrack) -> Result<Castable, String> {
     let ticket = qbz_source::registry()
         .playback(track)
         .await
@@ -1735,18 +1891,120 @@ async fn resolve_castable_path(track: &QueueTrack) -> Result<String, String> {
     match ticket {
         qbz_source::PlaybackTicket::File { path, .. }
         | qbz_source::PlaybackTicket::DsdFile { path, .. } => {
-            Ok(path.to_string_lossy().into_owned())
+            Ok(Castable::File(path.to_string_lossy().into_owned()))
         }
+        qbz_source::PlaybackTicket::Stream {
+            url,
+            request_headers,
+            ..
+        } => Ok(Castable::Stream {
+            url,
+            headers: request_headers,
+        }),
         other => Err(format!(
-            "Track {} cannot be cast: its source serves it over the network, not as a file ({})",
+            "Track {} cannot be cast: its source hands it over as {}",
             track.id,
             match other {
-                qbz_source::PlaybackTicket::Stream { .. } => "streamed",
                 qbz_source::PlaybackTicket::Bytes { .. } => "fetched bytes",
-                qbz_source::PlaybackTicket::Catalog { .. } => "catalog",
-                _ => "unsupported",
+                qbz_source::PlaybackTicket::Catalog { .. } => "a catalog id",
+                _ => "an unsupported ticket",
             }
         )),
+    }
+}
+
+/// Media-server adapter over the player's progressive download buffer:
+/// every request gets its own cursor; a read past the buffered edge blocks
+/// until the segment lands (the download is far faster than playback).
+struct BufferedRangeSource(Arc<qbz_player::BufferedMediaSource>);
+
+impl RangeSource for BufferedRangeSource {
+    fn open(&self, start: u64, len: u64) -> std::io::Result<Box<dyn std::io::Read + Send>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut reader = self.0.create_reader();
+        reader.seek(SeekFrom::Start(start))?;
+        Ok(Box::new(reader.take(len)))
+    }
+}
+
+/// Media-server adapter that re-fetches a range from a source server
+/// (Plex / Jellyfin / Subsonic) with the ticket's headers. Runs on the media
+/// server's own thread, so it drives the async client through the tokio
+/// handle and pulls the body chunk by chunk as the renderer reads.
+struct HttpRangeSource {
+    url: String,
+    headers: Vec<(String, String)>,
+    handle: tokio::runtime::Handle,
+}
+
+static PROXY_HTTP: OnceLock<reqwest::Client> = OnceLock::new();
+
+impl RangeSource for HttpRangeSource {
+    fn open(&self, start: u64, len: u64) -> std::io::Result<Box<dyn std::io::Read + Send>> {
+        let end = start + len - 1;
+        let client = PROXY_HTTP.get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_default()
+        });
+        let mut request = client
+            .get(&self.url)
+            .header("User-Agent", "Mozilla/5.0")
+            .header("Accept-Encoding", "identity")
+            .header("Range", format!("bytes={start}-{end}"));
+        for (name, value) in &self.headers {
+            request = request.header(name.as_str(), value.as_str());
+        }
+        let response = self
+            .handle
+            .block_on(request.send())
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        if !response.status().is_success() {
+            return Err(std::io::Error::other(format!(
+                "source answered {} to a range request",
+                response.status()
+            )));
+        }
+        struct BodyReader {
+            handle: tokio::runtime::Handle,
+            response: reqwest::Response,
+            pending: Vec<u8>,
+            offset: usize,
+            remaining: u64,
+        }
+        impl std::io::Read for BodyReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.remaining == 0 {
+                    return Ok(0);
+                }
+                while self.offset >= self.pending.len() {
+                    match self.handle.block_on(self.response.chunk()) {
+                        Ok(Some(chunk)) => {
+                            self.pending = chunk.to_vec();
+                            self.offset = 0;
+                        }
+                        Ok(None) => return Ok(0),
+                        Err(e) => return Err(std::io::Error::other(e.to_string())),
+                    }
+                }
+                let n = buf
+                    .len()
+                    .min(self.pending.len() - self.offset)
+                    .min(self.remaining as usize);
+                buf[..n].copy_from_slice(&self.pending[self.offset..self.offset + n]);
+                self.offset += n;
+                self.remaining -= n as u64;
+                Ok(n)
+            }
+        }
+        Ok(Box::new(BodyReader {
+            handle: self.handle.clone(),
+            response,
+            pending: Vec::new(),
+            offset: 0,
+            remaining: len,
+        }))
     }
 }
 
