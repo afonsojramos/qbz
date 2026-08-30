@@ -657,9 +657,17 @@ impl CastService {
             }
             CastProtocol::Dlna => {
                 let mut inner = self.inner.lock().await;
+                let loaded = inner.current_track_id.is_some();
                 let conn = inner.dlna.as_mut().ok_or("DLNA not connected")?;
-                // DLNA is a TWO-step load -> play.
+                // DLNA is a TWO-step load -> play. With a track already loaded
+                // the renderer is stopped FIRST: gmediarender ignored a
+                // SetAVTransportURI issued while it sat in PAUSED_PLAYBACK
+                // (2026-08-30 smoke — no GET followed, the old item stayed),
+                // and a Stop costs one SOAP call.
                 let result = async {
+                    if loaded {
+                        let _ = conn.stop().await;
+                    }
                     conn.load_media(&url, &dlna_metadata(track), &content_type)
                         .await
                         .map_err(|e| e.to_string())?;
@@ -855,14 +863,25 @@ impl CastService {
         });
         self.ensure_media_server().await?;
         let source: Arc<dyn RangeSource> = Arc::new(HttpRangeSource {
-            url,
-            headers,
+            url: url.clone(),
+            headers: headers.clone(),
             handle: tokio::runtime::Handle::current(),
         });
+        // The renderer pulls its bytes by Range, at its own pace, so QBZ never
+        // holds the file — and the visualizer's shadow decoder needs it. Pull
+        // a SECOND, sequential copy into a progressive buffer for the shadow
+        // (LAN traffic; capped so a huge item cannot eat the box).
+        let (shadow, cancel) = if info.content_length <= SHADOW_DOWNLOAD_MAX_BYTES {
+            let (buffer, cancel) = shadow_download(url, headers, info.content_length);
+            (Some(crate::cast_viz::ShadowSource::Buffered(buffer)), Some(cancel))
+        } else {
+            (None, None)
+        };
         {
             let mut inner = self.inner.lock().await;
             let server = inner.media_server.as_mut().ok_or("Media server gone")?;
             server.register_reader(track_id, info.content_length, &content_type, source);
+            inner.stream_cancel = cancel;
         }
         log::info!(
             "[qbz-qt][Cast] track {track_id} proxied from its server ({} B, {})",
@@ -875,7 +894,7 @@ impl CastService {
             origin: None,
             requested: None,
             request_cause: QualityLimit::None,
-            shadow: None,
+            shadow,
         })
     }
 
@@ -1957,16 +1976,82 @@ struct HttpRangeSource {
 
 static PROXY_HTTP: OnceLock<reqwest::Client> = OnceLock::new();
 
+/// Largest server-streamed item the shadow decoder will mirror into RAM.
+const SHADOW_DOWNLOAD_MAX_BYTES: u64 = 400 * 1024 * 1024;
+
+fn proxy_client() -> &'static reqwest::Client {
+    PROXY_HTTP.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
+/// Sequentially download `url` into a progressive buffer (exact `total`
+/// known) for the shadow decoder. The returned sender cancels it.
+fn shadow_download(
+    url: String,
+    headers: Vec<(String, String)>,
+    total: u64,
+) -> (
+    Arc<qbz_player::BufferedMediaSource>,
+    tokio::sync::watch::Sender<bool>,
+) {
+    let (source, writer) = qbz_player::BufferedMediaSource::new(
+        qbz_player::StreamingConfig::fast_start(),
+        Some(total),
+    );
+    let source = Arc::new(source);
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    crate::spawn(async move {
+        let mut request = proxy_client()
+            .get(&url)
+            .header("User-Agent", "Mozilla/5.0")
+            .header("Accept-Encoding", "identity");
+        for (name, value) in &headers {
+            request = request.header(name.as_str(), value.as_str());
+        }
+        let mut response = match request.send().await {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                let _ = writer.error(format!("shadow download: status {}", r.status()));
+                return;
+            }
+            Err(e) => {
+                let _ = writer.error(format!("shadow download: {e}"));
+                return;
+            }
+        };
+        loop {
+            if *cancel_rx.borrow() {
+                let _ = writer.error("shadow download cancelled".to_string());
+                return;
+            }
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    if writer.push_chunk(&chunk).is_err() {
+                        return;
+                    }
+                }
+                Ok(None) => {
+                    let _ = writer.complete();
+                    return;
+                }
+                Err(e) => {
+                    let _ = writer.error(format!("shadow download: {e}"));
+                    return;
+                }
+            }
+        }
+    });
+    (source, cancel_tx)
+}
+
 impl RangeSource for HttpRangeSource {
     fn open(&self, start: u64, len: u64) -> std::io::Result<Box<dyn std::io::Read + Send>> {
         let end = start + len - 1;
-        let client = PROXY_HTTP.get_or_init(|| {
-            reqwest::Client::builder()
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap_or_default()
-        });
-        let mut request = client
+        let mut request = proxy_client()
             .get(&self.url)
             .header("User-Agent", "Mozilla/5.0")
             .header("Accept-Encoding", "identity")
