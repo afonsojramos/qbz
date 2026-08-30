@@ -34,6 +34,7 @@ pub mod auth;
 pub mod bundle;
 pub mod client;
 pub mod cmaf;
+pub mod delegated;
 pub mod endpoints;
 pub mod error;
 pub mod forbidden_breaker;
@@ -55,6 +56,10 @@ pub use cmaf::{
     download_raw_with_progress as cmaf_download_raw_with_progress,
     setup_streaming as cmaf_setup_streaming, CmafProgressCallback, CmafProgressUpdate,
     CmafRawBundle, CmafStreamingInfo, CMAF_PREFETCH_CONCURRENCY,
+};
+pub use delegated::{
+    DelegatedApiConfig, DelegatedApiConfigError, DelegatedApiEndpoint, DelegatedApiError,
+    DelegatedApiResult, DelegatedAppCredentials, DelegatedQobuzClient,
 };
 pub use error::{ApiError, Result};
 pub use link_resolver::{resolve_link, LinkResolverError, ResolvedLink};

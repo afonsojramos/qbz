@@ -16,5 +16,8 @@ pub use model::{
     ConnectInfo, DeviceType, DisplayInfo, HandoffCandidate, LanJwtToken, MaxAudioQuality,
 };
 pub use projection::LanProjection;
-pub use server::{LanError, LanService, LanServiceConfig, SERVICE_TYPE};
+pub use server::{
+    LanError, LanHttpMethod, LanHttpRoute, LanRequestObservation, LanService, LanServiceConfig,
+    SERVICE_TYPE,
+};
 pub use validation::{EndpointPolicy, ValidationError, MAX_BODY_BYTES};

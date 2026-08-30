@@ -1,10 +1,15 @@
 use std::collections::HashMap;
-use std::net::IpAddr;
-use std::time::Duration;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::time::{Duration, Instant};
 
-use mdns_sd::{ServiceDaemon, ServiceInfo};
+use mdns_sd::{DaemonEvent, IfKind, ServiceDaemon, ServiceInfo, UnregisterStatus};
 
 use crate::server::{LanError, SERVICE_TYPE};
+
+const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(2);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const GOODBYE_RESEND_DELAY: Duration = Duration::from_millis(150);
+const DAEMON_SHUTDOWN_RESERVE: Duration = Duration::from_millis(250);
 
 pub(crate) struct MdnsRegistration {
     daemon: ServiceDaemon,
@@ -32,17 +37,60 @@ impl MdnsRegistration {
         let info = service_info(device_uuid, port, sdk_version, &addresses)?;
         let fullname = info.get_fullname().to_string();
         let daemon = ServiceDaemon::new()?;
-        daemon.register(info)?;
+        let monitor = daemon.monitor()?;
+        if daemon.register(info).is_err() {
+            shutdown_daemon(&daemon, Some(&fullname), SHUTDOWN_TIMEOUT);
+            return Err(LanError::Mdns);
+        }
+
+        let deadline = Instant::now() + ANNOUNCE_TIMEOUT;
+        let announced = loop {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break false;
+            };
+            match monitor.recv_timeout(remaining) {
+                Ok(DaemonEvent::Announce(announced, _))
+                    if announced.eq_ignore_ascii_case(&fullname) =>
+                {
+                    break true;
+                }
+                Ok(DaemonEvent::Error(_) | DaemonEvent::NameChange(_)) | Err(_) => break false,
+                Ok(_) => {}
+            }
+        };
+        if !announced {
+            shutdown_daemon(&daemon, Some(&fullname), SHUTDOWN_TIMEOUT);
+            return Err(LanError::Mdns);
+        }
 
         Ok(Self { daemon, fullname })
     }
 
     pub(crate) fn shutdown(self) {
-        if let Ok(receiver) = self.daemon.unregister(&self.fullname) {
-            let _ = receiver.recv_timeout(Duration::from_secs(2));
+        shutdown_daemon(&self.daemon, Some(&self.fullname), SHUTDOWN_TIMEOUT);
+    }
+}
+
+fn shutdown_daemon(daemon: &ServiceDaemon, fullname: Option<&str>, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    if let Some(fullname) = fullname {
+        if let Ok(receiver) = daemon.unregister(fullname) {
+            if let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+                if matches!(receiver.recv_timeout(remaining), Ok(UnregisterStatus::OK)) {
+                    // mdns-sd schedules a second goodbye 120 ms after the
+                    // unregister acknowledgement. Keep the daemon alive long
+                    // enough to send it, while reserving time for shutdown.
+                    if let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+                        let goodbye_budget = remaining.saturating_sub(DAEMON_SHUTDOWN_RESERVE);
+                        std::thread::sleep(GOODBYE_RESEND_DELAY.min(goodbye_budget));
+                    }
+                }
+            }
         }
-        if let Ok(receiver) = self.daemon.shutdown() {
-            let _ = receiver.recv_timeout(Duration::from_secs(2));
+    }
+    if let Ok(receiver) = daemon.shutdown() {
+        if let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            let _ = receiver.recv_timeout(remaining);
         }
     }
 }
@@ -61,27 +109,36 @@ fn service_info(
         ("sdk_version".to_string(), sdk_version.to_string()),
         ("path".to_string(), String::new()),
     ]);
-    ServiceInfo::new(
+    let mut info = ServiceInfo::new(
         SERVICE_TYPE,
         &instance,
         &hostname,
         addresses,
         port,
         properties,
-    )
-    .map(ServiceInfo::enable_addr_auto)
+    )?;
+    info.set_interfaces(addresses.iter().copied().map(IfKind::Addr).collect());
+    Ok(info)
 }
 
 fn lan_ipv4_addresses() -> Result<Vec<IpAddr>, LanError> {
-    let mut addresses = if_addrs::get_if_addrs()
+    // A connected UDP socket performs route selection without sending data.
+    // Targeting the mDNS multicast group yields the IPv4 interface that can
+    // actually reach LAN controllers, excluding Docker/VM bridges and
+    // loopback records that make strict official clients choose a dead URL.
+    let socket = UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
+        .map_err(|_| LanError::AddressDiscovery)?;
+    socket
+        .connect(SocketAddr::from((Ipv4Addr::new(224, 0, 0, 251), 5353)))
+        .map_err(|_| LanError::AddressDiscovery)?;
+    let address = socket
+        .local_addr()
         .map_err(|_| LanError::AddressDiscovery)?
-        .into_iter()
-        .map(|interface| interface.ip())
-        .filter(|ip| ip.is_ipv4() && !ip.is_loopback() && !ip.is_unspecified())
-        .collect::<Vec<_>>();
-    addresses.sort_unstable();
-    addresses.dedup();
-    Ok(addresses)
+        .ip();
+    if !address.is_ipv4() || address.is_loopback() || address.is_unspecified() {
+        return Err(LanError::NoLanAddresses);
+    }
+    Ok(vec![address])
 }
 
 fn short_id(device_uuid: &str) -> String {
@@ -118,5 +175,12 @@ mod tests {
         assert_eq!(info.get_property_val_str("device_uuid"), Some(uuid));
         assert_eq!(info.get_property_val_str("sdk_version"), Some("0.9.5"));
         assert_eq!(info.get_property_val_str("path"), Some(""));
+        assert!(!info.is_addr_auto());
+        assert_eq!(
+            info.get_addresses(),
+            &["192.0.2.10".parse::<IpAddr>().unwrap()]
+                .into_iter()
+                .collect()
+        );
     }
 }

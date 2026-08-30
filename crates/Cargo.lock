@@ -4485,6 +4485,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -4709,11 +4710,13 @@ name = "qconnect-app"
 version = "2.0.2"
 dependencies = [
  "async-trait",
+ "futures-util",
  "log",
  "prost",
  "qbz-models",
  "qbz-player",
  "qconnect-core",
+ "qconnect-lan",
  "qconnect-protocol",
  "qconnect-transport-ws",
  "serde",
@@ -4736,17 +4739,22 @@ dependencies = [
 name = "qconnect-lan"
 version = "2.0.2"
 dependencies = [
- "if-addrs 0.15.0",
+ "base64 0.23.1",
  "mdns-sd",
+ "qbz-credentials",
+ "qbz-qobuz",
+ "qconnect-core",
+ "qconnect-protocol",
+ "qconnect-transport-ws",
  "reqwest",
  "rustls",
  "serde",
  "serde_json",
  "socket2",
  "thiserror 2.0.20",
- "tiny_http",
  "tokio",
  "url",
+ "uuid 1.26.0",
  "zeroize",
 ]
 
@@ -4773,9 +4781,11 @@ dependencies = [
  "prost",
  "qconnect-protocol",
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tokio",
  "tokio-tungstenite",
+ "zeroize",
 ]
 
 [[package]]

@@ -7,6 +7,7 @@ description = "UI-agnostic Qobuz Connect application adapter"
 
 [dependencies]
 qconnect-core = { path = "../qconnect-core" }
+qconnect-lan = { path = "../qconnect-lan" }
 qconnect-protocol = { path = "../qconnect-protocol" }
 qconnect-transport-ws = { path = "../qconnect-transport-ws" }
 qbz-models = { path = "../qbz-models" }
@@ -16,6 +17,7 @@ qbz-models = { path = "../qbz-models" }
 # reached ONLY through the trait's start_track_stream and are never modified.
 qbz-player = { path = "../qbz-player" }
 async-trait = { workspace = true }
+futures-util = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

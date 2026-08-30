@@ -3,6 +3,7 @@
 //! Application adapter that composes qconnect core + protocol + transport.
 
 mod app;
+mod delegation;
 mod error;
 mod events;
 mod feature_flags;
@@ -20,6 +21,11 @@ pub use app::{
     SessionStateTakeoverInput,
 };
 pub use startup::{compute_effective_startup, QconnectStartupMode};
+pub use delegation::{
+    CommitRejected, CredentialOrigin, DelegationCancellation, DelegationCandidate,
+    DelegationCoordinator, DelegationCoordinatorConfig, DelegationCoordinatorError,
+    DelegationErrorCode, DelegationHost, DelegationPhase, DelegationSnapshot, RestoreReason,
+};
 pub use error::QconnectAppError;
 pub use events::{NoOpEventSink, QconnectAppEvent, QconnectEventSink};
 pub use session::{

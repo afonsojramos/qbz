@@ -1730,22 +1730,6 @@ pub trait SessionLoopHost: Send + Sync {
     async fn on_loop_error(&self, message: String);
 }
 
-/// Hex preview of up to `max_bytes` bytes for diagnostic logging. Mirrors the
-/// Tauri adapter's `hex_preview` (relocated with the loop, slice 5).
-fn hex_preview(data: &[u8], max_bytes: usize) -> String {
-    let take = data.len().min(max_bytes);
-    let hex: String = data[..take]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join("");
-    if data.len() > max_bytes {
-        format!("{hex}...({}B total)", data.len())
-    } else {
-        hex
-    }
-}
-
 impl<TTransport, TSink> QconnectApp<TTransport, TSink>
 where
     TTransport: WsTransport + 'static,
@@ -1866,9 +1850,10 @@ where
                         }
                         TransportEvent::InboundQueueServerEvent(evt) => {
                             log::debug!(
-                                "[QConnect] <-- Inbound queue event: {} payload={}",
+                                "[QConnect] <-- Inbound queue event: {} tracks={} autoplay_tracks={}",
                                 evt.message_type(),
-                                evt.payload
+                                evt.payload.get("tracks").and_then(|value| value.as_array()).map_or(0, Vec::len),
+                                evt.payload.get("autoplay_tracks").and_then(|value| value.as_array()).map_or(0, Vec::len),
                             );
                             self.sink
                                 .on_event(QconnectAppEvent::Diagnostic {
@@ -1888,9 +1873,8 @@ where
                         }
                         TransportEvent::InboundRendererServerCommand(cmd) => {
                             log::debug!(
-                                "[QConnect] <-- Inbound renderer command: {} payload={}",
-                                cmd.message_type(),
-                                cmd.payload
+                                "[QConnect] <-- Inbound renderer command: {}",
+                                cmd.message_type()
                             );
                         }
                         TransportEvent::InboundFrameDecoded {
@@ -1907,7 +1891,11 @@ where
                             cloud_message_type,
                             payload,
                         } => {
-                            log::debug!("[QConnect/Transport] <-- Payload bytes: cloud_type={} len={} hex={}", cloud_message_type, payload.len(), hex_preview(payload, 64));
+                            log::debug!(
+                                "[QConnect/Transport] <-- Payload bytes: cloud_type={} len={}",
+                                cloud_message_type,
+                                payload.len()
+                            );
                         }
                         TransportEvent::OutboundSent {
                             message_type,
@@ -2157,11 +2145,10 @@ mod tests {
     }
 
     fn test_config() -> WsTransportConfig {
-        WsTransportConfig {
-            endpoint_url: "wss://example.invalid/ws".to_string(),
-            subscribe_channels: vec![vec![1, 2, 3]],
-            ..Default::default()
-        }
+        let mut config = WsTransportConfig::default();
+        config.endpoint_url = "wss://example.invalid/ws".to_string();
+        config.subscribe_channels = vec![vec![1, 2, 3]];
+        config
     }
 
     async fn build_connected_app() -> (
