@@ -502,6 +502,16 @@ pub fn record_created_playlist(
     Ok(())
 }
 
+/// MUTATION producer: a playlist deleted through QBZ leaves the target set
+/// immediately instead of waiting out the two-generation grace.
+pub fn mark_inactive(conn: &Connection, qobuz_playlist_id: u64) -> Result<()> {
+    conn.execute(
+        "UPDATE qobuz_playlist_snapshot SET inactive = 1 WHERE qobuz_playlist_id = ?1",
+        params![qobuz_playlist_id as i64],
+    )?;
+    Ok(())
+}
+
 // ───────────────────────── Hydration planning ─────────────────────────
 
 /// The membership refreshes the hydrator still owes, oldest debt first:

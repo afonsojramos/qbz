@@ -33,8 +33,15 @@ pub enum PlaylistTrackRef {
     Qobuz(u64),
     /// A library-projected row: a local file, or a Jellyfin/Subsonic track
     /// (their playlist storage identity is the projection). `path` is the
-    /// `local_tracks.file_path` value local playlists key on.
-    Library { track_id: i64, path: Option<String> },
+    /// `local_tracks.file_path` value local playlists key on;
+    /// `qobuz_track_id` is set for offline copies (`qobuz_download` rows),
+    /// which local playlists store as CATALOG ids while Qobuz-playlist
+    /// sidecars store the library row — containment must look both ways.
+    Library {
+        track_id: i64,
+        path: Option<String>,
+        qobuz_track_id: Option<u64>,
+    },
     /// A Plex track by rating key.
     Plex { rating_key: String },
 }
@@ -42,8 +49,14 @@ pub enum PlaylistTrackRef {
 impl PlaylistTrackRef {
     /// Build the ref for a library row the way the playlist writers key it:
     /// Plex rows carry the rating key in `file_path`; every other source is
-    /// the projected library row itself.
-    pub fn from_library_row(source: &str, track_id: i64, file_path: &str) -> Self {
+    /// the projected library row itself (offline copies also carrying their
+    /// catalog id).
+    pub fn from_library_row(
+        source: &str,
+        track_id: i64,
+        file_path: &str,
+        qobuz_track_id: Option<u64>,
+    ) -> Self {
         if source == "plex" {
             Self::Plex {
                 rating_key: file_path.to_string(),
@@ -52,6 +65,7 @@ impl PlaylistTrackRef {
             Self::Library {
                 track_id,
                 path: Some(file_path.to_string()),
+                qobuz_track_id: qobuz_track_id.filter(|_| source == "qobuz_download"),
             }
         }
     }
@@ -105,10 +119,18 @@ pub fn playlists_containing(
     for (ordinal, r) in refs.iter().enumerate() {
         match r {
             PlaylistTrackRef::Qobuz(id) => qobuz_ids.push((*id as i64, ordinal)),
-            PlaylistTrackRef::Library { track_id, path } => {
+            PlaylistTrackRef::Library {
+                track_id,
+                path,
+                qobuz_track_id,
+            } => {
                 lib_ids.push((*track_id, ordinal));
                 if let Some(p) = path {
                     lib_paths.push((p.as_str(), ordinal));
+                }
+                // Offline copies live in local playlists as catalog ids.
+                if let Some(qid) = qobuz_track_id {
+                    qobuz_ids.push((*qid as i64, ordinal));
                 }
             }
             PlaylistTrackRef::Plex { rating_key } => plex_keys.push((rating_key.as_str(), ordinal)),
@@ -356,18 +378,59 @@ mod tests {
     #[test]
     fn ref_construction_routes_plex_by_stored_key() {
         assert_eq!(
-            PlaylistTrackRef::from_library_row("plex", 99, "12345"),
+            PlaylistTrackRef::from_library_row("plex", 99, "12345", None),
             PlaylistTrackRef::Plex {
                 rating_key: "12345".into()
             }
         );
         assert_eq!(
-            PlaylistTrackRef::from_library_row("jellyfin", 7, "/j/item"),
+            PlaylistTrackRef::from_library_row("jellyfin", 7, "/j/item", None),
             PlaylistTrackRef::Library {
                 track_id: 7,
-                path: Some("/j/item".into())
+                path: Some("/j/item".into()),
+                qobuz_track_id: None,
             }
         );
+        // The catalog id sticks only to offline copies; a stray value on any
+        // other source is dropped rather than trusted.
+        assert_eq!(
+            PlaylistTrackRef::from_library_row("qobuz_download", 8, "/dl/a.flac", Some(555)),
+            PlaylistTrackRef::Library {
+                track_id: 8,
+                path: Some("/dl/a.flac".into()),
+                qobuz_track_id: Some(555),
+            }
+        );
+        assert_eq!(
+            PlaylistTrackRef::from_library_row("local", 9, "/m/b.flac", Some(555)),
+            PlaylistTrackRef::Library {
+                track_id: 9,
+                path: Some("/m/b.flac".into()),
+                qobuz_track_id: None,
+            }
+        );
+    }
+
+    #[test]
+    fn offline_copy_matches_catalog_membership_too() {
+        let c = conn();
+        owned_playlists(&c, &[(1, "Qobuz side", &[555])]);
+        let lp = crate::local_playlists::create(&c, "Local side", None, false).unwrap();
+        crate::local_playlists::add_tracks(
+            &c,
+            &lp,
+            &[crate::local_playlists::LocalPlaylistTrackInput::Qobuz(555)],
+        )
+        .unwrap();
+
+        let refs = [PlaylistTrackRef::Library {
+            track_id: 8,
+            path: Some("/dl/a.flac".into()),
+            qobuz_track_id: Some(555),
+        }];
+        let rows = playlists_containing(&c, &refs).unwrap();
+        assert_eq!(contained(&rows, ContainmentTarget::Qobuz(1)), Some(1));
+        assert_eq!(contained(&rows, ContainmentTarget::Local(lp)), Some(1));
     }
 
     #[test]
@@ -455,6 +518,7 @@ mod tests {
             PlaylistTrackRef::Library {
                 track_id: 42,
                 path: Some("/music/a.flac".into()),
+                qobuz_track_id: None,
             },
             PlaylistTrackRef::Plex {
                 rating_key: "rk-9".into(),
