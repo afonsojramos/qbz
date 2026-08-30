@@ -484,6 +484,43 @@ fn apply_writes_are_idempotent_and_persist() {
 }
 
 #[test]
+fn exact_alsa_mixer_route_map_survives_bundle_plan_and_apply() {
+    let p = scratch("alsa-mixer-map");
+    let route = "alsa-route-v1|card=by-id:usb-D50-00|pcm=hw|DEV=0";
+    let bundle = bundle_with(json!({
+        "audio": {
+            "output_device": "hw:1,0",
+            "backend_type": "Alsa",
+            "alsa_hardware_volume": false,
+            "alsa_hardware_volume_controls": {
+                (route): { "name": "D50 III", "index": 0 }
+            }
+        }
+    }));
+
+    let plan = plan(&bundle, &p, &ImportOptions::default(), &live()).expect("plan");
+    assert!(
+        find(&plan.applied, "audio.alsa_hardware_volume_controls").is_some(),
+        "exact route map must be classified"
+    );
+    assert!(plan.routing_critical_changed);
+    apply(&plan, &p, None).expect("apply map");
+
+    let audio = AudioSettingsStore::new_at(&p.data_root).unwrap().get_settings().unwrap();
+    let route_key =
+        serde_json::from_value::<qbz_audio::alsa_hardware_volume::StableAlsaRouteKey>(json!(route))
+            .unwrap();
+    assert_eq!(
+        audio
+            .alsa_hardware_volume_controls
+            .get(&route_key)
+            .map(|control| (control.name.as_str(), control.index)),
+        Some(("D50 III", 0))
+    );
+    cleanup(&p);
+}
+
+#[test]
 fn bundle_json_roundtrips_flat() {
     // The on-disk shape is flat (§2.9): header + domains at the top level.
     let bundle = bundle_with(json!({ "audio": { "gapless_enabled": true } }));

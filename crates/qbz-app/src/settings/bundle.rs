@@ -736,6 +736,7 @@ fn plan_audio(
                     | "output_device"
                     | "alsa_plugin"
                     | "alsa_hardware_volume"
+                    | "alsa_hardware_volume_controls"
                     | "dsd_mode"
             )
             || k.eq_ignore_ascii_case("volume");
@@ -922,15 +923,22 @@ fn plan_audio_machine(
         }
     }
 
-    // alsa_plugin / alsa_hardware_volume — apply only with a validated ALSA device.
+    // ALSA plugin / hardware-volume flag / exact route map — apply only with
+    // a validated ALSA device. Imported identities are data only; the active
+    // route is probed again before any mixer write.
     let resolved_backend_alsa = resolved_backend_is_alsa(map, current, fallback, forced_device);
-    for key in ["alsa_plugin", "alsa_hardware_volume"] {
+    for key in [
+        "alsa_plugin",
+        "alsa_hardware_volume",
+        "alsa_hardware_volume_controls",
+    ] {
         let Some(v) = map.get(key) else { continue };
         let no_change = alsa_field_no_change(current, key, v);
         if no_change {
             applied_line(plan, &format!("audio.{key}"), v, "");
         } else if device_survives && resolved_backend_alsa {
             applied_line(plan, &format!("audio.{key}"), v, "rides the ALSA device");
+            plan.routing_critical_changed = true;
         } else {
             plan.skipped.push(skip_line(
                 &format!("audio.{key}"),
@@ -997,6 +1005,12 @@ fn intent_flag_current(current: &AudioSettings, flag: &str) -> bool {
 fn alsa_field_no_change(current: &AudioSettings, key: &str, v: &Value) -> bool {
     match key {
         "alsa_hardware_volume" => v.as_bool() == Some(current.alsa_hardware_volume),
+        "alsa_hardware_volume_controls" => {
+            serde_json::to_value(&current.alsa_hardware_volume_controls)
+                .ok()
+                .as_ref()
+                == Some(v)
+        }
         "alsa_plugin" => {
             let cur = serde_json::to_value(current.alsa_plugin).unwrap_or(Value::Null);
             *v == cur
@@ -1166,6 +1180,11 @@ fn apply_audio_writes(data_root: &Path, writes: &[(&str, &Value)]) -> Result<(),
                 store.set_alsa_plugin(p)?;
             }
             "alsa_hardware_volume" => store.set_alsa_hardware_volume(as_bool(value))?,
+            "alsa_hardware_volume_controls" => {
+                let controls = serde_json::from_value((*value).clone())
+                    .map_err(|e| format!("alsa_hardware_volume_controls: {e}"))?;
+                store.set_alsa_hardware_volume_controls(controls)?;
+            }
             "exclusive_mode" => store.set_exclusive_mode(as_bool(value))?,
             "dac_passthrough" => store.set_dac_passthrough(as_bool(value))?,
             "pw_force_bitperfect" => store.set_pw_force_bitperfect(as_bool(value))?,

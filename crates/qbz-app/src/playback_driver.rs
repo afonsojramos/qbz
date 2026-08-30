@@ -1012,6 +1012,7 @@ mod tests {
             duration: dur,
             track_id: track,
             volume: 1.0,
+            hardware_volume_active: false,
             sample_rate: None,
             bit_depth: None,
             shuffle: None,
