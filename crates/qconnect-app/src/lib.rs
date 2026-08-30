@@ -26,6 +26,7 @@ pub use session::{
     deferred_join_reason,
     find_unique_renderer_id, is_local_renderer_active, is_peer_renderer_active,
     normalize_active_renderer_id, quality_from_max_audio_quality, queue_item_snapshot_for_cursor,
+    qconnect_millis_from_secs,
     refresh_local_renderer_id, renderer_allows_remote_volume, should_arm_renderer_watchdog,
     should_reask_queue_state, ConnectionDecision, LocalIdentity, QconnectFileAudioQualitySnapshot,
     QconnectLifecycleState, QconnectRendererInfo, QconnectSessionRendererState,

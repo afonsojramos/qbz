@@ -262,12 +262,12 @@ pub async fn deferred_renderer_join(
             qconnect_app::queue_resolution::resolve_queue_item_ids_from_queue_state(&queue, tid)
         })
         .unwrap_or((None, None, None));
-    let duration_secs = match current_track_id {
+    let duration_ms = match current_track_id {
         Some(track_id) => runtime
             .core()
             .get_track(track_id)
             .await
-            .map(|track| u64::from(track.duration))
+            .map(|track| qconnect_app::qconnect_millis_from_secs(u64::from(track.duration)))
             .unwrap_or(0),
         None => 0,
     };
@@ -275,7 +275,7 @@ pub async fn deferred_renderer_join(
         "playing_state": PLAYING_STATE_STOPPED,
         "buffer_state": BUFFER_STATE_OK,
         "current_position": 0,
-        "duration": duration_secs,
+        "duration": duration_ms,
         "queue_version": {
             "major": queue_version_ref.major,
             "minor": queue_version_ref.minor

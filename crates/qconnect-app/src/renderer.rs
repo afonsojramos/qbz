@@ -241,16 +241,16 @@ pub async fn ensure_remote_track_loaded(
     track_id: u64,
     max_audio_quality: Option<i32>,
     start_position_secs: u64,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     {
         let state = sync_state.lock().await;
         if is_recent_load_attempt(&state, track_id) {
-            return Ok(());
+            return Ok(false);
         }
     }
     let playback_state = engine.get_playback_state();
     if !should_reload_remote_track(&playback_state, track_id) {
-        return Ok(());
+        return Ok(false);
     }
 
     {
@@ -266,7 +266,8 @@ pub async fn ensure_remote_track_loaded(
         .unwrap_or(0);
     engine
         .start_track_stream(track_id, quality, duration_secs, start_position_secs)
-        .await
+        .await?;
+    Ok(true)
 }
 
 /// Force a (re)stream of `track_id` at `start_position_secs` when BECOMING the
@@ -292,16 +293,16 @@ pub async fn force_remote_track_stream(
     track_id: u64,
     max_audio_quality: Option<i32>,
     start_position_secs: u64,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let playback_state = engine.get_playback_state();
     if playback_state.track_id == track_id && engine.has_loaded_audio() {
-        return Ok(());
+        return Ok(false);
     }
 
     {
         let state = sync_state.lock().await;
         if is_recent_load_attempt(&state, track_id) {
-            return Ok(());
+            return Ok(false);
         }
     }
     {
@@ -317,7 +318,8 @@ pub async fn force_remote_track_stream(
         .unwrap_or(0);
     engine
         .start_track_stream(track_id, quality, duration_secs, start_position_secs)
-        .await
+        .await?;
+    Ok(true)
 }
 
 pub async fn apply_remote_loop_mode(
@@ -344,6 +346,7 @@ pub async fn apply_renderer_command(
             next_track,
             ..
         } => {
+            let mut loaded_at_reported_position = false;
             let resolved_playing_state = renderer_state.playing_state.or(*playing_state);
             let mut projection_renderer_state = renderer_state.clone();
             if projection_renderer_state.current_track.is_none() {
@@ -420,7 +423,7 @@ pub async fn apply_renderer_command(
                             .or(*current_position_ms)
                             .map(|ms| ms / 1000)
                             .unwrap_or(0);
-                        if let Err(err) = ensure_remote_track_loaded(
+                        match ensure_remote_track_loaded(
                             engine,
                             sync_state,
                             command_track.track_id,
@@ -429,10 +432,11 @@ pub async fn apply_renderer_command(
                         )
                         .await
                         {
-                            log::warn!(
+                            Ok(loaded) => loaded_at_reported_position |= loaded,
+                            Err(err) => log::warn!(
                                 "[QConnect] Failed to load remote track {}: {err}",
                                 command_track.track_id
-                            );
+                            ),
                         }
                     }
                 }
@@ -462,7 +466,7 @@ pub async fn apply_renderer_command(
                                 .or(*current_position_ms)
                                 .map(|ms| ms / 1000)
                                 .unwrap_or(0);
-                            if let Err(err) = force_remote_track_stream(
+                            match force_remote_track_stream(
                                 engine,
                                 sync_state,
                                 track_id,
@@ -471,9 +475,10 @@ pub async fn apply_renderer_command(
                             )
                             .await
                             {
-                                log::warn!(
+                                Ok(loaded) => loaded_at_reported_position |= loaded,
+                                Err(err) => log::warn!(
                                     "[QConnect] Cold-start load of remote track {track_id} failed: {err}"
-                                );
+                                ),
                             }
                         } else {
                             engine.resume()?;
@@ -524,7 +529,10 @@ pub async fn apply_renderer_command(
                 // to defend against in commit 147bcbd7. If hiccups return,
                 // revert this change and reintroduce a more targeted echo
                 // detector (UUID-based) instead of the all-or-nothing gate.
-                if !is_echo_reset && current_pos_secs.abs_diff(target_secs) > 2 {
+                if !loaded_at_reported_position
+                    && !is_echo_reset
+                    && current_pos_secs.abs_diff(target_secs) > 2
+                {
                     log::info!(
                         "[QConnect] SetState seek: current={}s target={}s",
                         current_pos_secs,
@@ -1554,6 +1562,11 @@ mod tests {
             calls.start_positions,
             vec![118],
             "takeback load must resume at the cloud position (118s), not 0"
+        );
+        assert_eq!(
+            calls.seeks,
+            Vec::<u64>::new(),
+            "the load already starts at 118s; the same SetState must not seek again"
         );
     }
 }

@@ -66,6 +66,11 @@ pub const JOIN_SESSION_REASON_RECONNECTION: i32 = 2;
 /// while playingState==PLAY). See 05-sync-status-queue.md §1.
 pub const QCONNECT_RENDERER_LOST_TIMEOUT_MS: u64 = 12_000;
 
+/// Convert player/catalog seconds to the QConnect wire unit exactly once.
+pub const fn qconnect_millis_from_secs(seconds: u64) -> u64 {
+    seconds.saturating_mul(1_000)
+}
+
 /// Pure arming predicate for the renderer-liveness watchdog: arm only while the
 /// active renderer is a peer AND its reported playing_state is PLAYING.
 pub fn should_arm_renderer_watchdog(playing_state: Option<i32>, is_active_peer: bool) -> bool {
@@ -496,6 +501,12 @@ pub fn build_effective_renderer_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seconds_convert_to_qconnect_milliseconds_once() {
+        assert_eq!(qconnect_millis_from_secs(317), 317_000);
+        assert_eq!(qconnect_millis_from_secs(u64::MAX), u64::MAX);
+    }
 
     #[test]
     fn deferred_join_reason_is_reconnection_only_after_a_drop() {

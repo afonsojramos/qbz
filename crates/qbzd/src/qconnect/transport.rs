@@ -20,7 +20,6 @@ use std::sync::{Arc, OnceLock};
 use qbz_app::shell::AppRuntime;
 use qconnect_transport_ws::WsTransportConfig;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::adapter::DaemonAdapter;
 
@@ -28,8 +27,6 @@ const DEFAULT_QCONNECT_DEVICE_BRAND: &str = "QBZ";
 const DEFAULT_QCONNECT_DEVICE_MODEL: &str = "QBZ";
 const DEFAULT_QCONNECT_DEVICE_TYPE: i32 = 5; // computer
 const DEFAULT_QCONNECT_SOFTWARE_PREFIX: &str = "qbz";
-const QCONNECT_QWS_TOKEN_KIND: &str = "jwt_qws";
-const QCONNECT_QWS_CREATE_TOKEN_PATH: &str = "/qws/createToken";
 
 type Runtime = Arc<AppRuntime<DaemonAdapter>>;
 
@@ -519,75 +516,13 @@ async fn fetch_qconnect_transport_credentials(
         .clone()
         .ok_or_else(|| "qws/createToken requires an initialized API client".to_string())?;
 
-    let app_id = client
-        .app_id()
+    let (endpoint, _expires_at, jwt) = client
+        .create_qconnect_token()
         .await
-        .map_err(|err| format!("qws/createToken requires initialized API client: {err}"))?;
-    let user_auth_token = client
-        .auth_token()
-        .await
-        .map_err(|err| format!("qws/createToken requires authenticated user: {err}"))?;
-
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        "X-App-Id",
-        reqwest::header::HeaderValue::from_str(&app_id)
-            .map_err(|_| "invalid X-App-Id header value".to_string())?,
-    );
-    headers.insert(
-        "X-User-Auth-Token",
-        reqwest::header::HeaderValue::from_str(&user_auth_token)
-            .map_err(|_| "invalid X-User-Auth-Token header value".to_string())?,
-    );
-
-    let url = qbz_qobuz::endpoints::build_url(QCONNECT_QWS_CREATE_TOKEN_PATH);
-    let response = client
-        .get_http()
-        .post(&url)
-        .headers(headers)
-        .form(&[
-            ("jwt", QCONNECT_QWS_TOKEN_KIND),
-            ("user_auth_token_needed", "true"),
-            ("strong_auth_needed", "true"),
-        ])
-        .send()
-        .await
-        .map_err(|err| format!("qws/createToken HTTP request failed: {err}"))?;
-
-    let status = response.status();
-    // Read the raw body and check status BEFORE decoding: a 403's body is an
-    // edge/WAF HTML or empty page, not our JSON envelope, so a bare `.json()`
-    // surfaced it as a misleading "response decode failed" instead of the real
-    // status (issue #637).
-    let body = response
-        .text()
-        .await
-        .map_err(|err| format!("qws/createToken response read failed: {err}"))?;
-
-    if !status.is_success() {
-        let preview = body.trim().chars().take(300).collect::<String>();
-        return Err(format!("qws/createToken status {status}: {preview}"));
-    }
-
-    let payload: Value = serde_json::from_str(&body)
-        .map_err(|err| format!("qws/createToken response decode failed: {err}"))?;
-
-    let jwt_qws_payload = payload
-        .get("jwt_qws")
-        .ok_or_else(|| "qws/createToken response missing jwt_qws payload".to_string())?;
-
-    let endpoint_url = normalize_opt_string(
-        jwt_qws_payload
-            .get("endpoint")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-    );
-    let jwt_qws = normalize_opt_string(
-        jwt_qws_payload
-            .get("jwt")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-    );
+        .map_err(|err| format!("qws/createToken failed: {err}"))?
+        .into_parts();
+    let endpoint_url = normalize_opt_string(endpoint);
+    let jwt_qws = normalize_opt_string(Some(jwt));
 
     if endpoint_url.is_none() {
         return Err("qws/createToken response missing jwt_qws.endpoint".to_string());

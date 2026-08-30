@@ -42,6 +42,7 @@ pub mod lyrics;
 pub mod offline_gate;
 pub mod performers;
 pub mod purchases;
+pub mod qconnect_auth;
 pub mod retry;
 
 // Re-export main types
@@ -62,3 +63,4 @@ pub use lyrics::{
     QobuzLyricsPlainLine, QobuzLyricsPublisher, QobuzLyricsTranslation, QobuzLyricsUrls,
     QobuzLyricsWord,
 };
+pub use qconnect_auth::QwsAuthToken;

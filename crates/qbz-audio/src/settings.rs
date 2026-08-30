@@ -1092,6 +1092,9 @@ mod tests {
         {
             let store = AudioSettingsStore::new_at(&dir).expect("open store");
             store
+                .set_output_device(Some("hw:CARD=TestDAC,DEV=0"))
+                .expect("set output device");
+            store
                 .set_sync_audio_on_startup(true)
                 .expect("set sync flag");
             store
@@ -1111,6 +1114,10 @@ mod tests {
         let reopened = AudioSettingsStore::new_at(&dir).expect("reopen store");
         let settings = reopened.get_settings().expect("get settings");
 
+        assert_eq!(
+            settings.output_device.as_deref(),
+            Some("hw:CARD=TestDAC,DEV=0")
+        );
         assert!(settings.sync_audio_on_startup);
         assert_eq!(settings.quality_fallback_behavior, "always_fallback");
         assert!(settings.reserve_dac_while_running);

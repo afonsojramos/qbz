@@ -102,6 +102,11 @@ pub mod paths {
     // Session (CMAF streaming)
     pub const SESSION_START: &str = "/session/start";
 
+    // Qobuz Connect cloud authentication. Both are form-encoded POSTs; see
+    // qobuz-api-inferred-openapi-v10.0.0.0-beta.yaml.
+    pub const QWS_CREATE_TOKEN: &str = "/qws/createToken";
+    pub const QWS_DELEGATE_AUTH: &str = "/qws/delegateAuth";
+
     // File (CMAF streaming)
     pub const FILE_URL: &str = "/file/url";
 
