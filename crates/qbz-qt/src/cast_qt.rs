@@ -57,7 +57,8 @@ use std::sync::{Arc, OnceLock};
 
 use qbz_app::shell::AppRuntime;
 use qbz_cast::{
-    CastPositionInfo, ChromecastHandle, DeviceDiscovery, DiscoveredDevice, DiscoveredDlnaDevice,
+    CastError, CastPositionInfo, ChromecastHandle, DeviceDiscovery, DiscoveredDevice,
+    DiscoveredDlnaDevice,
     DlnaConnection, DlnaDiscovery, DlnaMetadata, DlnaPositionInfo, MediaMetadata, MediaServer,
 };
 use qbz_core::LoggingAdapter;
@@ -84,6 +85,9 @@ const CAST_POSITION_SIGNAL_MIN_SECS: f64 = 1.0;
 const CAST_PREMATURE_STOP_POLLS_MAX: u32 = 4;
 /// Consecutive failed position reads before the session is declared lost.
 const LOST_POLL_MAX: u32 = 5;
+/// Minimum spacing between two volume commands sent to a renderer while a
+/// slider is being dragged (one SOAP / Cast round trip each).
+const VOLUME_COALESCE_MS: u64 = 120;
 
 // ---------------------------------------------------------------------------
 // Protocol tag
@@ -176,6 +180,12 @@ struct CastInner {
     cast_premature_stop_polls: u32,
     // Consecutive failed position reads (device-disappeared detection).
     lost_polls: u32,
+    // Volume coalescer: the latest requested level and whether the single
+    // sender task is alive. A slider drag hands over ~30 values/s; the
+    // renderer gets the newest one every VOLUME_COALESCE_MS, last value
+    // always delivered.
+    pending_volume: Option<f32>,
+    volume_worker_busy: bool,
     // QConnect coexistence (§11.4): whether QConnect was on before casting,
     // so `disconnect` restores exactly the sessions `connect` suspended.
     qconnect_was_on_before_cast: bool,
@@ -798,33 +808,71 @@ impl CastService {
         Ok(true)
     }
 
-    pub(crate) async fn set_volume_if_cast(&self, volume: f32) -> Result<bool, String> {
-        let proto = {
-            let inner = self.inner.lock().await;
-            match inner.protocol {
-                Some(p) => p,
-                None => return Ok(false),
+    pub(crate) async fn set_volume_if_cast(self: &Arc<Self>, volume: f32) -> Result<bool, String> {
+        let v = volume.clamp(0.0, 1.0);
+        let spawn_worker = {
+            let mut inner = self.inner.lock().await;
+            if inner.protocol.is_none() {
+                return Ok(false);
+            }
+            // COALESCE: a slider drag arrives as one call per pixel and each
+            // one used to be a full SOAP / Cast round trip (~80 in 4 s on the
+            // 2026-08-29 smoke). Keep only the newest level and let ONE
+            // worker drain it every VOLUME_COALESCE_MS; the last value always
+            // reaches the renderer.
+            inner.pending_volume = Some(v);
+            if inner.volume_worker_busy {
+                false
+            } else {
+                inner.volume_worker_busy = true;
+                true
             }
         };
-        let v = volume.clamp(0.0, 1.0);
-        match proto {
-            CastProtocol::Chromecast => {
-                let inner = self.inner.lock().await;
-                if let Some(h) = inner.chromecast.as_ref() {
-                    h.set_volume(v).map_err(|e| e.to_string())?;
-                }
-            }
-            CastProtocol::Dlna => {
-                let mut inner = self.inner.lock().await;
-                if let Some(c) = inner.dlna.as_mut() {
-                    c.set_volume(v).await.map_err(|e| e.to_string())?;
-                }
-            }
-        }
-        // Reflect the drag on the bar: the local set_volume is skipped while
-        // casting and the cast poll doesn't push volume.
+        // Reflect the drag on the bar immediately: the local set_volume is
+        // skipped while casting and the cast poll doesn't push volume.
         crate::now_playing::set_volume(v);
+        if spawn_worker {
+            let svc = self.clone();
+            crate::spawn(async move { svc.drain_volume().await });
+        }
         Ok(true)
+    }
+
+    /// The single volume sender: takes the newest pending level, sends it,
+    /// waits VOLUME_COALESCE_MS, repeats until nothing is pending.
+    async fn drain_volume(self: &Arc<Self>) {
+        loop {
+            let (proto, v) = {
+                let mut inner = self.inner.lock().await;
+                match (inner.protocol, inner.pending_volume.take()) {
+                    (Some(p), Some(v)) => (p, v),
+                    _ => {
+                        inner.volume_worker_busy = false;
+                        return;
+                    }
+                }
+            };
+            let result: Result<(), String> = match proto {
+                CastProtocol::Chromecast => {
+                    let inner = self.inner.lock().await;
+                    match inner.chromecast.as_ref() {
+                        Some(h) => h.set_volume(v).map_err(|e| e.to_string()),
+                        None => Ok(()),
+                    }
+                }
+                CastProtocol::Dlna => {
+                    let mut inner = self.inner.lock().await;
+                    match inner.dlna.as_mut() {
+                        Some(c) => c.set_volume(v).await.map_err(|e| e.to_string()),
+                        None => Ok(()),
+                    }
+                }
+            };
+            if let Err(e) = result {
+                log::warn!("[qbz-qt][Cast] set volume failed: {e}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(VOLUME_COALESCE_MS)).await;
+        }
     }
 
     // NOTE: next/previous are intentionally NOT gated. While casting, the
@@ -955,18 +1003,43 @@ impl CastService {
         // Read position/state from the active renderer.
         let read = match proto {
             CastProtocol::Chromecast => {
-                let info: Option<CastPositionInfo> = {
+                // TYPED read, not `.ok()`: before anything is loaded there is
+                // no media session, and `get_media_position` says so with
+                // `NoMediaSession` without touching the network. That is an
+                // IDLE receiver, not a lost one — the old `.ok()` folded it
+                // into "no answer" and every connect made while paused was
+                // dropped after exactly LOST_POLL_MAX seconds (2026-08-29
+                // smoke, three times in a row). While idle, liveness is
+                // proven by the receiver-level `get_status` request/response
+                // instead, which needs no media session.
+                let info: Result<CastPositionInfo, CastError> = {
                     let inner = self.inner.lock().await;
-                    inner
-                        .chromecast
-                        .as_ref()
-                        .and_then(|h| h.get_media_position().ok())
+                    match inner.chromecast.as_ref() {
+                        Some(h) => match h.get_media_position() {
+                            Err(CastError::NoMediaSession) => match h.get_status() {
+                                Ok(_) => {
+                                    drop(inner);
+                                    self.inner.lock().await.lost_polls = 0;
+                                    return;
+                                }
+                                Err(e) => Err(e),
+                            },
+                            other => other,
+                        },
+                        None => Err(CastError::NotConnected),
+                    }
                 };
-                info.map(|i| {
-                    let st = i.player_state.to_uppercase();
-                    let playing = st == "PLAYING";
-                    (i.position_secs, i.duration_secs, st, playing)
-                })
+                match info {
+                    Ok(i) => {
+                        let st = i.player_state.to_uppercase();
+                        let playing = st == "PLAYING";
+                        Some((i.position_secs, i.duration_secs, st, playing))
+                    }
+                    Err(e) => {
+                        log::debug!("[qbz-qt][Cast] chromecast read failed: {e}");
+                        None
+                    }
+                }
             }
             CastProtocol::Dlna => {
                 let info: Option<DlnaPositionInfo> = {

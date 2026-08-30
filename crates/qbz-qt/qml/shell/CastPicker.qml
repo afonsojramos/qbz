@@ -289,7 +289,10 @@ Popup {
                 Text {
                     visible: QbzCast.connected && QbzCast.qualityDetail !== ""
                     width: parent.width
-                    height: visible ? implicitHeight : 0
+                    // No `height:` binding: a Text without one takes its
+                    // implicit height and a Column skips invisible items;
+                    // the explicit binding raised a "binding loop for
+                    // property height" warning on every connect.
                     text: QbzSession.tr("Streaming {} · {}", QbzSession.trRev)
                         .replace("{}", QbzCast.protocol === "dlna" ? "DLNA" : "Chromecast")
                         .replace("{}", QbzCast.qualityDetail) + root.qualitySuffix

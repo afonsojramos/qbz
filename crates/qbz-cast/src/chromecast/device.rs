@@ -229,7 +229,10 @@ impl CastDeviceConnection {
 
     /// Get current media position for seekbar updates
     pub fn get_media_position(&mut self) -> Result<CastPositionInfo, CastError> {
-        let session = self.session.as_ref().ok_or(CastError::NotConnected)?;
+        // No media app launched yet: the receiver is connected and healthy,
+        // there is simply nothing to read. Callers must not read this as
+        // "device gone" (the Qt poll did, and dropped every idle connect).
+        let session = self.session.as_ref().ok_or(CastError::NoMediaSession)?;
         let destination = &session.transport_id;
 
         let status = self

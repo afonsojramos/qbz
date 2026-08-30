@@ -49,6 +49,9 @@ pub struct DlnaConnection {
     // CurrentURI when a track ends, which would otherwise make a bare Play
     // (the manual play button, or a late auto-advance) fail permanently.
     last_set_uri_payload: Option<String>,
+    // Last 0-100 volume actually sent, so a drag that quantizes to the same
+    // step does not repeat the SOAP call.
+    last_volume_sent: Option<u32>,
     // Set by `load_media`, cleared by `play`. When true the URI was just set, so
     // `play` skips its idle pre-check (the content is already current) and avoids
     // a redundant SetAVTransportURI. A bare play (manual button / resume) leaves
@@ -106,6 +109,7 @@ impl DlnaConnection {
             rendering_control_service,
             current_uri: None,
             last_set_uri_payload: None,
+            last_volume_sent: None,
             uri_freshly_set: false,
             is_playing: false,
         })
@@ -456,6 +460,9 @@ impl DlnaConnection {
 
         // DLNA volume is typically 0-100
         let dlna_volume = ((volume.clamp(0.0, 1.0) * 100.0) as u32).min(100);
+        if self.last_volume_sent == Some(dlna_volume) {
+            return Ok(());
+        }
 
         let payload = format!(
             "<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredVolume>{}</DesiredVolume>",
@@ -463,6 +470,7 @@ impl DlnaConnection {
         );
 
         Self::run_action(rc_service, &self.device_url, "SetVolume", &payload, 10).await?;
+        self.last_volume_sent = Some(dlna_volume);
 
         log::info!("DLNA: Set volume to {}", dlna_volume);
         Ok(())

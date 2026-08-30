@@ -349,7 +349,7 @@ pub(crate) async fn play_all_tracks(
     // `touch_play` below is frontend-local recency bookkeeping that runs
     // regardless of where the audio plays (the Slint collection-play flow
     // records it on the routed path too).
-    if !crate::playback_qt::route_play_to_peer(runtime, first_id).await {
+    if !crate::playback_qt::route_play_remote(runtime, first_id, "play_all_tracks").await {
         if let Err(e) = crate::playback_qt::play_resolved_offline_aware(runtime, first_id, 0).await
         {
             log::error!("[qbz-qt] myqbz_play: play_track {first_id} failed: {e}");
@@ -523,7 +523,7 @@ pub(crate) fn item_action(source_item_id: String, action: String) {
                 let first_id = anchor.track_id;
                 // QConnect CONTROLLER mode (§7): route the play to the peer
                 // (after the funnel, before the local audible step).
-                if crate::playback_qt::route_play_to_peer(&runtime, first_id).await {
+                if crate::playback_qt::route_play_remote(&runtime, first_id, "item_action").await {
                     return;
                 }
                 if let Err(e) =
@@ -753,7 +753,7 @@ pub(crate) fn play_inline_track(item_source_item_id: String, track_id: String, a
                 let first_id = anchor.track_id;
                 // QConnect CONTROLLER mode (§7): route the play to the peer
                 // (after the funnel, before the local audible step).
-                if crate::playback_qt::route_play_to_peer(&runtime, first_id).await {
+                if crate::playback_qt::route_play_remote(&runtime, first_id, "play_inline_track").await {
                     return;
                 }
                 if let Err(e) =
