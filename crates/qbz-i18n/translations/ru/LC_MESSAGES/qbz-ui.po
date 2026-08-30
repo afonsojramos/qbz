@@ -6272,3 +6272,15 @@ msgstr "Показать панели фильтров"
 
 msgid "Hide filter panels"
 msgstr "Скрыть панели фильтров"
+
+msgid "Already in"
+msgstr "Уже в"
+
+msgid "Playlist index updating..."
+msgstr "Индекс плейлистов обновляется..."
+
+msgid "{} of {}"
+msgstr "{} из {}"
+
+msgid "Last playlist"
+msgstr "Последний плейлист"

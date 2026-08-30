@@ -6236,3 +6236,15 @@ msgstr "フィルターパネルを表示"
 
 msgid "Hide filter panels"
 msgstr "フィルターパネルを非表示"
+
+msgid "Already in"
+msgstr "追加済み"
+
+msgid "Playlist index updating..."
+msgstr "プレイリストの索引を更新中..."
+
+msgid "{} of {}"
+msgstr "{} / {}"
+
+msgid "Last playlist"
+msgstr "前回のプレイリスト"

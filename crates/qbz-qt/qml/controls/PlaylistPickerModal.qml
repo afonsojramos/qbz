@@ -42,6 +42,21 @@ Item {
     readonly property var rows: doc.playlists || []
     readonly property var dup: doc.dup || ({})
     readonly property int trackCount: doc.trackCount || 0
+    // Session-local pinned target (last successful add); null when unset,
+    // deleted, unwritable, or filtered out by the current query.
+    readonly property var lastUsed: doc.lastUsed || null
+    // Containment strip: writable playlists already holding carried tracks,
+    // honest per alreadyState ("loading"|"complete"|"updating"|"unavailable").
+    readonly property var alreadyIn: doc.alreadyIn || []
+    readonly property string alreadyState: doc.alreadyState || ""
+    // The strip renders only when it can back a claim: complete with matches,
+    // or updating (where partial matches show under an explicit caveat).
+    readonly property bool alreadyShowing: !root.creatingOpen
+        && (root.alreadyState === "updating"
+            || (root.alreadyState === "complete" && root.alreadyIn.length > 0))
+    // Independently collapsible (session-local: the modal mounts once per
+    // app run and this deliberately survives resetLocals()).
+    property bool alreadyCollapsed: false
     // The carried payload is LocalLibrary refs (counter wording only).
     readonly property bool localMode: doc.localMode === true
     readonly property bool creatingOpen: doc.creatingOpen === true
@@ -368,6 +383,127 @@ Item {
                             }
                         }
                     }
+
+                    // --- "Already in" containment strip ----------------
+                    // Writable playlists that already hold carried tracks.
+                    // Shown only when the index can back the claim: complete
+                    // with matches, or updating under an explicit caveat —
+                    // an empty answer from an incomplete index says NOTHING
+                    // and renders nothing (ADD_TO_PLAYLIST_REDESIGN.md).
+                    Column {
+                        width: parent.width - 48
+                        spacing: 8
+                        visible: root.alreadyShowing
+
+                        Item {
+                            width: parent.width
+                            height: 20
+                            Row {
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 6
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: QbzSession.tr("Already in", QbzSession.trRev)
+                                    color: theme.textSecondary
+                                    font.pixelSize: theme.fontLegal
+                                    font.weight: theme.weightMedium
+                                }
+                                QbzIcon {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    name: root.alreadyCollapsed ? "chevron-down" : "chevron-up"
+                                    width: 12
+                                    height: 12
+                                    tintName: alreadyToggle.containsMouse ? "textPrimary" : "muted"
+                                }
+                            }
+                            MouseArea {
+                                id: alreadyToggle
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.alreadyCollapsed = !root.alreadyCollapsed
+                            }
+                            Text {
+                                visible: root.alreadyState === "updating"
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: QbzSession.tr("Playlist index updating...", QbzSession.trRev)
+                                color: theme.textMuted
+                                font.pixelSize: theme.fontLegal
+                                font.italic: true
+                            }
+                        }
+
+                        ListView {
+                            visible: !root.alreadyCollapsed && root.alreadyIn.length > 0
+                            width: parent.width
+                            height: visible ? 32 : 0
+                            orientation: ListView.Horizontal
+                            spacing: 8
+                            clip: true
+                            boundsBehavior: Flickable.StopAtBounds
+                            model: root.alreadyIn
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: alreadyRow.implicitWidth + 20
+                                height: 30
+                                radius: 6
+                                color: alreadyArea.containsMouse
+                                    ? theme.surfaceHover : theme.surfaceElevated
+                                border.width: 1
+                                border.color: theme.borderSubtle
+                                Row {
+                                    id: alreadyRow
+                                    anchors.centerIn: parent
+                                    spacing: 6
+                                    QbzIcon {
+                                        visible: modelData.isLocal === true
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        name: "hard-drive"
+                                        width: 12
+                                        height: 12
+                                        tintName: "muted"
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        // Cap so one long name cannot push the
+                                        // whole strip off-card; implicitWidth
+                                        // is layout-independent, so this is
+                                        // not a binding loop.
+                                        width: Math.min(implicitWidth, 180)
+                                        text: modelData.name
+                                        color: theme.textPrimary
+                                        font.pixelSize: theme.fontLegal
+                                        elide: Text.ElideRight
+                                    }
+                                    // The multi-track card: "2 of 5". A full
+                                    // or single-track containment says it by
+                                    // presence alone.
+                                    Text {
+                                        visible: root.trackCount > 1
+                                            && modelData.contained < root.trackCount
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: QbzSession.tr("{} of {}", QbzSession.trRev)
+                                              .replace("{}", modelData.contained)
+                                              .replace("{}", root.trackCount)
+                                        color: theme.textMuted
+                                        font.pixelSize: theme.fontLegal
+                                    }
+                                }
+                                MouseArea {
+                                    id: alreadyArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    // Selecting it is the useful action: "add
+                                    // the missing 3 of 5" is one click plus
+                                    // the dup-confirm's "only new" answer.
+                                    onClicked: root.selectRow(modelData)
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -426,9 +562,11 @@ Item {
                 // 43 input + 4 gap.
                 y: 68 + 1 + 24 + 20 + 8 + 43 + 4
                 width: parent.width - 48
-                // create row 41 + 1 divider, 41 per shown row, 41 no-results,
-                // 1 + 34 overflow. Tauri max-height 320 + border.
-                height: Math.min(2 + 42 + root.shown * 41
+                // create row 41 + 1 divider, pinned last-used 41 + 1, 41 per
+                // shown row, 41 no-results, 1 + 34 overflow. Tauri max-height
+                // 320 + border.
+                height: Math.min(2 + 42 + (root.lastUsed !== null ? 42 : 0)
+                                 + root.shown * 41
                                  + ((root.rows.length === 0 && root.filterText !== "") ? 41 : 0)
                                  + (root.overflow > 0 ? 35 : 0), 322)
                 radius: theme.radiusSm
@@ -486,6 +624,61 @@ Item {
                             }
                         }
                         Rectangle { width: parent.width; height: 1; color: theme.borderSubtle }
+
+                        // Session's last successful target, pinned above the
+                        // results. Rust already validated it (still listed,
+                        // still writable) and de-duplicated it from `rows`;
+                        // under a search it only survives a matching query.
+                        Rectangle {
+                            visible: root.lastUsed !== null
+                            width: parent.width
+                            height: visible ? 41 : 0
+                            color: lastUsedArea.containsMouse ? theme.surfaceHover : "transparent"
+                            QbzIcon {
+                                id: lastUsedGlyph
+                                anchors.left: parent.left
+                                anchors.leftMargin: 12
+                                anchors.verticalCenter: parent.verticalCenter
+                                name: "clock"
+                                width: 14
+                                height: 14
+                                tintName: "muted"
+                            }
+                            Text {
+                                anchors.left: lastUsedGlyph.right
+                                anchors.leftMargin: 8
+                                anchors.right: lastUsedCaption.left
+                                anchors.rightMargin: 8
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: root.lastUsed ? root.lastUsed.name : ""
+                                color: theme.textPrimary
+                                font.pixelSize: theme.fontLink
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                id: lastUsedCaption
+                                anchors.right: parent.right
+                                anchors.rightMargin: 12
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: QbzSession.tr("Last playlist", QbzSession.trRev)
+                                color: theme.textMuted
+                                font.pixelSize: theme.fontLegal
+                                font.italic: true
+                            }
+                            MouseArea {
+                                id: lastUsedArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.selectRow(root.lastUsed)
+                            }
+                        }
+                        Rectangle {
+                            visible: root.lastUsed !== null
+                            width: parent.width
+                            height: visible ? 1 : 0
+                            color: theme.borderSubtle
+                        }
 
                         Repeater {
                             model: root.rows.slice(0, root.windowSize)
