@@ -4733,6 +4733,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "qconnect-lan"
+version = "2.0.2"
+dependencies = [
+ "if-addrs 0.15.0",
+ "mdns-sd",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "socket2",
+ "thiserror 2.0.20",
+ "tiny_http",
+ "tokio",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "qconnect-protocol"
 version = "2.0.2"
 dependencies = [
