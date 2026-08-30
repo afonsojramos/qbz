@@ -6213,3 +6213,36 @@ msgstr "Historique d’écoute effacé."
 
 msgid "Couldn't clear listening history."
 msgstr "Impossible d’effacer l’historique d’écoute."
+
+msgid "Checking ALSA mixer controls…"
+msgstr "Vérification des commandes du mixeur ALSA…"
+
+msgid "This device exposes multiple playback controls. Choose which one QBZ should use."
+msgstr "Ce périphérique expose plusieurs commandes de lecture. Choisissez celle que QBZ doit utiliser."
+
+msgid "The saved mixer control is no longer available. Choose another control."
+msgstr "La commande de mixage enregistrée n’est plus disponible. Choisissez-en une autre."
+
+msgid "QBZ does not have permission to read this device's ALSA mixer."
+msgstr "QBZ n’est pas autorisé à lire le mixeur ALSA de ce périphérique."
+
+msgid "The ALSA mixer is busy. Close the app using it and try again."
+msgstr "Le mixeur ALSA est occupé. Fermez l’application qui l’utilise et réessayez."
+
+msgid "The selected ALSA device is no longer available."
+msgstr "Le périphérique ALSA sélectionné n’est plus disponible."
+
+msgid "This ALSA device does not expose a mixer."
+msgstr "Ce périphérique ALSA n’expose aucun mixeur."
+
+msgid "QBZ could not write the selected ALSA mixer control. Direct playback remains fixed at 100%."
+msgstr "QBZ n’a pas pu modifier la commande du mixeur ALSA sélectionnée. La lecture directe reste fixée à 100 %."
+
+msgid "Selected mixer control"
+msgstr "Commande de mixage sélectionnée"
+
+msgid "Choose mixer control"
+msgstr "Choisir la commande de mixage"
+
+msgid "Change mixer control"
+msgstr "Changer la commande de mixage"

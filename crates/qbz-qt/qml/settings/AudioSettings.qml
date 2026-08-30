@@ -25,6 +25,24 @@ Column {
     id: root
 
     property var doc: ({})
+    property string openedHardwareVolumeChoice: ""
+
+    function maybeOpenHardwareVolumeChoice() {
+        const status = root.doc.alsaHardwareVolumeStatus || ""
+        const needsChoice = status === "ambiguous" || status === "stale"
+        const token = root.doc.alsaHardwareVolumeChoiceToken || ""
+        if (!needsChoice) {
+            root.openedHardwareVolumeChoice = ""
+            return
+        }
+        if (token !== "" && token !== root.openedHardwareVolumeChoice) {
+            root.openedHardwareVolumeChoice = token
+            Qt.callLater(function () { hardwareVolumeSelect.openPopup() })
+        }
+    }
+
+    onDocChanged: maybeOpenHardwareVolumeChoice()
+    Component.onCompleted: maybeOpenHardwareVolumeChoice()
 
     QbzTheme { id: theme }
 
@@ -147,6 +165,55 @@ Column {
         QbzToggle {
             checked: root.doc.alsaHardwareVolume === true
             onToggled: function (v) { QbzBridge.settingsBool("alsa-hardware-volume", v) }
+        }
+    }
+    Text {
+        visible: root.doc.backendIsAlsa === true
+                 && root.doc.alsaDirectSelected === true
+                 && (root.doc.alsaHardwareVolumeMessage || "") !== ""
+        width: parent.width
+        text: root.doc.alsaHardwareVolumeMessage || ""
+        color: (root.doc.alsaHardwareVolumeStatus || "") === "probing"
+            ? theme.textMuted : theme.warning
+        font.pixelSize: 12
+        wrapMode: Text.WordWrap
+    }
+    SettingRow {
+        visible: root.doc.backendIsAlsa === true
+                 && root.doc.alsaDirectSelected === true
+                 && (root.doc.alsaHardwareVolumeSelected || "") !== ""
+        label: QbzSession.tr("Selected mixer control", QbzSession.trRev)
+        Text {
+            text: root.doc.alsaHardwareVolumeSelected || ""
+            color: theme.textPrimary
+            font.pixelSize: theme.fontBody
+            font.weight: theme.weightMedium
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
+    SettingRow {
+        visible: root.doc.backendIsAlsa === true
+                 && root.doc.alsaDirectSelected === true
+                 && ((root.doc.alsaHardwareVolumeStatus || "") === "ambiguous"
+                     || (root.doc.alsaHardwareVolumeStatus || "") === "stale"
+                     || (root.doc.alsaHardwareVolume === true
+                         && root.doc.alsaHardwareVolumeCanChange === true))
+                 && (root.doc.alsaHardwareVolumeOptions || []).length > 0
+        label: ((root.doc.alsaHardwareVolumeStatus || "") === "ambiguous"
+                || (root.doc.alsaHardwareVolumeStatus || "") === "stale")
+            ? QbzSession.tr("Choose mixer control", QbzSession.trRev)
+            : QbzSession.tr("Change mixer control", QbzSession.trRev)
+        QbzSelect {
+            id: hardwareVolumeSelect
+            menuWidth: 260
+            popupWidth: 480
+            searchable: (root.doc.alsaHardwareVolumeOptions || []).length > 8
+            options: root.doc.alsaHardwareVolumeOptions || []
+            currentIndex: root.doc.alsaHardwareVolumeIndex !== undefined
+                ? root.doc.alsaHardwareVolumeIndex : -1
+            onSelected: function (i) {
+                QbzBridge.settingsSelect("alsa-hardware-volume-control", i)
+            }
         }
     }
     SettingRow {

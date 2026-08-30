@@ -503,6 +503,7 @@ mod tests {
             duration: 200,
             track_id: 42,
             volume,
+            hardware_volume_active: false,
             sample_rate: None,
             bit_depth: None,
             shuffle: Some(false),

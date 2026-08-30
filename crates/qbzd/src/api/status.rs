@@ -45,6 +45,9 @@ pub struct AudioStatus {
     pub bit_perfect: Option<String>,
     pub sample_rate: Option<u32>,
     pub bit_depth: Option<u32>,
+    pub hardware_volume_enabled: bool,
+    pub hardware_volume_active: bool,
+    pub hardware_volume_control: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,6 +155,13 @@ fn assemble_live(state: &super::ApiState) -> StatusDoc {
     let settings = state.audio.get_settings().ok();
     let backend = settings.as_ref().and_then(|s| backend_label(s.backend_type));
     let configured_device = settings.as_ref().and_then(|s| s.output_device.clone());
+    let hardware_volume_enabled = settings
+        .as_ref()
+        .is_some_and(|settings| settings.alsa_hardware_volume);
+    let hardware_volume_control = settings
+        .as_ref()
+        .and_then(|settings| settings.selected_alsa_hardware_volume_control())
+        .map(|control| control.to_string());
     let device_present = match &configured_device {
         None => true, // system default is always "present"
         Some(dev) => device_open || device_is_present(state, dev),
@@ -193,6 +203,9 @@ fn assemble_live(state: &super::ApiState) -> StatusDoc {
             bit_perfect: bitperfect_label(ev.bit_perfect_mode),
             sample_rate: ev.sample_rate,
             bit_depth: ev.bit_depth,
+            hardware_volume_enabled,
+            hardware_volume_active: ev.hardware_volume_active,
+            hardware_volume_control,
         },
         playback: PlaybackStatus {
             state: pstate.to_string(),
@@ -307,6 +320,9 @@ mod tests {
                 bit_perfect: None,
                 sample_rate: None,
                 bit_depth: None,
+                hardware_volume_enabled: false,
+                hardware_volume_active: false,
+                hardware_volume_control: None,
             },
             playback: PlaybackStatus {
                 state: "stopped".into(),

@@ -1835,3 +1835,36 @@ msgstr "Listening history cleared."
 
 msgid "Couldn't clear listening history."
 msgstr "Couldn't clear listening history."
+
+msgid "Checking ALSA mixer controls…"
+msgstr "Checking ALSA mixer controls…"
+
+msgid "This device exposes multiple playback controls. Choose which one QBZ should use."
+msgstr "This device exposes multiple playback controls. Choose which one QBZ should use."
+
+msgid "The saved mixer control is no longer available. Choose another control."
+msgstr "The saved mixer control is no longer available. Choose another control."
+
+msgid "QBZ does not have permission to read this device's ALSA mixer."
+msgstr "QBZ does not have permission to read this device's ALSA mixer."
+
+msgid "The ALSA mixer is busy. Close the app using it and try again."
+msgstr "The ALSA mixer is busy. Close the app using it and try again."
+
+msgid "The selected ALSA device is no longer available."
+msgstr "The selected ALSA device is no longer available."
+
+msgid "This ALSA device does not expose a mixer."
+msgstr "This ALSA device does not expose a mixer."
+
+msgid "QBZ could not write the selected ALSA mixer control. Direct playback remains fixed at 100%."
+msgstr "QBZ could not write the selected ALSA mixer control. Direct playback remains fixed at 100%."
+
+msgid "Selected mixer control"
+msgstr "Selected mixer control"
+
+msgid "Choose mixer control"
+msgstr "Choose mixer control"
+
+msgid "Change mixer control"
+msgstr "Change mixer control"

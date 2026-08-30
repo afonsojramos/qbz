@@ -8,6 +8,10 @@
 //! to enable gapless playback. When one source ends, the next is picked up
 //! seamlessly without interrupting the PCM stream.
 
+use qbz_audio::alsa_hardware_volume::{
+    read_hardware_volume, subscribe_hardware_volume_events, AlsaMixerControlId,
+    HardwareVolumeEvent, HardwareVolumeEventCallback, HardwareVolumeEventSubscription,
+};
 #[cfg(target_os = "linux")]
 use qbz_audio::AlsaDirectStream;
 use qbz_audio::VisualizerTap;
@@ -92,7 +96,10 @@ pub enum PlaybackEngine {
         playback_thread: Option<thread::JoinHandle<()>>,
         /// Signals that the writer thread has consumed a source and moved to next
         source_transition: Arc<AtomicBool>,
-        hardware_volume: bool,
+        hardware_volume_control: Option<AlsaMixerControlId>,
+        hardware_volume_active: Arc<AtomicBool>,
+        hardware_volume_events: HardwareVolumeEventCallback,
+        _hardware_volume_subscription: Option<HardwareVolumeEventSubscription>,
     },
     /// Native JACK output (#263 Tier 3). Mirrors AlsaDirect (gapless source queue
     /// + a single long-lived feeder thread), but the feeder resamples each source
@@ -140,8 +147,9 @@ impl PlaybackEngine {
     /// site can mislabel it.
     pub fn new_direct(
         stream: Arc<dyn qbz_audio::backend::DirectSink>,
-        hardware_volume: bool,
+        hardware_volume_control: Option<AlsaMixerControlId>,
         visualizer_tap: Option<VisualizerTap>,
+        hardware_volume_events: HardwareVolumeEventCallback,
     ) -> Self {
         let label = stream.log_label();
         let is_playing = Arc::new(AtomicBool::new(false));
@@ -150,6 +158,45 @@ impl PlaybackEngine {
         let duration_frames = Arc::new(AtomicU64::new(0));
         let source_queue = Arc::new(SourceQueue::new());
         let source_transition = Arc::new(AtomicBool::new(false));
+        let hardware_volume_active = Arc::new(AtomicBool::new(hardware_volume_control.is_some()));
+
+        let hardware_volume_subscription = hardware_volume_control.as_ref().and_then(|control| {
+            let Some(device_id) = stream.alsa_device_id() else {
+                hardware_volume_active.store(false, Ordering::SeqCst);
+                hardware_volume_events(HardwareVolumeEvent::Unavailable(
+                    "selected hardware volume has no ALSA device route".to_string(),
+                ));
+                return None;
+            };
+            match read_hardware_volume(device_id, control) {
+                Ok(snapshot) => hardware_volume_events(HardwareVolumeEvent::Changed(snapshot)),
+                Err(error) => {
+                    hardware_volume_active.store(false, Ordering::SeqCst);
+                    hardware_volume_events(HardwareVolumeEvent::Unavailable(error));
+                    return None;
+                }
+            }
+            let active = hardware_volume_active.clone();
+            let forward = hardware_volume_events.clone();
+            let callback: HardwareVolumeEventCallback = Arc::new(move |event| match event {
+                HardwareVolumeEvent::Unavailable(error) => {
+                    active.store(false, Ordering::SeqCst);
+                    forward(HardwareVolumeEvent::Unavailable(error));
+                }
+                HardwareVolumeEvent::Changed(snapshot) if active.load(Ordering::SeqCst) => {
+                    forward(HardwareVolumeEvent::Changed(snapshot));
+                }
+                HardwareVolumeEvent::Changed(_) => {}
+            });
+            match subscribe_hardware_volume_events(device_id, control, callback) {
+                Ok(subscription) => Some(subscription),
+                Err(error) => {
+                    hardware_volume_active.store(false, Ordering::SeqCst);
+                    hardware_volume_events(HardwareVolumeEvent::Unavailable(error));
+                    None
+                }
+            }
+        });
 
         // Spawn the single long-lived writer thread
         let handle = {
@@ -189,7 +236,10 @@ impl PlaybackEngine {
             source_queue,
             playback_thread: Some(handle),
             source_transition,
-            hardware_volume,
+            hardware_volume_control,
+            hardware_volume_active,
+            hardware_volume_events,
+            _hardware_volume_subscription: hardware_volume_subscription,
         }
     }
 
@@ -519,26 +569,17 @@ impl PlaybackEngine {
             Self::Direct {
                 stream,
                 label,
-                hardware_volume,
+                hardware_volume_control,
+                hardware_volume_active,
+                hardware_volume_events,
                 ..
             } => {
-                if *hardware_volume {
-                    #[cfg(target_os = "linux")]
-                    {
-                        if let Err(e) = stream.set_hardware_volume(volume) {
-                            log::warn!("[{label}] Hardware volume failed: {}", e);
-                        }
-                    }
-                    // Additive arm. `set_hardware_volume` is a DirectSink
-                    // method now, so a Windows sink can answer for itself
-                    // instead of the setting silently doing nothing; a sink
-                    // with no hardware volume returns Err and says so. macOS
-                    // and the other targets keep their previous silence --
-                    // CoreAudio has its own path (set_coreaudio_hardware_volume).
-                    #[cfg(windows)]
-                    {
-                        if let Err(e) = stream.set_hardware_volume(volume) {
-                            log::warn!("[{label}] Hardware volume failed: {}", e);
+                if hardware_volume_active.load(Ordering::SeqCst) {
+                    if let Some(control) = hardware_volume_control {
+                        if let Err(error) = stream.set_hardware_volume(control, volume) {
+                            log::warn!("[{label}] Hardware volume failed: {error}");
+                            hardware_volume_active.store(false, Ordering::SeqCst);
+                            hardware_volume_events(HardwareVolumeEvent::Unavailable(error));
                         }
                     }
                 } else {

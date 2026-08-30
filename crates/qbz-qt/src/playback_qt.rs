@@ -3211,6 +3211,10 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         // meta refresh just reset the bar's position to 0). Reset to None
         // whenever another owner (local/cast poll) may have written the bar.
         let mut last_remote_ui_push: Option<(u64, u64, u64, bool, u32, bool, i32)> = None;
+        // Physical ALSA knob events update the Player's shared volume atomics.
+        // Mirror only hardware-volume edges onto QML; ordinary local slider
+        // writes already publish immediately at their command boundary.
+        let mut last_hardware_volume: Option<(bool, u32)> = None;
 
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
@@ -3443,6 +3447,15 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             let duration = event.duration;
             let is_playing = event.is_playing;
             let cache = event.buffer_progress.unwrap_or(0.0);
+            let hardware_volume = (event.hardware_volume_active, event.volume.to_bits());
+            if last_hardware_volume != Some(hardware_volume) {
+                if event.hardware_volume_active
+                    || last_hardware_volume.is_some_and(|(active, _)| active)
+                {
+                    crate::now_playing::set_volume(event.volume);
+                }
+                last_hardware_volume = Some(hardware_volume);
+            }
             // Seek lock (PARITY-DEBT #15, playback.rs:5304): while streaming
             // (`buffer_progress` is Some) the user can only seek up to what
             // has downloaded; a fully-available track (None) seeks freely.
@@ -3979,6 +3992,7 @@ mod tests {
             duration: 0,
             track_id,
             volume: 1.0,
+            hardware_volume_active: false,
             sample_rate: None,
             bit_depth: None,
             shuffle: None,

@@ -6221,3 +6221,36 @@ msgstr "Historial de escucha borrado."
 
 msgid "Couldn't clear listening history."
 msgstr "No se pudo borrar el historial de escucha."
+
+msgid "Checking ALSA mixer controls…"
+msgstr "Comprobando los controles del mezclador ALSA…"
+
+msgid "This device exposes multiple playback controls. Choose which one QBZ should use."
+msgstr "Este dispositivo expone varios controles de reproducción. Elige cuál debe usar QBZ."
+
+msgid "The saved mixer control is no longer available. Choose another control."
+msgstr "El control del mezclador guardado ya no está disponible. Elige otro control."
+
+msgid "QBZ does not have permission to read this device's ALSA mixer."
+msgstr "QBZ no tiene permiso para leer el mezclador ALSA de este dispositivo."
+
+msgid "The ALSA mixer is busy. Close the app using it and try again."
+msgstr "El mezclador ALSA está ocupado. Cierra la aplicación que lo está usando e inténtalo de nuevo."
+
+msgid "The selected ALSA device is no longer available."
+msgstr "El dispositivo ALSA seleccionado ya no está disponible."
+
+msgid "This ALSA device does not expose a mixer."
+msgstr "Este dispositivo ALSA no expone un mezclador."
+
+msgid "QBZ could not write the selected ALSA mixer control. Direct playback remains fixed at 100%."
+msgstr "QBZ no pudo escribir en el control del mezclador ALSA seleccionado. La reproducción directa permanece fija al 100 %."
+
+msgid "Selected mixer control"
+msgstr "Control de mezclador seleccionado"
+
+msgid "Choose mixer control"
+msgstr "Elegir control de mezclador"
+
+msgid "Change mixer control"
+msgstr "Cambiar control de mezclador"

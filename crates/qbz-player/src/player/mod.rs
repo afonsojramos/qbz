@@ -646,6 +646,87 @@ fn apply_engine_volume(
     engine.set_volume(volume);
 }
 
+fn reported_volume_after_command(
+    requested: f32,
+    direct_output: bool,
+    hardware_volume_active: bool,
+) -> f32 {
+    #[cfg(target_os = "linux")]
+    if direct_output && !hardware_volume_active {
+        return 1.0;
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    let _ = (direct_output, hardware_volume_active);
+
+    requested
+}
+
+fn selected_alsa_hardware_volume_control(
+    settings: &Arc<Mutex<AudioSettings>>,
+) -> Option<qbz_audio::alsa_hardware_volume::AlsaMixerControlId> {
+    settings
+        .lock()
+        .ok()
+        .and_then(|settings| settings.selected_alsa_hardware_volume_control())
+}
+
+fn hardware_volume_event_callback(
+    state: &SharedState,
+    initially_active: bool,
+) -> qbz_audio::alsa_hardware_volume::HardwareVolumeEventCallback {
+    use qbz_audio::alsa_hardware_volume::{HardwareVolumeEvent, HardwareVolumeEventCallback};
+
+    state.set_hardware_volume_active(initially_active);
+    let state = state.clone();
+    // A session that has reported Unavailable must never be revived by an
+    // already-queued ctl Changed event. Serializing callbacks also guarantees
+    // that whichever event obtains this latch first completes before the next
+    // one updates SharedState.
+    let session_active = Mutex::new(initially_active);
+    let callback: HardwareVolumeEventCallback = Arc::new(move |event| {
+        let Ok(mut active) = session_active.lock() else {
+            state.set_hardware_volume_active(false);
+            state.volume.store(1.0_f32.to_bits(), Ordering::SeqCst);
+            state.record_stream_error(
+                "ALSA hardware volume event state became unavailable. Direct playback remains fixed at 100%."
+                    .to_string(),
+            );
+            return;
+        };
+        match event {
+            HardwareVolumeEvent::Changed(snapshot) if *active => {
+                state
+                    .volume
+                    .store(snapshot.volume.to_bits(), Ordering::SeqCst);
+                state.set_hardware_volume_active(true);
+            }
+            HardwareVolumeEvent::Changed(_) => {}
+            HardwareVolumeEvent::Unavailable(error) => {
+                *active = false;
+                state.set_hardware_volume_active(false);
+                state.volume.store(1.0_f32.to_bits(), Ordering::SeqCst);
+                state.record_stream_error(format!(
+                    "ALSA hardware volume became unavailable: {error}. Direct playback remains fixed at 100%."
+                ));
+            }
+        }
+    });
+    callback
+}
+
+fn direct_hardware_volume_binding(
+    settings: &Arc<Mutex<AudioSettings>>,
+    state: &SharedState,
+) -> (
+    Option<qbz_audio::alsa_hardware_volume::AlsaMixerControlId>,
+    qbz_audio::alsa_hardware_volume::HardwareVolumeEventCallback,
+) {
+    let control = selected_alsa_hardware_volume_control(settings);
+    let callback = hardware_volume_event_callback(state, control.is_some());
+    (control, callback)
+}
+
 #[cfg(target_os = "macos")]
 fn uses_coreaudio_system_default(settings: &AudioSettings) -> bool {
     settings
@@ -1038,6 +1119,10 @@ pub struct PlaybackEvent {
     pub duration: u64,
     pub track_id: u64,
     pub volume: f32,
+    /// Whether the exact persisted ALSA mixer control is active for this
+    /// session. False after a ctl/write/disconnect failure (fail closed).
+    #[serde(default)]
+    pub hardware_volume_active: bool,
     /// Actual sample rate of the current stream (Hz)
     pub sample_rate: Option<u32>,
     /// Actual bit depth of the current stream
@@ -1102,6 +1187,9 @@ pub struct SharedState {
     /// `normalization_gain`; integer-percent storage quantized the volume
     /// to 1% on every re-apply)
     volume: Arc<AtomicU32>,
+    /// Session state, separate from the persisted preference. Any control
+    /// failure flips this off while direct samples remain at unity.
+    hardware_volume_active: Arc<AtomicBool>,
     /// Playback start time (Unix timestamp millis when started/resumed)
     playback_start_millis: Arc<AtomicU64>,
     /// Position when playback was started/resumed (in seconds)
@@ -1183,6 +1271,7 @@ impl SharedState {
             dsd_direct: Arc::new(std::sync::atomic::AtomicU8::new(0)),
             has_loaded_audio: Arc::new(AtomicBool::new(false)),
             volume: Arc::new(AtomicU32::new(0.75f32.to_bits())),
+            hardware_volume_active: Arc::new(AtomicBool::new(false)),
             playback_start_millis: Arc::new(AtomicU64::new(0)),
             position_at_start: Arc::new(AtomicU64::new(0)),
             current_device: Arc::new(std::sync::RwLock::new(None)),
@@ -1639,6 +1728,14 @@ impl SharedState {
     pub fn volume(&self) -> f32 {
         f32::from_bits(self.volume.load(Ordering::SeqCst))
     }
+
+    pub fn set_hardware_volume_active(&self, active: bool) {
+        self.hardware_volume_active.store(active, Ordering::SeqCst);
+    }
+
+    pub fn hardware_volume_active(&self) -> bool {
+        self.hardware_volume_active.load(Ordering::SeqCst)
+    }
 }
 
 /// Audio player that handles streaming playback
@@ -2050,6 +2147,7 @@ impl Player {
                                         engine.stop();
                                         std::thread::sleep(Duration::from_millis(50));
                                     }
+                                    thread_state.set_hardware_volume_active(false);
                                     // Now this drop is the last Arc ref — PCM actually closes
                                     drop(stream_opt.take());
                                     // Give kernel time to fully release the ALSA device
@@ -2299,6 +2397,7 @@ impl Player {
                                 #[cfg(target_os = "linux")]
                                 std::thread::sleep(Duration::from_millis(50));
                             }
+                            thread_state.set_hardware_volume_active(false);
 
                             *current_audio_data = Some(data.clone());
                             *current_streaming_source = None; // Clear streaming source for non-streaming playback
@@ -2359,15 +2458,16 @@ impl Player {
                                 StreamType::Direct(alsa_stream) => {
                                     *consecutive_sink_failures = 0;
                                     thread_state.set_stream_error(false);
-                                    let hardware_volume = thread_settings
-                                        .lock()
-                                        .ok()
-                                        .map(|s| s.alsa_hardware_volume)
-                                        .unwrap_or(false);
+                                    let (hardware_volume, hardware_volume_events) =
+                                        direct_hardware_volume_binding(
+                                            &thread_settings,
+                                            &thread_state,
+                                        );
                                     PlaybackEngine::new_direct(
                                         alsa_stream.clone(),
                                         hardware_volume,
                                         thread_viz_tap.clone(),
+                                        hardware_volume_events,
                                     )
                                 }
                                 #[cfg(target_os = "linux")]
@@ -2602,6 +2702,7 @@ impl Player {
                                         engine.stop();
                                         std::thread::sleep(Duration::from_millis(50));
                                     }
+                                    thread_state.set_hardware_volume_active(false);
                                     // Now this drop is the last Arc ref — PCM actually closes
                                     drop(stream_opt.take());
                                     // Give kernel time to fully release the ALSA device
@@ -2776,6 +2877,7 @@ impl Player {
                                 #[cfg(target_os = "linux")]
                                 std::thread::sleep(Duration::from_millis(50));
                             }
+                            thread_state.set_hardware_volume_active(false);
 
                             // Create PlaybackEngine
                             let mut engine = match stream {
@@ -2805,15 +2907,16 @@ impl Player {
                                     }
                                 }
                                 StreamType::Direct(alsa_stream) => {
-                                    let hardware_volume = thread_settings
-                                        .lock()
-                                        .ok()
-                                        .map(|s| s.alsa_hardware_volume)
-                                        .unwrap_or(false);
+                                    let (hardware_volume, hardware_volume_events) =
+                                        direct_hardware_volume_binding(
+                                            &thread_settings,
+                                            &thread_state,
+                                        );
                                     PlaybackEngine::new_direct(
                                         alsa_stream.clone(),
                                         hardware_volume,
                                         thread_viz_tap.clone(),
+                                        hardware_volume_events,
                                     )
                                 }
                                 #[cfg(target_os = "linux")]
@@ -3121,6 +3224,7 @@ impl Player {
                                     engine.stop();
                                     std::thread::sleep(Duration::from_millis(50));
                                 }
+                                thread_state.set_hardware_volume_active(false);
                                 drop(stream_opt.take());
                                 std::thread::sleep(Duration::from_millis(50));
 
@@ -3225,6 +3329,7 @@ impl Player {
                                     engine.stop();
                                     std::thread::sleep(Duration::from_millis(50));
                                 }
+                                thread_state.set_hardware_volume_active(false);
                                 drop(stream_opt.take());
                                 std::thread::sleep(Duration::from_millis(50));
 
@@ -3503,17 +3608,18 @@ impl Player {
                                         }
                                     }
                                     StreamType::Direct(alsa_stream) => {
-                                        let hardware_volume = thread_settings
-                                            .lock()
-                                            .ok()
-                                            .map(|s| s.alsa_hardware_volume)
-                                            .unwrap_or(false);
-                                    PlaybackEngine::new_direct(
-                                        alsa_stream.clone(),
-                                        hardware_volume,
-                                        thread_viz_tap.clone(),
-                                    )
-                                }
+                                        let (hardware_volume, hardware_volume_events) =
+                                            direct_hardware_volume_binding(
+                                                &thread_settings,
+                                                &thread_state,
+                                            );
+                                        PlaybackEngine::new_direct(
+                                            alsa_stream.clone(),
+                                            hardware_volume,
+                                            thread_viz_tap.clone(),
+                                            hardware_volume_events,
+                                        )
+                                    }
                                     #[cfg(target_os = "linux")]
                                     StreamType::Jack(jack_stream) => {
                                         PlaybackEngine::new_jack(jack_stream.clone())
@@ -3594,6 +3700,7 @@ impl Player {
                             if let Some(engine) = current_engine.take() {
                                 engine.stop();
                             }
+                            thread_state.set_hardware_volume_active(false);
                             *current_audio_data = None;
                             *current_streaming_source = None;
                             *current_normalization_gain = None;
@@ -3635,9 +3742,14 @@ impl Player {
                             log::info!("Audio thread: stopped");
                         }
                         AudioCommand::SetVolume(volume) => {
+                            let reported_volume = reported_volume_after_command(
+                                volume,
+                                matches!(stream_opt.as_ref(), Some(StreamType::Direct(_))),
+                                thread_state.hardware_volume_active(),
+                            );
                             thread_state
                                 .volume
-                                .store(volume.to_bits(), Ordering::SeqCst);
+                                .store(reported_volume.to_bits(), Ordering::SeqCst);
                             if let Some(ref engine) = *current_engine {
                                 apply_engine_volume(&stream_opt, &engine, volume);
                             }
@@ -3733,6 +3845,7 @@ impl Player {
                             if let Some(engine) = current_engine.take() {
                                 engine.stop();
                             }
+                            thread_state.set_hardware_volume_active(false);
                             let seek_abort = |thread_state: &SharedState, why: &str| {
                                 log::error!("Audio thread: seek aborted: {why}");
                                 thread_state.is_playing.store(false, Ordering::SeqCst);
@@ -3753,15 +3866,16 @@ impl Player {
                                     }
                                 }
                                 StreamType::Direct(alsa_stream) => {
-                                    let hardware_volume = thread_settings
-                                        .lock()
-                                        .ok()
-                                        .map(|s| s.alsa_hardware_volume)
-                                        .unwrap_or(false);
+                                    let (hardware_volume, hardware_volume_events) =
+                                        direct_hardware_volume_binding(
+                                            &thread_settings,
+                                            &thread_state,
+                                        );
                                     PlaybackEngine::new_direct(
                                         alsa_stream.clone(),
                                         hardware_volume,
                                         thread_viz_tap.clone(),
+                                        hardware_volume_events,
                                     )
                                 }
                                 #[cfg(target_os = "linux")]
@@ -3910,6 +4024,7 @@ impl Player {
                             if let Some(engine) = current_engine.take() {
                                 engine.stop();
                             }
+                            thread_state.set_hardware_volume_active(false);
 
                             drop(stream_opt.take());
                             log::info!("Audio thread: previous stream dropped, device released");
@@ -3975,6 +4090,7 @@ impl Player {
                             if let Some(engine) = current_engine.take() {
                                 engine.stop();
                             }
+                            thread_state.set_hardware_volume_active(false);
                             drop(stream_opt.take());
                             // Undo anything QBZ parked so PipeWire / WirePlumber can
                             // reclaim the device (e.g. a DAC left invisible to other
@@ -4638,6 +4754,7 @@ impl Player {
                                 if let Some(engine) = current_engine.take() {
                                     engine.stop();
                                 }
+                                thread_state.set_hardware_volume_active(false);
                                 drop(stream_opt.take());
                                 pause_suspend_deadline = None;
                                 // Reset the PipeWire clock if WE forced it (self-gating;
@@ -6360,6 +6477,7 @@ impl Player {
             duration: self.state.duration(),
             track_id: self.state.current_track_id(),
             volume: self.state.volume(),
+            hardware_volume_active: self.state.hardware_volume_active(),
             sample_rate: if sample_rate > 0 {
                 Some(sample_rate)
             } else {
@@ -6459,12 +6577,58 @@ pub fn external_content_type(mime: &str, format_id: u32) -> String {
 mod tests {
     use super::compute_needs_new_stream;
     use super::external_content_type;
+    #[cfg(target_os = "linux")]
+    use super::{hardware_volume_event_callback, reported_volume_after_command};
     use super::{BufferedMediaSource, DsdErrorReport, SharedState, StreamingConfig};
+    #[cfg(target_os = "linux")]
+    use qbz_audio::alsa_hardware_volume::{
+        AlsaMixerControlId, HardwareVolumeEvent, HardwareVolumeSnapshot,
+    };
     use std::sync::atomic::Ordering;
 
     struct FakeDsdSource {
         words: std::vec::IntoIter<i32>,
         error: Option<String>,
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inactive_direct_hardware_volume_reports_unity() {
+        assert_eq!(reported_volume_after_command(0.25, true, false), 1.0);
+        assert_eq!(reported_volume_after_command(0.25, true, true), 0.25);
+        assert_eq!(reported_volume_after_command(0.25, false, false), 0.25);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unavailable_hardware_volume_session_cannot_be_revived_by_stale_event() {
+        let state = SharedState::new();
+        let callback = hardware_volume_event_callback(&state, true);
+        let changed = |volume| {
+            HardwareVolumeEvent::Changed(HardwareVolumeSnapshot {
+                control: AlsaMixerControlId {
+                    name: "D50 III".to_string(),
+                    index: 0,
+                },
+                channels: Vec::new(),
+                volume,
+                muted: false,
+            })
+        };
+
+        callback(changed(0.42));
+        assert!(state.hardware_volume_active());
+        assert_eq!(state.volume(), 0.42);
+
+        callback(HardwareVolumeEvent::Unavailable(
+            "device disappeared".to_string(),
+        ));
+        assert!(!state.hardware_volume_active());
+        assert_eq!(state.volume(), 1.0);
+
+        callback(changed(0.75));
+        assert!(!state.hardware_volume_active());
+        assert_eq!(state.volume(), 1.0);
     }
 
     impl Iterator for FakeDsdSource {

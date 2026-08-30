@@ -5,6 +5,7 @@
 //! NOTE: Tauri command wrappers remain in qbz-nix. This module contains only
 //! the core types and persistence logic.
 
+use crate::alsa_hardware_volume::{stable_alsa_route_key, AlsaMixerControlId, StableAlsaRouteKey};
 use crate::{AlsaPlugin, AudioBackendType};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,10 @@ pub struct AudioSettings {
     pub backend_type: Option<AudioBackendType>, // None = auto-detect
     pub alsa_plugin: Option<AlsaPlugin>,        // Only used when backend is ALSA
     pub alsa_hardware_volume: bool,             // Use ALSA mixer for volume (only with hw: devices)
+    /// Exact mixer identity per physical card + PCM route. The empty map is
+    /// the backward-compatible value for legacy settings databases.
+    #[serde(default)]
+    pub alsa_hardware_volume_controls: HashMap<StableAlsaRouteKey, AlsaMixerControlId>,
     /// When true, uncached tracks start playing via streaming instead of waiting for full download
     pub stream_first_track: bool,
     /// Initial buffer size in seconds before starting streaming playback (1-10, default 3)
@@ -86,6 +91,19 @@ fn default_dsd_mode() -> String {
     "convert".to_string()
 }
 
+impl AudioSettings {
+    /// Exact control selected for the currently configured physical PCM route.
+    /// A bare `alsa_hardware_volume=true` from an older database intentionally
+    /// returns `None` until the shared probe resolves and persists a choice.
+    pub fn selected_alsa_hardware_volume_control(&self) -> Option<AlsaMixerControlId> {
+        if !self.alsa_hardware_volume {
+            return None;
+        }
+        let route = stable_alsa_route_key(self.output_device.as_deref()?).ok()?;
+        self.alsa_hardware_volume_controls.get(&route).cloned()
+    }
+}
+
 impl Default for AudioSettings {
     fn default() -> Self {
         Self {
@@ -107,6 +125,7 @@ impl Default for AudioSettings {
             backend_type: Some(AudioBackendType::default()),
             alsa_plugin: Some(AlsaPlugin::Hw), // Default to hw (bit-perfect)
             alsa_hardware_volume: false,       // Disabled by default (maximum compatibility)
+            alsa_hardware_volume_controls: HashMap::new(),
             stream_first_track: true,          // On by default (opt-out)
             stream_buffer_seconds: 2,          // 2 seconds initial buffer
             streaming_only: false, // Disabled by default (cache tracks for instant replay)
@@ -153,6 +172,7 @@ impl AudioSettingsStore {
                 backend_type TEXT,
                 alsa_plugin TEXT,
                 alsa_hardware_volume INTEGER NOT NULL DEFAULT 0,
+                alsa_hardware_volume_controls TEXT NOT NULL DEFAULT '{}',
                 stream_first_track INTEGER NOT NULL DEFAULT 1,
                 stream_buffer_seconds INTEGER NOT NULL DEFAULT 2
             );",
@@ -167,6 +187,10 @@ impl AudioSettingsStore {
         let _ = conn.execute("ALTER TABLE audio_settings ADD COLUMN alsa_plugin TEXT", []);
         let _ = conn.execute(
             "ALTER TABLE audio_settings ADD COLUMN alsa_hardware_volume INTEGER DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE audio_settings ADD COLUMN alsa_hardware_volume_controls TEXT DEFAULT '{}'",
             [],
         );
         let _ = conn.execute(
@@ -298,7 +322,7 @@ impl AudioSettingsStore {
     pub fn get_settings(&self) -> Result<AudioSettings, String> {
         self.conn
             .query_row(
-                "SELECT output_device, exclusive_mode, dac_passthrough, preferred_sample_rate, backend_type, alsa_plugin, alsa_hardware_volume, stream_first_track, stream_buffer_seconds, streaming_only, limit_quality_to_device, device_max_sample_rate, normalization_enabled, normalization_target_lufs, gapless_enabled, device_sample_rate_limits, pw_force_bitperfect, sync_audio_on_startup, quality_fallback_behavior, skip_sink_switch, allow_quality_fallback, reserve_dac_while_running, dsd_mode FROM audio_settings WHERE id = 1",
+                "SELECT output_device, exclusive_mode, dac_passthrough, preferred_sample_rate, backend_type, alsa_plugin, alsa_hardware_volume, stream_first_track, stream_buffer_seconds, streaming_only, limit_quality_to_device, device_max_sample_rate, normalization_enabled, normalization_target_lufs, gapless_enabled, device_sample_rate_limits, pw_force_bitperfect, sync_audio_on_startup, quality_fallback_behavior, skip_sink_switch, allow_quality_fallback, reserve_dac_while_running, dsd_mode, alsa_hardware_volume_controls FROM audio_settings WHERE id = 1",
                 [],
                 |row| {
                     // Parse backend_type from JSON string
@@ -317,6 +341,14 @@ impl AudioSettingsStore {
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default();
 
+                    let alsa_hardware_volume_controls: HashMap<
+                        StableAlsaRouteKey,
+                        AlsaMixerControlId,
+                    > = row
+                        .get::<_, Option<String>>(23)?
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_default();
+
                     Ok(AudioSettings {
                         output_device: row.get(0)?,
                         exclusive_mode: row.get::<_, i64>(1)? != 0,
@@ -325,6 +357,7 @@ impl AudioSettingsStore {
                         backend_type,
                         alsa_plugin,
                         alsa_hardware_volume: row.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0,
+                        alsa_hardware_volume_controls,
                         stream_first_track: row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0,
                         stream_buffer_seconds: row.get::<_, Option<i64>>(8)?.unwrap_or(3) as u8,
                         streaming_only: row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
@@ -450,6 +483,84 @@ impl AudioSettingsStore {
                 params![enabled as i64],
             )
             .map_err(|e| format!("Failed to set ALSA hardware volume: {}", e))?;
+        Ok(())
+    }
+
+    /// Persist an exact control for one stable route without changing whether
+    /// hardware volume is enabled. Used by the explicit "Change control" flow.
+    pub fn set_alsa_hardware_volume_control(
+        &self,
+        route: StableAlsaRouteKey,
+        control: AlsaMixerControlId,
+    ) -> Result<(), String> {
+        let mut controls = self.get_settings()?.alsa_hardware_volume_controls;
+        controls.insert(route, control);
+        let json = serde_json::to_string(&controls)
+            .map_err(|error| format!("Failed to serialize ALSA mixer controls: {error}"))?;
+        self.conn
+            .execute(
+                "UPDATE audio_settings SET alsa_hardware_volume_controls = ?1 WHERE id = 1",
+                params![json],
+            )
+            .map_err(|error| format!("Failed to set ALSA mixer control: {error}"))?;
+        Ok(())
+    }
+
+    /// Replace the route-scoped exact-control map (settings bundle import).
+    /// This stores identities only; it never probes or writes a mixer. The
+    /// normal startup/reload reconciliation validates the active route before
+    /// hardware volume can be used.
+    pub fn set_alsa_hardware_volume_controls(
+        &self,
+        controls: HashMap<StableAlsaRouteKey, AlsaMixerControlId>,
+    ) -> Result<(), String> {
+        let json = serde_json::to_string(&controls)
+            .map_err(|error| format!("Failed to serialize ALSA mixer controls: {error}"))?;
+        self.conn
+            .execute(
+                "UPDATE audio_settings SET alsa_hardware_volume_controls = ?1 WHERE id = 1",
+                params![json],
+            )
+            .map_err(|error| format!("Failed to replace ALSA mixer controls: {error}"))?;
+        Ok(())
+    }
+
+    /// Remove the exact control for one route. If that route is currently in
+    /// use, callers must disable hardware volume first so no enabled setting
+    /// can remain without an identity.
+    pub fn clear_alsa_hardware_volume_control(
+        &self,
+        route: &StableAlsaRouteKey,
+    ) -> Result<(), String> {
+        let mut controls = self.get_settings()?.alsa_hardware_volume_controls;
+        controls.remove(route);
+        let json = serde_json::to_string(&controls)
+            .map_err(|error| format!("Failed to serialize ALSA mixer controls: {error}"))?;
+        self.conn
+            .execute(
+                "UPDATE audio_settings SET alsa_hardware_volume_controls = ?1 WHERE id = 1",
+                params![json],
+            )
+            .map_err(|error| format!("Failed to clear ALSA mixer control: {error}"))?;
+        Ok(())
+    }
+
+    /// Atomically persist the exact selection and enable the preference.
+    pub fn enable_alsa_hardware_volume(
+        &self,
+        route: StableAlsaRouteKey,
+        control: AlsaMixerControlId,
+    ) -> Result<(), String> {
+        let mut controls = self.get_settings()?.alsa_hardware_volume_controls;
+        controls.insert(route, control);
+        let json = serde_json::to_string(&controls)
+            .map_err(|error| format!("Failed to serialize ALSA mixer controls: {error}"))?;
+        self.conn
+            .execute(
+                "UPDATE audio_settings SET alsa_hardware_volume_controls = ?1, alsa_hardware_volume = 1 WHERE id = 1",
+                params![json],
+            )
+            .map_err(|error| format!("Failed to enable ALSA hardware volume: {error}"))?;
         Ok(())
     }
 
@@ -701,6 +812,8 @@ impl AudioSettingsStore {
         // Serialize per-device limits (empty on reset)
         let limits_json = serde_json::to_string(&defaults.device_sample_rate_limits)
             .map_err(|e| format!("Failed to serialize device sample rate limits: {}", e))?;
+        let mixer_controls_json = serde_json::to_string(&defaults.alsa_hardware_volume_controls)
+            .map_err(|e| format!("Failed to serialize ALSA mixer controls: {e}"))?;
 
         self.conn
             .execute(
@@ -725,7 +838,8 @@ impl AudioSettingsStore {
                     sync_audio_on_startup = ?18,
                     skip_sink_switch = ?19,
                     allow_quality_fallback = ?20,
-                    reserve_dac_while_running = ?21
+                    reserve_dac_while_running = ?21,
+                    alsa_hardware_volume_controls = ?22
                 WHERE id = 1",
                 params![
                     defaults.output_device,
@@ -749,6 +863,7 @@ impl AudioSettingsStore {
                     defaults.skip_sink_switch as i64,
                     defaults.allow_quality_fallback as i64,
                     defaults.reserve_dac_while_running as i64,
+                    mixer_controls_json,
                 ],
             )
             .map_err(|e| format!("Failed to reset audio settings: {}", e))?;
@@ -967,6 +1082,7 @@ mod tests {
         assert_eq!(settings.quality_fallback_behavior, "always_skip");
         assert_eq!(settings.output_device, None);
         assert!(!settings.dac_passthrough);
+        assert!(settings.alsa_hardware_volume_controls.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1032,5 +1148,88 @@ mod tests {
             serde_json::from_str(legacy).expect("legacy JSON should deserialize");
 
         assert!(!settings.reserve_dac_while_running);
+        assert!(settings.alsa_hardware_volume_controls.is_empty());
+    }
+
+    #[test]
+    fn exact_alsa_mixer_controls_round_trip_by_route() {
+        let (dir, store) = fresh_store("alsa-mixer-controls");
+        let route_a: StableAlsaRouteKey =
+            serde_json::from_str("\"alsa-route-v1|card=by-id:usb-D50-00|pcm=front|DEV=0\"")
+                .expect("route A");
+        let route_b: StableAlsaRouteKey =
+            serde_json::from_str("\"alsa-route-v1|card=by-id:usb-D50-00|pcm=iec958|DEV=1\"")
+                .expect("route B");
+        let control_a = AlsaMixerControlId {
+            name: "D50 III".to_string(),
+            index: 0,
+        };
+        let control_b = AlsaMixerControlId {
+            name: "Digital".to_string(),
+            index: 1,
+        };
+
+        store
+            .set_alsa_hardware_volume_control(route_a.clone(), control_a.clone())
+            .expect("set route A");
+        store
+            .set_alsa_hardware_volume_control(route_b.clone(), control_b.clone())
+            .expect("set route B");
+
+        let settings = store.get_settings().expect("read settings");
+        assert_eq!(
+            settings.alsa_hardware_volume_controls.get(&route_a),
+            Some(&control_a)
+        );
+        assert_eq!(
+            settings.alsa_hardware_volume_controls.get(&route_b),
+            Some(&control_b)
+        );
+        assert_ne!(route_a, route_b, "PCM DEV is part of the persisted key");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn database_without_mixer_control_map_migrates_to_empty() {
+        let dir = unique_test_dir("legacy-alsa-mixer-column");
+        {
+            let store = AudioSettingsStore::new_at(&dir).expect("create current store");
+            store
+                .conn
+                .execute(
+                    "ALTER TABLE audio_settings DROP COLUMN alsa_hardware_volume_controls",
+                    [],
+                )
+                .expect("simulate pre-map database");
+        }
+
+        let migrated = AudioSettingsStore::new_at(&dir).expect("migrate old store");
+        assert!(migrated
+            .get_settings()
+            .expect("read migrated settings")
+            .alsa_hardware_volume_controls
+            .is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reset_clears_route_scoped_alsa_mixer_controls() {
+        let (dir, store) = fresh_store("reset-alsa-mixer-controls");
+        let route: StableAlsaRouteKey =
+            serde_json::from_str("\"alsa-route-v1|card=card:D50|pcm=hw|DEV=0\"").expect("route");
+        store
+            .enable_alsa_hardware_volume(
+                route,
+                AlsaMixerControlId {
+                    name: "D50 III".to_string(),
+                    index: 0,
+                },
+            )
+            .expect("enable exact control");
+
+        let reset = store.reset_all().expect("reset");
+        assert!(!reset.alsa_hardware_volume);
+        assert!(reset.alsa_hardware_volume_controls.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

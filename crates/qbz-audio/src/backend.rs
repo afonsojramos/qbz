@@ -1082,6 +1082,12 @@ pub trait DirectSink: Send + Sync + 'static {
     /// is exactly what a hard-coded label at four call sites invites.
     fn log_label(&self) -> &'static str;
 
+    /// ALSA PCM identity for control-plane operations. Other direct sinks do
+    /// not expose an ALSA route and keep the default `None`.
+    fn alsa_device_id(&self) -> Option<&str> {
+        None
+    }
+
     /// Device-side volume, where the sink has one.
     ///
     /// The default REFUSES rather than silently succeeding: a sink without a
@@ -1089,7 +1095,11 @@ pub trait DirectSink: Send + Sync + 'static {
     /// already gated on the engine's `hardware_volume` flag, which is false for
     /// any such sink - permanently so for WASAPI exclusive, where the phase B
     /// contract rules out ISimpleAudioVolume.
-    fn set_hardware_volume(&self, _volume: f32) -> Result<(), String> {
+    fn set_hardware_volume(
+        &self,
+        _control: &crate::alsa_hardware_volume::AlsaMixerControlId,
+        _volume: f32,
+    ) -> Result<(), String> {
         Err("this sink has no hardware volume".to_string())
     }
 }
