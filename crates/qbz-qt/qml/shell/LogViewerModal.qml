@@ -83,6 +83,8 @@ Item {
         MouseArea {
             anchors.fill: parent
             onClicked: QbzShell.logClose()
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
         }
     }
 
@@ -109,7 +111,11 @@ Item {
         border.color: theme.borderSubtle
 
         // Swallow clicks so they never reach the closing backdrop.
-        MouseArea { anchors.fill: parent }
+        MouseArea {
+            anchors.fill: parent
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
 
         // ANCHORED, not a Column. The body is the only stretch row and its
         // height depends on which optional rows are mounted (the advanced

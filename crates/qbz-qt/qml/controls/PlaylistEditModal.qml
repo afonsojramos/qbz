@@ -171,6 +171,8 @@ Item {
             MouseArea {
                 anchors.fill: parent
                 onClicked: QbzPlaylistEdit.close()
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
             }
         }
 
@@ -185,7 +187,11 @@ Item {
             border.color: theme.borderSubtle
 
             // FIRST child: swallows clicks so they never reach the scrim.
-            MouseArea { anchors.fill: parent }
+            MouseArea {
+                anchors.fill: parent
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
+            }
 
             Column {
                 id: col

@@ -687,15 +687,27 @@ pull requests.
 - [@boxdot](https://github.com/boxdot)
 - [@arminfelder](https://github.com/arminfelder)
 - [@afonsojramos](https://github.com/afonsojramos) — macOS port
-- [@Vudgekek](https://github.com/Vudgekek) — macOS audio
 - [@GwendalBeaumont](https://github.com/GwendalBeaumont) — i18n
 - [@AdamArstall](https://github.com/AdamArstall)
+- [@Vudgekek](https://github.com/Vudgekek) — macOS audio
 - [@DoubleGate](https://github.com/DoubleGate)
-- [@pbaart](https://github.com/pbaart) — Dutch translation
+- [@hoyon](https://github.com/hoyon) — classical work grouping
+- [@mxnix](https://github.com/mxnix) — Russian translation
+- [@TerminalTilt](https://github.com/TerminalTilt) — Catppuccin themes
 - [@Alexandre-Menigault](https://github.com/Alexandre-Menigault) — active lyrics wrapping
 - [@MarkusAbtion](https://github.com/MarkusAbtion) — opt-in section navigation
 - [@fengalin](https://github.com/fengalin) — crypto-provider test coverage
 - [@luukvanderduim](https://github.com/luukvanderduim) — applied-filter visibility
+- [@pbaart](https://github.com/pbaart) — Dutch translation
+- [@b0bbywan](https://github.com/b0bbywan) — ALSA buffer sizing
+- [@stshow](https://github.com/stshow) — DLNA strict-renderer casting
+- [@Ronjar](https://github.com/Ronjar) — deb822 APT instructions
+- [@eldios](https://github.com/eldios) — Nix packaging
+- [@herder](https://github.com/herder) — Spotify-parity hotkeys and the Vim keymap
+- [@PhilipVinc](https://github.com/PhilipVinc) — daemon event hooks
+- [@Mazipani](https://github.com/Mazipani) — Chromecast X.509 v1 certificates
+- [@RayneGit](https://github.com/RayneGit) — Wayland clipboard
+- [@LuckyTheCoder](https://github.com/LuckyTheCoder) — macOS Liquid Glass icon
 
 ## License
 

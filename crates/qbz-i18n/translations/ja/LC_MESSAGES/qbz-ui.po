@@ -313,6 +313,9 @@ msgstr "人気のトラック"
 msgid "Play all next"
 msgstr "すべて次に再生"
 
+msgid "Play all later"
+msgstr "すべて後で再生"
+
 msgid "Add all to queue"
 msgstr "すべてキューに追加"
 
@@ -441,6 +444,9 @@ msgstr "よく再生するプレイリストから新しい音楽を見つけま
 
 msgid "Open album"
 msgstr "アルバムを開く"
+
+msgid "Open containing album"
+msgstr "収録アルバムを開く"
 
 msgid "Play"
 msgstr "再生"
@@ -4780,6 +4786,12 @@ msgstr "任意 — 外部ドライブと NAS"
 msgid "Copy"
 msgstr "コピー"
 
+msgid "Cut"
+msgstr "切り取り"
+
+msgid "Paste"
+msgstr "貼り付け"
+
 msgid "Copied!"
 msgstr "コピーしました！"
 
@@ -6251,3 +6263,21 @@ msgstr "{} / {}"
 
 msgid "Last playlist"
 msgstr "前回のプレイリスト"
+
+msgid "About music purchases"
+msgstr "音楽購入について"
+
+msgid "Music purchases are not available in every country or region where the platform offers streaming. One of those countries, where nothing can be bought and only the streaming subscription is offered, is Mexico."
+msgstr "音楽の購入は、プラットフォームがストリーミングを提供しているすべての国や地域で利用できるわけではありません。何も購入できず、ストリーミングのサブスクリプションのみが提供されている国のひとつがメキシコです。"
+
+msgid "As it happens, the developer and maintainer of this software is from Mexico, so this section was built in blind mode — 'I am one with the Force and the Force is with me' — with some feedback from a couple of contributors, but in the end, in blind mode: it ships with no guarantee that it works and no promise to fix whatever is broken."
+msgstr "実はこのソフトウェアの開発者・メンテナーはメキシコ出身です。そのためこのセクションは手探りで開発されました — 'I am one with the Force and the Force is with me' — 数人のコントリビューターからのフィードバックはありましたが、最終的には手探りのまま。動作の保証はなく、不具合を修正する約束もなしで提供されます。"
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Sponsors"
+msgstr "スポンサー"
+
+msgid "And all those anonymous sponsors..."
+msgstr "そして、すべての匿名スポンサーの皆さん…"

@@ -52,6 +52,8 @@ Item {
         MouseArea {
             anchors.fill: parent
             onClicked: if (doc.applying !== true) QbzDiscMeta.close()
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
         }
     }
 
@@ -66,7 +68,11 @@ Item {
         border.color: theme.borderSubtle
         clip: true
 
-        MouseArea { anchors.fill: parent }
+        MouseArea {
+            anchors.fill: parent
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
 
         // ---- Header ---------------------------------------------------
         Item {

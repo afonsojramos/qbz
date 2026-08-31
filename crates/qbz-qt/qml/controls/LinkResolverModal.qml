@@ -28,6 +28,8 @@ Item {
         MouseArea {
             anchors.fill: parent
             onClicked: QbzLink.close()
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
         }
     }
 
@@ -41,7 +43,11 @@ Item {
         border.width: 1
         border.color: theme.borderSubtle
 
-        MouseArea { anchors.fill: parent }
+        MouseArea {
+            anchors.fill: parent
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
 
         Column {
             id: panel

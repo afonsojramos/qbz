@@ -832,11 +832,48 @@ Rectangle {
             // the reference opens on the FIRST keystroke >= 2 chars and
             // debounces only the LOAD. Rust's version guard is what discards
             // the superseded loads.
-            onTextEdited: {
+            // Shared by keyboard edits (onTextEdited) and the edit menu's
+            // cut/paste, which are PROGRAMMATIC changes — TextInput only
+            // emits textEdited for user input, so a menu paste would
+            // otherwise change the text without ever driving the cortinilla.
+            function applyLiveQuery() {
                 if (text.trim().length < 2) {
                     QbzSearch.cortinillaDismiss()
                 } else {
                     QbzSearch.searchLive(text)
+                }
+            }
+            onTextEdited: applyLiveQuery()
+
+            // QoL round: clipboard access by pointer, not only Ctrl+C/X/V —
+            // QML TextInput has no system edit menu of its own. RightButton
+            // only, so left clicks keep placing the cursor.
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.RightButton
+                onClicked: function (mouse) {
+                    searchEditMenu.openAtCursor(searchInput, mouse.x, mouse.y)
+                }
+            }
+            CardMenu {
+                id: searchEditMenu
+                menuWidth: 160
+                entries: {
+                    var t = QbzSession.tr
+                    var r = QbzSession.trRev
+                    var hasSel = searchInput.selectedText !== ""
+                    return [
+                        { "label": t("Cut", r), "icon": "scissors", "action": "cut", "enabled": hasSel },
+                        { "label": t("Copy", r), "icon": "copy", "action": "copy", "enabled": hasSel },
+                        { "label": t("Paste", r), "icon": "clipboard", "action": "paste", "enabled": searchInput.canPaste },
+                        { "label": t("Select all", r), "icon": "square-check-big", "action": "select-all", "enabled": searchInput.text !== "" },
+                    ]
+                }
+                onPicked: function (a) {
+                    if (a === "cut") { searchInput.cut(); searchInput.applyLiveQuery() }
+                    else if (a === "copy") searchInput.copy()
+                    else if (a === "paste") { searchInput.paste(); searchInput.applyLiveQuery() }
+                    else if (a === "select-all") searchInput.selectAll()
                 }
             }
 

@@ -127,6 +127,8 @@ Item {
             MouseArea {
                 anchors.fill: parent
                 onClicked: root._close()
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
             }
         }
 
@@ -159,7 +161,11 @@ Item {
 
             // FIRST child: swallows clicks so they never reach the scrim
             // (the Slint's empty panel TouchArea, :137).
-            MouseArea { anchors.fill: parent }
+            MouseArea {
+                anchors.fill: parent
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
+            }
 
             // --- Header: icon + title + X (Slint :143-184) ---------------
             Item {

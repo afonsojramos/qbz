@@ -566,6 +566,12 @@ pub struct CortRow {
     pub art_url: String,
     #[serde(rename = "artPath")]
     pub art_path: String,
+    /// TRACK rows only ("Open containing album"): the containing album — a
+    /// Qobuz album id or a local album group key (both are what
+    /// `crate::open_album` routes). Empty when unknown; the QML menu gates
+    /// its entry on that.
+    #[serde(rename = "albumId")]
+    pub album_id: String,
     #[serde(rename = "flatIndex")]
     pub flat_index: i32,
 }
@@ -673,6 +679,7 @@ fn map_search_all_to_cortinilla(query: &str, results: &SearchAllResults) -> Cort
             subtitle: m.artist,
             quality_detail,
             art_url: m.art_url,
+            album_id: m.album_id,
             ..Default::default()
         }
     };
@@ -1080,7 +1087,8 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
     }
 }
 
-/// Dismiss (Esc / click-outside / idle / page change).
+/// Dismiss (Esc / click-outside / row activation / page change — the idle
+/// timer is gone: the panel is focus-driven since the QoL round).
 pub fn dismiss() {
     set_cortinilla_open(false);
     // Dismiss is a CANCELLATION POINT. Without the bump an in-flight load
@@ -1269,7 +1277,7 @@ pub fn row_menu_action(flat_index: i32, action: &str) {
     }
     if !matches!(
         action,
-        "play" | "next" | "later" | "queue" | "add-to-playlist"
+        "play" | "next" | "later" | "queue" | "add-to-playlist" | "open-album"
     ) {
         log::warn!("[qbz-qt] cortinilla menu: unknown action {action:?}");
         return;
@@ -1297,6 +1305,23 @@ pub fn row_menu_action(flat_index: i32, action: &str) {
         row.source,
         row.id,
     );
+    if action == "open-album" {
+        set_cortinilla_open(false);
+        // `open_album` routes BOTH id spaces (its is_local_feed_id arm
+        // recognises local group keys), so no source split here. The QML
+        // entry is gated on a non-empty albumId; an empty one is a stale
+        // snapshot, not a user path.
+        if row.kind != "track" || row.album_id.is_empty() {
+            log::warn!(
+                "[qbz-qt] cortinilla menu open-album: kind={} albumId empty={}",
+                row.kind,
+                row.album_id.is_empty()
+            );
+            return;
+        }
+        crate::open_album(row.album_id);
+        return;
+    }
     if action == "add-to-playlist" {
         set_cortinilla_open(false);
         if row.kind != "track" {

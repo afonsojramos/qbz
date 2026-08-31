@@ -206,6 +206,7 @@ pub(crate) fn derive_local_album_rows(
             quality_detail: local_quality_detail(t),
             art_url,
             art_path,
+            album_id: String::new(),
             flat_index: 0,
         });
     }
@@ -259,6 +260,7 @@ pub(crate) fn derive_local_artist_rows(
             quality_detail: String::new(),
             art_url,
             art_path,
+            album_id: String::new(),
             flat_index: 0,
         });
     }
@@ -291,6 +293,9 @@ pub(crate) fn map_local_track_to_cort_row(t: &qbz_library::LocalTrack) -> CortRo
         quality_detail: local_quality_detail(t),
         art_url,
         art_path,
+        // The same group key the local Albums section uses as its row id —
+        // what "Open containing album" hands to `crate::open_album`.
+        album_id: t.album_group_key.clone(),
         flat_index: 0,
     }
 }

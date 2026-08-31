@@ -64,7 +64,7 @@ fn build_commit() -> &'static str {
 /// The release codename shown in the build-info grid.
 ///
 /// HAND-SET, exactly like `AboutModal.slint:371`. Bump it with the version.
-pub const CODENAME: &str = "Rebuild 破 (You Can (Not) Advance)";
+pub const CODENAME: &str = "Rebuild Q (You Can (Not) Redo)";
 
 /// Platform label for the build-info grid. This is the Qt port, so the label
 /// reads "(Qt)" rather than the Slint build's "(Slint)".
@@ -108,6 +108,87 @@ const CONTRIBUTORS: &[&str] = &[
     "MarkusAbtion",
     "fengalin",
     "luukvanderduim",
+    // 2.1.0 sweep (QoL round). Same house rule as above: credited because
+    // their solution or idea SHIPPED, merged PR or not — pbaart (Dutch
+    // translation, #561), b0bbywan (ALSA buffer sizing, #662), stshow (the
+    // DLNA strict-renderer handling qbz-cast carries, #541/#547), Ronjar
+    // (deb822 APT docs, #530), eldios (nix libjack2, #563), herder
+    // (hotkeys + Vim preset, #724), PhilipVinc (daemon event hooks, #700),
+    // Mazipani (Chromecast X.509 v1 fix, #730), RayneGit (arboard
+    // wayland-data-control, #727), LuckyTheCoder (the macOS Liquid Glass
+    // icon, issue #712 — an issue, not a PR, and credited all the same).
+    "pbaart",
+    "b0bbywan",
+    "stshow",
+    "Ronjar",
+    "eldios",
+    "herder",
+    "PhilipVinc",
+    "Mazipani",
+    "RayneGit",
+    "LuckyTheCoder",
+];
+
+/// Public GitHub sponsors of the author (`sponsorshipsAsMaintainer`,
+/// `includePrivate: false` — ONLY logins GitHub itself shows publicly).
+/// Hand-maintained, like [`CONTRIBUTORS`].
+const GITHUB_SPONSORS: &[&str] = &[
+    "damienalexandre",
+    "ejrichards",
+    "nkopas",
+    "Eirikr70",
+    "Xameon42",
+];
+
+/// Ko-fi supporters, by the PUBLIC display name each typed into Ko-fi's
+/// "From" field — never emails, never payment columns. The anonymous
+/// defaults ("Supporter", "Ko-fi Supporter") are excluded here; they are what
+/// the modal's "And all those anonymous sponsors..." line is for.
+const KOFI_SPONSORS: &[&str] = &[
+    "voytrekk",
+    "Peppe",
+    "Bennytek",
+    "Aboto",
+    "turboapapera",
+    "voxit",
+    "Tom",
+    "Bopi",
+    "Sylvain Van Hoof",
+    "Torbi",
+    "Chris Heino",
+    "Pep",
+    "Roger",
+    "Norin",
+    "Niko",
+    "Mauzify",
+    "Max",
+    "forte_hunter",
+    "Anthony Philibert",
+    "Zeitfalle",
+    "Ben",
+    "silverbeetles",
+    "Mat",
+    "CB",
+    "Salty Pringles",
+    "oujou",
+    "Darktime ahead",
+    "Nebu",
+    "Otto",
+    "Hyrbii",
+    "Guillaume Michaud",
+    "Thomas",
+    "James",
+    "lollopolve",
+    "Julien",
+    "@adavid",
+    "Carlo",
+    "M.Rodorodette",
+    "C.H.",
+    "CraigMyers",
+    "Mal",
+    "Wouter Eerdekens",
+    "Ian B",
+    "valfaun",
 ];
 
 /// How many contributor chips per wrap row (`about.rs:76`). Slint has no
@@ -153,6 +234,10 @@ struct Doc {
     author_avatar: String,
     #[serde(rename = "contributorRows")]
     contributor_rows: Vec<Vec<Chip>>,
+    /// ADDITIVE (QoL round): the Sponsors section — GitHub sponsors first
+    /// (clickable, `url` set), then the Ko-fi display names (`url` empty).
+    /// FLAT, not row-grouped: only QML renders it, and `Flow` wraps.
+    sponsors: Vec<Chip>,
 }
 
 fn profile_url(handle: &str) -> String {
@@ -193,6 +278,19 @@ fn snapshot_doc() -> Doc {
                     })
                     .collect()
             })
+            .collect(),
+        sponsors: GITHUB_SPONSORS
+            .iter()
+            .map(|handle| Chip {
+                name: (*handle).to_string(),
+                url: profile_url(handle),
+                avatar: String::new(),
+            })
+            .chain(KOFI_SPONSORS.iter().map(|name| Chip {
+                name: (*name).to_string(),
+                url: String::new(),
+                avatar: String::new(),
+            }))
             .collect(),
     }
 }
@@ -332,6 +430,22 @@ mod tests {
             .find(|chip| chip.name == "fengalin")
             .unwrap();
         assert_eq!(fengalin.url, "https://github.com/fengalin");
+    }
+
+    #[test]
+    fn sponsors_are_github_then_kofi_and_only_github_links() {
+        let doc = snapshot_doc();
+        assert_eq!(
+            doc.sponsors.len(),
+            GITHUB_SPONSORS.len() + KOFI_SPONSORS.len()
+        );
+        for (chip, handle) in doc.sponsors.iter().zip(GITHUB_SPONSORS) {
+            assert_eq!(chip.name, *handle);
+            assert_eq!(chip.url, profile_url(handle));
+        }
+        assert!(doc.sponsors[GITHUB_SPONSORS.len()..]
+            .iter()
+            .all(|chip| chip.url.is_empty()));
     }
 
     #[test]

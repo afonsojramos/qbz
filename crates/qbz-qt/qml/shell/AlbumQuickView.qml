@@ -159,10 +159,10 @@ Item {
             { "label": t("Play"), "icon": "play-fill", "action": "play" },
             { "label": t("Play next"), "icon": "list-start", "action": "next" }
         ]
-        // The local queue owns a real block-tail operation. Catalog album
-        // enqueue does not, so its canonical menu has only one append row.
-        if (root.localAlbum)
-            entries.push({ "label": t("Play later"), "icon": "list-plus", "action": "later" })
+        // Both paths own a real block-tail operation now — the QoL round gave
+        // playback_qt::enqueue_album a "later" (#442) arm to match the local
+        // queue's, so the row is unconditional.
+        entries.push({ "label": t("Play later"), "icon": "list-plus", "action": "later" })
         entries.push({ "label": t("Add to queue"), "icon": "list-end", "action": "queue" })
         if (!root.localAlbum) {
             entries.push({ "sep": true })

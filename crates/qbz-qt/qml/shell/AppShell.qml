@@ -577,6 +577,8 @@ Rectangle {
         MouseArea {
             anchors.fill: parent
             onClicked: root.textModalOpen = false
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
         }
         Rectangle {
             anchors.centerIn: parent
@@ -586,7 +588,11 @@ Rectangle {
             color: theme.surfaceCard
             border.width: 1
             border.color: theme.borderSubtle
-            MouseArea { anchors.fill: parent }
+            MouseArea {
+                anchors.fill: parent
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
+            }
             Column {
                 anchors.fill: parent
                 anchors.margins: 24

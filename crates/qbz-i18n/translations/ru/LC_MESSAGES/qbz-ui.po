@@ -313,6 +313,9 @@ msgstr "Популярные треки"
 msgid "Play all next"
 msgstr "Воспроизвести все далее"
 
+msgid "Play all later"
+msgstr "Слушать все позже"
+
 msgid "Add all to queue"
 msgstr "Добавить все в очередь"
 
@@ -441,6 +444,9 @@ msgstr "Откройте новую музыку из ваших любимых 
 
 msgid "Open album"
 msgstr "Открыть альбом"
+
+msgid "Open containing album"
+msgstr "Открыть альбом трека"
 
 msgid "Play"
 msgstr "Воспроизвести"
@@ -4807,6 +4813,12 @@ msgstr "Опционально — внешние диски и NAS"
 msgid "Copy"
 msgstr "Копировать"
 
+msgid "Cut"
+msgstr "Вырезать"
+
+msgid "Paste"
+msgstr "Вставить"
+
 msgid "Copied!"
 msgstr "Скопировано!"
 
@@ -6287,3 +6299,21 @@ msgstr "{} из {}"
 
 msgid "Last playlist"
 msgstr "Последний плейлист"
+
+msgid "About music purchases"
+msgstr "О покупке музыки"
+
+msgid "Music purchases are not available in every country or region where the platform offers streaming. One of those countries, where nothing can be bought and only the streaming subscription is offered, is Mexico."
+msgstr "Покупка музыки доступна не во всех странах и регионах, где платформа предлагает стриминг. Одна из таких стран, где ничего нельзя купить и доступна только подписка на стриминг, — Мексика."
+
+msgid "As it happens, the developer and maintainer of this software is from Mexico, so this section was built in blind mode — 'I am one with the Force and the Force is with me' — with some feedback from a couple of contributors, but in the end, in blind mode: it ships with no guarantee that it works and no promise to fix whatever is broken."
+msgstr "Так уж вышло, что разработчик и мейнтейнер этой программы из Мексики, поэтому этот раздел разрабатывался вслепую — 'I am one with the Force and the Force is with me' — с некоторой обратной связью от пары контрибьюторов, но в итоге всё же вслепую: он поставляется без гарантии работоспособности и без обещания чинить то, что сломано."
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Sponsors"
+msgstr "Спонсоры"
+
+msgid "And all those anonymous sponsors..."
+msgstr "И все те анонимные спонсоры..."

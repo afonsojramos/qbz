@@ -314,6 +314,9 @@ msgstr "Beliebte Titel"
 msgid "Play all next"
 msgstr "Alle als Nächstes wiedergeben"
 
+msgid "Play all later"
+msgstr "Alle später abspielen"
+
 msgid "Add all to queue"
 msgstr "Alle zur Warteschlange hinzufügen"
 
@@ -442,6 +445,9 @@ msgstr "Entdecken Sie neue Musik aus Ihren meistgespielten Playlists."
 
 msgid "Open album"
 msgstr "Album öffnen"
+
+msgid "Open containing album"
+msgstr "Zugehöriges Album öffnen"
 
 msgid "Play"
 msgstr "Abspielen"
@@ -4791,6 +4797,12 @@ msgstr "Optional — externe Laufwerke & NAS"
 msgid "Copy"
 msgstr "Kopieren"
 
+msgid "Cut"
+msgstr "Ausschneiden"
+
+msgid "Paste"
+msgstr "Einfügen"
+
 msgid "Copied!"
 msgstr "Kopiert!"
 
@@ -6269,3 +6281,21 @@ msgstr "{} von {}"
 
 msgid "Last playlist"
 msgstr "Letzte Playlist"
+
+msgid "About music purchases"
+msgstr "Über Musikkäufe"
+
+msgid "Music purchases are not available in every country or region where the platform offers streaming. One of those countries, where nothing can be bought and only the streaming subscription is offered, is Mexico."
+msgstr "Musikkäufe sind nicht in jedem Land oder jeder Region verfügbar, in der die Plattform Streaming anbietet. Eines dieser Länder, in dem nichts gekauft werden kann und nur das Streaming-Abo angeboten wird, ist Mexiko."
+
+msgid "As it happens, the developer and maintainer of this software is from Mexico, so this section was built in blind mode — 'I am one with the Force and the Force is with me' — with some feedback from a couple of contributors, but in the end, in blind mode: it ships with no guarantee that it works and no promise to fix whatever is broken."
+msgstr "Zufällig stammt der Entwickler und Maintainer dieser Software aus Mexiko, daher wurde dieser Bereich im Blindflug entwickelt — 'I am one with the Force and the Force is with me' — mit etwas Feedback von ein paar Contributors, aber am Ende doch im Blindflug: Er wird ohne Funktionsgarantie und ohne Versprechen ausgeliefert, Fehler zu beheben."
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Sponsors"
+msgstr "Sponsoren"
+
+msgid "And all those anonymous sponsors..."
+msgstr "Und all die anonymen Sponsoren..."

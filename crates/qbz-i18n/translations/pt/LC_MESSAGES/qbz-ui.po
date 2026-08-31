@@ -314,6 +314,9 @@ msgstr "Faixas Populares"
 msgid "Play all next"
 msgstr "Reproduzir tudo a seguir"
 
+msgid "Play all later"
+msgstr "Tocar tudo depois"
+
 msgid "Add all to queue"
 msgstr "Adicionar tudo à fila"
 
@@ -442,6 +445,9 @@ msgstr "Descubra novas músicas a partir das suas playlists mais reproduzidas."
 
 msgid "Open album"
 msgstr "Abrir álbum"
+
+msgid "Open containing album"
+msgstr "Abrir o álbum de origem"
 
 msgid "Play"
 msgstr "Reproduzir"
@@ -4791,6 +4797,12 @@ msgstr "Opcional — discos externos e NAS"
 msgid "Copy"
 msgstr "Copiar"
 
+msgid "Cut"
+msgstr "Recortar"
+
+msgid "Paste"
+msgstr "Colar"
+
 msgid "Copied!"
 msgstr "Copiado!"
 
@@ -6267,3 +6279,21 @@ msgstr "{} de {}"
 
 msgid "Last playlist"
 msgstr "Última playlist"
+
+msgid "About music purchases"
+msgstr "Sobre a compra de músicas"
+
+msgid "Music purchases are not available in every country or region where the platform offers streaming. One of those countries, where nothing can be bought and only the streaming subscription is offered, is Mexico."
+msgstr "A compra de músicas não está disponível em todos os países ou regiões onde a plataforma oferece streaming. Um desses países, onde nada pode ser comprado e apenas a assinatura de streaming é oferecida, é o México."
+
+msgid "As it happens, the developer and maintainer of this software is from Mexico, so this section was built in blind mode — 'I am one with the Force and the Force is with me' — with some feedback from a couple of contributors, but in the end, in blind mode: it ships with no guarantee that it works and no promise to fix whatever is broken."
+msgstr "Acontece que o desenvolvedor e mantenedor deste software é do México, então esta seção foi desenvolvida às cegas — 'I am one with the Force and the Force is with me' — com algum feedback de alguns contribuidores, mas no fim às cegas: é entregue sem garantia de funcionamento e sem promessa de consertar o que estiver errado."
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Sponsors"
+msgstr "Patrocinadores"
+
+msgid "And all those anonymous sponsors..."
+msgstr "E todos esses patrocinadores anônimos..."

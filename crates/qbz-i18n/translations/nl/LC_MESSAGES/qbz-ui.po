@@ -314,6 +314,9 @@ msgstr "Populaire nummers"
 msgid "Play all next"
 msgstr "Alles hierna afspelen"
 
+msgid "Play all later"
+msgstr "Alles later afspelen"
+
 msgid "Add all to queue"
 msgstr "Alles aan wachtrij toevoegen"
 
@@ -442,6 +445,9 @@ msgstr "Ontdek nieuwe muziek op basis van je meest afgespeelde afspeellijsten."
 
 msgid "Open album"
 msgstr "Album openen"
+
+msgid "Open containing album"
+msgstr "Bijbehorend album openen"
 
 msgid "Play"
 msgstr "Afspelen"
@@ -4803,6 +4809,12 @@ msgstr "Optioneel — externe schijven & NAS"
 msgid "Copy"
 msgstr "Kopiëren"
 
+msgid "Cut"
+msgstr "Knippen"
+
+msgid "Paste"
+msgstr "Plakken"
+
 msgid "Copied!"
 msgstr "Gekopieerd!"
 
@@ -6257,3 +6269,21 @@ msgstr "{} van {}"
 
 msgid "Last playlist"
 msgstr "Laatste playlist"
+
+msgid "About music purchases"
+msgstr "Over muziekaankopen"
+
+msgid "Music purchases are not available in every country or region where the platform offers streaming. One of those countries, where nothing can be bought and only the streaming subscription is offered, is Mexico."
+msgstr "Muziekaankopen zijn niet beschikbaar in elk land of elke regio waar het platform streaming aanbiedt. Een van die landen, waar niets gekocht kan worden en alleen het streamingabonnement wordt aangeboden, is Mexico."
+
+msgid "As it happens, the developer and maintainer of this software is from Mexico, so this section was built in blind mode — 'I am one with the Force and the Force is with me' — with some feedback from a couple of contributors, but in the end, in blind mode: it ships with no guarantee that it works and no promise to fix whatever is broken."
+msgstr "Toevallig komt de ontwikkelaar en beheerder van deze software uit Mexico, dus deze sectie is blind ontwikkeld — 'I am one with the Force and the Force is with me' — met wat feedback van een paar contributors, maar uiteindelijk blind: hij wordt geleverd zonder garantie dat hij werkt en zonder belofte om te repareren wat kapot is."
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Sponsors"
+msgstr "Sponsors"
+
+msgid "And all those anonymous sponsors..."
+msgstr "En al die anonieme sponsors..."

@@ -117,7 +117,12 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "#bf000000"
-        MouseArea { anchors.fill: parent; onClicked: QbzLocal.ripWizardClose() }
+        MouseArea {
+            anchors.fill: parent
+            onClicked: QbzLocal.ripWizardClose()
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
     }
 
     Rectangle {
@@ -131,7 +136,11 @@ Item {
         border.color: theme.borderSubtle
         clip: true
 
-        MouseArea { anchors.fill: parent }
+        MouseArea {
+            anchors.fill: parent
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
 
         // ---- Header + step dots ----------------------------------------
         Item {

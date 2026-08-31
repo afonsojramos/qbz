@@ -288,6 +288,8 @@ Item {
             anchors.fill: parent
             enabled: !root.busy
             onClicked: root.closeEditor()
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
         }
     }
 
@@ -302,7 +304,11 @@ Item {
         border.color: theme.borderStrong
         clip: true
 
-        MouseArea { anchors.fill: parent }
+        MouseArea {
+            anchors.fill: parent
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
 
         Item {
             id: header
