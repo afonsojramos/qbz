@@ -152,38 +152,17 @@ Item {
     readonly property int scrollCap:
         root.height - theme.headerHeight - 6 - root.npbHeight - 16 - 12
 
-    // --- Idle auto-close (4.5s without hover/activity, Cortinilla.slint) --
-    // panelHovered can LATCH: if the panel goes invisible while the pointer
-    // is over it, the MouseArea never reports containsMouse=false, so the
-    // idle timer stays paused forever on the next open. The reference resets
-    // it on every open/close for exactly this reason.
-    property bool panelHovered: false
-    onVisibleChanged: root.panelHovered = false
-    // OWNER DIVERGENCE from the reference (2026-08-03): hovering the panel
-    // must not let it close under the cursor, but a cursor left there BY
-    // ACCIDENT must not hold it open forever either. So hover does not stop
-    // the countdown, it stretches it to 30s. The reference pauses the timer
-    // outright, which fails the second half.
-    //
-    // Assigning `interval` on a running Timer restarts it, so entering the
-    // panel gives a full 30s and leaving it gives a full 4.5s — which is
-    // exactly the wanted behaviour, not an accident.
-    Timer {
-        id: idleClose
-        interval: root.panelHovered ? 30000 : 4500
-        repeat: false
-        running: root.visible
-        onTriggered: QbzSearch.cortinillaDismiss()
-    }
+    // --- Focus-driven lifetime (QoL round, replaces the Slint idle timer) --
+    // The 4.5s/30s idle countdown was inherited from Slint, which could not
+    // keep the panel open while the field kept focus. The Qt rule is the one
+    // users expect of a combobox: while the header searchInput holds
+    // activeFocus the panel STAYS open; what closes it is an explicit act —
+    // a click outside (the scrims below, which also break the field's
+    // focus), Escape (HeaderBar's duck-walk to the shell root), activating a
+    // row, or a page change. No timer, per the repaint-pulse doctrine.
     Connections {
         target: QbzSearch
-        // Activity restarts the countdown (keystroke or arrow move). The
-        // keystroke probe is the QUERY, not the payload: the reference
-        // restarts per keystroke, and now that the debounce lives in Rust a
-        // burst of typing publishes one payload but many queries.
         function onCortinillaJsonChanged() { root.applyDoc() }
-        function onCortinillaQueryChanged() { if (root.visible && !root.panelHovered) idleClose.restart() }
-        function onCortinillaSelectedIndexChanged() { if (root.visible && !root.panelHovered) idleClose.restart() }
         // Keyboard scroll-into-view: the controller publishes the selected
         // row's content-space top-y; nudge the Flickable so it is visible.
         function onCortinillaScrollYChanged() {
@@ -203,6 +182,21 @@ Item {
     }
 
     // --- Click-outside scrims (any click outside the panel dismisses) ----
+    // With the focus-driven lifetime, the scrim is what "breaks the focus":
+    // it hands the keyboard to the shell root (the same duck-walk HeaderBar's
+    // Escape does — merely clearing focus leaves AppShell's Keys handler
+    // receiving nothing) and then dismisses.
+    function dismissOutside() {
+        var p = root
+        while (p.parent) {
+            if (p.parent.isQbzShellRoot === true) {
+                p.parent.forceActiveFocus()
+                break
+            }
+            p = p.parent
+        }
+        QbzSearch.cortinillaDismiss()
+    }
     // 1) everything BELOW the header.
     MouseArea {
         visible: root.visible
@@ -210,7 +204,7 @@ Item {
         y: theme.headerHeight
         width: root.width
         height: root.height - theme.headerHeight
-        onClicked: QbzSearch.cortinillaDismiss()
+        onClicked: root.dismissOutside()
     }
     // 2) header strip LEFT of the search box.
     MouseArea {
@@ -219,7 +213,7 @@ Item {
         y: 0
         width: (root.width - root.searchBoxWidth) / 2
         height: theme.headerHeight
-        onClicked: QbzSearch.cortinillaDismiss()
+        onClicked: root.dismissOutside()
     }
     // 3) header strip RIGHT of the search box.
     MouseArea {
@@ -228,7 +222,7 @@ Item {
         y: 0
         width: root.width - x
         height: theme.headerHeight
-        onClicked: QbzSearch.cortinillaDismiss()
+        onClicked: root.dismissOutside()
     }
 
     // --- The panel ----------------------------------------------------------
@@ -271,17 +265,6 @@ Item {
         border.color: theme.borderMuted
         clip: true
 
-        // Hover detection for the idle stretch. A HoverHandler, NOT the
-        // MouseArea this replaces: that MouseArea was declared first, so the
-        // Flickable and every row's own MouseArea sat ON TOP of it and took
-        // the hover events, and `containsMouse` stayed false for most of the
-        // panel's surface — which is why hovering did not hold the dropdown
-        // open. A HoverHandler reports for its item's whole area regardless
-        // of what is stacked above it.
-        HoverHandler {
-            id: panelHover
-            onHoveredChanged: root.panelHovered = hovered
-        }
         // Swallow clicks that land on the panel background so they do not
         // fall through to the dismiss scrims underneath.
         MouseArea {

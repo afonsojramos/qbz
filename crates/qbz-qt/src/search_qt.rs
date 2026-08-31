@@ -1080,7 +1080,8 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
     }
 }
 
-/// Dismiss (Esc / click-outside / idle / page change).
+/// Dismiss (Esc / click-outside / row activation / page change — the idle
+/// timer is gone: the panel is focus-driven since the QoL round).
 pub fn dismiss() {
     set_cortinilla_open(false);
     // Dismiss is a CANCELLATION POINT. Without the bump an in-flight load
