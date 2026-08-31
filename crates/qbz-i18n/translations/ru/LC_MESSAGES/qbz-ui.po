@@ -6311,3 +6311,9 @@ msgstr "Так уж вышло, что разработчик и мейнтей�
 
 msgid "OK"
 msgstr "OK"
+
+msgid "Sponsors"
+msgstr "Спонсоры"
+
+msgid "And all those anonymous sponsors..."
+msgstr "И все те анонимные спонсоры..."

@@ -210,6 +210,40 @@ Item {
         }
     }
 
+    // A sponsor chip — HandleChip minus the avatar circle (sponsors are
+    // names, not GitHub identities; only the GitHub-sponsor rows carry a
+    // url and become clickable). NOT a pill (ADR-008): radiusSm + border.
+    component SponsorChip: Rectangle {
+        id: sc
+        property string name: ""
+        property string url: ""
+        readonly property bool clickable: sc.url !== ""
+
+        height: 28
+        width: scText.implicitWidth + 24
+        radius: theme.radiusSm
+        border.width: 1
+        border.color: theme.borderSubtle
+        color: (sc.clickable && scArea.containsMouse) ? theme.surfaceHover : theme.surfaceElevated
+
+        Text {
+            id: scText
+            anchors.centerIn: parent
+            text: sc.name
+            color: (sc.clickable && scArea.containsMouse) ? theme.accent : theme.textPrimary
+            font.pixelSize: 13
+            font.weight: theme.weightMedium
+        }
+        MouseArea {
+            id: scArea
+            anchors.fill: parent
+            enabled: sc.clickable
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: QbzShell.openExternalUrl(sc.url)
+        }
+    }
+
     // A small uppercase-ish section heading (11px semibold, +0.5 tracking).
     component SectionHeading: Text {
         color: theme.textMuted
@@ -257,6 +291,10 @@ Item {
         MouseArea {
             anchors.fill: parent
             onClicked: QbzAbout.aboutClose()
+            // Wheel-lock (the DiscoverConfigModal rule): a MouseArea consumes
+            // presses but lets wheel events fall through, so without this the
+            // page underneath kept scrolling behind the modal.
+            onWheel: function (wheel) { wheel.accepted = true }
         }
     }
 
@@ -274,16 +312,23 @@ Item {
     Rectangle {
         id: panel
         anchors.centerIn: parent
-        // 840x770 capped, minus an 80px window margin — AboutModal.slint:163-164.
-        width: Math.min(root.width - 80, 840)
-        height: Math.min(root.height - 80, 770)
+        // The Slint reference was 840x770 (AboutModal.slint:163-164); grown
+        // for the Sponsors section (QoL round) so Contributors + Sponsors fit
+        // without crowding. Still capped by an 80px window margin.
+        width: Math.min(root.width - 80, 920)
+        height: Math.min(root.height - 80, 860)
         radius: theme.radiusMd
         color: theme.surfaceCard
         border.width: 1
         border.color: theme.borderSubtle
 
-        // Swallow clicks so they never reach the closing backdrop.
-        MouseArea { anchors.fill: parent }
+        // Swallow clicks so they never reach the closing backdrop — and the
+        // wheel, so a scroll outside the body Flickable (header, margins)
+        // does not reach the page behind the modal.
+        MouseArea {
+            anchors.fill: parent
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
 
         Item {
             id: stack
@@ -538,6 +583,47 @@ Item {
                                 avatar: contribChip.modelData.avatar || ""
                             }
                         }
+                    }
+
+                    Item { width: 1; height: 24 }
+
+                    // Sponsors (QoL round) — GitHub sponsors first (linked),
+                    // then Ko-fi supporters by their public display name.
+                    // FIXED-HEIGHT strip of exactly three chip rows
+                    // (3×28 + 2×8); the strip scrolls ITSELF, the modal
+                    // never grows with the list.
+                    SectionHeading { text: QbzSession.tr("Sponsors", QbzSession.trRev) }
+                    Item { width: 1; height: 12 }
+                    Flickable {
+                        width: parent.width
+                        height: 100
+                        clip: true
+                        contentWidth: width
+                        contentHeight: sponsorFlow.height
+                        boundsBehavior: Flickable.StopAtBounds
+                        Flow {
+                            id: sponsorFlow
+                            width: parent.width
+                            spacing: 8
+                            Repeater {
+                                model: root.doc.sponsors || []
+                                delegate: SponsorChip {
+                                    id: sponsorChip
+                                    required property var modelData
+                                    name: sponsorChip.modelData.name || ""
+                                    url: sponsorChip.modelData.url || ""
+                                }
+                            }
+                        }
+                    }
+                    Item { width: 1; height: 8 }
+                    Text {
+                        width: parent.width
+                        text: QbzSession.tr("And all those anonymous sponsors...", QbzSession.trRev)
+                        color: theme.textMuted
+                        font.pixelSize: 12
+                        font.italic: true
+                        wrapMode: Text.WordWrap
                     }
 
                     Item { width: 1; height: 24 }

@@ -6299,3 +6299,9 @@ msgstr "Dicho sea de paso, el desarrollador y mantenedor de este software es de 
 
 msgid "OK"
 msgstr "OK"
+
+msgid "Sponsors"
+msgstr "Patrocinadores"
+
+msgid "And all those anonymous sponsors..."
+msgstr "Y todos esos patrocinadores anónimos..."

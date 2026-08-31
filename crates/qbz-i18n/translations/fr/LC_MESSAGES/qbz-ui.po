@@ -6291,3 +6291,9 @@ msgstr "Il se trouve que le développeur et mainteneur de ce logiciel est mexica
 
 msgid "OK"
 msgstr "OK"
+
+msgid "Sponsors"
+msgstr "Sponsors"
+
+msgid "And all those anonymous sponsors..."
+msgstr "Et tous ces sponsors anonymes..."

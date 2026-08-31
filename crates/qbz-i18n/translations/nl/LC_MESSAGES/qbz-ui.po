@@ -6281,3 +6281,9 @@ msgstr "Toevallig komt de ontwikkelaar en beheerder van deze software uit Mexico
 
 msgid "OK"
 msgstr "OK"
+
+msgid "Sponsors"
+msgstr "Sponsors"
+
+msgid "And all those anonymous sponsors..."
+msgstr "En al die anonieme sponsors..."

@@ -6293,3 +6293,9 @@ msgstr "Zufällig stammt der Entwickler und Maintainer dieser Software aus Mexik
 
 msgid "OK"
 msgstr "OK"
+
+msgid "Sponsors"
+msgstr "Sponsoren"
+
+msgid "And all those anonymous sponsors..."
+msgstr "Und all die anonymen Sponsoren..."
