@@ -23,6 +23,18 @@ use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 const PORTAL_NOTIFICATION_ID: &str = "track-now-playing";
 
+/// The portal id of the LAST toast this process published, so the next one
+/// (or a withdraw) can remove it. Ids are UNIQUE per toast on purpose
+/// (`track-now-playing-<generation>`): re-publishing under one stable id is
+/// an in-place update, and Plasma never re-presents an update as a banner —
+/// `show-as-new` included (measured on the owner's desktop, 2026-08-31: a
+/// same-id replacement with the hint produced NO popup while a fresh id
+/// bannered every time). So each track change publishes a new id and removes
+/// the previous one, which is the fresh-id presentation with the same
+/// no-pileup lifecycle the stable id was for.
+#[cfg(target_os = "linux")]
+static PORTAL_NOTIFICATION_LAST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 /// Serializes portal mutations and invalidates slow, stale artwork jobs. A
 /// track-A notification can spend seconds downloading its cover while track B
 /// starts (or playback stops); without this generation check A may overwrite B
@@ -285,9 +297,7 @@ pub async fn show_track_notification(meta: NotificationMeta, offline: bool) {
 
     #[cfg(target_os = "linux")]
     {
-        use ashpd::desktop::notification::{
-            DisplayHint, Notification as PortalNotification, NotificationProxy,
-        };
+        use ashpd::desktop::notification::{Notification as PortalNotification, NotificationProxy};
         use ashpd::desktop::Icon;
         use std::sync::atomic::Ordering;
 
@@ -295,15 +305,13 @@ pub async fn show_track_notification(meta: NotificationMeta, offline: bool) {
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1);
 
-        // One stable id intentionally replaces the previous track toast. The
-        // portal normally treats that as an in-place update, which Plasma does
-        // not animate as a new banner after the first track. `show-as-new` is
-        // the portal's explicit contract for a replacement that must be
-        // presented again. It must not be combined with `transient`; stop,
-        // opt-out and shutdown withdraw the replaceable notification below.
-        let mut notification = PortalNotification::new(&meta.title)
-            .body(Some(body.as_str()))
-            .display_hint([DisplayHint::ShowAsNew]);
+        // A UNIQUE id per toast — see PORTAL_NOTIFICATION_LAST for why the
+        // stable-id + show-as-new shape was abandoned: Plasma presents a
+        // same-id replacement as a silent in-place update, hint or not. The
+        // previous toast is removed right before the new publish below, so
+        // the no-pileup lifecycle survives the id change.
+        let notification_id = format!("{PORTAL_NOTIFICATION_ID}-{generation}");
+        let mut notification = PortalNotification::new(&meta.title).body(Some(body.as_str()));
 
         if let Some(url) = meta.art_url.clone() {
             let prepared = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
@@ -328,10 +336,21 @@ pub async fn show_track_notification(meta: NotificationMeta, offline: bool) {
                     log::debug!("[notify] stale track notification discarded");
                     return;
                 }
-                match proxy
-                    .add_notification(PORTAL_NOTIFICATION_ID, notification)
-                    .await
-                {
+                // Retire the previous toast FIRST: on a rapid skip its banner
+                // may still be on screen, and the new publish must not stack
+                // on it. The record is swapped before the awaits (a std lock
+                // is never held across them); a failed add then leaves a
+                // dangling id behind, whose later removal is a harmless no-op.
+                let previous = PORTAL_NOTIFICATION_LAST
+                    .lock()
+                    .map(|mut last| last.replace(notification_id.clone()))
+                    .unwrap_or(None);
+                if let Some(prev) = previous {
+                    if let Err(e) = proxy.remove_notification(&prev).await {
+                        log::debug!("[notify] XDG portal remove_notification failed: {e}");
+                    }
+                }
+                match proxy.add_notification(&notification_id, notification).await {
                     Ok(()) => log::debug!("[notify] XDG portal notification published"),
                     Err(e) => log::warn!("[notify] XDG portal add_notification failed: {e}"),
                 }
@@ -427,7 +446,17 @@ pub async fn withdraw_track_notification() {
         if PORTAL_NOTIFICATION_GENERATION.load(Ordering::Acquire) != generation {
             return;
         }
-        if let Err(e) = proxy.remove_notification(PORTAL_NOTIFICATION_ID).await {
+        // The ids are per-toast now (see PORTAL_NOTIFICATION_LAST) — take and
+        // remove whichever one this process last published. Nothing published
+        // = nothing to withdraw.
+        let target = PORTAL_NOTIFICATION_LAST
+            .lock()
+            .map(|mut last| last.take())
+            .unwrap_or(None);
+        let Some(target) = target else {
+            return;
+        };
+        if let Err(e) = proxy.remove_notification(&target).await {
             log::debug!("[notify] XDG portal remove_notification failed: {e}");
         }
     }

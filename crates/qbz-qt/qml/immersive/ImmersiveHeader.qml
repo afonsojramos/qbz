@@ -480,9 +480,12 @@ Item {
     }
 
     // --- RIGHT: the window-controls capsule --------------------------------
-    // Collapsed: 44px circle, sliders glyph. Expands LEFTWARD to 112px
-    // (150ms ease-in-out, anchored right) revealing the fullscreen toggle
-    // and the X exit. Minimize/maximize/drag parked (Slint :1173-1183).
+    // Collapsed: 44px circle, sliders glyph. Expands LEFTWARD (150ms
+    // ease-in-out, anchored right) revealing the window controls and the X
+    // exit. On macOS the native traffic lights already carry
+    // minimize/maximize, so the capsule keeps only fullscreen + X (112px);
+    // everywhere else it also reveals minimize and maximize/restore (184px —
+    // 2026-08-31 visual cleanup; the Slint had them parked, :1173-1183).
     //
     // The expansion is the Slint state machine ported 1:1
     // (ImmersiveView.slint:1057-1184): `expanded = pinned || anyHover` is a
@@ -497,7 +500,9 @@ Item {
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         height: 36
-        width: expanded ? 112 : 44
+        // 40px lead-in + one 36px slot per button (2 on macOS, 4 elsewhere).
+        readonly property int buttonSlots: QbzShell.isMacos ? 2 : 4
+        width: expanded ? 40 + 36 * buttonSlots : 44
         radius: 18
         color: "#80000000"
         border.width: 1
@@ -512,6 +517,7 @@ Item {
         // Hover over ANY part of the capsule: the background or either
         // button (their hover areas extend 9px past the glyphs).
         readonly property bool anyHover: capHover.containsMouse
+            || minArea.containsMouse || maxArea.containsMouse
             || fsArea.containsMouse || xArea.containsMouse
         readonly property bool expanded: pinned || anyHover
 
@@ -535,6 +541,62 @@ Item {
             tintName: "white"
             opacity: capsule.expanded ? 0 : 1
             Behavior on opacity { NumberAnimation { duration: 100 } }
+        }
+
+        // Minimize + maximize/restore — non-macOS only (see the header note);
+        // both gate on the expansion BOOL exactly like the pair below.
+        readonly property bool platformButtons: !QbzShell.isMacos
+        QbzIcon {
+            name: "minus"
+            width: 15
+            height: 15
+            visible: capsule.platformButtons
+            x: capsule.width - 144
+            anchors.verticalCenter: parent.verticalCenter
+            tintName: minArea.containsMouse ? "white" : "muted"
+            opacity: capsule.expanded && capsule.platformButtons ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: 100 } }
+            MouseArea {
+                id: minArea
+                anchors.fill: parent
+                anchors.margins: -9
+                enabled: capsule.expanded && capsule.platformButtons
+                hoverEnabled: enabled
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    var w = header.Window.window
+                    if (w)
+                        w.showMinimized()
+                }
+            }
+        }
+        QbzIcon {
+            name: (header.Window.window
+                   && header.Window.window.visibility === Window.Maximized)
+                  ? "copy" : "square"
+            width: 14
+            height: 14
+            visible: capsule.platformButtons
+            x: capsule.width - 108
+            anchors.verticalCenter: parent.verticalCenter
+            tintName: maxArea.containsMouse ? "white" : "muted"
+            opacity: capsule.expanded && capsule.platformButtons ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: 100 } }
+            MouseArea {
+                id: maxArea
+                anchors.fill: parent
+                anchors.margins: -9
+                enabled: capsule.expanded && capsule.platformButtons
+                hoverEnabled: enabled
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    var w = header.Window.window
+                    if (!w)
+                        return
+                    w.visibility = w.visibility === Window.Maximized
+                        ? Window.Windowed : Window.Maximized
+                }
+            }
         }
 
         // Fullscreen toggle (glyph swaps on state) + X exit — revealed by the

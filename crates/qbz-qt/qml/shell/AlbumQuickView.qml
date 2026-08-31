@@ -164,9 +164,12 @@ Item {
         // queue's, so the row is unconditional.
         entries.push({ "label": t("Play later"), "icon": "list-plus", "action": "later" })
         entries.push({ "label": t("Add to queue"), "icon": "list-end", "action": "queue" })
+        // "Add to playlist" is for BOTH paths (owner, 2026-08-31: playlists
+        // can be 100% local or mixed — the local arm rides the quick view's
+        // own row snapshot). Mixtape/share stay catalog-only.
+        entries.push({ "sep": true })
+        entries.push({ "label": t("Add to playlist"), "icon": "list-music", "action": "playlist" })
         if (!root.localAlbum) {
-            entries.push({ "sep": true })
-            entries.push({ "label": t("Add to playlist"), "icon": "list-music", "action": "playlist" })
             entries.push({ "label": t("Add to mixtape"), "icon": "cassette-tape", "action": "mixtape" })
             entries.push({ "label": t("Share Qobuz link"), "icon": "link", "action": "share-qobuz" })
             entries.push({ "label": t("Share Album.link"), "icon": "link", "action": "share-albumlink" })
@@ -182,10 +185,8 @@ Item {
             entries.push({ "label": t("Play next"), "icon": "list-start", "action": "next" })
             entries.push({ "label": t("Play later"), "icon": "list-plus", "action": "later" })
             entries.push({ "label": t("Add to queue"), "icon": "list-end", "action": "queue" })
-            if (!root.localAlbum) {
-                entries.push({ "sep": true })
-                entries.push({ "label": t("Add to playlist"), "icon": "list-music", "action": "playlist" })
-            }
+            entries.push({ "sep": true })
+            entries.push({ "label": t("Add to playlist"), "icon": "list-music", "action": "playlist" })
         }
         // Quick View deliberately has no favourite or offline-cache actions,
         // inline or in this menu. Context stays about playback/navigation.
@@ -213,6 +214,14 @@ Item {
             // Play-later row that would perform the same write.
             root.albumPlaybackAction(root.localAlbum ? "queue" : "later")
         } else if (action === "playlist") {
+            if (root.localAlbum) {
+                // Rust still holds this quick view's row snapshot — fire the
+                // action BEFORE closing (close bumps the generation and the
+                // context would be refused as stale).
+                QbzAlbum.quickViewLocalAction("playlist", "")
+                root.closeQuickView()
+                return
+            }
             var ids = []
             for (var i = 0; i < root.tracks.length; i++) {
                 if (/^\d+$/.test(root.tracks[i].id || "")
@@ -241,6 +250,12 @@ Item {
         else if (action === "next" || action === "later" || action === "queue")
             root.enqueueTrack(track.id, action)
         else if (action === "playlist") {
+            if (root.localAlbum) {
+                // Same before-close ordering as the album arm above.
+                QbzAlbum.quickViewLocalAction("playlist", String(track.id))
+                root.closeQuickView()
+                return
+            }
             root.closeQuickView()
             QbzPlaylistPicker.openForTrack(track.id)
         } else if (action === "share") {

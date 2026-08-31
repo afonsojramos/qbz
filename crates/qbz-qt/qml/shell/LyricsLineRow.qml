@@ -54,6 +54,11 @@ Column {
     property bool uppercase: false
     property string fontFamily: ""
     property color activeColor: theme.accent
+    // The UNSUNG part of the active karaoke line. The default follows the
+    // theme; immersive hosts override it with a decisively dimmer white —
+    // theme.textSecondary is near-white there, so the timed fill was barely
+    // distinguishable from the sung overlay (2026-08-31 visual cleanup).
+    property color inactiveColor: theme.textSecondary
     // Lite fill: light the active line whole, no per-frame clip sweep.
     property bool liteFill: false
     property bool showTranslation: false
@@ -216,7 +221,7 @@ Column {
                     id: segBase
                     text: seg.modelData.text
                     wrapMode: Text.NoWrap
-                    color: theme.textSecondary
+                    color: row.inactiveColor
                     font.family: row.effFamily
                     font.pixelSize: row.sizeActive
                     font.weight: theme.weightBold

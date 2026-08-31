@@ -27,8 +27,18 @@ Column {
 
     QbzTheme { id: theme }
 
-    /// Equalizer tint + "Now Playing" label follow the active theme.
-    property color equalizerTint: theme.accent
+    /// Equalizer tint + "Now Playing" label follow the album palette, not
+    /// the theme accent: the theme color has no contrast guarantee over the
+    /// ambient backdrop (2026-08-31 visual cleanup — homologated with the
+    /// cinematic split card's waveform/seek accent).
+    AmbientAccent { id: ambientAccent }
+    property color equalizerTint: ambientAccent.value
+
+    /// The block sits directly on the ambient/blurred-cover field, which can
+    /// be near-white for light covers — every text row carries the same
+    /// restrained native shadow the lyrics surfaces use, so the fixed light
+    /// colors stay legible over ANY artwork.
+    readonly property color _shadow: "#b0000000"
 
     spacing: 6
 
@@ -57,6 +67,8 @@ Column {
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
                 font.letterSpacing: 0.5
+                style: Text.Raised
+                styleColor: root._shadow
                 anchors.verticalCenter: parent.verticalCenter
             }
         }
@@ -69,6 +81,8 @@ Column {
         color: "#ffffff"
         font.pixelSize: 28
         font.weight: Font.Bold
+        style: Text.Raised
+        styleColor: root._shadow
         horizontalAlignment: Text.AlignHCenter
         elide: Text.ElideRight
     }
@@ -77,8 +91,10 @@ Column {
     Text {
         width: parent.width
         text: QbzPlayer.npArtist
-        color: "#b3ffffff"
+        color: "#d9ffffff"
         font.pixelSize: 18
+        style: Text.Raised
+        styleColor: root._shadow
         horizontalAlignment: Text.AlignHCenter
         elide: Text.ElideRight
     }
@@ -88,9 +104,11 @@ Column {
         visible: QbzPlayer.npAlbum !== ""
         width: parent.width
         text: QbzPlayer.npAlbum
-        color: "#80ffffff"
+        color: "#bfffffff"
         font.pixelSize: 14
         font.italic: true
+        style: Text.Raised
+        styleColor: root._shadow
         horizontalAlignment: Text.AlignHCenter
         elide: Text.ElideRight
     }
@@ -106,6 +124,7 @@ Column {
             id: badge
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottom: parent.bottom
+            overAmbient: true
             tier: QbzPlayer.npQualityTier
             detail: QbzPlayer.npQualityDetail
         }

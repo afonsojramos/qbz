@@ -122,6 +122,9 @@ Item {
             uppercase: QbzLyrics.uppercase
             fontFamily: root.fontFamily
             activeColor: "#ffffff"
+            // 35% white: the theme's textSecondary was barely dimmer than
+            // the sung overlay, so the karaoke fill read as static text.
+            inactiveColor: "#59ffffff"
             liteFill: false
             centered: true
             textShadow: true

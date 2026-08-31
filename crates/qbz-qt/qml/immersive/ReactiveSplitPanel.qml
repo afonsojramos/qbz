@@ -38,8 +38,6 @@ Item {
     readonly property bool _noShaders: GraphicsInfo.api === GraphicsInfo.Software
         || GraphicsInfo.api === GraphicsInfo.Null
 
-    QbzTheme { id: theme }
-
     // Geometry from the owner's annotated 1280x720 composition. `stageTop` is
     // below the header; `playerTop` is the fixed y of ImmersivePlayerBar. The
     // card consumes 70% of that useful height and 85% of the viewport width.
@@ -76,14 +74,14 @@ Item {
     readonly property real cardBackdropOverscan: Math.max(36,
         Math.min(root.cardWidth, root.cardHeight) * 0.12)
 
-    // Exact complementary hue to the ambient primary, lifted just enough to
-    // stay legible over a dark atmosphere. Unlike FOCUS Wave Bed this is not
-    // mirrored: every column grows upward from one baseline.
-    readonly property color ambientPrimary: QbzShell.ambientPrimary
-    readonly property color waveColor: Qt.lighter(Qt.rgba(
-        1.0 - root.ambientPrimary.r,
-        1.0 - root.ambientPrimary.g,
-        1.0 - root.ambientPrimary.b, 1.0), 1.18)
+    // The album's OWN dominant hue, lifted for legibility (AmbientAccent).
+    // This used to be the exact COMPLEMENT of the ambient primary, which is
+    // how a deep-blue cover got an orange waveform/seek — the accent now
+    // stays in the album palette (2026-08-31 visual cleanup). Unlike FOCUS
+    // Wave Bed this is not mirrored: every column grows upward from one
+    // baseline.
+    AmbientAccent { id: ambientAccent }
+    readonly property color waveColor: ambientAccent.value
 
     readonly property string fontDir: "qrc:/qt/qml/com/blitzfc/qbz/qml/assets/fonts/"
     readonly property string fontSource: {
@@ -333,68 +331,45 @@ Item {
                 anchors.fill: parent
                 visible: !root.lyricsMode
 
-                readonly property string artistAlbum: QbzPlayer.npArtist
-                    + (QbzPlayer.npAlbum !== ""
-                        ? " — " + QbzPlayer.npAlbum : "")
+                // Fixed nominal faces, clamped by the CARD's height only. The
+                // shared shrink-to-fit typeScale is retired (owner, 2026-08-31
+                // round 3): a long title now WRAPS at full size instead of
+                // scaling the whole block down, and the subordinate lines
+                // elide rather than dictate anyone's size.
                 readonly property real nominalTitleSize: Math.max(24,
                     Math.min(48, card.height * 0.105))
                 readonly property real nominalMetaSize: Math.max(13,
                     Math.min(21, card.height * 0.052))
-
-                TextMetrics {
-                    id: titleMetrics
-                    text: QbzPlayer.npTitle
-                    font.pixelSize: nowPlayingPane.nominalTitleSize
-                    font.weight: Font.Bold
-                }
-                TextMetrics {
-                    id: artistAlbumMetrics
-                    text: nowPlayingPane.artistAlbum
-                    font.pixelSize: nowPlayingPane.nominalMetaSize
-                }
-                // One shared scale is derived from whichever metadata line is
-                // widest. The title remains the largest face, never elides,
-                // and every subordinate label follows its reduction.
-                readonly property real typeScale: {
-                    var scale = 1.0
-                    if (titleMetrics.advanceWidth > 0)
-                        scale = Math.min(scale,
-                            nowPlayingPane.width / titleMetrics.advanceWidth)
-                    if (artistAlbumMetrics.advanceWidth > 0)
-                        scale = Math.min(scale,
-                            nowPlayingPane.width / artistAlbumMetrics.advanceWidth)
-                    return Math.max(0.05, Math.min(1.0, scale))
-                }
 
                 Column {
                     id: metadataStack
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    spacing: Math.max(3,
-                        Math.round(7 * nowPlayingPane.typeScale))
+                    spacing: 7
 
+                    // "Now Playing" indicator at 1.5x, tinted with the
+                    // album-palette accent instead of the theme accent so it
+                    // matches the waveform/seek (owner request 2026-08-31).
                     Item {
                         visible: QbzPlayer.npPlaying
                         width: parent.width
-                        height: visible ? Math.max(12,
-                            Math.round(14 * nowPlayingPane.typeScale)) : 0
+                        height: visible ? 21 : 0
                         Row {
                             anchors.left: parent.left
                             anchors.verticalCenter: parent.verticalCenter
-                            spacing: Math.max(4,
-                                Math.round(8 * nowPlayingPane.typeScale))
+                            spacing: 12
                             EqualizerBars {
-                                tint: theme.accent
+                                tint: root.waveColor
+                                barScale: 1.5
                                 active: root.visible && QbzImmersive.open
                                 anchors.verticalCenter: parent.verticalCenter
                             }
                             Text {
                                 text: QbzSession.tr("Now Playing",
                                     QbzSession.trRev)
-                                color: theme.accent
-                                font.pixelSize: Math.max(1,
-                                    12 * nowPlayingPane.typeScale)
+                                color: root.waveColor
+                                font.pixelSize: 18
                                 font.weight: Font.DemiBold
                                 font.letterSpacing: 0.5
                                 anchors.verticalCenter: parent.verticalCenter
@@ -402,26 +377,34 @@ Item {
                         }
                     }
 
+                    // Three metadata lines: title / album / artist. The title
+                    // wraps at its full size instead of shrinking to fit.
                     Text {
                         width: parent.width
                         text: QbzPlayer.npTitle
                         color: "#f5ffffff"
-                        font.pixelSize: Math.max(1,
-                            nowPlayingPane.nominalTitleSize
-                                * nowPlayingPane.typeScale)
+                        font.pixelSize: nowPlayingPane.nominalTitleSize
                         font.weight: Font.Bold
-                        wrapMode: Text.NoWrap
-                        elide: Text.ElideNone
+                        wrapMode: Text.WordWrap
                     }
                     Text {
+                        visible: QbzPlayer.npAlbum !== ""
                         width: parent.width
-                        text: nowPlayingPane.artistAlbum
-                        color: "#a8ffffff"
-                        font.pixelSize: Math.max(1,
-                            nowPlayingPane.nominalMetaSize
-                                * nowPlayingPane.typeScale)
+                        text: QbzPlayer.npAlbum
+                        color: "#8cffffff"
+                        font.italic: true
+                        font.pixelSize: nowPlayingPane.nominalMetaSize
                         wrapMode: Text.NoWrap
-                        elide: Text.ElideNone
+                        elide: Text.ElideRight
+                    }
+                    Text {
+                        visible: QbzPlayer.npArtist !== ""
+                        width: parent.width
+                        text: QbzPlayer.npArtist
+                        color: "#b3ffffff"
+                        font.pixelSize: nowPlayingPane.nominalMetaSize
+                        wrapMode: Text.NoWrap
+                        elide: Text.ElideRight
                     }
 
                     Item {
@@ -432,7 +415,8 @@ Item {
                             id: qualityBadge
                             anchors.left: parent.left
                             compact: true
-                            scaleFactor: nowPlayingPane.typeScale
+                            overAmbient: true
+                            scaleFactor: 1.5
                             tier: QbzPlayer.npQualityTier
                             detail: QbzPlayer.npQualityDetail
                         }
@@ -500,6 +484,9 @@ Item {
                     uppercase: QbzLyrics.uppercase
                     fontFamily: root.lyricFontFamily
                     activeColor: "#ffffff"
+                    // 35% white so the karaoke fill reads (see
+                    // LyricsFocusPanel.qml).
+                    inactiveColor: "#59ffffff"
                     liteFill: false
                     centered: false
                     textShadow: true

@@ -24,6 +24,22 @@ Column {
 
     QbzTheme { id: theme }
 
+    /// Legibility mode for the immersive split panel (2026-08-31 visual
+    /// cleanup): there the body sits directly on the ambient field, where
+    /// theme tokens have no contrast guarantee over a light cover. On, every
+    /// text uses a fixed light color plus the restrained native shadow the
+    /// lyrics surfaces use. The desktop modal keeps the theme (default off).
+    property bool overAmbient: false
+    readonly property color cPrimary: overAmbient ? "#f2ffffff" : theme.textPrimary
+    readonly property color cMuted: overAmbient ? "#b3ffffff" : theme.textMuted
+    readonly property color cRule: overAmbient ? "#2effffff" : theme.surfaceElevated
+    readonly property int cStyle: overAmbient ? Text.Raised : Text.Normal
+    readonly property color cShadow: "#b0000000"
+    // Links follow the ALBUM palette over ambient — the theme accent has no
+    // contrast guarantee there (owner, 2026-08-31 round 2).
+    AmbientAccent { id: bodyAmbientAccent }
+    readonly property color cAccent: overAmbient ? bodyAmbientAccent.value : theme.accent
+
     readonly property var doc: host ? host.doc : ({})
 
     // ---- Loading ---------------------------------------------------------
@@ -36,7 +52,9 @@ Column {
             anchors.centerIn: parent
             width: Math.max(0, parent.width - 120)
             text: QbzSession.tr("Loading track info...", QbzSession.trRev)
-            color: theme.textMuted
+            color: body.cMuted
+            style: body.cStyle
+            styleColor: body.cShadow
             font.pixelSize: theme.fontBody
             horizontalAlignment: Text.AlignHCenter
         }
@@ -55,14 +73,18 @@ Column {
             Text {
                 width: parent.width
                 text: QbzSession.tr("Failed to load track info", QbzSession.trRev)
-                color: theme.textMuted
+                color: body.cMuted
+                style: body.cStyle
+                styleColor: body.cShadow
                 font.pixelSize: theme.fontBody
                 horizontalAlignment: Text.AlignHCenter
             }
             Text {
                 width: parent.width
                 text: body.host ? body.host.errorText : ""
-                color: theme.textMuted
+                color: body.cMuted
+                style: body.cStyle
+                styleColor: body.cShadow
                 font.pixelSize: theme.fontLegal
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
@@ -99,8 +121,12 @@ Column {
                 Text {
                     width: parent.width
                     text: body.doc.title || ""
-                    color: theme.textPrimary
-                    font.pixelSize: 16
+                    color: body.cPrimary
+                    style: body.cStyle
+                    styleColor: body.cShadow
+                    // The immersive panel reads at a distance — its header
+                    // steps up (owner, 2026-08-31 round 2).
+                    font.pixelSize: body.overAmbient ? 24 : 16
                     font.weight: theme.weightSemibold
                     wrapMode: Text.WordWrap
                 }
@@ -108,8 +134,10 @@ Column {
                     visible: (body.doc.album || "") !== ""
                     width: parent.width
                     text: body.doc.album || ""
-                    color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
+                    color: body.cMuted
+                    style: body.cStyle
+                    styleColor: body.cShadow
+                    font.pixelSize: body.overAmbient ? 15 : theme.fontLegal
                     elide: Text.ElideRight
                 }
                 // Artist — a link only when an id exists.
@@ -121,8 +149,10 @@ Column {
                         id: artistText
                         text: body.doc.artist || ""
                         color: (body.doc.artistId || "") !== ""
-                            ? theme.accent : theme.textPrimary
-                        font.pixelSize: 16
+                            ? body.cAccent : body.cPrimary
+                        style: body.cStyle
+                        styleColor: body.cShadow
+                        font.pixelSize: body.overAmbient ? 20 : 16
                         font.weight: theme.weightSemibold
                     }
                     MouseArea {
@@ -149,7 +179,9 @@ Column {
                     width: 18
                     height: 18
                     anchors.centerIn: parent
-                    tintName: closeArea.containsMouse ? "textPrimary" : "muted"
+                    tintName: body.overAmbient
+                        ? (closeArea.containsMouse ? "white" : "muted")
+                        : (closeArea.containsMouse ? "textPrimary" : "muted")
                 }
                 MouseArea {
                     id: closeArea
@@ -177,22 +209,28 @@ Column {
                     spacing: 24
                     InfoMetaCell {
                         cellWidth: loadedCol.metaColW
+                        overAmbient: body.overAmbient
                         label: QbzSession.tr("Duration", QbzSession.trRev)
                         Text {
                             width: loadedCol.metaColW
                             text: body.doc.duration || ""
-                            color: theme.textPrimary
+                            color: body.cPrimary
+                            style: body.cStyle
+                            styleColor: body.cShadow
                             font.pixelSize: 14
                             elide: Text.ElideRight
                         }
                     }
                     InfoMetaCell {
                         cellWidth: loadedCol.metaColW
+                        overAmbient: body.overAmbient
                         label: QbzSession.tr("Quality", QbzSession.trRev)
                         Text {
                             width: loadedCol.metaColW
                             text: body.doc.quality || ""
-                            color: theme.textPrimary
+                            color: body.cPrimary
+                            style: body.cStyle
+                            styleColor: body.cShadow
                             font.pixelSize: 14
                             elide: Text.ElideRight
                         }
@@ -202,11 +240,14 @@ Column {
                     InfoMetaCell {
                         visible: (body.doc.isrc || "") !== ""
                         cellWidth: loadedCol.metaColW
+                        overAmbient: body.overAmbient
                         label: "ISRC"
                         Text {
                             width: loadedCol.metaColW
                             text: body.doc.isrc || ""
-                            color: theme.textMuted
+                            color: body.cMuted
+                            style: body.cStyle
+                            styleColor: body.cShadow
                             font.pixelSize: 14
                             elide: Text.ElideRight
                         }
@@ -228,6 +269,7 @@ Column {
                     spacing: 24
                     InfoMetaCell {
                         cellWidth: loadedCol.metaColW
+                        overAmbient: body.overAmbient
                         label: QbzSession.tr("Label", QbzSession.trRev)
                         Item {
                             width: loadedCol.metaColW
@@ -238,7 +280,9 @@ Column {
                                 text: body.doc.label || ""
                                 color: (labelArea.containsMouse
                                         && (body.doc.labelId || "") !== "")
-                                    ? theme.accent : theme.textPrimary
+                                    ? body.cAccent : body.cPrimary
+                                style: body.cStyle
+                                styleColor: body.cShadow
                                 font.pixelSize: 14
                                 elide: Text.ElideRight
                             }
@@ -265,7 +309,7 @@ Column {
                     visible: body.host && body.host.credits.length > 0
                     width: parent.width
                     height: 1
-                    color: theme.surfaceElevated
+                    color: body.cRule
                 }
                 Item {
                     visible: body.host && body.host.credits.length > 0
@@ -284,6 +328,8 @@ Column {
                             delegate: InfoCreditCell {
                                 required property var modelData
                                 colW: loadedCol.creditsColW
+                                overAmbient: body.overAmbient
+                                accentColor: body.cAccent
                                 cell: modelData
                                 onNameClicked: function (n, r) { body.host.openMusician(n, r) }
                             }
@@ -297,6 +343,8 @@ Column {
                             delegate: InfoCreditCell {
                                 required property var modelData
                                 colW: loadedCol.creditsColW
+                                overAmbient: body.overAmbient
+                                accentColor: body.cAccent
                                 cell: modelData
                                 onNameClicked: function (n, r) { body.host.openMusician(n, r) }
                             }
@@ -314,7 +362,7 @@ Column {
                     visible: (body.doc.copyright || "") !== ""
                     width: parent.width
                     height: 1
-                    color: theme.surfaceElevated
+                    color: body.cRule
                 }
                 Item {
                     visible: (body.doc.copyright || "") !== ""
@@ -325,7 +373,9 @@ Column {
                     visible: (body.doc.copyright || "") !== ""
                     width: parent.width
                     text: body.doc.copyright || ""
-                    color: theme.textMuted
+                    color: body.cMuted
+                    style: body.cStyle
+                    styleColor: body.cShadow
                     font.pixelSize: 12
                     wrapMode: Text.WordWrap
                 }

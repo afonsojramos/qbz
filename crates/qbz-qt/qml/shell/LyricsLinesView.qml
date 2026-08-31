@@ -51,6 +51,8 @@ Item {
     // 0 System · 1 LINE Seed JP · 2 Montserrat · 3 Noto Sans · 4 Source Sans 3
     property int fontIndex: 0
     property color activeColor: theme.accent
+    // Unsung part of the active karaoke line (see LyricsLineRow.qml).
+    property color inactiveColor: theme.textSecondary
     property bool liteFill: false
 
     // Seek request from a line click (the host decides whether to honour it).
@@ -194,6 +196,7 @@ Item {
                         uppercase: view.uppercase
                         fontFamily: view.fontFamily
                         activeColor: view.activeColor
+                        inactiveColor: view.inactiveColor
                         liteFill: view.liteFill
                         showTranslation: view.showTranslation
                     }

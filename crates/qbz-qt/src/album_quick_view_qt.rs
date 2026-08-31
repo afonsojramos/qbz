@@ -379,7 +379,7 @@ pub(crate) fn local_action(action: String, track_id: String) {
         return;
     }
     let start = selected_position.unwrap_or(0);
-    let rows = if matches!(action.as_str(), "next" | "later" | "queue") {
+    let rows = if matches!(action.as_str(), "next" | "later" | "queue" | "playlist") {
         match selected_id {
             Some(id) => context
                 .tracks
@@ -393,6 +393,15 @@ pub(crate) fn local_action(action: String, track_id: String) {
         context.tracks
     };
     if rows.is_empty() {
+        return;
+    }
+
+    // "playlist" never touches the queue: source-aware refs, then the
+    // app-wide picker in LOCAL MODE (the local_bulk "add-to-playlist" tail).
+    // Sync on purpose — the QML fires this BEFORE closeQuickView, and the
+    // rows are already snapshotted above.
+    if action == "playlist" {
+        crate::local_album_actions::open_picker_for_rows(&rows);
         return;
     }
 

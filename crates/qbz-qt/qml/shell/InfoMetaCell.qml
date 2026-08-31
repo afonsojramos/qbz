@@ -19,6 +19,9 @@ Column {
     id: mc
     property string label: ""
     property int cellWidth: 0
+    /// Immersive-panel legibility mode (see TrackInfoBody.qml): fixed light
+    /// label + native shadow instead of the theme token.
+    property bool overAmbient: false
 
     QbzTheme { id: theme }
 
@@ -28,7 +31,9 @@ Column {
     Text {
         width: mc.cellWidth
         text: mc.label
-        color: theme.textMuted
+        color: mc.overAmbient ? "#b3ffffff" : theme.textMuted
+        style: mc.overAmbient ? Text.Raised : Text.Normal
+        styleColor: "#b0000000"
         font.pixelSize: 11
         font.weight: theme.weightSemibold
         font.letterSpacing: 0.5

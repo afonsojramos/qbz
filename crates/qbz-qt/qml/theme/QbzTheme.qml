@@ -61,8 +61,28 @@ QtObject {
     readonly property color surfaceHover: _c("surfaceHover")
     readonly property color bgHover: _c("bgHover")
     readonly property color textPrimary: _c("textPrimary")
-    readonly property color textSecondary: _c("textSecondary")
-    readonly property color textMuted: _c("textMuted")
+    // Weak-ramp hardening under ambient on LIGHT themes (owner, 2026-08-31):
+    // the ambient wash sits at mid luminance, where a light theme's grey
+    // secondary/muted ramp loses its contrast floor — dark themes keep their
+    // registry values untouched. The step is a plain channel mix toward
+    // textPrimary, so every consumer (there is one QbzTheme per component)
+    // follows without a call-site change. Icons ride the tint bake, not this
+    // object — if their muted tier still suffers, that is its own change.
+    readonly property bool _hardenWeakRamp: ambientOn && !isDark
+    function _towardPrimary(c, f) {
+        var p = _colorOf(_c("textPrimary"))
+        return Qt.rgba(c.r + (p.r - c.r) * f,
+                       c.g + (p.g - c.g) * f,
+                       c.b + (p.b - c.b) * f, c.a)
+    }
+    // _c() returns the document's STRING; give the mix real color channels.
+    function _colorOf(v) { return Qt.color(v) }
+    readonly property color textSecondary: _hardenWeakRamp
+        ? _towardPrimary(_colorOf(_c("textSecondary")), 0.40)
+        : _c("textSecondary")
+    readonly property color textMuted: _hardenWeakRamp
+        ? _towardPrimary(_colorOf(_c("textMuted")), 0.50)
+        : _c("textMuted")
     readonly property color textDisabled: _c("textDisabled")
     readonly property color accent: _c("accent")
     readonly property color accentHover: _c("accentHover")

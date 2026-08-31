@@ -131,6 +131,10 @@ Item {
         id: badge
         x: root.metaW - width
         y: titleRow.height + 3 + subRow.height + 3
+        // NO overAmbient here (owner, 2026-08-31 round 3): this card only
+        // mounts over dark surfaces (Wave Bed, lyrics, scopes, shader
+        // scenes) and the dark chip read as a bigger badge. The themed look
+        // was already right.
         tier: QbzPlayer.npQualityTier
         detail: QbzPlayer.npQualityDetail
         showIcon: true

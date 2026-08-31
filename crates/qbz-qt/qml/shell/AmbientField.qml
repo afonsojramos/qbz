@@ -61,6 +61,11 @@ Item {
     property color accent: QbzShell.ambientAccent
     // Set false by the host to freeze the clock (inactive / hidden).
     property bool running: true
+    // The in-shader legibility dim (multiply toward black). The host lowers
+    // it to 0 on LIGHT themes, where darkening is the wrong direction — the
+    // polarity-aware veil rectangle above the field takes over there
+    // (AppShell, 2026-08-31).
+    property real dim: QbzShell.ambientDim
 
     // True unless the window is minimized or hidden — see the GATING RULE at
     // the top. Focus is deliberately NOT part of this.
@@ -183,8 +188,9 @@ Item {
         property real resX: root.resW
         property real resY: root.resH
         // The dark legibility scrim, applied inside the program rather than as
-        // a second full-window Rectangle above it — see the shader.
-        property real dim: QbzShell.ambientDim
+        // a second full-window Rectangle above it — see the shader. Host-fed:
+        // 0 on light themes (the veil rectangle handles legibility there).
+        property real dim: root.dim
 
         onStatusChanged: {
             if (status === ShaderEffect.Error)
