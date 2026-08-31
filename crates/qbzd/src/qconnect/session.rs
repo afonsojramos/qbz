@@ -20,7 +20,7 @@
 //!
 //! The desktop's D5 offline-mode parks are dropped: qbzd has no offline MODE.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use qbz_app::shell::AppRuntime;
 use qconnect_app::renderer::PLAYING_STATE_STOPPED;
@@ -32,15 +32,17 @@ use serde_json::json;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::adapter::DaemonAdapter;
-use crate::state::DaemonShared;
+use super::authority::{AuthorityCell, AuthorityStamp};
 use super::engine::VolumeMode; // T10 (OD4): join-time volume report honors the mode
+use super::lan::DaemonLanProjectionSlot;
 use super::sink::{DaemonEventSink, DaemonQconnectApp};
 use super::transport::{
     default_qconnect_device_info, default_qconnect_device_info_with_name, resolve_transport_config,
     QconnectJoinSessionRequest, AUDIO_QUALITY_HIRES_LEVEL2,
 };
 use super::{update_lifecycle_state_if_running, DaemonQconnectInner};
+use crate::adapter::DaemonAdapter;
+use crate::state::DaemonShared;
 
 type Runtime = Arc<AppRuntime<DaemonAdapter>>;
 
@@ -52,22 +54,39 @@ type Runtime = Arc<AppRuntime<DaemonAdapter>>;
 pub struct DaemonSessionLoopHost {
     pub app: Arc<DaemonQconnectApp>,
     pub sync_state: Arc<Mutex<QconnectRemoteSyncState>>,
-    pub inner: Arc<Mutex<DaemonQconnectInner>>,
+    pub inner: Arc<StdMutex<DaemonQconnectInner>>,
+    pub authority: Arc<AuthorityCell>,
+    pub stamp: AuthorityStamp,
     pub sink: Arc<DaemonEventSink>,
     pub runtime: Runtime,
     pub shared: Arc<std::sync::Mutex<DaemonShared>>,
     /// T10 (OD4): resolved volume policy — the deferred renderer join reports 100
     /// in `Locked` mode, the real player volume in `Software`.
     pub volume_mode: VolumeMode,
+    pub(crate) projection: DaemonLanProjectionSlot,
 }
 
 #[async_trait::async_trait]
 impl SessionLoopHost for DaemonSessionLoopHost {
     async fn update_lifecycle(&self, state: QconnectLifecycleState) {
-        update_lifecycle_state_if_running(&self.inner, &self.sink, &self.shared, state).await;
+        if !self.authority.is_current(self.stamp) {
+            return;
+        }
+        update_lifecycle_state_if_running(
+            &self.inner,
+            &self.sink,
+            &self.shared,
+            &self.authority,
+            self.stamp,
+            state,
+        )
+        .await;
     }
 
     async fn bootstrap_after_reconnect(&self) {
+        if !self.authority.is_current(self.stamp) {
+            return;
+        }
         // FIX (b) (IV3, daemon-copy only): the WS transport reuses `last_config`
         // on in-loop reconnects and never re-resolves `/qws/createToken`, so a
         // reconnect after the JWT expires keeps failing. Re-resolve the transport
@@ -76,17 +95,46 @@ impl SessionLoopHost for DaemonSessionLoopHost {
         // desktop copy does NOT do this.
         match resolve_transport_config(&self.runtime).await {
             Ok(fresh) => {
-                let mut guard = self.inner.lock().await;
-                if let Some(rt) = guard.runtime.as_mut() {
-                    rt.config = fresh;
+                if !self.authority.is_current(self.stamp) {
+                    return;
+                }
+                let latched = {
+                    let mut guard = self
+                        .inner
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if let Some(rt) = guard.runtime.as_mut() {
+                        if rt.stamp == self.stamp {
+                            rt.config = fresh;
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                };
+                if !latched || !self.authority.is_current(self.stamp) {
+                    return;
                 }
                 log::info!("[QConnect] reconnect: re-resolved transport credentials (fresh JWT)");
             }
             Err(err) => {
+                if !self.authority.is_current(self.stamp) {
+                    return;
+                }
                 log::warn!("[QConnect] reconnect: credential re-resolve failed: {err}");
             }
         }
-        if let Err(err) = bootstrap_remote_presence(&self.app, None).await {
+        if !self.authority.is_current(self.stamp) {
+            return;
+        }
+        if let Err(err) =
+            bootstrap_remote_presence(&self.app, None, &self.authority, self.stamp).await
+        {
+            if !self.authority.is_current(self.stamp) {
+                return;
+            }
             log::error!("[QConnect] Re-bootstrap after reconnect failed: {err}");
         }
     }
@@ -99,6 +147,8 @@ impl SessionLoopHost for DaemonSessionLoopHost {
             self.volume_mode, // T10 (OD4): 100 in Locked, real in Software
             &session_uuid,
             reason,
+            &self.authority,
+            self.stamp,
         )
         .await;
     }
@@ -109,20 +159,40 @@ impl SessionLoopHost for DaemonSessionLoopHost {
         last_reason: String,
         idle_retry_active: bool,
     ) -> bool {
-        {
-            let mut guard = self.inner.lock().await;
-            guard.lifecycle_state = QconnectLifecycleState::Exhausted;
-            guard.last_error = Some(format!(
-                "Reconnect attempts exhausted ({attempts}): {last_reason}"
-            ));
-            if !idle_retry_active {
-                // Legacy terminate path: drop the runtime so a fresh connect()
-                // succeeds. Dropping it detaches this task's own JoinHandle (fine
-                // — the loop breaks right after).
-                guard.runtime = None;
+        if !self.authority.is_current(self.stamp) {
+            return true;
+        }
+        let (applied, retired) = {
+            let mut guard = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if guard.runtime.as_ref().map(|rt| rt.stamp) != Some(self.stamp) {
+                (false, None)
+            } else {
+                guard.lifecycle_state = QconnectLifecycleState::Exhausted;
+                guard.last_error = Some(format!(
+                    "Reconnect attempts exhausted ({attempts}): {last_reason}"
+                ));
+                if !idle_retry_active {
+                    // Legacy terminate path: drop the runtime so a fresh connect()
+                    // succeeds. Dropping it detaches this task's own JoinHandle
+                    // (fine — the loop breaks right after).
+                    (true, guard.runtime.take())
+                } else {
+                    (true, None)
+                }
             }
+        };
+        // Never drop a retired runtime while holding the synchronous inner lock.
+        drop(retired);
+        if !applied || !self.authority.is_current(self.stamp) {
+            return true;
         }
         if let Ok(mut s) = self.shared.lock() {
+            if !self.authority.is_current(self.stamp) {
+                return true;
+            }
             s.qconnect.state = "exhausted".to_string();
             s.qconnect.session_active = false;
             // 01 §9.3: reconnect-exhausted is a real network-class failure —
@@ -132,6 +202,12 @@ impl SessionLoopHost for DaemonSessionLoopHost {
             s.emit_qconnect_session_changed();
         }
         log::warn!("[QConnect] Reconnect exhausted ({attempts}): {last_reason}");
+        if !idle_retry_active {
+            // Invalidate this sink/host after publishing the terminal status.
+            // `clear_if_current` cannot clear a replacement installed in between.
+            self.projection
+                .clear_if_current(&self.authority, self.stamp);
+        }
         // Daemon has no offline MODE, so the desktop's idle-retry offline park is
         // dropped: keep idling (the transport's internal 60s idle rearm keeps
         // trying) unless idle-retry is off, in which case break + drop.
@@ -139,6 +215,9 @@ impl SessionLoopHost for DaemonSessionLoopHost {
     }
 
     async fn on_loop_error(&self, message: String) {
+        if !self.authority.is_current(self.stamp) {
+            return;
+        }
         // Slint copy surfaced a toast here — daemon logs it.
         log::error!("[QConnect] session loop error: {message}");
     }
@@ -151,7 +230,34 @@ impl SessionLoopHost for DaemonSessionLoopHost {
 pub async fn bootstrap_remote_presence(
     app: &Arc<DaemonQconnectApp>,
     custom_device_name: Option<String>,
+    authority: &AuthorityCell,
+    stamp: AuthorityStamp,
 ) -> Result<(), String> {
+    bootstrap_remote_presence_with_gate(app, custom_device_name, || authority.is_current(stamp))
+        .await
+}
+
+/// Complete the owner bootstrap on an isolated, authenticated/subscribed QWS
+/// runtime before its authority commit. The receiver is already subscribed, so
+/// resulting session events remain buffered for the loop installed at commit.
+pub(crate) async fn bootstrap_prepared_owner_presence(
+    app: &Arc<DaemonQconnectApp>,
+    custom_device_name: Option<String>,
+) -> Result<(), String> {
+    bootstrap_remote_presence_with_gate(app, custom_device_name, || true).await
+}
+
+async fn bootstrap_remote_presence_with_gate<F>(
+    app: &Arc<DaemonQconnectApp>,
+    custom_device_name: Option<String>,
+    is_current: F,
+) -> Result<(), String>
+where
+    F: Fn() -> bool,
+{
+    if !is_current() {
+        return Ok(());
+    }
     let device_info = default_qconnect_device_info_with_name(custom_device_name.as_deref());
 
     let join_payload = serde_json::to_value(QconnectJoinSessionRequest {
@@ -163,22 +269,40 @@ pub async fn bootstrap_remote_presence(
     let join_command = app
         .build_queue_command(QueueCommandType::CtrlSrvrJoinSession, join_payload)
         .await;
-    let join_action_uuid = app
-        .send_queue_command(join_command)
-        .await
-        .map_err(|err| format!("send bootstrap ctrl_srvr_join_session failed: {err}"))?;
+    if !is_current() {
+        return Ok(());
+    }
+    let join_action_uuid = match app.send_queue_command(join_command).await {
+        Ok(action_uuid) => action_uuid,
+        Err(_) if !is_current() => return Ok(()),
+        Err(err) => {
+            return Err(format!(
+                "send bootstrap ctrl_srvr_join_session failed: {err}"
+            ))
+        }
+    };
     // JoinSession responds with session/renderer controller events not part of
     // queue reducer correlation. Drop the pending slot so queue ops aren't blocked.
     app.clear_pending_if_matches(&join_action_uuid).await;
+    if !is_current() {
+        return Ok(());
+    }
 
     let ask_queue_command = app
         .build_queue_command(QueueCommandType::CtrlSrvrAskForQueueState, json!({}))
         .await;
-    let ask_action_uuid = app
-        .send_queue_command(ask_queue_command)
-        .await
-        .map_err(|err| format!("send bootstrap ask_for_queue_state failed: {err}"))?;
+    if !is_current() {
+        return Ok(());
+    }
+    let ask_action_uuid = match app.send_queue_command(ask_queue_command).await {
+        Ok(action_uuid) => action_uuid,
+        Err(_) if !is_current() => return Ok(()),
+        Err(err) => return Err(format!("send bootstrap ask_for_queue_state failed: {err}")),
+    };
     app.clear_pending_if_matches(&ask_action_uuid).await;
+    if !is_current() {
+        return Ok(());
+    }
 
     log::info!(
         "[QConnect] Bootstrap complete: controller joined, queue state requested. Renderer join deferred until session_uuid received."
@@ -198,16 +322,28 @@ pub async fn deferred_renderer_join(
     volume_mode: VolumeMode, // T10 (OD4): join-time volume report policy
     session_uuid: &str,
     join_reason: i32,
+    authority: &AuthorityCell,
+    stamp: AuthorityStamp,
 ) {
+    if !authority.is_current(stamp) {
+        return;
+    }
     let already_joined = {
         let st = sync_state.lock().await;
+        if !authority.is_current(stamp) {
+            return;
+        }
         st.last_joined_session_uuid.as_deref() == Some(session_uuid)
     };
     if already_joined {
-        log::info!(
-            "[QConnect] Deferred join skipped (already joined session_uuid={session_uuid}); re-asking renderer state"
-        );
+        log::info!("[QConnect] Deferred join skipped (session already joined)");
+        if !authority.is_current(stamp) {
+            return;
+        }
         if let Err(err) = app.ask_for_active_renderer_state().await {
+            if !authority.is_current(stamp) {
+                return;
+            }
             log::warn!("[QConnect] Idempotent-join AskForRendererState failed: {err}");
         }
         return;
@@ -215,8 +351,11 @@ pub async fn deferred_renderer_join(
 
     let device_info = default_qconnect_device_info();
     let queue_version_ref = app.queue_state_snapshot().await.version;
+    if !authority.is_current(stamp) {
+        return;
+    }
 
-    log::info!("[QConnect] Deferred renderer join with session_uuid={session_uuid}");
+    log::info!("[QConnect] Starting deferred renderer join");
 
     // 1. Renderer JoinSession with session_uuid.
     // Do NOT auto-steal the render on a fresh connect: join as an AVAILABLE
@@ -246,7 +385,13 @@ pub async fn deferred_renderer_join(
         queue_version_ref,
         renderer_join_payload,
     );
+    if !authority.is_current(stamp) {
+        return;
+    }
     if let Err(err) = app.send_renderer_report_command(renderer_join_report).await {
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::error!("[QConnect] Deferred renderer join failed: {err}");
         return;
     }
@@ -255,7 +400,13 @@ pub async fn deferred_renderer_join(
     // we may already have a current track, so resolve the real duration + current/
     // next queue_item_ids instead of hardcoding nulls.
     let renderer = app.renderer_state_snapshot().await;
+    if !authority.is_current(stamp) {
+        return;
+    }
     let queue = app.queue_state_snapshot().await;
+    if !authority.is_current(stamp) {
+        return;
+    }
     let current_track_id = renderer.current_track.as_ref().map(|item| item.track_id);
     let (current_qid, next_qid, _) = current_track_id
         .map(|tid| {
@@ -271,6 +422,9 @@ pub async fn deferred_renderer_join(
             .unwrap_or(0),
         None => 0,
     };
+    if !authority.is_current(stamp) {
+        return;
+    }
     let mut state_report_payload = json!({
         "playing_state": PLAYING_STATE_STOPPED,
         "buffer_state": RendererBufferState::Ok.as_i32(),
@@ -293,7 +447,13 @@ pub async fn deferred_renderer_join(
         queue_version_ref,
         state_report_payload,
     );
+    if !authority.is_current(stamp) {
+        return;
+    }
     if let Err(err) = app.send_renderer_report_command(state_report).await {
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::error!("[QConnect] Deferred renderer state report failed: {err}");
     }
 
@@ -310,7 +470,13 @@ pub async fn deferred_renderer_join(
         queue_version_ref,
         json!({ "volume": volume_pct }),
     );
+    if !authority.is_current(stamp) {
+        return;
+    }
     if let Err(err) = app.send_renderer_report_command(volume_report).await {
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::error!("[QConnect] Deferred renderer volume report failed: {err}");
     }
 
@@ -320,7 +486,13 @@ pub async fn deferred_renderer_join(
         queue_version_ref,
         json!({ "max_audio_quality": AUDIO_QUALITY_HIRES_LEVEL2 }),
     );
+    if !authority.is_current(stamp) {
+        return;
+    }
     if let Err(err) = app.send_renderer_report_command(max_quality_report).await {
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::error!("[QConnect] Deferred renderer max quality report failed: {err}");
     }
 
@@ -329,17 +501,32 @@ pub async fn deferred_renderer_join(
     // Re-request session state so the server sends an updated renderer list
     // (including ourselves).
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    if !authority.is_current(stamp) {
+        return;
+    }
     let refresh_command = app
         .build_queue_command(QueueCommandType::CtrlSrvrAskForQueueState, json!({}))
         .await;
+    if !authority.is_current(stamp) {
+        return;
+    }
     if let Ok(action_uuid) = app.send_queue_command(refresh_command).await {
         app.clear_pending_if_matches(&action_uuid).await;
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::info!("[QConnect] Re-requested session state after renderer join");
     }
 
     // Resync the active renderer's full state too, so a reconnect rejoin restores
     // renderer state.
+    if !authority.is_current(stamp) {
+        return;
+    }
     if let Err(err) = app.ask_for_active_renderer_state().await {
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::warn!("[QConnect] Post-join AskForRendererState failed: {err}");
     }
 
@@ -347,6 +534,9 @@ pub async fn deferred_renderer_join(
     // takes the idempotent fast-path above.
     {
         let mut st = sync_state.lock().await;
+        if !authority.is_current(stamp) {
+            return;
+        }
         st.last_joined_session_uuid = Some(session_uuid.to_string());
     }
 }

@@ -1,7 +1,7 @@
 // crates/qbzd/src/scrobble_engine.rs — scrobble-on-play (CONSOLE ext).
 //
-// A daemon background task subscribing the DaemonAdapter CoreEvent bus. On
-// `TrackStarted` it sends "now playing" to every ACTIVE provider; when the
+// A daemon background task subscribing the authority-stamped playback-event
+// bus. On `TrackStarted` it sends "now playing" to every ACTIVE provider; when the
 // track crosses the scrobble threshold (`qbz_app::scrobble_timing::
 // scrobble_delay_secs` — Last.fm's played-half-or-4-min rule) it scrobbles
 // ONCE. Credentials are re-read from the canonical `ScrobblerSettingsStore` on
@@ -20,6 +20,7 @@
 // Connection is never held across an await: it is opened inside a
 // `spawn_blocking` for each queue/drain op (mirrors `qbz::scrobble`).
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use qbz_app::settings::scrobblers::{ScrobblerSettings, ScrobblerSettingsStore};
@@ -30,7 +31,9 @@ use qbz_models::{CoreEvent, QueueTrack};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
+use crate::events_bridge::AuthorityStampedEvent;
 use crate::paths::ProfileRoots;
+use crate::qconnect::authority::{AuthorityCell, OwnerAuthorityToken};
 
 /// How often the ListenBrainz offline queue is retried (plus once at task
 /// start). Live now-playing/scrobble submits are unaffected — the drain only
@@ -40,6 +43,9 @@ const DRAIN_INTERVAL: Duration = Duration::from_secs(120);
 /// The track currently being timed for a scrobble.
 struct Playing {
     track: QueueTrack,
+    /// Exact owner observation that admitted this track start. A position from
+    /// any later owner generation must not finish this pending scrobble.
+    owner_token: OwnerAuthorityToken,
     /// Unix seconds when it started — Last.fm's scrobble timestamp.
     started_at: u64,
     /// Seconds into the track at which it becomes scrobble-eligible; `None`
@@ -51,7 +57,11 @@ struct Playing {
 /// Spawn the scrobble-on-play task. Holds NO `Arc<AppRuntime>` (only the roots,
 /// its own store, and the bus receiver), so it is outside the §8.2 audio
 /// clock-release ordering — the caller aborts it for a clean shutdown.
-pub fn spawn(roots: ProfileRoots, mut rx: broadcast::Receiver<CoreEvent>) -> JoinHandle<()> {
+pub fn spawn(
+    roots: ProfileRoots,
+    mut rx: broadcast::Receiver<AuthorityStampedEvent>,
+    authority: Arc<AuthorityCell>,
+) -> JoinHandle<()> {
     use broadcast::error::RecvError;
     tokio::spawn(async move {
         let store = match ScrobblerSettingsStore::new_at(&roots.data) {
@@ -71,31 +81,62 @@ pub fn spawn(roots: ProfileRoots, mut rx: broadcast::Receiver<CoreEvent>) -> Joi
             // `biased`: live bus events take priority over the drain tick.
             tokio::select! {
                 biased;
-                ev = rx.recv() => match ev {
-                    Ok(CoreEvent::TrackStarted { track, .. }) => {
-                        let settings = store.get_settings().unwrap_or_default();
-                        if !settings.enabled {
+                received = rx.recv() => match received {
+                    Ok(stamped) => {
+                        let Some(owner_token) = stamped.owner_token else {
                             playing = None;
                             continue;
+                        };
+                        let Some(permit) = authority
+                            .wait_for_exact_owner_action_permit(owner_token)
+                            .await
+                        else {
+                            playing = None;
+                            continue;
+                        };
+                        if playing
+                            .as_ref()
+                            .is_some_and(|current| current.owner_token != owner_token)
+                        {
+                            playing = None;
                         }
-                        now_playing(&settings, &track).await;
-                        playing = Some(Playing {
-                            threshold: qbz_app::scrobble_timing::scrobble_delay_secs(track.duration_secs),
-                            started_at: now_unix(),
-                            track,
-                            scrobbled: false,
-                        });
-                    }
-                    Ok(CoreEvent::PositionUpdated { position_secs, .. }) => {
-                        if let Some(p) = playing.as_mut() {
-                            if due(position_secs, p.threshold, p.scrobbled) {
+
+                        match stamped.event {
+                            CoreEvent::TrackStarted { track, .. } => {
                                 let settings = store.get_settings().unwrap_or_default();
-                                scrobble(&settings, &p.track, p.started_at, &roots).await;
-                                p.scrobbled = true;
+                                if !settings.enabled {
+                                    playing = None;
+                                    continue;
+                                }
+                                now_playing(&settings, &track).await;
+                                playing = Some(Playing {
+                                    threshold: qbz_app::scrobble_timing::scrobble_delay_secs(track.duration_secs),
+                                    started_at: now_unix(),
+                                    track,
+                                    owner_token,
+                                    scrobbled: false,
+                                });
                             }
+                            CoreEvent::PositionUpdated { position_secs, .. } => {
+                                if let Some(p) = playing.as_mut() {
+                                    if due(position_secs, p.threshold, p.scrobbled) {
+                                        let settings = store.get_settings().unwrap_or_default();
+                                        p.scrobbled = scrobble(
+                                            &settings,
+                                            &p.track,
+                                            p.started_at,
+                                            &roots,
+                                        )
+                                        .await;
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
+                        // Keep the exact admission alive through every provider
+                        // await and any failed-listen persistence above.
+                        drop(permit);
                     }
-                    Ok(_) => {}
                     Err(RecvError::Lagged(_)) => continue,
                     Err(RecvError::Closed) => return,
                 },
@@ -134,7 +175,12 @@ async fn now_playing(s: &ScrobblerSettings, t: &QueueTrack) {
     }
 }
 
-async fn scrobble(s: &ScrobblerSettings, t: &QueueTrack, started_at: u64, roots: &ProfileRoots) {
+async fn scrobble(
+    s: &ScrobblerSettings,
+    t: &QueueTrack,
+    started_at: u64,
+    roots: &ProfileRoots,
+) -> bool {
     let album = album_opt(t);
     if s.lastfm_active() {
         let c = LastFmClient::with_session_key(s.lastfm_session_key.clone());
@@ -145,8 +191,15 @@ async fn scrobble(s: &ScrobblerSettings, t: &QueueTrack, started_at: u64, roots:
     }
     if s.listenbrainz_active() {
         let c = lb_client(s);
-        match c.submit_listen(&t.artist, &t.title, album, started_at as i64, None).await {
-            Ok(()) => log::info!("[scrobbler] listenbrainz submitted: {} — {}", t.artist, t.title),
+        match c
+            .submit_listen(&t.artist, &t.title, album, started_at as i64, None)
+            .await
+        {
+            Ok(()) => log::info!(
+                "[scrobbler] listenbrainz submitted: {} — {}",
+                t.artist,
+                t.title
+            ),
             Err(e) => {
                 // Persist to the shared offline queue; the periodic drain retries it.
                 log::warn!("[scrobbler] listenbrainz submit failed, queueing: {e}");
@@ -154,6 +207,7 @@ async fn scrobble(s: &ScrobblerSettings, t: &QueueTrack, started_at: u64, roots:
             }
         }
     }
+    true
 }
 
 /// Persist a failed listen into the SHARED `ListenBrainzCache.listen_queue`
@@ -275,11 +329,16 @@ fn album_opt(t: &QueueTrack) -> Option<&str> {
 }
 
 fn now_unix() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::qconnect::authority::AuthorityOrigin;
+
     use super::*;
 
     #[test]
@@ -320,8 +379,31 @@ mod tests {
 
     #[test]
     fn album_opt_drops_empty_and_unknown() {
-        assert_eq!(album_opt(&qt("Light as a Feather")), Some("Light as a Feather"));
+        assert_eq!(
+            album_opt(&qt("Light as a Feather")),
+            Some("Light as a Feather")
+        );
         assert_eq!(album_opt(&qt("")), None);
         assert_eq!(album_opt(&qt("Unknown Album")), None);
+    }
+
+    #[test]
+    fn stale_owner_generation_cannot_finish_pending_scrobble() {
+        let authority = Arc::new(AuthorityCell::new());
+        let owner = authority.reserve(AuthorityOrigin::Owner);
+        assert!(authority.install(owner));
+        let (old_token, permit) = authority
+            .try_owner_action_permit_observed()
+            .expect("owner observation");
+        drop(permit);
+
+        let guest = authority.reserve(AuthorityOrigin::Delegated { generation: 4 });
+        assert!(authority.install(guest));
+        let restored_owner = authority.reserve(AuthorityOrigin::Owner);
+        assert!(authority.install(restored_owner));
+
+        assert!(authority
+            .try_owner_action_permit_exact(old_token)
+            .is_none());
     }
 }

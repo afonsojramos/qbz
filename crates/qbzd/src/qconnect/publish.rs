@@ -23,18 +23,19 @@
 //! (same pattern as `daemon.rs::spawn_queue_persist`), which ALSO covers queue
 //! edits while paused/stopped — a transition-only hook would miss those.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use qbz_app::shell::AppRuntime;
 use qbz_models::CoreEvent;
 use qconnect_app::{is_local_renderer_active, QueueCommandType};
 use serde_json::json;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::adapter::DaemonAdapter;
+use super::authority::{AuthorityCell, AuthorityStamp};
 use super::DaemonQconnectInner;
+use crate::adapter::DaemonAdapter;
 
 /// Push the local core queue to the Connect session when it differs from the
 /// cloud's. No-op under any of the gates listed in the module docs. Echo-safe
@@ -42,21 +43,34 @@ use super::DaemonQconnectInner;
 /// to the very queue it materialized locally, so a controller-pushed queue
 /// compares equal and is never bounced back.
 pub async fn publish_local_queue_if_changed(
-    inner: &Arc<Mutex<DaemonQconnectInner>>,
+    inner: &Arc<StdMutex<DaemonQconnectInner>>,
     runtime: &Arc<AppRuntime<DaemonAdapter>>,
+    authority: &AuthorityCell,
+    expected_stamp: AuthorityStamp,
 ) {
-    let (app, sync_state) = {
-        let guard = inner.lock().await;
+    let (app, sync_state, stamp) = {
+        let guard = inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         match guard.runtime.as_ref() {
-            Some(rt) => (Arc::clone(&rt.app), Arc::clone(&rt.sync_state)),
+            Some(rt) if rt.stamp == expected_stamp => {
+                (Arc::clone(&rt.app), Arc::clone(&rt.sync_state), rt.stamp)
+            }
             None => return,
+            Some(_) => return,
         }
     };
+    if !authority.is_current(stamp) {
+        return;
+    }
 
     // Only push while WE are the active renderer (the user is driving the
     // daemon). When a peer owns playback, the peer publishes its own queue.
     {
         let state = sync_state.lock().await;
+        if !authority.is_current(stamp) {
+            return;
+        }
         if !is_local_renderer_active(&state.session) {
             return;
         }
@@ -71,6 +85,9 @@ pub async fn publish_local_queue_if_changed(
     }
 
     let (tracks, current_index) = runtime.core().get_all_queue_tracks().await;
+    if !authority.is_current(stamp) {
+        return;
+    }
     if tracks.is_empty() {
         return;
     }
@@ -80,17 +97,31 @@ pub async fn publish_local_queue_if_changed(
     // inbound) so our own adoption / a remote queue change never bounces back.
     {
         let state = sync_state.lock().await;
+        if !authority.is_current(stamp) {
+            return;
+        }
         if let Some(applied) = &state.last_applied_queue_state {
-            let applied_ids: Vec<u64> =
-                applied.queue_items.iter().map(|item| item.track_id).collect();
+            let applied_ids: Vec<u64> = applied
+                .queue_items
+                .iter()
+                .map(|item| item.track_id)
+                .collect();
             if applied_ids == ordered_ids {
                 return;
             }
         }
     }
     // ...and skip when we already pushed this exact queue (cloud echo pending).
+    if !authority.is_current(stamp) {
+        return;
+    }
     {
-        let guard = inner.lock().await;
+        let guard = inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !installed_runtime_matches(&guard, stamp) {
+            return;
+        }
         if guard.last_pushed_queue_ids.as_deref() == Some(ordered_ids.as_slice()) {
             return;
         }
@@ -106,9 +137,20 @@ pub async fn publish_local_queue_if_changed(
         source != "local" && source != "plex" && track.id > 0
     });
     if !all_eligible {
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::info!("[QConnect] Local queue has non-Qobuz tracks; not casting to Connect");
         // Remember it so we don't re-log on every queue event within this queue.
-        let mut guard = inner.lock().await;
+        if !authority.is_current(stamp) {
+            return;
+        }
+        let mut guard = inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !installed_runtime_matches(&guard, stamp) {
+            return;
+        }
         guard.last_pushed_queue_ids = Some(ordered_ids);
         return;
     }
@@ -128,16 +170,50 @@ pub async fn publish_local_queue_if_changed(
     let command = app
         .build_queue_command(QueueCommandType::CtrlSrvrQueueLoadTracks, payload)
         .await;
+    if !authority.is_current(stamp) {
+        return;
+    }
     match app.send_queue_command(command).await {
         Ok(_) => {
+            if !authority.is_current(stamp) {
+                return;
+            }
             log::info!(
                 "[QConnect] Pushed local queue to Connect ({count} tracks, start={start_index})"
             );
-            let mut guard = inner.lock().await;
+            if !authority.is_current(stamp) {
+                return;
+            }
+            let mut guard = inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !installed_runtime_matches(&guard, stamp) {
+                return;
+            }
             guard.last_pushed_queue_ids = Some(ordered_ids);
         }
-        Err(err) => log::warn!("[QConnect] Failed to push local queue: {err}"),
+        Err(err) if authority.is_current(stamp) => {
+            log::warn!("[QConnect] Failed to push local queue: {err}")
+        }
+        Err(_) => {}
     }
+}
+
+fn installed_runtime_matches(inner: &DaemonQconnectInner, stamp: AuthorityStamp) -> bool {
+    inner.runtime.as_ref().map(|runtime| runtime.stamp) == Some(stamp)
+}
+
+fn capture_installed_stamp(
+    inner: &StdMutex<DaemonQconnectInner>,
+    authority: &AuthorityCell,
+) -> Option<AuthorityStamp> {
+    let stamp = inner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.stamp)?;
+    authority.is_current(stamp).then_some(stamp)
 }
 
 /// The queue-publish subscriber: debounces `CoreEvent::QueueUpdated` bursts by
@@ -148,8 +224,9 @@ pub async fn publish_local_queue_if_changed(
 /// aborted+joined in `QconnectHandle::shutdown` ahead of `drop(booted)` (the
 /// #521 ordering), exactly like the report scheduler.
 pub fn spawn_queue_cloud_publish(
-    inner: Arc<Mutex<DaemonQconnectInner>>,
+    inner: Arc<StdMutex<DaemonQconnectInner>>,
     runtime: Arc<AppRuntime<DaemonAdapter>>,
+    authority: Arc<AuthorityCell>,
     mut rx: broadcast::Receiver<CoreEvent>,
 ) -> JoinHandle<()> {
     use tokio::sync::broadcast::error::RecvError;
@@ -157,12 +234,17 @@ pub fn spawn_queue_cloud_publish(
     tokio::spawn(async move {
         loop {
             // Block until the FIRST queue mutation of a burst.
-            match rx.recv().await {
-                Ok(CoreEvent::QueueUpdated { .. }) => {}
+            let mut event_stamp = match rx.recv().await {
+                Ok(CoreEvent::QueueUpdated { .. }) => {
+                    let Some(stamp) = capture_installed_stamp(&inner, &authority) else {
+                        continue;
+                    };
+                    stamp
+                }
                 Ok(_) => continue,
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return,
-            }
+            };
             // Debounce: a fixed deadline that only a further QueueUpdated extends.
             let mut deadline = tokio::time::Instant::now() + DEBOUNCE;
             loop {
@@ -170,6 +252,10 @@ pub fn spawn_queue_cloud_publish(
                     _ = tokio::time::sleep_until(deadline) => break,
                     r = rx.recv() => match r {
                         Ok(CoreEvent::QueueUpdated { .. }) => {
+                            let Some(stamp) = capture_installed_stamp(&inner, &authority) else {
+                                break;
+                            };
+                            event_stamp = stamp;
                             deadline = tokio::time::Instant::now() + DEBOUNCE;
                         }
                         Ok(_) => {}
@@ -178,7 +264,7 @@ pub fn spawn_queue_cloud_publish(
                     }
                 }
             }
-            publish_local_queue_if_changed(&inner, &runtime).await;
+            publish_local_queue_if_changed(&inner, &runtime, &authority, event_stamp).await;
         }
     })
 }

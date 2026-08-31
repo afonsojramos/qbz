@@ -6,9 +6,9 @@
 // parks on signals — API-less but fully diagnosable in-process.
 use std::sync::{Arc, Mutex};
 
+use qbz_app::playback_driver::{self, DriverDeps};
 use qbz_app::settings::daemon_prefs;
 use qbz_app::shell::AppRuntime;
-use qbz_app::playback_driver::{self, DriverDeps};
 use qbz_core::CoreError;
 use qbz_models::{CoreEvent, UserSession};
 use tokio::sync::broadcast;
@@ -111,6 +111,12 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //     (T9/T10) splice after this, reading `booted`.
     let prefs = daemon_prefs::load_at(&roots.data);
     let quality = playback_driver::quality_from_key(&prefs.streaming_quality);
+    let qconnect_authority = Arc::new(crate::qconnect::authority::AuthorityCell::new());
+    // Owner-only playback consumers use a parallel, daemon-local bus whose
+    // events carry the exact authority observation made by events_bridge.
+    // Keep the public CoreEvent bus unchanged for SSE/MPRIS/hooks.
+    let (owner_event_tx, _) =
+        broadcast::channel::<crate::events_bridge::AuthorityStampedEvent>(256);
     // T11: a live-updatable cell, not a value captured once — `settings/reload`
     // re-reads `daemon_prefs` and writes here so the driver's OWN auto-advance
     // (gapless prefetch, natural-end advance) picks up a `playback.quality`
@@ -132,6 +138,7 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
         report_notify.clone(),
         edge_notify.clone(),
         booted.bus.clone(),
+        qconnect_authority.clone(),
     );
     let driver = tokio::spawn(playback_driver::run_driver(
         booted.runtime.clone(),
@@ -145,20 +152,33 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //      flushed to the session store, so a restart resumes the remote-set queue
     //      PAUSED (boot already restores it, §8.1-9½). Holds an `Arc<AppRuntime>`
     //      clone, so it is aborted+joined ahead of `drop(booted)` (#521 ordering).
-    let queue_persist = spawn_queue_persist(booted.runtime.clone(), booted.bus.subscribe());
+    let queue_persist = spawn_queue_persist(
+        booted.runtime.clone(),
+        booted.bus.subscribe(),
+        qconnect_authority.clone(),
+    );
 
-    // 10c. Scrobble-on-play (CONSOLE): a CoreEvent-bus subscriber that sends
+    // 10c. Scrobble-on-play (CONSOLE): an authority-stamped event subscriber that sends
     //      "now playing" on TrackStarted and scrobbles once past the Last.fm
     //      threshold, to whichever of Last.fm / ListenBrainz is connected +
     //      enabled in the scrobbler store. Holds NO Arc<AppRuntime>, so it sits
     //      outside the #521/§8.2 ordering — aborted for a clean shutdown below.
-    let scrobbler = crate::scrobble_engine::spawn(roots.clone(), booted.bus.subscribe());
+    let scrobbler = crate::scrobble_engine::spawn(
+        roots.clone(),
+        owner_event_tx.subscribe(),
+        qconnect_authority.clone(),
+    );
 
-    // 10c¼. Listen log (§12.1): the scrobbler's sibling on the same bus,
+    // 10c¼. Listen log (§12.1): the scrobbler's sibling on the same stamped bus,
     //       WITHOUT its enabled gate — the log is local and on by default, so
     //       a headless streamer finally contributes history. Holds no
     //       Arc<AppRuntime>; stopped (abort + close the open row) below.
-    let listen_log = crate::listen_log_engine::spawn(&roots, booted.bus.subscribe()).await;
+    let listen_log = crate::listen_log_engine::spawn(
+        &roots,
+        owner_event_tx.subscribe(),
+        qconnect_authority.clone(),
+    )
+    .await;
 
     // 10c½. Events bridge: translate the driver's transition edges into the
     //       playback CoreEvents the bus consumers above (and SSE, and the event
@@ -166,8 +186,13 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //       PositionUpdated / VolumeChanged. Holds only a Weak<AppRuntime>
     //       upgraded per wake, but is still aborted+joined ahead of
     //       `drop(booted)` so a mid-wake strong Arc can't outlive the ordering.
-    let events_bridge =
-        crate::events_bridge::spawn(&booted.runtime, booted.bus.clone(), edge_notify);
+    let events_bridge = crate::events_bridge::spawn(
+        &booted.runtime,
+        booted.bus.clone(),
+        owner_event_tx,
+        edge_notify,
+        qconnect_authority.clone(),
+    );
 
     // 10c¾. Event hook (CONSOLE): fork `hooks.script` (or `QBZD_HOOK`) once per
     //       forwarded bus event with QBZ_* variables in its environment — push
@@ -191,6 +216,7 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
         roots.clone(),
         booted.bus.subscribe(),
         tokio::runtime::Handle::current(),
+        qconnect_authority.clone(),
     );
 
     // 11. HTTP serve (02 §3) on the already-bound socket. `ApiState` carries a
@@ -239,6 +265,7 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     let mut qconnect = crate::qconnect::start(
         booted.runtime.clone(),
         booted.shared.clone(),
+        qconnect_authority.clone(),
         &roots,
         quality_cell.clone(),
         report_notify,
@@ -407,7 +434,11 @@ fn revalidate_alsa_hardware_volume(
     }
 }
 
-async fn boot(roots: &ProfileRoots, cfg: &QbzdConfig, warn_count: usize) -> Result<BootedRuntime, String> {
+async fn boot(
+    roots: &ProfileRoots,
+    cfg: &QbzdConfig,
+    warn_count: usize,
+) -> Result<BootedRuntime, String> {
     // 6.+7. stores + runtime composition. The two substitutions (01 §2.2):
     //   - with_audio_settings, NOT AppRuntime::new (which hardcodes the
     //     desktop-global AudioSettingsStore — shell.rs:87-101);
@@ -527,15 +558,45 @@ fn build_driver_deps(
     report_notify: Arc<tokio::sync::Notify>,
     edge_notify: Arc<tokio::sync::Notify>,
     bus: tokio::sync::broadcast::Sender<qbz_models::CoreEvent>,
+    qconnect_authority: Arc<crate::qconnect::authority::AuthorityCell>,
 ) -> DriverDeps {
     let latch_shared = shared.clone();
     let tick_shared = shared;
+    let qconnect_authority_allowed = Arc::clone(&qconnect_authority);
+    let qconnect_authority_observe = Arc::clone(&qconnect_authority);
+    let qconnect_authority_readmit = qconnect_authority;
     DriverDeps {
         quality: Arc::new(move || {
             quality_cell
                 .lock()
                 .map(|q| *q)
                 .unwrap_or(qbz_models::Quality::UltraHiRes)
+        }),
+        owner_actions_allowed: Arc::new(move || qconnect_authority_allowed.owner_actions_allowed()),
+        observe_authority: Arc::new(move || {
+            match qconnect_authority_observe.observe_owner_authority() {
+                crate::qconnect::authority::OwnerAuthorityObservation::Owner {
+                    token,
+                    permit,
+                } => qbz_app::playback_driver::DriverAuthorityObservation::Owner(
+                    qbz_app::playback_driver::DriverOwnerAdmission::new(
+                        qbz_app::playback_driver::DriverOwnerToken::new(token),
+                        qbz_app::playback_driver::DriverActionPermit::new(permit),
+                    ),
+                ),
+                crate::qconnect::authority::OwnerAuthorityObservation::Delegated => {
+                    qbz_app::playback_driver::DriverAuthorityObservation::Delegated
+                }
+                crate::qconnect::authority::OwnerAuthorityObservation::Fenced => {
+                    qbz_app::playback_driver::DriverAuthorityObservation::Fenced
+                }
+            }
+        }),
+        readmit_owner_action: Arc::new(move |token| {
+            let token = token.downcast_ref::<crate::qconnect::authority::OwnerAuthorityToken>()?;
+            qconnect_authority_readmit
+                .try_owner_action_permit_exact(*token)
+                .map(qbz_app::playback_driver::DriverActionPermit::new)
         }),
         // T10: signal the report scheduler on every ReportEdge. `notify_one`
         // stores a single permit if the scheduler is mid-report, so no edge is
@@ -580,6 +641,7 @@ fn build_driver_deps(
 fn spawn_queue_persist(
     runtime: Arc<AppRuntime<DaemonAdapter>>,
     mut rx: broadcast::Receiver<CoreEvent>,
+    qconnect_authority: Arc<crate::qconnect::authority::AuthorityCell>,
 ) -> JoinHandle<()> {
     use tokio::sync::broadcast::error::RecvError;
     const DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
@@ -608,6 +670,10 @@ fn spawn_queue_persist(
                     }
                 }
             }
+            let Some(_owner_permit) = qconnect_authority.try_owner_action_permit() else {
+                log::debug!("[qbzd] queue-persist: skipped delegated QConnect queue");
+                continue;
+            };
             playback_driver::save_session_now(runtime.as_ref()).await;
             log::debug!("[qbzd] queue-persist: session flushed after QueueUpdated burst");
         }
@@ -898,10 +964,10 @@ async fn wait_for_signal() {
 // reinit/reload narrative is composed CLIENT-side from the CLI's own copy of
 // the Apply-ladder classification, never carried on the wire).
 
-/// The single entry point the HTTP route calls. Order matters only at the
-/// margin (independent domains): audio/quality/qconnect-KV first, credentials
-/// last, so a login/logout settles the auth state before QConnect decides
-/// whether to (re)connect against it.
+/// The single entry point the HTTP route calls. Audio/quality are independent;
+/// credentials are reconciled next so their branch can retire LAN/delegated
+/// QConnect before mutating owner auth, and QConnect KV reconciliation runs last
+/// so an enabled service reconnects only against the settled credential state.
 pub(crate) async fn reload(state: &crate::api::ApiState) {
     reload_audio(state);
     reload_quality(state);
@@ -922,6 +988,22 @@ pub(crate) async fn reload(state: &crate::api::ApiState) {
 /// 87-94`, per-key classification `:877-967,1134-1290`; 03-setup-tui.md §4.3
 /// lists the same 9 fields).
 pub(crate) fn reload_audio(state: &crate::api::ApiState) {
+    // Audio reload is an owner-side live-player action. Keep this permit only
+    // for the audio phase: `reload_credentials`/`reload_qconnect` below may
+    // intentionally tear down delegated authority and must be free to acquire
+    // and drain their own transition fence.
+    let _owner_action = match state.qconnect_control.get() {
+        None => None, // boot window: no delegated runtime can exist yet
+        Some(qconnect) => {
+            let Some(permit) = qconnect.try_owner_action_permit() else {
+                log::info!(
+                    "[reload] live audio settings not applied while QConnect owns playback; retry reload after owner authority returns"
+                );
+                return;
+            };
+            Some(permit)
+        }
+    };
     let (fresh, hardware_volume) = match revalidate_alsa_hardware_volume(&state.audio) {
         Ok(result) => result,
         Err(e) => {
@@ -1057,8 +1139,8 @@ pub(crate) fn decide_credential_action(
 /// Re-read the credential file and reconcile the live session against it (02
 /// §3.3.17: "absent → NeedsAuth transition; new → session restore"; taxonomy
 /// shared with boot, §6.2). `qconnect` is `None` only in the brief boot window
-/// before step 12 populates the cell — the teardown branch just skips the
-/// QConnect disconnect then (there is no session for it to hold yet).
+/// before step 12 populates the cell — credential-change teardown is skipped
+/// only then, because no LAN/coordinator/runtime exists yet.
 pub(crate) async fn reload_credentials(
     runtime: &Arc<AppRuntime<DaemonAdapter>>,
     shared: &Arc<Mutex<DaemonShared>>,
@@ -1082,7 +1164,14 @@ pub(crate) async fn reload_credentials(
         CredentialAction::EnterNeedsAuth => {
             log::info!("[reload] credential file cleared — tearing the session down (NeedsAuth)");
             if let Some(qc) = qconnect {
-                let _ = qc.disconnect().await;
+                if let Err(e) = qc.disconnect_for_credentials_change().await {
+                    // Fail closed: owner logout/deactivation must never race a
+                    // surviving LAN candidate or delegated authority.
+                    log::warn!(
+                        "[reload] QConnect credential-change teardown failed; keeping current auth: {e}"
+                    );
+                    return;
+                }
             }
             let _ = runtime.core().stop();
             let _ = runtime.core().logout().await;
@@ -1090,6 +1179,16 @@ pub(crate) async fn reload_credentials(
             set_needs_auth(shared, None);
         }
         CredentialAction::Apply(token) => {
+            if let Some(qc) = qconnect {
+                if let Err(e) = qc.disconnect_for_credentials_change().await {
+                    // Do not install/account-switch the owner token until LAN,
+                    // candidate validation, and delegated authority are gone.
+                    log::warn!(
+                        "[reload] QConnect credential-change teardown failed; token not applied: {e}"
+                    );
+                    return;
+                }
+            }
             qbz_log::register_secret(token.clone());
             match runtime.core().login_with_token(&token).await {
                 Ok(session) => {

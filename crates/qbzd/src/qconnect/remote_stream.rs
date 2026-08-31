@@ -23,6 +23,31 @@ use std::time::Duration;
 
 use qbz_player::{BufferWriter, Player};
 
+/// Owned background feeder for one progressive remote stream.
+///
+/// Tokio normally detaches a task when its `JoinHandle` is dropped. This
+/// wrapper deliberately aborts instead: the renderer engine owns exactly one
+/// feeder, so replacing/stopping an authority cannot leave an old CDN request
+/// writing into a retired buffer.
+#[must_use = "dropping the feeder aborts the background CDN request"]
+pub struct RemoteStreamFeeder {
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl RemoteStreamFeeder {
+    fn new(task: tokio::task::JoinHandle<()>) -> Self {
+        Self { task: Some(task) }
+    }
+}
+
+impl Drop for RemoteStreamFeeder {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
 /// Format/size facts sniffed from a remote audio URL before streaming.
 pub struct RemoteStreamInfo {
     pub content_length: u64,
@@ -45,8 +70,10 @@ pub async fn stream_remote_track_into_player(
     start_position_secs: u64,
     url: &str,
     log_tag: &str,
-) -> Result<(), String> {
+    authority_check: impl FnOnce() -> Result<(), String>,
+) -> Result<RemoteStreamFeeder, String> {
     let stream_info = probe_remote_stream_info(url).await?;
+    authority_check()?;
     log::info!(
         "[{}/STREAMING] Track {} - {:.2} MB, {}Hz, {} ch, {}-bit, {:.1} MB/s",
         log_tag,
@@ -74,7 +101,7 @@ pub async fn stream_remote_track_into_player(
     let url = url.to_string();
     let content_length = stream_info.content_length;
     let log_tag = log_tag.to_string();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         if let Err(err) =
             download_and_stream_remote_track(&url, writer, track_id, content_length, &log_tag).await
         {
@@ -87,7 +114,7 @@ pub async fn stream_remote_track_into_player(
         }
     });
 
-    Ok(())
+    Ok(RemoteStreamFeeder::new(task))
 }
 
 /// HEAD for content-length, then a small `Range: bytes=0-65535` GET to (a)
@@ -101,14 +128,19 @@ pub async fn probe_remote_stream_info(url: &str) -> Result<RemoteStreamInfo, Str
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))
         .build()
-        .map_err(|err| format!("create stream probe client: {err}"))?;
+        .map_err(|_| "create stream probe HTTP client failed".to_string())?;
 
     let head_response = client
         .head(url)
         .header("User-Agent", "Mozilla/5.0")
         .send()
         .await
-        .map_err(|err| format!("probe HEAD request failed: {}", describe_reqwest_error(&err)))?;
+        .map_err(|err| {
+            format!(
+                "probe HEAD request failed: {}",
+                describe_reqwest_error(&err)
+            )
+        })?;
 
     if !head_response.status().is_success() {
         return Err(format!(
@@ -131,7 +163,12 @@ pub async fn probe_remote_stream_info(url: &str) -> Result<RemoteStreamInfo, Str
         .header("Range", "bytes=0-65535")
         .send()
         .await
-        .map_err(|err| format!("probe range request failed: {}", describe_reqwest_error(&err)))?;
+        .map_err(|err| {
+            format!(
+                "probe range request failed: {}",
+                describe_reqwest_error(&err)
+            )
+        })?;
 
     if !range_response.status().is_success() {
         return Err(format!(
@@ -210,7 +247,7 @@ pub async fn download_and_stream_remote_track(
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(300))
         .build()
-        .map_err(|err| format!("create remote streaming client: {err}"))?;
+        .map_err(|_| "create remote streaming HTTP client failed".to_string())?;
 
     let response = client
         .get(url)
@@ -237,8 +274,12 @@ pub async fn download_and_stream_remote_track(
     let mut last_log_time = Instant::now();
 
     while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result
-            .map_err(|err| format!("remote streaming chunk failed: {}", describe_reqwest_error(&err)))?;
+        let chunk = chunk_result.map_err(|err| {
+            format!(
+                "remote streaming chunk failed: {}",
+                describe_reqwest_error(&err)
+            )
+        })?;
         bytes_received += chunk.len() as u64;
 
         if let Err(err) = writer.push_chunk(&chunk) {
@@ -294,28 +335,90 @@ pub async fn download_and_stream_remote_track(
     Ok(())
 }
 
-/// reqwest's `Display` hides the source chain — which is exactly where the
-/// diagnosis lives (Akamai's >100-header small-object flood surfaces as hyper's
-/// "message head is too large" two levels down). Walk `source()` and join the
-/// chain so logs AND signature matching see the real cause.
+/// Return a bounded, URL-free diagnostic for a reqwest failure.
+///
+/// The raw error and its source chain can contain the signed CDN URL (including
+/// its query). We inspect the chain only to preserve the known header-limit
+/// classification and never copy an arbitrary cause into the returned string.
 pub fn describe_reqwest_error(err: &reqwest::Error) -> String {
-    use std::error::Error as _;
-    let mut out = err.to_string();
-    let mut source = err.source();
-    while let Some(cause) = source {
-        out.push_str(": ");
-        out.push_str(&cause.to_string());
-        source = cause.source();
+    if error_chain_has_header_limit(err) {
+        return safe_transport_diagnostic(
+            "message head is too large; signed URL and query are intentionally omitted",
+        )
+        .to_string();
     }
-    out
+
+    if err.is_timeout() {
+        "HTTP transport timed out".to_string()
+    } else if err.is_connect() {
+        "HTTP transport connection failed".to_string()
+    } else if err.is_body() {
+        "HTTP response body failed".to_string()
+    } else if err.is_decode() {
+        "HTTP response decode failed".to_string()
+    } else if err.is_status() {
+        "HTTP status rejected".to_string()
+    } else {
+        "HTTP transport request failed".to_string()
+    }
 }
 
-/// True when an error message (already chain-expanded by
-/// [`describe_reqwest_error`]) shows hyper's hard-coded h1 100-header cap.
+fn error_chain_has_header_limit(err: &reqwest::Error) -> bool {
+    use std::error::Error as _;
+
+    if is_header_flood_error(&err.to_string()) {
+        return true;
+    }
+    let mut source = err.source();
+    while let Some(cause) = source {
+        if is_header_flood_error(&cause.to_string()) {
+            return true;
+        }
+        source = cause.source();
+    }
+    false
+}
+
+/// Map arbitrary transport text to one of a few constant diagnostics. This is
+/// intentionally lossy: CDN URLs and their credential-bearing query strings
+/// are never valid log or API output.
+fn safe_transport_diagnostic(message: &str) -> &'static str {
+    if is_header_flood_error(message) {
+        "HTTP response header limit exceeded (message head is too large)"
+    } else {
+        "HTTP transport request failed"
+    }
+}
+
+/// True when a sanitized diagnostic (or an internal raw cause inspected before
+/// logging) shows hyper's hard-coded h1 100-header cap.
 /// Akamai answers SMALL raw-url objects with ~106 headers (the `X-AK-GRN` /
 /// `X-AK-FWD-ERROR: ERR_POC_FWD_OBJ_TOO_SMALL` flood), so EVERY reqwest fetch
 /// of such an URL fails this way — streaming probe and full download alike.
 pub fn is_header_flood_error(message: &str) -> bool {
     let haystack = message.to_ascii_lowercase();
     haystack.contains("message head is too large") || haystack.contains("too many headers")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_header_flood_error, safe_transport_diagnostic};
+
+    #[test]
+    fn cdn_diagnostic_never_echoes_url_or_query() {
+        let raw = "request failed for https://cdn.example/audio.flac?jwt=super-secret";
+        let diagnostic = safe_transport_diagnostic(raw);
+        assert_eq!(diagnostic, "HTTP transport request failed");
+        assert!(!diagnostic.contains("cdn.example"));
+        assert!(!diagnostic.contains("super-secret"));
+    }
+
+    #[test]
+    fn sanitized_header_limit_remains_machine_classifiable() {
+        let raw = "https://cdn.example/audio?token=secret: message head is too large";
+        let diagnostic = safe_transport_diagnostic(raw);
+        assert!(is_header_flood_error(diagnostic));
+        assert!(!diagnostic.contains("cdn.example"));
+        assert!(!diagnostic.contains("secret"));
+    }
 }

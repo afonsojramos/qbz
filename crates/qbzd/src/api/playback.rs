@@ -33,7 +33,10 @@ use tiny_http::Response;
 
 use crate::state::AuthState;
 
-use super::{canon_volume, err_json, json, ApiState};
+use super::{
+    canon_volume, err_json, json, owner_action_gate, owner_action_lease, transport_action_lease,
+    ApiState,
+};
 
 /// `GET /api/now-playing` (02 §3.3.4). `playback` is the serialized
 /// `PlaybackEvent` (qbz-player/src/player/mod.rs:925) with `shuffle`/`repeat`
@@ -74,20 +77,30 @@ pub fn now_playing(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
         .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
         .unwrap_or(Value::Null);
 
-    json(200, serde_json::json!({"playback": playback, "track": track}))
+    json(
+        200,
+        serde_json::json!({"playback": playback, "track": track}),
+    )
 }
 
 /// `POST /api/playback/play` (02 §3.3.5). Resume if paused; cold-start the
 /// current queue track when `!has_loaded_audio()` (the desktop's
 /// `toggle_play_pause` cold-start branch, `crates/qbz/src/playback.rs:3837-3860`).
 pub fn play(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
-    let player = state.runtime.core().player();
-    if player.has_loaded_audio() {
+    let transport_lease = match transport_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
+    if state.runtime.core().player().has_loaded_audio() {
         return match state.runtime.core().resume() {
             Ok(()) => json(200, serde_json::json!({"state": "playing"})),
             Err(e) => runtime_error(&e.to_string()),
         };
     }
+    // Cold start selects/resolves the owner queue and therefore needs the
+    // stricter owner lease. Drop the transport permit first; `cold_start`
+    // revalidates authority before its first mutation.
+    drop(transport_lease);
     // The cold-start load is spawn-and-ack: report "loading" (honest ack);
     // `qbzd now` / SSE show the transition to playing.
     match cold_start(state) {
@@ -100,6 +113,10 @@ pub fn play(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
 /// 0 · 1 · 3 (no 5, §2.2) so a `Player::pause` channel failure is
 /// [`runtime_error`], not [`device_error`].
 pub fn pause(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
+    let _transport_lease = match transport_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
     match state.runtime.core().pause() {
         Ok(()) => json(200, serde_json::json!({"state": "paused"})),
         Err(e) => runtime_error(&e.to_string()),
@@ -112,6 +129,10 @@ pub fn pause(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
 /// the cold-start branch (`cold_start`'s own [`device_error`]) — the
 /// pause/resume branches use [`runtime_error`] like plain `pause`/`stop`.
 pub fn toggle(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
+    let transport_lease = match transport_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
     let player = state.runtime.core().player();
     let ev = player.get_playback_event();
     if ev.is_playing {
@@ -126,6 +147,9 @@ pub fn toggle(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
             Err(e) => runtime_error(&e.to_string()),
         };
     }
+    // The remaining branch is owner queue selection/stream resolution, not a
+    // primitive transport command. Re-admit it under owner authority.
+    drop(transport_lease);
     // The cold-start load is spawn-and-ack: report "loading" (honest ack);
     // `qbzd now` / SSE show the transition to playing.
     match cold_start(state) {
@@ -137,6 +161,10 @@ pub fn toggle(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
 /// `POST /api/playback/stop` (02 §3.3.8). Never cold-starts; same exit-set
 /// reasoning as `pause`.
 pub fn stop(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
+    let _transport_lease = match transport_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
     match state.runtime.core().stop() {
         Ok(()) => json(200, serde_json::json!({"state": "stopped"})),
         Err(e) => runtime_error(&e.to_string()),
@@ -160,6 +188,10 @@ pub fn previous(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
 /// an async command to the audio thread; the clamp is deterministic so the
 /// "post-state" is knowable synchronously.
 pub fn seek(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
+    let _transport_lease = match transport_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
     let player = state.runtime.core().player();
     if player.is_dsd_direct_active() {
         return err_json(
@@ -182,11 +214,18 @@ pub fn seek(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
             "body: {\"position\": 90} or {\"delta\": -10}",
         );
     };
-    let clamped = if ev.duration > 0 { target.min(ev.duration) } else { target };
+    let clamped = if ev.duration > 0 {
+        target.min(ev.duration)
+    } else {
+        target
+    };
     if let Err(e) = state.runtime.core().seek(clamped) {
         return runtime_error(&e.to_string());
     }
-    json(200, serde_json::json!({"position": clamped, "duration": ev.duration}))
+    json(
+        200,
+        serde_json::json!({"position": clamped, "duration": ev.duration}),
+    )
 }
 
 /// `POST /api/playback/volume` (02 §3.3.12). One of three body forms:
@@ -194,6 +233,10 @@ pub fn seek(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
 /// `{"mute": "on"|"off"|"toggle"}` (also `qbzd mute`'s route — no dedicated
 /// route, §2.2). All three are gated by the same DSD-direct guard as `seek`.
 pub fn volume(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
+    let _transport_lease = match transport_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
     let player = state.runtime.core().player();
     if player.is_dsd_direct_active() {
         return err_json(
@@ -236,7 +279,10 @@ pub fn volume(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
     if let Err(e) = state.runtime.core().set_volume(target) {
         return runtime_error(&e.to_string());
     }
-    json(200, serde_json::json!({"volume": canon_volume(target), "muted": muted_after}))
+    json(
+        200,
+        serde_json::json!({"volume": canon_volume(target), "muted": muted_after}),
+    )
 }
 
 /// `POST /api/playback/shuffle` (CONSOLE). Body `{"mode": "on"|"off"|"toggle"}`
@@ -244,7 +290,17 @@ pub fn volume(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
 /// queue-mode toggle touches no Qobuz session; state also surfaces in
 /// `/api/status` and `/api/now-playing`.
 pub fn shuffle(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
-    let mode = body.get("mode").and_then(|v| v.as_str()).unwrap_or("toggle");
+    if let Some(resp) = owner_action_gate(state) {
+        return resp;
+    }
+    let mode = body
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("toggle");
+    let _owner_lease = match owner_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
     let enabled = match mode {
         "on" => {
             state.rt.block_on(state.runtime.core().set_shuffle(true));
@@ -256,7 +312,12 @@ pub fn shuffle(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
         }
         "toggle" => state.rt.block_on(state.runtime.core().toggle_shuffle()),
         other => {
-            return err_json(400, "bad_request", &format!("invalid mode '{other}'"), "mode: on | off | toggle")
+            return err_json(
+                400,
+                "bad_request",
+                &format!("invalid mode '{other}'"),
+                "mode: on | off | toggle",
+            )
         }
     };
     json(200, serde_json::json!({"shuffle": enabled}))
@@ -265,14 +326,26 @@ pub fn shuffle(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
 /// `POST /api/playback/repeat` (CONSOLE). Body `{"mode": "off"|"all"|"one"}`.
 /// No auth. Returns the applied mode.
 pub fn repeat(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
+    if let Some(resp) = owner_action_gate(state) {
+        return resp;
+    }
     let mode = body.get("mode").and_then(|v| v.as_str()).unwrap_or("");
     let rm = match mode {
         "off" => qbz_models::RepeatMode::Off,
         "all" => qbz_models::RepeatMode::All,
         "one" => qbz_models::RepeatMode::One,
         other => {
-            return err_json(400, "bad_request", &format!("invalid repeat mode '{other}'"), "mode: off | all | one")
+            return err_json(
+                400,
+                "bad_request",
+                &format!("invalid repeat mode '{other}'"),
+                "mode: off | all | one",
+            )
         }
+    };
+    let _owner_lease = match owner_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
     };
     state.rt.block_on(state.runtime.core().set_repeat_mode(rm));
     json(200, serde_json::json!({"repeat": mode}))
@@ -302,7 +375,12 @@ fn apply_mute(state: &ApiState, live: f32, arg: &str) -> Response<Cursor<Vec<u8>
     let mut guard = match state.shared.lock() {
         Ok(g) => g,
         Err(_) => {
-            return err_json(500, "internal", "daemon state lock poisoned", "restart qbzd")
+            return err_json(
+                500,
+                "internal",
+                "daemon state lock poisoned",
+                "restart qbzd",
+            )
         }
     };
 
@@ -315,13 +393,21 @@ fn apply_mute(state: &ApiState, live: f32, arg: &str) -> Response<Cursor<Vec<u8>
         guard.muted = true;
         (stash, state.runtime.core().set_volume(0.0))
     } else if !mute_on && guard.muted {
-        let restored = if guard.premute_volume > 0.0 { guard.premute_volume } else { 0.7 };
+        let restored = if guard.premute_volume > 0.0 {
+            guard.premute_volume
+        } else {
+            0.7
+        };
         guard.muted = false;
         (restored, state.runtime.core().set_volume(restored))
     } else {
         // Already in the requested state — a no-op that still reports the
         // current nominal level.
-        let nominal = if guard.muted { guard.premute_volume } else { live };
+        let nominal = if guard.muted {
+            guard.premute_volume
+        } else {
+            live
+        };
         (nominal, Ok(()))
     };
     let muted_now = guard.muted;
@@ -330,7 +416,10 @@ fn apply_mute(state: &ApiState, live: f32, arg: &str) -> Response<Cursor<Vec<u8>
     if let Err(e) = set_result {
         return runtime_error(&e.to_string());
     }
-    json(200, serde_json::json!({"volume": canon_volume(nominal), "muted": muted_now}))
+    json(
+        200,
+        serde_json::json!({"volume": canon_volume(nominal), "muted": muted_now}),
+    )
 }
 
 /// `next`/`previous` (02 §3.3.9-10): gate on NeedsAuth BEFORE running the
@@ -347,13 +436,21 @@ fn apply_mute(state: &ApiState, live: f32, arg: &str) -> Response<Cursor<Vec<u8>
 /// The landing track is no longer reported synchronously — follow it via
 /// `qbzd now` / SSE.
 fn advance(state: &ApiState, forward: bool) -> Response<Cursor<Vec<u8>>> {
+    if let Some(resp) = owner_action_gate(state) {
+        return resp;
+    }
     if let Some(resp) = auth_gate(state) {
         return resp;
     }
+    let owner_lease = match owner_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
     let quality = resolve_quality(state);
     let runtime = std::sync::Arc::clone(&state.runtime);
     let shared = Arc::clone(&state.shared);
     state.rt.spawn(async move {
+        let _owner_lease = owner_lease;
         if let Err(err) =
             qbz_app::playback_driver::advance_and_play(runtime.as_ref(), quality, forward).await
         {
@@ -382,6 +479,7 @@ fn advance(state: &ApiState, forward: bool) -> Response<Cursor<Vec<u8>>> {
 /// `last_errors.stream` instead of a 5xx. Ok(()) means "load queued" — the
 /// callers answer `{"state": "loading"}`.
 fn cold_start(state: &ApiState) -> Result<(), Response<Cursor<Vec<u8>>>> {
+    let owner_lease = owner_action_lease(state)?;
     if let Some(resp) = auth_gate(state) {
         return Err(resp);
     }
@@ -402,6 +500,7 @@ fn cold_start(state: &ApiState) -> Result<(), Response<Cursor<Vec<u8>>>> {
     let runtime = std::sync::Arc::clone(&state.runtime);
     let shared = Arc::clone(&state.shared);
     state.rt.spawn(async move {
+        let _owner_lease = owner_lease;
         let played = runtime
             .core()
             .play_track_resolved(track_id, quality, None, None, 0)
@@ -435,7 +534,12 @@ fn auth_gate(state: &ApiState) -> Option<Response<Cursor<Vec<u8>>>> {
         .map(|s| s.auth == AuthState::NeedsAuth)
         .unwrap_or(false);
     if needs_auth {
-        Some(err_json(409, "needs_auth", "not logged in to Qobuz", "run: qbzd login"))
+        Some(err_json(
+            409,
+            "needs_auth",
+            "not logged in to Qobuz",
+            "run: qbzd login",
+        ))
     } else {
         None
     }

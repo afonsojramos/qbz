@@ -14,7 +14,7 @@
 //! `duration_ms` are MILLISECONDS (the QConnect protocol unit).
 #![allow(dead_code)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use qbz_app::shell::AppRuntime;
 use qbz_player::player::PlaybackBufferState;
@@ -25,8 +25,9 @@ use qconnect_app::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::adapter::DaemonAdapter;
+use super::authority::{AuthorityCell, AuthorityStamp};
 use super::sink::DaemonQconnectApp;
+use crate::adapter::DaemonAdapter;
 
 pub const QCONNECT_RENDERER_CHANNELS: i32 = 2;
 const AUDIO_QUALITY_UNKNOWN: i32 = 0;
@@ -45,25 +46,39 @@ pub async fn report_playback_state(
     app: &Arc<DaemonQconnectApp>,
     sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
     runtime: &Arc<AppRuntime<DaemonAdapter>>,
+    authority: &AuthorityCell,
+    stamp: AuthorityStamp,
     playing_state: i32,
     position_ms: i64,
     duration_ms: i64,
     track_id: u64,
     buffer_state: PlaybackBufferState,
 ) {
+    if !authority.is_current(stamp) {
+        return;
+    }
     // Only report when WE are the active renderer. When a peer renderer owns
     // playback (the daemon is acting as a controller) the renderer reports come
     // from the peer, not us.
     {
         let state = sync_state.lock().await;
+        if !authority.is_current(stamp) {
+            return;
+        }
         if !is_local_renderer_active(&state.session) {
             return;
         }
     }
 
     let (current_qid, next_qid) =
-        resolve_queue_item_ids_by_track_id(app, sync_state, track_id).await;
+        resolve_queue_item_ids_by_track_id(app, sync_state, authority, stamp, track_id).await;
+    if !authority.is_current(stamp) {
+        return;
+    }
     let queue_version = app.queue_state_snapshot().await.version;
+    if !authority.is_current(stamp) {
+        return;
+    }
 
     let report = build_renderer_playback_report(
         Uuid::new_v4().to_string(),
@@ -77,12 +92,21 @@ pub async fn report_playback_state(
             next_queue_item_id: next_qid,
         },
     );
+    if !authority.is_current(stamp) {
+        return;
+    }
     if let Err(err) = app.send_renderer_report_command(report).await {
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::warn!("[QConnect] Failed to report playback state: {err}");
     }
 
-    if position_ms >= 0 {
+    if position_ms >= 0 && authority.is_current(stamp) {
         app.update_renderer_position(position_ms as u64).await;
+    }
+    if !authority.is_current(stamp) {
+        return;
     }
 
     // Report the live output format so the controller shows the correct quality
@@ -95,11 +119,20 @@ pub async fn report_playback_state(
     if let Some(snapshot) =
         build_file_audio_quality_snapshot(sample_rate, bit_depth, QCONNECT_RENDERER_CHANNELS)
     {
+        if !authority.is_current(stamp) {
+            return;
+        }
         if let Err(err) = app
             .report_file_audio_quality_if_changed(queue_version, snapshot)
             .await
         {
+            if !authority.is_current(stamp) {
+                return;
+            }
             log::warn!("[QConnect] Failed to report file audio quality: {err}");
+        }
+        if !authority.is_current(stamp) {
+            return;
         }
         if let Err(err) = app
             .report_device_audio_quality_if_changed(
@@ -110,6 +143,9 @@ pub async fn report_playback_state(
             )
             .await
         {
+            if !authority.is_current(stamp) {
+                return;
+            }
             log::warn!("[QConnect] Failed to report device audio quality: {err}");
         }
     }
@@ -158,14 +194,25 @@ fn build_file_audio_quality_snapshot(
 async fn resolve_queue_item_ids_by_track_id(
     app: &Arc<DaemonQconnectApp>,
     sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
+    authority: &AuthorityCell,
+    stamp: AuthorityStamp,
     track_id: u64,
 ) -> (Option<u64>, Option<u64>) {
+    if !authority.is_current(stamp) {
+        return (None, None);
+    }
     let queue = app.queue_state_snapshot().await;
+    if !authority.is_current(stamp) {
+        return (None, None);
+    }
     let (current_qid, next_qid, next_track_id) =
         qconnect_app::queue_resolution::resolve_queue_item_ids_from_queue_state(&queue, track_id);
 
     if let Some(current_qid) = current_qid {
         let mut state = sync_state.lock().await;
+        if !authority.is_current(stamp) {
+            return (None, None);
+        }
         state.last_renderer_queue_item_id = Some(current_qid);
         state.last_renderer_next_queue_item_id = next_qid;
         state.last_renderer_track_id = Some(track_id);
@@ -195,8 +242,9 @@ async fn resolve_queue_item_ids_by_track_id(
 //     `is_playing`, so a paused/stopped renderer stays silent like the desktop.
 pub async fn run_report_scheduler(
     notify: Arc<tokio::sync::Notify>,
-    inner: Arc<Mutex<super::DaemonQconnectInner>>,
+    inner: Arc<StdMutex<super::DaemonQconnectInner>>,
     runtime: Arc<AppRuntime<DaemonAdapter>>,
+    authority: Arc<AuthorityCell>,
 ) {
     use qconnect_app::renderer::{PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING};
 
@@ -211,8 +259,27 @@ pub async fn run_report_scheduler(
         // Reset so the periodic floor only fires after 2 s of edge silence.
         interval.reset();
 
+        // Capture one exact installed runtime before reading player state. If a
+        // handoff lands while the snapshot is read, the stamp check below drops
+        // the mixed-authority sample.
+        let (app, sync_state, stamp) = {
+            let guard = inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match guard.runtime.as_ref() {
+                Some(rt) => (Arc::clone(&rt.app), Arc::clone(&rt.sync_state), rt.stamp),
+                _ => continue,
+            }
+        };
+        if !authority.is_current(stamp) {
+            continue;
+        }
+
         // Read the live player state. Nothing loaded -> nothing to report.
         let ev = runtime.core().player().get_playback_event();
+        if !authority.is_current(stamp) {
+            continue;
+        }
         let report_track_id = qconnect_report_track_id(&ev);
         if report_track_id == 0 {
             continue;
@@ -229,16 +296,6 @@ pub async fn run_report_scheduler(
             continue;
         }
 
-        // Resolve the LIVE session (app + the shared sync accumulator). No runtime
-        // means QConnect is not connected -> a no-op this tick.
-        let (app, sync_state) = {
-            let guard = inner.lock().await;
-            match guard.runtime.as_ref() {
-                Some(rt) => (Arc::clone(&rt.app), Arc::clone(&rt.sync_state)),
-                None => continue,
-            }
-        };
-
         let playing_state = if ev.is_playing {
             PLAYING_STATE_PLAYING
         } else {
@@ -251,6 +308,8 @@ pub async fn run_report_scheduler(
             &app,
             &sync_state,
             &runtime,
+            &authority,
+            stamp,
             playing_state,
             position_ms,
             duration_ms,

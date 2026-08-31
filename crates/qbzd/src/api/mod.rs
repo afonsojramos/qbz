@@ -32,7 +32,7 @@ pub mod status;
 
 use std::io::Cursor;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use tiny_http::{Header, Method, Request, Response};
@@ -536,6 +536,75 @@ pub(crate) fn err_json(
     json(status, error_body(code, message, hint))
 }
 
+/// Refuse owner-only queue and track-selection actions while the QConnect
+/// authority cell belongs to a delegated runtime (or is fenced during an
+/// authority transition). Transport controls that are safe for either origin
+/// -- pause/resume/seek/volume -- deliberately do not call this OWNER gate;
+/// they use [`transport_action_lease`] so they still drain before a handoff.
+pub(crate) fn owner_action_gate(state: &ApiState) -> Option<Response<Cursor<Vec<u8>>>> {
+    owner_actions_blocked(state.qconnect_control.as_ref())
+        .then(|| json(409, owner_action_conflict_body()))
+}
+
+/// Atomically admit one owner-only action. The returned permit must stay alive
+/// through every queue/playback mutation and await in that action; authority
+/// handoff closes new admission and drains these permits before snapshotting.
+/// `None` inside `Ok` is the short boot window before QConnect publishes its
+/// control handle, when no delegated runtime can exist yet.
+pub(crate) fn owner_action_lease(
+    state: &ApiState,
+) -> Result<Option<crate::qconnect::authority::AuthorityActionPermit>, Response<Cursor<Vec<u8>>>> {
+    let Some(qconnect) = state.qconnect_control.get() else {
+        return Ok(None);
+    };
+    qconnect
+        .try_owner_action_permit()
+        .map(Some)
+        .ok_or_else(|| json(409, owner_action_conflict_body()))
+}
+
+/// Atomically admit an origin-agnostic transport action. A stable owner or
+/// delegated renderer may be controlled locally, but a transition fence
+/// refuses the action so it cannot land on the runtime installed after the
+/// handoff. As with owner leases, `None` is only the pre-QConnect boot window.
+pub(crate) fn transport_action_lease(
+    state: &ApiState,
+) -> Result<Option<crate::qconnect::authority::AuthorityActionPermit>, Response<Cursor<Vec<u8>>>> {
+    let Some(qconnect) = state.qconnect_control.get() else {
+        return Ok(None);
+    };
+    qconnect
+        .try_transport_action_permit()
+        .map(Some)
+        .ok_or_else(|| json(409, transport_action_conflict_body()))
+}
+
+/// Cheap form used by spawn-and-ack handlers immediately before their async
+/// owner action starts. An unpublished control means QConnect has not reached
+/// daemon boot step 12 yet, so there is no delegated authority to conflict
+/// with.
+pub(crate) fn owner_actions_blocked(control: &OnceLock<crate::qconnect::QconnectControl>) -> bool {
+    control
+        .get()
+        .is_some_and(|qconnect| !qconnect.owner_actions_allowed())
+}
+
+fn owner_action_conflict_body() -> serde_json::Value {
+    error_body(
+        "qconnect_authority_conflict",
+        "the owner queue is unavailable while QConnect controls playback",
+        "return playback control to the QBZ owner and try again",
+    )
+}
+
+fn transport_action_conflict_body() -> serde_json::Value {
+    error_body(
+        "qconnect_authority_transition",
+        "playback control is temporarily unavailable during a QConnect handoff",
+        "retry the transport command",
+    )
+}
+
 pub(crate) fn error_body(code: &str, message: &str, hint: &str) -> serde_json::Value {
     serde_json::json!({"error": {"code": code, "message": message, "hint": hint}})
 }
@@ -682,5 +751,43 @@ mod tests {
         assert_eq!(body["error"]["code"], "origin_forbidden");
         assert_eq!(body["error"]["message"], "refused");
         assert_eq!(body["error"]["hint"], "not a browser API");
+    }
+
+    #[test]
+    fn owner_action_conflict_is_stable_and_contains_no_handoff_details() {
+        let body = owner_action_conflict_body();
+        assert_eq!(body["error"]["code"], "qconnect_authority_conflict");
+        assert_eq!(
+            body["error"]["message"],
+            "the owner queue is unavailable while QConnect controls playback"
+        );
+
+        let encoded = serde_json::to_string(&body).unwrap();
+        for secret_shape in [
+            "Authorization",
+            "Bearer",
+            "jwt",
+            "session_id",
+            "endpoint",
+            "http://",
+            "https://",
+            "?",
+        ] {
+            assert!(
+                !encoded.contains(secret_shape),
+                "conflict response reflected sensitive shape {secret_shape}"
+            );
+        }
+    }
+
+    #[test]
+    fn transport_transition_conflict_is_retryable_and_origin_agnostic() {
+        let body = transport_action_conflict_body();
+        assert_eq!(body["error"]["code"], "qconnect_authority_transition");
+        assert_eq!(body["error"]["hint"], "retry the transport command");
+        let message = body["error"]["message"].as_str().unwrap();
+        assert!(message.contains("handoff"));
+        assert!(!message.contains("owner"));
+        assert!(!message.contains("delegated"));
     }
 }
