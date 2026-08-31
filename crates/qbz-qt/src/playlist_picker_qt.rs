@@ -859,6 +859,49 @@ pub fn create_and_add(name: &str) {
     });
 }
 
+/// Shared-drag DROP: the picker's add matrix without the modal. Routes a
+/// payload onto a sidebar target the same way `pick` would — local refs to a
+/// local playlist or the Qobuz sidecar, Qobuz ids to a local playlist — with
+/// the same success tail (last-used, toast, refreshes). The Qobuz-ids-onto-
+/// Qobuz-playlist case stays with its pre-existing `playlist_qt::add_tracks`
+/// caller and never reaches here.
+pub async fn add_dropped_payload_to_target(runtime: &Runtime, target_id: &str, payload: Payload) {
+    if payload.is_empty() {
+        return;
+    }
+    match crate::local_playlist_qt::PlaylistRef::parse(target_id) {
+        Some(crate::local_playlist_qt::PlaylistRef::Local(target)) => {
+            let added = tokio::task::spawn_blocking({
+                let target = target.clone();
+                move || match payload {
+                    Payload::LocalRefs(refs) => {
+                        crate::local_playlist_qt::add_local_refs_blocking(&target, &refs)
+                    }
+                    Payload::Qobuz(ids) => {
+                        crate::local_playlist_qt::add_qobuz_tracks_blocking(&target, &ids)
+                    }
+                }
+            })
+            .await
+            .unwrap_or(0);
+            set_last_used(&target, added);
+            toast_added(added, "");
+            refresh_local_target(runtime, &target).await;
+        }
+        Some(crate::local_playlist_qt::PlaylistRef::Qobuz(pid)) => {
+            let Payload::LocalRefs(refs) = payload else {
+                return;
+            };
+            let qobuz_count = crate::sidebar_qt::playlist_track_count(pid).unwrap_or(0);
+            let written = write_sidecar_refs(pid, qobuz_count, refs).await;
+            set_last_used(&pid.to_string(), written);
+            toast_added(written, "");
+            crate::playlist_qt::refresh_after_membership_change(runtime, pid).await;
+        }
+        None => {}
+    }
+}
+
 /// Seam C — attach local-mode refs to a QOBUZ playlist through the library.db
 /// sidecar tables. Returns how many refs were written.
 ///
@@ -879,6 +922,10 @@ async fn write_sidecar_refs(pid: u64, qobuz_count: u32, refs: Vec<String>) -> us
             for r in &refs {
                 if let Some(key) = r.strip_prefix("plex:") {
                     db.add_plex_track_to_playlist(pid, key, next)?;
+                } else if let Some(item) = r.strip_prefix("jellyfin:") {
+                    db.add_remote_track_to_playlist(pid, "jellyfin", item, next)?;
+                } else if let Some(item) = r.strip_prefix("subsonic:") {
+                    db.add_remote_track_to_playlist(pid, "subsonic", item, next)?;
                 } else if let Ok(lid) = r.parse::<i64>() {
                     db.add_local_track_to_playlist(pid, lid, next)?;
                 } else {

@@ -67,7 +67,7 @@ pub fn record_detail_detached(playlist_id: u64, name: String, owner: String, tra
         let owner = Some(owner.as_str()).filter(|value| !value.is_empty());
         let result = crate::library_db_qt::with_db(true, |db| {
             Ok(db.with_connection(|conn| {
-                repo::replace_tracks(conn, playlist_id, &name, owner, &track_ids, None)
+                repo::replace_tracks(conn, playlist_id, &name, owner, &track_ids)
             }))
         });
         match result {

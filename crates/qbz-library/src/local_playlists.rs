@@ -23,11 +23,18 @@ pub fn is_local_playlist_id(id: &str) -> bool {
 }
 
 /// Track source inside a local playlist.
+///
+/// Jellyfin/Subsonic rows (2026-08-30) store the SERVER ITEM ID in the
+/// `local_path` column — the same convention their library projection uses
+/// for `file_path`: that column is "the source-native locator", not always a
+/// filesystem path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalPlaylistTrackSource {
     Qobuz,
     Local,
     Plex,
+    Jellyfin,
+    Subsonic,
 }
 
 impl LocalPlaylistTrackSource {
@@ -36,12 +43,16 @@ impl LocalPlaylistTrackSource {
             Self::Qobuz => "qobuz",
             Self::Local => "local",
             Self::Plex => "plex",
+            Self::Jellyfin => "jellyfin",
+            Self::Subsonic => "subsonic",
         }
     }
     fn parse(s: &str) -> Self {
         match s {
             "local" => Self::Local,
             "plex" => Self::Plex,
+            "jellyfin" => Self::Jellyfin,
+            "subsonic" => Self::Subsonic,
             _ => Self::Qobuz,
         }
     }
@@ -86,12 +97,15 @@ pub struct LocalPlaylistTrack {
     pub added_at: i64,
 }
 
-/// Input for `add_tracks` — exactly one of the three refs per source.
+/// Input for `add_tracks` — exactly one source-native ref per variant.
+/// Jellyfin/Subsonic carry the server item id (stored in `local_path`).
 #[derive(Debug, Clone)]
 pub enum LocalPlaylistTrackInput {
     Qobuz(u64),
     Local(String),
     Plex(String),
+    Jellyfin(String),
+    Subsonic(String),
 }
 
 fn now_ms() -> i64 {
@@ -344,7 +358,12 @@ fn hydrate_counts(conn: &Connection, p: &mut LocalPlaylist) -> Result<()> {
         match LocalPlaylistTrackSource::parse(&source) {
             LocalPlaylistTrackSource::Qobuz => p.qobuz_count = count,
             LocalPlaylistTrackSource::Local => p.local_count = count,
-            LocalPlaylistTrackSource::Plex => p.plex_count = count,
+            // The three server-backed sources share one bucket: every
+            // consumer of these counts distinguishes "on this machine" from
+            // "needs a server", not server brands.
+            LocalPlaylistTrackSource::Plex
+            | LocalPlaylistTrackSource::Jellyfin
+            | LocalPlaylistTrackSource::Subsonic => p.plex_count += count,
         }
         p.track_count += count;
     }
@@ -444,6 +463,12 @@ pub fn add_tracks(
             LocalPlaylistTrackInput::Qobuz(id) => ("qobuz", Some(*id as i64), None, None),
             LocalPlaylistTrackInput::Local(path) => ("local", None, Some(path.as_str()), None),
             LocalPlaylistTrackInput::Plex(key) => ("plex", None, None, Some(key.as_str())),
+            LocalPlaylistTrackInput::Jellyfin(item) => {
+                ("jellyfin", None, Some(item.as_str()), None)
+            }
+            LocalPlaylistTrackInput::Subsonic(item) => {
+                ("subsonic", None, Some(item.as_str()), None)
+            }
         };
         let exists: bool = conn
             .prepare(

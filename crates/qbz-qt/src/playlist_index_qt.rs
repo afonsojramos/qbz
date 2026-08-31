@@ -13,7 +13,7 @@
 //! load), so reconnects and mutations re-arm it for free; a poke while a walk
 //! is running coalesces into one more round instead of a second walker.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use qbz_library::qobuz_playlist_snapshot as repo;
@@ -57,17 +57,29 @@ pub fn poke() {
     });
 }
 
-/// Pick the next candidate that still has retry budget. Pure — the driver's
-/// only decision, kept out of the loop so it is testable.
-fn next_candidate(queue: &[repo::HydrationCandidate], failures: &HashMap<u64, u32>) -> Option<u64> {
+/// Pick the next candidate that still has retry budget and was not already
+/// written this round. Pure — the driver's decisions, kept out of the loop so
+/// they are testable.
+///
+/// The `written` set is the FORWARD-PROGRESS GUARD: a playlist successfully
+/// synced this round must never be fetched again within it, even if the
+/// staleness query still flags it — a queue that cannot be satisfied by a
+/// successful write is a data bug to log, not a loop to run. The 2026-08-30
+/// smoke hit exactly that: one playlist re-fetched every 500ms for minutes.
+fn next_candidate(
+    queue: &[repo::HydrationCandidate],
+    failures: &HashMap<u64, u32>,
+    written: &HashSet<u64>,
+) -> Option<u64> {
     queue
         .iter()
         .map(|c| c.qobuz_playlist_id)
-        .find(|pid| failures.get(pid).map_or(true, |&n| n < MAX_ATTEMPTS))
+        .find(|pid| !written.contains(pid) && failures.get(pid).map_or(true, |&n| n < MAX_ATTEMPTS))
 }
 
 async fn run_round(runtime: &Runtime) {
     let mut failures: HashMap<u64, u32> = HashMap::new();
+    let mut written: HashSet<u64> = HashSet::new();
     loop {
         if crate::offline_fwd::engine().is_offline() {
             return;
@@ -79,7 +91,20 @@ async fn run_round(runtime: &Runtime) {
         })
         .await
         .unwrap_or_default();
-        let Some(pid) = next_candidate(&queue, &failures) else {
+        let Some(pid) = next_candidate(&queue, &failures, &written) else {
+            if let Some(stuck) = queue
+                .iter()
+                .find(|c| written.contains(&c.qobuz_playlist_id))
+            {
+                // A successful sync that does not settle its queue entry is a
+                // staleness-rule bug; surface it instead of looping on it.
+                log::warn!(
+                    "[qbz-qt] playlist index: {} still queued ({:?}) after a successful sync; \
+                     leaving it for the next authoritative list",
+                    stuck.qobuz_playlist_id,
+                    stuck.reason
+                );
+            }
             crate::playlist_picker_qt::membership_index_progressed();
             return;
         };
@@ -97,7 +122,6 @@ async fn run_round(runtime: &Runtime) {
                                 &playlist.name,
                                 owner,
                                 &playlist.track_ids,
-                                playlist.updated_at,
                             )
                         }))
                     })
@@ -107,7 +131,9 @@ async fn run_round(runtime: &Runtime) {
                 .flatten()
                 .and_then(Result::ok)
                 .unwrap_or(false);
-                if !wrote {
+                if wrote {
+                    written.insert(pid);
+                } else {
                     // Header vanished mid-round (deleted / retired). Spend
                     // the whole budget so the round moves on.
                     log::debug!("[qbz-qt] playlist index: {pid} lost its header; skipped");
@@ -148,18 +174,31 @@ mod tests {
     fn next_candidate_skips_exhausted_budgets() {
         let queue = candidates(&[1, 2, 3]);
         let mut failures = HashMap::new();
-        assert_eq!(next_candidate(&queue, &failures), Some(1));
+        let written = HashSet::new();
+        assert_eq!(next_candidate(&queue, &failures, &written), Some(1));
 
         failures.insert(1, MAX_ATTEMPTS);
-        assert_eq!(next_candidate(&queue, &failures), Some(2));
+        assert_eq!(next_candidate(&queue, &failures, &written), Some(2));
 
         failures.insert(2, MAX_ATTEMPTS - 1);
         // Budget not exhausted yet: 2 is still first in line.
-        assert_eq!(next_candidate(&queue, &failures), Some(2));
+        assert_eq!(next_candidate(&queue, &failures, &written), Some(2));
 
         failures.insert(2, MAX_ATTEMPTS);
         failures.insert(3, MAX_ATTEMPTS);
         // Everything parked: the round ends instead of spinning.
-        assert_eq!(next_candidate(&queue, &failures), None);
+        assert_eq!(next_candidate(&queue, &failures, &written), None);
+    }
+
+    #[test]
+    fn next_candidate_never_refetches_a_successful_write() {
+        // The 2026-08-30 infinite loop: a queue entry that survives its own
+        // successful sync must end the round, not restart it.
+        let queue = candidates(&[1]);
+        let failures = HashMap::new();
+        let mut written = HashSet::new();
+        assert_eq!(next_candidate(&queue, &failures, &written), Some(1));
+        written.insert(1);
+        assert_eq!(next_candidate(&queue, &failures, &written), None);
     }
 }

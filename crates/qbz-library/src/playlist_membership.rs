@@ -14,13 +14,13 @@
 //! - `local_playlist_tracks` — everything inside `local:` playlists (same:
 //!   locally authoritative).
 //!
-//! Identity notes. Jellyfin and Subsonic rows reach playlists through their
-//! `local_tracks` projection, so their playlist identity IS the library row
-//! (`track_id` + the stored path/key) — structurally collision-free across
-//! servers because each server's items are distinct projected rows. Plex
-//! sidecars store the bare rating key (the Plex merge keeps it in
-//! `file_path`); rating keys are scoped to the single configured server, the
-//! same assumption the sidecar tables have always made.
+//! Identity notes. Plex rows are keyed by rating key (their merge keeps it
+//! in `file_path`), Jellyfin/Subsonic rows by their source-qualified server
+//! item id (`playlist_remote_tracks`, and `local_playlist_tracks.local_path`
+//! under their own `source` value); both key spaces are scoped to the single
+//! configured server per protocol, the same assumption the sidecar tables
+//! have always made. Everything else that lives in the library is its
+//! projected row (`track_id` + path).
 
 use std::collections::{HashMap, HashSet};
 
@@ -44,29 +44,35 @@ pub enum PlaylistTrackRef {
     },
     /// A Plex track by rating key.
     Plex { rating_key: String },
+    /// A Jellyfin/Subsonic track by its server item id (their projected rows
+    /// carry it in `file_path`; playlists store it source-qualified).
+    Remote { source: String, item_id: String },
 }
 
 impl PlaylistTrackRef {
     /// Build the ref for a library row the way the playlist writers key it:
-    /// Plex rows carry the rating key in `file_path`; every other source is
-    /// the projected library row itself (offline copies also carrying their
-    /// catalog id).
+    /// Plex rows carry the rating key in `file_path`, Jellyfin/Subsonic rows
+    /// their server item id; every other source is the projected library row
+    /// itself (offline copies also carrying their catalog id).
     pub fn from_library_row(
         source: &str,
         track_id: i64,
         file_path: &str,
         qobuz_track_id: Option<u64>,
     ) -> Self {
-        if source == "plex" {
-            Self::Plex {
+        match source {
+            "plex" => Self::Plex {
                 rating_key: file_path.to_string(),
-            }
-        } else {
-            Self::Library {
+            },
+            "jellyfin" | "subsonic" => Self::Remote {
+                source: source.to_string(),
+                item_id: file_path.to_string(),
+            },
+            _ => Self::Library {
                 track_id,
                 path: Some(file_path.to_string()),
                 qobuz_track_id: qobuz_track_id.filter(|_| source == "qobuz_download"),
-            }
+            },
         }
     }
 }
@@ -116,6 +122,7 @@ pub fn playlists_containing(
     let mut lib_ids: Vec<(i64, usize)> = Vec::new();
     let mut lib_paths: Vec<(&str, usize)> = Vec::new();
     let mut plex_keys: Vec<(&str, usize)> = Vec::new();
+    let mut remote_items: Vec<(&str, &str, usize)> = Vec::new();
     for (ordinal, r) in refs.iter().enumerate() {
         match r {
             PlaylistTrackRef::Qobuz(id) => qobuz_ids.push((*id as i64, ordinal)),
@@ -134,6 +141,9 @@ pub fn playlists_containing(
                 }
             }
             PlaylistTrackRef::Plex { rating_key } => plex_keys.push((rating_key.as_str(), ordinal)),
+            PlaylistTrackRef::Remote { source, item_id } => {
+                remote_items.push((source.as_str(), item_id.as_str(), ordinal))
+            }
         }
     }
 
@@ -222,6 +232,39 @@ pub fn playlists_containing(
         collect_qobuz(found);
     }
 
+    // Remote refs → the Jellyfin/Subsonic sidecars on Qobuz playlists,
+    // source-qualified (the sources come from a fixed vocabulary, so the
+    // literal in the SQL is safe).
+    for source in ["jellyfin", "subsonic"] {
+        let items: Vec<(&str, usize)> = remote_items
+            .iter()
+            .filter(|(s, _, _)| *s == source)
+            .map(|(_, item, ordinal)| (*item, *ordinal))
+            .collect();
+        for chunk in items.chunks(IN_CHUNK) {
+            let sql = format!(
+                "SELECT qobuz_playlist_id, item_id FROM playlist_remote_tracks
+                  WHERE source = '{source}' AND item_id IN ({})",
+                placeholders(chunk.len())
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(
+                rusqlite::params_from_iter(chunk.iter().map(|(item, _)| *item)),
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+            )?;
+            let mut found = Vec::new();
+            for row in rows {
+                let (pid, item) = row?;
+                for (i, ordinal) in &chunk[..] {
+                    if *i == item {
+                        found.push((pid, *ordinal));
+                    }
+                }
+            }
+            collect_qobuz(found);
+        }
+    }
+
     // All three identity columns of local playlists.
     let mut collect_local = |rows: Vec<(String, usize)>| {
         for (pid, ordinal) in rows {
@@ -253,9 +296,11 @@ pub fn playlists_containing(
         collect_local(found);
     }
     for chunk in lib_paths.chunks(IN_CHUNK) {
+        // source-qualified: remote rows store their server item id in the
+        // same column, and a filesystem path must never match one.
         let sql = format!(
             "SELECT playlist_id, local_path FROM local_playlist_tracks
-              WHERE local_path IN ({})",
+              WHERE source = 'local' AND local_path IN ({})",
             placeholders(chunk.len())
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -295,6 +340,35 @@ pub fn playlists_containing(
             }
         }
         collect_local(found);
+    }
+    for source in ["jellyfin", "subsonic"] {
+        let items: Vec<(&str, usize)> = remote_items
+            .iter()
+            .filter(|(s, _, _)| *s == source)
+            .map(|(_, item, ordinal)| (*item, *ordinal))
+            .collect();
+        for chunk in items.chunks(IN_CHUNK) {
+            let sql = format!(
+                "SELECT playlist_id, local_path FROM local_playlist_tracks
+                  WHERE source = '{source}' AND local_path IN ({})",
+                placeholders(chunk.len())
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(
+                rusqlite::params_from_iter(chunk.iter().map(|(item, _)| *item)),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )?;
+            let mut found = Vec::new();
+            for row in rows {
+                let (pid, item) = row?;
+                for (i, ordinal) in &chunk[..] {
+                    if *i == item {
+                        found.push((pid.clone(), *ordinal));
+                    }
+                }
+            }
+            collect_local(found);
+        }
     }
 
     let mut out: Vec<PlaylistContainment> = hits
@@ -342,7 +416,15 @@ mod tests {
                  plex_rating_key TEXT NOT NULL,
                  position INTEGER NOT NULL,
                  added_at INTEGER NOT NULL,
-                 UNIQUE(qobuz_playlist_id, plex_rating_key));",
+                 UNIQUE(qobuz_playlist_id, plex_rating_key));
+             CREATE TABLE playlist_remote_tracks (
+                 id INTEGER PRIMARY KEY,
+                 qobuz_playlist_id INTEGER NOT NULL,
+                 source TEXT NOT NULL,
+                 item_id TEXT NOT NULL,
+                 position INTEGER NOT NULL,
+                 added_at INTEGER NOT NULL,
+                 UNIQUE(qobuz_playlist_id, source, item_id));",
         )
         .unwrap();
         c
@@ -365,7 +447,7 @@ mod tests {
             .collect();
         snapshot::record_authoritative_list(c, &entries).unwrap();
         for (id, name, ids) in playlists {
-            snapshot::replace_tracks(c, *id, name, None, ids, None).unwrap();
+            snapshot::replace_tracks(c, *id, name, None, ids).unwrap();
         }
     }
 
@@ -384,11 +466,10 @@ mod tests {
             }
         );
         assert_eq!(
-            PlaylistTrackRef::from_library_row("jellyfin", 7, "/j/item", None),
-            PlaylistTrackRef::Library {
-                track_id: 7,
-                path: Some("/j/item".into()),
-                qobuz_track_id: None,
+            PlaylistTrackRef::from_library_row("jellyfin", 7, "jelly-item", None),
+            PlaylistTrackRef::Remote {
+                source: "jellyfin".into(),
+                item_id: "jelly-item".into(),
             }
         );
         // The catalog id sticks only to offline copies; a stray value on any
@@ -480,7 +561,7 @@ mod tests {
             }],
         )
         .unwrap();
-        snapshot::replace_tracks(&c, 5, "Followed", None, &[10], None).unwrap();
+        snapshot::replace_tracks(&c, 5, "Followed", None, &[10]).unwrap();
         let rows = playlists_containing(&c, &[PlaylistTrackRef::Qobuz(10)]).unwrap();
         assert!(rows.is_empty());
 
@@ -533,6 +614,53 @@ mod tests {
             Some(3)
         );
         assert_eq!(rows[0].target, ContainmentTarget::Local(lp));
+    }
+
+    #[test]
+    fn remote_rows_answer_by_source_qualified_item_id() {
+        let c = conn();
+        c.execute_batch(
+            "INSERT INTO playlist_remote_tracks VALUES (NULL, 7, 'jellyfin', 'item-1', 0, 1);",
+        )
+        .unwrap();
+        let lp = crate::local_playlists::create(&c, "Remote mix", None, false).unwrap();
+        crate::local_playlists::add_tracks(
+            &c,
+            &lp,
+            &[
+                crate::local_playlists::LocalPlaylistTrackInput::Jellyfin("item-1".into()),
+                crate::local_playlists::LocalPlaylistTrackInput::Subsonic("song-9".into()),
+            ],
+        )
+        .unwrap();
+
+        let jelly = PlaylistTrackRef::from_library_row("jellyfin", 12345, "item-1", None);
+        let sub = PlaylistTrackRef::Remote {
+            source: "subsonic".into(),
+            item_id: "song-9".into(),
+        };
+        // The same item id under the WRONG source must not match.
+        let wrong = PlaylistTrackRef::Remote {
+            source: "subsonic".into(),
+            item_id: "item-1".into(),
+        };
+        let rows = playlists_containing(&c, &[jelly, sub]).unwrap();
+        assert_eq!(contained(&rows, ContainmentTarget::Qobuz(7)), Some(1));
+        assert_eq!(
+            contained(&rows, ContainmentTarget::Local(lp.clone())),
+            Some(2)
+        );
+        assert!(playlists_containing(&c, &[wrong]).unwrap().is_empty());
+
+        // A local FILE path that happens to equal a remote item id never
+        // cross-matches (the source qualifier on the shared column).
+        let path_ref = PlaylistTrackRef::Library {
+            track_id: 1,
+            path: Some("item-1".into()),
+            qobuz_track_id: None,
+        };
+        let rows = playlists_containing(&c, &[path_ref]).unwrap();
+        assert!(contained(&rows, ContainmentTarget::Local(lp)).is_none());
     }
 
     #[test]

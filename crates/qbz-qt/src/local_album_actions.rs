@@ -876,10 +876,20 @@ pub fn add_to_playlist(id: String) {
         log::warn!("[qbz-qt] local album add-to-playlist: no version open for album '{id}'");
         return;
     }
+    open_picker_for_rows(&tracks);
+}
+
+/// The shared tail of every local add-to-playlist entry: source-aware refs
+/// (`local_picker_ref_for_track` — Plex and Jellyfin/Subsonic ride their
+/// source-native keys, everything else its library row id), then the picker.
+pub(crate) fn open_picker_for_rows(tracks: &[qbz_library::LocalTrack]) {
     let refs: Vec<String> = tracks
         .iter()
         .map(crate::local_playlist_qt::local_picker_ref_for_track)
         .collect();
+    if refs.is_empty() {
+        return;
+    }
     crate::playlist_picker_qt::open_for_local_refs(&crate::app(), refs);
 }
 

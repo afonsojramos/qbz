@@ -280,18 +280,20 @@ pub fn record_authoritative_list(conn: &Connection, entries: &[AuthoritativeEntr
 
 /// MEMBERSHIP producer: full-replace the snapshot track ids of ONE playlist
 /// (detail load or hydrator fetch) and refresh its header. Stamps
-/// `membership_synced_at` / `membership_count`, and records the API
-/// `updated_at` in force (`remote_updated_at_evidence`) when the caller has
-/// one. Returns `false` (writing NOTHING) when the playlist has no header
-/// row — i.e. it was never captured by the headers producer, so it is not
-/// one of the user's listed playlists.
+/// `membership_synced_at` / `membership_count`, and copies the HEADER's
+/// current `remote_updated_at` into the membership evidence — never a stamp
+/// from the fetch itself: `playlist/get` and `getUserPlaylists` do not report
+/// comparable `updated_at` values, and trusting the fetch's made the queue
+/// re-fetch the same playlist forever (smoke 2026-08-30). Returns `false`
+/// (writing NOTHING) when the playlist has no header row — i.e. it was never
+/// captured by the headers producer, so it is not one of the user's listed
+/// playlists.
 pub fn replace_tracks(
     conn: &Connection,
     qobuz_playlist_id: u64,
     name: &str,
     owner: Option<&str>,
     track_ids: &[u64],
-    remote_updated_at_evidence: Option<i64>,
 ) -> Result<bool> {
     let ts = now_ms();
     conn.execute_batch("BEGIN IMMEDIATE")?;
@@ -300,8 +302,7 @@ pub fn replace_tracks(
             "UPDATE qobuz_playlist_snapshot
                 SET name = ?2, owner = ?3, track_count = ?4, snapped_at = ?5,
                     membership_synced_at = ?5, membership_count = ?4,
-                    membership_remote_updated_at =
-                        COALESCE(?6, remote_updated_at)
+                    membership_remote_updated_at = remote_updated_at
               WHERE qobuz_playlist_id = ?1",
             params![
                 qobuz_playlist_id as i64,
@@ -309,7 +310,6 @@ pub fn replace_tracks(
                 owner,
                 track_ids.len() as u32,
                 ts,
-                remote_updated_at_evidence,
             ],
         )?;
         if updated == 0 {
@@ -514,25 +514,41 @@ pub fn mark_inactive(conn: &Connection, qobuz_playlist_id: u64) -> Result<()> {
 
 // ───────────────────────── Hydration planning ─────────────────────────
 
-/// The membership refreshes the hydrator still owes, oldest debt first:
-/// never-synced playlists, then count mismatches, then remote-revision
-/// mismatches. Only owned, active playlists — followed/read-only playlists
-/// are informational and must not spend the rate budget.
+/// The membership refreshes the hydrator still owes, oldest debt first.
+/// Only owned, active playlists — followed/read-only playlists are
+/// informational and must not spend the rate budget.
+///
+/// Staleness is deliberately NOT "any evidence disagrees" (the 2026-08-30
+/// smoke found that fetching forever): a playlist is stale when
+///
+/// - membership was never captured; or
+/// - BOTH sides carry a remote revision and they differ — the authoritative
+///   list said the playlist changed since the membership sync; or
+/// - a revision comparison is impossible on either side, and the counts
+///   disagree (the coarse fallback).
+///
+/// A successful `replace_tracks` copies the header's current revision into
+/// the membership evidence and equalises the counts, so every sync strictly
+/// converges: only a NEW authoritative list can make a playlist stale again,
+/// and then only the playlists it actually reports changed.
 pub fn hydration_queue(conn: &Connection) -> Result<Vec<HydrationCandidate>> {
     let mut stmt = conn.prepare(
         "SELECT qobuz_playlist_id,
                 membership_synced_at IS NULL AS never_synced,
-                membership_count IS NOT track_count AS count_mismatch,
-                (remote_updated_at IS NOT NULL
-                 AND membership_remote_updated_at IS NOT remote_updated_at)
+                (membership_remote_updated_at IS NOT NULL
+                 AND remote_updated_at IS NOT NULL
+                 AND membership_remote_updated_at != remote_updated_at)
                     AS revision_mismatch
            FROM qobuz_playlist_snapshot
           WHERE is_owned = 1 AND inactive = 0
             AND (membership_synced_at IS NULL
-                 OR membership_count IS NOT track_count
-                 OR (remote_updated_at IS NOT NULL
-                     AND membership_remote_updated_at IS NOT remote_updated_at))
-          ORDER BY never_synced DESC, count_mismatch DESC, qobuz_playlist_id",
+                 OR (membership_remote_updated_at IS NOT NULL
+                     AND remote_updated_at IS NOT NULL
+                     AND membership_remote_updated_at != remote_updated_at)
+                 OR ((membership_remote_updated_at IS NULL
+                      OR remote_updated_at IS NULL)
+                     AND membership_count IS NOT track_count))
+          ORDER BY never_synced DESC, revision_mismatch DESC, qobuz_playlist_id",
     )?;
     let mut out = Vec::new();
     for r in stmt.query_map([], |r| {
@@ -542,15 +558,15 @@ pub fn hydration_queue(conn: &Connection) -> Result<Vec<HydrationCandidate>> {
             r.get::<_, bool>(2)?,
         ))
     })? {
-        let (pid, never, count) = r?;
+        let (pid, never, revision) = r?;
         out.push(HydrationCandidate {
             qobuz_playlist_id: pid,
             reason: if never {
                 StaleReason::NeverSynced
-            } else if count {
-                StaleReason::CountMismatch
-            } else {
+            } else if revision {
                 StaleReason::RemoteRevision
+            } else {
+                StaleReason::CountMismatch
             },
         });
     }
@@ -679,7 +695,7 @@ mod tests {
     fn roundtrip_header_and_tracks() {
         let c = conn();
         record(&c, &[entry(42, "Road Trip", 3)]);
-        let wrote = replace_tracks(&c, 42, "Road Trip", Some("me"), &[30, 10, 20], None).unwrap();
+        let wrote = replace_tracks(&c, 42, "Road Trip", Some("me"), &[30, 10, 20]).unwrap();
         assert!(wrote);
 
         let h = get_header(&c, 42).unwrap().unwrap();
@@ -702,8 +718,8 @@ mod tests {
     fn replace_is_full_replace() {
         let c = conn();
         record(&c, &[entry(7, "Mix", 3)]);
-        replace_tracks(&c, 7, "Mix", None, &[1, 2, 3], None).unwrap();
-        replace_tracks(&c, 7, "Mix renamed", None, &[9], None).unwrap();
+        replace_tracks(&c, 7, "Mix", None, &[1, 2, 3]).unwrap();
+        replace_tracks(&c, 7, "Mix renamed", None, &[9]).unwrap();
 
         assert_eq!(track_ids(&c, 7).unwrap(), vec![9]);
         let h = get_header(&c, 7).unwrap().unwrap();
@@ -744,7 +760,7 @@ mod tests {
         let c = conn();
         // No header row -> the detail producer writes NOTHING (a merely
         // viewed public playlist must not land in the snapshot).
-        let wrote = replace_tracks(&c, 99, "Someone's list", None, &[1, 2], None).unwrap();
+        let wrote = replace_tracks(&c, 99, "Someone's list", None, &[1, 2]).unwrap();
         assert!(!wrote);
         assert!(get_header(&c, 99).unwrap().is_none());
         assert!(track_ids(&c, 99).unwrap().is_empty());
@@ -756,7 +772,7 @@ mod tests {
         // timestamp that also vouched for membership. Now they must not.
         let c = conn();
         record(&c, &[entry(5, "Mix", 2)]);
-        replace_tracks(&c, 5, "Mix", None, &[1, 2], None).unwrap();
+        replace_tracks(&c, 5, "Mix", None, &[1, 2]).unwrap();
         let synced = get_header(&c, 5).unwrap().unwrap().membership_synced_at;
 
         record(&c, &[entry(5, "Mix", 2)]);
@@ -791,8 +807,9 @@ mod tests {
         let c = conn();
         let mut never = entry(1, "Never", 4);
         never.remote_updated_at = Some(100);
-        let mut mismatch = entry(2, "Mismatch", 5);
-        mismatch.remote_updated_at = Some(100);
+        // Revision unavailable on this one: the coarse count fallback governs.
+        let mut counted = entry(2, "Counted", 5);
+        counted.remote_updated_at = None;
         let mut revised = entry(3, "Revised", 1);
         revised.remote_updated_at = Some(100);
         let mut fresh = entry(4, "Fresh", 1);
@@ -805,33 +822,68 @@ mod tests {
             &c,
             &[
                 never.clone(),
-                mismatch.clone(),
+                counted.clone(),
                 revised.clone(),
                 fresh.clone(),
                 followed,
             ],
         );
-        // Membership for 2 (3 of 5 -> count mismatch), 3 (agrees, but synced
-        // under an older remote revision), 4 (agrees, current revision).
-        replace_tracks(&c, 2, "Mismatch", None, &[1, 2, 3], Some(100)).unwrap();
-        replace_tracks(&c, 3, "Revised", None, &[7], Some(90)).unwrap();
-        replace_tracks(&c, 4, "Fresh", None, &[8], Some(100)).unwrap();
-        // The list reasserts the authoritative counts/revisions the entries
-        // declared (replace_tracks overwrote track_count with the membership
-        // size, which is exactly the drift the queue must notice).
-        record(&c, &[never, mismatch, revised, fresh]);
+        replace_tracks(&c, 2, "Counted", None, &[7]).unwrap();
+        replace_tracks(&c, 3, "Revised", None, &[7]).unwrap();
+        replace_tracks(&c, 4, "Fresh", None, &[8]).unwrap();
+        // Next authoritative list: 2's declared count (5) disagrees with its
+        // membership (1) and it has no revision signal; 3 changed remotely.
+        revised.remote_updated_at = Some(200);
+        record(&c, &[never, counted, revised, fresh]);
 
         let queue = hydration_queue(&c).unwrap();
         let ids: Vec<u64> = queue.iter().map(|q| q.qobuz_playlist_id).collect();
-        assert_eq!(ids, vec![1, 2, 3]);
+        assert_eq!(ids, vec![1, 3, 2]);
         assert_eq!(queue[0].reason, StaleReason::NeverSynced);
-        assert_eq!(queue[1].reason, StaleReason::CountMismatch);
-        assert_eq!(queue[2].reason, StaleReason::RemoteRevision);
+        assert_eq!(queue[1].reason, StaleReason::RemoteRevision);
+        assert_eq!(queue[2].reason, StaleReason::CountMismatch);
 
         match index_state(&c).unwrap() {
             MembershipIndexState::Updating { pending } => assert_eq!(pending, 3),
             other => panic!("expected Updating, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn successful_sync_settles_the_queue_even_when_the_list_count_lags() {
+        // The 2026-08-30 smoke: one playlist re-fetched forever. A sync must
+        // CONVERGE — with revision evidence on both sides equal, a lagging
+        // list count is the list's problem, not a reason to fetch again.
+        let c = conn();
+        let mut e = entry(1, "Lagging", 10);
+        e.remote_updated_at = Some(100);
+        record(&c, &[e.clone()]);
+        replace_tracks(&c, 1, "Lagging", None, &[5, 6, 7]).unwrap();
+        // The list still reports the stale count 10 and the same revision.
+        record(&c, &[e]);
+        assert!(hydration_queue(&c).unwrap().is_empty());
+        assert_eq!(index_state(&c).unwrap(), MembershipIndexState::Complete);
+    }
+
+    #[test]
+    fn only_the_playlists_the_list_reports_changed_requeue() {
+        let c = conn();
+        let mut a = entry(1, "A", 2);
+        a.remote_updated_at = Some(100);
+        let mut b = entry(2, "B", 2);
+        b.remote_updated_at = Some(100);
+        record(&c, &[a.clone(), b.clone()]);
+        replace_tracks(&c, 1, "A", None, &[1, 2]).unwrap();
+        replace_tracks(&c, 2, "B", None, &[3, 4]).unwrap();
+        assert!(hydration_queue(&c).unwrap().is_empty());
+
+        // Only B changed remotely.
+        b.remote_updated_at = Some(200);
+        record(&c, &[a, b]);
+        let queue = hydration_queue(&c).unwrap();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].qobuz_playlist_id, 2);
+        assert_eq!(queue[0].reason, StaleReason::RemoteRevision);
     }
 
     #[test]
@@ -843,7 +895,7 @@ mod tests {
             index_state(&c).unwrap(),
             MembershipIndexState::Updating { pending: 1 }
         ));
-        replace_tracks(&c, 1, "A", None, &[10], None).unwrap();
+        replace_tracks(&c, 1, "A", None, &[10]).unwrap();
         assert_eq!(index_state(&c).unwrap(), MembershipIndexState::Complete);
     }
 
@@ -851,7 +903,7 @@ mod tests {
     fn incremental_add_and_remove() {
         let c = conn();
         record(&c, &[entry(1, "A", 2), entry(2, "Uncaptured", 3)]);
-        replace_tracks(&c, 1, "A", None, &[10, 20], None).unwrap();
+        replace_tracks(&c, 1, "A", None, &[10, 20]).unwrap();
 
         assert!(apply_added_tracks(&c, 1, &[30, 40]).unwrap());
         assert_eq!(track_ids(&c, 1).unwrap(), vec![10, 20, 30, 40]);

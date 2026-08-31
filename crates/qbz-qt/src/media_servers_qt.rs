@@ -340,6 +340,56 @@ pub fn purge_cache(kind: MediaServerKind) {
 /// - `album_group_key` is the PREFIXED key (`jellyfin:<albumId>`), matching the
 ///   one the grid's SQL union publishes, so "go to album" from a track row
 ///   lands on the same page the card opens.
+/// Bulk media-cache resolution for playlist refs: `(source, item_id, _)`
+/// rows to `(source, item_id) -> LocalTrack`. Misses are simply absent —
+/// the caller renders them as honest Unresolved rows. Blocking.
+pub fn tracks_by_item_ids_blocking(
+    refs: &[(String, String, i32)],
+) -> std::collections::HashMap<(String, String), qbz_library::LocalTrack> {
+    let mut out = std::collections::HashMap::new();
+    for source_name in ["jellyfin", "subsonic"] {
+        let items: Vec<&str> = refs
+            .iter()
+            .filter(|(s, _, _)| s == source_name)
+            .map(|(_, item, _)| item.as_str())
+            .collect();
+        if items.is_empty() {
+            continue;
+        }
+        let (remote, read_source) = if source_name == "jellyfin" {
+            (qbz_media_cache::RemoteSource::Jellyfin, source_name)
+        } else {
+            (qbz_media_cache::RemoteSource::Subsonic, source_name)
+        };
+        let read = |conn: &rusqlite::Connection| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    qbz_media_cache::track_by_item_id(conn, remote, item)
+                        .ok()
+                        .flatten()
+                        .map(cached_to_local_track)
+                        .map(|track| ((read_source.to_string(), (*item).to_string()), track))
+                })
+                .collect::<Vec<_>>()
+        };
+        let resolved = match remote {
+            qbz_media_cache::RemoteSource::Jellyfin => qbz_source::registry()
+                .jellyfin()
+                .cache()
+                .with(read)
+                .unwrap_or_default(),
+            qbz_media_cache::RemoteSource::Subsonic => qbz_source::registry()
+                .subsonic()
+                .cache()
+                .with(read)
+                .unwrap_or_default(),
+        };
+        out.extend(resolved);
+    }
+    out
+}
+
 pub fn cached_to_local_track(t: qbz_media_cache::CachedTrack) -> qbz_library::LocalTrack {
     let source = t.source.clone();
     let source_instance = if t.server_id.trim().is_empty() {

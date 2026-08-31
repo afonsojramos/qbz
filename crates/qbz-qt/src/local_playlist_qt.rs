@@ -242,6 +242,10 @@ pub fn add_local_refs_blocking(id: &str, refs: &[String]) -> usize {
         for r in refs {
             if let Some(key) = r.strip_prefix("plex:") {
                 out.push(repo::LocalPlaylistTrackInput::Plex(key.to_string()));
+            } else if let Some(item) = r.strip_prefix("jellyfin:") {
+                out.push(repo::LocalPlaylistTrackInput::Jellyfin(item.to_string()));
+            } else if let Some(item) = r.strip_prefix("subsonic:") {
+                out.push(repo::LocalPlaylistTrackInput::Subsonic(item.to_string()));
             } else if let Ok(rid) = r.parse::<i64>() {
                 if let Some(input) = local_row_input(db, rid)? {
                     out.push(input);
@@ -272,6 +276,16 @@ pub fn membership_refs_blocking(
             if let Some(key) = r.strip_prefix("plex:") {
                 out.push(PlaylistTrackRef::Plex {
                     rating_key: key.to_string(),
+                });
+            } else if let Some(item) = r.strip_prefix("jellyfin:") {
+                out.push(PlaylistTrackRef::Remote {
+                    source: "jellyfin".to_string(),
+                    item_id: item.to_string(),
+                });
+            } else if let Some(item) = r.strip_prefix("subsonic:") {
+                out.push(PlaylistTrackRef::Remote {
+                    source: "subsonic".to_string(),
+                    item_id: item.to_string(),
                 });
             } else if let Ok(rid) = r.parse::<i64>() {
                 out.push(match db.get_track(rid)? {
@@ -355,6 +369,24 @@ pub fn resolve_cover_urls_blocking(id: &str, limit: usize) -> Vec<String> {
                                     covers.push(art);
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            repo::LocalPlaylistTrackSource::Jellyfin | repo::LocalPlaylistTrackSource::Subsonic => {
+                if let Some(item) = t.local_path {
+                    let source = t.source.as_str().to_string();
+                    let resolved = crate::media_servers_qt::tracks_by_item_ids_blocking(&[(
+                        source.clone(),
+                        item.clone(),
+                        0,
+                    )]);
+                    if let Some(art) = resolved
+                        .get(&(source, item))
+                        .and_then(|lt| lt.artwork_path.clone())
+                    {
+                        if !covers.contains(&art) {
+                            covers.push(art);
                         }
                     }
                 }
@@ -539,7 +571,7 @@ pub fn read_sidecar_rows_blocking(
     qobuz_track_count: u32,
     include_plex: bool,
 ) -> Vec<LoadedRow> {
-    let (mut rows, plex_refs) = with_db(false, |db| {
+    let (mut rows, plex_refs, remote_refs) = with_db(false, |db| {
         match db.heal_playlist_sidecar_positions(playlist_id, qobuz_track_count) {
             Ok(healed) => {
                 for entry in &healed {
@@ -565,7 +597,8 @@ pub fn read_sidecar_rows_blocking(
         } else {
             Vec::new()
         };
-        Ok((rows, plex_refs))
+        let remote_refs = db.get_playlist_remote_tracks_with_position(playlist_id)?;
+        Ok((rows, plex_refs, remote_refs))
     })
     .unwrap_or_default();
 
@@ -602,6 +635,36 @@ pub fn read_sidecar_rows_blocking(
                 }
             },
         }));
+    }
+
+    // Jellyfin/Subsonic sidecars — the Plex pattern against the media cache.
+    // A miss renders the honest Unresolved row, never a vanished one.
+    if !remote_refs.is_empty() {
+        let resolved = crate::media_servers_qt::tracks_by_item_ids_blocking(&remote_refs);
+        rows.extend(
+            remote_refs
+                .into_iter()
+                .map(|(source, item, position)| LoadedRow {
+                    position,
+                    item: match resolved.get(&(source.clone(), item.clone())) {
+                        Some(track) => RowItem::Local(Box::new(track.clone())),
+                        None => {
+                            log::warn!(
+                                "[qbz-qt] playlist {playlist_id}: {source} item {item:?} not in \
+                                 the media cache — rendered as unavailable"
+                            );
+                            RowItem::Unresolved {
+                                kind: if source == "jellyfin" {
+                                    "jellyfin"
+                                } else {
+                                    "subsonic"
+                                },
+                                reference: item,
+                            }
+                        }
+                    },
+                }),
+        );
     }
     rows
 }
@@ -653,6 +716,12 @@ pub fn local_picker_ref_for_row(id: &str) -> Option<String> {
             .source_item_id_hint
             .as_ref()
             .map(|key| format!("plex:{key}")),
+        // Remote rows carry the server item id in the hint slot, same as
+        // Plex carries the rating key (media_servers_qt::cached_to_local_track).
+        Some(source @ ("jellyfin" | "subsonic")) => q
+            .source_item_id_hint
+            .as_ref()
+            .map(|item| format!("{source}:{item}")),
         Some("local") => Some(q.id.to_string()),
         // An OFFLINE COPY row (`local_playback::local_queue_track` tags these
         // "qobuz_download"). It reaches this function because `row_to_display`
@@ -682,11 +751,17 @@ pub fn local_picker_ref_for_row(id: &str) -> Option<String> {
 /// library row id. A Plex row must NEVER ride its numeric id — the synthetic
 /// 2^40 ids do not resolve through `get_track`, and typing one as a Qobuz id
 /// is the legacy bug that wrote permanently unresolvable rows.
+///
+/// Jellyfin/Subsonic rows likewise NEVER ride their numeric id — it is a
+/// media-cache rowid, which `local_row_input`'s `get_track` would happily
+/// resolve against `local_tracks` (the same number, a DIFFERENT track). Like
+/// Plex, their playlist identity is the source-native key their projection
+/// keeps in `file_path`: the server item id, carried source-prefixed.
 pub fn local_picker_ref_for_track(track: &qbz_library::LocalTrack) -> String {
-    if track.source.as_deref() == Some("plex") {
-        format!("plex:{}", track.file_path)
-    } else {
-        track.id.to_string()
+    match track.source.as_deref() {
+        Some("plex") => format!("plex:{}", track.file_path),
+        Some(source @ ("jellyfin" | "subsonic")) => format!("{source}:{}", track.file_path),
+        _ => track.id.to_string(),
     }
 }
 
@@ -782,7 +857,14 @@ pub(crate) fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueT
             let source = if matches!(item, RowItem::Plex(_)) {
                 "plex"
             } else {
-                "local"
+                // Remote sidecar rows resolve into RowItem::Local carrying
+                // their own source; publishing it is what keeps
+                // `local_picker_ref_for_row` and the queue typing honest.
+                match t.source.as_deref() {
+                    Some("jellyfin") => "jellyfin",
+                    Some("subsonic") => "subsonic",
+                    _ => "local",
+                }
             };
             let row = PlaylistTrackRow {
                 id: queue.id.to_string(),
@@ -1024,6 +1106,32 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
         .unwrap_or_default()
     };
 
+    // Jellyfin/Subsonic rows: ONE bulk media-cache lookup by item id (their
+    // item id rides the local_path column, source-qualified).
+    let remote_refs: Vec<(String, String, i32)> = tracks
+        .iter()
+        .filter_map(|t| {
+            let source = match t.source {
+                repo::LocalPlaylistTrackSource::Jellyfin => "jellyfin",
+                repo::LocalPlaylistTrackSource::Subsonic => "subsonic",
+                _ => return None,
+            };
+            t.local_path
+                .clone()
+                .map(|item| (source.to_string(), item, 0))
+        })
+        .collect();
+    let remote_resolved: HashMap<(String, String), qbz_library::LocalTrack> =
+        if remote_refs.is_empty() {
+            HashMap::new()
+        } else {
+            tokio::task::spawn_blocking(move || {
+                crate::media_servers_qt::tracks_by_item_ids_blocking(&remote_refs)
+            })
+            .await
+            .unwrap_or_default()
+        };
+
     let mut rows: Vec<LoadedRow> = Vec::new();
     let (mut hidden, mut missing_files, mut unresolved) = (0usize, 0usize, 0usize);
     for t in tracks {
@@ -1081,6 +1189,28 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
                         RowItem::Unresolved {
                             kind: "plex",
                             reference: key,
+                        }
+                    }
+                }
+            }
+            repo::LocalPlaylistTrackSource::Jellyfin | repo::LocalPlaylistTrackSource::Subsonic => {
+                let source = t.source.as_str();
+                let item_id = t.local_path.clone().unwrap_or_default();
+                match remote_resolved.get(&(source.to_string(), item_id.clone())) {
+                    Some(track) => RowItem::Local(Box::new(track.clone())),
+                    None => {
+                        unresolved += 1;
+                        log::warn!(
+                            "[qbz-qt] local playlist {id}: {source} item {item_id:?} not in \
+                             the media cache — rendered as unavailable"
+                        );
+                        RowItem::Unresolved {
+                            kind: if source == "jellyfin" {
+                                "jellyfin"
+                            } else {
+                                "subsonic"
+                            },
+                            reference: item_id,
                         }
                     }
                 }
