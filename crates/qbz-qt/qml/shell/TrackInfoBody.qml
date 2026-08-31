@@ -35,6 +35,10 @@ Column {
     readonly property color cRule: overAmbient ? "#2effffff" : theme.surfaceElevated
     readonly property int cStyle: overAmbient ? Text.Raised : Text.Normal
     readonly property color cShadow: "#b0000000"
+    // Links follow the ALBUM palette over ambient — the theme accent has no
+    // contrast guarantee there (owner, 2026-08-31 round 2).
+    AmbientAccent { id: bodyAmbientAccent }
+    readonly property color cAccent: overAmbient ? bodyAmbientAccent.value : theme.accent
 
     readonly property var doc: host ? host.doc : ({})
 
@@ -120,7 +124,9 @@ Column {
                     color: body.cPrimary
                     style: body.cStyle
                     styleColor: body.cShadow
-                    font.pixelSize: 16
+                    // The immersive panel reads at a distance — its header
+                    // steps up (owner, 2026-08-31 round 2).
+                    font.pixelSize: body.overAmbient ? 24 : 16
                     font.weight: theme.weightSemibold
                     wrapMode: Text.WordWrap
                 }
@@ -131,7 +137,7 @@ Column {
                     color: body.cMuted
                     style: body.cStyle
                     styleColor: body.cShadow
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: body.overAmbient ? 15 : theme.fontLegal
                     elide: Text.ElideRight
                 }
                 // Artist — a link only when an id exists.
@@ -143,10 +149,10 @@ Column {
                         id: artistText
                         text: body.doc.artist || ""
                         color: (body.doc.artistId || "") !== ""
-                            ? theme.accent : body.cPrimary
+                            ? body.cAccent : body.cPrimary
                         style: body.cStyle
                         styleColor: body.cShadow
-                        font.pixelSize: 16
+                        font.pixelSize: body.overAmbient ? 20 : 16
                         font.weight: theme.weightSemibold
                     }
                     MouseArea {
@@ -274,7 +280,7 @@ Column {
                                 text: body.doc.label || ""
                                 color: (labelArea.containsMouse
                                         && (body.doc.labelId || "") !== "")
-                                    ? theme.accent : body.cPrimary
+                                    ? body.cAccent : body.cPrimary
                                 style: body.cStyle
                                 styleColor: body.cShadow
                                 font.pixelSize: 14
@@ -323,6 +329,7 @@ Column {
                                 required property var modelData
                                 colW: loadedCol.creditsColW
                                 overAmbient: body.overAmbient
+                                accentColor: body.cAccent
                                 cell: modelData
                                 onNameClicked: function (n, r) { body.host.openMusician(n, r) }
                             }
@@ -337,6 +344,7 @@ Column {
                                 required property var modelData
                                 colW: loadedCol.creditsColW
                                 overAmbient: body.overAmbient
+                                accentColor: body.cAccent
                                 cell: modelData
                                 onNameClicked: function (n, r) { body.host.openMusician(n, r) }
                             }

@@ -22,6 +22,9 @@ Column {
     /// Immersive-panel legibility mode (see TrackInfoBody.qml): fixed light
     /// colors + native shadow instead of the theme tokens.
     property bool overAmbient: false
+    /// Hover color for clickable names — the host swaps in the album-palette
+    /// accent over ambient (theme accent has no contrast guarantee there).
+    property color accentColor: theme.accent
 
     signal nameClicked(string name, string roleRaw)
 
@@ -55,7 +58,7 @@ Column {
                     id: nameText
                     width: cc.colW
                     text: nameRow.modelData
-                    color: nameArea.containsMouse ? theme.accent
+                    color: nameArea.containsMouse ? cc.accentColor
                         : (cc.overAmbient ? "#f2ffffff" : theme.textPrimary)
                     style: cc.overAmbient ? Text.Raised : Text.Normal
                     styleColor: "#b0000000"
