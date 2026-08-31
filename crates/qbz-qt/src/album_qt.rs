@@ -773,6 +773,9 @@ pub fn bulk_action(album_id: String, ids_json: String, action: String) {
                     picked,
                     crate::playback_qt::PlayContext::album(&album_id),
                 );
+                if picked.is_empty() {
+                    return;
+                }
                 if let Err(e) =
                     crate::playback_qt::enqueue_track_list_mode(&runtime, picked, mode).await
                 {

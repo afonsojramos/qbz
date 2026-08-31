@@ -1175,6 +1175,43 @@ mod tests {
         model_track_to_core_queue_track(&mock_track(id))
     }
 
+    #[test]
+    fn qconnect_admission_uses_provenance_and_accepts_materialized_rows() {
+        for source in [
+            "qobuz",
+            "qobuz_download",
+            "qobuz_purchase",
+            "offline",
+            QCONNECT_REMOTE_QUEUE_SOURCE,
+        ] {
+            let mut track = mock_queue_track(7);
+            track.source = Some(source.to_string());
+            track.is_local = source == "qobuz_download";
+            assert!(qconnect_queue_track_is_resolvable(&track), "{source}");
+        }
+
+        for source in ["local", "plex", "jellyfin", "subsonic", "navidrome"] {
+            let mut track = mock_queue_track(7);
+            track.source = Some(source.to_string());
+            track.is_local = true;
+            assert!(!qconnect_queue_track_is_resolvable(&track), "{source}");
+        }
+    }
+
+    #[test]
+    fn qconnect_admission_legacy_rows_require_non_local_positive_ids() {
+        let mut track = mock_queue_track(7);
+        track.source = None;
+        track.is_local = false;
+        assert!(qconnect_queue_track_is_resolvable(&track));
+
+        track.is_local = true;
+        assert!(!qconnect_queue_track_is_resolvable(&track));
+        track.id = 0;
+        track.is_local = false;
+        assert!(!qconnect_queue_track_is_resolvable(&track));
+    }
+
     fn queue_state(
         version: QueueVersion,
         items: Vec<QueueItem>,

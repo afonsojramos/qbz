@@ -1437,6 +1437,9 @@ pub async fn enqueue_all(runtime: &Runtime, mode: &str) -> Result<(), String> {
         queue,
         crate::playback_qt::PlayContext::playlist(&playlist_id),
     );
+    if queue.is_empty() {
+        return Ok(());
+    }
     crate::playback_qt::enqueue_track_list_mode(runtime, queue, mode).await
 }
 

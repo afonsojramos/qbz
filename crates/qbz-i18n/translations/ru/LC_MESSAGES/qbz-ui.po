@@ -6317,3 +6317,9 @@ msgstr "Спонсоры"
 
 msgid "And all those anonymous sponsors..."
 msgstr "И все те анонимные спонсоры..."
+
+msgid "Qobuz Connect can't resolve local tracks. {} track was skipped and wasn't added to the queue. Turn off Qobuz Connect to play it."
+msgid_plural "Qobuz Connect can't resolve local tracks. {} tracks were skipped and weren't added to the queue. Turn off Qobuz Connect to play them."
+msgstr[0] "Qobuz Connect не может распознать локальные треки. Пропущен {} локальный трек; он не добавлен в очередь. Отключите Qobuz Connect, чтобы воспроизвести его."
+msgstr[1] "Qobuz Connect не может распознать локальные треки. Пропущено {} локальных трека; они не добавлены в очередь. Отключите Qobuz Connect, чтобы воспроизвести их."
+msgstr[2] "Qobuz Connect не может распознать локальные треки. Пропущено {} локальных треков; они не добавлены в очередь. Отключите Qobuz Connect, чтобы воспроизвести их."

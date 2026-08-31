@@ -123,6 +123,9 @@ pub fn run(ids_json: String, action: String, context_kind: String, context_id: S
                     queue,
                     crate::playback_qt::PlayContext::new(&context_kind, &context_id),
                 );
+                if queue.is_empty() {
+                    return;
+                }
                 let runtime = crate::app();
                 if let Err(e) =
                     crate::playback_qt::enqueue_track_list_mode(&runtime, queue, mode).await

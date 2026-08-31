@@ -296,9 +296,9 @@ pub(crate) async fn apply(rows: Vec<LocalTrack>, action: &str) -> bool {
 /// a multi-row insert keeps its order, "play-later" appends to the manual
 /// block's tail, anything else appends.
 ///
-/// QConnect EXEMPT (contract §6.3): no routed arm / sync-on-add tail — a
-/// local-only batch is never Qobuz-castable, so the predicate is always false
-/// (Slint local_bulk.rs:261-269 is likewise unhooked).
+/// The shared enqueue seam runs before any core mutation. While QConnect is
+/// enabled it drops this local-only batch, raises the single counted notice,
+/// and leaves the existing queue untouched.
 async fn enqueue_rows(rows: Vec<LocalTrack>, mode: &str) {
     let runtime = crate::app();
     // Same folder-cover backfill the single-row path runs
@@ -313,6 +313,10 @@ async fn enqueue_rows(rows: Vec<LocalTrack>, mode: &str) {
     .await
     .unwrap_or_default();
     let queue: Vec<QueueTrack> = rows.iter().map(local_queue_track).collect();
+    let queue = crate::playback_qt::stamped(queue, None);
+    if queue.is_empty() {
+        return;
+    }
     log::info!("[qbz-qt] local bulk {mode}: {} track(s)", queue.len());
     let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
         return;

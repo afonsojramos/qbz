@@ -2225,6 +2225,9 @@ pub async fn enqueue_all(
     mode: &str,
 ) -> Result<(), String> {
     let tracks = crate::playback_qt::stamped(current_queue(), open_context());
+    if tracks.is_empty() {
+        return Ok(());
+    }
     crate::playback_qt::enqueue_track_list_mode(runtime, tracks, mode).await
 }
 

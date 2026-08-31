@@ -830,13 +830,14 @@ async fn play_extended_upcoming(
         log::warn!("[qbz-qt] queue: upcoming changed during extended activation");
         return;
     }
-    if crate::qconnect_qt::publish::is_connected()
+    if crate::qconnect_qt::queue_admission_enabled()
         && !crate::qconnect_qt::is_qconnect_queue_track(&track)
     {
         log::info!(
             "[qbz-qt] queue: skipped QConnect-incompatible upcoming row {}",
             track.id
         );
+        crate::qconnect_qt::toast_unresolvable_tracks(1);
         return;
     }
     if let Some(service) = crate::qconnect_qt::service() {
@@ -892,13 +893,14 @@ pub async fn play_extended(
                 log::warn!("[qbz-qt] queue: history changed during activation");
                 return;
             }
-            if crate::qconnect_qt::publish::is_connected()
+            if crate::qconnect_qt::queue_admission_enabled()
                 && !crate::qconnect_qt::is_qconnect_queue_track(&track)
             {
                 log::info!(
                     "[qbz-qt] queue: skipped QConnect-incompatible history row {}",
                     track.id
                 );
+                crate::qconnect_qt::toast_unresolvable_tracks(1);
                 return;
             }
             if let Some(service) = crate::qconnect_qt::service() {
@@ -1224,13 +1226,17 @@ pub async fn drop_extended(
                 log::warn!("[qbz-qt] queue: history changed during extended drag");
                 return;
             }
-            if crate::qconnect_qt::publish::is_connected()
+            // Admission follows enabled intent, including reconnect windows;
+            // otherwise a local history row can enter the queue while the
+            // transport is down and poison the next cloud sync.
+            if crate::qconnect_qt::queue_admission_enabled()
                 && !crate::qconnect_qt::is_qconnect_queue_track(&track)
             {
                 log::info!(
                     "[qbz-qt] queue: skipped QConnect-incompatible history drag {}",
                     track.id
                 );
+                crate::qconnect_qt::toast_unresolvable_tracks(1);
                 return;
             }
             if let Some(service) = crate::qconnect_qt::service() {

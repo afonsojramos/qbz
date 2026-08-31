@@ -816,6 +816,9 @@ pub(crate) async fn enqueue_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, mod
     // Same stamping seam the Qobuz enqueue paths use, so an appended local
     // block carries its own origin instead of inheriting whatever is playing.
     let queue = crate::playback_qt::stamped(tracks.iter().map(local_queue_track).collect(), None);
+    if queue.is_empty() {
+        return;
+    }
     let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
         return;
     };
@@ -823,11 +826,9 @@ pub(crate) async fn enqueue_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, mod
     // (reversed so a multi-track insert keeps its order), "later" appends to
     // the block tail, anything else appends.
     //
-    // QConnect EXEMPT (contract §6.3): no routed arm and no sync-on-add tail
-    // here — this is a LOCAL-only path, so `batch_all_qconnect_castable` is
-    // always false and the push would never fire; hooking the arm would only
-    // risk the refusal toast on every click (Slint local_playback.rs:437-450
-    // is likewise unhooked).
+    // This remains a local-only execution path. While QConnect is enabled the
+    // shared seam above returns an empty batch after raising the counted
+    // notice, so no local row can enter the connected queue here.
     match mode.as_str() {
         "next" => {
             for t in queue.into_iter().rev() {

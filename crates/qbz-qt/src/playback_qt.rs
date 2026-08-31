@@ -779,7 +779,7 @@ pub(crate) fn queue_track_unavailable(track: &QueueTrack) -> bool {
     dead && !crate::offline_qt::is_cached_id(track.id)
 }
 
-/// Why rows were dropped, counted per reason. The two are NOT interchangeable
+/// Why rows were dropped, counted per reason. The reasons are NOT interchangeable
 /// and must not collapse into one number: a blacklist drop is what the user
 /// asked for and stays SILENT, while an unavailability drop is news they never
 /// asked for and owes them a toast (D4 — "el usuario siempre debe saber"). One
@@ -790,6 +790,9 @@ pub(crate) struct QueueDrops {
     pub blacklisted: usize,
     /// Dropped because Qobuz pulled the track AND we hold no offline copy.
     pub unavailable: usize,
+    /// Dropped while QConnect is enabled because its source is not resolvable
+    /// by Qobuz. These rows never enter the local queue in that mode.
+    pub qconnect_unresolvable: usize,
 }
 
 /// The ONE toast a queue build owes when it silently shortened itself
@@ -829,17 +832,19 @@ fn toast_unavailable_dropped(count: usize) {
 /// itself dropped, the walk lands on the next survivor, which is what the user
 /// asking for "play from here" means once "here" is gone.
 ///
-/// Renamed from `filter_blacklisted_queue`: it now drops for two reasons and
+/// Renamed from `filter_blacklisted_queue`: it now drops for three reasons and
 /// the old name named only one of them.
 fn filter_unplayable_queue(
     tracks: Vec<QueueTrack>,
     start: Option<usize>,
 ) -> (Vec<QueueTrack>, Option<usize>, QueueDrops) {
+    let qconnect_enabled = crate::qconnect_qt::queue_admission_enabled();
     let (kept, start, dropped) = filter_queue_with(
         tracks,
         start,
         queue_track_blacklisted,
         queue_track_unavailable,
+        |track| qconnect_enabled && !crate::qconnect_qt::is_qconnect_queue_track(track),
     );
     if dropped.blacklisted > 0 {
         log::info!(
@@ -853,26 +858,33 @@ fn filter_unplayable_queue(
             dropped.unavailable
         );
     }
+    if dropped.qconnect_unresolvable > 0 {
+        log::info!(
+            "[qbz-qt] qconnect admission: dropped {} unresolvable track(s) from the queue",
+            dropped.qconnect_unresolvable
+        );
+    }
     (kept, start, dropped)
 }
 
 /// The pure half, split out so the index remap is unit-testable without a bound
-/// session (the blacklist store needs one). The two predicates decide;
+/// session (the blacklist store needs one). The three predicates decide;
 /// everything else is arithmetic, and that arithmetic is unchanged.
 ///
-/// TWO predicates, not one OR'd closure, because the caller has to know WHICH
+/// Separate predicates, not one OR'd closure, because the caller has to know WHICH
 /// one claimed each row (see [`QueueDrops`]). `blacklisted` is tested FIRST and
 /// wins ties: a pulled track by an artist the user blocked is a row they
 /// already chose not to see, and toasting "1 track skipped" for it would
 /// announce exactly the content the blacklist exists to hide.
 ///
 /// The log line that used to live here moved to `filter_unplayable_queue`: it
-/// said "blacklist", which a second reason turns into a lie.
+/// said "blacklist", which any additional reason turns into a lie.
 fn filter_queue_with<T>(
     tracks: Vec<T>,
     start: Option<usize>,
     blacklisted: impl Fn(&T) -> bool,
     unavailable: impl Fn(&T) -> bool,
+    qconnect_unresolvable: impl Fn(&T) -> bool,
 ) -> (Vec<T>, Option<usize>, QueueDrops) {
     let clicked = start.unwrap_or(0);
     let mut kept = Vec::with_capacity(tracks.len());
@@ -886,6 +898,10 @@ fn filter_queue_with<T>(
         }
         if unavailable(&track) {
             dropped.unavailable += 1;
+            continue;
+        }
+        if qconnect_unresolvable(&track) {
+            dropped.qconnect_unresolvable += 1;
             continue;
         }
         if new_start.is_none() && i >= clicked {
@@ -938,6 +954,7 @@ pub(crate) struct PreparedQueue {
     start: Option<usize>,
     anchor: Option<QueueStart>,
     unavailable_dropped: usize,
+    qconnect_unresolvable_dropped: usize,
 }
 
 impl PreparedQueue {
@@ -959,12 +976,14 @@ pub(crate) fn prepare_queue_stamped(
     let (mut tracks, start, dropped) = filter_unplayable_queue(tracks, start);
     if tracks.is_empty() && asked > 0 {
         log::info!(
-            "[qbz-qt] set_queue: all {asked} track(s) filtered ({} blacklisted, {} unavailable) \
+            "[qbz-qt] set_queue: all {asked} track(s) filtered ({} blacklisted, {} unavailable, {} qconnect-unresolvable) \
              — keeping the previous queue",
             dropped.blacklisted,
-            dropped.unavailable
+            dropped.unavailable,
+            dropped.qconnect_unresolvable
         );
         toast_unavailable_dropped(dropped.unavailable);
+        crate::qconnect_qt::toast_unresolvable_tracks(dropped.qconnect_unresolvable);
         return None;
     }
     stamp_context(&mut tracks, context);
@@ -980,6 +999,7 @@ pub(crate) fn prepare_queue_stamped(
         start,
         anchor,
         unavailable_dropped: dropped.unavailable,
+        qconnect_unresolvable_dropped: dropped.qconnect_unresolvable,
     })
 }
 
@@ -1006,12 +1026,14 @@ async fn commit_prepared_queue_with_offline_only(
         start,
         anchor,
         unavailable_dropped,
+        qconnect_unresolvable_dropped,
     } = prepared;
     runtime
         .core()
         .set_queue_with_offline_only(tracks, start, offline_only)
         .await;
     toast_unavailable_dropped(unavailable_dropped);
+    crate::qconnect_qt::toast_unresolvable_tracks(qconnect_unresolvable_dropped);
     if let Some(svc) = crate::qconnect_qt::service() {
         svc.sync_local_queue_if_changed().await;
     }
@@ -1067,6 +1089,7 @@ pub(crate) fn stamped(tracks: Vec<QueueTrack>, context: Option<PlayContext>) -> 
     // in the list must not be reachable by dragging it into the queue either.
     // No start index to remap here — these APPEND.
     let mut dropped = QueueDrops::default();
+    let qconnect_enabled = crate::qconnect_qt::queue_admission_enabled();
     let mut tracks: Vec<QueueTrack> = tracks
         .into_iter()
         .filter(|t| {
@@ -1076,6 +1099,10 @@ pub(crate) fn stamped(tracks: Vec<QueueTrack>, context: Option<PlayContext>) -> 
             }
             if queue_track_unavailable(t) {
                 dropped.unavailable += 1;
+                return false;
+            }
+            if qconnect_enabled && !crate::qconnect_qt::is_qconnect_queue_track(t) {
+                dropped.qconnect_unresolvable += 1;
                 return false;
             }
             true
@@ -1093,11 +1120,18 @@ pub(crate) fn stamped(tracks: Vec<QueueTrack>, context: Option<PlayContext>) -> 
             dropped.unavailable
         );
     }
+    if dropped.qconnect_unresolvable > 0 {
+        log::info!(
+            "[qbz-qt] qconnect admission: dropped {} unresolvable track(s) from an enqueue",
+            dropped.qconnect_unresolvable
+        );
+    }
     // Idempotent with the seam below it: `myqbz_play_qt` stamps and THEN calls
     // `set_queue_stamped`, whose second pass finds nothing left to drop and so
     // raises no second toast. That module's existing "both passes are
     // idempotent" comment stays true.
     toast_unavailable_dropped(dropped.unavailable);
+    crate::qconnect_qt::toast_unresolvable_tracks(dropped.qconnect_unresolvable);
     stamp_context(&mut tracks, context);
     warn_dead_context(&tracks, "enqueue");
     tracks
@@ -1109,22 +1143,13 @@ pub(crate) fn stamped(tracks: Vec<QueueTrack>, context: Option<PlayContext>) -> 
 // ---------------------------------------------------------------------------
 
 /// QConnect sync-on-add predicate (#442, playback.rs:4082-4096): true when
-/// EVERY track of an added batch is Qobuz-castable (mirrors
-/// `sync_local_queue_if_changed`'s all-or-nothing admission — `local` /
-/// `plex` refused, offline `qobuz_download` eligible). A non-castable batch
-/// skips the post-add push so a local/plex add never trips the refusal toast
-/// on every click; the next track tick already surfaces that state.
+/// every surviving row uses a Qobuz-resolvable provenance. The shared enqueue
+/// seam normally guarantees this while QConnect is enabled; this remains a
+/// defensive gate for callers running while it is disabled or starting up.
 pub(crate) fn batch_all_qconnect_castable(tracks: &[QueueTrack]) -> bool {
-    tracks.iter().all(|qt| {
-        qt.id > 0
-            && !matches!(
-                qt.source
-                    .as_deref()
-                    .map(|s| s.to_ascii_lowercase())
-                    .as_deref(),
-                Some("local") | Some("plex")
-            )
-    })
+    tracks
+        .iter()
+        .all(crate::qconnect_qt::is_qconnect_queue_track)
 }
 
 /// QConnect sync-on-add (#442, playback.rs:4098-4111): after a local queue
@@ -1979,8 +2004,8 @@ pub async fn enqueue_album(
         _ => runtime.core().add_tracks(tracks).await,
     }
     // QConnect sync-on-add (#442): push the updated queue to the session so a
-    // connected controller sees the new items; skipped silently for a
-    // non-castable batch (self-gating when a peer owns playback).
+    // connected controller sees the surviving items (self-gating when a peer
+    // owns playback).
     sync_qconnect_after_add(added_castable).await;
     publish_queue(runtime).await;
     Ok(())
@@ -2369,8 +2394,8 @@ pub async fn enqueue_track_list_mode(
         }
         _ => runtime.core().add_tracks(tracks).await,
     }
-    // QConnect sync-on-add (#442): push the updated queue to the session;
-    // skipped silently for a non-castable batch.
+    // QConnect sync-on-add (#442): push the updated surviving queue to the
+    // session.
     sync_qconnect_after_add(added_castable).await;
     publish_queue(runtime).await;
     Ok(())
@@ -5170,8 +5195,13 @@ mod tests {
     /// the one the user clicked — silently, and only when something was blocked.
     #[test]
     fn start_index_follows_the_clicked_track() {
-        let (kept, start, _) =
-            filter_queue_with(vec![0, 1, 2, 3, 4], Some(2), |n| n % 2 == 1, |_| false);
+        let (kept, start, _) = filter_queue_with(
+            vec![0, 1, 2, 3, 4],
+            Some(2),
+            |n| n % 2 == 1,
+            |_| false,
+            |_| false,
+        );
         assert_eq!(kept, vec![0, 2, 4]);
         assert_eq!(start, Some(1)); // the 2 moved from index 2 to index 1
     }
@@ -5179,8 +5209,13 @@ mod tests {
     /// Clicking a row that is itself blocked lands on the next survivor.
     #[test]
     fn a_blocked_clicked_row_falls_forward() {
-        let (kept, start, _) =
-            filter_queue_with(vec![0, 1, 2, 3], Some(1), |n| n % 2 == 1, |_| false);
+        let (kept, start, _) = filter_queue_with(
+            vec![0, 1, 2, 3],
+            Some(1),
+            |n| n % 2 == 1,
+            |_| false,
+            |_| false,
+        );
         assert_eq!(kept, vec![0, 2]);
         assert_eq!(start, Some(1)); // the 1 was dropped, so start on the 2
     }
@@ -5189,8 +5224,13 @@ mod tests {
     /// (an out-of-range index is what makes the core start nothing at all).
     #[test]
     fn a_fully_blocked_tail_clamps_to_the_last_survivor() {
-        let (kept, start, _) =
-            filter_queue_with(vec![0, 1, 3, 5], Some(2), |n| n % 2 == 1, |_| false);
+        let (kept, start, _) = filter_queue_with(
+            vec![0, 1, 3, 5],
+            Some(2),
+            |n| n % 2 == 1,
+            |_| false,
+            |_| false,
+        );
         assert_eq!(kept, vec![0]);
         assert_eq!(start, Some(0));
     }
@@ -5198,7 +5238,8 @@ mod tests {
     /// Everything blocked: an empty queue carries NO start index.
     #[test]
     fn everything_blocked_yields_no_start() {
-        let (kept, start, _) = filter_queue_with(vec![1, 3, 5], Some(1), |n| n % 2 == 1, |_| false);
+        let (kept, start, _) =
+            filter_queue_with(vec![1, 3, 5], Some(1), |n| n % 2 == 1, |_| false, |_| false);
         assert!(kept.is_empty());
         assert_eq!(start, None);
     }
@@ -5207,7 +5248,8 @@ mod tests {
     /// user without a blacklist takes.
     #[test]
     fn nothing_blocked_is_identity() {
-        let (kept, start, _) = filter_queue_with(vec![0, 2, 4], Some(2), |_| false, |_| false);
+        let (kept, start, _) =
+            filter_queue_with(vec![0, 2, 4], Some(2), |_| false, |_| false, |_| false);
         assert_eq!(kept, vec![0, 2, 4]);
         assert_eq!(start, Some(2));
     }
@@ -5215,7 +5257,7 @@ mod tests {
     /// Acceptance §8-5: a build containing dead tracks drops them AND re-maps
     /// the start index to the track the user actually clicked. Same arithmetic
     /// as the blacklist, different predicate — which is why the helper took a
-    /// second closure instead of a rewrite.
+    /// dedicated closure instead of a rewrite.
     #[test]
     fn unavailable_rows_drop_and_remap_the_start_index() {
         // Rows 1 and 3 are "pulled"; the user clicked row 4.
@@ -5224,6 +5266,7 @@ mod tests {
             Some(4),
             |_| false,
             |n| *n == 1 || *n == 3,
+            |_| false,
         );
         assert_eq!(kept, vec![0, 2, 4]);
         assert_eq!(start, Some(2)); // the 4 moved from index 4 to index 2
@@ -5236,8 +5279,13 @@ mod tests {
     /// news. A single counter would force one policy on both.
     #[test]
     fn the_two_drop_reasons_are_counted_separately() {
-        let (kept, _, dropped) =
-            filter_queue_with(vec![0, 1, 2, 3], Some(0), |n| *n == 1, |n| *n == 2);
+        let (kept, _, dropped) = filter_queue_with(
+            vec![0, 1, 2, 3],
+            Some(0),
+            |n| *n == 1,
+            |n| *n == 2,
+            |_| false,
+        );
         assert_eq!(kept, vec![0, 3]);
         assert_eq!(dropped.blacklisted, 1);
         assert_eq!(dropped.unavailable, 1);
@@ -5248,9 +5296,26 @@ mod tests {
     /// content the blacklist exists to keep off their screen.
     #[test]
     fn blacklist_wins_the_tie_and_stays_silent() {
-        let (kept, _, dropped) = filter_queue_with(vec![0, 1], Some(0), |n| *n == 1, |n| *n == 1);
+        let (kept, _, dropped) =
+            filter_queue_with(vec![0, 1], Some(0), |n| *n == 1, |n| *n == 1, |_| false);
         assert_eq!(kept, vec![0]);
         assert_eq!(dropped.blacklisted, 1);
+        assert_eq!(dropped.unavailable, 0);
+    }
+
+    #[test]
+    fn qconnect_unresolvable_rows_drop_and_remap_the_start_index() {
+        let (kept, start, dropped) = filter_queue_with(
+            vec![0, 1, 2, 3, 4],
+            Some(3),
+            |_| false,
+            |_| false,
+            |n| *n == 1 || *n == 3,
+        );
+        assert_eq!(kept, vec![0, 2, 4]);
+        assert_eq!(start, Some(2));
+        assert_eq!(dropped.qconnect_unresolvable, 2);
+        assert_eq!(dropped.blacklisted, 0);
         assert_eq!(dropped.unavailable, 0);
     }
 

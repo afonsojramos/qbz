@@ -27,7 +27,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use qbz_app::shell::AppRuntime;
 use qbz_models::CoreEvent;
-use qconnect_app::{is_local_renderer_active, QueueCommandType};
+use qconnect_app::{
+    is_local_renderer_active, qconnect_queue_track_is_resolvable, QueueCommandType,
+};
 use serde_json::json;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -128,14 +130,7 @@ pub async fn publish_local_queue_if_changed(
     }
 
     // Admission: refuse the whole push if any track isn't Qobuz-castable.
-    let all_eligible = tracks.iter().all(|track| {
-        let source = track
-            .source
-            .as_deref()
-            .unwrap_or("qobuz")
-            .to_ascii_lowercase();
-        source != "local" && source != "plex" && track.id > 0
-    });
+    let all_eligible = tracks.iter().all(qconnect_queue_track_is_resolvable);
     if !all_eligible {
         if !authority.is_current(stamp) {
             return;

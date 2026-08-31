@@ -964,9 +964,9 @@ fn publish_doc(doc: Option<AlbumDetailDoc>) {
 /// "Play next" / "Play later" / "Add to queue" over a track SUBSET — the same
 /// core helpers `local_playback::enqueue` uses, just without the id round-trip.
 ///
-/// QConnect EXEMPT (contract §6.3): no routed arm / sync-on-add tail — a
-/// local-only batch is never Qobuz-castable, so the predicate is always false
-/// (Slint local_album_actions.rs:486-494 is likewise unhooked).
+/// The shared enqueue seam runs before any core mutation. While QConnect is
+/// enabled it drops this local-only batch, raises the single counted notice,
+/// and leaves the existing queue untouched.
 async fn enqueue_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, mode: &str) {
     let tracks = tokio::task::spawn_blocking(move || {
         let mut tracks = tracks;
@@ -976,6 +976,7 @@ async fn enqueue_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, mode: &str) {
     .await
     .unwrap_or_default();
     let queue: Vec<QueueTrack> = tracks.iter().map(local_queue_track).collect();
+    let queue = crate::playback_qt::stamped(queue, None);
     if queue.is_empty() {
         return;
     }

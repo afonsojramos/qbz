@@ -6287,3 +6287,8 @@ msgstr "Sponsors"
 
 msgid "And all those anonymous sponsors..."
 msgstr "En al die anonieme sponsors..."
+
+msgid "Qobuz Connect can't resolve local tracks. {} track was skipped and wasn't added to the queue. Turn off Qobuz Connect to play it."
+msgid_plural "Qobuz Connect can't resolve local tracks. {} tracks were skipped and weren't added to the queue. Turn off Qobuz Connect to play them."
+msgstr[0] "Qobuz Connect kan lokale tracks niet vinden. {} track is overgeslagen en niet aan de wachtrij toegevoegd. Schakel Qobuz Connect uit om deze af te spelen."
+msgstr[1] "Qobuz Connect kan lokale tracks niet vinden. {} tracks zijn overgeslagen en niet aan de wachtrij toegevoegd. Schakel Qobuz Connect uit om ze af te spelen."

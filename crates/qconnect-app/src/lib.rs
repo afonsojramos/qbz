@@ -59,6 +59,7 @@ pub use qconnect_core::{
 pub use qconnect_protocol::{
     QueueCommandType, RendererBufferState, RendererReport, RendererReportType,
 };
+pub use renderer::{qconnect_queue_track_is_resolvable, qconnect_source_is_resolvable};
 pub use renderer_engine::QconnectRendererEngine;
 pub use reporting::{
     build_renderer_playback_report, qconnect_report_track_id, renderer_buffer_state,
