@@ -84,6 +84,9 @@ const PREF_HIDE_UNAVAILABLE: &str = "purchases_hide_unavailable";
 const PREF_HIDE_DOWNLOADED: &str = "purchases_hide_downloaded";
 const PREF_QUALITY_FILTER: &str = "purchases_quality_filter";
 const PREF_REGION_NOTICE_SEEN: &str = "purchases_region_notice_seen";
+/// The one-time blind-mode disclaimer modal (QoL round) — same mechanism as
+/// the region notice: seeded from the pref on entry, dismissed once, forever.
+const PREF_DISCLAIMER_SEEN: &str = "purchases_disclaimer_seen";
 
 // ---------------------------------------------------------------------------
 //  Documents (contract §G.2 / §G.3 — FROZEN; two QML lanes are written against
@@ -196,6 +199,9 @@ struct ListDoc {
     searching: bool,
     #[serde(rename = "regionNoticeVisible")]
     region_notice_visible: bool,
+    /// ADDITIVE (QoL round): the one-time disclaimer modal.
+    #[serde(rename = "disclaimerVisible")]
+    disclaimer_visible: bool,
     /// The Tracks tab shows ONLY group + the two filters (§5).
     toolbar: ToolbarDoc,
     albums: Vec<AlbumRow>,
@@ -714,6 +720,7 @@ struct ListState {
     search: String,
     searching: bool,
     region_notice_visible: bool,
+    disclaimer_visible: bool,
     group: String,
     sort: String,
     ascending: bool,
@@ -748,6 +755,9 @@ impl Default for ListState {
             search: String::new(),
             searching: false,
             region_notice_visible: true,
+            // FALSE until the entry seed reads the pref: the modal must never
+            // flash for a user who already dismissed it.
+            disclaimer_visible: false,
             group: "off".to_string(),
             // §G.2's spelling of the reference's `'date'` sort key.
             sort: "purchased".to_string(),
@@ -919,6 +929,7 @@ fn build_list_doc(s: &ListState) -> ListDoc {
         search: s.search.clone(),
         searching: s.searching,
         region_notice_visible: s.region_notice_visible,
+        disclaimer_visible: s.disclaimer_visible,
         toolbar: ToolbarDoc {
             group: s.group.clone(),
             sort: s.sort.clone(),
@@ -1373,6 +1384,7 @@ pub fn open_list() {
         s.hide_downloaded = crate::settings_qt::pref_bool(PREF_HIDE_DOWNLOADED, false);
         s.quality_filter = crate::settings_qt::pref_str(PREF_QUALITY_FILTER, "all");
         s.region_notice_visible = !crate::settings_qt::pref_bool(PREF_REGION_NOTICE_SEEN, false);
+        s.disclaimer_visible = !crate::settings_qt::pref_bool(PREF_DISCLAIMER_SEEN, false);
         s.error.clear();
         // THE GUARD (§5). `false -> true` is claimed here, under the lock, so
         // two entries in the same frame cannot both fire the metadata load.
@@ -1701,6 +1713,13 @@ pub fn set_quality_filter(value: String) {
 pub fn dismiss_region_notice() {
     crate::settings_qt::save_pref(PREF_REGION_NOTICE_SEEN, serde_json::json!(true));
     with_list(|s| s.region_notice_visible = false);
+    publish_list();
+}
+
+/// OK on the one-time disclaimer modal: persist and never show it again.
+pub fn dismiss_disclaimer() {
+    crate::settings_qt::save_pref(PREF_DISCLAIMER_SEEN, serde_json::json!(true));
+    with_list(|s| s.disclaimer_visible = false);
     publish_list();
 }
 
