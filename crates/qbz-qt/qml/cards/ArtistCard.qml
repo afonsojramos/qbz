@@ -333,6 +333,10 @@ Rectangle {
         if (root.showFollow)
             m.push({ "label": root.following ? t("Following", r) : t("Follow", r),
                      "icon": root.following ? "check" : "user-plus", "action": "follow" })
+        // QoL round: the Discography Builder, reachable from the card — the
+        // same seam ArtistView's ⋯ overflow uses (`QbzDisco.open` takes the
+        // artist id, no open view required).
+        m.push({ "label": t("Create Artist Collection", r), "icon": "library-big", "action": "disco" })
         // Reco-scoped dismissal (NOT the blacklist) — the artist leaves the
         // Recommendations rails only.
         if (root.hasNotInterestedSeam)
@@ -344,6 +348,7 @@ Rectangle {
         if (a === "open") QbzArtist.openArtist(root.item.id)
         else if (a === "play") QbzPlayer.playArtistCard(root.item.id)
         else if (a === "follow") root.toggleFollow()
+        else if (a === "disco") QbzDisco.open(root.item.id)
         // THREE args: the store persists (id, name, image_url) and only
         // backfills a field that is EMPTY, so a blank first write can never be
         // repaired later. `artworkUrl` first because that is the host-
