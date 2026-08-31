@@ -220,26 +220,15 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         log::debug!("[qbz-qt] sidebar load: fetching user playlists");
         match runtime.core().get_user_playlists().await {
             Ok(pls) => {
-                crate::playlist_snapshot_qt::record_names_detached(
-                    pls.iter()
-                        .map(|playlist| crate::playlist_snapshot_qt::SnapshotNameEntry {
-                            qobuz_playlist_id: playlist.id,
-                            name: playlist.name.clone(),
-                            owner: Some(playlist.owner.name.clone())
-                                .filter(|owner| !owner.is_empty()),
-                            track_count: Some(playlist.tracks_count),
-                        })
-                        .collect(),
-                );
-                // Same response, second consumer: the playlist ownership /
-                // follow snapshot every PlaylistCard's tri-state overlay reads
-                // (`playlist_qt::set_user_playlists`). This is the earliest point
-                // in the session where the user's own playlist list exists, and
-                // it costs no extra request — the alternative was every card
-                // rendering the "follow a foreign playlist" arm until the Library
-                // view had been opened at least once.
+                // Ownership snapshot FIRST — every PlaylistCard's tri-state
+                // overlay reads it, this is the earliest point in the session
+                // where the user's own list exists, and `authoritative_entries`
+                // below depends on the sets this call seeds.
                 let pairs: Vec<(u64, u64)> = pls.iter().map(|p| (p.id, p.owner.id)).collect();
                 crate::playlist_qt::set_user_playlists(&pairs);
+                if let Some(entries) = crate::playlist_snapshot_qt::authoritative_entries(&pls) {
+                    crate::playlist_snapshot_qt::record_authoritative_detached(entries);
+                }
                 pls
             }
             Err(e) => {

@@ -436,6 +436,7 @@ Item {
                                         genre: gcell.modelData.genre
                                         year: gcell.modelData.year
                                         qualityTier: gcell.modelData.qualityTier
+                                        qualityDetail: gcell.modelData.qualityDetail || ""
                                         artSource: root.coverMap[gcell.modelData.artUrl] || ""
                                         // The pin payload persists the REMOTE
                                         // url, never the file:// cache path.

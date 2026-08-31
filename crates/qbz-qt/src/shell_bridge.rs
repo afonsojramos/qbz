@@ -714,6 +714,18 @@ pub mod qbz_shell {
             y: f32,
             inline_visual: bool,
         );
+        /// LOCAL-mode twin: a Local Library / Explorer row enters the shared
+        /// drag by ROW ID (resolved to source-aware refs at drop time).
+        #[qinvokable]
+        fn drag_start_local(
+            self: Pin<&mut QbzShell>,
+            row_id: QString,
+            title: QString,
+            subtitle: QString,
+            x: f32,
+            y: f32,
+            inline_visual: bool,
+        );
         #[qinvokable]
         fn drag_move(self: Pin<&mut QbzShell>, x: f32, y: f32);
         /// A sidebar playlist row claims / releases the drop target.
@@ -1441,6 +1453,25 @@ impl qbz_shell::QbzShell {
     ) {
         crate::drag_start(
             track_id.to_string(),
+            title.to_string(),
+            subtitle.to_string(),
+            x,
+            y,
+            inline_visual,
+        );
+    }
+
+    pub fn drag_start_local(
+        self: Pin<&mut Self>,
+        row_id: QString,
+        title: QString,
+        subtitle: QString,
+        x: f32,
+        y: f32,
+        inline_visual: bool,
+    ) {
+        crate::drag_start_local(
+            row_id.to_string(),
             title.to_string(),
             subtitle.to_string(),
             x,

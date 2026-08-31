@@ -6255,3 +6255,15 @@ msgstr "Afficher les panneaux de filtres"
 
 msgid "Hide filter panels"
 msgstr "Masquer les panneaux de filtres"
+
+msgid "Already in"
+msgstr "Déjà dans"
+
+msgid "Playlist index updating..."
+msgstr "Mise à jour de l'index des playlists..."
+
+msgid "{} of {}"
+msgstr "{} sur {}"
+
+msgid "Last playlist"
+msgstr "Dernière playlist"

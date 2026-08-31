@@ -1519,8 +1519,7 @@ fn open_local_cort_row_in_playlist_picker(row_id: &str) {
         );
         return;
     };
-    let reference = crate::local_playlist_qt::local_picker_ref_for_track(&track);
-    crate::playlist_picker_qt::open_for_local_refs(&crate::app(), vec![reference]);
+    crate::local_album_actions::open_picker_for_rows(std::slice::from_ref(&track));
 }
 
 /// "View more" on a section: full search page on the matching tab

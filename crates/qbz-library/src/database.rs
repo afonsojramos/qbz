@@ -264,6 +264,11 @@ impl LibraryDatabase {
             CREATE INDEX IF NOT EXISTS idx_playlist_local_tracks_playlist
                 ON playlist_local_tracks(qobuz_playlist_id);
 
+            -- The Add-to-Playlist picker asks the inverse question — "which
+            -- playlists hold this track" (playlist_membership.rs).
+            CREATE INDEX IF NOT EXISTS idx_playlist_local_tracks_track
+                ON playlist_local_tracks(local_track_id, qobuz_playlist_id);
+
             -- Plex tracks added to playlists. Kept in its own table because
             -- Plex tracks live on a remote server and have a TEXT rating key,
             -- not the i64 filesystem id used by local_tracks. No foreign key
@@ -281,6 +286,30 @@ impl LibraryDatabase {
 
             CREATE INDEX IF NOT EXISTS idx_playlist_plex_tracks_playlist
                 ON playlist_plex_tracks(qobuz_playlist_id);
+
+            CREATE INDEX IF NOT EXISTS idx_playlist_plex_tracks_key
+                ON playlist_plex_tracks(plex_rating_key, qobuz_playlist_id);
+
+            -- Jellyfin/Subsonic tracks added to playlists (2026-08-30). Their
+            -- library rows are media-cache projections with no local_tracks
+            -- rowid, so they get their own sidecar keyed by the server item
+            -- id — the plex_rating_key pattern, source-qualified because two
+            -- protocols share the table.
+            CREATE TABLE IF NOT EXISTS playlist_remote_tracks (
+                id INTEGER PRIMARY KEY,
+                qobuz_playlist_id INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                added_at INTEGER NOT NULL,
+                UNIQUE(qobuz_playlist_id, source, item_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_playlist_remote_tracks_playlist
+                ON playlist_remote_tracks(qobuz_playlist_id);
+
+            CREATE INDEX IF NOT EXISTS idx_playlist_remote_tracks_item
+                ON playlist_remote_tracks(source, item_id, qobuz_playlist_id);
 
             -- Custom track order per playlist (user-defined arrangement)
             CREATE TABLE IF NOT EXISTS playlist_track_custom_order (
@@ -4995,6 +5024,104 @@ impl LibraryDatabase {
         Ok(())
     }
 
+    /// Attach a Jellyfin/Subsonic track to a Qobuz playlist by its server
+    /// item id — the Plex pattern, source-qualified. Re-adding MOVES the row
+    /// to the new slot rather than duplicating it (INSERT OR REPLACE on the
+    /// UNIQUE key, edge E4).
+    pub fn add_remote_track_to_playlist(
+        &self,
+        qobuz_playlist_id: u64,
+        source: &str,
+        item_id: &str,
+        position: i32,
+    ) -> Result<(), LibraryError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO playlist_remote_tracks
+                (qobuz_playlist_id, source, item_id, position, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![qobuz_playlist_id as i64, source, item_id, position, now],
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to add remote track to playlist: {}", e))
+            })?;
+
+        Ok(())
+    }
+
+    /// Remove a Jellyfin/Subsonic track from a playlist.
+    pub fn remove_remote_track_from_playlist(
+        &self,
+        qobuz_playlist_id: u64,
+        source: &str,
+        item_id: &str,
+    ) -> Result<(), LibraryError> {
+        self.conn
+            .execute(
+                "DELETE FROM playlist_remote_tracks
+                  WHERE qobuz_playlist_id = ?1 AND source = ?2 AND item_id = ?3",
+                params![qobuz_playlist_id as i64, source, item_id],
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!(
+                    "Failed to remove remote track from playlist: {}",
+                    e
+                ))
+            })?;
+        Ok(())
+    }
+
+    /// `(source, item_id, position)` of every remote sidecar row of one
+    /// playlist, position ASC.
+    pub fn get_playlist_remote_tracks_with_position(
+        &self,
+        qobuz_playlist_id: u64,
+    ) -> Result<Vec<(String, String, i32)>, LibraryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT source, item_id, position FROM playlist_remote_tracks
+                  WHERE qobuz_playlist_id = ?1
+                  ORDER BY position ASC, added_at ASC, id ASC",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare query: {}", e)))?;
+        let rows = stmt
+            .query_map(params![qobuz_playlist_id as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i32>(2)?,
+                ))
+            })
+            .map_err(|e| LibraryError::Database(format!("Failed to query: {}", e)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(
+                row.map_err(|e| LibraryError::Database(format!("Failed to read row: {}", e)))?,
+            );
+        }
+        Ok(out)
+    }
+
+    /// Number of remote sidecar rows of one playlist.
+    pub fn get_playlist_remote_track_count(
+        &self,
+        qobuz_playlist_id: u64,
+    ) -> Result<u32, LibraryError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM playlist_remote_tracks WHERE qobuz_playlist_id = ?1",
+                params![qobuz_playlist_id as i64],
+                |row| row.get::<_, u32>(0),
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to count remote tracks: {}", e)))
+    }
+
     /// Remove a Plex track from a playlist.
     pub fn remove_plex_track_from_playlist(
         &self,
@@ -5298,6 +5425,29 @@ impl LibraryDatabase {
             *result.entry(playlist_id).or_insert(0) += count;
         }
 
+        let mut remote_stmt = self
+            .conn
+            .prepare(
+                "SELECT qobuz_playlist_id, COUNT(*) as count
+             FROM playlist_remote_tracks
+             GROUP BY qobuz_playlist_id",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare query: {}", e)))?;
+
+        let remote_rows = remote_stmt
+            .query_map([], |row| {
+                let playlist_id: i64 = row.get(0)?;
+                let count: u32 = row.get(1)?;
+                Ok((playlist_id as u64, count))
+            })
+            .map_err(|e| LibraryError::Database(format!("Failed to query: {}", e)))?;
+
+        for row in remote_rows {
+            let (playlist_id, count) =
+                row.map_err(|e| LibraryError::Database(format!("Failed to read row: {}", e)))?;
+            *result.entry(playlist_id).or_insert(0) += count;
+        }
+
         Ok(result)
     }
 
@@ -5357,6 +5507,7 @@ impl LibraryDatabase {
     ) -> Result<i32, LibraryError> {
         let local_count = self.get_playlist_local_track_count(qobuz_playlist_id)?;
         let plex_count = self.get_playlist_plex_track_count(qobuz_playlist_id)?;
+        let remote_count = self.get_playlist_remote_track_count(qobuz_playlist_id)?;
         let max_pos: Option<i32> = self
             .conn
             .query_row(
@@ -5366,6 +5517,9 @@ impl LibraryDatabase {
                     UNION ALL
                     SELECT MAX(position) AS p FROM playlist_plex_tracks
                      WHERE qobuz_playlist_id = ?1
+                    UNION ALL
+                    SELECT MAX(position) AS p FROM playlist_remote_tracks
+                     WHERE qobuz_playlist_id = ?1
                 )",
                 params![qobuz_playlist_id as i64],
                 |row| row.get(0),
@@ -5373,7 +5527,7 @@ impl LibraryDatabase {
             .map_err(|e| {
                 LibraryError::Database(format!("Failed to read max sidecar position: {}", e))
             })?;
-        let count_based = (qobuz_track_count + local_count + plex_count) as i32;
+        let count_based = (qobuz_track_count + local_count + plex_count + remote_count) as i32;
         Ok(count_based.max(max_pos.map(|p| p + 1).unwrap_or(0)))
     }
 
@@ -5455,6 +5609,33 @@ impl LibraryDatabase {
                 rows.push(("plex", rowid, key, pos));
             }
         }
+        {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, source || ':' || item_id, position FROM playlist_remote_tracks
+                     WHERE qobuz_playlist_id = ?1
+                     ORDER BY position ASC, added_at ASC, id ASC",
+                )
+                .map_err(|e| {
+                    LibraryError::Database(format!("Failed to prepare heal query: {}", e))
+                })?;
+            let mapped = stmt
+                .query_map(params![qobuz_playlist_id as i64], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i32>(2)?,
+                    ))
+                })
+                .map_err(|e| LibraryError::Database(format!("Failed to query heal rows: {}", e)))?;
+            for r in mapped {
+                let (rowid, key, pos) = r.map_err(|e| {
+                    LibraryError::Database(format!("Failed to read heal row: {}", e))
+                })?;
+                rows.push(("remote", rowid, key, pos));
+            }
+        }
         if rows.is_empty() {
             return Ok(Vec::new());
         }
@@ -5473,10 +5654,10 @@ impl LibraryDatabase {
         let mut next = ((qobuz_track_count as i32) + sidecar_total as i32).max(max_pos + 1);
         let mut healed = Vec::with_capacity(moves.len());
         for (kind, rowid, reference, old) in moves {
-            let sql = if kind == "local" {
-                "UPDATE playlist_local_tracks SET position = ?1 WHERE id = ?2"
-            } else {
-                "UPDATE playlist_plex_tracks SET position = ?1 WHERE id = ?2"
+            let sql = match kind {
+                "local" => "UPDATE playlist_local_tracks SET position = ?1 WHERE id = ?2",
+                "plex" => "UPDATE playlist_plex_tracks SET position = ?1 WHERE id = ?2",
+                _ => "UPDATE playlist_remote_tracks SET position = ?1 WHERE id = ?2",
             };
             self.conn.execute(sql, params![next, rowid]).map_err(|e| {
                 LibraryError::Database(format!("Failed to heal sidecar position: {}", e))

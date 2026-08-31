@@ -134,9 +134,16 @@ Item {
         showFavorite: false
         showDownload: false
         showMenu: false
-        // Local rows are NOT drag sources: item.id is a local DB row id and
-        // the sidebar drop handler forwards it as a Qobuz catalog id.
+        // Local rows drag through the LOCAL arm: item.id is a local DB row
+        // id, so the shared drag carries it typed (`dragStartLocal`) and the
+        // drop handlers resolve it source-aware — the same guardrails as the
+        // picker. `draggable` stays false so `catalogRow` keeps meaning
+        // "item.id is a Qobuz catalog id".
         draggable: false
+        // NOT for native-catalog rows: their `item.id` is the catalog seam's
+        // identity, not a legacy row id the drop resolver can look up — a
+        // ghost that lands as a silent no-op is worse than no gesture.
+        localDragSource: !root.nativeActions
         qualityStyle: "icon"
         // A failed physical row stays clickable so the user can retry after a
         // drive returns. The preflight prevents any queue/NPB mutation until

@@ -1877,3 +1877,15 @@ msgstr "Show filter panels"
 
 msgid "Hide filter panels"
 msgstr "Hide filter panels"
+
+msgid "Already in"
+msgstr "Already in"
+
+msgid "Playlist index updating..."
+msgstr "Playlist index updating..."
+
+msgid "{} of {}"
+msgstr "{} of {}"
+
+msgid "Last playlist"
+msgstr "Last playlist"

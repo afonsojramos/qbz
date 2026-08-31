@@ -1316,12 +1316,20 @@ pub async fn insert_dragged_track(
     // filters now (F2 + D5), so one row in can legitimately be ZERO rows out —
     // and a DRAG of a pulled track into the queue would have PANICKED. The seam
     // has already toasted the reason.
-    let Some(qt) = crate::playback_qt::stamped(
-        vec![crate::playback_qt::queue_track_for(runtime, track_id).await?],
-        None,
-    )
-    .pop() else {
-        log::info!("[qbz-qt] queue: dragged track {track_id} was filtered out");
+    let qt = crate::playback_qt::queue_track_for(runtime, track_id).await?;
+    insert_dragged_queue_track(runtime, qt, to_slot).await
+}
+
+/// The same drop, from an already-built `QueueTrack` — the LOCAL-mode drag's
+/// arm (Explorer / Local Library rows), and the shared tail of the Qobuz one.
+pub async fn insert_dragged_queue_track(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track: qbz_models::QueueTrack,
+    to_slot: usize,
+) -> Result<(), String> {
+    let id = track.id;
+    let Some(qt) = crate::playback_qt::stamped(vec![track], None).pop() else {
+        log::info!("[qbz-qt] queue: dragged track {id} was filtered out");
         return Ok(());
     };
 

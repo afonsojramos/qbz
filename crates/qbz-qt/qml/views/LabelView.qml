@@ -218,6 +218,7 @@ Rectangle {
                             genre: crCell.modelData.genre
                             year: crCell.modelData.year
                             qualityTier: crCell.modelData.qualityTier
+                            qualityDetail: crCell.modelData.qualityDetail || ""
                             ribbon: crCell.modelData.ribbon || ""
                             ribbonKind: crCell.modelData.ribbonKind || ""
                             artSource: crCell.modelData.artPath || ""

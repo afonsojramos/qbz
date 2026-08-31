@@ -6245,3 +6245,15 @@ msgstr "Filterpanelen tonen"
 
 msgid "Hide filter panels"
 msgstr "Filterpanelen verbergen"
+
+msgid "Already in"
+msgstr "Al in"
+
+msgid "Playlist index updating..."
+msgstr "Playlist-index wordt bijgewerkt..."
+
+msgid "{} of {}"
+msgstr "{} van {}"
+
+msgid "Last playlist"
+msgstr "Laatste playlist"

@@ -828,6 +828,10 @@ pub struct Playlist {
     pub image_rectangle_mini: Option<Vec<String>>,
     pub slug: Option<String>,
     pub users_count: Option<u32>,
+    /// API revision stamp (unix seconds). The membership index reads it as
+    /// change evidence when the API provides it; absent on some list shapes.
+    #[serde(default)]
+    pub updated_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -869,6 +873,9 @@ pub struct PlaylistWithTrackIds {
     pub images300: Option<Vec<String>>,
     pub slug: Option<String>,
     pub users_count: Option<u32>,
+    /// API revision stamp (unix seconds), when the response carries one.
+    #[serde(default)]
+    pub updated_at: Option<i64>,
 }
 
 /// Result of checking for duplicate tracks in a playlist

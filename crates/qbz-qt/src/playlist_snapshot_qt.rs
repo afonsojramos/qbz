@@ -9,18 +9,50 @@ use std::collections::{HashMap, HashSet};
 
 use qbz_library::qobuz_playlist_snapshot as repo;
 
-pub use repo::SnapshotNameEntry;
+pub use repo::AuthoritativeEntry;
 
-pub fn record_names_detached(entries: Vec<SnapshotNameEntry>) {
-    if entries.is_empty() {
-        return;
+/// Turn one `get_user_playlists()` response into authoritative snapshot
+/// entries. Ownership comes from the session user id; when that id is not
+/// known yet the caller must SKIP recording — an all-foreign list would both
+/// starve the hydrator and start the two-generation retirement clock.
+pub fn authoritative_entries(
+    playlists: &[qbz_models::Playlist],
+) -> Option<Vec<AuthoritativeEntry>> {
+    if !crate::playlist_qt::session_user_known() {
+        log::debug!(
+            "[qbz-qt] playlist snapshot: session user unknown; authoritative list not recorded"
+        );
+        return None;
     }
+    Some(
+        playlists
+            .iter()
+            .map(|playlist| AuthoritativeEntry {
+                qobuz_playlist_id: playlist.id,
+                name: playlist.name.clone(),
+                owner: Some(playlist.owner.name.clone()).filter(|owner| !owner.is_empty()),
+                track_count: Some(playlist.tracks_count),
+                remote_updated_at: playlist.updated_at,
+                is_owned: crate::playlist_qt::owns(playlist.owner.id),
+            })
+            .collect(),
+    )
+}
+
+pub fn record_authoritative_detached(entries: Vec<AuthoritativeEntry>) {
     let write = move || {
         let result = crate::library_db_qt::with_db(true, |db| {
-            Ok(db.with_connection(|conn| repo::upsert_names(conn, &entries)))
+            Ok(db.with_connection(|conn| repo::record_authoritative_list(conn, &entries)))
         });
-        if let Some(Err(error)) = result {
-            log::warn!("[qbz-qt] playlist snapshot names write failed: {error}");
+        match result {
+            Some(Ok(generation)) => {
+                log::debug!("[qbz-qt] playlist snapshot: authoritative generation {generation}");
+                crate::playlist_index_qt::poke();
+            }
+            Some(Err(error)) => {
+                log::warn!("[qbz-qt] playlist snapshot authoritative write failed: {error}")
+            }
+            None => {}
         }
     };
     if tokio::runtime::Handle::try_current().is_ok() {
@@ -39,7 +71,7 @@ pub fn record_detail_detached(playlist_id: u64, name: String, owner: String, tra
             }))
         });
         match result {
-            Some(Ok(true)) => {}
+            Some(Ok(true)) => crate::playlist_picker_qt::membership_index_progressed(),
             Some(Ok(false)) => log::debug!(
                 "[qbz-qt] playlist snapshot: {playlist_id} is not in the user list; membership skipped"
             ),

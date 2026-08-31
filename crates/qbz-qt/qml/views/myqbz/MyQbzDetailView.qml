@@ -957,6 +957,7 @@ Rectangle {
                         readonly property string cSubtitle: root.patchRev >= 0 ? (gcell.live.subtitle || "") : ""
                         readonly property string cYear: root.patchRev >= 0 ? (gcell.live.yearText || "") : ""
                         readonly property string cQuality: root.patchRev >= 0 ? (gcell.live.qualityTier || "") : ""
+                        readonly property string cDetail: root.patchRev >= 0 ? (gcell.live.qualityDetail || "") : ""
                         /// The GRID rung of the cover, NOT the list row's.
                         /// `artPath` is the 50px thumbnail every list row draws
                         /// at 40px; this cell's artwork well is 200px, so
@@ -1084,6 +1085,7 @@ Rectangle {
                             genre: ""
                             year: gcell.cYear
                             qualityTier: gcell.cQuality
+                            qualityDetail: gcell.cDetail
                             artSource: gcell.cArt
                             // The pin payload / block snapshot url (see
                             // `cArtUrl`). Without it a pinned My QBZ album

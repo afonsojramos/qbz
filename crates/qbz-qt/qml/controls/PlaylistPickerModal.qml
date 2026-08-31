@@ -42,6 +42,20 @@ Item {
     readonly property var rows: doc.playlists || []
     readonly property var dup: doc.dup || ({})
     readonly property int trackCount: doc.trackCount || 0
+    // Session-local pinned target (last successful add); null when unset,
+    // deleted, unwritable, or filtered out by the current query.
+    readonly property var lastUsed: doc.lastUsed || null
+    // Containment strip: writable playlists already holding carried tracks,
+    // honest per alreadyState ("loading"|"complete"|"updating"|"unavailable").
+    readonly property var alreadyIn: doc.alreadyIn || []
+    readonly property string alreadyState: doc.alreadyState || ""
+    // The column renders only when it can back a claim: complete with
+    // matches, or updating (where partial matches show under an explicit
+    // caveat). It is a SIDE column, not an in-flow strip, so the dropdown
+    // can never cover it.
+    readonly property bool alreadyShowing:
+        root.alreadyState === "updating"
+        || (root.alreadyState === "complete" && root.alreadyIn.length > 0)
     // The carried payload is LocalLibrary refs (counter wording only).
     readonly property bool localMode: doc.localMode === true
     readonly property bool creatingOpen: doc.creatingOpen === true
@@ -100,20 +114,23 @@ Item {
         anchors.fill: parent
         visible: root.doc.open === true && root.dup.open !== true
 
-        // Scrim — click outside dismisses.
+        // Scrim — click outside dismisses. The wheel is eaten too: these
+        // overlays are plain Items, not Popups, so no modal grab stops the
+        // page underneath from scrolling (the DiscoverConfigModal contract).
         Rectangle {
             anchors.fill: parent
             color: "#bf000000"
             MouseArea {
                 anchors.fill: parent
                 onClicked: QbzPlaylistPicker.close()
+                onWheel: function (wheel) { wheel.accepted = true }
             }
         }
 
         Rectangle {
             id: card
             anchors.centerIn: parent
-            width: Math.min(parent.width - 80, 490)
+            width: Math.min(parent.width - 80, 735)
             // Tauri: min-height 400 / max-height 90vh. The body stretches so
             // the footer pins to the bottom.
             height: Math.min(Math.max(400, panel.implicitHeight), parent.height * 0.9)
@@ -123,11 +140,17 @@ Item {
             border.color: theme.borderSubtle
             // NO clip: the dropdown legitimately overflows the card bottom.
 
+            // The "Already in" side column's slot. Zero when absent, so the
+            // main content takes the whole card.
+            readonly property real rightPanelW: root.alreadyShowing ? 221 : 0
+
             // Swallow clicks so they never reach the scrim; doubles as
             // "a click inside the card closes the list" (Tauri parity).
+            // The wheel stops here too — same reason as the scrim.
             MouseArea {
                 anchors.fill: parent
                 onClicked: root.dropdownOpen = false
+                onWheel: function (wheel) { wheel.accepted = true }
             }
 
             Column {
@@ -174,10 +197,11 @@ Item {
                 }
                 Rectangle { width: parent.width; height: 1; color: theme.borderSubtle }
 
-                // --- Body ---------------------------------------------
+                // --- Body (the MAIN column; the "Already in" side column
+                // takes the right slot when present) -------------------
                 Column {
                     id: body
-                    width: parent.width
+                    width: parent.width - card.rightPanelW
                     padding: 24
                     spacing: 16
 
@@ -368,11 +392,127 @@ Item {
                             }
                         }
                     }
+
+                }
+            }
+
+            // --- "Already in" side column -----------------------------
+            // The containment answer as a right-hand column instead of an
+            // in-flow strip: the dropdown overlays the MAIN column only, so
+            // this list stays readable while the playlist list is open.
+            // Shown if and only if the index can back a claim (complete with
+            // matches, or updating under the explicit caveat) — an empty
+            // answer from an incomplete index renders nothing.
+            Item {
+                visible: root.alreadyShowing
+                anchors.top: parent.top
+                anchors.topMargin: 69
+                anchors.bottom: footerDivider.top
+                anchors.right: parent.right
+                width: card.rightPanelW
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 1
+                    color: theme.borderSubtle
+                }
+
+                Column {
+                    anchors.fill: parent
+                    anchors.leftMargin: 17
+                    anchors.rightMargin: 16
+                    anchors.topMargin: 16
+                    spacing: 8
+
+                    Text {
+                        text: QbzSession.tr("Already in", QbzSession.trRev)
+                        color: theme.textSecondary
+                        font.pixelSize: theme.fontLegal
+                        font.weight: theme.weightMedium
+                    }
+                    Text {
+                        visible: root.alreadyState === "updating"
+                        width: parent.width
+                        text: QbzSession.tr("Playlist index updating...", QbzSession.trRev)
+                        color: theme.textMuted
+                        font.pixelSize: theme.fontLegal
+                        font.italic: true
+                        wrapMode: Text.WordWrap
+                    }
+
+                    ListView {
+                        width: parent.width
+                        height: Math.max(0, parent.height - y - 12)
+                        clip: true
+                        spacing: 2
+                        boundsBehavior: Flickable.StopAtBounds
+                        model: root.alreadyIn
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: parent ? parent.width : 0
+                            height: 34
+                            radius: theme.radiusSm
+                            color: alreadyArea.containsMouse
+                                ? theme.surfaceHover : "transparent"
+                            QbzIcon {
+                                id: alreadyGlyph
+                                visible: modelData.isLocal === true
+                                anchors.left: parent.left
+                                anchors.leftMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                name: "hard-drive"
+                                width: 12
+                                height: 12
+                                tintName: "muted"
+                            }
+                            Text {
+                                anchors.left: alreadyGlyph.visible
+                                    ? alreadyGlyph.right : parent.left
+                                anchors.leftMargin: 6
+                                anchors.right: alreadyCount.visible
+                                    ? alreadyCount.left : parent.right
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.name
+                                color: theme.textPrimary
+                                font.pixelSize: theme.fontLegal
+                                elide: Text.ElideRight
+                            }
+                            // The multi-track answer: "2 of 5". A full or
+                            // single-track containment says it by presence.
+                            Text {
+                                id: alreadyCount
+                                visible: root.trackCount > 1
+                                    && modelData.contained < root.trackCount
+                                anchors.right: parent.right
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: QbzSession.tr("{} of {}", QbzSession.trRev)
+                                      .replace("{}", modelData.contained)
+                                      .replace("{}", root.trackCount)
+                                color: theme.textMuted
+                                font.pixelSize: theme.fontLegal
+                            }
+                            MouseArea {
+                                id: alreadyArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                // Selecting it is the useful action: "add the
+                                // missing 3 of 5" is one click plus the
+                                // dup-confirm's only-new answer.
+                                onClicked: root.selectRow(modelData)
+                            }
+                        }
+                    }
                 }
             }
 
             // --- Footer, pinned to the card bottom --------------------
             Rectangle {
+                id: footerDivider
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: footerRow.top
@@ -425,10 +565,14 @@ Item {
                 // 1 divider + 24 body pad + 20 label row + 8 spacing +
                 // 43 input + 4 gap.
                 y: 68 + 1 + 24 + 20 + 8 + 43 + 4
-                width: parent.width - 48
-                // create row 41 + 1 divider, 41 per shown row, 41 no-results,
-                // 1 + 34 overflow. Tauri max-height 320 + border.
-                height: Math.min(2 + 42 + root.shown * 41
+                // MAIN column only — the "Already in" side column stays
+                // readable while the list is open (that is its whole point).
+                width: parent.width - card.rightPanelW - 48
+                // create row 41 + 1 divider, pinned last-used 41 + 1, 41 per
+                // shown row, 41 no-results, 1 + 34 overflow. Tauri max-height
+                // 320 + border.
+                height: Math.min(2 + 42 + (root.lastUsed !== null ? 42 : 0)
+                                 + root.shown * 41
                                  + ((root.rows.length === 0 && root.filterText !== "") ? 41 : 0)
                                  + (root.overflow > 0 ? 35 : 0), 322)
                 radius: theme.radiusSm
@@ -486,6 +630,61 @@ Item {
                             }
                         }
                         Rectangle { width: parent.width; height: 1; color: theme.borderSubtle }
+
+                        // Session's last successful target, pinned above the
+                        // results. Rust already validated it (still listed,
+                        // still writable) and de-duplicated it from `rows`;
+                        // under a search it only survives a matching query.
+                        Rectangle {
+                            visible: root.lastUsed !== null
+                            width: parent.width
+                            height: visible ? 41 : 0
+                            color: lastUsedArea.containsMouse ? theme.surfaceHover : "transparent"
+                            QbzIcon {
+                                id: lastUsedGlyph
+                                anchors.left: parent.left
+                                anchors.leftMargin: 12
+                                anchors.verticalCenter: parent.verticalCenter
+                                name: "clock"
+                                width: 14
+                                height: 14
+                                tintName: "muted"
+                            }
+                            Text {
+                                anchors.left: lastUsedGlyph.right
+                                anchors.leftMargin: 8
+                                anchors.right: lastUsedCaption.left
+                                anchors.rightMargin: 8
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: root.lastUsed ? root.lastUsed.name : ""
+                                color: theme.textPrimary
+                                font.pixelSize: theme.fontLink
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                id: lastUsedCaption
+                                anchors.right: parent.right
+                                anchors.rightMargin: 12
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: QbzSession.tr("Last playlist", QbzSession.trRev)
+                                color: theme.textMuted
+                                font.pixelSize: theme.fontLegal
+                                font.italic: true
+                            }
+                            MouseArea {
+                                id: lastUsedArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.selectRow(root.lastUsed)
+                            }
+                        }
+                        Rectangle {
+                            visible: root.lastUsed !== null
+                            width: parent.width
+                            height: visible ? 1 : 0
+                            color: theme.borderSubtle
+                        }
 
                         Repeater {
                             model: root.rows.slice(0, root.windowSize)
@@ -590,6 +789,7 @@ Item {
             MouseArea {
                 anchors.fill: parent
                 onClicked: QbzPlaylistPicker.cancelDuplicates()
+                onWheel: function (wheel) { wheel.accepted = true }
             }
         }
 
@@ -601,7 +801,10 @@ Item {
             color: theme.surfaceCard
             border.width: 1
             border.color: theme.borderSubtle
-            MouseArea { anchors.fill: parent }
+            MouseArea {
+                anchors.fill: parent
+                onWheel: function (wheel) { wheel.accepted = true }
+            }
 
             Column {
                 id: dupPanel

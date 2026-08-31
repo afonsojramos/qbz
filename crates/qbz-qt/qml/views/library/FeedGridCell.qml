@@ -81,6 +81,7 @@ Item {
             genre: cell.item.genre
             year: cell.item.year
             qualityTier: cell.item.qualityTier
+            qualityDetail: cell.item.qualityDetail || cell.item.qualityLabel || ""
             artSource: cell.view.artMap[cell.item.artKey] || ""
             isFavorite: cell.item.isFavorite
             isPinned: cell.item.isPinned

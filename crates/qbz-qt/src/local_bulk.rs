@@ -165,6 +165,16 @@ fn resolve_blocking(scope: &str, ids: &[String]) -> Vec<LocalTrack> {
         s.tracks_raw
             .iter()
             .chain(s.detail_raw.iter())
+            // The Library Explorer's expanded albums live in their own row
+            // cache. Without these, an Explorer track menu resolved through
+            // this function silently dropped every merged Plex/remote row —
+            // "Add to playlist" opened nothing (smoke 2026-08-30).
+            .chain(s.genre_detail_raw.values().flatten())
+            .chain(
+                s.genre_detail_all_tracks
+                    .values()
+                    .flat_map(|arc| arc.iter()),
+            )
             .map(|t| (t.id, t.clone()))
             .collect()
     });
@@ -180,6 +190,12 @@ fn resolve_blocking(scope: &str, ids: &[String]) -> Vec<LocalTrack> {
             with_db(|db| db.get_track(row)).flatten()
         })
         .collect()
+}
+
+/// Track-scope resolution for callers outside the bulk bars (the shared
+/// drag's local payload): same caches, same last-resort DB lookup.
+pub(crate) fn resolve_track_rows_blocking(ids: &[String]) -> Vec<LocalTrack> {
+    resolve_blocking("track", ids)
 }
 
 pub(crate) fn resolve_album_ids_blocking(ids: &[String]) -> Vec<LocalTrack> {
@@ -245,11 +261,8 @@ pub(crate) async fn apply(rows: Vec<LocalTrack>, action: &str) -> bool {
             if rows.is_empty() {
                 return false;
             }
-            let refs: Vec<String> = rows
-                .iter()
-                .map(crate::local_playlist_qt::local_picker_ref_for_track)
-                .collect();
-            crate::playlist_picker_qt::open_for_local_refs(&crate::app(), refs);
+            // Shared tail: source-aware refs, then the picker.
+            crate::local_album_actions::open_picker_for_rows(&rows);
             false
         }
         // NO CALLER as of 2026-07-31: no bulk bar offers this action any more.

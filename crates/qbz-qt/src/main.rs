@@ -318,6 +318,7 @@ mod external_reco_qt;
 mod artist_qt;
 mod lyrics_qt;
 mod playback_qt;
+mod playlist_index_qt;
 mod playlist_picker_qt;
 mod tunnelflow_qt;
 // Playlist Importer controller (the `qbz-playlist-import` crate's frontend
@@ -2146,6 +2147,12 @@ pub(crate) fn playlist_move_row(row_id: String, delta: i32) {
 // DragTrack enum also carries local-library rows and Plex keys into
 // sidecar writes — out of scope, see module POC-NOTEs).
 static DRAGGED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+/// LOCAL-mode drag payload: Local Library row ids, resolved to source-aware
+/// picker refs at DROP time (the rows can leave the visible cache between
+/// press and release; ids survive that, refs are cheap to build once).
+/// Mutually exclusive with `DRAGGED` — a drag carries one payload kind, the
+/// same invariant the picker's `Payload` enum enforces.
+static DRAGGED_LOCAL_ROWS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// The claimed drop target (sidebar playlist id) — mirrored Rust-side so
 /// drag_end never reads the bridge off-thread.
 static DRAG_OVER: Mutex<String> = Mutex::new(String::new());
@@ -2164,9 +2171,39 @@ pub(crate) fn drag_start(
 ) {
     let id = track_id.parse::<u64>().unwrap_or(0);
     *DRAGGED.lock().unwrap() = if id > 0 { vec![id] } else { Vec::new() };
+    DRAGGED_LOCAL_ROWS.lock().unwrap().clear();
     log::info!("[qbz-qt][drag] start {track_id} ({title})");
     shell_bridge::ui(move |mut b| {
         b.as_mut().set_drag_count(if id > 0 { 1 } else { 0 });
+        b.as_mut().set_drag_title(QString::from(title.as_str()));
+        b.as_mut()
+            .set_drag_subtitle(QString::from(subtitle.as_str()));
+        b.as_mut().set_drag_x(x);
+        b.as_mut().set_drag_y(y);
+        b.as_mut().set_drag_inline_visual(inline_visual);
+        b.as_mut().set_drag_over_playlist_id(QString::default());
+        b.as_mut().set_drag_over_queue_index(-1);
+        b.as_mut().set_drag_active(true);
+    });
+}
+
+/// LOCAL-mode twin of [`drag_start`]: a Local Library / Explorer row enters
+/// the shared drag carrying its ROW ID, never a number that could be read as
+/// a catalog id (the picker's `Payload` invariant, kept at the drag seam).
+pub(crate) fn drag_start_local(
+    row_id: String,
+    title: String,
+    subtitle: String,
+    x: f32,
+    y: f32,
+    inline_visual: bool,
+) {
+    DRAGGED.lock().unwrap().clear();
+    let ok = !row_id.is_empty();
+    *DRAGGED_LOCAL_ROWS.lock().unwrap() = if ok { vec![row_id.clone()] } else { Vec::new() };
+    log::info!("[qbz-qt][drag] start local row {row_id} ({title})");
+    shell_bridge::ui(move |mut b| {
+        b.as_mut().set_drag_count(if ok { 1 } else { 0 });
         b.as_mut().set_drag_title(QString::from(title.as_str()));
         b.as_mut()
             .set_drag_subtitle(QString::from(subtitle.as_str()));
@@ -2211,9 +2248,70 @@ pub(crate) fn drag_end() {
         b.as_mut().set_drag_over_queue_index(-1);
     });
     let tracks = std::mem::take(&mut *DRAGGED.lock().unwrap());
-    if tracks.is_empty() {
+    let local_rows = std::mem::take(&mut *DRAGGED_LOCAL_ROWS.lock().unwrap());
+    if tracks.is_empty() && local_rows.is_empty() {
         return;
     }
+
+    // LOCAL-mode payload: Explorer / Local Library rows, resolved to
+    // source-aware refs at drop time and routed through the picker's own
+    // add matrix — the "same guardrails" contract: a library row id can
+    // never reach a Qobuz endpoint, a Plex/remote row rides its server key.
+    if !local_rows.is_empty() {
+        let runtime = app();
+        let pid = pid.clone();
+        spawn(async move {
+            let rows = tokio::task::spawn_blocking(move || {
+                local_bulk::resolve_track_rows_blocking(&local_rows)
+            })
+            .await
+            .unwrap_or_default();
+            if rows.is_empty() {
+                log::warn!("[qbz-qt][drag] local drop resolved no rows; ignored");
+                return;
+            }
+            if queue_slot >= 0 {
+                let was_empty = runtime
+                    .core()
+                    .get_queue_state_full()
+                    .await
+                    .upcoming
+                    .is_empty()
+                    && runtime.core().current_track().await.is_none();
+                let mut landed = false;
+                for (n, row) in rows.into_iter().enumerate() {
+                    let qt = local_playback::local_queue_track(&row);
+                    let slot = queue_slot as usize + n;
+                    match queue_qt::insert_dragged_queue_track(&runtime, qt, slot).await {
+                        Ok(()) => landed = true,
+                        Err(e) => log::error!(
+                            "[qbz-qt][drag] queue insert of local row {} at {slot} failed: {e}",
+                            row.id
+                        ),
+                    }
+                }
+                if was_empty && landed {
+                    queue_qt::set_drop_play_prompt(true);
+                }
+                return;
+            }
+            if pid.is_empty() {
+                return;
+            }
+            let refs: Vec<String> = rows
+                .iter()
+                .map(local_playlist_qt::local_picker_ref_for_track)
+                .collect();
+            playlist_picker_qt::add_dropped_payload_to_target(
+                &runtime,
+                &pid,
+                playlist_picker_qt::Payload::LocalRefs(refs),
+            )
+            .await;
+        });
+        return;
+    }
+
     // The QUEUE target wins when both are claimed. They cannot both be under
     // the pointer geometrically, so this only decides a stale claim — and the
     // queue one is the more recent, since the panel overlays the sidebar.
