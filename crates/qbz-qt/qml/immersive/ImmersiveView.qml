@@ -594,8 +594,11 @@ Item {
                         uppercase: QbzLyrics.uppercase
                         fontIndex: QbzLyrics.fontIndex
                         // Solid white active line in immersive
-                        // (data-panels.md §2, :1548).
+                        // (data-panels.md §2, :1548). The unsung part of the
+                        // active line drops to 35% white so the karaoke fill
+                        // is actually visible (2026-08-31 visual cleanup).
                         activeColor: "#ffffff"
+                        inactiveColor: "#59ffffff"
                         onSeekRequested: function (timeMs) {
                             if (QbzPlayer.npDurationSecs > 0)
                                 QbzPlayer.seek(timeMs / 1000 / QbzPlayer.npDurationSecs)
