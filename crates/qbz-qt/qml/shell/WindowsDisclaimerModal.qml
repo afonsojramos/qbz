@@ -94,7 +94,11 @@ Item {
         // No click-through close. Unlike the other modals this one is the
         // first thing a new user sees and says what is not promised; a stray
         // click on the scrim should not dismiss it.
-        MouseArea { anchors.fill: parent }
+        MouseArea {
+            anchors.fill: parent
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
     }
 
     Rectangle {
@@ -115,7 +119,11 @@ Item {
         border.width: 1
         border.color: theme.borderSubtle
 
-        MouseArea { anchors.fill: parent }
+        MouseArea {
+            anchors.fill: parent
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
 
         Item {
             anchors.fill: parent

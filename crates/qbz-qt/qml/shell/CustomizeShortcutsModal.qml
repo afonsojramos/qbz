@@ -131,6 +131,8 @@ Item {
             MouseArea {
                 anchors.fill: parent
                 onClicked: root._close()
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
             }
         }
 
@@ -160,7 +162,11 @@ Item {
             border.color: theme.borderSubtle
 
             // FIRST child: swallows clicks so they never reach the scrim.
-            MouseArea { anchors.fill: parent }
+            MouseArea {
+                anchors.fill: parent
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
+            }
 
             // --- Header: title + "N modified" badge + X (Slint :208-261) --
             // NO keyboard icon here — the editor header has none (trap 6).

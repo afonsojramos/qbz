@@ -89,6 +89,8 @@ Item {
             MouseArea {
                 anchors.fill: parent
                 onClicked: QbzMyQbz.createClose()
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
             }
         }
         Rectangle {
@@ -101,7 +103,11 @@ Item {
             border.width: 1
             border.color: theme.borderSubtle
 
-            MouseArea { anchors.fill: parent }
+            MouseArea {
+                anchors.fill: parent
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
+            }
 
             Column {
                 id: createCol
@@ -262,6 +268,8 @@ Item {
             MouseArea {
                 anchors.fill: parent
                 onClicked: QbzMyQbz.editClose()
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
             }
         }
         Rectangle {
@@ -274,7 +282,11 @@ Item {
             border.width: 1
             border.color: theme.borderSubtle
 
-            MouseArea { anchors.fill: parent }
+            MouseArea {
+                anchors.fill: parent
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
+            }
 
             Column {
                 id: editCol
@@ -428,6 +440,8 @@ Item {
             MouseArea {
                 anchors.fill: parent
                 onClicked: QbzMyQbz.mixClose()
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
             }
         }
         Rectangle {
@@ -440,7 +454,11 @@ Item {
             border.width: 1
             border.color: theme.borderSubtle
 
-            MouseArea { anchors.fill: parent }
+            MouseArea {
+                anchors.fill: parent
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
+            }
 
             Column {
                 id: mixCol

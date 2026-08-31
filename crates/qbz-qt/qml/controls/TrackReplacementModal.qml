@@ -78,6 +78,8 @@ Item {
         MouseArea {
             anchors.fill: parent
             onClicked: if (!root.applying) QbzTrackReplace.close()
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
         }
     }
 
@@ -93,7 +95,11 @@ Item {
         clip: true
 
         // Swallow clicks so they never reach the scrim.
-        MouseArea { anchors.fill: parent }
+        MouseArea {
+            anchors.fill: parent
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
 
         Column {
             id: panel

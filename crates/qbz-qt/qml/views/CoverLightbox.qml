@@ -56,6 +56,10 @@ Popup {
         MouseArea {
             anchors.fill: parent
             onClicked: root.close()
+            // Wheel-lock (the DiscoverConfigModal rule): the Popup is not
+            // `modal`, so nothing grabs the wheel for it — without this the
+            // page kept scrolling behind the lightbox.
+            onWheel: function (wheel) { wheel.accepted = true }
         }
 
         // The 90% viewport the artwork is fitted into, so it never touches

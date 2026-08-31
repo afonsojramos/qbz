@@ -138,6 +138,8 @@ Item {
             MouseArea {
                 anchors.fill: parent
                 onClicked: QbzFolderEdit.createClose()
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
             }
         }
 
@@ -152,7 +154,11 @@ Item {
             border.color: theme.borderSubtle
 
             // FIRST child: swallows clicks so they never reach the scrim.
-            MouseArea { anchors.fill: parent }
+            MouseArea {
+                anchors.fill: parent
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
+            }
 
             Column {
                 id: createCol
@@ -280,6 +286,8 @@ Item {
             MouseArea {
                 anchors.fill: parent
                 onClicked: QbzFolderEdit.editClose()
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
             }
         }
 
@@ -293,7 +301,11 @@ Item {
             border.width: 1
             border.color: theme.borderSubtle
 
-            MouseArea { anchors.fill: parent }
+            MouseArea {
+                anchors.fill: parent
+                // Wheel-lock (the DiscoverConfigModal rule).
+                onWheel: function (wheel) { wheel.accepted = true }
+            }
 
             Column {
                 id: editCol

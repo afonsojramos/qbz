@@ -45,6 +45,8 @@ Item {
         MouseArea {
             anchors.fill: parent
             onClicked: root.open = false
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
         }
     }
 
@@ -69,7 +71,11 @@ Item {
         border.color: theme.borderSubtle
 
         // Swallow clicks so the scrim below does not close the modal.
-        MouseArea { anchors.fill: parent }
+        MouseArea {
+            anchors.fill: parent
+            // Wheel-lock (the DiscoverConfigModal rule).
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
 
         Column {
             anchors.fill: parent
