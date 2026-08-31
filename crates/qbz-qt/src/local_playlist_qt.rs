@@ -1225,11 +1225,10 @@ pub async fn load_qobuz_offline(playlist_id: u64) -> bool {
 
 /// Play the open local detail from `start_row_id` ("" = from the top).
 ///
-/// D8: an offline-only playlist stamps the queue via
-/// `set_queue_offline_only`, which is what keeps ANY of its tracks from being
-/// pushed to Qobuz Connect. The flag is set BEFORE the queue is installed and
-/// cleared for every non-offline-only playlist, or a stamp would leak into the
-/// next thing the user plays.
+/// D8: an offline-only playlist installs the queue together with its
+/// offline-only stamp, which keeps ANY of its tracks from being pushed to
+/// Qobuz Connect. Every non-offline-only replacement clears the stamp so it
+/// cannot leak into the next thing the user plays.
 pub async fn play(runtime: &Runtime, start_row_id: &str) {
     play_in(runtime, start_row_id, false).await
 }
@@ -1296,7 +1295,9 @@ async fn play_in(runtime: &Runtime, start_row_id: &str, shuffle: bool) {
             .position(|t| t.id.to_string() == start_row_id)
             .unwrap_or(0)
     };
-    runtime.core().set_queue_offline_only(offline_only);
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     // The "playing from" origin is ("playlist", <local:uuid>) — the reference
     // stamps it on BOTH local play paths (`local_playlist.rs:1578` play_all /
     // Shuffle and `:1599` play_from_visible), with the explicit note that "the
@@ -1314,11 +1315,12 @@ async fn play_in(runtime: &Runtime, start_row_id: &str, shuffle: bool) {
     // MIXED — it can hold real Qobuz tracks beside local files — so the filter
     // genuinely fires here, and reading the id off the pre-filter list would
     // replay one the core just dropped.
-    let Some(anchor) = crate::playback_qt::set_queue_stamped(
+    let Some(anchor) = crate::playback_qt::set_queue_stamped_with_offline_only(
         runtime,
         queue,
         Some(start),
         crate::playback_qt::PlayContext::playlist(&playlist_id),
+        offline_only,
     )
     .await
     else {

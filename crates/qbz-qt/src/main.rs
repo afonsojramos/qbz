@@ -13,8 +13,8 @@
 //! async work; results hop back to Qt through the bridge's `CxxQtThread`.
 
 mod auth_qt;
-mod listen_log_qt;
 mod deep_link_qt;
+mod listen_log_qt;
 #[cfg(target_os = "linux")]
 mod single_instance_qt;
 // The Windows sibling. Carries its own `#![cfg(target_os = "windows")]`.
@@ -372,7 +372,9 @@ mod viz_qt;
 // credential discovery + device identity, and the renderer engine over
 // `runtime.core()`. Plain modules — they declare no #[cxx_qt::bridge], so
 // they must NOT appear in build.rs's rust_files. Wired by the B3 facade.
+mod qconnect_delegation_qt;
 mod qconnect_engine_qt;
+mod qconnect_lan_qt;
 mod qconnect_transport_qt;
 // QConnect port block B3: the facade (service singleton + controller routing)
 // and the inbound event sink. Plain modules, same convention as B1/B2. The
@@ -432,17 +434,58 @@ extern "C" fn on_session_commit_data() {
 
     /// Well under the ~5 s Windows allows before it stops waiting.
     const COMMIT_DEADLINE: Duration = Duration::from_secs(3);
+    /// Leave one second of the Windows budget for the bounded SQLite flush.
+    const QCONNECT_DEADLINE: Duration = Duration::from_secs(2);
 
     let _ = std::panic::catch_unwind(|| {
-        log::info!("[qbz-qt] session ending; persisting");
+        log::info!("[qbz-qt] session ending; withdrawing QConnect before persistence");
         let (tx, rx) = channel::<()>();
         let spawned = std::thread::Builder::new()
             .name("qbz-session-commit".to_string())
             .spawn(move || {
+                // A delegated queue is session-scoped and must never become
+                // the owner's Windows shutdown snapshot. Use the same ordered
+                // teardown as the ordinary event-loop exit, but reserve time
+                // for the synchronous SQLite flush below. Fail closed: when
+                // authority cannot be restored within the budget, preserve
+                // the previous on-disk snapshot instead of writing guest data.
+                let qconnect_owner_safe = match (TOKIO.get(), qconnect_qt::service()) {
+                    (_, None) => true,
+                    (Some(runtime), Some(service)) => runtime.block_on(async move {
+                        match tokio::time::timeout(QCONNECT_DEADLINE, service.disconnect()).await {
+                            Ok(Ok(())) => true,
+                            Ok(Err(error)) => {
+                                log::warn!(
+                                    "[qbz-qt] Windows QConnect teardown failed: {error}"
+                                );
+                                false
+                            }
+                            Err(_) => {
+                                log::warn!(
+                                    "[qbz-qt] Windows QConnect teardown exceeded {}s",
+                                    QCONNECT_DEADLINE.as_secs()
+                                );
+                                false
+                            }
+                        }
+                    }),
+                    (None, Some(_)) => {
+                        log::warn!(
+                            "[qbz-qt] Windows QConnect teardown has no runtime; skipping persistence"
+                        );
+                        false
+                    }
+                };
                 // `save_on_exit` block_on()s the capture on the tokio handle
                 // bound at shell entry. Safe from a plain thread; it would
                 // panic only from inside an async context, which this is not.
-                qbz_app::session_persist::save_on_exit();
+                if qconnect_owner_safe {
+                    qbz_app::session_persist::save_on_exit();
+                } else {
+                    log::warn!(
+                        "[qbz-qt] Windows session persistence skipped to avoid saving delegated state"
+                    );
+                }
                 // Listen log: the row in flight closes as `shutdown` here too.
                 listen_log_qt::shutdown_blocking();
                 let _ = tx.send(());
@@ -1033,6 +1076,26 @@ pub(crate) fn do_logout() {
     deep_link_qt::set_online_session(false);
     let runtime = app();
     spawn(async move {
+        // QConnect may currently be rendering with delegated credentials and
+        // an ephemeral guest queue. Withdraw LAN admission and restore the
+        // owner authority before the owner token is removed or any session
+        // state can be persisted under the next account.
+        if let Some(service) = qconnect_qt::service() {
+            match service.disconnect_safely().await {
+                Ok(outcome) if outcome.authority_safe => {}
+                Ok(_) => {
+                    integrations_qt::set_qobuz_authenticated(true);
+                    deep_link_qt::set_online_session(true);
+                    return;
+                }
+                Err(e) => {
+                    log::error!("[qbz-qt] QConnect logout teardown failed: {e}");
+                    integrations_qt::set_qobuz_authenticated(true);
+                    deep_link_qt::set_online_session(true);
+                    return;
+                }
+            }
+        }
         // A connected renderer keeps playing after the session ends unless it
         // is torn down explicitly (the cast service owns its own socket).
         cast_qt::service().shutdown().await;
@@ -1891,6 +1954,9 @@ pub(crate) fn playlist_shuffle() {
         // track every time (owner ruling 2026-08-01: every shuffle must be
         // genuinely random).
         if local_playlist_qt::open_id().is_some() {
+            let Some(_owner_action) = playback_qt::begin_owner_action() else {
+                return;
+            };
             runtime.core().set_shuffle(true).await;
             now_playing::set_shuffle(true);
             local_playlist_qt::play_shuffled(&runtime).await;
@@ -3660,66 +3726,82 @@ fn main() {
         // the watchdog `_exit(0)`s the process. Idempotent — the quit paths
         // arm it earlier, at the moment quit was requested.
         arm_hard_exit_watchdog("event-loop exit");
-        // Final full snapshot. Placed here — after the loop and AFTER the
-        // watchdog — rather than in each QML quit handler: window close, tray
-        // "Quit" and the hotkey all converge on this line, so one call covers
-        // paths that four scattered ones would keep missing. (The reference
-        // flushes from the handlers instead — `tray/mod.rs:300`.)
-        //
-        // ORDER IS LOAD-BEARING: this is a synchronous `block_on` of a SQLite
-        // write on the main thread with no UI left. Behind the watchdog it can
-        // wedge and the process still dies in 5s; in front of it, a wedge is an
-        // app with no window that only `kill -9` ends — the 2026-08-04 quit
-        // incident exactly. No-op unless `persist_session` is on.
-        qbz_app::session_persist::save_on_exit();
-        // Listen log: close the row in flight as `shutdown`. Same placement
-        // and the same reasoning as the session flush above (one SQLite
-        // write on the main thread, behind the watchdog).
-        listen_log_qt::shutdown_blocking();
-
-        // Same reason as logout: leaving the app must stop the renderer.
-        //
-        // BOUNDED. This is a `block_on` on the main thread after the UI is
-        // already gone, and it awaits a tokio `Mutex` that the cast poll task
-        // also takes (`cast_qt.rs:1111`, aborted only AFTER the lock is
-        // acquired). If anything holds that lock, the process survives with no
-        // window, no tray response and no way out but `kill -9` — which is
-        // exactly what an owner hit on 2026-08-04. A cast device that keeps
-        // playing for two seconds longer is a far smaller failure than an app
-        // that cannot be closed, so the timeout wins the tie.
+        // Same reason as logout: leaving the app must stop every renderer.
+        // QConnect goes first logically (its future withdraws LAN admission
+        // before touching authority), while the independent notification and
+        // cast cleanup run concurrently under the existing five-second hard
+        // exit budget. Construct every timer inside the runtime: constructing
+        // `tokio::time::timeout` before `block_on` has no reactor and panics.
+        let mut qconnect_owner_safe = true;
         if let Some(rt) = TOKIO.get() {
-            // Construct the timer *inside* the runtime. Building
-            // `tokio::time::timeout` as the argument to `block_on` happens
-            // before the runtime is entered and panics with "no reactor
-            // running" during every normal quit.
-            let notification_withdrawn = rt.block_on(async {
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(1),
-                    qbz_media_controls::withdraw_track_notification(),
-                )
-                .await
+            let (qconnect_stopped, notification_withdrawn, cast_stopped) = rt.block_on(async {
+                let qconnect_stop = async {
+                    let Some(service) = qconnect_qt::service() else {
+                        return true;
+                    };
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(3),
+                        service.disconnect(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => true,
+                        Ok(Err(error)) => {
+                            log::warn!("[qbz-qt] QConnect shutdown failed: {error}");
+                            false
+                        }
+                        Err(_) => false,
+                    }
+                };
+                let notification_stop = async {
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(1),
+                        qbz_media_controls::withdraw_track_notification(),
+                    )
+                    .await
+                    .is_ok()
+                };
+                let cast_stop = async {
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        cast_qt::service().shutdown(),
+                    )
+                    .await
+                    .is_ok()
+                };
+                tokio::join!(qconnect_stop, notification_stop, cast_stop)
             });
-            let notification_withdrawn = notification_withdrawn.is_ok();
+            qconnect_owner_safe = qconnect_stopped;
+            if !qconnect_stopped {
+                log::warn!(
+                    "[qbz-qt] QConnect shutdown did not finish within 3s; \
+                     skipping session persistence to avoid saving delegated state"
+                );
+            }
             if !notification_withdrawn {
                 log::warn!(
                     "[qbz-qt] notification withdrawal did not finish within 1s; exiting anyway"
                 );
             }
-            let stopped = rt.block_on(async {
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    cast_qt::service().shutdown(),
-                )
-                .await
-                .is_ok()
-            });
-            if !stopped {
+            if !cast_stopped {
                 log::warn!(
                     "[qbz-qt] cast shutdown did not finish within 2s; exiting anyway \
                      (a cast device may keep playing until it times out)"
                 );
             }
         }
+
+        // Final full snapshot. QConnect teardown MUST precede this write: a
+        // delegated queue is ephemeral and may never become the owner's saved
+        // session. If bounded teardown failed, preserving the previous saved
+        // snapshot is safer than writing guest state.
+        if qconnect_owner_safe {
+            qbz_app::session_persist::save_on_exit();
+        }
+        // Listen log: close the row in flight as `shutdown`. Same placement
+        // and the same reasoning as the session flush above (one SQLite
+        // write on the main thread, behind the watchdog).
+        listen_log_qt::shutdown_blocking();
         log::info!("[qbz-qt] shutdown complete");
     }
     // Explicit, INSTRUMENTED drops (2026-08-04 quit incident). Rust would run

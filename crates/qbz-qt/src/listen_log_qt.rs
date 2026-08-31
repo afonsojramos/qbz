@@ -20,6 +20,8 @@ use qbz_app::listen_log::{meta_from_queue_track, ListenLogger, Origin};
 use qbz_models::QueueTrack;
 use qbz_player::PlaybackEvent;
 
+use crate::playback_qt::OwnerActionLease;
+
 static LOGGER: OnceLock<RwLock<Option<Arc<ListenLogger>>>> = OnceLock::new();
 
 /// A `track_id == 0` tick is normally the sub-second gap while the engine
@@ -64,6 +66,19 @@ pub async fn teardown() {
     }
 }
 
+/// Playback authority moved from the signed-in owner to a delegated renderer.
+///
+/// The delegation transition calls this only after owner actions have drained,
+/// so no admitted owner hook can still be writing the row. Delegated playback
+/// never opens a replacement row: every hot-path hook below requires the
+/// unforgeable owner lease captured with its playback snapshot.
+pub async fn handoff() {
+    EMPTY_TICKS.store(0, std::sync::atomic::Ordering::Relaxed);
+    if let Some(logger) = logger() {
+        logger.handoff().await;
+    }
+}
+
 /// Orderly exit: close the row in flight as `shutdown`. Synchronous —
 /// called from `main.rs` after the event loop, behind the hard-exit
 /// watchdog like the session flush next to it.
@@ -76,7 +91,11 @@ pub fn shutdown_blocking() {
 /// The de-duped track edge. `event` is the poll's own `PlaybackEvent`, which
 /// carries the ACTUAL stream facts (bit depth / sample rate) — the queue row
 /// only knows what the catalogue claimed.
-pub async fn on_track_edge(track: &QueueTrack, event: &PlaybackEvent) {
+pub async fn on_track_edge(
+    _owner_action: &OwnerActionLease,
+    track: &QueueTrack,
+    event: &PlaybackEvent,
+) {
     // Ephemeral rows (CD / ad-hoc folder) never reach any history — owner
     // rule, same guard as `recently_qt::record_queue_track`.
     if crate::local_ephemeral::is_ephemeral_id(track.id as i64) {
@@ -103,7 +122,12 @@ pub async fn on_track_edge(track: &QueueTrack, event: &PlaybackEvent) {
 /// One poll tick. `position_secs` is the engine's whole-second position;
 /// the accumulator only credits monotonic deltas of at most 5 s while
 /// `is_playing`, so pauses and seeks add nothing.
-pub async fn on_tick(track_id: u64, position_secs: u64, is_playing: bool) {
+pub async fn on_tick(
+    _owner_action: &OwnerActionLease,
+    track_id: u64,
+    position_secs: u64,
+    is_playing: bool,
+) {
     let Some(logger) = logger() else {
         return;
     };
@@ -124,14 +148,14 @@ pub async fn on_tick(track_id: u64, position_secs: u64, is_playing: bool) {
 
 /// The poll loop's natural end-of-track edge (the `track_ended` predicate),
 /// BEFORE anything advances the cursor.
-pub async fn on_natural_end() {
+pub async fn on_natural_end(_owner_action: &OwnerActionLease) {
     if let Some(logger) = logger() {
         logger.ended_naturally().await;
     }
 }
 
 /// A stream failure on the current track.
-pub async fn on_error() {
+pub async fn on_error(_owner_action: &OwnerActionLease) {
     if let Some(logger) = logger() {
         logger.errored().await;
     }

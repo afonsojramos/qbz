@@ -794,6 +794,9 @@ pub fn set_session_artwork(path: &str) {
     let url = qbz_models::fs_url::file_url(&path);
     crate::spawn(async move {
         let runtime = crate::app();
+        let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+            return;
+        };
         if runtime.core().patch_queue_artwork(&ids, &url).await {
             crate::playback_qt::refresh_now_playing(&runtime).await;
         }
@@ -1071,6 +1074,9 @@ async fn play_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, start: usize) {
     if queue.is_empty() {
         return;
     }
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     let start = start.min(queue.len() - 1);
     let first = queue[start].clone();
     runtime.core().set_queue(queue, Some(start)).await;

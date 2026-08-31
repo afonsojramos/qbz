@@ -251,10 +251,8 @@ pub fn local_queue_track(t: &LocalTrack) -> QueueTrack {
     let is_offline = src == "qobuz_download";
     let is_plex = src == "plex";
     let is_media = src == "jellyfin" || src == "subsonic";
-    let artwork_url = crate::local_rows::portable_artwork_ref(
-        t,
-        crate::local_rows::ArtworkScope::Track,
-    );
+    let artwork_url =
+        crate::local_rows::portable_artwork_ref(t, crate::local_rows::ArtworkScope::Track);
     let sample_rate_khz = if t.sample_rate >= 1000.0 {
         t.sample_rate / 1000.0
     } else {
@@ -395,6 +393,11 @@ pub(crate) async fn play_audible(runtime: &Runtime, track: &QueueTrack) -> bool 
     if crate::playback_qt::route_play_remote_track(runtime, track, "play_audible").await {
         return true;
     }
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        // The delegated queue is already audible through its stamped engine;
+        // a local click is a handled refusal, never a second backend start.
+        return true;
+    };
     if belongs_to_the_offline_tier(track) {
         return match crate::playback_qt::play_resolved_offline_aware(runtime, track.id, 0).await {
             Ok(()) => true,
@@ -584,6 +587,9 @@ pub(crate) async fn play_rows(
     };
     let Some(first) = prepared.anchor_track().cloned() else {
         log::warn!("[qbz-qt] local play: prepared queue has no anchor");
+        return;
+    };
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
         return;
     };
 
@@ -810,6 +816,9 @@ pub(crate) async fn enqueue_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, mod
     // Same stamping seam the Qobuz enqueue paths use, so an appended local
     // block carries its own origin instead of inheriting whatever is playing.
     let queue = crate::playback_qt::stamped(tracks.iter().map(local_queue_track).collect(), None);
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     // Same core helpers the Qobuz rows use: "next" inserts at the cursor
     // (reversed so a multi-track insert keeps its order), "later" appends to
     // the block tail, anything else appends.
@@ -1130,6 +1139,9 @@ pub async fn play_single_from_source(runtime: &Runtime, track_id: u64, source: &
                     let Some(first) = prepared.anchor_track().cloned() else {
                         log::warn!("[qbz-qt] {source} play: prepared queue has no anchor");
                         return false;
+                    };
+                    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+                        return true;
                     };
                     let played = play_audible(runtime, &first).await;
                     if !played {

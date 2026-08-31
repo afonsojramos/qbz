@@ -561,6 +561,9 @@ fn dispatch(ev: MediaEvent) {
         // sites (`src/cast_qt.rs:309`, `src/qconnect_engine_qt.rs:92`).
         // `QbzCore::stop` is synchronous (`crates/qbz-core/src/core.rs:1060`).
         MediaEvent::Stop => {
+            let Some(_transport_action) = crate::playback_qt::begin_transport_action() else {
+                return;
+            };
             // Bound to a local first: `AppRuntime::core()` returns a BORROW
             // (`crates/qbz-app/src/shell.rs:144`) and `app()` hands back an
             // owned Arc, so the runtime must outlive the call — the same shape

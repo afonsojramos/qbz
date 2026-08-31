@@ -156,10 +156,21 @@ impl qbz_qconnect::QbzQConnect {
             // value — Some ONLY when the operation succeeded, so a failed
             // manual connect never downgrades a remembered "connected".
             let (connected, record) = if service.is_running().await {
-                if let Err(err) = service.disconnect().await {
-                    log::warn!("[QConnect] disconnect failed: {err}");
+                match service.disconnect_safely().await {
+                    Ok(outcome) if outcome.authority_safe => {
+                        if !outcome.owner_restored {
+                            log::warn!(
+                                "[QConnect] disconnected safely, but owner playback was not restored"
+                            );
+                        }
+                        (false, Some(false))
+                    }
+                    Ok(_) => (true, None),
+                    Err(err) => {
+                        log::warn!("[QConnect] disconnect failed: {err}");
+                        (true, None)
+                    }
                 }
-                (false, Some(false))
             } else {
                 match service.connect().await {
                     Ok(()) => (true, Some(true)),

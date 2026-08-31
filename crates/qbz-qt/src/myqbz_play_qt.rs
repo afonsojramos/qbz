@@ -329,6 +329,9 @@ pub(crate) async fn play_all_tracks(
         crate::toast_qt::error(qbz_i18n::t("This collection resolved to 0 playable tracks"));
         return;
     }
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     // Context `None` — `derive_context` infers album-or-artist (T16).
     // F1: the anchor comes back from the seam, never from `tracks[0]`.
     let Some(anchor) = crate::playback_qt::set_queue_stamped(runtime, tracks, Some(0), None).await
@@ -507,6 +510,9 @@ pub(crate) fn item_action(source_item_id: String, action: String) {
                 return;
             }
         }
+        let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+            return;
+        };
         let added_castable = crate::playback_qt::batch_all_qconnect_castable(&tracks);
 
         match mode {
@@ -647,6 +653,9 @@ fn bulk_enqueue_inner(items: Vec<MixtapeCollectionItem>, mode: BulkEnqueueMode) 
         if crate::playback_qt::route_enqueue_to_peer(&tracks, routed_mode).await {
             return;
         }
+        let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+            return;
+        };
         let added_castable = crate::playback_qt::batch_all_qconnect_castable(&tracks);
 
         match mode {
@@ -737,6 +746,9 @@ pub(crate) fn play_inline_track(item_source_item_id: String, track_id: String, a
             crate::toast_qt::error(qbz_i18n::t("This track is no longer available"));
             return;
         };
+        let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+            return;
+        };
 
         match mode {
             InlineTrackMode::Play => {
@@ -753,7 +765,9 @@ pub(crate) fn play_inline_track(item_source_item_id: String, track_id: String, a
                 let first_id = anchor.track_id;
                 // QConnect CONTROLLER mode (§7): route the play to the peer
                 // (after the funnel, before the local audible step).
-                if crate::playback_qt::route_play_remote(&runtime, first_id, "play_inline_track").await {
+                if crate::playback_qt::route_play_remote(&runtime, first_id, "play_inline_track")
+                    .await
+                {
                     return;
                 }
                 if let Err(e) =

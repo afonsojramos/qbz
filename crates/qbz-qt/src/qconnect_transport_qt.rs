@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
+use qbz_qobuz::ApiError;
 use qconnect_transport_ws::WsTransportConfig;
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +27,61 @@ const DEFAULT_QCONNECT_DEVICE_TYPE: i32 = 5; // computer
 const DEFAULT_QCONNECT_SOFTWARE_PREFIX: &str = "qbz";
 
 type Runtime = Arc<AppRuntime<LoggingAdapter>>;
+
+#[derive(Clone, Copy)]
+enum QconnectCredentialFailure {
+    ApiClientUnavailable,
+    Network,
+    Authentication,
+    Authorization,
+    Offline,
+    RateLimited,
+    Server,
+    InvalidResponse,
+    ServiceResponse,
+    Client,
+    MissingEndpoint,
+}
+
+impl QconnectCredentialFailure {
+    const fn category(self) -> &'static str {
+        match self {
+            Self::ApiClientUnavailable => "api-client-unavailable",
+            Self::Network => "network",
+            Self::Authentication => "authentication",
+            Self::Authorization => "authorization",
+            Self::Offline => "offline",
+            Self::RateLimited => "rate-limited",
+            Self::Server => "server",
+            Self::InvalidResponse => "invalid-response",
+            Self::ServiceResponse => "service-response",
+            Self::Client => "client",
+            Self::MissingEndpoint => "missing-endpoint",
+        }
+    }
+}
+
+fn classify_qconnect_credential_error(error: &ApiError) -> QconnectCredentialFailure {
+    match error {
+        ApiError::NetworkError(_) => QconnectCredentialFailure::Network,
+        ApiError::AuthenticationError(_)
+        | ApiError::InvalidAppId
+        | ApiError::InvalidAppSecret
+        | ApiError::BundleExtractionError(_) => QconnectCredentialFailure::Authentication,
+        ApiError::IneligibleUser | ApiError::Forbidden(_) | ApiError::ForbiddenCircuitOpen(_) => {
+            QconnectCredentialFailure::Authorization
+        }
+        ApiError::OfflineMode => QconnectCredentialFailure::Offline,
+        ApiError::RateLimited(_) => QconnectCredentialFailure::RateLimited,
+        ApiError::ServerError(_) => QconnectCredentialFailure::Server,
+        ApiError::ParseError(_) => QconnectCredentialFailure::InvalidResponse,
+        ApiError::ApiResponse(_) => QconnectCredentialFailure::ServiceResponse,
+        ApiError::NonStreamable
+        | ApiError::InvalidQuality(_)
+        | ApiError::NoQualityAvailable
+        | ApiError::TrackUnavailable(_) => QconnectCredentialFailure::Client,
+    }
+}
 
 /// Persistent QConnect device identity — delegates to the shared module so the
 /// Qt install resolves the SAME uuid as Slint (same DB path/key/env override).
@@ -421,14 +477,18 @@ pub async fn resolve_transport_config(runtime: &Runtime) -> Result<WsTransportCo
                 endpoint_url = endpoint_url.or(discovered_endpoint);
                 jwt_qws = jwt_qws.or(discovered_jwt_qws);
             }
-            Err(err) if endpoint_url.is_some() => {
+            Err(failure) if endpoint_url.is_some() => {
                 log::warn!(
-                    "[QConnect] qws/createToken auto-discovery failed, using provided endpoint: {err}"
+                    "[QConnect] qws/createToken auto-discovery failed, using provided endpoint \
+                     (category={})",
+                    failure.category()
                 );
             }
-            Err(err) => {
+            Err(failure) => {
                 return Err(format!(
-                    "QConnect endpoint_url is required (or QBZ_QCONNECT_WS_ENDPOINT). Auto-discovery via qws/createToken failed: {err}"
+                    "QConnect endpoint_url is required (or QBZ_QCONNECT_WS_ENDPOINT). \
+                     Auto-discovery via qws/createToken failed (category={})",
+                    failure.category()
                 ));
             }
         }
@@ -462,7 +522,7 @@ pub async fn resolve_transport_config(runtime: &Runtime) -> Result<WsTransportCo
 
 async fn fetch_qconnect_transport_credentials(
     runtime: &Runtime,
-) -> Result<(Option<String>, Option<String>), String> {
+) -> Result<(Option<String>, Option<String>), QconnectCredentialFailure> {
     // Qt difference (same as Slint): the client is Option-wrapped (None before
     // API init).
     let client = runtime
@@ -471,18 +531,18 @@ async fn fetch_qconnect_transport_credentials(
         .read()
         .await
         .clone()
-        .ok_or_else(|| "qws/createToken requires an initialized API client".to_string())?;
+        .ok_or(QconnectCredentialFailure::ApiClientUnavailable)?;
 
     let (endpoint, _expires_at, jwt) = client
         .create_qconnect_token()
         .await
-        .map_err(|err| format!("qws/createToken failed: {err}"))?
+        .map_err(|error| classify_qconnect_credential_error(&error))?
         .into_parts();
     let endpoint_url = normalize_opt_string(endpoint);
     let jwt_qws = normalize_opt_string(Some(jwt));
 
     if endpoint_url.is_none() {
-        return Err("qws/createToken response missing jwt_qws.endpoint".to_string());
+        return Err(QconnectCredentialFailure::MissingEndpoint);
     }
 
     Ok((endpoint_url, jwt_qws))

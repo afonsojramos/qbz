@@ -768,6 +768,9 @@ pub fn set_page(page: i32) {
 }
 
 pub async fn play_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index: usize) {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     let Some(&upcoming_index) = current_page_indices(runtime).await.get(page_index) else {
         log::warn!("[qbz-qt] queue: play_upcoming {page_index} out of range");
         return;
@@ -793,6 +796,9 @@ pub async fn play_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index
 /// so it resolves the right track even when the desktop panel was left
 /// filtered or paged (state.slint:4896-4900 `play-coverflow-upcoming`).
 pub async fn play_upcoming_flat(runtime: &Arc<AppRuntime<LoggingAdapter>>, upcoming_index: usize) {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     let state = runtime.core().get_queue_state_full().await;
     if let Some(candidate) = state.upcoming.get(upcoming_index) {
         if crate::local_playback::preflight_queue_track(candidate)
@@ -813,6 +819,9 @@ async fn play_extended_upcoming(
     upcoming_index: usize,
     expected_id: u64,
 ) {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     let state = runtime.core().get_queue_state_full().await;
     let Some(track) = state.upcoming.get(upcoming_index).cloned() else {
         return;
@@ -872,6 +881,9 @@ pub async fn play_extended(
             play_extended_upcoming(runtime, phase_index, expected_id).await;
         }
         "history" => {
+            let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+                return;
+            };
             let state = runtime.core().get_queue_state_full().await;
             let Some(track) = state.history.get(phase_index).cloned() else {
                 return;
@@ -938,6 +950,9 @@ pub async fn play_extended(
 }
 
 pub async fn remove_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index: usize) {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     let Some(&upcoming_index) = current_page_indices(runtime).await.get(page_index) else {
         log::warn!("[qbz-qt] queue: remove_upcoming {page_index} out of range");
         return;
@@ -950,6 +965,9 @@ pub async fn remove_upcoming_flat(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     upcoming_index: usize,
 ) {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     let state = runtime.core().get_queue_state_full().await;
     if upcoming_index >= state.upcoming.len() {
         return;
@@ -973,6 +991,9 @@ pub async fn remove_upcoming_flat(
 /// merely on a share this network cannot see, because an unreachable local row
 /// is `Unreachable`, not dead, and never enters that predicate.
 pub async fn purge_unavailable_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> usize {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return 0;
+    };
     let doomed: Vec<usize> = {
         let state = runtime.core().get_queue_state_full().await;
         state
@@ -998,6 +1019,9 @@ pub async fn purge_unavailable_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>
 }
 
 pub async fn remove_all_after(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index: usize) {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     let Some(&upcoming_index) = current_page_indices(runtime).await.get(page_index) else {
         log::warn!("[qbz-qt] queue: remove_all_after {page_index} out of range");
         return;
@@ -1010,6 +1034,9 @@ pub async fn remove_all_after_flat(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     upcoming_index: usize,
 ) {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     let state = runtime.core().get_queue_state_full().await;
     if upcoming_index >= state.upcoming.len() {
         return;
@@ -1041,6 +1068,9 @@ pub async fn move_track(
     from_page: usize,
     to_slot: usize,
 ) {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     let page_rows = current_page_indices(runtime).await;
     let Some(&from_q) = page_rows.get(from_page) else {
         log::warn!("[qbz-qt] queue: reorder from {from_page} out of range");
@@ -1082,6 +1112,9 @@ pub async fn move_track_flat(
     from: usize,
     to_slot: usize,
 ) {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     let state = runtime.core().get_queue_state_full().await;
     if from >= state.upcoming.len() || to_slot > state.upcoming.len() {
         return;
@@ -1114,6 +1147,9 @@ async fn insert_queue_track_at(
     track: QueueTrack,
     to_slot: usize,
 ) -> Result<InsertOutcome, String> {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return Ok(InsertOutcome::Remote);
+    };
     if let Some(service) = crate::qconnect_qt::service() {
         if service
             .insert_at_slot_on_peer_if_active(track.id, track.source.as_deref(), to_slot)
@@ -1122,7 +1158,6 @@ async fn insert_queue_track_at(
             return Ok(InsertOutcome::Remote);
         }
     }
-
     let added_castable =
         crate::playback_qt::batch_all_qconnect_castable(std::slice::from_ref(&track));
     runtime.core().add_track(track).await;
@@ -1152,6 +1187,9 @@ pub async fn drop_extended(
     target_phase: &str,
     to_slot: usize,
 ) {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     match phase {
         "upcoming" => {
             if target_phase != "upcoming" {
@@ -1197,11 +1235,7 @@ pub async fn drop_extended(
             }
             if let Some(service) = crate::qconnect_qt::service() {
                 match service
-                    .insert_at_slot_on_peer_outcome(
-                        track.id,
-                        track.source.as_deref(),
-                        to_slot,
-                    )
+                    .insert_at_slot_on_peer_outcome(track.id, track.source.as_deref(), to_slot)
                     .await
                 {
                     crate::qconnect_qt::PeerInsertAtSlotOutcome::Inserted => {
@@ -1309,6 +1343,9 @@ pub async fn insert_dragged_track(
 
 /// History replay (queue.rs play_history: a fresh single-track queue).
 pub async fn play_history(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: usize) {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     let state = runtime.core().get_queue_state_full().await;
     let Some(track) = state.history.get(index).cloned() else {
         log::warn!("[qbz-qt] queue: play_history {index} out of range");
@@ -1342,6 +1379,9 @@ pub async fn play_history(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: usiz
 /// come back showing "page 3 of 1" filtered by a query with nothing left to
 /// match.
 pub async fn clear_queue(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     let playing = runtime.core().get_playback_state().is_playing;
     runtime.core().clear_queue(playing).await;
     {
@@ -1358,6 +1398,9 @@ pub async fn clear_queue(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 /// clears it. The core auto-clears the marker on queue mutation, and `publish`
 /// reflects whatever it currently holds. `queue.rs::toggle_stop_after` 1:1.
 pub async fn toggle_stop_after(runtime: &Arc<AppRuntime<LoggingAdapter>>, id: &str) {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     let Ok(track_id) = id.parse::<u64>() else {
         return;
     };
