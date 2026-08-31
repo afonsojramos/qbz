@@ -141,6 +141,14 @@ Rectangle {
     // `playlist add-tracks` as a QOBUZ catalog id — a local row dropped on a
     // playlist would silently add an unrelated catalog track.
     property bool draggable: true
+    /// LOCAL-mode drag arm (2026-08-30): the row IS a drag source, but its
+    /// `item.id` is a LOCAL library row id, so it enters the shared drag via
+    /// `dragStartLocal` — a typed payload the drop handlers resolve
+    /// source-aware, never a number that could be read as a catalog id.
+    /// Independent of `draggable` on purpose: `catalogRow` below keeps
+    /// meaning "item.id is a Qobuz catalog id".
+    property bool localDragSource: false
+    readonly property bool dragSource: root.draggable || root.localDragSource
     /// A live transport guard separate from catalogue availability. The full
     /// queue uses it when QConnect is active: incompatible rows stay visible
     /// and keep their non-transport menu actions, but cannot play or drag.
@@ -1471,7 +1479,7 @@ Rectangle {
         // later, `onCanceled` fired, and the drag died at roughly the row
         // boundary — never reaching the sidebar. Arming at 6px and claiming
         // the grab there wins the race by construction, because 6 < 10.
-        preventStealing: (root.reorderDrag && root.draggable && !root.selectMode)
+        preventStealing: (root.reorderDrag && root.dragSource && !root.selectMode)
                          || root.dragging
         onPressed: function (mouse) {
             if (mouse.button === Qt.RightButton) {
@@ -1491,7 +1499,7 @@ Rectangle {
             // A dead row is not a drag source either: dropping it on a sidebar
             // playlist would add a track that cannot play, which is precisely
             // the state this treatment exists to stop spreading.
-            if (!pressed || !(pressedButtons & Qt.LeftButton) || !root.draggable
+            if (!pressed || !(pressedButtons & Qt.LeftButton) || !root.dragSource
                 || root.selectMode || root.pulledDead || root.playBlocked) return
             const g = mapToItem(null, mouse.x, mouse.y)
             const dx = mouse.x - root.downPos.x
@@ -1519,9 +1527,15 @@ Rectangle {
             if (!root.dragging && armed) {
                 root.dragging = true
                 root.bodyDragStarted(root.number)
-                QbzShell.dragStart(root.item.id, root.item.title || "",
-                    (root.item.artist || "") + " · " + (root.item.album || ""),
-                    g.x, g.y, root.inlineDragVisual)
+                if (root.localDragSource)
+                    QbzShell.dragStartLocal(String(root.item.id),
+                        root.item.title || "",
+                        (root.item.artist || "") + " · " + (root.item.album || ""),
+                        g.x, g.y, root.inlineDragVisual)
+                else
+                    QbzShell.dragStart(root.item.id, root.item.title || "",
+                        (root.item.artist || "") + " · " + (root.item.album || ""),
+                        g.x, g.y, root.inlineDragVisual)
             }
             if (root.dragging) QbzShell.dragMove(g.x, g.y)
         }
