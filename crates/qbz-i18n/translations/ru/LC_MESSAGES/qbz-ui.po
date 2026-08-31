@@ -6269,3 +6269,9 @@ msgstr "Изменить регулятор микшера"
 
 msgid "Qobuz Connect could not shut down safely. Quit and reopen QBZ, then try logging out again."
 msgstr "Не удалось безопасно завершить работу Qobuz Connect. Закройте и снова откройте QBZ, затем повторите выход из учётной записи."
+
+msgid "Show filter panels"
+msgstr "Показать панели фильтров"
+
+msgid "Hide filter panels"
+msgstr "Скрыть панели фильтров"

@@ -1871,3 +1871,9 @@ msgstr "Change mixer control"
 
 msgid "Qobuz Connect could not shut down safely. Quit and reopen QBZ, then try logging out again."
 msgstr "Qobuz Connect could not shut down safely. Quit and reopen QBZ, then try logging out again."
+
+msgid "Show filter panels"
+msgstr "Show filter panels"
+
+msgid "Hide filter panels"
+msgstr "Hide filter panels"

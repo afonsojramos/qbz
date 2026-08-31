@@ -6233,3 +6233,9 @@ msgstr "ミキサーコントロールを変更"
 
 msgid "Qobuz Connect could not shut down safely. Quit and reopen QBZ, then try logging out again."
 msgstr "Qobuz Connect を安全に終了できませんでした。QBZ を終了して再度開き、もう一度ログアウトしてください。"
+
+msgid "Show filter panels"
+msgstr "フィルターパネルを表示"
+
+msgid "Hide filter panels"
+msgstr "フィルターパネルを非表示"

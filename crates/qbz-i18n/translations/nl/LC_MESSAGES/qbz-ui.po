@@ -6239,3 +6239,9 @@ msgstr "Mixerregelaar wijzigen"
 
 msgid "Qobuz Connect could not shut down safely. Quit and reopen QBZ, then try logging out again."
 msgstr "Qobuz Connect kon niet veilig worden afgesloten. Sluit QBZ af, open het opnieuw en probeer daarna nogmaals uit te loggen."
+
+msgid "Show filter panels"
+msgstr "Filterpanelen tonen"
+
+msgid "Hide filter panels"
+msgstr "Filterpanelen verbergen"

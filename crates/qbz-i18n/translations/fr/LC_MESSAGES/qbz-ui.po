@@ -6249,3 +6249,9 @@ msgstr "Changer la commande de mixage"
 
 msgid "Qobuz Connect could not shut down safely. Quit and reopen QBZ, then try logging out again."
 msgstr "Qobuz Connect n’a pas pu s’arrêter en toute sécurité. Quittez et rouvrez QBZ, puis réessayez de vous déconnecter."
+
+msgid "Show filter panels"
+msgstr "Afficher les panneaux de filtres"
+
+msgid "Hide filter panels"
+msgstr "Masquer les panneaux de filtres"
