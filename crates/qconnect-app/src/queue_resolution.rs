@@ -42,9 +42,7 @@ pub fn is_valid_ordered_queue_shuffle_order(order: &[usize], track_count: usize)
     true
 }
 
-pub fn ordered_queue_cursors(
-    queue: &QConnectQueueState,
-) -> Vec<QconnectOrderedQueueCursor> {
+pub fn ordered_queue_cursors(queue: &QConnectQueueState) -> Vec<QconnectOrderedQueueCursor> {
     let mut cursors = if queue.shuffle_mode {
         queue
             .shuffle_order
@@ -438,20 +436,21 @@ pub fn resolve_qconnect_shuffle_pivot(
     None
 }
 
-pub fn resolve_core_shuffle_order(
-    queue_state: &QConnectQueueState,
-    renderer_queue_item_id: Option<u64>,
-    renderer_track_id: Option<u64>,
-    renderer_next_queue_item_id: Option<u64>,
-    renderer_next_track_id: Option<u64>,
-) -> Option<Vec<usize>> {
+/// Return the WS-authored playback order without reinterpretation.
+///
+/// `shuffled_track_indexes` already is the official session order over the
+/// original queue. Current/next belong to the renderer cursor and must never be
+/// prepended here: doing so creates a QBZ-only permutation that other official
+/// clients cannot observe.
+pub fn resolve_core_shuffle_order(queue_state: &QConnectQueueState) -> Option<Vec<usize>> {
     if !queue_state.shuffle_mode {
         return None;
     }
 
-    let raw_order = queue_state.shuffle_order.as_ref().filter(|order| {
-        is_valid_ordered_queue_shuffle_order(order, queue_state.queue_items.len())
-    });
+    let raw_order = queue_state
+        .shuffle_order
+        .as_ref()
+        .filter(|order| is_valid_ordered_queue_shuffle_order(order, queue_state.queue_items.len()));
 
     if raw_order.is_none() {
         log::debug!(
@@ -461,42 +460,7 @@ pub fn resolve_core_shuffle_order(
         );
         return None;
     }
-    let raw_order = raw_order.unwrap();
-
-    let current_index =
-        resolve_remote_start_index(queue_state, renderer_queue_item_id, renderer_track_id);
-    let next_index = resolve_remote_start_index(
-        queue_state,
-        renderer_next_queue_item_id,
-        renderer_next_track_id,
-    );
-
-    let mut ordered = Vec::with_capacity(queue_state.queue_items.len());
-    if let Some(index) = current_index {
-        ordered.push(index);
-    }
-    if let Some(index) = next_index {
-        if !ordered.contains(&index) {
-            ordered.push(index);
-        }
-    }
-    for &index in raw_order {
-        if !ordered.contains(&index) {
-            ordered.push(index);
-        }
-    }
-    for index in 0..queue_state.queue_items.len() {
-        if !ordered.contains(&index) {
-            ordered.push(index);
-        }
-    }
-
-    log::debug!(
-        "[QConnect] resolve_core_shuffle_order: result={:?} current={:?} next={:?}",
-        ordered, current_index, next_index,
-    );
-
-    Some(ordered)
+    Some(raw_order.unwrap().clone())
 }
 
 fn is_cloud_placeholder_current_queue_item(
@@ -588,6 +552,21 @@ mod tests {
     fn track_id_lookup_when_qid_absent_from_queue() {
         let q = queue(vec![item(0, 100), item(7, 200)]);
         assert_eq!(resolve_remote_start_index(&q, Some(99), Some(200)), Some(1));
+    }
+
+    #[test]
+    fn core_shuffle_projection_preserves_ws_indexes_byte_for_byte() {
+        let mut q = queue(vec![
+            item(0, 100),
+            item(1, 101),
+            item(2, 102),
+            item(3, 103),
+            item(4, 104),
+        ]);
+        q.shuffle_mode = true;
+        q.shuffle_order = Some(vec![4, 2, 0, 3, 1]);
+
+        assert_eq!(resolve_core_shuffle_order(&q), Some(vec![4, 2, 0, 3, 1]));
     }
 
     /// Shuffle pivot prefers the renderer's reported queue_item_id.

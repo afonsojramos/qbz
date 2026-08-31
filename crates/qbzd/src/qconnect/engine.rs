@@ -490,11 +490,6 @@ impl QconnectRendererEngine for DaemonRendererEngine {
             self.core().set_shuffle(enabled).await;
         }
     }
-    async fn set_shuffle_flag(&self, enabled: bool) {
-        if let Ok(_permit) = self.action_permit() {
-            self.core().set_shuffle_with_order(enabled, None).await;
-        }
-    }
     async fn get_all_queue_tracks(&self) -> (Vec<QueueTrack>, Option<usize>) {
         if !self.is_current() {
             return (Vec::new(), None);

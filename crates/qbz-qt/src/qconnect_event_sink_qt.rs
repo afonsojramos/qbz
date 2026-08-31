@@ -519,7 +519,9 @@ impl QtQconnectEventSink {
         }
 
         let playback_state = self.engine.get_playback_state();
-        if playback_state.track_id == 0 {
+        // stop() intentionally preserves current_track_id, so track_id alone
+        // would issue another stop for every peer state/volume/quality event.
+        if playback_state.track_id == 0 || !self.engine.has_loaded_audio() {
             return;
         }
         if !self.is_current() {
@@ -702,12 +704,25 @@ impl QconnectEventSink for QtQconnectEventSink {
                 if !self.is_current() {
                     return;
                 }
-                if let Err(err) = result {
+                let applied = if let Err(err) = result {
                     log::warn!("[QConnect] Failed to apply renderer command: {err}");
+                    false
                 } else if became_active {
                     self.report_active_renderer_ready().await;
                     if !self.is_current() {
                         return;
+                    }
+                    true
+                } else {
+                    true
+                };
+                if applied {
+                    let (volume, muted) = local_volume_ui_projection(command, state);
+                    if let Some(volume) = volume {
+                        crate::now_playing::set_volume(volume);
+                    }
+                    if let Some(muted) = muted {
+                        crate::now_playing::set_muted(muted);
                     }
                 }
                 // A SetState changes the current track / play-state — reflect it
@@ -819,6 +834,34 @@ fn renderer_command_label(command: &RendererCommand) -> &'static str {
     }
 }
 
+/// Project a controller-originated volume command onto the local QBZ slider.
+/// Applying the command to the audio engine is not enough: ordinary local
+/// software volume is deliberately excluded from the 1 Hz hardware-knob poll,
+/// so without this command-edge projection the sound changes while QML remains
+/// at its previous value.
+fn local_volume_ui_projection(
+    command: &RendererCommand,
+    state: &qconnect_app::QConnectRendererState,
+) -> (Option<f32>, Option<bool>) {
+    match command {
+        RendererCommand::SetVolume { volume, .. } => {
+            let volume = state
+                .volume
+                .or(*volume)
+                .map(qconnect_app::renderer::normalize_volume_to_fraction);
+            (volume, volume.map(|value| value <= 0.0))
+        }
+        RendererCommand::MuteVolume { value } if *value => (Some(0.0), Some(true)),
+        RendererCommand::MuteVolume { .. } => (
+            state
+                .volume
+                .map(qconnect_app::renderer::normalize_volume_to_fraction),
+            Some(false),
+        ),
+        _ => (None, None),
+    }
+}
+
 /// Format a QConnect event into a one-line DEV-log entry. Big payloads
 /// (QueueUpdated / SessionManagement) are summarized; the rest use Debug.
 fn dev_event_line(event: &QconnectAppEvent) -> String {
@@ -886,5 +929,38 @@ mod tests {
         assert!(!carries_lan_session_projection(
             "MESSAGE_TYPE_SRVR_CTRL_QUEUE_STATE"
         ));
+    }
+
+    #[test]
+    fn local_renderer_volume_command_projects_to_the_qbz_slider() {
+        let command = RendererCommand::SetVolume {
+            volume: Some(10),
+            volume_delta: None,
+        };
+        let state = qconnect_app::QConnectRendererState {
+            volume: Some(73),
+            ..Default::default()
+        };
+
+        let (volume, muted) = local_volume_ui_projection(&command, &state);
+
+        assert!((volume.unwrap() - 0.73).abs() < f32::EPSILON);
+        assert_eq!(muted, Some(false));
+    }
+
+    #[test]
+    fn local_renderer_mute_edges_project_both_slider_and_icon() {
+        let state = qconnect_app::QConnectRendererState {
+            volume: Some(42),
+            ..Default::default()
+        };
+        assert_eq!(
+            local_volume_ui_projection(&RendererCommand::MuteVolume { value: true }, &state),
+            (Some(0.0), Some(true))
+        );
+        assert_eq!(
+            local_volume_ui_projection(&RendererCommand::MuteVolume { value: false }, &state),
+            (Some(0.42), Some(false))
+        );
     }
 }

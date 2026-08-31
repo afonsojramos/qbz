@@ -12,8 +12,8 @@ use qconnect_core::{
 use qconnect_protocol::{
     build_qconnect_outbound_envelope, build_qconnect_renderer_outbound_envelope,
     decode_playback_error, parse_inbound_event, InboundEnvelope, QueueCommand, QueueCommandType,
-    QueueEventType, QueueServerEvent, RendererCommandType, RendererReport, RendererReportType,
-    RendererServerCommand,
+    QueueEventType, QueueServerEvent, RendererBufferState, RendererCommandType, RendererReport,
+    RendererReportType, RendererServerCommand,
 };
 use qconnect_transport_ws::{TransportEvent, WsTransport, WsTransportConfig};
 use serde_json::Value;
@@ -23,13 +23,14 @@ use uuid::Uuid;
 use async_trait::async_trait;
 use qbz_player::player::PlaybackBufferState;
 
+use crate::renderer::PLAYING_STATE_STOPPED;
 use crate::session::{
     compute_connection_state, deferred_join_reason, is_local_renderer_active,
     is_peer_renderer_active, normalize_active_renderer_id, refresh_local_renderer_id,
     should_arm_renderer_watchdog, should_reask_queue_state, LocalIdentity,
     QconnectFileAudioQualitySnapshot, QconnectLifecycleState, QconnectRendererInfo, RendererStatus,
-    ServerActiveState, PLAYING_STATE_PLAYING, PLAYING_STATE_UNKNOWN,
-    QCONNECT_RENDERER_LOST_TIMEOUT_MS,
+    ServerActiveState, JOIN_SESSION_REASON_CONTROLLER_REQUEST, PLAYING_STATE_PLAYING,
+    PLAYING_STATE_UNKNOWN, QCONNECT_RENDERER_LOST_TIMEOUT_MS,
 };
 use crate::{
     build_renderer_playback_report, ensure_session_renderer_state,
@@ -235,6 +236,41 @@ where
         report: RendererReport,
     ) -> Result<(), QconnectAppError> {
         self.send_renderer_report(report).await
+    }
+
+    /// Send the exact controller-requested renderer JoinSession report used by
+    /// delegated handoff and reconnect. Hosts supply only their serialized
+    /// device-info projection; queue version and initial wire state stay shared
+    /// so Qt and qbzd cannot drift independently.
+    pub async fn send_delegated_join(
+        &self,
+        session_id: &str,
+        become_active: bool,
+        device_info: Value,
+    ) -> Result<(), QconnectAppError> {
+        let queue_version = self.queue_state_snapshot().await.version;
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrJoinSession,
+            Uuid::new_v4().to_string(),
+            queue_version,
+            serde_json::json!({
+                "session_uuid": session_id,
+                "device_info": device_info,
+                "is_active": become_active,
+                "reason": JOIN_SESSION_REASON_CONTROLLER_REQUEST,
+                "initial_state": {
+                    "playing_state": PLAYING_STATE_STOPPED,
+                    "buffer_state": RendererBufferState::Ok.as_i32(),
+                    "current_position": 0,
+                    "duration": 0,
+                    "queue_version": {
+                        "major": queue_version.major,
+                        "minor": queue_version.minor,
+                    }
+                }
+            }),
+        );
+        self.send_renderer_report_command(report).await
     }
 
     /// Emit a RndrSrvrFileAudioQualityChanged report describing the decoded file
@@ -809,7 +845,10 @@ fn map_server_event(event: &QueueServerEvent, current: &QConnectQueueState) -> Q
                 next.shuffle_order = if !parsed_shuffle.is_empty() {
                     Some(parsed_shuffle)
                 } else {
-                    current.shuffle_order.clone()
+                    // A QueueState is an authoritative snapshot. Reusing an
+                    // older order when the field is absent would preserve a
+                    // QBZ-only permutation across a server resync.
+                    None
                 };
             } else {
                 next.shuffle_order = None;
@@ -1014,16 +1053,13 @@ fn parse_u64(payload: &Value, field: &str) -> Option<u64> {
 /// Parse a JSON byte array (e.g. the server `queue_hash` field #100) into bytes.
 /// Returns `None` when absent/null so an omitted hash does not clobber state.
 fn parse_bytes(payload: &Value, field: &str) -> Option<Vec<u8>> {
-    payload
-        .get(field)
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(value_as_u64)
-                .filter_map(|value| u8::try_from(value).ok())
-                .collect()
-        })
+    payload.get(field).and_then(Value::as_array).map(|entries| {
+        entries
+            .iter()
+            .filter_map(value_as_u64)
+            .filter_map(|value| u8::try_from(value).ok())
+            .collect()
+    })
 }
 
 fn parse_bool(payload: &Value, field: &str, default: bool) -> bool {
@@ -1114,9 +1150,7 @@ fn session_management_event_completes_pending_action(
         return true;
     }
 
-    if pending.is_set_volume_action
-        && matches!(event_type, QueueEventType::SrvrCtrlVolumeChanged)
-    {
+    if pending.is_set_volume_action && matches!(event_type, QueueEventType::SrvrCtrlVolumeChanged) {
         // Volume changes come back as session-management events without a
         // stable action_uuid ack. Treat the first volume-changed echo as the
         // completion signal so a rapid volume drag is not blocked behind the
@@ -1398,8 +1432,7 @@ where
                 remote_projection_renderer_id = Some(renderer_id as i32);
                 sync_local_playback = true;
 
-                let is_active_peer = state.session.active_renderer_id
-                    == Some(renderer_id as i32)
+                let is_active_peer = state.session.active_renderer_id == Some(renderer_id as i32)
                     && is_peer_renderer_active(&state.session)
                     && renderer_id != -1;
 
@@ -2028,7 +2061,8 @@ where
                             log::info!(
                                 "[QConnect/Transport] Session established — backoff counters reset"
                             );
-                            host.update_lifecycle(QconnectLifecycleState::Connected).await;
+                            host.update_lifecycle(QconnectLifecycleState::Connected)
+                                .await;
                         }
                         TransportEvent::MaxReconnectAttemptsExceeded {
                             attempts,
@@ -2110,8 +2144,7 @@ where
                                     // re-claim, or the idle auto-take when our
                                     // ADD_RENDERER already landed).
                                     auto_take_attempted = true;
-                                    if let Err(err) =
-                                        self.send_set_active_renderer(local_id).await
+                                    if let Err(err) = self.send_set_active_renderer(local_id).await
                                     {
                                         log::warn!(
                                             "[QConnect] takeover set_active_renderer failed: {err}"
@@ -2193,7 +2226,7 @@ mod tests {
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use qconnect_core::QueueVersion;
+    use qconnect_core::{QueueEvent, QueueVersion};
     use qconnect_transport_ws::InMemoryWsTransport;
 
     use crate::session::{
@@ -2203,9 +2236,9 @@ mod tests {
     use serde_json::json;
     use tokio::sync::Mutex;
 
-    use crate::{QconnectAppEvent, QconnectEventSink};
+    use crate::{QconnectAppEvent, QconnectEventSink, JOIN_SESSION_REASON_CONTROLLER_REQUEST};
 
-    use super::{queue_hashes_diverge, QconnectApp, SessionLoopHost};
+    use super::{map_server_event, queue_hashes_diverge, QconnectApp, SessionLoopHost};
     use qconnect_core::QConnectQueueState;
     use qconnect_protocol::{
         QueueCommandType, QueueEventType, QueueServerEvent, RendererCommandType,
@@ -2281,6 +2314,46 @@ mod tests {
         let events_rx = app.subscribe_transport_events();
         app.connect(test_config()).await.expect("connect");
         (app, sink, transport, events_rx)
+    }
+
+    #[tokio::test]
+    async fn delegated_join_report_owns_shared_initial_state_and_queue_version() {
+        let (app, _sink, transport, _events_rx) = build_connected_app().await;
+        {
+            let state = app.state_handle();
+            state.lock().await.queue.version = QueueVersion::new(7, 3);
+        }
+
+        let session_id = "98f0c227-767c-4a4f-bb1c-69fccb4cf6d5";
+        app.send_delegated_join(
+            session_id,
+            true,
+            json!({
+                "device_uuid": "13d40c34-df5d-4eb5-a513-e5145364a800",
+                "capabilities": {"max_audio_quality": 4}
+            }),
+        )
+        .await
+        .expect("delegated join");
+
+        let sent = transport.sent_messages().await;
+        assert_eq!(sent.len(), 1);
+        let envelope = &sent[0];
+        assert_eq!(envelope.message_type, "MESSAGE_TYPE_RNDR_SRVR_JOIN_SESSION");
+        assert_eq!(envelope.queue_version_ref, QueueVersion::new(7, 3));
+        assert_eq!(envelope.payload["session_uuid"], session_id);
+        assert_eq!(envelope.payload["is_active"], true);
+        assert_eq!(
+            envelope.payload["reason"],
+            JOIN_SESSION_REASON_CONTROLLER_REQUEST
+        );
+        assert_eq!(envelope.payload["initial_state"]["playing_state"], 1);
+        assert_eq!(envelope.payload["initial_state"]["buffer_state"], 2);
+        assert_eq!(
+            envelope.payload["initial_state"]["queue_version"],
+            json!({"major": 7, "minor": 3})
+        );
+        assert!(envelope.payload_bytes.is_some());
     }
 
     #[tokio::test]
@@ -2710,6 +2783,35 @@ mod tests {
             sent.len() >= 2,
             "expected original command plus ask-for-state resync"
         );
+    }
+
+    #[test]
+    fn authoritative_queue_state_without_indexes_drops_stale_shuffle_order() {
+        let current = QConnectQueueState {
+            shuffle_mode: true,
+            shuffle_order: Some(vec![1, 0]),
+            ..Default::default()
+        };
+        let event = QueueServerEvent {
+            event_type: QueueEventType::SrvrCtrlQueueState,
+            action_uuid: None,
+            queue_version: Some(QueueVersion::new(2, 0)),
+            payload: json!({
+                "tracks": [
+                    {"track_id": 10, "queue_item_id": 100},
+                    {"track_id": 20, "queue_item_id": 200}
+                ],
+                "shuffle_mode": true
+            }),
+        };
+
+        let QueueEvent::QueueStateReplaced { state, .. } = map_server_event(&event, &current)
+        else {
+            panic!("expected queue-state replacement");
+        };
+
+        assert_eq!(state.queue_items.len(), 2);
+        assert_eq!(state.shuffle_order, None);
     }
 
     #[tokio::test]

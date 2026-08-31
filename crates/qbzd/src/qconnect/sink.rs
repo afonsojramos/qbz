@@ -258,7 +258,9 @@ impl DaemonEventSink {
         }
 
         let playback_state = self.engine.get_playback_state();
-        if playback_state.track_id == 0 {
+        // stop() intentionally preserves current_track_id, so track_id alone
+        // would issue another stop for every peer state/volume/quality event.
+        if playback_state.track_id == 0 || !self.engine.has_loaded_audio() {
             return;
         }
         if !self.is_current() {
