@@ -203,7 +203,8 @@ pub mod qbz_player {
         /// AlbumView row play: the album starting AT this track.
         #[qinvokable]
         fn play_album_from(self: Pin<&mut QbzPlayer>, album_id: QString, track_id: QString);
-        /// AlbumView row "Play next" ("next") / "Add to queue" ("later").
+        /// AlbumView row "Play next" ("next") / "Play later" ("later") /
+        /// "Add to queue" ("queue").
         #[qinvokable]
         fn enqueue_album_track(
             self: Pin<&mut QbzPlayer>,
@@ -211,7 +212,8 @@ pub mod qbz_player {
             track_id: QString,
             mode: QString,
         );
-        /// AlbumCard ⋯ menu: Play next ("next") / Add to queue ("later").
+        /// AlbumCard ⋯ menu: Play next ("next") / Play later ("later", #442
+        /// block tail) / Add to queue ("queue").
         #[qinvokable]
         fn enqueue_album(self: Pin<&mut QbzPlayer>, album_id: QString, mode: QString);
         /// Track-row offline cache actions (offline_cache_qt.rs): download /

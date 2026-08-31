@@ -1910,9 +1910,10 @@ fn is_local_album(album_id: &str) -> bool {
     crate::library_qt::is_local_album_key(album_id)
 }
 
-/// "Play next" / "Add to queue" for an album (AlbumCard ⋯ menu): resolve
-/// the album's tracks and insert them after the current track (mode
-/// "next") or append them (mode "later").
+/// "Play next" / "Play later" / "Add to queue" for an album (AlbumCard ⋯
+/// menu): resolve the album's tracks and insert them after the current track
+/// (mode "next"), land them on the manual block's tail (mode "later", #442),
+/// or append them (anything else).
 pub async fn enqueue_album(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     album_id: &str,
@@ -1946,9 +1947,13 @@ pub async fn enqueue_album(
     // QConnect CONTROLLER mode (contract §7): route the add to the peer's
     // queue — early-returns when handled, so the local insert + sync tail
     // below only run in local/renderer mode. The mode is normalized to what
-    // THIS fn's local match does: only "next" inserts at the cursor, every
-    // other mode appends (there is no block-tail arm here).
-    let routed_mode = if mode == "next" { "next" } else { "queue" };
+    // THIS fn's local match does: "next" inserts at the cursor, "later"
+    // lands on the manual block's tail, anything else appends.
+    let routed_mode = match mode {
+        "next" => "next",
+        "later" => "later",
+        _ => "queue",
+    };
     if route_enqueue_to_peer(&tracks, routed_mode).await {
         return Ok(());
     }
@@ -1956,14 +1961,22 @@ pub async fn enqueue_album(
         return Ok(());
     };
     let added_castable = batch_all_qconnect_castable(&tracks);
-    if mode == "next" {
-        // add_track_next inserts directly after the current track — feed
-        // in reverse so the album's first track lands first.
-        for track in tracks.into_iter().rev() {
-            runtime.core().add_track_next(track).await;
+    match mode {
+        "next" => {
+            // add_track_next inserts directly after the current track — feed
+            // in reverse so the album's first track lands first.
+            for track in tracks.into_iter().rev() {
+                runtime.core().add_track_next(track).await;
+            }
         }
-    } else {
-        runtime.core().add_tracks(tracks).await;
+        "later" => {
+            // #442 block tail — same arm the track menus and
+            // enqueue_track_list_mode use, in album order.
+            for track in tracks {
+                runtime.core().add_track_later(track).await;
+            }
+        }
+        _ => runtime.core().add_tracks(tracks).await,
     }
     // QConnect sync-on-add (#442): push the updated queue to the session so a
     // connected controller sees the new items; skipped silently for a
