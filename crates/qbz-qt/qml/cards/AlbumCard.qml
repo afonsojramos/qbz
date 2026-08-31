@@ -13,7 +13,9 @@
 //
 // --- Menu inventory vs discover/AlbumCard.slint ------------------------
 //   Open album · Play · Play next · Play later · Add to queue ·
-//   Add to/Remove from Library (show-favorite) · Block this album
+//   Add to/Remove from Library (show-favorite) ·
+//   Add to mixtape · Make available offline (catalog, not pulled — QoL round
+//     additions over the .slint inventory) · Block this album
 //     (source != local && source != plex)
 // (the first entry's NOUN is overridable per host — see `openLabel`; the last
 //  two are gated on `catalogAffordances`)
@@ -322,6 +324,17 @@ Rectangle {
             m.push({ "label": root.isFavorite ? t("Remove from Library", r) : t("Add to Library", r),
                      "icon": root.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
         }
+        if (root.catalogAffordances && !root.pulled) {
+            // QoL round: the album page's container + offline actions, on the
+            // card. `catalogAffordances` is the catalog-id guarantee (the
+            // add/cache invokables both run get_album), and a PULLED album is
+            // refused both — the container stores an id that resolves nowhere
+            // and the download arm has no stream url left (the same two
+            // refusals ArtistView's PopularTrackRow menu documents).
+            m.push({ "label": t("Add to mixtape", r), "icon": "cassette-tape", "action": "mixtape" })
+            m.push({ "label": root.cacheStatus === 3 ? t("Refresh offline copy", r) : t("Make available offline", r),
+                     "icon": root.cacheStatus === 3 ? "refresh-cw" : "cloud-download", "action": "cache-album" })
+        }
         if (root.catalogAffordances) {
             // .slint gates this on a non-local/plex source as well — and the
             // rule is "not a Qobuz catalog album", so every server source is
@@ -356,6 +369,8 @@ Rectangle {
         // denormalized snapshot and a file:// cache path is dead on any other
         // machine, the same reason the pin payload uses it.
         if (a === "favorite") { root.toggleFavorite(); return }
+        if (a === "mixtape") { QbzAlbum.addToMixtape(root.albumId); return }
+        if (a === "cache-album") { QbzAlbum.albumCacheOffline(root.albumId); return }
         if (a === "block") {
             QbzBlacklist.blockAlbum(root.albumId, root.title, root.artist,
                 root.artworkUrl)
