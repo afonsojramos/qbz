@@ -27,7 +27,8 @@ pub use mapper::{
     encode_queue_command_batch, encode_renderer_report_batch,
 };
 pub use renderer::{
-    RendererCommandType, RendererReport, RendererReportType, RendererServerCommand,
+    RendererBufferState, RendererCommandType, RendererReport, RendererReportType,
+    RendererServerCommand,
 };
 pub use wire::{
     build_outbound_envelope, decode_inbound_json, encode_outbound_json,

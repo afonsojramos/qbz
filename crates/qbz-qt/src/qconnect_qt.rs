@@ -39,12 +39,14 @@
 //! `*_if_remote` call sites (playback_qt.rs / queue_qt.rs / playlist_qt.rs /
 //! myqbz_play_qt.rs / integrations_qt.rs / cast_qt.rs) are all in place.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
+use qbz_player::player::PlaybackBufferState;
 use qconnect_app::queue_resolution::{
     find_cursor_index_by_queue_item_id, find_cursor_index_by_track_id, ordered_queue_cursors,
     resolve_controller_queue_item_from_snapshots, resolve_queue_item_ids_from_queue_state,
@@ -52,29 +54,39 @@ use qconnect_app::queue_resolution::{
 };
 use qconnect_app::renderer::{PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING, PLAYING_STATE_STOPPED};
 use qconnect_app::{
-    build_effective_renderer_snapshot, ensure_session_renderer_state, is_local_renderer_active,
-    is_peer_renderer_active, queue_item_snapshot_for_cursor, renderer_allows_remote_volume,
-    QConnectQueueState, QConnectRendererState, QconnectApp, QconnectAppEvent, QconnectEventSink,
+    build_effective_renderer_snapshot, build_renderer_playback_report,
+    ensure_session_renderer_state, is_local_renderer_active, is_peer_renderer_active,
+    lan_callback_is_current, queue_item_snapshot_for_cursor, renderer_allows_remote_volume,
+    AuthorityActionPermit, AuthorityCell, AuthorityOrigin, AuthorityStamp,
+    DelegationCoordinatorConfig, DelegationHost, LanRuntimeLifecycle, OwnerAuthorityObservation,
+    OwnerAuthorityToken, QConnectQueueState, QConnectRendererState, QconnectApp, QconnectAppEvent,
+    QconnectDisabledToken, QconnectEnableIntent, QconnectEnableToken, QconnectEventSink,
     QconnectFileAudioQualitySnapshot, QconnectLifecycleState, QconnectRemoteSyncState,
-    QconnectSessionState, QueueCommandType, RendererReport, RendererReportType, SessionLoopHost,
+    QconnectSessionState, QueueCommandType, RendererBufferState, RendererPlaybackSnapshot,
+    RendererReport, RendererReportType, SessionLoopHost,
 };
+use qconnect_lan::EndpointPolicy;
 use qconnect_transport_ws::{NativeWsTransport, WsTransportConfig};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::qconnect_delegation_qt::{QtDelegationCoordinator, QtDelegationHost};
 use crate::qconnect_engine_qt::QtRendererEngine;
 use crate::qconnect_event_sink_qt::{QtQconnectApp, QtQconnectEventSink};
+use crate::qconnect_lan_qt::{max_audio_quality_for_quality, QtLanProjectionSlot, QtLanRuntime};
 use crate::qconnect_transport_qt::{
     build_set_position_player_state_request, default_qconnect_device_info,
     default_qconnect_device_info_with_name, load_persisted_device_name, resolve_transport_config,
     QconnectJoinSessionRequest, QconnectMuteVolumeRequest, QconnectQueueVersionPayload,
     QconnectSetPlayerStateQueueItemPayload, QconnectSetPlayerStateRequest,
-    QconnectSetVolumeRequest, AUDIO_QUALITY_HIRES_LEVEL2, BUFFER_STATE_OK,
+    QconnectSetVolumeRequest,
 };
 
 const QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS: u64 = 1_500;
 const QCONNECT_PLAY_TRACK_HANDOFF_POLL_MS: u64 = 50;
+const QCONNECT_COORDINATOR_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const QCONNECT_AUTHORITY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Wall-clock now in ms (mirrors the Tauri `qconnect_now_ms`, which is
 /// Tauri-local; reimplemented inline here per the controller-port spec).
@@ -216,7 +228,6 @@ pub(crate) mod publish {
             b.as_mut().set_diag_log_text(QString::default());
         });
     }
-
 }
 
 /// Reduced peer-renderer playback snapshot for the now-playing seek bar while
@@ -312,12 +323,17 @@ pub fn spawn_startup_auto_connect(handle: &tokio::runtime::Handle) {
                 waited_ms += 100;
             }
         };
+        let enable_token = service.enable_intent.enable();
         // Tauri's `startup_retry_schedule()` (gap #8): one immediate attempt,
         // then one per scheduled delay; give up for the session after the last
         // step. Each connect() re-resolves the transport config internally, so
         // a transient credential/network failure can clear on a later attempt.
         let schedule: [u64; 4] = [2_000, 5_000, 15_000, 30_000];
         for attempt in 0..=schedule.len() {
+            if !service.enable_intent.is_current(enable_token) {
+                log::info!("[QConnect] startup auto-connect cancelled by disable");
+                return;
+            }
             // D5: offline (incl. persisted induced-offline surviving a
             // restart) — bail silently instead of letting connect()'s
             // offline refusal TOAST on every retry (5 spams over ~52s).
@@ -325,14 +341,25 @@ pub fn spawn_startup_auto_connect(handle: &tokio::runtime::Handle) {
                 log::info!("[QConnect] startup auto-connect skipped: offline mode active (D5)");
                 return;
             }
-            match service.connect().await {
+            match service.connect_with_token(enable_token).await {
                 Ok(()) => {
-                    log::info!("[QConnect] startup auto-connect succeeded");
-                    // Mirror the manual toggle's tail: flip the bar badge on.
-                    publish::connected(true);
+                    if service
+                        .enable_intent
+                        .commit_if_current(enable_token, || {
+                            log::info!("[QConnect] startup auto-connect succeeded");
+                            // Mirror the manual toggle's tail: flip the bar badge on.
+                            publish::connected(true);
+                        })
+                        .is_none()
+                    {
+                        return;
+                    }
                     return;
                 }
                 Err(err) => {
+                    if !service.enable_intent.is_current(enable_token) {
+                        return;
+                    }
                     log::warn!(
                         "[QConnect] startup auto-connect attempt {} failed: {err}",
                         attempt + 1
@@ -341,7 +368,13 @@ pub fn spawn_startup_auto_connect(handle: &tokio::runtime::Handle) {
             }
             match schedule.get(attempt) {
                 Some(delay_ms) => {
+                    if !service.enable_intent.is_current(enable_token) {
+                        return;
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(*delay_ms)).await;
+                    if !service.enable_intent.is_current(enable_token) {
+                        return;
+                    }
                 }
                 None => {
                     log::warn!(
@@ -403,56 +436,87 @@ pub fn dev_clear() {
     publish::diag_clear();
 }
 
-struct QtQconnectRuntime {
-    app: Arc<QtQconnectApp>,
+pub(crate) struct QtQconnectRuntime {
+    pub(crate) stamp: AuthorityStamp,
+    pub(crate) app: Arc<QtQconnectApp>,
     // Read by `diagnostics_snapshot` (the "Has Endpoint" row).
-    config: WsTransportConfig,
-    event_loop: tokio::task::JoinHandle<()>,
+    pub(crate) config: WsTransportConfig,
+    pub(crate) event_loop: tokio::task::JoinHandle<()>,
     // Shared with the app + sink; read by the renderer snapshots and by
     // `diagnostics_snapshot` (session topology).
-    sync_state: Arc<Mutex<QconnectRemoteSyncState>>,
+    pub(crate) sync_state: Arc<Mutex<QconnectRemoteSyncState>>,
 }
 
 #[derive(Default)]
-struct QtQconnectInner {
-    runtime: Option<QtQconnectRuntime>,
-    last_error: Option<String>,
-    lifecycle_state: QconnectLifecycleState,
+pub(crate) struct QtQconnectInner {
+    pub(crate) runtime: Option<QtQconnectRuntime>,
+    pub(crate) last_error: Option<String>,
+    pub(crate) lifecycle_state: QconnectLifecycleState,
+    /// Exact enabled intent that owns the pre-runtime `Connecting` claim.
+    /// A disable can clear it synchronously, and a late attempt can therefore
+    /// never release or overwrite a newer attempt's claim.
+    pub(crate) connecting_token: Option<QconnectEnableToken>,
+    pub(crate) last_pushed_queue_ids: Option<Vec<u64>>,
+}
+
+pub(crate) fn lock_inner(inner: &StdMutex<QtQconnectInner>) -> StdMutexGuard<'_, QtQconnectInner> {
+    inner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Dedup + gate a lifecycle transition: only emit while a runtime is alive and
 /// the state actually changes. Mirrors the Tauri `update_lifecycle_state_if_running`.
 async fn update_lifecycle_state_if_running(
-    inner: &Arc<Mutex<QtQconnectInner>>,
+    inner: &Arc<StdMutex<QtQconnectInner>>,
     sink: &QtQconnectEventSink,
+    authority: &AuthorityCell,
+    stamp: AuthorityStamp,
     next: QconnectLifecycleState,
 ) {
-    let mut guard = inner.lock().await;
-    if guard.runtime.is_none() {
+    if !authority.is_current(stamp) {
         return;
     }
-    if guard.lifecycle_state == next {
+    {
+        let mut guard = lock_inner(inner);
+        if guard.runtime.as_ref().map(|runtime| runtime.stamp) != Some(stamp)
+            || guard.lifecycle_state == next
+        {
+            return;
+        }
+        guard.lifecycle_state = next;
+    }
+    if !authority.is_current(stamp) {
         return;
     }
-    guard.lifecycle_state = next;
-    drop(guard);
     sink.on_event(QconnectAppEvent::LifecycleChanged { state: next })
         .await;
 }
 
 pub struct QtQconnectService {
-    inner: Arc<Mutex<QtQconnectInner>>,
+    inner: Arc<StdMutex<QtQconnectInner>>,
+    authority: Arc<AuthorityCell>,
+    enable_intent: Arc<QconnectEnableIntent>,
     runtime: Runtime,
     custom_device_name: Arc<tokio::sync::RwLock<Option<String>>>,
-    /// Track-id list of the queue we last pushed to the session (controller-side
-    /// queue sync). Guards against re-pushing the same queue before the cloud's
-    /// echo `QueueUpdated` lands (which would otherwise double-push on the next
-    /// track tick). Cleared on disconnect.
-    last_pushed_queue_ids: Mutex<Option<Vec<u64>>>,
+    delegation_host: Arc<QtDelegationHost>,
+    coordinator: QtDelegationCoordinator,
+    lan: Mutex<Option<QtLanRuntime>>,
+    lan_lifecycle: LanRuntimeLifecycle<QtLanRuntime>,
+    lifecycle_gate: Mutex<()>,
     /// Controller-mode mirror of the local queue's manual block (#442 "Play
     /// later"): steers `insert_after` for play-later routing. See the struct
     /// docs on `ControllerManualBlock`.
     controller_manual: Mutex<ControllerManualBlock>,
+    teardown_incomplete: AtomicBool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct QconnectDisconnectOutcome {
+    pub authority_safe: bool,
+    pub owner_restored: bool,
+    pub lan_withdrawn: bool,
+    pub cast_restore_token: Option<QconnectDisabledToken>,
 }
 
 /// Result of routing a Queue View insertion to the active peer. The historical
@@ -749,7 +813,7 @@ impl QtQconnectService {
         // brief inner lock, then release it before awaiting the per-handle
         // locks — the reference's ordering, kept verbatim.
         let (app, sync_state, last_error, has_endpoint, running) = {
-            let guard = self.inner.lock().await;
+            let guard = lock_inner(&self.inner);
             match guard.runtime.as_ref() {
                 Some(rt) => (
                     Some(Arc::clone(&rt.app)),
@@ -813,17 +877,460 @@ impl QtQconnectService {
 impl QtQconnectService {
     pub fn new(runtime: Runtime) -> Self {
         let saved_name = load_persisted_device_name();
+        let inner = Arc::new(StdMutex::new(QtQconnectInner::default()));
+        let authority = Arc::new(AuthorityCell::new());
+        let enable_intent = Arc::new(QconnectEnableIntent::new(false));
+        let custom_device_name = Arc::new(tokio::sync::RwLock::new(saved_name));
+        let delegation_host = Arc::new(QtDelegationHost::new(
+            Arc::clone(&runtime),
+            Arc::clone(&inner),
+            Arc::clone(&custom_device_name),
+            Arc::clone(&authority),
+        ));
+        let coordinator = QtDelegationCoordinator::disabled(
+            Arc::clone(&delegation_host),
+            DelegationCoordinatorConfig::default(),
+        );
+        assert!(
+            delegation_host.install_coordinator(coordinator.clone()),
+            "QConnect delegation coordinator may only be installed once"
+        );
         Self {
-            inner: Arc::new(Mutex::new(QtQconnectInner::default())),
+            inner,
+            authority,
+            enable_intent,
             runtime,
-            custom_device_name: Arc::new(tokio::sync::RwLock::new(saved_name)),
-            last_pushed_queue_ids: Mutex::new(None),
+            custom_device_name,
+            delegation_host,
+            coordinator,
+            lan: Mutex::new(None),
+            lan_lifecycle: LanRuntimeLifecycle::new(|runtime: &mut QtLanRuntime| {
+                runtime.shutdown_blocking()
+            }),
+            lifecycle_gate: Mutex::new(()),
             controller_manual: Mutex::new(ControllerManualBlock::default()),
+            teardown_incomplete: AtomicBool::new(false),
         }
     }
 
+    async fn await_while_enabled<T>(
+        &self,
+        enable_token: QconnectEnableToken,
+        future: impl std::future::Future<Output = T>,
+    ) -> Result<T, String> {
+        let value = tokio::select! {
+            biased;
+            _ = self.enable_intent.cancelled(enable_token) => {
+                return Err("Qobuz Connect was disabled".to_string());
+            }
+            value = future => value,
+        };
+        self.enable_intent
+            .is_current(enable_token)
+            .then_some(value)
+            .ok_or_else(|| "Qobuz Connect was disabled".to_string())
+    }
+
+    async fn await_connect_handoff<T>(
+        &self,
+        enable_token: QconnectEnableToken,
+        cast_transition: &crate::cast_qt::CastQconnectTransitionLease,
+        future: impl std::future::Future<Output = T>,
+    ) -> Result<T, String> {
+        let value = tokio::select! {
+            biased;
+            _ = self.enable_intent.cancelled(enable_token) => {
+                return Err("Qobuz Connect was disabled".to_string());
+            }
+            _ = cast_transition.cancelled() => {
+                return Err("Qobuz Connect start was superseded by a newer Cast request".to_string());
+            }
+            value = future => value,
+        };
+        if !self.enable_intent.is_current(enable_token) {
+            Err("Qobuz Connect was disabled".to_string())
+        } else if !cast_transition.is_current() {
+            Err("Qobuz Connect start was superseded by a newer Cast request".to_string())
+        } else {
+            Ok(value)
+        }
+    }
+
+    async fn acquire_cast_transition(
+        &self,
+        enable_token: QconnectEnableToken,
+    ) -> Result<crate::cast_qt::CastQconnectTransitionLease, String> {
+        let cast_epoch = crate::cast_qt::begin_qconnect_start_intent();
+        self.acquire_exact_cast_transition(enable_token, cast_epoch)
+            .await
+    }
+
+    async fn acquire_exact_cast_transition(
+        &self,
+        enable_token: QconnectEnableToken,
+        cast_epoch: crate::cast_qt::CastTransitionEpoch,
+    ) -> Result<crate::cast_qt::CastQconnectTransitionLease, String> {
+        // Do not cancel this future after it enters Cast teardown: it may own
+        // detached renderer handles that must reach the tracked physical fence.
+        // Cast bounds/cancels its own pre-teardown waits. Enabled intent is
+        // revalidated immediately after the cancellation-safe handoff returns.
+        let transition = crate::cast_qt::disconnect_before_qconnect_start_exact(cast_epoch).await?;
+        self.enable_intent
+            .is_current(enable_token)
+            .then_some(transition)
+            .ok_or_else(|| "Qobuz Connect was disabled before renderer handoff".to_string())
+    }
+
+    async fn acquire_cast_restore_transition(
+        &self,
+        cast_epoch: crate::cast_qt::CastTransitionEpoch,
+    ) -> Result<crate::cast_qt::CastQconnectTransitionLease, String> {
+        crate::cast_qt::disconnect_before_qconnect_restore(cast_epoch).await
+    }
+
+    pub(crate) fn cast_restore_token_is_current(&self, token: QconnectDisabledToken) -> bool {
+        self.enable_intent.is_disabled_current(token)
+    }
+
+    pub(crate) fn has_enabled_intent(&self) -> bool {
+        self.enable_intent.current_token().is_some()
+    }
+
+    /// Admit one complete owner-side mutation. The permit must stay alive
+    /// through every await and spawned continuation that can touch owner state.
+    pub fn try_owner_action_permit(&self) -> Option<AuthorityActionPermit> {
+        self.authority.try_owner_action_permit()
+    }
+
+    /// Admit the owner observation that will produce an async playback
+    /// snapshot, returning its exact authority generation with the permit.
+    pub fn try_owner_action_permit_observed(
+        &self,
+    ) -> Option<(OwnerAuthorityToken, AuthorityActionPermit)> {
+        self.authority.try_owner_action_permit_observed()
+    }
+
+    /// Classify a playback observation without conflating an installed guest
+    /// with the transient fence held while a candidate is still fallible.
+    pub fn observe_owner_authority(&self) -> OwnerAuthorityObservation {
+        self.authority.observe_owner_authority()
+    }
+
+    /// Re-admit only a continuation produced by the exact owner observation.
+    pub fn try_owner_action_permit_exact(
+        &self,
+        token: OwnerAuthorityToken,
+    ) -> Option<AuthorityActionPermit> {
+        self.authority.try_owner_action_permit_exact(token)
+    }
+
+    /// Preserve already-stamped owner work across a fallible candidate fence.
+    /// It returns `None` only once that exact owner generation is truly stale.
+    pub async fn wait_for_exact_owner_action_permit(
+        &self,
+        token: OwnerAuthorityToken,
+    ) -> Option<AuthorityActionPermit> {
+        self.authority
+            .wait_for_exact_owner_action_permit(token)
+            .await
+    }
+
+    pub fn try_transport_action_permit(&self) -> Option<AuthorityActionPermit> {
+        self.authority.try_transport_action_permit()
+    }
+
+    fn begin_runtime_action(&self) -> Result<AuthorityActionPermit, String> {
+        self.begin_runtime_action_if_running()?
+            .ok_or_else(|| "QConnect service is not running".to_string())
+    }
+
+    fn begin_runtime_action_if_running(&self) -> Result<Option<AuthorityActionPermit>, String> {
+        let Some(stamp) = lock_inner(&self.inner)
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.stamp)
+        else {
+            return Ok(None);
+        };
+        self.authority
+            .try_runtime_action_permit(stamp)
+            .map(Some)
+            .ok_or_else(|| "QConnect runtime authority changed".to_string())
+    }
+
+    async fn owner_app_id(&self) -> Result<String, String> {
+        let client = self
+            .runtime
+            .core()
+            .client()
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| "qconnect-lan-owner-client-unavailable".to_string())?;
+        client
+            .app_id()
+            .await
+            .map_err(|_| "qconnect-lan-app-id-unavailable".to_string())
+    }
+
+    async fn start_lan(
+        &self,
+        enable_token: QconnectEnableToken,
+        stamp: AuthorityStamp,
+        qws_endpoint: &str,
+    ) -> Result<(), String> {
+        if !self.lan_lifecycle.teardown_safe() {
+            return Err("qconnect-lan-physical-teardown-unsafe".to_string());
+        }
+        if !self.enable_intent.is_current(enable_token) {
+            return Err("qconnect-lan-disabled".to_string());
+        }
+        if self.lan.lock().await.is_some() {
+            return self
+                .enable_intent
+                .is_current(enable_token)
+                .then_some(())
+                .ok_or_else(|| "qconnect-lan-disabled".to_string());
+        }
+        if !self.enable_intent.is_current(enable_token) || !self.authority.is_current(stamp) {
+            return Err("qconnect-lan-owner-superseded".to_string());
+        }
+
+        let endpoint_policy =
+            EndpointPolicy::from_trusted_endpoints(qbz_qobuz::endpoints::BASE_URL, qws_endpoint)
+                .map_err(|_| "qconnect-lan-endpoint-policy-invalid".to_string())?;
+        let app_id = self
+            .await_while_enabled(enable_token, self.owner_app_id())
+            .await??;
+        if !self.enable_intent.is_current(enable_token) {
+            return Err("qconnect-lan-disabled".to_string());
+        }
+        let max_audio_quality =
+            max_audio_quality_for_quality(crate::playback_qt::local_playback_quality().0);
+        let custom_name = self.custom_device_name.read().await.clone();
+        if !self.enable_intent.is_current(enable_token) {
+            return Err("qconnect-lan-disabled".to_string());
+        }
+        let current_session_id = self
+            .delegation_host
+            .current_projected_session_id(stamp)
+            .ok_or_else(|| "qconnect-lan-owner-session-unavailable".to_string())?;
+        if !self.enable_intent.is_current(enable_token) || !self.authority.is_current(stamp) {
+            return Err("qconnect-lan-owner-superseded".to_string());
+        }
+        let coordinator = self.coordinator.clone();
+        let callback_intent = Arc::clone(&self.enable_intent);
+        let callback_authority = Arc::clone(&self.authority);
+        let runtime_handle = tokio::runtime::Handle::current();
+        let bridge_handle = runtime_handle.clone();
+
+        let started = self
+            .lan_lifecycle
+            .start(
+                move || {
+                    QtLanRuntime::start(
+                        bridge_handle,
+                        endpoint_policy,
+                        app_id,
+                        max_audio_quality,
+                        Some(current_session_id),
+                        move |candidate| {
+                            let coordinator = coordinator.clone();
+                            let callback_intent = Arc::clone(&callback_intent);
+                            let callback_authority = Arc::clone(&callback_authority);
+                            async move {
+                                if !lan_callback_is_current(
+                                    callback_intent.as_ref(),
+                                    callback_authority.as_ref(),
+                                    stamp,
+                                ) {
+                                    return;
+                                }
+                                match coordinator.admit(candidate).await {
+                                    Ok(generation) => log::info!(
+                                        "[QConnect LAN] handoff admitted generation={generation}"
+                                    ),
+                                    Err(error) => log::warn!(
+                                        "[QConnect LAN] handoff admission rejected: {error}"
+                                    ),
+                                }
+                            }
+                        },
+                    )
+                },
+                self.enable_intent.cancelled(enable_token),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+
+        if !self.enable_intent.is_current(enable_token) || !self.authority.is_current(stamp) {
+            if let Err(error) = self.lan_lifecycle.shutdown(started).await {
+                log::warn!("[QConnect LAN] stale listener teardown failed: {error}");
+            }
+            return Err("qconnect-lan-owner-superseded".to_string());
+        }
+
+        let projection = started.projection();
+        let mut display = projection.display_info();
+        display.friendly_name =
+            crate::qconnect_transport_qt::resolve_qconnect_friendly_name(custom_name.as_deref());
+        display.max_audio_quality = max_audio_quality;
+        projection.update_display(display);
+        let port = started.port();
+        let mut pending = Some(started);
+        let mut lan = self.lan.lock().await;
+        let installed = self
+            .enable_intent
+            .commit_if_current(enable_token, || {
+                if !self.authority.is_current(stamp) || lan.is_some() {
+                    return false;
+                }
+                self.delegation_host.attach_projection(projection);
+                *lan = pending.take();
+                log::info!("[QConnect LAN] listener ready port={port:?}");
+                dev_push_event("LAN receiver listening".to_string());
+                true
+            })
+            .unwrap_or(false);
+        drop(lan);
+        if installed {
+            return Ok(());
+        }
+
+        if let Some(stale) = pending {
+            if let Err(error) = self.lan_lifecycle.shutdown(stale).await {
+                log::warn!("[QConnect LAN] rejected listener teardown failed: {error}");
+            }
+        }
+        Err("qconnect-lan-disabled-or-owner-superseded".to_string())
+    }
+
+    async fn stop_lan(&self) -> Result<(), String> {
+        self.delegation_host.detach_projection();
+        let runtime = self.lan.lock().await.take();
+        if let Some(runtime) = runtime {
+            self.lan_lifecycle
+                .shutdown(runtime)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        self.lan_lifecycle
+            .settle()
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    async fn wait_for_owner_session_ready(
+        &self,
+        enable_token: QconnectEnableToken,
+        stamp: AuthorityStamp,
+    ) -> Result<(), String> {
+        const OWNER_SESSION_TIMEOUT: Duration = Duration::from_secs(30);
+        let wait = async {
+            loop {
+                if !self.enable_intent.is_current(enable_token) {
+                    return Err("qconnect disabled before session acceptance".into());
+                }
+                if !self.authority.is_current(stamp) {
+                    return Err("qconnect owner authority changed before session acceptance".into());
+                }
+                let lifecycle = lock_inner(&self.inner).lifecycle_state;
+                match lifecycle {
+                    QconnectLifecycleState::Connected => return Ok(()),
+                    QconnectLifecycleState::Off | QconnectLifecycleState::Exhausted => {
+                        return Err(format!(
+                            "qconnect owner session failed before acceptance ({lifecycle:?})"
+                        ));
+                    }
+                    _ => {
+                        if !self.enable_intent.is_current(enable_token) {
+                            return Err("qconnect disabled before session acceptance".into());
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                }
+            }
+        };
+        tokio::time::timeout(OWNER_SESSION_TIMEOUT, wait)
+            .await
+            .map_err(|_| "qconnect owner session acceptance timed out".to_string())?
+    }
+
+    /// Retire only the initial owner runtime installed by one connect attempt.
+    /// This deliberately avoids the global disconnect path: a late failed
+    /// attempt must not invalidate enabled intent or tear down a newer runtime.
+    async fn retire_initial_owner_if_current(
+        &self,
+        enable_token: QconnectEnableToken,
+        stamp: AuthorityStamp,
+        error: Option<String>,
+    ) {
+        let mut error = error;
+        let current_retirement = self.enable_intent.commit_if_current(enable_token, || {
+            let mut inner = lock_inner(&self.inner);
+            if inner.runtime.as_ref().map(|runtime| runtime.stamp) != Some(stamp) {
+                return None;
+            }
+            self.delegation_host
+                .projection_slot()
+                .clear_if_current(&self.authority, stamp);
+            inner.lifecycle_state = QconnectLifecycleState::Off;
+            inner.last_pushed_queue_ids = None;
+            if let Some(error) = error.take() {
+                inner.last_error = Some(error);
+            }
+            inner.runtime.take()
+        });
+        let runtime = match current_retirement {
+            Some(runtime) => runtime,
+            None => {
+                // Disabled intent may already be tearing this stamp down. Help
+                // retire it exactly, but never publish its stale error.
+                let mut inner = lock_inner(&self.inner);
+                if inner.runtime.as_ref().map(|runtime| runtime.stamp) != Some(stamp) {
+                    return;
+                }
+                self.delegation_host
+                    .projection_slot()
+                    .clear_if_current(&self.authority, stamp);
+                inner.lifecycle_state = QconnectLifecycleState::Off;
+                inner.last_pushed_queue_ids = None;
+                inner.runtime.take()
+            }
+        };
+
+        if let Some(runtime) = runtime {
+            runtime.event_loop.abort();
+            {
+                let mut sync = runtime.sync_state.lock().await;
+                sync.watchdog_generation = sync.watchdog_generation.wrapping_add(1);
+                sync.session = QconnectSessionState::default();
+                sync.session_renderer_states.clear();
+            }
+            let _ = runtime.app.disconnect().await;
+            let _ = runtime.event_loop.await;
+        }
+    }
+
+    fn record_connect_error_if_current(&self, enable_token: QconnectEnableToken, message: String) {
+        let _ = self.enable_intent.commit_if_current(enable_token, || {
+            let mut inner = lock_inner(&self.inner);
+            if inner.runtime.is_none() {
+                inner.lifecycle_state = QconnectLifecycleState::Off;
+                inner.connecting_token = None;
+                inner.last_error = Some(message);
+            }
+        });
+    }
+
     pub async fn is_running(&self) -> bool {
-        self.inner.lock().await.runtime.is_some()
+        let inner = lock_inner(&self.inner);
+        inner.runtime.is_some()
+            || inner.connecting_token.is_some()
+            || self.lan_lifecycle.start_pending()
+            || !self.lan_lifecycle.teardown_safe()
+            || self.teardown_incomplete.load(Ordering::Acquire)
     }
 
     /// Update the cached custom device name (Settings > Playback). The name
@@ -834,7 +1341,14 @@ impl QtQconnectService {
     /// Persistence is the caller's job
     /// (`qconnect_transport_qt::persist_device_name`).
     pub async fn set_custom_device_name(&self, name: Option<String>) {
-        *self.custom_device_name.write().await = name;
+        *self.custom_device_name.write().await = name.clone();
+        let projection = self.lan.lock().await.as_ref().map(QtLanRuntime::projection);
+        if let Some(projection) = projection {
+            let mut display = projection.display_info();
+            display.friendly_name =
+                crate::qconnect_transport_qt::resolve_qconnect_friendly_name(name.as_deref());
+            projection.update_display(display);
+        }
     }
 
     /// D5 (offline-MODE): force-disconnect on every transition INTO offline
@@ -869,11 +1383,30 @@ impl QtQconnectService {
                     "[QConnect] Offline mode entered; force-disconnecting Qobuz Connect (D5)"
                 );
                 dev_push_event("-> force-disconnect (offline mode)".to_string());
-                if let Err(err) = service.disconnect().await {
-                    log::warn!("[QConnect] offline force-disconnect failed: {err}");
+                let mut authority_safe = false;
+                for attempt in 1..=3 {
+                    match service.disconnect_safely().await {
+                        Ok(outcome) if outcome.authority_safe => {
+                            authority_safe = true;
+                            if !outcome.owner_restored {
+                                log::warn!(
+                                    "[QConnect] offline teardown was safe but owner playback restoration failed"
+                                );
+                            }
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(err) => log::warn!(
+                            "[QConnect] offline force-disconnect attempt {attempt} failed: {err}"
+                        ),
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
                 }
-                // Mirror the manual toggle's tail: the bar's connect toggle off.
-                publish::connected(false);
+                if authority_safe {
+                    // Mirror the manual toggle's tail only after authority is
+                    // proven quiescent; an unsafe timeout must not claim Off.
+                    publish::connected(false);
+                }
             }
         });
     }
@@ -892,9 +1425,13 @@ impl QtQconnectService {
         position_ms: i64,
         duration_ms: i64,
         track_id: u64,
+        buffer_state: PlaybackBufferState,
     ) {
+        let Ok(Some(_runtime_action)) = self.begin_runtime_action_if_running() else {
+            return;
+        };
         let (app, sync_state) = {
-            let guard = self.inner.lock().await;
+            let guard = lock_inner(&self.inner);
             match guard.runtime.as_ref() {
                 Some(runtime) => (Arc::clone(&runtime.app), Arc::clone(&runtime.sync_state)),
                 None => return,
@@ -932,22 +1469,17 @@ impl QtQconnectService {
         }
         let queue_version = app.queue_state_snapshot().await.version;
 
-        let report = RendererReport::new(
-            RendererReportType::RndrSrvrStateUpdated,
+        let report = build_renderer_playback_report(
             Uuid::new_v4().to_string(),
             queue_version,
-            json!({
-                "playing_state": playing_state,
-                "buffer_state": BUFFER_STATE_OK,
-                "current_position": position_ms,
-                "duration": duration_ms,
-                "current_queue_item_id": current_qid,
-                "next_queue_item_id": next_qid,
-                "queue_version": {
-                    "major": queue_version.major,
-                    "minor": queue_version.minor
-                }
-            }),
+            RendererPlaybackSnapshot {
+                playing_state,
+                buffer_state,
+                position_ms: Some(position_ms),
+                duration_ms: Some(duration_ms),
+                current_queue_item_id: current_qid,
+                next_queue_item_id: next_qid,
+            },
         );
         if let Err(err) = app.send_renderer_report_command(report).await {
             log::warn!("[QConnect] Failed to report playback state: {err}");
@@ -988,10 +1520,75 @@ impl QtQconnectService {
     }
 
     /// Establish the QConnect session. Gated on an initialized API client (the
-    /// qws/createToken discovery needs it). Idempotent: a second call while a
-    /// runtime is alive is a no-op (the UI toggle stays on).
+    /// qws/createToken discovery needs it). Idempotent while a runtime is live.
     pub async fn connect(&self) -> Result<(), String> {
-        if !self.runtime.core().is_api_initialized().await {
+        // Publish the Cast epoch BEFORE renewing enabled intent. A Cast already
+        // inside its suspend seam snapshots E, revalidates its own epoch, then
+        // CAS-disables E; this order makes a fresh click win in every interleave.
+        let cast_epoch = crate::cast_qt::begin_qconnect_start_intent();
+        let enable_token = self.enable_intent.enable_new_intent();
+        let cast_transition = self
+            .acquire_exact_cast_transition(enable_token, cast_epoch)
+            .await?;
+        self.connect_with_token_and_cast_transition(enable_token, Some(cast_transition), None)
+            .await
+    }
+
+    /// Restore the QConnect session suspended by one exact Cast lifetime. The
+    /// Cast epoch is validated while acquiring the already-ordered Cast →
+    /// QConnect handoff lane, so a late restore cannot evict a newer renderer.
+    pub(crate) async fn connect_for_cast_restore(
+        &self,
+        cast_epoch: crate::cast_qt::CastTransitionEpoch,
+        restore_token: QconnectDisabledToken,
+    ) -> Result<(), String> {
+        let cast_transition = self.acquire_cast_restore_transition(cast_epoch).await?;
+        let enable_token = self
+            .enable_intent
+            .enable_if_disabled(restore_token)
+            .ok_or_else(|| {
+                "Qobuz Connect restore was superseded by newer user intent".to_string()
+            })?;
+        self.connect_with_token_and_cast_transition(
+            enable_token,
+            Some(cast_transition),
+            Some(restore_token),
+        )
+        .await
+    }
+
+    async fn connect_with_token(&self, enable_token: QconnectEnableToken) -> Result<(), String> {
+        self.connect_with_token_and_cast_transition(enable_token, None, None)
+            .await
+    }
+
+    async fn connect_with_token_and_cast_transition(
+        &self,
+        enable_token: QconnectEnableToken,
+        cast_transition: Option<crate::cast_qt::CastQconnectTransitionLease>,
+        restore_token: Option<QconnectDisabledToken>,
+    ) -> Result<(), String> {
+        if !self.enable_intent.is_current(enable_token) {
+            return Err("Qobuz Connect was disabled".to_string());
+        }
+        // Cast and QConnect are mutually exclusive renderers. Claim the shared
+        // handoff lane before any network preflight so a newer renderer intent
+        // is visible immediately, not after a slow API call.
+        let cast_transition = match cast_transition {
+            Some(transition) => transition,
+            None => self.acquire_cast_transition(enable_token).await?,
+        };
+        if !self.enable_intent.is_current(enable_token) {
+            return Err("Qobuz Connect was disabled".to_string());
+        }
+        let api_initialized = self
+            .await_connect_handoff(
+                enable_token,
+                &cast_transition,
+                self.runtime.core().is_api_initialized(),
+            )
+            .await?;
+        if !api_initialized {
             return Err("Qobuz API is not initialized; cannot start Qobuz Connect".to_string());
         }
         // D5 (offline-MODE): QConnect is not available in ANY offline mode,
@@ -1004,103 +1601,210 @@ impl QtQconnectService {
             return Err("Qobuz Connect is unavailable while offline".to_string());
         }
 
-        // Claim the connect slot ATOMICALLY before the transport-config await, so
-        // two concurrent connect()s can't both build a runtime (the second would
-        // overwrite + leak the first's transport + event-loop task). A live
-        // runtime OR an in-flight `Connecting` both short-circuit to a no-op —
-        // the re-check the adversarial review flagged (`runtime.is_some()` only)
-        // had a TOCTOU window across the await; the `Connecting` sentinel closes it.
-        {
-            let mut guard = self.inner.lock().await;
-            if guard.runtime.is_some()
-                || guard.lifecycle_state == QconnectLifecycleState::Connecting
-            {
-                log::info!(
-                    "[QConnect] connect() called while already {:?}; no-op",
-                    guard.lifecycle_state
-                );
-                return Ok(());
-            }
-            guard.lifecycle_state = QconnectLifecycleState::Connecting;
-            guard.last_error = None;
+        let _lifecycle = self
+            .await_connect_handoff(enable_token, &cast_transition, self.lifecycle_gate.lock())
+            .await?;
+        if !self.enable_intent.is_current(enable_token) {
+            return Err("Qobuz Connect was disabled".to_string());
+        }
+        if self.teardown_incomplete.load(Ordering::Acquire) {
+            return Err("qconnect-authority-teardown-incomplete".to_string());
+        }
+        let prior_restore = self
+            .await_connect_handoff(
+                enable_token,
+                &cast_transition,
+                self.delegation_host.await_owner_playback_restore(),
+            )
+            .await?;
+        if let Err(error) = prior_restore {
+            let message = format!("qconnect owner rollback incomplete: {error}");
+            self.record_connect_error_if_current(enable_token, message.clone());
+            return Err(message);
         }
 
-        let config = match resolve_transport_config(&self.runtime).await {
-            Ok(config) => config,
-            Err(err) => {
-                // Release the Connecting claim so a later retry can proceed.
-                let mut guard = self.inner.lock().await;
-                if guard.runtime.is_none() {
-                    guard.lifecycle_state = QconnectLifecycleState::Off;
+        // Claim the pre-runtime slot at the same synchronous boundary that
+        // validates enabled intent. A repeated call for the same intent reports
+        // "in progress"; a stale claim from an invalidated intent is replaceable.
+        let claimed = self
+            .enable_intent
+            .commit_if_current(enable_token, || {
+                let mut guard = lock_inner(&self.inner);
+                if guard.runtime.is_some() {
+                    return Ok(false);
                 }
+                if guard.connecting_token == Some(enable_token) {
+                    return Err("QConnect connect is already in progress".to_string());
+                }
+                guard.connecting_token = Some(enable_token);
+                guard.lifecycle_state = QconnectLifecycleState::Connecting;
+                guard.last_error = None;
+                Ok(true)
+            })
+            .ok_or_else(|| "Qobuz Connect was disabled".to_string())??;
+        if !claimed {
+            cast_transition.commit_qconnect_started(restore_token).await;
+            return Ok(());
+        }
+
+        let config = match self
+            .await_connect_handoff(
+                enable_token,
+                &cast_transition,
+                resolve_transport_config(&self.runtime),
+            )
+            .await
+        {
+            Ok(Ok(config)) => config,
+            Ok(Err(err)) => {
+                self.record_connect_error_if_current(enable_token, err.clone());
+                return Err(err);
+            }
+            Err(err) => {
+                self.record_connect_error_if_current(enable_token, err.clone());
                 return Err(err);
             }
         };
+        if !self.enable_intent.is_current(enable_token) {
+            return Err("Qobuz Connect was disabled".to_string());
+        }
 
+        let qws_endpoint = config.endpoint_url.clone();
+        let stamp = self.authority.reserve(AuthorityOrigin::Owner);
+        let projection = self.delegation_host.projection_slot();
         let transport = Arc::new(NativeWsTransport::new());
         let sync_state = Arc::new(Mutex::new(QconnectRemoteSyncState::default()));
-        let engine = QtRendererEngine::new(Arc::clone(&self.runtime));
+        let engine = QtRendererEngine::owner(
+            Arc::clone(&self.runtime),
+            Arc::clone(&self.authority),
+            stamp,
+        );
         let sink = Arc::new(QtQconnectEventSink::new(
             engine,
             Arc::clone(&self.runtime),
             Arc::clone(&sync_state),
+            Arc::clone(&self.authority),
+            stamp,
+            projection.clone(),
         ));
         let app = Arc::new(QconnectApp::new(
             Arc::clone(&transport) as Arc<NativeWsTransport>,
             Arc::clone(&sink),
             Arc::clone(&sync_state),
         ));
-        // Wire the owning app into the sink so it can emit reports (e.g.
-        // is_active=true after SetActive(true)) and drive session-apply.
         sink.set_app(&app);
 
-        if let Err(err) = app.connect(config.clone()).await {
-            let mut guard = self.inner.lock().await;
-            guard.lifecycle_state = QconnectLifecycleState::Off;
-            let msg = format!("qconnect transport connect failed: {err}");
-            guard.last_error = Some(msg.clone());
-            return Err(msg);
+        // The transport broadcast has no replay. Subscribe before connect so
+        // Connected/Auth/Subscribed/SessionEstablished cannot race past this
+        // runtime while the WebSocket handshake is completing.
+        let transport_rx = app.subscribe_transport_events();
+
+        let app_connect = tokio::select! {
+            biased;
+            _ = self.enable_intent.cancelled(enable_token) => {
+                let _ = app.disconnect().await;
+                return Err("Qobuz Connect was disabled during transport connect".to_string());
+            }
+            _ = cast_transition.cancelled() => {
+                let error =
+                    "Qobuz Connect start was superseded during transport connect".to_string();
+                self.record_connect_error_if_current(enable_token, error.clone());
+                let _ = app.disconnect().await;
+                return Err(error);
+            }
+            result = app.connect(config.clone()) => result,
+        };
+        if let Err(err) = app_connect {
+            let message = format!("qconnect transport connect failed: {err}");
+            self.record_connect_error_if_current(enable_token, message.clone());
+            return Err(message);
+        }
+        if !self.enable_intent.is_current(enable_token) {
+            let _ = app.disconnect().await;
+            return Err("Qobuz Connect was disabled during transport connect".to_string());
         }
 
-        // Subscribe to transport events SYNCHRONOUSLY here — after connect()
-        // returns and BEFORE the spawn / any further await — so the receiver is
-        // live before the WS handshake emits Connected / Subscribed /
-        // SessionEstablished / SESSION_STATE. tokio broadcast has no replay; a
-        // receiver created inside the spawned loop would race + drop those.
-        let transport_rx = app.subscribe_transport_events();
         let idle_retry_active = config.reconnect_idle_retry_ms > 0;
         let host: Arc<dyn SessionLoopHost> = Arc::new(QtSessionLoopHost {
             app: Arc::clone(&app),
             sync_state: Arc::clone(&sync_state),
             inner: Arc::clone(&self.inner),
+            authority: Arc::clone(&self.authority),
+            stamp,
             sink: Arc::clone(&sink),
             runtime: Arc::clone(&self.runtime),
-        });
-        let app_for_loop = Arc::clone(&app);
-        let event_loop = tokio::spawn(async move {
-            app_for_loop
-                .run_session_loop(host, transport_rx, idle_retry_active)
-                .await;
+            projection: projection.clone(),
         });
 
-        let runtime_app = Arc::clone(&app);
-        {
-            let mut guard = self.inner.lock().await;
-            guard.last_error = None;
-            guard.runtime = Some(QtQconnectRuntime {
-                app,
-                config,
-                event_loop,
-                sync_state,
-            });
+        let mut host = Some(host);
+        let mut transport_rx = Some(transport_rx);
+        if let Err(error) = cast_transition.revalidate_no_cast().await {
+            self.record_connect_error_if_current(enable_token, error.clone());
+            let _ = app.disconnect().await;
+            return Err(error);
+        }
+        let installed = self
+            .enable_intent
+            .commit_if_current(enable_token, || {
+                let mut guard = lock_inner(&self.inner);
+                if guard.runtime.is_some() || guard.connecting_token != Some(enable_token) {
+                    return false;
+                }
+                if !projection.install_authority(&self.authority, stamp, None) {
+                    guard.connecting_token = None;
+                    guard.lifecycle_state = QconnectLifecycleState::Off;
+                    return false;
+                }
+                let app_for_loop = Arc::clone(&app);
+                let host = host.take().expect("connect host consumed once");
+                let transport_rx = transport_rx.take().expect("connect receiver consumed once");
+                let event_loop = tokio::spawn(async move {
+                    app_for_loop
+                        .run_session_loop(host, transport_rx, idle_retry_active)
+                        .await;
+                });
+                guard.last_error = None;
+                guard.last_pushed_queue_ids = None;
+                guard.connecting_token = None;
+                guard.runtime = Some(QtQconnectRuntime {
+                    stamp,
+                    app: Arc::clone(&app),
+                    config: config.clone(),
+                    event_loop,
+                    sync_state: Arc::clone(&sync_state),
+                });
+                true
+            })
+            .unwrap_or(false);
+        let cast_receipt = cast_transition.release();
+        if !installed {
+            let error = "qconnect owner install was disabled or superseded".to_string();
+            self.record_connect_error_if_current(enable_token, error.clone());
+            let _ = app.disconnect().await;
+            return Err(error);
         }
 
         let custom_name = self.custom_device_name.read().await.clone();
-        if let Err(err) = bootstrap_remote_presence(&runtime_app, custom_name).await {
-            let _ = self.disconnect().await;
-            let mut guard = self.inner.lock().await;
-            guard.last_error = Some(format!("qconnect bootstrap failed: {err}"));
-            return Err(format!("qconnect bootstrap failed: {err}"));
+        let bootstrap = tokio::select! {
+            biased;
+            _ = self.enable_intent.cancelled(enable_token) => {
+                let error = "Qobuz Connect was disabled during bootstrap".to_string();
+                self.retire_initial_owner_if_current(enable_token, stamp, None).await;
+                return Err(error);
+            }
+            result = bootstrap_remote_presence(&app, custom_name, &self.authority, stamp) => result,
+        };
+        if let Err(err) = bootstrap {
+            let error = format!("qconnect bootstrap failed: {err}");
+            self.retire_initial_owner_if_current(enable_token, stamp, Some(error.clone()))
+                .await;
+            return Err(error);
+        }
+        if !self.enable_intent.is_current(enable_token) || !self.authority.is_current(stamp) {
+            let error = "qconnect owner authority changed during bootstrap".to_string();
+            self.retire_initial_owner_if_current(enable_token, stamp, Some(error.clone()))
+                .await;
+            return Err(error);
         }
 
         // D5 race close: offline may have been entered while this connect was
@@ -1108,64 +1812,243 @@ impl QtQconnectService {
         // that the runtime is set; any later flip is the watcher's job.
         if crate::offline_fwd::engine().is_offline() {
             log::info!("[QConnect] offline mode entered during connect(); tearing down (D5)");
-            let _ = self.disconnect().await;
+            self.enable_intent.disable();
+            let _ = self.disconnect_with_owner_policy_locked(true).await;
             return Err("Qobuz Connect is unavailable while offline".to_string());
         }
 
+        if let Err(error) = self.wait_for_owner_session_ready(enable_token, stamp).await {
+            self.retire_initial_owner_if_current(enable_token, stamp, Some(error.clone()))
+                .await;
+            return Err(error);
+        }
+        let owner_ready = self
+            .await_while_enabled(
+                enable_token,
+                self.coordinator
+                    .declare_owner_ready_if(|| self.enable_intent.is_current(enable_token)),
+            )
+            .await
+            .unwrap_or(false);
+        if !owner_ready {
+            if self.enable_intent.is_current(enable_token) {
+                self.coordinator.shutdown().await;
+            }
+            let error = "qconnect delegation coordinator did not enter OwnerReady".to_string();
+            self.retire_initial_owner_if_current(enable_token, stamp, Some(error.clone()))
+                .await;
+            return Err(error);
+        }
+        if !self.enable_intent.is_current(enable_token) {
+            let error = "Qobuz Connect was disabled before LAN startup".to_string();
+            self.retire_initial_owner_if_current(enable_token, stamp, Some(error.clone()))
+                .await;
+            return Err(error);
+        }
+        if let Err(error) = self.start_lan(enable_token, stamp, &qws_endpoint).await {
+            if !self.enable_intent.is_current(enable_token) || !self.authority.is_current(stamp) {
+                self.retire_initial_owner_if_current(enable_token, stamp, Some(error.clone()))
+                    .await;
+                return Err(error);
+            }
+            // LAN is a silent capability of the global QConnect service. A bind
+            // failure is diagnostic and leaves the accepted owner cloud session
+            // intact; it never creates a secondary user-facing mode or toggle.
+            let _ = self.enable_intent.commit_if_current(enable_token, || {
+                log::warn!("[QConnect LAN] listener unavailable: {error}");
+                dev_push_event(format!("LAN receiver unavailable: {error}"));
+            });
+        }
+
+        if !self.enable_intent.is_current(enable_token) {
+            return Err("Qobuz Connect was disabled during connect".to_string());
+        }
+        cast_receipt.commit_qconnect_started(restore_token).await;
         Ok(())
     }
 
-    pub async fn disconnect(&self) -> Result<(), String> {
-        let runtime = {
-            let mut guard = self.inner.lock().await;
-            // Always force Off — "disable QConnect" must succeed regardless of the
-            // current lifecycle (issue #358). The transport shutdown + the loop
-            // abort tear down any in-flight reconnect.
-            guard.lifecycle_state = QconnectLifecycleState::Off;
-            guard.runtime.take()
-        };
-
-        *self.last_pushed_queue_ids.lock().await = None;
-
-        if let Some(runtime) = runtime {
-            // FIX #20: disarm the in-flight liveness watchdog BEFORE aborting the
-            // event loop. A watchdog armed while a peer was playing fires
-            // ~seconds later and emits RendererUnreachable (spurious error toast +
-            // lingering golden cast badge) if we don't bump the generation it
-            // captured. run_renderer_watchdog no-ops on a generation mismatch
-            // (app.rs `run_renderer_watchdog`), so bumping the shared field here
-            // neutralizes any pending watchdog task. `watchdog_generation` is a
-            // public field on QconnectRemoteSyncState; mutate it directly.
-            {
-                let mut state = runtime.sync_state.lock().await;
-                state.watchdog_generation = state.watchdog_generation.wrapping_add(1);
-                // Clear the session topology + per-renderer cache so that any
-                // event still in flight when the loop aborts cannot recompute
-                // `is_peer_renderer_active() == true` and resurrect the golden
-                // render badge AFTER we clear is-remote/cast-target below
-                // (tokio `abort()` is not instantaneous; the sink can run one
-                // more `refresh_now_playing_remote_state` from a stale session).
-                state.session = QconnectSessionState::default();
-                state.session_renderer_states.clear();
+    async fn disconnect_with_owner_policy(
+        &self,
+        restore_owner: bool,
+    ) -> Result<QconnectDisconnectOutcome, String> {
+        // Cancellation must be observable by a connect that currently owns
+        // the lifecycle gate. Waiting for that connect before invalidating its
+        // token would turn disable into a full bootstrap/session timeout.
+        let disabled_token = self.enable_intent.disable();
+        {
+            let mut inner = lock_inner(&self.inner);
+            inner.connecting_token = None;
+            if inner.runtime.is_none() {
+                inner.lifecycle_state = QconnectLifecycleState::Off;
             }
-            if let Err(err) = runtime.app.disconnect().await {
-                let mut guard = self.inner.lock().await;
-                guard.last_error = Some(format!("qconnect disconnect failed: {err}"));
+        }
+        let _lifecycle = self.lifecycle_gate.lock().await;
+        if self.enable_intent.current_token().is_some() {
+            return Err("qconnect-disable-superseded-by-enable".to_string());
+        }
+        let mut outcome = self
+            .disconnect_with_owner_policy_locked(restore_owner)
+            .await?;
+        outcome.cast_restore_token = Some(disabled_token);
+        Ok(outcome)
+    }
+
+    /// Cancel the exact QConnect enable currently competing with one Cast
+    /// transition. Unlike a user disable, this never advances an already-off
+    /// intent and never disables a newer enable that superseded the captured
+    /// token. A successful `T -> E -> T2` handoff returns `T2` only while it is
+    /// still the latest disabled intent after physical/authority teardown.
+    pub(crate) async fn disconnect_for_cast(
+        &self,
+        cast_epoch: crate::cast_qt::CastTransitionEpoch,
+    ) -> Result<QconnectDisconnectOutcome, String> {
+        let expected_enable = self.enable_intent.current_token();
+        // The manual QConnect side publishes its Cast epoch before renewing E.
+        // Snapshot E first, then reject a stale Cast B before its CAS. If a
+        // click lands between this check and the CAS, E changes and the CAS
+        // fails; if it lands after the CAS, post-teardown enabled revalidation
+        // rejects B. Together these establish a total B/C order.
+        if !crate::cast_qt::qconnect_start_intent_is_current(cast_epoch) {
+            return Err("qconnect-cast-suspend-superseded-by-renderer-intent".to_string());
+        }
+        let replacement_disabled = expected_enable.and_then(|expected| {
+            let disabled = self.enable_intent.disable_if_current(expected)?;
+            // Cancellation is visible before waiting for the lifecycle lane.
+            // Clear only the captured claim: a newer enabled intent must keep
+            // its own pre-runtime slot.
+            let mut inner = lock_inner(&self.inner);
+            if inner.connecting_token == Some(expected) {
+                inner.connecting_token = None;
+                if inner.runtime.is_none() {
+                    inner.lifecycle_state = QconnectLifecycleState::Off;
+                }
             }
-            runtime.event_loop.abort();
+            Some(disabled)
+        });
+
+        let _lifecycle = self.lifecycle_gate.lock().await;
+        // A manual/new enable after the exact disable owns the next renderer
+        // transition. Do not tear it down while it waits behind Cast's gate.
+        if self.enable_intent.current_token().is_some() {
+            return Err("qconnect-cast-suspend-superseded-by-enable".to_string());
         }
 
-        // Clear the UI: no session = no renderers in the picker, and no remote
-        // playback state. Without this the last device list + is-remote/cast
-        // state linger after turning Connect off. (Contract §11.3: the remote
-        // volume-lock flag is cleared HERE too — its second write site — or it
-        // sticks true after disconnect.)
-        publish::devices(Vec::new());
-        publish::active_renderer_id(-1);
-        crate::now_playing::set_remote(false, "");
-        crate::now_playing::set_remote_volume_locked(false);
+        let mut outcome = self.teardown_with_owner_policy_locked(true).await;
+        // A later manual disable advances the disabled epoch and deliberately
+        // removes Cast's restore obligation. A later enable is rejected above.
+        outcome.cast_restore_token =
+            replacement_disabled.filter(|token| self.enable_intent.is_disabled_current(*token));
+        if self.enable_intent.current_token().is_some() {
+            return Err("qconnect-cast-suspend-superseded-by-enable".to_string());
+        }
+        Ok(outcome)
+    }
 
-        Ok(())
+    async fn disconnect_with_owner_policy_locked(
+        &self,
+        restore_owner: bool,
+    ) -> Result<QconnectDisconnectOutcome, String> {
+        let outcome = self.teardown_with_owner_policy_locked(restore_owner).await;
+        if outcome.authority_safe {
+            Ok(outcome)
+        } else {
+            Err("qconnect-authority-teardown-incomplete".to_string())
+        }
+    }
+
+    async fn teardown_with_owner_policy_locked(
+        &self,
+        restore_owner: bool,
+    ) -> QconnectDisconnectOutcome {
+        // The public entry invalidated enabled intent before waiting for this
+        // lane. Do not invalidate again here: an enable requested while that
+        // wait was pending is newer and must win.
+        {
+            let mut inner = lock_inner(&self.inner);
+            inner.connecting_token = None;
+            if inner.runtime.is_none() {
+                inner.lifecycle_state = QconnectLifecycleState::Off;
+            }
+        }
+        // Normative order: close HTTP/mDNS admission first, then invalidate and
+        // join candidates, then stop the installed cloud authority. Both the
+        // coordinator and host teardown are idempotent, including the window
+        // before the initial owner reached OwnerReady.
+        let lan_withdrawn = if let Err(error) = self.stop_lan().await {
+            log::warn!("[QConnect] LAN teardown failed: {error}");
+            false
+        } else {
+            !self.lan_lifecycle.start_pending() && self.lan_lifecycle.teardown_safe()
+        };
+        // A restore scheduled by the preceding delegated -> owner transition
+        // still owns the delegation transition gate. Let that tracked task
+        // reach its bounded terminal result before asking coordinator shutdown
+        // to acquire the same gate; otherwise the shorter coordinator timeout
+        // merely cancels its waiter and leaves a late owner runtime behind.
+        let prior_owner_restore = self.delegation_host.await_owner_playback_restore().await;
+        self.delegation_host
+            .set_shutdown_restore_owner(restore_owner);
+        let coordinator_stopped = if tokio::time::timeout(
+            QCONNECT_COORDINATOR_SHUTDOWN_TIMEOUT,
+            self.coordinator.shutdown(),
+        )
+        .await
+        .is_err()
+        {
+            log::warn!("[QConnect] qconnect-coordinator-shutdown-timed-out");
+            false
+        } else {
+            true
+        };
+        let direct_authority_shutdown_needed = !coordinator_stopped
+            || self.authority.current().is_some()
+            || lock_inner(&self.inner).runtime.is_some()
+            || self.delegation_host.owner_snapshot_pending();
+        let authority_stopped = if direct_authority_shutdown_needed {
+            if tokio::time::timeout(
+                QCONNECT_AUTHORITY_SHUTDOWN_TIMEOUT,
+                self.delegation_host.shutdown_authority(),
+            )
+            .await
+            .is_err()
+            {
+                log::warn!("[QConnect] qconnect-authority-shutdown-timed-out");
+                false
+            } else {
+                true
+            }
+        } else {
+            true
+        };
+        let shutdown_owner_restore = self.delegation_host.await_owner_playback_restore().await;
+        let owner_restored = prior_owner_restore.is_ok()
+            && shutdown_owner_restore.is_ok()
+            && !self.delegation_host.owner_restore_pending();
+        let runtime_removed = lock_inner(&self.inner).runtime.is_none();
+        let authority_safe = lan_withdrawn
+            && coordinator_stopped
+            && authority_stopped
+            && runtime_removed
+            && self.authority.current().is_none();
+        self.teardown_incomplete
+            .store(!authority_safe, Ordering::Release);
+        if authority_safe {
+            *self.controller_manual.lock().await = ControllerManualBlock::default();
+        }
+        QconnectDisconnectOutcome {
+            authority_safe,
+            owner_restored,
+            lan_withdrawn,
+            cast_restore_token: None,
+        }
+    }
+
+    pub async fn disconnect(&self) -> Result<(), String> {
+        self.disconnect_safely().await.map(|_| ())
+    }
+
+    pub async fn disconnect_safely(&self) -> Result<QconnectDisconnectOutcome, String> {
+        self.disconnect_with_owner_policy(true).await
     }
 
     /// Controller-side queue sync: when the LOCAL queue differs from the session
@@ -1180,8 +2063,11 @@ impl QtQconnectService {
     /// Plex track is refused whole (a renderer can only play Qobuz catalog ids;
     /// offline qobuz_download IS eligible — its id is the real Qobuz id).
     pub async fn sync_local_queue_if_changed(&self) {
+        let Ok(Some(_runtime_action)) = self.begin_runtime_action_if_running() else {
+            return;
+        };
         let (app, sync_state) = {
-            let guard = self.inner.lock().await;
+            let guard = lock_inner(&self.inner);
             match guard.runtime.as_ref() {
                 Some(runtime) => (Arc::clone(&runtime.app), Arc::clone(&runtime.sync_state)),
                 None => return,
@@ -1227,8 +2113,8 @@ impl QtQconnectService {
         }
         // ...and skip when we already pushed this exact queue (cloud echo pending).
         {
-            let pushed = self.last_pushed_queue_ids.lock().await;
-            if pushed.as_deref() == Some(ordered_ids.as_slice()) {
+            let guard = lock_inner(&self.inner);
+            if guard.last_pushed_queue_ids.as_deref() == Some(ordered_ids.as_slice()) {
                 return;
             }
         }
@@ -1240,7 +2126,7 @@ impl QtQconnectService {
             crate::toast_qt::error(qbz_i18n::t("Mixed queue — not cast to Qobuz Connect"));
             dev_push_event("-> queue push REFUSED (mixed/non-Qobuz)".to_string());
             // Remember it so we don't re-toast on every track tick within this queue.
-            *self.last_pushed_queue_ids.lock().await = Some(ordered_ids);
+            lock_inner(&self.inner).last_pushed_queue_ids = Some(ordered_ids);
             return;
         }
 
@@ -1267,7 +2153,7 @@ impl QtQconnectService {
                 dev_push_event(format!(
                     "-> QueueLoadTracks {count} tracks start={start_index}"
                 ));
-                *self.last_pushed_queue_ids.lock().await = Some(ordered_ids);
+                lock_inner(&self.inner).last_pushed_queue_ids = Some(ordered_ids);
             }
             Err(err) => log::warn!("[QConnect] Failed to push local queue: {err}"),
         }
@@ -1290,16 +2176,16 @@ impl QtQconnectService {
     /// still returns `true` (a peer owns playback; falling back to local audio
     /// would double-play).
     pub async fn play_on_peer_if_active(&self, track_id: u64) -> bool {
-        let (app, peer_active) = {
-            let guard = self.inner.lock().await;
+        let (app, sync_state) = {
+            let guard = lock_inner(&self.inner);
             let Some(runtime) = guard.runtime.as_ref() else {
                 return false;
             };
-            let peer_active = {
-                let state = runtime.sync_state.lock().await;
-                is_peer_renderer_active(&state.session)
-            };
-            (Arc::clone(&runtime.app), peer_active)
+            (Arc::clone(&runtime.app), Arc::clone(&runtime.sync_state))
+        };
+        let peer_active = {
+            let state = sync_state.lock().await;
+            is_peer_renderer_active(&state.session)
         };
         if !peer_active {
             return false;
@@ -1330,7 +2216,7 @@ impl QtQconnectService {
             crate::toast_qt::error(qbz_i18n::t("Mixed queue — not cast to Qobuz Connect"));
             dev_push_event("-> queue push REFUSED (mixed/non-Qobuz)".to_string());
             // Remember it so the poll loop's sync doesn't re-toast this queue.
-            *self.last_pushed_queue_ids.lock().await = Some(ordered_ids);
+            lock_inner(&self.inner).last_pushed_queue_ids = Some(ordered_ids);
             // Handled: do NOT play a refused queue locally.
             return true;
         }
@@ -1358,7 +2244,7 @@ impl QtQconnectService {
                 dev_push_event(format!(
                     "-> play_on_peer QueueLoadTracks {count} start={start_index}"
                 ));
-                *self.last_pushed_queue_ids.lock().await = Some(ordered_ids);
+                lock_inner(&self.inner).last_pushed_queue_ids = Some(ordered_ids);
             }
             Err(err) => {
                 log::warn!("[QConnect] play_on_peer: queue push failed: {err}");
@@ -1902,11 +2788,14 @@ impl QtQconnectService {
     /// the session under the sync-state lock. Shared by the play-next /
     /// add-to-queue routing entry points.
     async fn is_peer_renderer_active(&self) -> bool {
-        let guard = self.inner.lock().await;
-        let Some(runtime) = guard.runtime.as_ref() else {
-            return false;
+        let sync_state = {
+            let guard = lock_inner(&self.inner);
+            let Some(runtime) = guard.runtime.as_ref() else {
+                return false;
+            };
+            Arc::clone(&runtime.sync_state)
         };
-        let state = runtime.sync_state.lock().await;
+        let state = sync_state.lock().await;
         is_peer_renderer_active(&state.session)
     }
 
@@ -1938,8 +2827,9 @@ impl QtQconnectService {
         command_type: QueueCommandType,
         payload: Value,
     ) -> Result<String, String> {
+        let _runtime_action = self.begin_runtime_action()?;
         let app = {
-            let guard = self.inner.lock().await;
+            let guard = lock_inner(&self.inner);
             guard
                 .runtime
                 .as_ref()
@@ -1983,14 +2873,12 @@ impl QtQconnectService {
             }
         }
 
-        // Dev diagnostic: dump the EXACT outbound payload for the player-state
-        // command (pause/resume/seek/skip) so a test can diff QBZ's command
-        // field-for-field against a working controller (e.g. WebPlayer pausing an
-        // iOS renderer). Gated to SetPlayerState so a volume drag never spams it.
-        // Answers "do we log who sends what when QBZ != renderer": yes, now.
+        // Payloads may contain session/context identifiers. Diagnostics keep
+        // only the allowlisted command kind; individual routing methods already
+        // report safe scalar intent such as pause/seek/track count.
         if matches!(command_type, QueueCommandType::CtrlSrvrSetPlayerState) {
-            log::info!("[QConnect] --> outbound SetPlayerState payload={payload}");
-            dev_push_event(format!("-> SetPlayerState {payload}"));
+            log::debug!("[QConnect] outbound SetPlayerState");
+            dev_push_event("-> SetPlayerState".to_string());
         }
 
         let command = app.build_queue_command(command_type, payload).await;
@@ -2001,9 +2889,15 @@ impl QtQconnectService {
 
     /// Update the app's cached renderer position (controller optimistic seek).
     async fn update_renderer_position(&self, position_ms: u64) {
-        let guard = self.inner.lock().await;
-        if let Some(runtime) = &guard.runtime {
-            runtime.app.update_renderer_position(position_ms).await;
+        let app = {
+            let guard = lock_inner(&self.inner);
+            guard
+                .runtime
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.app))
+        };
+        if let Some(app) = app {
+            app.update_renderer_position(position_ms).await;
         }
     }
 
@@ -2040,7 +2934,7 @@ impl QtQconnectService {
         String,
     > {
         let (app, sync_state) = {
-            let guard = self.inner.lock().await;
+            let guard = lock_inner(&self.inner);
             let Some(runtime) = guard.runtime.as_ref() else {
                 return Ok(None);
             };
@@ -2100,11 +2994,14 @@ impl QtQconnectService {
     /// Used by the audio-settings force-100 path to SKIP forcing local volume
     /// to 100% while controlling a peer (the bit-perfect lock is lifted then).
     pub async fn is_peer_active(&self) -> bool {
-        let guard = self.inner.lock().await;
-        let Some(runtime) = guard.runtime.as_ref() else {
-            return false;
+        let sync_state = {
+            let guard = lock_inner(&self.inner);
+            let Some(runtime) = guard.runtime.as_ref() else {
+                return false;
+            };
+            Arc::clone(&runtime.sync_state)
         };
-        let state = runtime.sync_state.lock().await;
+        let state = sync_state.lock().await;
         is_peer_renderer_active(&state.session)
     }
 
@@ -2157,12 +3054,15 @@ impl QtQconnectService {
         playing_state: Option<i32>,
         current_position_ms: Option<u64>,
     ) {
-        let guard = self.inner.lock().await;
-        let Some(runtime) = guard.runtime.as_ref() else {
-            return;
+        let sync_state = {
+            let guard = lock_inner(&self.inner);
+            let Some(runtime) = guard.runtime.as_ref() else {
+                return;
+            };
+            Arc::clone(&runtime.sync_state)
         };
 
-        let mut sync_state = runtime.sync_state.lock().await;
+        let mut sync_state = sync_state.lock().await;
         let Some(active_renderer_id) = sync_state.session.active_renderer_id else {
             return;
         };
@@ -2184,12 +3084,15 @@ impl QtQconnectService {
     /// Optimistically apply only a playing_state to the active peer renderer.
     /// Mirrors the Tauri `prime_remote_renderer_playing_state`.
     async fn prime_remote_renderer_playing_state(&self, playing_state: i32) {
-        let guard = self.inner.lock().await;
-        let Some(runtime) = guard.runtime.as_ref() else {
-            return;
+        let sync_state = {
+            let guard = lock_inner(&self.inner);
+            let Some(runtime) = guard.runtime.as_ref() else {
+                return;
+            };
+            Arc::clone(&runtime.sync_state)
         };
 
-        let mut sync_state = runtime.sync_state.lock().await;
+        let mut sync_state = sync_state.lock().await;
         let Some(active_renderer_id) = sync_state.session.active_renderer_id else {
             return;
         };
@@ -2218,6 +3121,9 @@ impl QtQconnectService {
         &self,
         direction: QconnectRemoteSkipDirection,
     ) -> Result<bool, String> {
+        let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
+            return Ok(false);
+        };
         let direction_label = match direction {
             QconnectRemoteSkipDirection::Next => "next",
             QconnectRemoteSkipDirection::Previous => "previous",
@@ -2226,11 +3132,14 @@ impl QtQconnectService {
         let remote_context = self.effective_remote_renderer_snapshot().await?;
         let Some((renderer, queue, session)) = remote_context else {
             let reason = {
-                let guard = self.inner.lock().await;
-                let Some(runtime) = guard.runtime.as_ref() else {
-                    return Ok(false);
+                let sync_state = {
+                    let guard = lock_inner(&self.inner);
+                    let Some(runtime) = guard.runtime.as_ref() else {
+                        return Ok(false);
+                    };
+                    Arc::clone(&runtime.sync_state)
                 };
-                let session = runtime.sync_state.lock().await.session.clone();
+                let session = sync_state.lock().await.session.clone();
                 if session.active_renderer_id.is_none() {
                     "missing_active_renderer_id"
                 } else if session.local_renderer_id.is_none() {
@@ -2300,14 +3209,20 @@ impl QtQconnectService {
     /// Toggle play/pause on the active PEER renderer. Mirrors the Tauri
     /// `toggle_remote_renderer_playback_if_active`.
     pub async fn toggle_remote_renderer_playback_if_active(&self) -> Result<bool, String> {
+        let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
+            return Ok(false);
+        };
         let remote_context = self.effective_remote_renderer_snapshot().await?;
         let Some((renderer, _queue, session)) = remote_context else {
             let reason = {
-                let guard = self.inner.lock().await;
-                let Some(runtime) = guard.runtime.as_ref() else {
-                    return Ok(false);
+                let sync_state = {
+                    let guard = lock_inner(&self.inner);
+                    let Some(runtime) = guard.runtime.as_ref() else {
+                        return Ok(false);
+                    };
+                    Arc::clone(&runtime.sync_state)
                 };
-                let session = runtime.sync_state.lock().await.session.clone();
+                let session = sync_state.lock().await.session.clone();
                 if session.active_renderer_id.is_none() {
                     "missing_active_renderer_id"
                 } else if session.local_renderer_id.is_none() {
@@ -2365,18 +3280,17 @@ impl QtQconnectService {
         &self,
         track_id: u64,
     ) -> Result<bool, String> {
-        let (app, session, sync_state) = {
-            let guard = self.inner.lock().await;
+        let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
+            return Ok(false);
+        };
+        let (app, sync_state) = {
+            let guard = lock_inner(&self.inner);
             let Some(runtime) = guard.runtime.as_ref() else {
                 return Ok(false);
             };
-            let session = runtime.sync_state.lock().await.session.clone();
-            (
-                Arc::clone(&runtime.app),
-                session,
-                Arc::clone(&runtime.sync_state),
-            )
+            (Arc::clone(&runtime.app), Arc::clone(&runtime.sync_state))
         };
+        let session = sync_state.lock().await.session.clone();
 
         let active_renderer_id = session.active_renderer_id;
         let local_renderer_id = session.local_renderer_id;
@@ -2477,7 +3391,7 @@ impl QtQconnectService {
     /// connected, regardless of who is the active renderer.
     async fn transport_connected(&self) -> bool {
         let app = {
-            let guard = self.inner.lock().await;
+            let guard = lock_inner(&self.inner);
             match guard.runtime.as_ref() {
                 Some(runtime) => Arc::clone(&runtime.app),
                 None => return false,
@@ -2492,15 +3406,17 @@ impl QtQconnectService {
     ///
     /// WS-AUTHORITATIVE (load-bearing): QBZ sends ONLY `{shuffle_mode,
     /// shuffle_seed, shuffle_pivot_queue_item_id}` — never a local order. The
-    /// cloud generates the order and echoes it; QBZ applies ONLY that echoed
-    /// order (inbound SetShuffleMode is flag-only + materialize applies the
-    /// cloud's `shuffled_track_indexes`). The local `playback::toggle_shuffle`
-    /// path (which DOES invent a local random order — the documented failure
-    /// mode) is reachable ONLY when NOT connected (this returns `Ok(false)` then,
-    /// so the caller runs it offline). The previous peer-only gate let that local
-    /// path run while connected-as-renderer, which both did nothing visible AND
-    /// risked the divergent-order bug.
+    /// server-authorized seed/pivot or `shuffled_track_indexes` is the sole
+    /// input to the deterministic playback order applied by every client.
+    /// Inbound `SetShuffleMode` alone cannot mutate the local queue. The local
+    /// `playback::toggle_shuffle` path (which invents local entropy) is reachable
+    /// ONLY when NOT connected (this returns `Ok(false)` then, so the caller runs
+    /// it offline). The previous peer-only gate let that local path run while
+    /// connected-as-renderer, producing the documented divergent-order bug.
     pub async fn toggle_shuffle_if_remote(&self) -> Result<bool, String> {
+        let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
+            return Ok(false);
+        };
         if !self.transport_connected().await {
             // Offline: caller runs the local shuffle path.
             return Ok(false);
@@ -2520,9 +3436,10 @@ impl QtQconnectService {
         // never populates for a peer.
         let next_shuffle = !queue.shuffle_mode;
 
-        // The cloud REQUIRES a `shuffle_seed` when enabling ("shuffleSeed is
-        // undefined" otherwise) and uses it to GENERATE the order — QBZ supplies
-        // only the seed + pivot, never an order. No `rand` crate here (unlike
+        // The server REQUIRES a `shuffle_seed` when enabling ("shuffleSeed is
+        // undefined" otherwise). QBZ originates one only while acting as the
+        // controller that requested this toggle; renderers consume the echoed
+        // WS seed/pivot and never generate another. No `rand` crate here (unlike
         // Tauri); seed from the wall clock, masked to i32::MAX for the wire
         // `fixed32`. Pivot keeps the current track at the front. Mirrors the
         // Tauri `apply_qconnect_shuffle_mode` payload.
@@ -2565,6 +3482,9 @@ impl QtQconnectService {
     /// QConnect loop wire values: 1=off, 3=all, 2=one; cycle off->all->one->off.
     /// Returns `Ok(false)` ONLY when NOT connected so the caller runs local.
     pub async fn cycle_repeat_if_remote(&self) -> Result<bool, String> {
+        let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
+            return Ok(false);
+        };
         if !self.transport_connected().await {
             return Ok(false);
         }
@@ -2609,6 +3529,9 @@ impl QtQconnectService {
         from_q: usize,
         to_q: usize,
     ) -> Result<bool, String> {
+        let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
+            return Ok(false);
+        };
         if !self.transport_connected().await {
             return Ok(false);
         }
@@ -2657,6 +3580,9 @@ impl QtQconnectService {
     /// frontend does NOT fall back to local volume. Mirrors the Tauri
     /// `set_volume_if_remote`.
     pub async fn set_volume_if_remote(&self, volume: i32) -> Result<bool, String> {
+        let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
+            return Ok(false);
+        };
         let remote_context = self.effective_remote_renderer_snapshot().await?;
         let Some((_renderer, _queue, session)) = remote_context else {
             return Ok(false);
@@ -2701,6 +3627,9 @@ impl QtQconnectService {
 
     /// Mute/unmute the active PEER renderer. Mirrors the Tauri `mute_if_remote`.
     pub async fn mute_if_remote(&self, value: bool) -> Result<bool, String> {
+        let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
+            return Ok(false);
+        };
         let remote_context = self.effective_remote_renderer_snapshot().await?;
         let Some((_renderer, _queue, session)) = remote_context else {
             return Ok(false);
@@ -2730,6 +3659,9 @@ impl QtQconnectService {
     // autoplay/stop UI work.
     #[allow(dead_code)]
     pub async fn set_autoplay_mode_if_remote(&self, enabled: bool) -> Result<bool, String> {
+        let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
+            return Ok(false);
+        };
         let remote_context = self.effective_remote_renderer_snapshot().await?;
         let Some((_renderer, _queue, session)) = remote_context else {
             return Ok(false);
@@ -2759,6 +3691,9 @@ impl QtQconnectService {
         &self,
         track_ids: Vec<u32>,
     ) -> Result<bool, String> {
+        let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
+            return Ok(false);
+        };
         let remote_context = self.effective_remote_renderer_snapshot().await?;
         let Some((_renderer, _queue, session)) = remote_context else {
             return Ok(false);
@@ -2788,6 +3723,9 @@ impl QtQconnectService {
     /// Stop the active PEER renderer. Mirrors the Tauri `stop_if_remote`.
     #[allow(dead_code)] // Reserved: ported, pending QConnect stop wiring.
     pub async fn stop_if_remote(&self) -> Result<bool, String> {
+        let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
+            return Ok(false);
+        };
         let remote_context = self.effective_remote_renderer_snapshot().await?;
         let Some((renderer, queue, session)) = remote_context else {
             return Ok(false);
@@ -2833,6 +3771,9 @@ impl QtQconnectService {
     /// touched (a seek must not toggle play/pause). Mirrors the Tauri
     /// `set_position_if_remote`.
     pub async fn set_position_if_remote(&self, position_ms: i64) -> Result<bool, String> {
+        let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
+            return Ok(false);
+        };
         let remote_context = self.effective_remote_renderer_snapshot().await?;
         let Some((renderer, queue, session)) = remote_context else {
             return Ok(false);
@@ -2874,8 +3815,9 @@ impl QtQconnectService {
     /// over `QconnectApp::send_set_active_renderer` (guard + clear-pending).
     /// Mirrors the Tauri `v2_qconnect_set_active_renderer`.
     pub async fn set_active_renderer(&self, renderer_id: i32) -> Result<bool, String> {
+        let _runtime_action = self.begin_runtime_action()?;
         let app = {
-            let guard = self.inner.lock().await;
+            let guard = lock_inner(&self.inner);
             guard
                 .runtime
                 .as_ref()
@@ -2924,21 +3866,34 @@ async fn park_session_loop_while_offline(context: &str) {
 /// shared sync accumulator, the service inner (lifecycle gating + teardown),
 /// the sink (lifecycle emit), and the runtime (track duration read for the
 /// join).
-struct QtSessionLoopHost {
-    app: Arc<QtQconnectApp>,
-    sync_state: Arc<Mutex<QconnectRemoteSyncState>>,
-    inner: Arc<Mutex<QtQconnectInner>>,
-    sink: Arc<QtQconnectEventSink>,
-    runtime: Runtime,
+pub(crate) struct QtSessionLoopHost {
+    pub(crate) app: Arc<QtQconnectApp>,
+    pub(crate) sync_state: Arc<Mutex<QconnectRemoteSyncState>>,
+    pub(crate) inner: Arc<StdMutex<QtQconnectInner>>,
+    pub(crate) authority: Arc<AuthorityCell>,
+    pub(crate) stamp: AuthorityStamp,
+    pub(crate) sink: Arc<QtQconnectEventSink>,
+    pub(crate) runtime: Runtime,
+    pub(crate) projection: QtLanProjectionSlot,
 }
 
 #[async_trait::async_trait]
 impl SessionLoopHost for QtSessionLoopHost {
     async fn update_lifecycle(&self, state: QconnectLifecycleState) {
-        update_lifecycle_state_if_running(&self.inner, &self.sink, state).await;
+        update_lifecycle_state_if_running(
+            &self.inner,
+            &self.sink,
+            &self.authority,
+            self.stamp,
+            state,
+        )
+        .await;
     }
 
     async fn bootstrap_after_reconnect(&self) {
+        if !self.authority.is_current(self.stamp) {
+            return;
+        }
         // D5 (offline-MODE): never re-bootstrap presence while offline. The
         // force-disconnect watcher is tearing the session down on the offline
         // edge; a transport reconnect that sneaks in before that lands (induced
@@ -2950,7 +3905,47 @@ impl SessionLoopHost for QtSessionLoopHost {
         // this wait); if the session is still alive when the online edge
         // arrives, the normal bootstrap below resumes.
         park_session_loop_while_offline("Reconnect bootstrap").await;
-        if let Err(err) = bootstrap_remote_presence(&self.app, None).await {
+        if !self.authority.is_current(self.stamp) {
+            return;
+        }
+        // Refresh the owner token/config for subsequent reconnect attempts. A
+        // long-running desktop session must not keep retrying an expired JWT.
+        match resolve_transport_config(&self.runtime).await {
+            Ok(fresh) => {
+                if !self.authority.is_current(self.stamp) {
+                    return;
+                }
+                let latched = {
+                    let mut guard = lock_inner(&self.inner);
+                    if let Some(runtime) = guard.runtime.as_mut() {
+                        if runtime.stamp == self.stamp {
+                            runtime.config = fresh;
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                };
+                if !latched || !self.authority.is_current(self.stamp) {
+                    return;
+                }
+                log::info!("[QConnect] reconnect: refreshed owner transport credentials");
+            }
+            Err(error) => {
+                if !self.authority.is_current(self.stamp) {
+                    return;
+                }
+                log::warn!("[QConnect] reconnect credential refresh failed: {error}");
+            }
+        }
+        if let Err(err) =
+            bootstrap_remote_presence(&self.app, None, &self.authority, self.stamp).await
+        {
+            if !self.authority.is_current(self.stamp) {
+                return;
+            }
             log::error!("[QConnect] Re-bootstrap after reconnect failed: {err}");
         }
     }
@@ -2962,6 +3957,8 @@ impl SessionLoopHost for QtSessionLoopHost {
             &self.runtime,
             &session_uuid,
             reason,
+            &self.authority,
+            self.stamp,
         )
         .await;
     }
@@ -2972,18 +3969,29 @@ impl SessionLoopHost for QtSessionLoopHost {
         last_reason: String,
         idle_retry_active: bool,
     ) -> bool {
-        {
-            let mut guard = self.inner.lock().await;
-            guard.lifecycle_state = QconnectLifecycleState::Exhausted;
-            guard.last_error = Some(format!(
-                "Reconnect attempts exhausted ({attempts}): {last_reason}"
-            ));
-            if !idle_retry_active {
-                // Legacy terminate path: drop the runtime so a fresh connect()
-                // succeeds. Dropping it detaches this task's own JoinHandle (fine
-                // — the loop breaks right after) (#358).
-                guard.runtime = None;
+        if !self.authority.is_current(self.stamp) {
+            return true;
+        }
+        let (applied, retired) = {
+            let mut guard = lock_inner(&self.inner);
+            if guard.runtime.as_ref().map(|runtime| runtime.stamp) != Some(self.stamp) {
+                (false, None)
+            } else {
+                guard.lifecycle_state = QconnectLifecycleState::Exhausted;
+                guard.last_error = Some(format!(
+                    "Reconnect attempts exhausted ({attempts}): {last_reason}"
+                ));
+                if !idle_retry_active {
+                    (true, guard.runtime.take())
+                } else {
+                    (true, None)
+                }
             }
+        };
+        // Never drop a retired runtime while holding the service mutex.
+        drop(retired);
+        if !applied || !self.authority.is_current(self.stamp) {
+            return true;
         }
         // TODO(qt-qconnect-ui): surface the Exhausted lifecycle on the badge.
         // (Reference TODO(slint-qconnect-ui), kept unwired per §9 D6.)
@@ -3005,11 +4013,17 @@ impl SessionLoopHost for QtSessionLoopHost {
         // keep-idling branch — the terminate branch breaks the loop anyway.
         if idle_retry_active {
             park_session_loop_while_offline("Idle-retry rearm").await;
+        } else {
+            self.projection
+                .clear_if_current(&self.authority, self.stamp);
         }
         !idle_retry_active
     }
 
     async fn on_loop_error(&self, message: String) {
+        if !self.authority.is_current(self.stamp) {
+            return;
+        }
         // TODO(qt-qconnect-ui): surface as a toast (Tauri emits qconnect:error).
         // (Reference TODO(slint-qconnect-ui), kept unwired per §9 D6.)
         log::error!("[QConnect] session loop error: {message}");
@@ -3023,6 +4037,15 @@ const AUDIO_QUALITY_CD: i32 = 2;
 const AUDIO_QUALITY_HIRES_L1: i32 = 3;
 const AUDIO_QUALITY_HIRES_L2: i32 = 4;
 const AUDIO_QUALITY_HIRES_L3: i32 = 5;
+
+fn qconnect_max_audio_quality_wire() -> i32 {
+    match crate::playback_qt::local_playback_quality().0 {
+        qbz_models::Quality::Mp3 => AUDIO_QUALITY_MP3,
+        qbz_models::Quality::Lossless => AUDIO_QUALITY_CD,
+        qbz_models::Quality::HiRes => AUDIO_QUALITY_HIRES_L1,
+        qbz_models::Quality::UltraHiRes => AUDIO_QUALITY_HIRES_L2,
+    }
+}
 
 /// Classify a (sample_rate, bit_depth) output into the QConnect AudioQuality
 /// level. Pure mirror of the Tauri `classify_qconnect_audio_quality`.
@@ -3090,11 +4113,41 @@ async fn resolve_queue_item_ids_by_track_id(
 /// for the current queue state. The renderer-side join is deferred until the
 /// server sends SESSION_STATE with a session_uuid (handled in the session loop).
 /// Mirrors the Tauri `bootstrap_remote_presence`.
-async fn bootstrap_remote_presence(
+pub(crate) async fn bootstrap_remote_presence(
+    app: &Arc<QtQconnectApp>,
+    custom_device_name: Option<String>,
+    authority: &AuthorityCell,
+    stamp: AuthorityStamp,
+) -> Result<(), String> {
+    bootstrap_remote_presence_with_gate(app, custom_device_name, || authority.is_current(stamp))
+        .await
+}
+
+/// Bootstrap an isolated owner candidate before its reserved stamp is
+/// installed. The coordinator owns cancellation and the candidate receiver is
+/// already subscribed, so emitted session events remain buffered until commit.
+pub(crate) async fn bootstrap_prepared_owner_presence(
     app: &Arc<QtQconnectApp>,
     custom_device_name: Option<String>,
 ) -> Result<(), String> {
-    let device_info = default_qconnect_device_info_with_name(custom_device_name.as_deref());
+    bootstrap_remote_presence_with_gate(app, custom_device_name, || true).await
+}
+
+async fn bootstrap_remote_presence_with_gate<F>(
+    app: &Arc<QtQconnectApp>,
+    custom_device_name: Option<String>,
+    is_current: F,
+) -> Result<(), String>
+where
+    F: Fn() -> bool,
+{
+    if !is_current() {
+        return Err("qconnect bootstrap authority retired".to_string());
+    }
+    let mut device_info = default_qconnect_device_info_with_name(custom_device_name.as_deref());
+    if let Some(capabilities) = device_info.capabilities.as_mut() {
+        capabilities.max_audio_quality = Some(qconnect_max_audio_quality_wire());
+    }
 
     let join_payload = serde_json::to_value(QconnectJoinSessionRequest {
         session_uuid: None,
@@ -3105,25 +4158,43 @@ async fn bootstrap_remote_presence(
     let join_command = app
         .build_queue_command(QueueCommandType::CtrlSrvrJoinSession, join_payload)
         .await;
+    if !is_current() {
+        return Err("qconnect bootstrap authority retired".to_string());
+    }
     let join_action_uuid = app
         .send_queue_command(join_command)
         .await
         .map_err(|err| format!("send bootstrap ctrl_srvr_join_session failed: {err}"))?;
+    if !is_current() {
+        return Err("qconnect bootstrap authority retired".to_string());
+    }
     // JoinSession responds with session/renderer controller events not part of
     // queue reducer correlation. Drop the pending slot so queue ops aren't blocked.
     app.clear_pending_if_matches(&join_action_uuid).await;
+    if !is_current() {
+        return Err("qconnect bootstrap authority retired".to_string());
+    }
 
     let ask_queue_command = app
         .build_queue_command(QueueCommandType::CtrlSrvrAskForQueueState, json!({}))
         .await;
+    if !is_current() {
+        return Err("qconnect bootstrap authority retired".to_string());
+    }
     let ask_action_uuid = app
         .send_queue_command(ask_queue_command)
         .await
         .map_err(|err| format!("send bootstrap ask_for_queue_state failed: {err}"))?;
+    if !is_current() {
+        return Err("qconnect bootstrap authority retired".to_string());
+    }
     app.clear_pending_if_matches(&ask_action_uuid).await;
+    if !is_current() {
+        return Err("qconnect bootstrap authority retired".to_string());
+    }
 
     log::info!(
-        "[QConnect] Bootstrap complete: controller joined, queue state requested. Renderer join deferred until session_uuid received."
+        "[QConnect] Bootstrap complete: controller joined, queue state requested; renderer join deferred until a session is present"
     );
     Ok(())
 }
@@ -3138,25 +4209,43 @@ async fn deferred_renderer_join(
     runtime: &Runtime,
     session_uuid: &str,
     join_reason: i32,
+    authority: &AuthorityCell,
+    stamp: AuthorityStamp,
 ) {
+    if !authority.is_current(stamp) {
+        return;
+    }
     let already_joined = {
         let st = sync_state.lock().await;
+        if !authority.is_current(stamp) {
+            return;
+        }
         st.last_joined_session_uuid.as_deref() == Some(session_uuid)
     };
     if already_joined {
-        log::info!(
-            "[QConnect] Deferred join skipped (already joined session_uuid={session_uuid}); re-asking renderer state"
-        );
+        log::info!("[QConnect] Deferred join skipped (session already joined)");
+        if !authority.is_current(stamp) {
+            return;
+        }
         if let Err(err) = app.ask_for_active_renderer_state().await {
+            if !authority.is_current(stamp) {
+                return;
+            }
             log::warn!("[QConnect] Idempotent-join AskForRendererState failed: {err}");
         }
         return;
     }
 
-    let device_info = default_qconnect_device_info();
+    let mut device_info = default_qconnect_device_info();
+    if let Some(capabilities) = device_info.capabilities.as_mut() {
+        capabilities.max_audio_quality = Some(qconnect_max_audio_quality_wire());
+    }
     let queue_version_ref = app.queue_state_snapshot().await.version;
+    if !authority.is_current(stamp) {
+        return;
+    }
 
-    log::info!("[QConnect] Deferred renderer join with session_uuid={session_uuid}");
+    log::info!("[QConnect] Starting deferred renderer join");
 
     // 1. Renderer JoinSession with session_uuid.
     // Do NOT auto-steal the render on a fresh connect: join as an AVAILABLE
@@ -3176,7 +4265,7 @@ async fn deferred_renderer_join(
         "reason": join_reason,
         "initial_state": {
             "playing_state": PLAYING_STATE_STOPPED,
-            "buffer_state": BUFFER_STATE_OK,
+            "buffer_state": RendererBufferState::Ok.as_i32(),
             "current_position": 0,
             "duration": 0,
             "queue_version": {
@@ -3191,7 +4280,13 @@ async fn deferred_renderer_join(
         queue_version_ref,
         renderer_join_payload,
     );
+    if !authority.is_current(stamp) {
+        return;
+    }
     if let Err(err) = app.send_renderer_report_command(renderer_join_report).await {
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::error!("[QConnect] Deferred renderer join failed: {err}");
         return;
     }
@@ -3200,27 +4295,36 @@ async fn deferred_renderer_join(
     // we may already have a current track, so resolve the real duration + current/
     // next queue_item_ids instead of hardcoding nulls.
     let renderer = app.renderer_state_snapshot().await;
+    if !authority.is_current(stamp) {
+        return;
+    }
     let queue = app.queue_state_snapshot().await;
+    if !authority.is_current(stamp) {
+        return;
+    }
     let current_track_id = renderer.current_track.as_ref().map(|item| item.track_id);
     let (current_qid, next_qid, _) = current_track_id
         .map(|tid| {
             qconnect_app::queue_resolution::resolve_queue_item_ids_from_queue_state(&queue, tid)
         })
         .unwrap_or((None, None, None));
-    let duration_secs = match current_track_id {
+    let duration_ms = match current_track_id {
         Some(track_id) => runtime
             .core()
             .get_track(track_id)
             .await
-            .map(|track| u64::from(track.duration))
+            .map(|track| qconnect_app::qconnect_millis_from_secs(u64::from(track.duration)))
             .unwrap_or(0),
         None => 0,
     };
+    if !authority.is_current(stamp) {
+        return;
+    }
     let mut state_report_payload = json!({
         "playing_state": PLAYING_STATE_STOPPED,
-        "buffer_state": BUFFER_STATE_OK,
+        "buffer_state": RendererBufferState::Ok.as_i32(),
         "current_position": 0,
-        "duration": duration_secs,
+        "duration": duration_ms,
         "queue_version": {
             "major": queue_version_ref.major,
             "minor": queue_version_ref.minor
@@ -3238,18 +4342,32 @@ async fn deferred_renderer_join(
         queue_version_ref,
         state_report_payload,
     );
+    if !authority.is_current(stamp) {
+        return;
+    }
     if let Err(err) = app.send_renderer_report_command(state_report).await {
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::error!("[QConnect] Deferred renderer state report failed: {err}");
     }
 
     // 3. Report volume and max audio quality.
+    let volume_pct =
+        (runtime.core().get_playback_state().volume.clamp(0.0, 1.0) * 100.0).round() as i32;
     let volume_report = RendererReport::new(
         RendererReportType::RndrSrvrVolumeChanged,
         Uuid::new_v4().to_string(),
         queue_version_ref,
-        json!({ "volume": 100 }),
+        json!({ "volume": volume_pct }),
     );
+    if !authority.is_current(stamp) {
+        return;
+    }
     if let Err(err) = app.send_renderer_report_command(volume_report).await {
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::error!("[QConnect] Deferred renderer volume report failed: {err}");
     }
 
@@ -3257,9 +4375,15 @@ async fn deferred_renderer_join(
         RendererReportType::RndrSrvrMaxAudioQualityChanged,
         Uuid::new_v4().to_string(),
         queue_version_ref,
-        json!({ "max_audio_quality": AUDIO_QUALITY_HIRES_LEVEL2 }),
+        json!({ "max_audio_quality": qconnect_max_audio_quality_wire() }),
     );
+    if !authority.is_current(stamp) {
+        return;
+    }
     if let Err(err) = app.send_renderer_report_command(max_quality_report).await {
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::error!("[QConnect] Deferred renderer max quality report failed: {err}");
     }
 
@@ -3269,17 +4393,32 @@ async fn deferred_renderer_join(
     // (including ourselves). Without this, the UI may not see QBZ as a renderer
     // until the next reconnect cycle.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    if !authority.is_current(stamp) {
+        return;
+    }
     let refresh_command = app
         .build_queue_command(QueueCommandType::CtrlSrvrAskForQueueState, json!({}))
         .await;
+    if !authority.is_current(stamp) {
+        return;
+    }
     if let Ok(action_uuid) = app.send_queue_command(refresh_command).await {
         app.clear_pending_if_matches(&action_uuid).await;
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::info!("[QConnect] Re-requested session state after renderer join");
     }
 
     // Resync the active renderer's full state too, so a reconnect rejoin restores
     // renderer state.
+    if !authority.is_current(stamp) {
+        return;
+    }
     if let Err(err) = app.ask_for_active_renderer_state().await {
+        if !authority.is_current(stamp) {
+            return;
+        }
         log::warn!("[QConnect] Post-join AskForRendererState failed: {err}");
     }
 
@@ -3287,6 +4426,9 @@ async fn deferred_renderer_join(
     // takes the idempotent fast-path above.
     {
         let mut st = sync_state.lock().await;
+        if !authority.is_current(stamp) {
+            return;
+        }
         st.last_joined_session_uuid = Some(session_uuid.to_string());
     }
 }
@@ -3350,5 +4492,68 @@ mod tests {
         let mut row = track(Some("qobuz"), false);
         row.id = 0;
         assert!(!is_qconnect_queue_track(&row));
+    }
+
+    #[test]
+    fn cast_teardown_replaces_only_the_exact_enabled_intent() {
+        let source = include_str!("qconnect_qt.rs");
+        let body = source
+            .split_once("pub(crate) async fn disconnect_for_cast")
+            .expect("Cast-specific QConnect teardown")
+            .1
+            .split_once("async fn disconnect_with_owner_policy_locked")
+            .expect("Cast-specific teardown boundary")
+            .0;
+
+        let enabled_snapshot = body
+            .find("enable_intent.current_token()")
+            .expect("enabled-intent snapshot");
+        let cast_revalidation = body
+            .find("qconnect_start_intent_is_current(cast_epoch)")
+            .expect("Cast epoch revalidation");
+        let exact_disable = body
+            .find("disable_if_current(expected)")
+            .expect("exact enabled-intent disable");
+        let lifecycle = body
+            .find("lifecycle_gate.lock().await")
+            .expect("lifecycle gate");
+        let teardown = body
+            .find("teardown_with_owner_policy_locked(true)")
+            .expect("teardown without a second disable");
+        let exact_revalidation = body
+            .find("is_disabled_current(*token)")
+            .expect("replacement token revalidation");
+
+        assert!(enabled_snapshot < cast_revalidation);
+        assert!(cast_revalidation < exact_disable);
+        assert!(exact_disable < lifecycle);
+        assert!(lifecycle < teardown);
+        assert!(teardown < exact_revalidation);
+        assert!(!body.contains(".disable()"));
+    }
+
+    #[test]
+    fn manual_connect_publishes_cast_intent_before_renewing_enable() {
+        let source = include_str!("qconnect_qt.rs");
+        let body = source
+            .split_once("pub async fn connect(&self)")
+            .expect("manual QConnect entrypoint")
+            .1
+            .split_once("pub(crate) async fn connect_for_cast_restore")
+            .expect("automatic restore entrypoint")
+            .0;
+
+        let cast_intent = body
+            .find("begin_qconnect_start_intent()")
+            .expect("synchronous Cast intent publication");
+        let enabled_intent = body
+            .find("enable_new_intent()")
+            .expect("fresh manual enabled intent");
+        let exact_acquire = body
+            .find("acquire_exact_cast_transition(enable_token, cast_epoch)")
+            .expect("exact Cast transition acquisition");
+
+        assert!(cast_intent < enabled_intent);
+        assert!(enabled_intent < exact_acquire);
     }
 }

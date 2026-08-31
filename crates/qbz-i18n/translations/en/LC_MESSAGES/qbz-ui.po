@@ -1868,3 +1868,6 @@ msgstr "Choose mixer control"
 
 msgid "Change mixer control"
 msgstr "Change mixer control"
+
+msgid "Qobuz Connect could not shut down safely. Quit and reopen QBZ, then try logging out again."
+msgstr "Qobuz Connect could not shut down safely. Quit and reopen QBZ, then try logging out again."

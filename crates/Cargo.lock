@@ -4485,6 +4485,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -4540,6 +4541,8 @@ dependencies = [
  "qbz-text-utils",
  "qbz-theme",
  "qconnect-app",
+ "qconnect-lan",
+ "qconnect-protocol",
  "qconnect-transport-ws",
  "qt-build-utils",
  "rand 0.10.2",
@@ -4555,6 +4558,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "winresource",
  "zbus 5.19.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -4687,6 +4691,7 @@ dependencies = [
  "qbz-reco",
  "qconnect-app",
  "qconnect-core",
+ "qconnect-lan",
  "qconnect-protocol",
  "qconnect-transport-ws",
  "rand 0.10.2",
@@ -4702,6 +4707,7 @@ dependencies = [
  "urlencoding",
  "uuid 1.26.0",
  "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
@@ -4709,11 +4715,13 @@ name = "qconnect-app"
 version = "2.0.2"
 dependencies = [
  "async-trait",
+ "futures-util",
  "log",
  "prost",
  "qbz-models",
  "qbz-player",
  "qconnect-core",
+ "qconnect-lan",
  "qconnect-protocol",
  "qconnect-transport-ws",
  "serde",
@@ -4721,6 +4729,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "uuid 1.26.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -4730,6 +4739,30 @@ dependencies = [
  "qbz-models",
  "serde",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "qconnect-lan"
+version = "2.0.2"
+dependencies = [
+ "base64 0.23.1",
+ "if-addrs 0.15.0",
+ "mdns-sd",
+ "qbz-credentials",
+ "qbz-qobuz",
+ "qconnect-core",
+ "qconnect-protocol",
+ "qconnect-transport-ws",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "socket2",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "uuid 1.26.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -4755,9 +4788,11 @@ dependencies = [
  "prost",
  "qconnect-protocol",
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tokio",
  "tokio-tungstenite",
+ "zeroize",
 ]
 
 [[package]]

@@ -17,12 +17,15 @@ use qbz_models::Track;
 
 use crate::state::AuthState;
 
-use super::{err_json, ApiState};
+use super::{err_json, owner_action_gate, ApiState};
 
 /// `POST /api/radio`. Body: one of `{"artist_id": N}` | `{"track_id": N}` |
 /// `{"album_id": "..."}`. Errors: 409 needs_auth, 400 bad_request (no seed),
 /// 502 radio_failed (upstream), 404/503 from `start_resolved` (empty / start).
 pub fn radio(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
+    if let Some(resp) = owner_action_gate(state) {
+        return resp;
+    }
     if let Some(resp) = auth_gate(state) {
         return resp;
     }

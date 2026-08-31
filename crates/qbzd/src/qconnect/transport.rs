@@ -18,9 +18,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use qbz_app::shell::AppRuntime;
+use qbz_qobuz::ApiError;
 use qconnect_transport_ws::WsTransportConfig;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::adapter::DaemonAdapter;
 
@@ -28,10 +28,63 @@ const DEFAULT_QCONNECT_DEVICE_BRAND: &str = "QBZ";
 const DEFAULT_QCONNECT_DEVICE_MODEL: &str = "QBZ";
 const DEFAULT_QCONNECT_DEVICE_TYPE: i32 = 5; // computer
 const DEFAULT_QCONNECT_SOFTWARE_PREFIX: &str = "qbz";
-const QCONNECT_QWS_TOKEN_KIND: &str = "jwt_qws";
-const QCONNECT_QWS_CREATE_TOKEN_PATH: &str = "/qws/createToken";
 
 type Runtime = Arc<AppRuntime<DaemonAdapter>>;
+
+#[derive(Clone, Copy)]
+enum QconnectCredentialFailure {
+    ApiClientUnavailable,
+    Network,
+    Authentication,
+    Authorization,
+    Offline,
+    RateLimited,
+    Server,
+    InvalidResponse,
+    ServiceResponse,
+    Client,
+    MissingEndpoint,
+}
+
+impl QconnectCredentialFailure {
+    const fn category(self) -> &'static str {
+        match self {
+            Self::ApiClientUnavailable => "api-client-unavailable",
+            Self::Network => "network",
+            Self::Authentication => "authentication",
+            Self::Authorization => "authorization",
+            Self::Offline => "offline",
+            Self::RateLimited => "rate-limited",
+            Self::Server => "server",
+            Self::InvalidResponse => "invalid-response",
+            Self::ServiceResponse => "service-response",
+            Self::Client => "client",
+            Self::MissingEndpoint => "missing-endpoint",
+        }
+    }
+}
+
+fn classify_qconnect_credential_error(error: &ApiError) -> QconnectCredentialFailure {
+    match error {
+        ApiError::NetworkError(_) => QconnectCredentialFailure::Network,
+        ApiError::AuthenticationError(_)
+        | ApiError::InvalidAppId
+        | ApiError::InvalidAppSecret
+        | ApiError::BundleExtractionError(_) => QconnectCredentialFailure::Authentication,
+        ApiError::IneligibleUser | ApiError::Forbidden(_) | ApiError::ForbiddenCircuitOpen(_) => {
+            QconnectCredentialFailure::Authorization
+        }
+        ApiError::OfflineMode => QconnectCredentialFailure::Offline,
+        ApiError::RateLimited(_) => QconnectCredentialFailure::RateLimited,
+        ApiError::ServerError(_) => QconnectCredentialFailure::Server,
+        ApiError::ParseError(_) => QconnectCredentialFailure::InvalidResponse,
+        ApiError::ApiResponse(_) => QconnectCredentialFailure::ServiceResponse,
+        ApiError::NonStreamable
+        | ApiError::InvalidQuality(_)
+        | ApiError::NoQualityAvailable
+        | ApiError::TrackUnavailable(_) => QconnectCredentialFailure::Client,
+    }
+}
 
 /// The daemon-root `qconnect_settings.db` path, set once by `qconnect::start`
 /// before any connect. Daemon adaptation: the desktop delegates the path to the
@@ -151,7 +204,6 @@ pub const AUDIO_QUALITY_MP3: i32 = 1;
 pub const AUDIO_QUALITY_HIRES_LEVEL2: i32 = 4;
 const VOLUME_REMOTE_CONTROL_ALLOWED: i32 = 2;
 /// Renderer buffer-state wire value for OK/ready (mirrors the Tauri adapter).
-pub const BUFFER_STATE_OK: i32 = 2;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QconnectDeviceCapabilitiesPayload {
@@ -468,14 +520,18 @@ pub async fn resolve_transport_config(runtime: &Runtime) -> Result<WsTransportCo
                 endpoint_url = endpoint_url.or(discovered_endpoint);
                 jwt_qws = jwt_qws.or(discovered_jwt_qws);
             }
-            Err(err) if endpoint_url.is_some() => {
+            Err(failure) if endpoint_url.is_some() => {
                 log::warn!(
-                    "[QConnect] qws/createToken auto-discovery failed, using provided endpoint: {err}"
+                    "[QConnect] qws/createToken auto-discovery failed, using provided endpoint \
+                     (category={})",
+                    failure.category()
                 );
             }
-            Err(err) => {
+            Err(failure) => {
                 return Err(format!(
-                    "QConnect endpoint_url is required (or QBZ_QCONNECT_WS_ENDPOINT). Auto-discovery via qws/createToken failed: {err}"
+                    "QConnect endpoint_url is required (or QBZ_QCONNECT_WS_ENDPOINT). \
+                     Auto-discovery via qws/createToken failed (category={})",
+                    failure.category()
                 ));
             }
         }
@@ -509,7 +565,7 @@ pub async fn resolve_transport_config(runtime: &Runtime) -> Result<WsTransportCo
 
 async fn fetch_qconnect_transport_credentials(
     runtime: &Runtime,
-) -> Result<(Option<String>, Option<String>), String> {
+) -> Result<(Option<String>, Option<String>), QconnectCredentialFailure> {
     // The client is Option-wrapped (None before API init).
     let client = runtime
         .core()
@@ -517,80 +573,18 @@ async fn fetch_qconnect_transport_credentials(
         .read()
         .await
         .clone()
-        .ok_or_else(|| "qws/createToken requires an initialized API client".to_string())?;
+        .ok_or(QconnectCredentialFailure::ApiClientUnavailable)?;
 
-    let app_id = client
-        .app_id()
+    let (endpoint, _expires_at, jwt) = client
+        .create_qconnect_token()
         .await
-        .map_err(|err| format!("qws/createToken requires initialized API client: {err}"))?;
-    let user_auth_token = client
-        .auth_token()
-        .await
-        .map_err(|err| format!("qws/createToken requires authenticated user: {err}"))?;
-
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        "X-App-Id",
-        reqwest::header::HeaderValue::from_str(&app_id)
-            .map_err(|_| "invalid X-App-Id header value".to_string())?,
-    );
-    headers.insert(
-        "X-User-Auth-Token",
-        reqwest::header::HeaderValue::from_str(&user_auth_token)
-            .map_err(|_| "invalid X-User-Auth-Token header value".to_string())?,
-    );
-
-    let url = qbz_qobuz::endpoints::build_url(QCONNECT_QWS_CREATE_TOKEN_PATH);
-    let response = client
-        .get_http()
-        .post(&url)
-        .headers(headers)
-        .form(&[
-            ("jwt", QCONNECT_QWS_TOKEN_KIND),
-            ("user_auth_token_needed", "true"),
-            ("strong_auth_needed", "true"),
-        ])
-        .send()
-        .await
-        .map_err(|err| format!("qws/createToken HTTP request failed: {err}"))?;
-
-    let status = response.status();
-    // Read the raw body and check status BEFORE decoding: a 403's body is an
-    // edge/WAF HTML or empty page, not our JSON envelope, so a bare `.json()`
-    // surfaced it as a misleading "response decode failed" instead of the real
-    // status (issue #637).
-    let body = response
-        .text()
-        .await
-        .map_err(|err| format!("qws/createToken response read failed: {err}"))?;
-
-    if !status.is_success() {
-        let preview = body.trim().chars().take(300).collect::<String>();
-        return Err(format!("qws/createToken status {status}: {preview}"));
-    }
-
-    let payload: Value = serde_json::from_str(&body)
-        .map_err(|err| format!("qws/createToken response decode failed: {err}"))?;
-
-    let jwt_qws_payload = payload
-        .get("jwt_qws")
-        .ok_or_else(|| "qws/createToken response missing jwt_qws payload".to_string())?;
-
-    let endpoint_url = normalize_opt_string(
-        jwt_qws_payload
-            .get("endpoint")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-    );
-    let jwt_qws = normalize_opt_string(
-        jwt_qws_payload
-            .get("jwt")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-    );
+        .map_err(|error| classify_qconnect_credential_error(&error))?
+        .into_parts();
+    let endpoint_url = normalize_opt_string(endpoint);
+    let jwt_qws = normalize_opt_string(Some(jwt));
 
     if endpoint_url.is_none() {
-        return Err("qws/createToken response missing jwt_qws.endpoint".to_string());
+        return Err(QconnectCredentialFailure::MissingEndpoint);
     }
 
     Ok((endpoint_url, jwt_qws))
@@ -608,7 +602,10 @@ fn normalize_opt_string(value: Option<String>) -> Option<String> {
 }
 
 pub fn parse_subscribe_channels(items: Vec<String>) -> Result<Vec<Vec<u8>>, String> {
-    items.into_iter().map(|item| decode_hex_channel(&item)).collect()
+    items
+        .into_iter()
+        .map(|item| decode_hex_channel(&item))
+        .collect()
 }
 
 pub fn decode_hex_channel(raw: &str) -> Result<Vec<u8>, String> {
@@ -663,10 +660,8 @@ mod tests {
 
     #[test]
     fn kv_helpers_round_trip_against_a_temp_daemon_db() {
-        let tmp = std::env::temp_dir().join(format!(
-            "qbzd_qconnect_kv_test_{}.db",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("qbzd_qconnect_kv_test_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
 
         // Unset -> defaults / None.

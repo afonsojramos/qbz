@@ -64,6 +64,7 @@ enum AudioCommand {
         duration_secs: u64,
         sample_rate: u32,
         channels: u16,
+        play_gen: u64,
     },
     /// Play from streaming source (BufferedMediaSource)
     /// The download task should already be running and pushing to the source
@@ -147,6 +148,7 @@ enum GaplessMedia {
 
 struct GaplessPending {
     track_id: u64,
+    play_generation: u64,
     duration_secs: u64,
     media: GaplessMedia,
     sample_rate: u32,
@@ -1123,6 +1125,63 @@ pub struct ExternalStreamHandle {
     pub cancel: tokio::sync::watch::Sender<bool>,
 }
 
+/// Player-owned buffer lifecycle. This is intentionally independent from
+/// QConnect: adapters map it to their wire protocol instead of teaching the
+/// audio engine about renderer constants.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub enum PlaybackBufferState {
+    #[default]
+    Idle,
+    InitialBuffering,
+    Ready,
+    Underrun,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PlaybackBufferSlot {
+    state: PlaybackBufferState,
+    track_id: u64,
+    play_generation: u64,
+}
+
+impl Default for PlaybackBufferSlot {
+    fn default() -> Self {
+        Self {
+            state: PlaybackBufferState::Idle,
+            track_id: 0,
+            play_generation: 0,
+        }
+    }
+}
+
+/// Generation-scoped reporter carried by a live incremental decoder.
+/// Reporting is a side channel only; it never changes PCM flow or scheduling.
+#[derive(Clone)]
+pub(super) struct PlaybackBufferReporter {
+    state: SharedState,
+    track_id: u64,
+    play_generation: u64,
+}
+
+impl PlaybackBufferReporter {
+    fn new(state: SharedState, track_id: u64, play_generation: u64) -> Self {
+        Self {
+            state,
+            track_id,
+            play_generation,
+        }
+    }
+
+    pub(super) fn report(&self, buffer_state: PlaybackBufferState) {
+        self.state.set_buffer_state_for_play(
+            buffer_state,
+            self.track_id,
+            self.play_generation,
+        );
+    }
+}
+
 /// Event payload for playback state updates
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PlaybackEvent {
@@ -1161,6 +1220,14 @@ pub struct PlaybackEvent {
     /// the track is fully buffered — drives the seek-bar cache overlay.
     #[serde(default)]
     pub buffer_progress: Option<f32>,
+    /// Instantaneous player-owned buffer lifecycle. Unlike `buffer_progress`,
+    /// this remains meaningful when content length is unknown or fully cached.
+    #[serde(default)]
+    pub buffer_state: PlaybackBufferState,
+    /// Track identity paired atomically with `buffer_state`. During initial
+    /// buffering it can lead `track_id`, which changes only after audio starts.
+    #[serde(default)]
+    pub buffer_track_id: u64,
     /// Monotonic edge raised when the audio engine consumes every queued
     /// source. Pollers compare generations instead of trying to sample a
     /// potentially sub-tick `playing -> stopped` transition.
@@ -1226,6 +1293,9 @@ pub struct SharedState {
     gapless_next_track_id: Arc<AtomicU64>,
     /// Streaming buffer progress (0.0-1.0 stored as f32 bits, 0 = not streaming)
     buffer_progress: Arc<AtomicU32>,
+    /// Buffer state plus the play identity allowed to mutate it. A mutex keeps
+    /// the generation check and transition atomic with respect to a new play.
+    buffer_state: Arc<std::sync::Mutex<PlaybackBufferSlot>>,
     /// Current bit-perfect mode encoded as u8 (see `bit_perfect_mode_from_u8`).
     /// 0 = Unknown (no stream active yet), 1 = Disabled (CPAL/Rodio / shared
     /// system path), 2 = DirectHardware (ALSA hw:), 3 = PluginFallback (plughw:).
@@ -1295,6 +1365,7 @@ impl SharedState {
             gapless_ready: Arc::new(AtomicBool::new(false)),
             gapless_next_track_id: Arc::new(AtomicU64::new(0)),
             buffer_progress: Arc::new(AtomicU32::new(0)),
+            buffer_state: Arc::new(std::sync::Mutex::new(PlaybackBufferSlot::default())),
             bit_perfect_mode: Arc::new(AtomicU8::new(0)),
             play_generation: Arc::new(AtomicU64::new(0)),
             engine_empty_generation: Arc::new(AtomicU64::new(0)),
@@ -1344,6 +1415,7 @@ impl SharedState {
     /// fires the toast exactly once per error.
     pub fn record_stream_error(&self, message: impl Into<String>) {
         self.stream_error.store(true, Ordering::SeqCst);
+        self.mark_current_buffer_error();
         if let Ok(mut m) = self.stream_error_message.write() {
             *m = Some(message.into());
         }
@@ -1361,7 +1433,15 @@ impl SharedState {
     /// Start a new play intent; returns the generation token for this intent
     /// (see `Player::begin_play`).
     pub(crate) fn begin_play(&self) -> u64 {
-        self.play_generation.fetch_add(1, Ordering::SeqCst) + 1
+        let generation = self.play_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Ok(mut slot) = self.buffer_state.lock() {
+            *slot = PlaybackBufferSlot {
+                state: PlaybackBufferState::Idle,
+                track_id: 0,
+                play_generation: generation,
+            };
+        }
+        generation
     }
 
     /// The most recent play generation (the token a play command sent right
@@ -1374,6 +1454,82 @@ impl SharedState {
     /// uses this to abandon buffer waits for superseded plays (#591).
     pub(crate) fn is_current_play(&self, gen: u64) -> bool {
         self.current_play_generation() == gen
+    }
+
+    fn begin_buffering(&self, track_id: u64, play_generation: u64) {
+        if !self.is_current_play(play_generation) {
+            return;
+        }
+        if let Ok(mut slot) = self.buffer_state.lock() {
+            if self.is_current_play(play_generation) {
+                *slot = PlaybackBufferSlot {
+                    state: PlaybackBufferState::InitialBuffering,
+                    track_id,
+                    play_generation,
+                };
+            }
+        }
+    }
+
+    fn set_buffer_state_for_play(
+        &self,
+        buffer_state: PlaybackBufferState,
+        track_id: u64,
+        play_generation: u64,
+    ) {
+        if !self.is_current_play(play_generation) {
+            return;
+        }
+        if let Ok(mut slot) = self.buffer_state.lock() {
+            if self.is_current_play(play_generation)
+                && slot.play_generation == play_generation
+                && slot.track_id == track_id
+            {
+                slot.state = buffer_state;
+            }
+        }
+    }
+
+    fn adopt_buffered_track(
+        &self,
+        track_id: u64,
+        state: PlaybackBufferState,
+        play_generation: u64,
+    ) {
+        if !self.is_current_play(play_generation) {
+            return;
+        }
+        if let Ok(mut slot) = self.buffer_state.lock() {
+            if self.is_current_play(play_generation)
+                && slot.play_generation == play_generation
+            {
+                *slot = PlaybackBufferSlot {
+                    state,
+                    track_id,
+                    play_generation,
+                };
+            }
+        }
+    }
+
+    fn mark_current_buffer_error(&self) {
+        let play_generation = self.current_play_generation();
+        if let Ok(mut slot) = self.buffer_state.lock() {
+            if slot.play_generation == play_generation && slot.track_id != 0 {
+                slot.state = PlaybackBufferState::Error;
+            }
+        }
+    }
+
+    pub fn playback_buffer_state(&self) -> PlaybackBufferState {
+        self.playback_buffer_snapshot().0
+    }
+
+    pub fn playback_buffer_snapshot(&self) -> (PlaybackBufferState, u64) {
+        self.buffer_state
+            .lock()
+            .map(|slot| (slot.state, slot.track_id))
+            .unwrap_or((PlaybackBufferState::Error, 0))
     }
 
     /// Publish a durable engine-empty edge for frontend/headless pollers.
@@ -1390,6 +1546,7 @@ impl SharedState {
         if !self.is_current_play(play_gen) {
             return;
         }
+        self.set_buffer_state_for_play(PlaybackBufferState::Error, track_id, play_gen);
         self.source_failure_track_id
             .store(track_id, Ordering::SeqCst);
         self.source_failure_generation
@@ -2088,7 +2245,15 @@ impl Player {
                             duration_secs,
                             sample_rate,
                             channels,
+                            play_gen,
                         } => {
+                            if !thread_state.is_current_play(play_gen) {
+                                log::info!(
+                                    "Audio thread: cached play of track {} was superseded",
+                                    track_id
+                                );
+                                return;
+                            }
                             log::info!(
                                 "Audio thread: playing track {} ({}Hz, {} channels)",
                                 track_id,
@@ -2372,6 +2537,11 @@ impl Player {
                                         );
                                         thread_state.set_stream_error(true);
                                         thread_state.set_current_device(None);
+                                        thread_state.set_buffer_state_for_play(
+                                            PlaybackBufferState::Error,
+                                            track_id,
+                                            play_gen,
+                                        );
                                         return;
                                     }
                                 }
@@ -2395,6 +2565,11 @@ impl Player {
 
                             let Some(ref stream) = *stream_opt else {
                                 log::error!("Audio thread: no audio device available");
+                                thread_state.set_buffer_state_for_play(
+                                    PlaybackBufferState::Error,
+                                    track_id,
+                                    play_gen,
+                                );
                                 return;
                             };
 
@@ -2463,6 +2638,11 @@ impl Player {
                                                     thread_state.set_current_device(None);
                                                 }
                                             }
+                                            thread_state.set_buffer_state_for_play(
+                                                PlaybackBufferState::Error,
+                                                track_id,
+                                                play_gen,
+                                            );
                                             return;
                                         }
                                     }
@@ -2497,6 +2677,11 @@ impl Player {
                                 Ok(s) => s,
                                 Err(e) => {
                                     log::error!("Failed to decode audio: {}", e);
+                                    thread_state.set_buffer_state_for_play(
+                                        PlaybackBufferState::Error,
+                                        track_id,
+                                        play_gen,
+                                    );
                                     return;
                                 }
                             };
@@ -2566,8 +2751,19 @@ impl Player {
                             );
                             if let Err(e) = engine.append(source) {
                                 log::error!("Failed to append source to engine: {}", e);
+                                thread_state.set_buffer_state_for_play(
+                                    PlaybackBufferState::Error,
+                                    track_id,
+                                    play_gen,
+                                );
                                 return;
                             }
+
+                            thread_state.set_buffer_state_for_play(
+                                PlaybackBufferState::Ready,
+                                track_id,
+                                play_gen,
+                            );
 
                             thread_state.is_playing.store(true, Ordering::SeqCst);
                             thread_state.position.store(0, Ordering::SeqCst);
@@ -3025,6 +3221,11 @@ impl Player {
                                 thread_state.set_loaded_audio(false);
                                 thread_state.is_playing.store(false, Ordering::SeqCst);
                                 thread_state.record_stream_error(err_msg);
+                                thread_state.set_buffer_state_for_play(
+                                    PlaybackBufferState::Error,
+                                    track_id,
+                                    play_gen,
+                                );
                                 return;
                             }
                             if resume_buffer_target > 0
@@ -3046,7 +3247,14 @@ impl Player {
                             // Create incremental streaming source - this starts playback IMMEDIATELY
                             // while continuing to decode/download in background
                             let incremental_source =
-                                match IncrementalStreamingSource::new(source.clone()) {
+                                match IncrementalStreamingSource::new_for_play(
+                                    source.clone(),
+                                    PlaybackBufferReporter::new(
+                                        thread_state.clone(),
+                                        track_id,
+                                        play_gen,
+                                    ),
+                                ) {
                                     Ok(s) => s,
                                     Err(e) => {
                                         log::error!(
@@ -3059,6 +3267,11 @@ impl Player {
                                         thread_state.is_playing.store(false, Ordering::SeqCst);
                                         thread_state.record_stream_error(
                                             "Failed to start the streaming decoder",
+                                        );
+                                        thread_state.set_buffer_state_for_play(
+                                            PlaybackBufferState::Error,
+                                            track_id,
+                                            play_gen,
                                         );
                                         return;
                                     }
@@ -3171,6 +3384,11 @@ impl Player {
                             );
                             if let Err(e) = engine.append(source_to_play) {
                                 log::error!("Failed to append streaming source to engine: {}", e);
+                                thread_state.set_buffer_state_for_play(
+                                    PlaybackBufferState::Error,
+                                    track_id,
+                                    play_gen,
+                                );
                                 return;
                             }
 
@@ -3510,6 +3728,7 @@ impl Player {
                                         log::info!("[gapless-trace] set (dop) track {track_id}");
                                         *gapless_pending = Some(GaplessPending {
                                             track_id,
+                                            play_generation: thread_state.current_play_generation(),
                                             duration_secs: duration,
                                             media: GaplessMedia::Direct,
                                             sample_rate: rate,
@@ -4253,6 +4472,7 @@ impl Player {
                             log::info!("[gapless-trace] set (pcm) track {track_id}");
                             *gapless_pending = Some(GaplessPending {
                                 track_id,
+                                play_generation: thread_state.current_play_generation(),
                                 duration_secs: actual_duration,
                                 media: GaplessMedia::Buffered(data),
                                 sample_rate,
@@ -4317,7 +4537,14 @@ impl Player {
                                 return;
                             }
 
-                            let incremental = match IncrementalStreamingSource::new(source.clone()) {
+                            let incremental = match IncrementalStreamingSource::new_for_play(
+                                source.clone(),
+                                PlaybackBufferReporter::new(
+                                    thread_state.clone(),
+                                    track_id,
+                                    thread_state.current_play_generation(),
+                                ),
+                            ) {
                                 Ok(source) => source,
                                 Err(error) => {
                                     log::warn!(
@@ -4392,6 +4619,7 @@ impl Player {
                             log::info!("[gapless-trace] set (stream) track {track_id}");
                             *gapless_pending = Some(GaplessPending {
                                 track_id,
+                                play_generation: thread_state.current_play_generation(),
                                 duration_secs,
                                 media: GaplessMedia::Streaming(source),
                                 sample_rate,
@@ -4594,6 +4822,11 @@ impl Player {
                                                 current_streaming_source = None;
                                             }
                                         }
+                                        thread_state.adopt_buffered_track(
+                                            pending.track_id,
+                                            PlaybackBufferState::Ready,
+                                            pending.play_generation,
+                                        );
                                         current_track_sample_rate = Some(pending.sample_rate);
                                         current_track_channels = Some(pending.channels);
                                         thread_state
@@ -4652,6 +4885,11 @@ impl Player {
                                                     current_streaming_source = None;
                                                 }
                                             }
+                                            thread_state.adopt_buffered_track(
+                                                pending.track_id,
+                                                PlaybackBufferState::Ready,
+                                                pending.play_generation,
+                                            );
                                             current_track_sample_rate = Some(pending.sample_rate);
                                             current_track_channels = Some(pending.channels);
                                             thread_state.set_stream_quality(
@@ -4742,6 +4980,11 @@ impl Player {
                                         // generation is the release edge the
                                         // pollers key on.
                                         thread_state.record_engine_empty(ended_track_id);
+                                        thread_state.set_buffer_state_for_play(
+                                            PlaybackBufferState::Idle,
+                                            ended_track_id,
+                                            thread_state.current_play_generation(),
+                                        );
                                     }
                                 }
                             }
@@ -5100,9 +5343,9 @@ impl Player {
         let stream_url = client
             .get_stream_url_with_fallback(track_id, quality)
             .await
-            .map_err(|e| {
-                log::error!("Player: Failed to get stream URL: {}", e);
-                format!("Failed to get stream URL: {}", e)
+            .map_err(|_| {
+                log::error!("Player: Failed to get stream URL (details omitted)");
+                "Failed to get stream URL".to_string()
             })?;
 
         if !self.is_current_play(gen) {
@@ -5112,11 +5355,7 @@ impl Player {
             return Ok(());
         }
 
-        log::info!(
-            "Player: Got stream URL: {} (format: {})",
-            stream_url.url,
-            stream_url.mime_type
-        );
+        log::info!("Player: Got stream URL (format: {})", stream_url.mime_type);
 
         // Download the audio data
         log::info!("Player: Starting audio caching...");
@@ -5912,9 +6151,18 @@ impl Player {
             track_id
         );
 
+        let play_gen = self.state.current_play_generation();
+        self.state.begin_buffering(track_id, play_gen);
+
         // Extract audio metadata (sample rate, channels, bit depth) - fast header-only read
-        let meta = extract_audio_metadata_full(&data)
-            .map_err(|e| format!("Failed to extract audio metadata: {}", e))?;
+        let meta = extract_audio_metadata_full(&data).map_err(|e| {
+            self.state.set_buffer_state_for_play(
+                PlaybackBufferState::Error,
+                track_id,
+                play_gen,
+            );
+            format!("Failed to extract audio metadata: {}", e)
+        })?;
 
         let sample_rate = meta.sample_rate;
         let channels = meta.channels;
@@ -5937,8 +6185,14 @@ impl Player {
                 duration_secs: 0, // Will be determined by decoder
                 sample_rate,
                 channels,
+                play_gen,
             })
             .map_err(|e| {
+                self.state.set_buffer_state_for_play(
+                    PlaybackBufferState::Error,
+                    track_id,
+                    play_gen,
+                );
                 log::error!("Player: Failed to send to audio thread: {}", e);
                 format!(
                     "Failed to send play command (audio thread may have crashed): {}",
@@ -6274,6 +6528,8 @@ impl Player {
 
         let (source, writer) = BufferedMediaSource::new(config, Some(content_length));
         let source = Arc::new(source);
+        let play_gen = self.state.current_play_generation();
+        self.state.begin_buffering(track_id, play_gen);
 
         self.tx
             .send(AudioCommand::PlayStreaming {
@@ -6284,9 +6540,14 @@ impl Player {
                 duration_secs,
                 start_position_secs,
                 content_length,
-                play_gen: self.state.current_play_generation(),
+                play_gen,
             })
             .map_err(|e| {
+                self.state.set_buffer_state_for_play(
+                    PlaybackBufferState::Error,
+                    track_id,
+                    play_gen,
+                );
                 log::error!("Player: Failed to send streaming command: {}", e);
                 format!("Failed to send streaming play command: {}", e)
             })?;
@@ -6390,6 +6651,8 @@ impl Player {
 
         let (source, writer) = BufferedMediaSource::new(config, Some(content_length));
         let source = Arc::new(source);
+        let play_gen = self.state.current_play_generation();
+        self.state.begin_buffering(track_id, play_gen);
 
         self.tx
             .send(AudioCommand::PlayStreaming {
@@ -6400,9 +6663,14 @@ impl Player {
                 duration_secs,
                 start_position_secs,
                 content_length,
-                play_gen: self.state.current_play_generation(),
+                play_gen,
             })
             .map_err(|e| {
+                self.state.set_buffer_state_for_play(
+                    PlaybackBufferState::Error,
+                    track_id,
+                    play_gen,
+                );
                 log::error!("Player: Failed to send streaming command: {}", e);
                 format!("Failed to send streaming play command: {}", e)
             })?;
@@ -6423,7 +6691,7 @@ impl Player {
             .timeout(Duration::from_secs(60))
             .connect_timeout(Duration::from_secs(10))
             .build()
-            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+            .map_err(|_| "Failed to create HTTP client".to_string())?;
 
         log::info!("Caching audio from URL...");
 
@@ -6432,7 +6700,10 @@ impl Player {
             .header("User-Agent", "Mozilla/5.0")
             .send()
             .await
-            .map_err(|e| format!("Failed to fetch audio: {}", e))?;
+            .map_err(|e| format!(
+                "Failed to fetch audio: {}",
+                crate::remote_stream::describe_reqwest_error(&e)
+            ))?;
 
         if !response.status().is_success() {
             return Err(format!("HTTP error: {}", response.status()));
@@ -6443,7 +6714,10 @@ impl Player {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| format!("Failed to read audio bytes: {}", e))?;
+            .map_err(|e| format!(
+                "Failed to read audio bytes: {}",
+                crate::remote_stream::describe_reqwest_error(&e)
+            ))?;
 
         log::info!("Cached {} bytes", bytes.len());
         Ok(bytes.to_vec())
@@ -6576,6 +6850,7 @@ impl Player {
     pub fn get_playback_event(&self) -> PlaybackEvent {
         let sample_rate = self.state.get_sample_rate();
         let bit_depth = self.state.get_bit_depth();
+        let (buffer_state, buffer_track_id) = self.state.playback_buffer_snapshot();
         PlaybackEvent {
             is_playing: self.state.is_playing(),
             position: self.state.current_position(),
@@ -6596,6 +6871,8 @@ impl Player {
             gapless_next_track_id: self.state.get_gapless_next_track_id(),
             bit_perfect_mode: self.state.get_bit_perfect_mode(),
             buffer_progress: self.state.get_buffer_progress(),
+            buffer_state,
+            buffer_track_id,
             engine_empty_generation: self
                 .state
                 .engine_empty_generation
@@ -6684,7 +6961,10 @@ mod tests {
     use super::external_content_type;
     #[cfg(target_os = "linux")]
     use super::{hardware_volume_event_callback, reported_volume_after_command};
-    use super::{BufferedMediaSource, DsdErrorReport, SharedState, StreamingConfig};
+    use super::{
+        BufferedMediaSource, DsdErrorReport, PlaybackBufferReporter, PlaybackBufferState,
+        SharedState, StreamingConfig,
+    };
     #[cfg(target_os = "linux")]
     use qbz_audio::alsa_hardware_volume::{
         AlsaMixerControlId, HardwareVolumeEvent, HardwareVolumeSnapshot,
@@ -6809,6 +7089,48 @@ mod tests {
         state.record_source_failure(42, current_generation);
         assert_eq!(state.source_failure_generation.load(Ordering::SeqCst), 1);
         assert_eq!(state.source_failure_track_id.load(Ordering::SeqCst), 42);
+    }
+
+    #[test]
+    fn buffer_state_is_scoped_to_play_generation_and_track() {
+        let state = SharedState::new();
+        let first_generation = state.begin_play();
+        state.begin_buffering(41, first_generation);
+        let first_reporter = PlaybackBufferReporter::new(state.clone(), 41, first_generation);
+
+        assert_eq!(
+            state.playback_buffer_snapshot(),
+            (PlaybackBufferState::InitialBuffering, 41)
+        );
+        first_reporter.report(PlaybackBufferState::Ready);
+        assert_eq!(
+            state.playback_buffer_snapshot(),
+            (PlaybackBufferState::Ready, 41)
+        );
+
+        let second_generation = state.begin_play();
+        state.begin_buffering(42, second_generation);
+        first_reporter.report(PlaybackBufferState::Underrun);
+
+        assert_eq!(
+            state.playback_buffer_snapshot(),
+            (PlaybackBufferState::InitialBuffering, 42),
+            "a late transition from the old decoder must not overwrite the new play"
+        );
+    }
+
+    #[test]
+    fn current_source_failure_marks_buffer_error() {
+        let state = SharedState::new();
+        let generation = state.begin_play();
+        state.begin_buffering(42, generation);
+
+        state.record_source_failure(42, generation);
+
+        assert_eq!(
+            state.playback_buffer_snapshot(),
+            (PlaybackBufferState::Error, 42)
+        );
     }
 
     #[test]

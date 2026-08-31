@@ -11,6 +11,7 @@ use super::auth::{
     sign_request, sign_search, sign_session_start,
 };
 use super::bundle::{self, BundleTokens};
+use super::delegated::{DelegatedApiConfigError, DelegatedAppCredentials};
 use super::endpoints::{self, paths};
 use super::error::{ApiError, Result};
 use super::forbidden_breaker::ForbiddenBreaker;
@@ -18,25 +19,30 @@ use super::lyrics::{
     merge_translation_into, QobuzLyricsContent, QobuzLyricsDocument, QobuzLyricsUrls,
 };
 use qbz_models::*;
+use zeroize::Zeroizing;
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0";
 
-/// Read a short, log-safe preview of a response body — for diagnosing an
-/// unexpected non-2xx (e.g. distinguishing an edge/WAF HTML 403 from the API's
-/// JSON error envelope, issue #637). Bounded so a large/HTML body can't bloat
-/// the log; prefixed with " : " so it reads well appended to an error message.
+/// Return a bounded, content-free diagnostic for an unexpected response body.
+///
+/// Remote bodies are untrusted and can contain credentials or echo signed
+/// request parameters. They must never enter logs or a displayable `ApiError`.
+/// We retain only whether a body was present.
 async fn body_preview(response: reqwest::Response) -> String {
     match response.text().await {
         Ok(body) => {
-            let trimmed = body.trim();
-            if trimmed.is_empty() {
-                " : <empty body>".to_string()
-            } else {
-                let preview: String = trimmed.chars().take(200).collect();
-                format!(" : {preview}")
-            }
+            let body = Zeroizing::new(body);
+            redacted_body_diagnostic(body.as_str()).to_string()
         }
         Err(_) => String::new(),
+    }
+}
+
+fn redacted_body_diagnostic(body: &str) -> &'static str {
+    if body.trim().is_empty() {
+        " : <empty body>"
+    } else {
+        " : <response body omitted>"
     }
 }
 
@@ -47,12 +53,45 @@ struct CmafSession {
     expires_at: u64,
 }
 
+/// The app secret which has actually passed the API probe, together with the
+/// app ID of the bundle generation it belongs to.
+///
+/// Keeping the provenance beside the secret prevents a background bundle
+/// rotation from silently pairing a previously validated secret with a new
+/// app ID. The secret is app-level material, never a user session token, and
+/// is wiped when replaced or when the last client owner is dropped.
+struct ValidatedBundleSecret {
+    app_id: String,
+    signing_secret: Zeroizing<String>,
+}
+
+impl ValidatedBundleSecret {
+    fn new(app_id: String, signing_secret: String) -> Self {
+        Self {
+            app_id,
+            signing_secret: Zeroizing::new(signing_secret),
+        }
+    }
+
+    fn is_current_for(&self, tokens: &BundleTokens) -> bool {
+        self.app_id == tokens.app_id
+            && tokens
+                .secrets
+                .iter()
+                .any(|candidate| candidate == self.signing_secret.as_str())
+    }
+
+    fn copy_material(&self) -> (String, String) {
+        (self.app_id.clone(), self.signing_secret.to_string())
+    }
+}
+
 /// Qobuz API client
 pub struct QobuzClient {
     http: Client,
     tokens: Arc<RwLock<Option<BundleTokens>>>,
     session: Arc<RwLock<Option<UserSession>>>,
-    validated_secret: Arc<RwLock<Option<String>>>,
+    validated_secret: Arc<RwLock<Option<ValidatedBundleSecret>>>,
     locale: Arc<RwLock<String>>,
     cmaf_session: Arc<RwLock<Option<CmafSession>>>,
     /// Where the regenerable bundle-token cache goes, when the embedder rather
@@ -169,6 +208,7 @@ impl QobuzClient {
             let version = cached.bundle_version.clone();
             log::info!("[Bundle] Using cached tokens (version {})", version);
             *self.tokens.write().await = Some(cached.into());
+            *self.validated_secret.write().await = None;
 
             // Cache reads are never gated, but the background refresh is a
             // network request — gate it once before cloning the client into
@@ -178,6 +218,7 @@ impl QobuzClient {
                 Ok(client) => {
                     let client = client.clone();
                     let tokens_arc = Arc::clone(&self.tokens);
+                    let validated_secret = Arc::clone(&self.validated_secret);
                     let cache_dir = self.bundle_cache_dir.clone();
                     tokio::spawn(async move {
                         if let Some(fresh) = bundle::refresh_bundle_if_changed_in(
@@ -188,6 +229,7 @@ impl QobuzClient {
                         .await
                         {
                             *tokens_arc.write().await = Some(fresh);
+                            *validated_secret.write().await = None;
                             log::info!("[Bundle] Background refresh applied rotated tokens");
                         }
                     });
@@ -209,6 +251,7 @@ impl QobuzClient {
         )
         .await?;
         *self.tokens.write().await = Some(tokens);
+        *self.validated_secret.write().await = None;
         Ok(false)
     }
 
@@ -259,27 +302,72 @@ impl QobuzClient {
         Ok(&self.http)
     }
 
-    /// Get validated secret (validates on first use)
-    pub(crate) async fn secret(&self) -> Result<String> {
-        // Check if we already have a validated secret
-        if let Some(secret) = self.validated_secret.read().await.clone() {
-            return Ok(secret);
-        }
+    /// Return app ID and signing secret from one validated bundle generation.
+    async fn validated_app_material(&self) -> Result<(String, String)> {
+        let (app_id, candidates) = {
+            let tokens = self.tokens.read().await;
+            let tokens = tokens.as_ref().ok_or_else(|| {
+                ApiError::BundleExtractionError("Client not initialized".to_string())
+            })?;
 
-        // Need to validate secrets
-        let tokens = self.tokens.read().await;
-        let tokens = tokens
-            .as_ref()
-            .ok_or_else(|| ApiError::BundleExtractionError("Client not initialized".to_string()))?;
+            if let Some(validated) = self.validated_secret.read().await.as_ref() {
+                if validated.is_current_for(tokens) {
+                    return Ok(validated.copy_material());
+                }
+            }
 
-        for secret in &tokens.secrets {
+            (
+                tokens.app_id.clone(),
+                Zeroizing::new(tokens.secrets.clone()),
+            )
+        };
+
+        for secret in candidates.iter() {
             if self.test_secret(secret).await? {
-                *self.validated_secret.write().await = Some(secret.clone());
-                return Ok(secret.clone());
+                // A background refresh is allowed while the network probe is
+                // running. Accept its result only if the exact app material is
+                // still present in the current bundle generation.
+                let tokens = self.tokens.read().await;
+                let current = tokens.as_ref().ok_or_else(|| {
+                    ApiError::BundleExtractionError("Client not initialized".to_string())
+                })?;
+                if current.app_id != app_id
+                    || !current.secrets.iter().any(|candidate| candidate == secret)
+                {
+                    return Err(ApiError::BundleExtractionError(
+                        "Bundle credentials changed during validation".to_string(),
+                    ));
+                }
+
+                let validated = ValidatedBundleSecret::new(app_id.clone(), secret.clone());
+                let material = validated.copy_material();
+                *self.validated_secret.write().await = Some(validated);
+                return Ok(material);
             }
         }
 
         Err(ApiError::InvalidAppSecret)
+    }
+
+    /// Get the validated signing secret (validates bundle candidates on first use).
+    pub(crate) async fn secret(&self) -> Result<String> {
+        self.validated_app_material()
+            .await
+            .map(|(_, signing_secret)| signing_secret)
+    }
+
+    /// Copy only validated app-level material into an isolated QConnect guest.
+    ///
+    /// The returned value does not contain, share, or copy this client's
+    /// [`UserSession`], user auth token, OAuth private key, cookies, or HTTP
+    /// client. In particular, it uses the secret selected by the existing API
+    /// validation probe; it never guesses by taking the first bundle secret.
+    pub async fn delegated_app_credentials(&self) -> Result<DelegatedAppCredentials> {
+        let (app_id, signing_secret) = self.validated_app_material().await?;
+        DelegatedAppCredentials::new(app_id, signing_secret).map_err(|error| match error {
+            DelegatedApiConfigError::InvalidAppId => ApiError::InvalidAppId,
+            _ => ApiError::InvalidAppSecret,
+        })
     }
 
     /// Test if a secret is valid using a known track
@@ -3180,6 +3268,16 @@ impl Default for QobuzClient {
 mod tests {
     use super::*;
 
+    #[test]
+    fn remote_body_diagnostic_never_echoes_payload() {
+        let marker = "jwt=secret&request_sig=signed-value";
+        let diagnostic = redacted_body_diagnostic(marker);
+        assert_eq!(diagnostic, " : <response body omitted>");
+        assert!(!diagnostic.contains(marker));
+        assert!(!diagnostic.contains("secret"));
+        assert_eq!(redacted_body_diagnostic("  \n"), " : <empty body>");
+    }
+
     /// Install the process-level rustls `CryptoProvider`, once.
     ///
     /// UNRELATED DRIVE-BY FIX, 2026-08-16: the two gate tests below were failing
@@ -3196,6 +3294,80 @@ mod tests {
         INIT.call_once(|| {
             let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         });
+    }
+
+    #[tokio::test]
+    async fn delegated_credentials_use_the_validated_secret_not_the_first_candidate() {
+        ensure_crypto_provider();
+        let client = QobuzClient::new().expect("client construction is local-only");
+        let app_id = "123456789";
+        let first_candidate = "first-unvalidated-secret";
+        let selected_secret = "second-validated-secret";
+
+        *client.tokens.write().await = Some(BundleTokens {
+            app_id: app_id.to_string(),
+            secrets: vec![first_candidate.to_string(), selected_secret.to_string()],
+            private_key: Some("owner-oauth-private-key".to_string()),
+        });
+        *client.validated_secret.write().await = Some(ValidatedBundleSecret::new(
+            app_id.to_string(),
+            selected_secret.to_string(),
+        ));
+        *client.session.write().await = Some(UserSession {
+            user_auth_token: "owner-user-auth-token".to_string(),
+            user_id: 7,
+            email: "owner@example.test".to_string(),
+            display_name: "Owner".to_string(),
+            subscription_label: "Studio".to_string(),
+            subscription_valid_until: None,
+            country_code: Some("MX".to_string()),
+            language_code: Some("es".to_string()),
+        });
+
+        let credentials = client.delegated_app_credentials().await.unwrap();
+        let (delegated_app_id, delegated_secret) = credentials.values_for_test();
+        assert_eq!(delegated_app_id, app_id);
+        assert_eq!(delegated_secret, selected_secret);
+        assert_ne!(delegated_secret, first_candidate);
+        assert_ne!(delegated_secret, "owner-oauth-private-key");
+        assert_ne!(delegated_secret, "owner-user-auth-token");
+    }
+
+    #[test]
+    fn validated_secret_is_bound_to_its_bundle_generation() {
+        let validated =
+            ValidatedBundleSecret::new("123456789".to_string(), "selected-secret".to_string());
+        let matching = BundleTokens {
+            app_id: "123456789".to_string(),
+            secrets: vec!["other-secret".to_string(), "selected-secret".to_string()],
+            private_key: None,
+        };
+        let rotated_secret = BundleTokens {
+            app_id: "123456789".to_string(),
+            secrets: vec!["replacement-secret".to_string()],
+            private_key: None,
+        };
+        let rotated_app = BundleTokens {
+            app_id: "987654321".to_string(),
+            secrets: vec!["selected-secret".to_string()],
+            private_key: None,
+        };
+
+        assert!(validated.is_current_for(&matching));
+        assert!(!validated.is_current_for(&rotated_secret));
+        assert!(!validated.is_current_for(&rotated_app));
+    }
+
+    #[tokio::test]
+    async fn delegated_credentials_require_an_initialized_owner_client() {
+        ensure_crypto_provider();
+        let client = QobuzClient::new().expect("client construction is local-only");
+
+        assert!(matches!(
+            client.delegated_app_credentials().await,
+            Err(ApiError::BundleExtractionError(message))
+                if message == "Client not initialized"
+        ));
     }
 
     /// With the offline gate closed, any public API method must fail fast

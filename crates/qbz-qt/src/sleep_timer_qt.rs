@@ -65,6 +65,17 @@ pub fn set(runtime: Arc<AppRuntime<LoggingAdapter>>, minutes: i32) {
             }
             let now = Instant::now();
             if now >= deadline {
+                // A timer can be armed under owner authority and outlive a
+                // QConnect handoff. Re-admit the expiry itself so that stale
+                // local automation cannot pause the delegated renderer (and
+                // cannot race a transition fence). The timer still returns to
+                // idle: its one deadline has elapsed, only the playback side
+                // effect is refused.
+                let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+                    log::info!("[qbz-qt] sleep-timer: expiry ignored while QConnect owns playback");
+                    push_state(false, String::new());
+                    return;
+                };
                 if runtime.core().get_playback_state().is_playing {
                     if let Err(e) = runtime.core().pause() {
                         log::warn!("[qbz-qt] sleep-timer: pause on expiry failed: {e}");

@@ -23,6 +23,7 @@ serde_json = { workspace = true }
 # Crypto (for Qobuz auth)
 md-5 = { workspace = true }
 base64 = { workspace = true }
+zeroize = "1"
 
 # Time
 chrono = { workspace = true }

@@ -47,6 +47,9 @@ use qbz_integrations::listenbrainz::{AdditionalInfo, ListenBrainzClient};
 use qbz_integrations::NowListening;
 use qbz_models::QueueTrack;
 
+use crate::playback_qt::{
+    begin_owner_action, begin_owner_action_exact, OwnerActionToken,
+};
 use crate::settings_qt::{pref_bool, save_pref};
 
 // ---------------------------------------------------------------------------
@@ -403,41 +406,137 @@ pub fn discord_push(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     if !discord().is_enabled() {
         return;
     }
+    let Some(owner_action) = begin_owner_action() else {
+        return;
+    };
+    let owner_token = owner_action.token();
+    drop(owner_action);
     let runtime = runtime.clone();
     crate::spawn(async move {
-        let state = runtime.core().get_queue_state().await;
-        let Some(track) = state.current_track else {
-            // Nothing playing — drop the activity.
-            let _ = tokio::task::spawn_blocking(|| discord().clear()).await;
+        // The task has not read its queue input yet, so re-admit the exact
+        // producer observation at the consumer. This also invalidates the
+        // special pre-service token if QConnect appeared before scheduling.
+        let Some(_owner_action) = begin_owner_action_exact(owner_token).await else {
             return;
         };
-        let pb = runtime.core().get_playback_state();
-        let title = match track.version.as_deref().filter(|v| !v.is_empty()) {
-            Some(version) => format!("{} ({version})", track.title),
-            None => track.title.clone(),
-        };
-        // Discord's large_image needs an http(s) URL or an asset key; local /
-        // Plex covers are filesystem paths Discord can't fetch, so drop them
-        // (the core falls back to the "cover" asset key). A sized Qobuz cover
-        // is rewritten to the 600 tier first — the queue can carry the 50px
-        // `small` from a restored session, and Discord renders whatever the
-        // suffix says (owner smoke 2026-08-15: pixelated presence art).
-        let cover_url = track
-            .artwork_url
-            .clone()
-            .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
-            .map(|u| qbz_models::qobuz_cover_at_px(&u, 600).unwrap_or(u));
-        let meta = NowListening {
-            title,
-            artist: track.artist.clone(),
-            album: track.album.clone(),
-            is_playing: pb.is_playing,
-            current_time: pb.position as f64,
-            duration: track.duration_secs as f64,
-            cover_url,
-        };
-        let _ = tokio::task::spawn_blocking(move || discord().update(&meta)).await;
+        push_discord_current(&runtime, None, None).await;
     });
+}
+
+/// Push a Discord continuation derived from an already-read playback event.
+/// The exact token rejects owner -> guest -> owner cycles; track + generation
+/// reject a later local edge within the same owner authority.
+pub fn discord_push_observed(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    owner_token: OwnerActionToken,
+    expected_track_id: u64,
+) {
+    let expected_generation = SCROBBLE_GEN.load(Ordering::SeqCst);
+    spawn_discord_observed(
+        runtime,
+        owner_token,
+        expected_track_id,
+        expected_generation,
+    );
+}
+
+/// Discord-only peer edge. It shares the playback integration generation so
+/// an A -> B -> A sequence cannot revive a queued push for the first A.
+pub fn discord_track_change_edge(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    owner_token: OwnerActionToken,
+    expected_track_id: u64,
+) {
+    let expected_generation = SCROBBLE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    spawn_discord_observed(
+        runtime,
+        owner_token,
+        expected_track_id,
+        expected_generation,
+    );
+}
+
+fn spawn_discord_observed(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    owner_token: OwnerActionToken,
+    expected_track_id: u64,
+    expected_generation: u64,
+) {
+    if !discord().is_enabled() || expected_track_id == 0 {
+        return;
+    }
+    let runtime = runtime.clone();
+    crate::spawn(async move {
+        let Some(_owner_action) = begin_owner_action_exact(owner_token).await else {
+            return;
+        };
+        push_discord_current(
+            &runtime,
+            Some(expected_track_id),
+            Some(expected_generation),
+        )
+        .await;
+    });
+}
+
+async fn push_discord_current(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    expected_track_id: Option<u64>,
+    expected_generation: Option<u64>,
+) {
+    if expected_generation
+        .is_some_and(|expected| expected != SCROBBLE_GEN.load(Ordering::SeqCst))
+    {
+        return;
+    }
+    let state = runtime.core().get_queue_state().await;
+    // The queue read yields. A newer track edge may have advanced the shared
+    // generation while this task was suspended; in particular, an old empty
+    // snapshot must not clear the newer track's Discord activity.
+    if expected_generation
+        .is_some_and(|expected| expected != SCROBBLE_GEN.load(Ordering::SeqCst))
+    {
+        return;
+    }
+    let Some(track) = state.current_track else {
+        // Nothing playing — drop the activity.
+        let _ = tokio::task::spawn_blocking(|| discord().clear()).await;
+        return;
+    };
+    if !integration_snapshot_matches(
+        expected_track_id,
+        expected_generation,
+        track.id,
+        SCROBBLE_GEN.load(Ordering::SeqCst),
+    ) {
+        return;
+    }
+    let pb = runtime.core().get_playback_state();
+    let title = match track.version.as_deref().filter(|v| !v.is_empty()) {
+        Some(version) => format!("{} ({version})", track.title),
+        None => track.title.clone(),
+    };
+    // Discord's large_image needs an http(s) URL or an asset key; local /
+    // Plex covers are filesystem paths Discord can't fetch, so drop them
+    // (the core falls back to the "cover" asset key). A sized Qobuz cover
+    // is rewritten to the 600 tier first — the queue can carry the 50px
+    // `small` from a restored session, and Discord renders whatever the
+    // suffix says (owner smoke 2026-08-15: pixelated presence art).
+    let cover_url = track
+        .artwork_url
+        .clone()
+        .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+        .map(|u| qbz_models::qobuz_cover_at_px(&u, 600).unwrap_or(u));
+    let meta = NowListening {
+        title,
+        artist: track.artist.clone(),
+        album: track.album.clone(),
+        is_playing: pb.is_playing,
+        current_time: pb.position as f64,
+        duration: track.duration_secs as f64,
+        cover_url,
+    };
+    let _ = tokio::task::spawn_blocking(move || discord().update(&meta)).await;
 }
 
 /// Tear down the live activity + IPC connection (logout / app exit).
@@ -791,29 +890,76 @@ static SCROBBLE_GEN: AtomicU64 = AtomicU64::new(0);
 /// How often the delayed-scrobble task samples the player while waiting.
 const SCROBBLE_TICK: Duration = Duration::from_secs(1);
 
-/// Track-change entry point. Fires now-playing immediately for each enabled +
-/// authed service, then arms a delayed scrobble at `min(50% of duration,
-/// 240s)`. No-op when no service is active (opt-in gate).
-///
-/// GLUE: call from the playback poll's de-duped track-change edge only — NOT
-/// on resume/seek, or the scrobble re-arms.
-pub fn on_track_changed(meta: ScrobbleMeta) {
-    // Always bump the generation so any in-flight stale timer self-cancels.
-    let my_gen = SCROBBLE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
-    let cfg = scrobble_settings();
-    if !cfg.lastfm_active() && !cfg.listenbrainz_active() {
-        return;
-    }
+/// Cancel every owner-playback integration at the authority commit boundary.
+/// Exact tokens already reject work after the install; the generation wakes
+/// delayed same-owner timers promptly, and clearing Discord removes the
+/// owner's presence before delegated playback becomes observable.
+pub fn cancel_owner_playback_tasks() {
+    let cancelled_generation = SCROBBLE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    crate::spawn(async move {
+        if SCROBBLE_GEN.load(Ordering::SeqCst) != cancelled_generation {
+            return;
+        }
+        let _ = tokio::task::spawn_blocking(|| discord().clear()).await;
+    });
+}
+
+/// Shared track/generation validation for queued integration continuations.
+/// `None` means the task obtained its own exact owner lease before reading the
+/// queue and did not derive its input from an earlier playback snapshot.
+fn integration_snapshot_matches(
+    expected_track_id: Option<u64>,
+    expected_generation: Option<u64>,
+    observed_track_id: u64,
+    observed_generation: u64,
+) -> bool {
+    expected_track_id.is_none_or(|expected| expected == observed_track_id)
+        && expected_generation.is_none_or(|expected| expected == observed_generation)
+}
+
+/// Fires now-playing immediately, then waits for the exact owner's track to
+/// reach `min(50% of duration, 240s)`. No lease is held during the long wait;
+/// each observation is re-admitted with the token captured before the queue
+/// snapshot, and the irreversible send keeps that exact permit alive.
+fn spawn_scrobble(
+    meta: ScrobbleMeta,
+    cfg: ScrobblerSettings,
+    owner_token: OwnerActionToken,
+    expected_track_id: u64,
+    expected_generation: u64,
+) {
     // Last.fm wants the time the track STARTED, captured here on the edge —
     // never the time the threshold fired (a 240 s wait on a long track put
     // every scrobble four minutes late).
     let started_at = unix_now();
     crate::spawn(async move {
+        let rt = crate::app();
+        let Some(initial_owner_action) = begin_owner_action_exact(owner_token).await else {
+            return;
+        };
+        let initial_event = rt.core().player().get_playback_event();
+        if !integration_snapshot_matches(
+            Some(expected_track_id),
+            Some(expected_generation),
+            initial_event.track_id,
+            SCROBBLE_GEN.load(Ordering::SeqCst),
+        ) {
+            return;
+        }
         // Now-playing is never queued. It may use the independent network in
         // manual-offline immediate mode or an opted-in logged-out session.
         if current_scrobble_policy(&cfg).await.action == ScrobbleAction::SendNow {
-            send_now_playing(&meta, &cfg).await;
+            let current_event = rt.core().player().get_playback_event();
+            if integration_snapshot_matches(
+                Some(expected_track_id),
+                Some(expected_generation),
+                current_event.track_id,
+                SCROBBLE_GEN.load(Ordering::SeqCst),
+            ) {
+                send_now_playing(&meta, &cfg).await;
+            }
         }
+        drop(initial_owner_action);
 
         // Delayed scrobble. Unknown / too-short duration: skip (Last.fm's
         // "longer than 30 seconds" rule lives in qbz_app::scrobble_timing).
@@ -830,26 +976,34 @@ pub fn on_track_changed(meta: ScrobbleMeta) {
         // without a scrobble; a newer track edge self-cancels via the
         // generation, as before. Seeks move the position and therefore the
         // moment this fires — the same rule the daemon applies.
-        let rt = crate::app();
         let mut ticker = tokio::time::interval(SCROBBLE_TICK);
         loop {
             ticker.tick().await;
-            if SCROBBLE_GEN.load(Ordering::SeqCst) != my_gen {
+            let Some(threshold_owner_action) = begin_owner_action_exact(owner_token).await else {
                 return;
-            }
+            };
             let ev = rt.core().player().get_playback_event();
-            if ev.track_id == 0 {
+            if !integration_snapshot_matches(
+                Some(expected_track_id),
+                Some(expected_generation),
+                ev.track_id,
+                SCROBBLE_GEN.load(Ordering::SeqCst),
+            ) {
                 log::debug!(
-                    "[qbz-qt] scrobble: stopped before the threshold, dropping '{}'",
+                    "[qbz-qt] scrobble: owner track changed before the threshold, dropping '{}'",
                     meta.track
                 );
                 return;
             }
             if ev.is_playing && ev.position >= wait {
-                break;
+                // Keep the exact permit through policy revalidation and the
+                // irreversible external send/queue operation.
+                send_scrobble(&meta, started_at).await;
+                drop(threshold_owner_action);
+                return;
             }
+            drop(threshold_owner_action);
         }
-        send_scrobble(&meta, started_at).await;
     });
 }
 
@@ -865,14 +1019,21 @@ pub fn on_track_changed(meta: ScrobbleMeta) {
 /// following the peer's tracks while scrobbles are suppressed (the push
 /// inside `refresh_now_playing_meta`, playback.rs:2236-2239, which the peer
 /// track edge also reaches, :5137-5141). The poll loop's PEER edge therefore
-/// calls [`discord_push`] directly and never this entry. The ephemeral-mode
+/// calls [`discord_push_observed`] directly and never this entry. The ephemeral-mode
 /// product law (scrobble MAY happen) is unaffected — this guard is about
 /// REMOTE ownership, not ephemeral.
 ///
 /// GLUE: call from the playback poll's DE-DUPED track-change edge
 /// (`track_id != last_track_id`), never from `refresh_now_playing` — that runs
 /// on every play/queue republish and would re-arm the scrobble timer.
-pub fn on_track_change_edge(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+pub fn on_track_change_edge(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    owner_token: OwnerActionToken,
+    expected_track_id: u64,
+) {
+    // Bump synchronously at the producer edge. If two spawned queue reads run
+    // out of order, the older one cannot make itself newest after the fact.
+    let expected_generation = SCROBBLE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
     let cfg = scrobble_settings();
     let scrobblers_live = cfg.lastfm_active() || cfg.listenbrainz_active();
     if !scrobblers_live && !discord().is_enabled() {
@@ -880,6 +1041,21 @@ pub fn on_track_change_edge(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     }
     let rt = runtime.clone();
     crate::spawn(async move {
+        let Some(_owner_action) = begin_owner_action_exact(owner_token).await else {
+            return;
+        };
+        let state = rt.core().get_queue_state().await;
+        let Some(track) = state.current_track else {
+            return;
+        };
+        if !integration_snapshot_matches(
+            Some(expected_track_id),
+            Some(expected_generation),
+            track.id,
+            SCROBBLE_GEN.load(Ordering::SeqCst),
+        ) {
+            return;
+        }
         if scrobblers_live {
             // The guard (playback.rs:2267-2271): a remote QConnect renderer
             // owns playback — skip the scrobble half ONLY. The spawn's other
@@ -892,14 +1068,24 @@ pub fn on_track_change_edge(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
                 None => false,
             };
             if !peer_active {
-                let state = rt.core().get_queue_state().await;
-                if let Some(track) = state.current_track {
-                    on_track_changed(meta_from_queue_track(&track));
-                }
+                spawn_scrobble(
+                    meta_from_queue_track(&track),
+                    cfg,
+                    owner_token,
+                    expected_track_id,
+                    expected_generation,
+                );
             }
         }
         // UNGUARDED, 1:1 with the reference — Discord follows the peer.
-        discord_push(&rt);
+        if discord().is_enabled() {
+            push_discord_current(
+                &rt,
+                Some(expected_track_id),
+                Some(expected_generation),
+            )
+            .await;
+        }
     });
 }
 
@@ -1347,6 +1533,22 @@ mod tests {
         );
         assert_eq!(no_accumulation.action, ScrobbleAction::SendNow);
         assert!(!no_accumulation.queue_on_failure);
+    }
+
+    #[test]
+    fn queued_integration_requires_the_exact_track_and_generation() {
+        assert!(integration_snapshot_matches(Some(41), Some(7), 41, 7));
+        assert!(!integration_snapshot_matches(Some(41), Some(7), 42, 7));
+        assert!(!integration_snapshot_matches(Some(41), Some(7), 41, 8));
+
+        // A -> B -> A is still stale: the numeric track matches again, but the
+        // producer generation cannot be revived by the later A edge.
+        assert!(!integration_snapshot_matches(Some(41), Some(7), 41, 9));
+    }
+
+    #[test]
+    fn task_owned_snapshot_needs_no_prior_track_identity() {
+        assert!(integration_snapshot_matches(None, None, 99, 12));
     }
 
     #[test]

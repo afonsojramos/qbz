@@ -38,6 +38,8 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::default::{get_codecs, get_probe};
 
+use super::{PlaybackBufferReporter, PlaybackBufferState};
+
 /// Configuration for the streaming buffer
 #[derive(Debug, Clone)]
 pub struct StreamingConfig {
@@ -649,6 +651,8 @@ pub struct IncrementalStreamingSource {
     stalled: bool,
     /// Reference to the buffered source (for cache retrieval after playback)
     buffered_source: Arc<BufferedMediaSource>,
+    /// Optional generation-safe side channel into the player's buffer state.
+    buffer_reporter: Option<PlaybackBufferReporter>,
 }
 
 impl IncrementalStreamingSource {
@@ -659,6 +663,20 @@ impl IncrementalStreamingSource {
     ///
     /// Returns the source along with detected sample_rate and channels.
     pub fn new(buffered_source: Arc<BufferedMediaSource>) -> Result<Self, String> {
+        Self::new_inner(buffered_source, None)
+    }
+
+    pub(super) fn new_for_play(
+        buffered_source: Arc<BufferedMediaSource>,
+        buffer_reporter: PlaybackBufferReporter,
+    ) -> Result<Self, String> {
+        Self::new_inner(buffered_source, Some(buffer_reporter))
+    }
+
+    fn new_inner(
+        buffered_source: Arc<BufferedMediaSource>,
+        buffer_reporter: Option<PlaybackBufferReporter>,
+    ) -> Result<Self, String> {
         // Create a reader from the buffered source
         let reader = buffered_source.create_reader();
         let media_source = Box::new(reader) as Box<dyn MediaSource>;
@@ -712,6 +730,7 @@ impl IncrementalStreamingSource {
             packets_decoded: 0,
             stalled: false,
             buffered_source,
+            buffer_reporter,
         })
     }
 
@@ -782,6 +801,9 @@ impl IncrementalStreamingSource {
                         // mode so the live stream gets the pipe to itself (#591).
                         self.stalled = true;
                         qbz_audio::network_throttle::state().record_underrun();
+                        if let Some(reporter) = &self.buffer_reporter {
+                            reporter.report(PlaybackBufferState::Underrun);
+                        }
                     }
                     std::thread::sleep(Duration::from_millis(5));
                     continue;
@@ -793,11 +815,19 @@ impl IncrementalStreamingSource {
                         self.packets_decoded
                     );
                     self.finished = true;
+                    if self.buffered_source.download_error().is_some() {
+                        if let Some(reporter) = &self.buffer_reporter {
+                            reporter.report(PlaybackBufferState::Error);
+                        }
+                    }
                     return;
                 }
                 Err(err) => {
                     log::error!("Symphonia read error in stream: {}", err);
                     self.finished = true;
+                    if let Some(reporter) = &self.buffer_reporter {
+                        reporter.report(PlaybackBufferState::Error);
+                    }
                     return;
                 }
             };
@@ -821,10 +851,16 @@ impl IncrementalStreamingSource {
                     // Add samples to queue
                     self.sample_queue
                         .extend(sample_buf.samples().iter().copied());
+                    let ready_edge = should_report_ready(self.packets_decoded, self.stalled);
                     self.packets_decoded += 1;
                     // Successful decode ends any stall episode; the next
                     // WouldBlock streak records a fresh underrun.
                     self.stalled = false;
+                    if ready_edge {
+                        if let Some(reporter) = &self.buffer_reporter {
+                            reporter.report(PlaybackBufferState::Ready);
+                        }
+                    }
                 }
                 Err(SymphoniaError::DecodeError(e)) => {
                     log::warn!("Decode error (skipping packet): {}", e);
@@ -837,11 +873,18 @@ impl IncrementalStreamingSource {
                 Err(err) => {
                     log::error!("Symphonia decode error: {}", err);
                     self.finished = true;
+                    if let Some(reporter) = &self.buffer_reporter {
+                        reporter.report(PlaybackBufferState::Error);
+                    }
                     return;
                 }
             }
         }
     }
+}
+
+const fn should_report_ready(packets_decoded: u64, stalled: bool) -> bool {
+    packets_decoded == 0 || stalled
 }
 
 impl Source for IncrementalStreamingSource {
@@ -1117,6 +1160,15 @@ mod tests {
     use super::*;
     use std::thread;
     use std::time::Duration;
+
+    #[test]
+    fn ready_reports_only_on_first_decode_and_stall_recovery() {
+        assert!(should_report_ready(0, false));
+        assert!(!should_report_ready(1, false));
+        assert!(!should_report_ready(400, false));
+        assert!(should_report_ready(1, true));
+        assert!(should_report_ready(400, true));
+    }
 
     #[test]
     fn first_error_wins_over_later_generic_abort() {

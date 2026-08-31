@@ -969,6 +969,9 @@ async fn enqueue_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, mode: &str) {
     if queue.is_empty() {
         return;
     }
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     match mode {
         // Reversed so a multi-track insert at the cursor keeps its order.
         "next" => {

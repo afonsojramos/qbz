@@ -32,6 +32,7 @@ use tokio::task::JoinHandle;
 
 use crate::adapter::DaemonAdapter;
 use crate::paths::ProfileRoots;
+use crate::qconnect::authority::AuthorityCell;
 
 type Runtime = Arc<AppRuntime<DaemonAdapter>>;
 
@@ -59,7 +60,10 @@ impl MprisHandle {
 /// `qbzd settings set playback.mpris` write.
 fn enabled(roots: &ProfileRoots) -> bool {
     if let Ok(v) = std::env::var("QBZD_MPRIS") {
-        return !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no");
+        return !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        );
     }
     qbz_app::settings::daemon_prefs::load_at(&roots.data).mpris_enabled
 }
@@ -71,6 +75,7 @@ pub fn spawn(
     roots: ProfileRoots,
     mut bus: broadcast::Receiver<CoreEvent>,
     handle: Handle,
+    authority: Arc<AuthorityCell>,
 ) -> Option<MprisHandle> {
     if !enabled(&roots) {
         log::info!("[mpris] disabled (playback.mpris / QBZD_MPRIS)");
@@ -81,13 +86,14 @@ pub fn spawn(
     // integration never keeps the runtime alive.
     let weak: Weak<AppRuntime<DaemonAdapter>> = Arc::downgrade(runtime);
     let cb_handle = handle.clone();
+    let cb_authority = Arc::clone(&authority);
     // Headless: the daemon owns no window, so there is no HWND to give.
     // On Linux, which is the only place qbzd ships, MPRIS keys off the D-Bus
     // name and ignores this entirely.
     let integration: Arc<dyn MediaIntegration> = Arc::from(qbz_media_controls::spawn(
         move |ev| {
             if let Some(rt) = weak.upgrade() {
-                handle_media_event(&rt, &roots, &cb_handle, ev);
+                handle_media_event(&rt, &roots, &cb_handle, &cb_authority, ev);
             }
         },
         qbz_media_controls::NativeWindow::default(),
@@ -123,7 +129,10 @@ pub fn spawn(
 
         loop {
             match bus.recv().await {
-                Ok(CoreEvent::TrackStarted { track, position_secs }) => {
+                Ok(CoreEvent::TrackStarted {
+                    track,
+                    position_secs,
+                }) => {
                     updater_integ.set_metadata(&track_meta(&track));
                     last = PlaybackStatus::Playing;
                     updater_integ.set_playback(last, Some(Duration::from_secs(position_secs)));
@@ -146,7 +155,10 @@ pub fn spawn(
         }
     });
 
-    Some(MprisHandle { integration, updater })
+    Some(MprisHandle {
+        integration,
+        updater,
+    })
 }
 
 // ============================ inbound ============================
@@ -155,16 +167,31 @@ pub fn spawn(
 /// mpris-server (D-Bus) thread — NOT a tokio worker — so the sync core commands
 /// are called directly; the async advance ritual is spawned fire-and-forget so
 /// the D-Bus thread never blocks on a network resolve. Time values are micros.
-fn handle_media_event(rt: &Runtime, roots: &ProfileRoots, handle: &Handle, ev: MediaEvent) {
+fn handle_media_event(
+    rt: &Runtime,
+    roots: &ProfileRoots,
+    handle: &Handle,
+    authority: &Arc<AuthorityCell>,
+    ev: MediaEvent,
+) {
     let core = rt.core();
     match ev {
         MediaEvent::Play => {
+            let Some(_transport_permit) = authority.try_transport_action_permit() else {
+                return;
+            };
             let _ = core.resume();
         }
         MediaEvent::Pause => {
+            let Some(_transport_permit) = authority.try_transport_action_permit() else {
+                return;
+            };
             let _ = core.pause();
         }
         MediaEvent::Toggle => {
+            let Some(_transport_permit) = authority.try_transport_action_permit() else {
+                return;
+            };
             let player = core.player();
             if player.get_playback_event().is_playing {
                 let _ = core.pause();
@@ -173,31 +200,59 @@ fn handle_media_event(rt: &Runtime, roots: &ProfileRoots, handle: &Handle, ev: M
             }
         }
         MediaEvent::Stop => {
+            let Some(_transport_permit) = authority.try_transport_action_permit() else {
+                return;
+            };
             let _ = core.stop();
         }
-        MediaEvent::Next => spawn_advance(rt, roots, handle, true),
-        MediaEvent::Previous => spawn_advance(rt, roots, handle, false),
+        MediaEvent::Next => {
+            if let Some(permit) = authority.try_owner_action_permit() {
+                spawn_advance(rt, roots, handle, permit, true);
+            }
+        }
+        MediaEvent::Previous => {
+            if let Some(permit) = authority.try_owner_action_permit() {
+                spawn_advance(rt, roots, handle, permit, false);
+            }
+        }
         MediaEvent::SeekBy(micros) => {
+            let Some(_transport_permit) = authority.try_transport_action_permit() else {
+                return;
+            };
             let player = core.player();
             if player.is_dsd_direct_active() {
                 return;
             }
             let ev = player.get_playback_event();
             let target = (ev.position as i64 + micros / 1_000_000).max(0) as u64;
-            let clamped = if ev.duration > 0 { target.min(ev.duration) } else { target };
+            let clamped = if ev.duration > 0 {
+                target.min(ev.duration)
+            } else {
+                target
+            };
             let _ = core.seek(clamped);
         }
         MediaEvent::SetPosition(micros) => {
+            let Some(_transport_permit) = authority.try_transport_action_permit() else {
+                return;
+            };
             let player = core.player();
             if player.is_dsd_direct_active() {
                 return;
             }
             let ev = player.get_playback_event();
             let target = (micros.max(0) as u64) / 1_000_000;
-            let clamped = if ev.duration > 0 { target.min(ev.duration) } else { target };
+            let clamped = if ev.duration > 0 {
+                target.min(ev.duration)
+            } else {
+                target
+            };
             let _ = core.seek(clamped);
         }
         MediaEvent::SetVolume(vol) => {
+            let Some(_transport_permit) = authority.try_transport_action_permit() else {
+                return;
+            };
             let player = core.player();
             if !player.is_dsd_direct_active() {
                 let _ = core.set_volume((vol as f32).clamp(0.0, 1.0));
@@ -212,12 +267,19 @@ fn handle_media_event(rt: &Runtime, roots: &ProfileRoots, handle: &Handle, ev: M
 /// Fire-and-forget the FULL advance ritual (skip-walk → play → prefetch →
 /// persist) off the D-Bus thread, at the daemon's persisted streaming quality
 /// (the same key the driver seeds at boot).
-fn spawn_advance(rt: &Runtime, roots: &ProfileRoots, handle: &Handle, forward: bool) {
+fn spawn_advance(
+    rt: &Runtime,
+    roots: &ProfileRoots,
+    handle: &Handle,
+    permit: crate::qconnect::authority::AuthorityActionPermit,
+    forward: bool,
+) {
     let rt = rt.clone();
     let quality = qbz_app::playback_driver::quality_from_key(
         &qbz_app::settings::daemon_prefs::load_at(&roots.data).streaming_quality,
     );
     handle.spawn(async move {
+        let _permit = permit;
         let _ = qbz_app::playback_driver::advance_and_play(rt.as_ref(), quality, forward).await;
     });
 }
@@ -264,13 +326,19 @@ mod tests {
         // classification the getter uses.
         for v in ["0", "false", "off", "no", "FALSE", " Off "] {
             assert!(
-                matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no"),
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "0" | "false" | "off" | "no"
+                ),
                 "{v:?} should read as disabled"
             );
         }
         for v in ["1", "true", "on", "yes", "anything"] {
             assert!(
-                !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no"),
+                !matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "0" | "false" | "off" | "no"
+                ),
                 "{v:?} should read as enabled"
             );
         }

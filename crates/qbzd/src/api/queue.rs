@@ -41,7 +41,7 @@ use qbz_models::{QueueTrack, RepeatMode, Track};
 
 use crate::state::AuthState;
 
-use super::{err_json, json, ApiState};
+use super::{err_json, json, owner_action_gate, owner_action_lease, ApiState};
 
 /// `GET /api/queue` (02 §3.3.13). `query` is the raw query string (no leading
 /// `?`) — `route()` strips it off the path before dispatch, so it is threaded
@@ -100,6 +100,9 @@ pub fn list(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
 /// STRICT and run before any core call, so a rejected body never partially
 /// mutates the queue).
 pub fn add(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
+    if let Some(resp) = owner_action_gate(state) {
+        return resp;
+    }
     if let Some(resp) = auth_gate(state) {
         return resp;
     }
@@ -134,6 +137,14 @@ pub fn add(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
         .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
         .collect();
 
+    // Catalog resolution can outlive an authority handoff. Revalidate before
+    // the first owner queue mutation so a guest epoch cannot inherit this
+    // request merely because it began under owner authority.
+    let _owner_lease = match owner_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
+
     if position == AddPosition::Next {
         // `add_track_next` always inserts immediately after the current
         // track, so reverse iteration is what lands multiple tracks in
@@ -158,6 +169,10 @@ pub fn add(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
 /// playing track — the verbatim hint below is quoted §3.3.15; also a
 /// missing or non-integer `index` field, with distinct messages).
 pub fn remove(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
+    let _owner_lease = match owner_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
     let index = match parse_remove_index(body) {
         Ok(i) => i,
         Err((message, hint)) => return err_json(400, "bad_request", &message, &hint),
@@ -214,6 +229,10 @@ pub fn remove(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
 /// (default `true` when the field is absent — the CLI always sends it
 /// explicitly, §"queue clear" in cli/queue.rs).
 pub fn clear(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
+    let _owner_lease = match owner_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
     let keep_current = body.get("keep_current").and_then(|v| v.as_bool()).unwrap_or(true);
     state.rt.block_on(state.runtime.core().clear_queue(keep_current));
     let total_tracks = state.rt.block_on(state.runtime.core().get_queue_state()).total_tracks;
@@ -223,6 +242,9 @@ pub fn clear(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
 /// `POST /api/queue/move` (CONSOLE). Body `{"from": N, "to": N}` (0-based).
 /// GUI drag-reorder (core `move_track`). 404 when either index is out of range.
 pub fn reorder(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
+    if let Some(resp) = owner_action_gate(state) {
+        return resp;
+    }
     let from = match body.get("from").and_then(|v| v.as_u64()) {
         Some(n) => n as usize,
         None => return err_json(400, "bad_request", "move requires 'from' and 'to'", "body: {\"from\": 7, \"to\": 2}"),
@@ -230,6 +252,10 @@ pub fn reorder(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
     let to = match body.get("to").and_then(|v| v.as_u64()) {
         Some(n) => n as usize,
         None => return err_json(400, "bad_request", "move requires 'from' and 'to'", "body: {\"from\": 7, \"to\": 2}"),
+    };
+    let _owner_lease = match owner_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
     };
     if state.rt.block_on(state.runtime.core().move_track(from, to)) {
         json(200, serde_json::json!({"from": from, "to": to}))
@@ -246,12 +272,19 @@ pub fn reorder(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
 /// spawn-and-ack (see `playback::advance`) so a slow fetch can't starve the
 /// single-threaded API — failures latch into `last_errors.stream`.
 pub fn jump(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
+    if let Some(resp) = owner_action_gate(state) {
+        return resp;
+    }
     if let Some(resp) = auth_gate(state) {
         return resp;
     }
     let index = match body.get("index").and_then(|v| v.as_u64()) {
         Some(n) => n as usize,
         None => return err_json(400, "bad_request", "jump requires an 'index'", "body: {\"index\": 2}"),
+    };
+    let owner_lease = match owner_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
     };
     let track = match state.rt.block_on(state.runtime.core().play_index(index)) {
         Some(t) => t,
@@ -262,6 +295,7 @@ pub fn jump(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
     let runtime = std::sync::Arc::clone(&state.runtime);
     let shared = std::sync::Arc::clone(&state.shared);
     state.rt.spawn(async move {
+        let _owner_lease = owner_lease;
         if let Err(err) = runtime
             .core()
             .play_track_resolved(track_id, quality, None, None, 0)
@@ -285,6 +319,10 @@ pub fn jump(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
 /// `{"current": true}` | `{"off": true}`. Sets/clears the stop-after gate
 /// (core `set_stop_after`/`clear_stop_after`).
 pub fn stop_after(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
+    let _owner_lease = match owner_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
     if body.get("off").and_then(|v| v.as_bool()).unwrap_or(false) {
         state.rt.block_on(state.runtime.core().clear_stop_after());
         return json(200, serde_json::json!({"stop_after_track_id": Value::Null}));

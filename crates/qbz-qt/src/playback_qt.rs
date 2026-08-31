@@ -35,13 +35,168 @@
 //!   does NOT have that exemption; do not "restore parity" by removing it.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use cxx_qt_lib::QString;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
 use qbz_models::{PageArtistTrack, Quality, QueueTrack, RepeatMode};
 use qbz_player::PlaybackEvent;
+
+/// A lease for work that belongs to the signed-in owner's local queue.
+///
+/// QConnect is initialized after the playback surface during shell boot, so a
+/// missing service means the ordinary pre-QConnect local path is still valid.
+/// Once the service exists, however, failure to obtain its permit means a
+/// delegated renderer owns the queue (or an authority handoff is draining):
+/// callers must treat the local action as handled/refused and do no work.
+pub(crate) struct OwnerActionLease {
+    _permit: Option<qconnect_app::AuthorityActionPermit>,
+    token: OwnerActionToken,
+}
+
+/// Copyable stamp for a continuation derived from one exact owner snapshot.
+///
+/// `BeforeService` is intentionally invalidated as soon as the QConnect
+/// singleton appears. Otherwise work queued during shell boot could be
+/// re-admitted after an authority generation that did not exist when its
+/// inputs were read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OwnerActionToken {
+    BeforeService,
+    Qconnect(qconnect_app::OwnerAuthorityToken),
+}
+
+/// Atomic classification used by playback observations that also own edge
+/// bookkeeping. A fence is neither owner nor guest: it is a short retry window
+/// while a still-fallible candidate drains owner work.
+enum OwnerActionObservation {
+    Owner(OwnerActionLease),
+    Delegated,
+    Fenced,
+}
+
+impl OwnerActionLease {
+    pub(crate) const fn token(&self) -> OwnerActionToken {
+        self.token
+    }
+}
+
+/// A local transport control may operate on either owner or delegated audio,
+/// but it still has to drain before an authority handoff can swap runtimes.
+pub(crate) struct TransportActionLease {
+    _permit: Option<qconnect_app::AuthorityActionPermit>,
+}
+
+pub(crate) fn begin_owner_action() -> Option<OwnerActionLease> {
+    match crate::qconnect_qt::service() {
+        None => Some(OwnerActionLease {
+            _permit: None,
+            token: OwnerActionToken::BeforeService,
+        }),
+        Some(service) => service
+            .try_owner_action_permit_observed()
+            .map(|(token, permit)| OwnerActionLease {
+                _permit: Some(permit),
+                token: OwnerActionToken::Qconnect(token),
+            }),
+    }
+}
+
+fn observe_owner_action() -> OwnerActionObservation {
+    match crate::qconnect_qt::service() {
+        None => OwnerActionObservation::Owner(OwnerActionLease {
+            _permit: None,
+            token: OwnerActionToken::BeforeService,
+        }),
+        Some(service) => match service.observe_owner_authority() {
+            qconnect_app::OwnerAuthorityObservation::Owner { token, permit } => {
+                OwnerActionObservation::Owner(OwnerActionLease {
+                    _permit: Some(permit),
+                    token: OwnerActionToken::Qconnect(token),
+                })
+            }
+            qconnect_app::OwnerAuthorityObservation::Delegated => OwnerActionObservation::Delegated,
+            qconnect_app::OwnerAuthorityObservation::Fenced => OwnerActionObservation::Fenced,
+        },
+    }
+}
+
+enum OwnerScopedSnapshot<T> {
+    Captured {
+        owner_action: Option<OwnerActionLease>,
+        snapshot: T,
+    },
+    Fenced,
+}
+
+/// Freeze the authority observation before reading a local playback snapshot.
+/// A fallible transition fence does not consume the snapshot at all; delegated
+/// playback may still be read for UI/reporting but carries no owner permit.
+fn capture_owner_scoped_snapshot<T>(
+    observe: impl FnOnce() -> OwnerActionObservation,
+    read: impl FnOnce() -> T,
+) -> OwnerScopedSnapshot<T> {
+    match observe() {
+        OwnerActionObservation::Owner(owner_action) => OwnerScopedSnapshot::Captured {
+            owner_action: Some(owner_action),
+            snapshot: read(),
+        },
+        OwnerActionObservation::Delegated => OwnerScopedSnapshot::Captured {
+            owner_action: None,
+            snapshot: read(),
+        },
+        OwnerActionObservation::Fenced => OwnerScopedSnapshot::Fenced,
+    }
+}
+
+fn owner_generation_changed(
+    observed: Option<OwnerActionToken>,
+    previous: Option<OwnerActionToken>,
+) -> bool {
+    observed.is_some() && observed != previous
+}
+
+/// Re-admit a queued continuation only for the authority generation that read
+/// its input. This is deliberately different from [`begin_owner_action`]: a
+/// guest -> owner promotion must not legitimize work derived from guest state.
+pub(crate) async fn begin_owner_action_exact(token: OwnerActionToken) -> Option<OwnerActionLease> {
+    match token {
+        OwnerActionToken::BeforeService => {
+            crate::qconnect_qt::service()
+                .is_none()
+                .then_some(OwnerActionLease {
+                    _permit: None,
+                    token,
+                })
+        }
+        OwnerActionToken::Qconnect(token) => crate::qconnect_qt::service()?
+            .wait_for_exact_owner_action_permit(token)
+            .await
+            .map(|permit| OwnerActionLease {
+                _permit: Some(permit),
+                token: OwnerActionToken::Qconnect(token),
+            }),
+    }
+}
+
+pub(crate) fn begin_transport_action() -> Option<TransportActionLease> {
+    match crate::qconnect_qt::service() {
+        None => Some(TransportActionLease { _permit: None }),
+        Some(service) => service
+            .try_transport_action_permit()
+            .map(|permit| TransportActionLease {
+                _permit: Some(permit),
+            }),
+    }
+}
+
+/// Cheap refusal check for route funnels. The real local operation always
+/// acquires its own lease as well; this check only makes a delegated click look
+/// handled instead of falling through to an error/toast path.
+fn delegated_authority_owns_queue() -> bool {
+    begin_owner_action().is_none()
+}
 
 /// The request tier for every play. Persisted in ui_prefs.json ("streaming_quality")
 /// and applied here from Settings > Audio (settings_qt). Default "hires_plus".
@@ -131,6 +286,79 @@ const PREFETCH_LOOKAHEAD: usize = 2;
 const MAX_CONCURRENT_PREFETCH: usize = 2;
 static PREFETCH_SEMAPHORE: tokio::sync::Semaphore =
     tokio::sync::Semaphore::const_new(MAX_CONCURRENT_PREFETCH);
+
+/// Every background download that can retain an owner-action permit. The
+/// delegation host closes admission first, then advances the generation and
+/// aborts this registry before waiting for the authority drain. A start gate
+/// makes registration race-free: a task cannot touch I/O until its AbortHandle
+/// is either visible to cancellation or rejected by the newer generation.
+static OWNER_PLAYBACK_TASK_GENERATION: AtomicU64 = AtomicU64::new(0);
+static OWNER_PLAYBACK_TASKS: OnceLock<Mutex<Vec<(u64, tokio::task::AbortHandle)>>> =
+    OnceLock::new();
+
+fn owner_playback_tasks() -> &'static Mutex<Vec<(u64, tokio::task::AbortHandle)>> {
+    OWNER_PLAYBACK_TASKS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn owner_playback_task_generation() -> u64 {
+    OWNER_PLAYBACK_TASK_GENERATION.load(Ordering::SeqCst)
+}
+
+fn spawn_owner_playback_task<F>(future: F) -> tokio::task::JoinHandle<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let generation = owner_playback_task_generation();
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        if start_rx.await.is_err() || owner_playback_task_generation() != generation {
+            return;
+        }
+        future.await;
+    });
+    let abort = task.abort_handle();
+    let should_start = {
+        let mut tasks = owner_playback_tasks()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        tasks.retain(|(_, handle)| !handle.is_finished());
+        if owner_playback_task_generation() == generation {
+            tasks.push((generation, abort.clone()));
+            true
+        } else {
+            false
+        }
+    };
+    if should_start {
+        let _ = start_tx.send(());
+    } else {
+        abort.abort();
+    }
+    task
+}
+
+/// Cancel downloads that were admitted before a transition fence. Callers
+/// must close owner admission first; advancing the generation then makes a
+/// concurrent registration either visible in the registry or self-rejecting.
+pub(crate) fn cancel_owner_playback_tasks() {
+    OWNER_PLAYBACK_TASK_GENERATION
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |generation| {
+            generation.checked_add(1)
+        })
+        .expect("owner playback task generation exhausted");
+    let handles = {
+        let mut tasks = owner_playback_tasks()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        tasks
+            .drain(..)
+            .map(|(_, handle)| handle)
+            .collect::<Vec<_>>()
+    };
+    for handle in handles {
+        handle.abort();
+    }
+}
 
 /// The prefetch edge is separate from `last_track_id`: the latter belongs to
 /// the LOCAL UI/integration pump and is intentionally reset while casting,
@@ -267,7 +495,11 @@ async fn gapless_edge_is_current(
 /// performs cheap policy/queue work inline; every full download is spawned in
 /// the background and goes through `Player::prefetch_into_cache`, which owns
 /// the in-flight marker, cache re-check, 20 s failure cooldown and cache write.
-async fn kick_prefetch(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+async fn kick_prefetch(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    owner_snapshot: &OwnerActionLease,
+) {
+    let owner_token = owner_snapshot.token();
     let streaming_only = crate::settings_qt::audio_settings().streaming_only;
     let offline = crate::offline_fwd::engine().is_offline();
     if streaming_only || offline {
@@ -299,10 +531,13 @@ async fn kick_prefetch(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
             continue;
         }
         let runtime = runtime.clone();
-        tokio::spawn(async move {
+        drop(spawn_owner_playback_task(async move {
             let _permit = match PREFETCH_SEMAPHORE.acquire().await {
                 Ok(permit) => permit,
                 Err(_) => return,
+            };
+            let Some(_owner_action) = begin_owner_action_exact(owner_token).await else {
+                return;
             };
             let client_lock = runtime.core().client();
             let guard = client_lock.read().await;
@@ -313,7 +548,7 @@ async fn kick_prefetch(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
             if let Err(error) = player.prefetch_into_cache(client, track_id, quality).await {
                 log::debug!("[qbz-qt] prefetch: track {track_id} failed: {error}");
             }
-        });
+        }));
     }
 }
 
@@ -716,6 +951,10 @@ pub(crate) fn prepare_queue_stamped(
     start: Option<usize>,
     context: Option<PlayContext>,
 ) -> Option<PreparedQueue> {
+    // Source-owned playback stages audio before committing the replacement,
+    // so it reaches this lower seam directly. Refuse before that staging work
+    // when a delegated renderer owns the queue.
+    let _owner_action = begin_owner_action()?;
     let asked = tracks.len();
     let (mut tracks, start, dropped) = filter_unplayable_queue(tracks, start);
     if tracks.is_empty() && asked > 0 {
@@ -748,13 +987,30 @@ pub(crate) async fn commit_prepared_queue(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     prepared: PreparedQueue,
 ) -> Option<QueueStart> {
+    commit_prepared_queue_with_offline_only(runtime, prepared, false).await
+}
+
+async fn commit_prepared_queue_with_offline_only(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    prepared: PreparedQueue,
+    offline_only: bool,
+) -> Option<QueueStart> {
+    let Some(_owner_action) = begin_owner_action() else {
+        // Preserve the anchor as a handled/refused result. Callers route it
+        // through `route_play_remote` next, which consumes the delegated case
+        // without starting local audio or surfacing a misleading filter error.
+        return prepared.anchor;
+    };
     let PreparedQueue {
         tracks,
         start,
         anchor,
         unavailable_dropped,
     } = prepared;
-    runtime.core().set_queue(tracks, start).await;
+    runtime
+        .core()
+        .set_queue_with_offline_only(tracks, start, offline_only)
+        .await;
     toast_unavailable_dropped(unavailable_dropped);
     if let Some(svc) = crate::qconnect_qt::service() {
         svc.sync_local_queue_if_changed().await;
@@ -778,6 +1034,19 @@ pub(crate) async fn set_queue_stamped(
     commit_prepared_queue(runtime, prepared).await
 }
 
+/// Local-playlist variant of [`set_queue_stamped`] that publishes the D8
+/// offline-only flag before the queue event becomes observable.
+pub(crate) async fn set_queue_stamped_with_offline_only(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    tracks: Vec<QueueTrack>,
+    start: Option<usize>,
+    context: Option<PlayContext>,
+    offline_only: bool,
+) -> Option<QueueStart> {
+    let prepared = prepare_queue_stamped(tracks, start, context)?;
+    commit_prepared_queue_with_offline_only(runtime, prepared, offline_only).await
+}
+
 /// Same guarantee for the ADD paths (play-next / add-to-queue): appended tracks
 /// carry their own origin, so the glyph stays right after the queue advances
 /// into them.
@@ -786,6 +1055,11 @@ pub(crate) async fn set_queue_stamped(
 /// other modules and must be able to reach the SAME stamping seam — a private
 /// helper is what forced them to hand-roll their context in the first place.
 pub(crate) fn stamped(tracks: Vec<QueueTrack>, context: Option<PlayContext>) -> Vec<QueueTrack> {
+    if delegated_authority_owns_queue() {
+        // Enqueue callers already treat an empty post-seam batch as a handled
+        // no-op. Do not toast: the controller owns the visible guest queue.
+        return Vec::new();
+    }
     // The SECOND seam (F2). `set_queue_stamped` guards the REPLACE paths; this
     // guards play-next / play-later / add-to-queue, and its own reason for
     // existing is that enqueue "must not be the back door" for the blacklist.
@@ -864,6 +1138,9 @@ pub(crate) async fn sync_qconnect_after_add(added_castable: bool) {
     if !added_castable {
         return;
     }
+    let Some(_owner_action) = begin_owner_action() else {
+        return;
+    };
     if let Some(svc) = crate::qconnect_qt::service() {
         svc.sync_local_queue_if_changed().await;
     }
@@ -879,6 +1156,9 @@ pub(crate) async fn sync_qconnect_after_add(added_castable: bool) {
 /// Returns `true` when handled remotely — the caller MUST NOT enqueue
 /// locally, and its sync tail does not run (the peer owns the queue now).
 pub(crate) async fn route_enqueue_to_peer(tracks: &[QueueTrack], mode: &str) -> bool {
+    let Some(_owner_action) = begin_owner_action() else {
+        return true;
+    };
     let Some(svc) = crate::qconnect_qt::service() else {
         return false;
     };
@@ -894,6 +1174,9 @@ pub(crate) async fn route_enqueue_to_peer(tracks: &[QueueTrack], mode: &str) -> 
 /// Single-track variant of [`route_enqueue_to_peer`] (Slint
 /// playback.rs:4120-4128's single-track arm).
 pub(crate) async fn route_track_to_peer(track: &QueueTrack, mode: &str) -> bool {
+    let Some(_owner_action) = begin_owner_action() else {
+        return true;
+    };
     let Some(svc) = crate::qconnect_qt::service() else {
         return false;
     };
@@ -946,6 +1229,12 @@ pub(crate) async fn play_resolved_offline_aware(
     track_id: u64,
     start_position_secs: u64,
 ) -> Result<(), String> {
+    let Some(_owner_action) = begin_owner_action() else {
+        log::debug!(
+            "[play] local resolved start for track {track_id} refused by delegated authority"
+        );
+        return Ok(());
+    };
     // TRIPWIRE for the funnel: this is the LOCAL Qobuz/offline step and must
     // never run while a renderer owns playback. A hit here means an entry
     // point skipped `route_play_remote` — it is a bug, and this line is how
@@ -1022,6 +1311,98 @@ pub(crate) async fn play_resolved_offline_aware(
         .await
 }
 
+/// Restore the signed-in owner's exact current track after delegated playback.
+///
+/// The delegation host calls this while owning its transition gate and closed
+/// owner-action fence (the offline path uses the same exclusive handoff
+/// boundary). This helper therefore does not acquire authority again and
+/// deliberately skips both Cast and QConnect-peer routing: it restores audio
+/// on this process from the queue snapshot the host already installed.
+/// `position_secs` is always explicit, including zero, so the process-start
+/// session-resume stash can never override the handoff snapshot.
+pub(crate) async fn restore_owner_playback(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track_id: u64,
+    position_secs: u64,
+    was_playing: bool,
+) -> Result<(), String> {
+    let track = runtime
+        .core()
+        .current_track()
+        .await
+        .filter(|track| track.id == track_id)
+        .ok_or_else(|| "owner restore cursor no longer matches its snapshot".to_string())?;
+
+    // A startup resume token for the same track is stale once this stronger
+    // authority snapshot exists. Consume and discard it even when the exact
+    // handoff position is zero.
+    let _ = qbz_app::session_persist::take_resume_for(track_id);
+
+    let raw = qbz_source::RawRef::from_queue_track(&track);
+    let is_offline = raw.badge == qbz_source::SourceBadge::Offline;
+    let source_item = if is_offline {
+        None
+    } else {
+        match qbz_source::registry().claim(&raw) {
+            Ok(item) => Some(item),
+            Err(error) if track.is_local => {
+                return Err(format!(
+                    "owner source restore could not claim its row: {error}"
+                ));
+            }
+            // Legacy Qobuz queue snapshots may predate the explicit `source`
+            // field. Preserve their catalog fallback when `is_local` is false.
+            Err(_) => None,
+        }
+    };
+
+    if source_item
+        .as_ref()
+        .is_some_and(|item| item.source() != qbz_source::SourceId::QOBUZ)
+    {
+        match crate::audible_qt::play_queue_track(runtime, &track).await {
+            Ok(true) => {
+                // Source tickets start at their own zero (or CUE base). Apply a
+                // non-zero relative owner position after the source is live;
+                // zero remains an explicit fresh start and never consults the
+                // process-start resume stash above.
+                if position_secs > 0 {
+                    runtime
+                        .core()
+                        .seek(position_secs)
+                        .map_err(|error| format!("owner source restore seek failed: {error}"))?;
+                }
+            }
+            Ok(false) => return Err("owner source restore was refused by the player".to_string()),
+            Err(error) => return Err(format!("owner source restore failed: {error}")),
+        }
+    } else {
+        let quality = local_playback_quality().0;
+        let offline = crate::offline_qt::get().await;
+        let sink = offline
+            .as_ref()
+            .map(|_| crate::offline_cache_qt::row_sink());
+        runtime
+            .core()
+            .play_track_resolved(
+                track_id,
+                quality,
+                offline.as_deref(),
+                sink.as_ref(),
+                position_secs,
+            )
+            .await?;
+    }
+
+    if !was_playing {
+        runtime
+            .core()
+            .pause()
+            .map_err(|error| format!("owner restore pause failed: {error}"))?;
+    }
+    Ok(())
+}
+
 /// QConnect CONTROLLER-mode play routing (contract §7's decided arm position —
 /// Slint playback.rs:638-651): when a PEER renderer owns playback, route the
 /// play to the peer instead of running the local audible step. Call AFTER
@@ -1052,6 +1433,11 @@ pub(crate) async fn route_play_remote(
     track_id: u64,
     entry: &'static str,
 ) -> bool {
+    let Some(_owner_action) = begin_owner_action() else {
+        log::debug!("[play] entry={entry} track={track_id} -> refused by delegated authority");
+        crate::now_playing::clear_loading();
+        return true;
+    };
     if crate::cast_qt::play_current_if_cast(runtime).await {
         log::info!("[play] entry={entry} track={track_id} -> cast renderer");
         crate::now_playing::clear_loading();
@@ -1075,6 +1461,14 @@ pub(crate) async fn route_play_remote_track(
     track: &QueueTrack,
     entry: &'static str,
 ) -> bool {
+    let Some(_owner_action) = begin_owner_action() else {
+        log::debug!(
+            "[play] entry={entry} track={} -> refused by delegated authority",
+            track.id
+        );
+        crate::now_playing::clear_loading();
+        return true;
+    };
     if crate::cast_qt::play_track_if_cast(track).await {
         log::info!("[play] entry={entry} track={} -> cast renderer", track.id);
         crate::now_playing::clear_loading();
@@ -1088,10 +1482,7 @@ pub(crate) async fn route_play_remote_track(
     false
 }
 
-async fn route_play_to_peer(
-    runtime: &Arc<AppRuntime<LoggingAdapter>>,
-    track_id: u64,
-) -> bool {
+async fn route_play_to_peer(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u64) -> bool {
     let Some(svc) = crate::qconnect_qt::service() else {
         return false;
     };
@@ -1414,6 +1805,9 @@ pub async fn play_artist(
         &artist_name,
     );
     if !top.is_empty() {
+        let Some(_owner_action) = begin_owner_action() else {
+            return Ok(());
+        };
         // F1: the anchor comes back from the seam, never from `top` — the
         // filter may have dropped `top[0]`.
         let Some(anchor) =
@@ -1481,6 +1875,9 @@ pub async fn play_artist(
         track.context_kind = None;
         track.context_id = None;
     }
+    let Some(_owner_action) = begin_owner_action() else {
+        return Ok(());
+    };
     // F1: the anchor is read off the queue the core received.
     let Some(anchor) =
         set_queue_stamped(runtime, queue, Some(0), PlayContext::artist(artist_id)).await
@@ -1555,6 +1952,9 @@ pub async fn enqueue_album(
     if route_enqueue_to_peer(&tracks, routed_mode).await {
         return Ok(());
     }
+    let Some(_owner_action) = begin_owner_action() else {
+        return Ok(());
+    };
     let added_castable = batch_all_qconnect_castable(&tracks);
     if mode == "next" {
         // add_track_next inserts directly after the current track — feed
@@ -1601,6 +2001,9 @@ pub async fn play_album_from(
     let tracks = fetch_album_queue(runtime, album_id).await?;
     let start = start_index.min(tracks.len() - 1);
     let count = tracks.len();
+    let Some(_owner_action) = begin_owner_action() else {
+        return Ok(());
+    };
     // F1: the id to play is whatever SURVIVED at the remapped index. Reading
     // `tracks[start].id` here and playing it after the seam is the defect the
     // owner's acceptance test 7 catches — "play the album and skip the dead
@@ -1648,6 +2051,9 @@ pub async fn play_album_from_track(
     }
     let tracks = fetch_album_queue(runtime, album_id).await?;
     let start = tracks.iter().position(|t| t.id == track_id).unwrap_or(0);
+    let Some(_owner_action) = begin_owner_action() else {
+        return Ok(());
+    };
     // F1: the anchor comes from the seam. Clicking the album's DEAD row lands
     // on the next survivor rather than playing an id the core dropped.
     let Some(anchor) =
@@ -1812,6 +2218,9 @@ pub async fn play_track_list_in(
         (tracks, start)
     };
     let start = start.min(tracks.len() - 1);
+    let Some(_owner_action) = begin_owner_action() else {
+        return Ok(());
+    };
     // F1: the anchor comes from the seam. `Err` and not `Ok` when nothing
     // survives, deliberately: `try_infinite_refill` reads this Result to decide
     // whether a radio actually started, and an `Ok` over an empty publish would
@@ -1930,6 +2339,9 @@ pub async fn enqueue_track_list_mode(
     if route_enqueue_to_peer(&tracks, mode).await {
         return Ok(());
     }
+    let Some(_owner_action) = begin_owner_action() else {
+        return Ok(());
+    };
     let added_castable = batch_all_qconnect_castable(&tracks);
     match mode {
         "next" => {
@@ -2040,6 +2452,9 @@ pub async fn enqueue_album_track(
     if route_track_to_peer(&track, routed_mode).await {
         return Ok(());
     }
+    let Some(_owner_action) = begin_owner_action() else {
+        return Ok(());
+    };
     let added_castable = batch_all_qconnect_castable(std::slice::from_ref(&track));
     // THREE modes, like `enqueue_track_list_mode`. This match had only two, and
     // that is why the album page hid its "Play later": with "later" falling
@@ -2075,6 +2490,9 @@ pub async fn play_album_shuffled(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     album_id: &str,
 ) -> Result<(), String> {
+    let Some(_owner_action) = begin_owner_action() else {
+        return Ok(());
+    };
     runtime.core().set_shuffle(true).await;
     crate::now_playing::set_shuffle(true);
     if is_local_album(album_id) {
@@ -2266,6 +2684,9 @@ pub async fn play_single_track(
     track_id: u64,
 ) -> Result<(), String> {
     let qt = queue_track_for(runtime, track_id).await?;
+    let Some(_owner_action) = begin_owner_action() else {
+        return Ok(());
+    };
     // Bare single-track play: no container origin, so the derive falls to the
     // track's own album — same landing spot as the Slint fallback.
     // F1 in its smallest form: when the seam drops this one row there is
@@ -2313,6 +2734,9 @@ pub async fn enqueue_single_track(
     if route_track_to_peer(&qt, mode).await {
         return Ok(());
     }
+    let Some(_owner_action) = begin_owner_action() else {
+        return Ok(());
+    };
     let added_castable = batch_all_qconnect_castable(std::slice::from_ref(&qt));
     match mode {
         "next" => runtime.core().add_track_next(qt).await,
@@ -2331,6 +2755,9 @@ pub async fn enqueue_single_track(
 // ---------------------------------------------------------------------------
 
 pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    let Some(_transport_action) = begin_transport_action() else {
+        return;
+    };
     // A connected renderer owns transport — the local player is stopped.
     match crate::cast_qt::service().toggle_play_if_cast().await {
         Ok(true) => return,
@@ -2385,6 +2812,9 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     // during that window the engine answers false to both.
     let pending = PENDING_PLAY_ID.load(Ordering::Relaxed);
     if !was_playing && pending != 0 {
+        let Some(_owner_action) = begin_owner_action() else {
+            return;
+        };
         log::info!("[qbz-qt] toggle-play: cancelling the in-flight cold start of track {pending}");
         PENDING_PLAY_ID.store(0, Ordering::Relaxed);
         crate::now_playing::clear_loading();
@@ -2406,6 +2836,9 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         // under the queue lock so a concurrent mutation cannot start a
         // different row.
         if current.is_none() {
+            let Some(_owner_action) = begin_owner_action() else {
+                return;
+            };
             let state = runtime.core().get_queue_state_full().await;
             let Some(candidate) = state.upcoming.first().cloned() else {
                 log::info!("[qbz-qt] toggle-play ignored: empty queue");
@@ -2438,6 +2871,9 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         }
 
         if !runtime.core().player().has_loaded_audio() {
+            let Some(_owner_action) = begin_owner_action() else {
+                return;
+            };
             if let Some(track) = current {
                 log::info!(
                     "[qbz-qt] toggle-play: no loaded audio -> cold-starting current track {}",
@@ -2475,11 +2911,16 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         // Persist the paused position: pausing is the strongest signal the user
         // is done for now, and the ~5s poll flush can be up to 5s stale.
         // No-op unless `persist_session` is on.
-        qbz_app::session_persist::capture_and_save(runtime).await;
+        if let Some(_owner_action) = begin_owner_action() {
+            qbz_app::session_persist::capture_and_save(runtime).await;
+        }
     }
 }
 
 pub async fn next(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    let Some(_owner_action) = begin_owner_action() else {
+        return;
+    };
     // QConnect CONTROLLER mode (Slint main.rs:14268-14277): a peer renderer
     // owns playback — skip on IT and return; the local cursor stays put (the
     // cloud echo re-materializes the queue). NOTE: no cast branch here, 1:1
@@ -2512,6 +2953,9 @@ pub async fn next(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 }
 
 pub async fn previous(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    let Some(_owner_action) = begin_owner_action() else {
+        return;
+    };
     // QConnect CONTROLLER mode (Slint main.rs:14293-14302) — see next() above.
     if let Some(svc) = crate::qconnect_qt::service() {
         match svc.skip_previous_if_remote().await {
@@ -2566,6 +3010,9 @@ async fn play_queue_track(
     if route_play_remote(runtime, track_id, "play_queue_track").await {
         return;
     }
+    let Some(_owner_action) = begin_owner_action() else {
+        return;
+    };
     // Source-aware audible step: a LOCAL file plays from disk through the
     // player's play_data seam. The Qobuz tier-walk below needs a client and
     // would fail with "No Qobuz client available" on every local advance.
@@ -2661,6 +3108,9 @@ fn auto_skip_unavailable<'a>(
         if !is_terminal_unavailable(&error) {
             return;
         }
+        let Some(_owner_action) = begin_owner_action() else {
+            return;
+        };
         // §5.1 clause 2 (D3): remember it for the rest of the run, so the queue
         // filter stops offering it to the player. The API flag covers the
         // tracks Qobuz already admits are gone; THIS covers the ones it still
@@ -2702,6 +3152,9 @@ fn auto_skip_unavailable<'a>(
 }
 
 pub async fn seek_frac(runtime: &Arc<AppRuntime<LoggingAdapter>>, frac: f32) {
+    let Some(_transport_action) = begin_transport_action() else {
+        return;
+    };
     match crate::cast_qt::service()
         .seek_fraction_if_cast(frac as f64)
         .await
@@ -2788,6 +3241,9 @@ pub async fn seek_frac(runtime: &Arc<AppRuntime<LoggingAdapter>>, frac: f32) {
 }
 
 pub async fn set_volume(runtime: &Arc<AppRuntime<LoggingAdapter>>, volume: f32) {
+    let Some(_transport_action) = begin_transport_action() else {
+        return;
+    };
     if matches!(
         crate::cast_qt::service().set_volume_if_cast(volume).await,
         Ok(true)
@@ -2818,6 +3274,9 @@ pub async fn set_volume(runtime: &Arc<AppRuntime<LoggingAdapter>>, volume: f32) 
 }
 
 pub async fn toggle_mute(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    let Some(_transport_action) = begin_transport_action() else {
+        return;
+    };
     // QConnect FIRST (Slint main.rs:14455-14478 — the ONE dispatch that checks
     // QConnect before cast; the reference has NO cast arm for mute). The
     // remote API wants the target value; send the negation of the
@@ -2851,6 +3310,9 @@ pub async fn toggle_mute(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 }
 
 pub async fn toggle_shuffle(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    let Some(_owner_action) = begin_owner_action() else {
+        return;
+    };
     // QConnect (Slint main.rs:14492-14501 — no cast arm in the reference):
     // the CLOUD owns shuffle order while connected (gated on
     // transport_connected inside the service — §12.14, no extra gate here);
@@ -2872,6 +3334,9 @@ pub async fn toggle_shuffle(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 }
 
 pub async fn cycle_repeat(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    let Some(_owner_action) = begin_owner_action() else {
+        return;
+    };
     // QConnect (Slint main.rs:14517-14526 — no cast arm in the reference):
     // gated on transport_connected inside the service (§12.14).
     if let Some(svc) = crate::qconnect_qt::service() {
@@ -3183,6 +3648,11 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
     }
     crate::spawn(async move {
         let mut last_track_id: u64 = 0;
+        // Exact owner generation that produced the last local snapshot. Keep
+        // this separate from `last_track_id`: an owner restored after guest
+        // playback may legitimately resume the same numeric track id, and
+        // still owes owner-only edges/integrations from its fresh snapshot.
+        let mut last_owner_token: Option<OwnerActionToken> = None;
         let mut was_playing = false;
         let mut seen_position: u64 = 0;
         // Divider for the ~5s position flush (see the save_position call).
@@ -3204,6 +3674,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         // both the local engine and the cast cursor. Unlike the gapless guard,
         // it names the NEW current track whose two successors are being warmed.
         let mut prefetch_track_edge = PrefetchTrackEdge::default();
+        let mut seen_owner_playback_task_generation = owner_playback_task_generation();
 
         // QConnect renderer-report throttle (contract §6.2): the official
         // client reports RndrSrvrStateUpdated ~every 2s while playing PLUS
@@ -3214,6 +3685,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         // 1:1, translate by wall time.
         let mut last_reported_track_id: u64 = 0;
         let mut last_reported_playing = false;
+        let mut last_reported_buffer_state = qbz_player::player::PlaybackBufferState::Idle;
         let mut report_tick: u64 = 0;
         const QCONNECT_REPORT_EVERY_N_TICKS: u64 = 2;
 
@@ -3241,6 +3713,17 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         loop {
             ticker.tick().await;
 
+            let task_generation = owner_playback_task_generation();
+            if task_generation != seen_owner_playback_task_generation {
+                // A transition fence cancelled every admitted background
+                // download. Rearm both one-shot edges so a failed candidate can
+                // resume owner warming; a committed guest remains gated by its
+                // delegated observation and cannot start replacement work.
+                seen_owner_playback_task_generation = task_generation;
+                gapless_requested_for = 0;
+                prefetch_track_edge.observe(0);
+            }
+
             if gapless_fetch_task
                 .as_ref()
                 .is_some_and(|task| task.is_finished())
@@ -3263,16 +3746,37 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // explanation — the support issue the Slint fix was written for.
             // take_stream_error_message() drains exactly once per recorded
             // error, so each failed attempt toasts once.
-            if let Some(msg) = runtime.core().player().state.take_stream_error_message() {
-                log::error!("[qbz-qt] audio output error: {msg}");
-                let sandboxed = !matches!(
-                    qbz_audio::health::detect_sandbox(),
-                    qbz_audio::health::Sandbox::None
-                );
-                crate::toast_qt::error(stream_error_text(&msg, sandboxed));
-                // Listen log: a stream that died mid-track closes as `error`
-                // (a track that never started has no row to close).
-                crate::listen_log_qt::on_error().await;
+            {
+                // The error slot is itself a playback snapshot. Admit before
+                // draining it so a guest error cannot be applied to an owner
+                // row after a guest -> owner promotion.
+                let (error_owner_snapshot, stream_error) =
+                    match capture_owner_scoped_snapshot(observe_owner_action, || {
+                        runtime.core().player().state.take_stream_error_message()
+                    }) {
+                        OwnerScopedSnapshot::Captured {
+                            owner_action,
+                            snapshot,
+                        } => (owner_action, snapshot),
+                        // Do not drain an owner error or perturb playback edge
+                        // bookkeeping merely because a candidate is still inside
+                        // its fallible, pre-commit fence.
+                        OwnerScopedSnapshot::Fenced => continue,
+                    };
+                if let Some(msg) = stream_error {
+                    log::error!("[qbz-qt] audio output error: {msg}");
+                    let sandboxed = !matches!(
+                        qbz_audio::health::detect_sandbox(),
+                        qbz_audio::health::Sandbox::None
+                    );
+                    crate::toast_qt::error(stream_error_text(&msg, sandboxed));
+                    // Listen log: only the owner observation may close its row.
+                    // Guest playback is closed explicitly as `handoff` at the
+                    // authority boundary and is never folded into this store.
+                    if let Some(owner_snapshot) = error_owner_snapshot.as_ref() {
+                        crate::listen_log_qt::on_error(owner_snapshot).await;
+                    }
+                }
             }
 
             // --- QConnect CONTROLLER mode: peer-state reflection ----------
@@ -3296,6 +3800,14 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 Some(svc) => svc.remote_now_playing().await,
                 None => None,
             } {
+                // Queue metadata below belongs to this controller-side owner
+                // observation. A concurrent delegation invalidates it before
+                // any queue read or integration task can be admitted.
+                let Some(remote_owner_snapshot) = begin_owner_action() else {
+                    last_peer_track_id = 0;
+                    last_remote_ui_push = None;
+                    continue;
+                };
                 // The peer changed track on its own → refresh the bar/queue
                 // meta from the core cursor (the event sink already aligned
                 // it to the peer's track via sync_active_renderer_projection).
@@ -3312,7 +3824,11 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                     // inside refresh_now_playing_meta (playback.rs:5137-5141
                     // -> :2236-2239). The scrobble half of the LOCAL edge is
                     // peer-guarded inside `on_track_change_edge` instead.
-                    crate::integrations_qt::discord_push(&runtime);
+                    crate::integrations_qt::discord_track_change_edge(
+                        &runtime,
+                        remote_owner_snapshot.token(),
+                        remote.track_id,
+                    );
                     last_peer_track_id = remote.track_id;
                 }
                 // Lyrics follow the peer (Q7, §11.1): publish the RAW
@@ -3422,6 +3938,13 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // stopped, so this path would push position 0 / not-playing every
             // second and fight it.
             if crate::cast_qt::is_casting().await {
+                let Some(cast_owner_snapshot) = begin_owner_action() else {
+                    last_track_id = 0;
+                    was_playing = false;
+                    seen_position = 0;
+                    prefetch_track_edge.observe(0);
+                    continue;
+                };
                 // The local engine is stopped while casting, so its PlaybackEvent can
                 // never surface a track edge. The cast service advances the shared
                 // core cursor; observe that cursor here and warm once per new current
@@ -3433,7 +3956,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                     .map(|track| track.id)
                     .unwrap_or(0);
                 if prefetch_track_edge.observe(cast_track_id) {
-                    kick_prefetch(&runtime).await;
+                    kick_prefetch(&runtime, &cast_owner_snapshot).await;
                 }
                 last_track_id = 0;
                 was_playing = false;
@@ -3462,7 +3985,23 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // `now_playing::set_remote(false)` choke point, which unlike this
             // fallthrough also runs while the cast branch owns the loop. See the
             // note in `now_playing::set_remote`.
-            let event = runtime.core().player().get_playback_event();
+            // Freeze owner authority before reading any local playback or queue
+            // snapshot. `None` is a valid delegated observation: UI/QConnect
+            // reporting remain live, but owner-only consumers must use this
+            // exact result and may not obtain a fresh permit later in the tick.
+            let (owner_snapshot, event) =
+                match capture_owner_scoped_snapshot(observe_owner_action, || {
+                    runtime.core().player().get_playback_event()
+                }) {
+                    OwnerScopedSnapshot::Captured {
+                        owner_action,
+                        snapshot,
+                    } => (owner_action, snapshot),
+                    // Preserve last_track_id / last_owner_token and every owner
+                    // integration across a candidate that may still fail. Only an
+                    // actually installed guest is an authority edge.
+                    OwnerScopedSnapshot::Fenced => continue,
+                };
             let track_id = event.track_id;
             let position = event.position;
             let duration = event.duration;
@@ -3491,54 +4030,86 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // not. Only a NEW non-zero engine track — including a gapless
             // handoff — enters `kick_prefetch`. A stop rearms replaying the
             // same id later.
-            let immediate_prefetch_edge = prefetch_track_edge.observe(track_id);
+            let immediate_prefetch_edge = if owner_snapshot.is_some() {
+                prefetch_track_edge.observe(track_id)
+            } else {
+                // Do not let a guest id consume the owner's one-shot edge. A
+                // restored owner whose track id happens to match must warm its
+                // own queue from a fresh owner snapshot.
+                prefetch_track_edge.observe(0);
+                false
+            };
 
             // --- Track-change edge (new current track surfaced) ----------
-            if track_id != 0 && track_id != last_track_id {
-                // A cold start that reached audio is no longer pending.
-                PENDING_PLAY_ID.store(0, Ordering::Relaxed);
+            let observed_owner_token = owner_snapshot.as_ref().map(OwnerActionLease::token);
+            // Compare the COMPLETE owner identity, not only None -> Some. A
+            // short owner -> guest -> owner cycle can fit between two poll
+            // ticks; its restored owner token is new even when neither the
+            // numeric track id nor the sampled Option-ness changed. The old
+            // delayed integrations were invalidated by that authority cycle,
+            // so this fresh snapshot must re-arm their edge work.
+            let owner_changed = owner_generation_changed(observed_owner_token, last_owner_token);
+            if track_id != 0 && (track_id != last_track_id || owner_changed) {
+                if owner_snapshot.is_some() {
+                    // A cold OWNER start that reached audio is no longer
+                    // pending. Guest playback must not consume this latch.
+                    PENDING_PLAY_ID.store(0, Ordering::Relaxed);
+                }
                 // Reconcile the queue pointer (a real advance moves it; a
-                // manual play already did) and refresh meta + queue.
-                let _ = runtime.core().sync_current_to_id(track_id).await;
+                // manual play already did). A delegated renderer installs its
+                // cursor through the stamped QConnect engine, so this owner
+                // poller must never realign it.
+                if owner_snapshot.is_some() {
+                    let _ = runtime.core().sync_current_to_id(track_id).await;
+                }
+                // UI reflection is authority-neutral: the local renderer must
+                // still paint and report guest playback.
                 refresh_now_playing(&runtime).await;
                 publish_queue(&runtime).await;
-                // Integrations: scrobble now-playing + arm the delayed
-                // scrobble, and refresh the Discord presence. This is the
-                // DE-DUPED track edge on purpose — firing it from
-                // refresh_now_playing would re-arm the timer on every republish.
-                crate::integrations_qt::on_track_change_edge(&runtime);
-                // Local play history — Recently Played and Most Played read the
-                // same file the other frontends write; without this the Qt build
-                // shows their history and never adds to it. Same de-duped edge
-                // as the scrobblers, never from refresh_now_playing.
-                //
-                // EPHEMERAL (owner rule): an ephemeral folder "solo se reproduce
-                // y ya" and "no deja rastros en las bibliotecas" — it may be
-                // added to the queue and to nothing else, so a play of it must
-                // NOT land in Recently Played / Most Played. The player carries
-                // the synthetic id verbatim (`local_ephemeral::play_file` hands
-                // `row_id` to the engine), so the poll's own `track_id` is the
-                // cheapest place to decide, before the queue-state fetch.
-                // `record_queue_track` re-checks the same predicate, so the rule
-                // holds even if another call site appears.
-                if !crate::local_ephemeral::is_ephemeral_id(track_id as i64) {
-                    if let Some(track) = runtime.core().get_queue_state().await.current_track {
-                        crate::recently_qt::record_queue_track(&track);
-                        crate::home_qt::note_recent_store_changed();
-                        // Listen log: open the row for this track (and close
-                        // the previous one as a skip if it is still open).
-                        // Runs BESIDE the old stores, never instead of them.
-                        crate::listen_log_qt::on_track_edge(&track, &event).await;
+                if let Some(owner_snapshot) = owner_snapshot.as_ref() {
+                    // Integrations: scrobble now-playing + arm the delayed
+                    // scrobble, and refresh the Discord presence. This is the
+                    // DE-DUPED track edge on purpose — firing it from
+                    // refresh_now_playing would re-arm the timer on every republish.
+                    crate::integrations_qt::on_track_change_edge(
+                        &runtime,
+                        owner_snapshot.token(),
+                        track_id,
+                    );
+                    // Local play history — Recently Played and Most Played read the
+                    // same file the other frontends write; without this the Qt build
+                    // shows their history and never adds to it. Same de-duped edge
+                    // as the scrobblers, never from refresh_now_playing.
+                    //
+                    // EPHEMERAL (owner rule): an ephemeral folder "solo se reproduce
+                    // y ya" and "no deja rastros en las bibliotecas" — it may be
+                    // added to the queue and to nothing else, so a play of it must
+                    // NOT land in Recently Played / Most Played. The player carries
+                    // the synthetic id verbatim (`local_ephemeral::play_file` hands
+                    // `row_id` to the engine), so the poll's own `track_id` is the
+                    // cheapest place to decide, before the queue-state fetch.
+                    // `record_queue_track` re-checks the same predicate, so the rule
+                    // holds even if another call site appears.
+                    if !crate::local_ephemeral::is_ephemeral_id(track_id as i64) {
+                        if let Some(track) = runtime.core().get_queue_state().await.current_track {
+                            crate::recently_qt::record_queue_track(&track);
+                            crate::home_qt::note_recent_store_changed();
+                            // Listen log: open the row for this track (and close
+                            // the previous one as a skip if it is still open).
+                            // Runs BESIDE the old stores, never instead of them.
+                            crate::listen_log_qt::on_track_edge(owner_snapshot, &track, &event)
+                                .await;
+                        }
                     }
+                    // Persist the session (queue + current track + position) so a
+                    // restart can restore it. Hooked on the DE-DUPED track edge and
+                    // not at each play call site: `play_queue_track` alone has five
+                    // early returns (cast, peer, local, plex, Qobuz) and the album /
+                    // single / shuffle entries add more, so a per-call-site hook is
+                    // a list that silently goes stale. This edge sees them all.
+                    // No-op unless `persist_session` is on.
+                    qbz_app::session_persist::capture_and_save(&runtime).await;
                 }
-                // Persist the session (queue + current track + position) so a
-                // restart can restore it. Hooked on the DE-DUPED track edge and
-                // not at each play call site: `play_queue_track` alone has five
-                // early returns (cast, peer, local, plex, Qobuz) and the album /
-                // single / shuffle entries add more, so a per-call-site hook is
-                // a list that silently goes stale. This edge sees them all.
-                // No-op unless `persist_session` is on.
-                qbz_app::session_persist::capture_and_save(&runtime).await;
                 last_track_id = track_id;
                 // The engine may have reached this track through a GAPLESS
                 // hand-off, in which case the arming guard still names the
@@ -3560,7 +4131,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // another local edge tracker has not yet been cleared by its
             // end-of-track arm.
             if immediate_prefetch_edge {
-                kick_prefetch(&runtime).await;
+                if let Some(owner_snapshot) = owner_snapshot.as_ref() {
+                    kick_prefetch(&runtime, owner_snapshot).await;
+                }
             }
 
             if track_id != 0 {
@@ -3568,7 +4141,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             }
             // Listen log accumulator: credits audible seconds only (playing,
             // monotonic, <= 5 s per tick); a run of empty ticks is the stop.
-            crate::listen_log_qt::on_tick(track_id, position, is_playing).await;
+            if let Some(owner_snapshot) = owner_snapshot.as_ref() {
+                crate::listen_log_qt::on_tick(owner_snapshot, track_id, position, is_playing).await;
+            }
 
             // --- Position / state push ------------------------------------
             // Seek lock first, so the bar never renders a position push whose
@@ -3623,54 +4198,63 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // would hand the next track's bytes over seamlessly and the marker
             // would never fire, which is exactly what playback.rs:5372-5377
             // warns about.
-            if event.gapless_ready
+            if owner_snapshot.is_some()
+                && event.gapless_ready
                 && event.gapless_next_track_id == 0
                 && track_id != 0
                 && gapless_requested_for != track_id
                 && runtime.core().get_stop_after().await != Some(track_id)
             {
-                let upcoming = runtime.core().peek_upcoming(1).await;
-                if let Some(next) = upcoming.into_iter().next() {
-                    // Never queue the current track as its own successor.
-                    if next.id != track_id && !next.is_local {
-                        gapless_requested_for = track_id;
-                        let runtime = runtime.clone();
-                        let next_id = next.id;
-                        let task = tokio::spawn(async move {
-                            let quality = local_playback_quality().0;
-                            let streaming_only =
-                                crate::settings_qt::audio_settings().streaming_only;
-                            let player_cached = runtime.core().player().is_track_cached(next_id);
-                            let offline_cached = crate::offline_qt::is_cached_id(next_id);
+                if let Some(owner_snapshot) = owner_snapshot.as_ref() {
+                    let owner_token = owner_snapshot.token();
+                    let upcoming = runtime.core().peek_upcoming(1).await;
+                    if let Some(next) = upcoming.into_iter().next() {
+                        // Never queue the current track as its own successor.
+                        if next.id != track_id && !next.is_local {
+                            gapless_requested_for = track_id;
+                            let runtime = runtime.clone();
+                            let next_id = next.id;
+                            let task = spawn_owner_playback_task(async move {
+                                let Some(_owner_action) =
+                                    begin_owner_action_exact(owner_token).await
+                                else {
+                                    return;
+                                };
+                                let quality = local_playback_quality().0;
+                                let streaming_only =
+                                    crate::settings_qt::audio_settings().streaming_only;
+                                let player_cached =
+                                    runtime.core().player().is_track_cached(next_id);
+                                let offline_cached = crate::offline_qt::is_cached_id(next_id);
 
-                            if streaming_only && !player_cached && !offline_cached {
-                                // A long successor cannot reliably finish a
-                                // whole-file download inside the fixed 10 s
-                                // handoff window. In Streaming only, prepare
-                                // just its initial CMAF buffer and append that
-                                // incremental source behind the current one.
-                                // The same adaptive throttle that protects
-                                // immediate prefetch keeps a struggling live
-                                // stream from starting this second transfer.
-                                let throttle_cap = qbz_audio::network_throttle::state()
-                                    .current_prefetch_cap(
-                                        qbz_audio::network_throttle::playback_mbps_for_quality(
-                                            prefetch_quality_tag(quality),
-                                        ),
-                                        1,
-                                    );
-                                if !should_stream_gapless_successor(
-                                    streaming_only,
-                                    player_cached,
-                                    offline_cached,
-                                    throttle_cap,
-                                ) {
-                                    log::info!(
+                                if streaming_only && !player_cached && !offline_cached {
+                                    // A long successor cannot reliably finish a
+                                    // whole-file download inside the fixed 10 s
+                                    // handoff window. In Streaming only, prepare
+                                    // just its initial CMAF buffer and append that
+                                    // incremental source behind the current one.
+                                    // The same adaptive throttle that protects
+                                    // immediate prefetch keeps a struggling live
+                                    // stream from starting this second transfer.
+                                    let throttle_cap = qbz_audio::network_throttle::state()
+                                        .current_prefetch_cap(
+                                            qbz_audio::network_throttle::playback_mbps_for_quality(
+                                                prefetch_quality_tag(quality),
+                                            ),
+                                            1,
+                                        );
+                                    if !should_stream_gapless_successor(
+                                        streaming_only,
+                                        player_cached,
+                                        offline_cached,
+                                        throttle_cap,
+                                    ) {
+                                        log::info!(
                                         "[qbz-qt] [GAPLESS] streaming successor {next_id} skipped: network throttle cap 0"
                                     );
-                                    return;
-                                }
-                                match runtime
+                                        return;
+                                    }
+                                    match runtime
                                     .core()
                                     .queue_gapless_streaming(next_id, quality)
                                     .await
@@ -3685,84 +4269,91 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                                         "[qbz-qt] [GAPLESS] streaming setup for {next_id} failed: {error}; trying byte fallback"
                                     ),
                                 }
-                            }
+                                }
 
-                            // Shared tier-walk: L1/L2 (player cache) -> OFFLINE
-                            // -> network, then hand the bytes to play_next. The
-                            // offline handle and the row sink are the same two
-                            // `play_resolved_offline_aware` supplies; passing
-                            // `None, None` here (under a comment claiming this
-                            // port opens no offline index — the funnel above
-                            // does) made a DOWNLOADED next track re-download for
-                            // gapless, and fail outright with no network.
-                            let off = crate::offline_qt::get().await;
-                            let sink = off.as_ref().map(|_| crate::offline_cache_qt::row_sink());
-                            if let Some(data) = runtime
-                                .core()
-                                .fetch_for_gapless_resolved(
-                                    next_id,
-                                    // The gapless next track is LOCAL playback,
-                                    // so it resolves against the same capped
-                                    // tier as the audible play (Slint twin:
-                                    // playback.rs:5404). Prefetching at a
-                                    // higher tier than the funnel would request
-                                    // is exactly how a quality-blind cache
-                                    // leaks an uncapped stream to the DAC.
-                                    quality,
-                                    off.as_deref(),
-                                    sink.as_ref(),
-                                )
-                                .await
-                            {
-                                if !gapless_edge_is_current(&runtime, track_id, next_id).await {
-                                    log::info!(
+                                // Shared tier-walk: L1/L2 (player cache) -> OFFLINE
+                                // -> network, then hand the bytes to play_next. The
+                                // offline handle and the row sink are the same two
+                                // `play_resolved_offline_aware` supplies; passing
+                                // `None, None` here (under a comment claiming this
+                                // port opens no offline index — the funnel above
+                                // does) made a DOWNLOADED next track re-download for
+                                // gapless, and fail outright with no network.
+                                let off = crate::offline_qt::get().await;
+                                let sink =
+                                    off.as_ref().map(|_| crate::offline_cache_qt::row_sink());
+                                if let Some(data) = runtime
+                                    .core()
+                                    .fetch_for_gapless_resolved(
+                                        next_id,
+                                        // The gapless next track is LOCAL playback,
+                                        // so it resolves against the same capped
+                                        // tier as the audible play (Slint twin:
+                                        // playback.rs:5404). Prefetching at a
+                                        // higher tier than the funnel would request
+                                        // is exactly how a quality-blind cache
+                                        // leaks an uncapped stream to the DAC.
+                                        quality,
+                                        off.as_deref(),
+                                        sink.as_ref(),
+                                    )
+                                    .await
+                                {
+                                    if !gapless_edge_is_current(&runtime, track_id, next_id).await {
+                                        log::info!(
                                         "[qbz-qt] [GAPLESS] discarded stale track {next_id} after predecessor {track_id} moved or its queue edge changed"
                                     );
-                                    return;
+                                        return;
+                                    }
+                                    let player = runtime.core().player();
+                                    match player.play_next(data, next_id) {
+                                        Ok(()) => log::info!(
+                                            "[qbz-qt] [GAPLESS] queued track {next_id} for gapless"
+                                        ),
+                                        Err(e) => log::warn!(
+                                            "[qbz-qt] [GAPLESS] play_next {next_id} failed: {e}"
+                                        ),
+                                    }
                                 }
-                                let player = runtime.core().player();
-                                match player.play_next(data, next_id) {
-                                    Ok(()) => log::info!(
-                                        "[qbz-qt] [GAPLESS] queued track {next_id} for gapless"
-                                    ),
-                                    Err(e) => log::warn!(
-                                        "[qbz-qt] [GAPLESS] play_next {next_id} failed: {e}"
-                                    ),
-                                }
+                            });
+                            if let Some(stale) = gapless_fetch_task.replace(task) {
+                                stale.abort();
                             }
-                        });
-                        if let Some(stale) = gapless_fetch_task.replace(task) {
-                            stale.abort();
-                        }
-                    } else if next.id != track_id && next.is_local {
-                        // Source-owned gapless. `is_local` means "does not use
-                        // Qobuz's tier walk", NOT "has a filesystem path": it
-                        // also covers Plex/Jellyfin/Subsonic streams. Resolve
-                        // the same PlaybackTicket normal playback consumes and
-                        // let the shared exhaustive matcher turn files, bytes,
-                        // DSD and remote streams into `play_next`.
-                        gapless_requested_for = track_id;
-                        let runtime = runtime.clone();
-                        let task = tokio::spawn(async move {
-                            let next_id = next.id;
-                            match crate::audible_qt::queue_gapless_successor(
-                                &runtime, track_id, &next,
-                            )
-                            .await
-                            {
-                                Ok(true) => log::info!(
+                        } else if next.id != track_id && next.is_local {
+                            // Source-owned gapless. `is_local` means "does not use
+                            // Qobuz's tier walk", NOT "has a filesystem path": it
+                            // also covers Plex/Jellyfin/Subsonic streams. Resolve
+                            // the same PlaybackTicket normal playback consumes and
+                            // let the shared exhaustive matcher turn files, bytes,
+                            // DSD and remote streams into `play_next`.
+                            gapless_requested_for = track_id;
+                            let runtime = runtime.clone();
+                            let task = spawn_owner_playback_task(async move {
+                                let Some(_owner_action) =
+                                    begin_owner_action_exact(owner_token).await
+                                else {
+                                    return;
+                                };
+                                let next_id = next.id;
+                                match crate::audible_qt::queue_gapless_successor(
+                                    &runtime, track_id, &next,
+                                )
+                                .await
+                                {
+                                    Ok(true) => log::info!(
                                     "[qbz-qt] [GAPLESS] queued source track {next_id} for gapless"
                                 ),
-                                Ok(false) => log::debug!(
+                                    Ok(false) => log::debug!(
                                     "[qbz-qt] [GAPLESS] source pre-queue {next_id} not applicable"
                                 ),
-                                Err(e) => log::warn!(
-                                    "[qbz-qt] [GAPLESS] source pre-queue {next_id} failed: {e}"
-                                ),
+                                    Err(e) => log::warn!(
+                                        "[qbz-qt] [GAPLESS] source pre-queue {next_id} failed: {e}"
+                                    ),
+                                }
+                            });
+                            if let Some(stale) = gapless_fetch_task.replace(task) {
+                                stale.abort();
                             }
-                        });
-                        if let Some(stale) = gapless_fetch_task.replace(task) {
-                            stale.abort();
                         }
                     }
                 }
@@ -3781,24 +4372,30 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // controller or not connected) and resolves the queue_item_ids —
             // no extra gates.
             report_tick = report_tick.wrapping_add(1);
-            if track_id != 0 {
-                let transition =
-                    track_id != last_reported_track_id || is_playing != last_reported_playing;
-                let periodic = is_playing && report_tick % QCONNECT_REPORT_EVERY_N_TICKS == 0;
+            let report_track_id = qconnect_app::qconnect_report_track_id(&event);
+            if report_track_id != 0 {
+                let transition = report_track_id != last_reported_track_id
+                    || is_playing != last_reported_playing
+                    || event.buffer_state != last_reported_buffer_state;
+                let buffer_active = matches!(
+                    event.buffer_state,
+                    qbz_player::player::PlaybackBufferState::InitialBuffering
+                        | qbz_player::player::PlaybackBufferState::Underrun
+                );
+                let periodic = (is_playing || buffer_active)
+                    && report_tick % QCONNECT_REPORT_EVERY_N_TICKS == 0;
                 if transition || periodic {
                     if let Some(svc) = crate::qconnect_qt::service() {
-                        let playing_state = if is_playing {
-                            qconnect_app::renderer::PLAYING_STATE_PLAYING
-                        } else {
-                            qconnect_app::renderer::PLAYING_STATE_PAUSED
-                        };
+                        let playing_state =
+                            qconnect_app::renderer_playing_state(is_playing, event.buffer_state);
                         let position_ms = (position as i64) * 1000;
                         let duration_ms = (duration as i64) * 1000;
                         svc.report_playback_state(
                             playing_state,
                             position_ms,
                             duration_ms,
-                            track_id,
+                            report_track_id,
+                            event.buffer_state,
                         )
                         .await;
                         // On a track change, also reconcile the session queue:
@@ -3809,8 +4406,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                             svc.sync_local_queue_if_changed().await;
                         }
                     }
-                    last_reported_track_id = track_id;
+                    last_reported_track_id = report_track_id;
                     last_reported_playing = is_playing;
+                    last_reported_buffer_state = event.buffer_state;
                 }
             }
 
@@ -3828,16 +4426,17 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             let explicit_recovery_edge = event.engine_empty_generation
                 != seen_engine_empty_generation
                 || event.source_failure_generation != seen_source_failure_generation;
-            let queue_track_id = if explicit_recovery_edge || sampled_track_end {
-                runtime
-                    .core()
-                    .current_track()
-                    .await
-                    .map(|t| t.id)
-                    .unwrap_or(0)
-            } else {
-                0
-            };
+            let queue_track_id =
+                if owner_snapshot.is_some() && (explicit_recovery_edge || sampled_track_end) {
+                    runtime
+                        .core()
+                        .current_track()
+                        .await
+                        .map(|t| t.id)
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
             let recovery_cause = playback_recovery_cause(
                 &event,
                 queue_track_id,
@@ -3852,21 +4451,30 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             seen_source_failure_generation = event.source_failure_generation;
 
             if let Some(recovery_cause) = recovery_cause {
+                let Some(owner_snapshot) = owner_snapshot.as_ref() else {
+                    // The stamped delegated engine owns guest advancement.
+                    // Consume the sampled edge locally without logging,
+                    // mutating the cursor, or retrying it on every poll tick.
+                    seen_position = position;
+                    was_playing = is_playing;
+                    last_owner_token = observed_owner_token;
+                    continue;
+                };
                 match recovery_cause {
                     PlaybackRecoveryCause::SourceFailure => {
                         log::warn!(
                             "[qbz-qt] recovery: source retries exhausted for track {queue_track_id}; continuing the queue"
                         );
-                        crate::listen_log_qt::on_error().await;
+                        crate::listen_log_qt::on_error(owner_snapshot).await;
                     }
                     PlaybackRecoveryCause::EngineEmpty => {
                         log::info!(
                             "[qbz-qt] recovery: engine empty for track {queue_track_id} with no gapless successor; continuing the queue"
                         );
-                        crate::listen_log_qt::on_natural_end().await;
+                        crate::listen_log_qt::on_natural_end(owner_snapshot).await;
                     }
                     PlaybackRecoveryCause::SampledNaturalEnd => {
-                        crate::listen_log_qt::on_natural_end().await;
+                        crate::listen_log_qt::on_natural_end(owner_snapshot).await;
                     }
                 }
 
@@ -3928,9 +4536,14 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                         // SIBLING OF THE BLOCK AT THE LOOP TAIL: a push in only
                         // one of the two is the silent half-port.
                         crate::media_controls_qt::push_playback_state(is_playing, position);
-                        crate::integrations_qt::discord_push(&runtime);
+                        crate::integrations_qt::discord_push_observed(
+                            &runtime,
+                            owner_snapshot.token(),
+                            track_id,
+                        );
                     }
                     was_playing = is_playing;
+                    last_owner_token = observed_owner_token;
                     continue;
                 }
                 last_track_id = 0;
@@ -3957,7 +4570,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // `% 5` — tick-count throttles do not translate 1:1.
             save_pos_tick = save_pos_tick.wrapping_add(1);
             if is_playing && track_id != 0 && save_pos_tick % 5 == 0 {
-                qbz_app::session_persist::save_position(position);
+                if owner_snapshot.is_some() {
+                    qbz_app::session_persist::save_position(position);
+                }
             }
             // Reflect play/pause into the tray tooltip on the TRANSITION only,
             // so the "Middle-click to pause/play" hint stays correct without
@@ -3972,28 +4587,38 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 // sibling in the stop-after arm above. Same order as the
                 // reference: tray, MPRIS, Discord.
                 crate::media_controls_qt::push_playback_state(is_playing, position);
-                crate::integrations_qt::discord_push(&runtime);
+                if let Some(owner_snapshot) = owner_snapshot.as_ref() {
+                    crate::integrations_qt::discord_push_observed(
+                        &runtime,
+                        owner_snapshot.token(),
+                        track_id,
+                    );
+                }
             }
             was_playing = is_playing;
+            last_owner_token = observed_owner_token;
         }
     });
 }
 
 // ---------------------------------------------------------------------------
-// Tests (pure functions only — no Qt, no engine, no session)
+// Tests (no Qt, engine, audio device or session)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_queue_with, gapless_edge_matches, playback_recovery_cause, prefetch_track_ids,
-        quality_badge_from, reconcile_device_cap, should_stream_gapless_successor,
-        stream_error_text, xorshift_shuffle_seeded, PlaybackRecoveryCause, PrefetchCandidate,
-        PrefetchTrackEdge,
+        cancel_owner_playback_tasks, capture_owner_scoped_snapshot, filter_queue_with,
+        gapless_edge_matches, owner_generation_changed, playback_recovery_cause,
+        prefetch_track_ids, quality_badge_from, reconcile_device_cap,
+        should_stream_gapless_successor, spawn_owner_playback_task, stream_error_text,
+        xorshift_shuffle_seeded, OwnerActionObservation, OwnerActionToken, OwnerScopedSnapshot,
+        PlaybackRecoveryCause, PrefetchCandidate, PrefetchTrackEdge,
     };
     use qbz_models::{Quality, QualityLimit, QueueTrack};
     use qbz_player::PlaybackEvent;
     use qbz_source::QualityHint;
+    use std::sync::Arc;
 
     fn remote(id: u64) -> PrefetchCandidate {
         PrefetchCandidate {
@@ -4023,11 +4648,81 @@ mod tests {
             gapless_next_track_id: 0,
             bit_perfect_mode: None,
             buffer_progress: None,
+            buffer_state: qbz_player::player::PlaybackBufferState::Idle,
+            buffer_track_id: 0,
             engine_empty_generation: 0,
             engine_empty_track_id: 0,
             source_failure_generation: 0,
             source_failure_track_id: 0,
         }
+    }
+
+    #[test]
+    fn owner_observation_precedes_snapshot_and_fence_does_not_consume_it() {
+        use std::cell::RefCell;
+
+        let order = RefCell::new(Vec::new());
+        let captured = capture_owner_scoped_snapshot(
+            || {
+                order.borrow_mut().push("observe");
+                OwnerActionObservation::Delegated
+            },
+            || {
+                order.borrow_mut().push("read");
+                41_u64
+            },
+        );
+        assert!(matches!(
+            captured,
+            OwnerScopedSnapshot::Captured {
+                owner_action: None,
+                snapshot: 41
+            }
+        ));
+        assert_eq!(*order.borrow(), ["observe", "read"]);
+
+        order.borrow_mut().clear();
+        let fenced = capture_owner_scoped_snapshot(
+            || {
+                order.borrow_mut().push("observe");
+                OwnerActionObservation::Fenced
+            },
+            || {
+                order.borrow_mut().push("read");
+                99_u64
+            },
+        );
+        assert!(matches!(fenced, OwnerScopedSnapshot::Fenced));
+        assert_eq!(*order.borrow(), ["observe"]);
+
+        let first = OwnerActionToken::BeforeService;
+        assert!(owner_generation_changed(Some(first), None));
+        assert!(!owner_generation_changed(Some(first), Some(first)));
+        assert!(!owner_generation_changed(None, Some(first)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn owner_background_task_is_cancelable_before_it_can_start_io() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        cancel_owner_playback_tasks();
+        let ran = Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&ran);
+        let task = spawn_owner_playback_task(async move {
+            observed.store(true, Ordering::Release);
+        });
+        cancel_owner_playback_tasks();
+        let _ = task.await;
+        assert!(!ran.load(Ordering::Acquire));
+
+        let completed = Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&completed);
+        spawn_owner_playback_task(async move {
+            observed.store(true, Ordering::Release);
+        })
+        .await
+        .unwrap();
+        assert!(completed.load(Ordering::Acquire));
     }
 
     #[test]

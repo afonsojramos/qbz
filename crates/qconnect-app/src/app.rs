@@ -1,17 +1,19 @@
 use std::{
-    sync::Arc,
+    collections::VecDeque,
+    sync::{Arc, Mutex as StdMutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use qconnect_core::{
     apply_event, apply_renderer_command, telemetry, PendingCorrelation, PendingQueueAction,
-    QConnectQueueState, QConnectRendererState, QueueEvent, QueueItem, QueueVersion, RendererCommand,
+    QConnectQueueState, QConnectRendererState, QueueEvent, QueueItem, QueueVersion,
+    RendererCommand,
 };
 use qconnect_protocol::{
     build_qconnect_outbound_envelope, build_qconnect_renderer_outbound_envelope,
     decode_playback_error, parse_inbound_event, InboundEnvelope, QueueCommand, QueueCommandType,
-    QueueEventType, QueueServerEvent, RendererCommandType, RendererReport, RendererReportType,
-    RendererServerCommand,
+    QueueEventType, QueueServerEvent, RendererBufferState, RendererCommandType, RendererReport,
+    RendererReportType, RendererServerCommand,
 };
 use qconnect_transport_ws::{TransportEvent, WsTransport, WsTransportConfig};
 use serde_json::Value;
@@ -19,18 +21,21 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use async_trait::async_trait;
+use qbz_player::player::PlaybackBufferState;
 
+use crate::renderer::PLAYING_STATE_STOPPED;
 use crate::session::{
     compute_connection_state, deferred_join_reason, is_local_renderer_active,
     is_peer_renderer_active, normalize_active_renderer_id, refresh_local_renderer_id,
     should_arm_renderer_watchdog, should_reask_queue_state, LocalIdentity,
     QconnectFileAudioQualitySnapshot, QconnectLifecycleState, QconnectRendererInfo, RendererStatus,
-    ServerActiveState, PLAYING_STATE_PLAYING, PLAYING_STATE_UNKNOWN,
-    QCONNECT_RENDERER_LOST_TIMEOUT_MS,
+    ServerActiveState, JOIN_SESSION_REASON_CONTROLLER_REQUEST, PLAYING_STATE_PLAYING,
+    PLAYING_STATE_UNKNOWN, QCONNECT_RENDERER_LOST_TIMEOUT_MS,
 };
 use crate::{
-    ensure_session_renderer_state, sync_session_renderer_active_flags, QconnectAppError,
-    QconnectAppEvent, QconnectEventSink, QconnectRemoteSyncState, QconnectRuntimeState,
+    build_renderer_playback_report, ensure_session_renderer_state,
+    sync_session_renderer_active_flags, QconnectAppError, QconnectAppEvent, QconnectEventSink,
+    QconnectRemoteSyncState, QconnectRuntimeState, RendererPlaybackSnapshot,
 };
 
 pub struct QconnectApp<TTransport, TSink>
@@ -50,6 +55,17 @@ where
     /// (slice 6) both lock THIS one, exactly as they share it today via the Tauri
     /// adapter. See `MASTER-qconnect-to-slint-plan.md` §0 (one Mutex, not two).
     sync: Arc<Mutex<QconnectRemoteSyncState>>,
+    /// Timers belong to this app instance, not to the process runtime. Keeping
+    /// their handles here lets disconnect/retirement abort them synchronously
+    /// before an old sink (and its renderer engine/stream feeder) can outlive
+    /// the authority that created it.
+    background_tasks: Arc<StdMutex<BackgroundTasks>>,
+}
+
+#[derive(Default)]
+struct BackgroundTasks {
+    accepting: bool,
+    handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl<TTransport, TSink> Clone for QconnectApp<TTransport, TSink>
@@ -63,6 +79,7 @@ where
             sink: Arc::clone(&self.sink),
             state: Arc::clone(&self.state),
             sync: Arc::clone(&self.sync),
+            background_tasks: Arc::clone(&self.background_tasks),
         }
     }
 }
@@ -88,6 +105,10 @@ where
             sink,
             state: Arc::new(Mutex::new(QconnectRuntimeState::default())),
             sync,
+            background_tasks: Arc::new(StdMutex::new(BackgroundTasks {
+                accepting: true,
+                handles: Vec::new(),
+            })),
         }
     }
 
@@ -108,6 +129,7 @@ where
 
     pub async fn connect(&self, config: WsTransportConfig) -> Result<(), QconnectAppError> {
         self.transport.connect(config).await?;
+        self.set_background_tasks_accepting(true);
         {
             let mut state = self.state.lock().await;
             state.transport_connected = true;
@@ -119,7 +141,8 @@ where
     }
 
     pub async fn disconnect(&self) -> Result<(), QconnectAppError> {
-        self.transport.disconnect().await?;
+        self.abort_background_tasks().await;
+        let transport_result = self.transport.disconnect().await;
         {
             let mut state = self.state.lock().await;
             state.transport_connected = false;
@@ -128,7 +151,7 @@ where
         self.sink
             .on_event(QconnectAppEvent::TransportDisconnected)
             .await;
-        Ok(())
+        transport_result.map_err(Into::into)
     }
 
     pub async fn queue_state_snapshot(&self) -> QConnectQueueState {
@@ -213,6 +236,41 @@ where
         report: RendererReport,
     ) -> Result<(), QconnectAppError> {
         self.send_renderer_report(report).await
+    }
+
+    /// Send the exact controller-requested renderer JoinSession report used by
+    /// delegated handoff and reconnect. Hosts supply only their serialized
+    /// device-info projection; queue version and initial wire state stay shared
+    /// so Qt and qbzd cannot drift independently.
+    pub async fn send_delegated_join(
+        &self,
+        session_id: &str,
+        become_active: bool,
+        device_info: Value,
+    ) -> Result<(), QconnectAppError> {
+        let queue_version = self.queue_state_snapshot().await.version;
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrJoinSession,
+            Uuid::new_v4().to_string(),
+            queue_version,
+            serde_json::json!({
+                "session_uuid": session_id,
+                "device_info": device_info,
+                "is_active": become_active,
+                "reason": JOIN_SESSION_REASON_CONTROLLER_REQUEST,
+                "initial_state": {
+                    "playing_state": PLAYING_STATE_STOPPED,
+                    "buffer_state": RendererBufferState::Ok.as_i32(),
+                    "current_position": 0,
+                    "duration": 0,
+                    "queue_version": {
+                        "major": queue_version.major,
+                        "minor": queue_version.minor,
+                    }
+                }
+            }),
+        );
+        self.send_renderer_report_command(report).await
     }
 
     /// Emit a RndrSrvrFileAudioQualityChanged report describing the decoded file
@@ -571,9 +629,10 @@ where
 
     fn spawn_pending_timeout_watch(&self, action_uuid: String) {
         let app = self.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             app.watch_pending_action_timeout(action_uuid).await;
         });
+        self.own_background_task(handle);
     }
 
     async fn watch_pending_action_timeout(&self, action_uuid: String) {
@@ -669,22 +728,22 @@ where
                         queue_version_ref.major,
                         queue_version_ref.minor
                     );
-                    let report = RendererReport::new(
-                        RendererReportType::RndrSrvrStateUpdated,
+                    let buffer_state = if renderer.playing_state == Some(PLAYING_STATE_PLAYING) {
+                        PlaybackBufferState::InitialBuffering
+                    } else {
+                        PlaybackBufferState::Ready
+                    };
+                    let report = build_renderer_playback_report(
                         self.next_action_uuid(),
                         queue_version_ref,
-                        serde_json::json!({
-                            "playing_state": renderer.playing_state,
-                            "buffer_state": infer_buffer_state(renderer.playing_state),
-                            "current_position": renderer.current_position_ms,
-                            "duration": Option::<u64>::None,
-                            "queue_version": {
-                                "major": queue_version_ref.major,
-                                "minor": queue_version_ref.minor
-                            },
-                            "current_queue_item_id": Option::<i32>::None,
-                            "next_queue_item_id": Option::<i32>::None
-                        }),
+                        RendererPlaybackSnapshot {
+                            playing_state: renderer.playing_state.unwrap_or(PLAYING_STATE_UNKNOWN),
+                            buffer_state,
+                            position_ms: renderer.current_position_ms.map(|value| value as i64),
+                            duration_ms: None,
+                            current_queue_item_id: None,
+                            next_queue_item_id: None,
+                        },
                     );
                     self.send_renderer_report(report).await?;
                 } else {
@@ -744,15 +803,6 @@ where
     }
 }
 
-fn infer_buffer_state(playing_state: Option<i32>) -> Option<i32> {
-    match playing_state {
-        Some(2) | Some(3) => Some(2),
-        Some(1) => Some(1),
-        Some(value) => Some(value),
-        None => None,
-    }
-}
-
 /// BLOCKING OPEN QUESTION: the Qobuz `queue_hash` (field #100) algorithm is
 /// undocumented. Until it is verified, this returns `None`, which keeps
 /// `queue_hashes_diverge` inert so it can NOT fire spurious resyncs. Flipping
@@ -795,7 +845,10 @@ fn map_server_event(event: &QueueServerEvent, current: &QConnectQueueState) -> Q
                 next.shuffle_order = if !parsed_shuffle.is_empty() {
                     Some(parsed_shuffle)
                 } else {
-                    current.shuffle_order.clone()
+                    // A QueueState is an authoritative snapshot. Reusing an
+                    // older order when the field is absent would preserve a
+                    // QBZ-only permutation across a server resync.
+                    None
                 };
             } else {
                 next.shuffle_order = None;
@@ -1000,16 +1053,13 @@ fn parse_u64(payload: &Value, field: &str) -> Option<u64> {
 /// Parse a JSON byte array (e.g. the server `queue_hash` field #100) into bytes.
 /// Returns `None` when absent/null so an omitted hash does not clobber state.
 fn parse_bytes(payload: &Value, field: &str) -> Option<Vec<u8>> {
-    payload
-        .get(field)
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(value_as_u64)
-                .filter_map(|value| u8::try_from(value).ok())
-                .collect()
-        })
+    payload.get(field).and_then(Value::as_array).map(|entries| {
+        entries
+            .iter()
+            .filter_map(value_as_u64)
+            .filter_map(|value| u8::try_from(value).ok())
+            .collect()
+    })
 }
 
 fn parse_bool(payload: &Value, field: &str, default: bool) -> bool {
@@ -1100,9 +1150,7 @@ fn session_management_event_completes_pending_action(
         return true;
     }
 
-    if pending.is_set_volume_action
-        && matches!(event_type, QueueEventType::SrvrCtrlVolumeChanged)
-    {
+    if pending.is_set_volume_action && matches!(event_type, QueueEventType::SrvrCtrlVolumeChanged) {
         // Volume changes come back as session-management events without a
         // stable action_uuid ack. Treat the first volume-changed echo as the
         // completion signal so a rapid volume drag is not blocked behind the
@@ -1384,8 +1432,7 @@ where
                 remote_projection_renderer_id = Some(renderer_id as i32);
                 sync_local_playback = true;
 
-                let is_active_peer = state.session.active_renderer_id
-                    == Some(renderer_id as i32)
+                let is_active_peer = state.session.active_renderer_id == Some(renderer_id as i32)
                     && is_peer_renderer_active(&state.session)
                     && renderer_id != -1;
 
@@ -1488,9 +1535,48 @@ where
     /// `watch_pending_action_timeout`; relocated from the Tauri sink (slice 2+4).
     pub fn arm_renderer_watchdog(&self, renderer_id: i32, generation: u64) {
         let app = self.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             app.run_renderer_watchdog(renderer_id, generation).await;
         });
+        self.own_background_task(handle);
+    }
+
+    fn own_background_task(&self, handle: tokio::task::JoinHandle<()>) {
+        let mut tasks = self
+            .background_tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !tasks.accepting {
+            handle.abort();
+            return;
+        }
+        tasks.handles.retain(|task| !task.is_finished());
+        tasks.handles.push(handle);
+    }
+
+    fn set_background_tasks_accepting(&self, accepting: bool) {
+        let mut tasks = self
+            .background_tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        tasks.accepting = accepting;
+    }
+
+    async fn abort_background_tasks(&self) {
+        let handles = {
+            let mut tasks = self
+                .background_tasks
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            tasks.accepting = false;
+            std::mem::take(&mut tasks.handles)
+        };
+        for handle in &handles {
+            handle.abort();
+        }
+        for handle in handles {
+            let _ = handle.await;
+        }
     }
 
     async fn run_renderer_watchdog(&self, renderer_id: i32, generation: u64) {
@@ -1592,9 +1678,8 @@ where
         // raw parse would classify -1 as `Some(-1)` and fall into the `Some(_)`
         // peer-active arm — suppressing the idle auto-take. Filtering `>= 0` maps
         // -1 (and any negative sentinel) to None, the genuine "session idle" state.
-        let incoming_active = normalize_active_renderer_id(
-            payload.get("active_renderer_id").and_then(Value::as_i64),
-        );
+        let incoming_active =
+            normalize_active_renderer_id(payload.get("active_renderer_id").and_then(Value::as_i64));
         let server = match incoming_active {
             None => ServerActiveState::None,
             Some(id) if Some(id) == local_id => ServerActiveState::Me,
@@ -1737,22 +1822,6 @@ pub trait SessionLoopHost: Send + Sync {
     async fn on_loop_error(&self, message: String);
 }
 
-/// Hex preview of up to `max_bytes` bytes for diagnostic logging. Mirrors the
-/// Tauri adapter's `hex_preview` (relocated with the loop, slice 5).
-fn hex_preview(data: &[u8], max_bytes: usize) -> String {
-    let take = data.len().min(max_bytes);
-    let hex: String = data[..take]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join("");
-    if data.len() > max_bytes {
-        format!("{hex}...({}B total)", data.len())
-    } else {
-        hex
-    }
-}
-
 impl<TTransport, TSink> QconnectApp<TTransport, TSink>
 where
     TTransport: WsTransport + 'static,
@@ -1768,8 +1837,31 @@ where
     pub async fn run_session_loop(
         &self,
         host: Arc<dyn SessionLoopHost>,
+        transport_rx: tokio::sync::broadcast::Receiver<TransportEvent>,
+        idle_retry_active: bool,
+    ) {
+        self.run_session_loop_with_prefetched(
+            host,
+            transport_rx,
+            idle_retry_active,
+            VecDeque::new(),
+        )
+        .await;
+    }
+
+    /// Run the shared transport loop after draining events that this exact
+    /// receiver already consumed during a transactional preflight.
+    ///
+    /// `prefetched` is processed once, in FIFO order, before the receiver is
+    /// polled again. Callers must move (not copy) consumed events into this
+    /// queue; the receiver then resumes at its existing cursor, so the handoff
+    /// has neither a loss window nor a replay duplicate.
+    pub async fn run_session_loop_with_prefetched(
+        &self,
+        host: Arc<dyn SessionLoopHost>,
         mut transport_rx: tokio::sync::broadcast::Receiver<TransportEvent>,
         idle_retry_active: bool,
+        mut prefetched: VecDeque<TransportEvent>,
     ) {
         // NOTE: `transport_rx` is subscribed by the adapter SYNCHRONOUSLY before
         // this task is spawned (and before any further await), so the receiver is
@@ -1795,7 +1887,11 @@ where
         // until the session_uuid is confirmed. Reset on disconnect.
         let mut lagged_reask_attempts: u32 = 0;
         loop {
-            match transport_rx.recv().await {
+            let next_event = match prefetched.pop_front() {
+                Some(event) => Ok(event),
+                None => transport_rx.recv().await,
+            };
+            match next_event {
                 Ok(event) => {
                     // P1-3: on every SESSION_STATE, capture our prior active/playing
                     // state + classify the server's active renderer BEFORE the sink
@@ -1804,8 +1900,10 @@ where
                     let mut takeover_input: Option<SessionStateTakeoverInput> = None;
                     if let TransportEvent::InboundQueueServerEvent(ref evt) = event {
                         if evt.message_type() == "MESSAGE_TYPE_SRVR_CTRL_SESSION_STATE" {
-                            takeover_input =
-                                Some(self.capture_session_state_takeover_input(&evt.payload).await);
+                            takeover_input = Some(
+                                self.capture_session_state_takeover_input(&evt.payload)
+                                    .await,
+                            );
                             if !renderer_joined {
                                 if let Some(session_uuid) =
                                     evt.payload.get("session_uuid").and_then(|v| v.as_str())
@@ -1817,7 +1915,9 @@ where
                                     )
                                     .await;
                                 } else {
-                                    log::warn!("[QConnect] SESSION_STATE received but no session_uuid in payload: {}", evt.payload);
+                                    log::warn!(
+                                        "[QConnect] SESSION_STATE received without session_uuid"
+                                    );
                                 }
                             }
                         }
@@ -1873,9 +1973,10 @@ where
                         }
                         TransportEvent::InboundQueueServerEvent(evt) => {
                             log::debug!(
-                                "[QConnect] <-- Inbound queue event: {} payload={}",
+                                "[QConnect] <-- Inbound queue event: {} tracks={} autoplay_tracks={}",
                                 evt.message_type(),
-                                evt.payload
+                                evt.payload.get("tracks").and_then(|value| value.as_array()).map_or(0, Vec::len),
+                                evt.payload.get("autoplay_tracks").and_then(|value| value.as_array()).map_or(0, Vec::len),
                             );
                             self.sink
                                 .on_event(QconnectAppEvent::Diagnostic {
@@ -1895,9 +1996,8 @@ where
                         }
                         TransportEvent::InboundRendererServerCommand(cmd) => {
                             log::debug!(
-                                "[QConnect] <-- Inbound renderer command: {} payload={}",
-                                cmd.message_type(),
-                                cmd.payload
+                                "[QConnect] <-- Inbound renderer command: {}",
+                                cmd.message_type()
                             );
                         }
                         TransportEvent::InboundFrameDecoded {
@@ -1914,7 +2014,11 @@ where
                             cloud_message_type,
                             payload,
                         } => {
-                            log::debug!("[QConnect/Transport] <-- Payload bytes: cloud_type={} len={} hex={}", cloud_message_type, payload.len(), hex_preview(payload, 64));
+                            log::debug!(
+                                "[QConnect/Transport] <-- Payload bytes: cloud_type={} len={}",
+                                cloud_message_type,
+                                payload.len()
+                            );
                         }
                         TransportEvent::OutboundSent {
                             message_type,
@@ -1933,16 +2037,10 @@ where
                                 message
                             );
                         }
-                        TransportEvent::CloudError {
-                            msg_id,
-                            code,
-                            descr,
-                        } => {
+                        TransportEvent::CloudError { msg_id, code } => {
                             log::warn!(
-                                "[QConnect/Transport] Cloud rejected session: msg_id={} code={} descr={:?} (issue #358)",
-                                msg_id,
-                                code,
-                                descr
+                                "[QConnect/Transport] Cloud rejected session: msg_id={} code={} (issue #358)",
+                                msg_id, code
                             );
                             self.sink
                                 .on_event(QconnectAppEvent::Diagnostic {
@@ -1951,7 +2049,7 @@ where
                                     payload: serde_json::json!({
                                         "msg_id": msg_id,
                                         "code": code,
-                                        "descr": descr,
+                                        "category": "cloud-rejected",
                                     }),
                                 })
                                 .await;
@@ -1963,7 +2061,8 @@ where
                             log::info!(
                                 "[QConnect/Transport] Session established — backoff counters reset"
                             );
-                            host.update_lifecycle(QconnectLifecycleState::Connected).await;
+                            host.update_lifecycle(QconnectLifecycleState::Connected)
+                                .await;
                         }
                         TransportEvent::MaxReconnectAttemptsExceeded {
                             attempts,
@@ -2045,8 +2144,7 @@ where
                                     // re-claim, or the idle auto-take when our
                                     // ADD_RENDERER already landed).
                                     auto_take_attempted = true;
-                                    if let Err(err) =
-                                        self.send_set_active_renderer(local_id).await
+                                    if let Err(err) = self.send_set_active_renderer(local_id).await
                                     {
                                         log::warn!(
                                             "[QConnect] takeover set_active_renderer failed: {err}"
@@ -2124,20 +2222,23 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use qconnect_core::QueueVersion;
+    use qconnect_core::{QueueEvent, QueueVersion};
     use qconnect_transport_ws::InMemoryWsTransport;
 
-    use crate::session::{LocalIdentity, QconnectRendererInfo, ServerActiveState};
+    use crate::session::{
+        LocalIdentity, QconnectLifecycleState, QconnectRendererInfo, ServerActiveState,
+    };
     use crate::QconnectRemoteSyncState;
     use serde_json::json;
     use tokio::sync::Mutex;
 
-    use crate::{QconnectAppEvent, QconnectEventSink};
+    use crate::{QconnectAppEvent, QconnectEventSink, JOIN_SESSION_REASON_CONTROLLER_REQUEST};
 
-    use super::{queue_hashes_diverge, QconnectApp};
+    use super::{map_server_event, queue_hashes_diverge, QconnectApp, SessionLoopHost};
     use qconnect_core::QConnectQueueState;
     use qconnect_protocol::{
         QueueCommandType, QueueEventType, QueueServerEvent, RendererCommandType,
@@ -2163,12 +2264,38 @@ mod tests {
         }
     }
 
-    fn test_config() -> WsTransportConfig {
-        WsTransportConfig {
-            endpoint_url: "wss://example.invalid/ws".to_string(),
-            subscribe_channels: vec![vec![1, 2, 3]],
-            ..Default::default()
+    #[derive(Default)]
+    struct TestSessionLoopHost {
+        lifecycles: Mutex<Vec<QconnectLifecycleState>>,
+    }
+
+    #[async_trait]
+    impl SessionLoopHost for TestSessionLoopHost {
+        async fn update_lifecycle(&self, state: QconnectLifecycleState) {
+            self.lifecycles.lock().await.push(state);
         }
+
+        async fn bootstrap_after_reconnect(&self) {}
+
+        async fn deferred_renderer_join(&self, _session_uuid: String, _reason: i32) {}
+
+        async fn on_reconnect_exhausted(
+            &self,
+            _attempts: u32,
+            _last_reason: String,
+            _idle_retry_active: bool,
+        ) -> bool {
+            true
+        }
+
+        async fn on_loop_error(&self, _message: String) {}
+    }
+
+    fn test_config() -> WsTransportConfig {
+        let mut config = WsTransportConfig::default();
+        config.endpoint_url = "wss://example.invalid/ws".to_string();
+        config.subscribe_channels = vec![vec![1, 2, 3]];
+        config
     }
 
     async fn build_connected_app() -> (
@@ -2187,6 +2314,106 @@ mod tests {
         let events_rx = app.subscribe_transport_events();
         app.connect(test_config()).await.expect("connect");
         (app, sink, transport, events_rx)
+    }
+
+    #[tokio::test]
+    async fn delegated_join_report_owns_shared_initial_state_and_queue_version() {
+        let (app, _sink, transport, _events_rx) = build_connected_app().await;
+        {
+            let state = app.state_handle();
+            state.lock().await.queue.version = QueueVersion::new(7, 3);
+        }
+
+        let session_id = "98f0c227-767c-4a4f-bb1c-69fccb4cf6d5";
+        app.send_delegated_join(
+            session_id,
+            true,
+            json!({
+                "device_uuid": "13d40c34-df5d-4eb5-a513-e5145364a800",
+                "capabilities": {"max_audio_quality": 4}
+            }),
+        )
+        .await
+        .expect("delegated join");
+
+        let sent = transport.sent_messages().await;
+        assert_eq!(sent.len(), 1);
+        let envelope = &sent[0];
+        assert_eq!(envelope.message_type, "MESSAGE_TYPE_RNDR_SRVR_JOIN_SESSION");
+        assert_eq!(envelope.queue_version_ref, QueueVersion::new(7, 3));
+        assert_eq!(envelope.payload["session_uuid"], session_id);
+        assert_eq!(envelope.payload["is_active"], true);
+        assert_eq!(
+            envelope.payload["reason"],
+            JOIN_SESSION_REASON_CONTROLLER_REQUEST
+        );
+        assert_eq!(envelope.payload["initial_state"]["playing_state"], 1);
+        assert_eq!(envelope.payload["initial_state"]["buffer_state"], 2);
+        assert_eq!(
+            envelope.payload["initial_state"]["queue_version"],
+            json!({"major": 7, "minor": 3})
+        );
+        assert!(envelope.payload_bytes.is_some());
+    }
+
+    #[tokio::test]
+    async fn session_loop_drains_prefetched_events_once_before_live_receiver() {
+        // Build without `app.connect()`: that helper intentionally emits its own
+        // TransportConnected sink event, which is outside the prefetched/live
+        // receiver sequence this test measures.
+        let transport = Arc::new(InMemoryWsTransport::new());
+        let sink = TestSink::default();
+        let app = QconnectApp::new(
+            transport,
+            Arc::new(sink.clone()),
+            Arc::new(Mutex::new(QconnectRemoteSyncState::default())),
+        );
+        let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(8);
+        events_tx
+            .send(qconnect_transport_ws::TransportEvent::Connected)
+            .expect("preflight receiver exists");
+        events_tx
+            .send(qconnect_transport_ws::TransportEvent::SessionEstablished)
+            .expect("preflight receiver exists");
+        let prefetched = VecDeque::from([
+            events_rx.recv().await.expect("prefetched connected event"),
+            events_rx
+                .recv()
+                .await
+                .expect("prefetched established event"),
+        ]);
+        events_tx
+            .send(qconnect_transport_ws::TransportEvent::Disconnected)
+            .expect("live receiver exists");
+        drop(events_tx);
+
+        let host = Arc::new(TestSessionLoopHost::default());
+        let loop_host: Arc<dyn SessionLoopHost> = host.clone();
+        app.run_session_loop_with_prefetched(loop_host, events_rx, false, prefetched)
+            .await;
+
+        assert_eq!(
+            *host.lifecycles.lock().await,
+            vec![
+                QconnectLifecycleState::Connected,
+                QconnectLifecycleState::Reconnecting,
+            ]
+        );
+        let sink_events = sink.snapshot().await;
+        assert_eq!(
+            sink_events
+                .iter()
+                .filter(|event| matches!(event, QconnectAppEvent::TransportConnected))
+                .count(),
+            1
+        );
+        assert_eq!(
+            sink_events
+                .iter()
+                .filter(|event| matches!(event, QconnectAppEvent::TransportDisconnected))
+                .count(),
+            1
+        );
     }
 
     fn renderer_info(renderer_id: i32, device_uuid: &str) -> QconnectRendererInfo {
@@ -2214,7 +2441,10 @@ mod tests {
         let mut state = handle.lock().await;
         state.session.local_renderer_id = Some(1);
         state.session.active_renderer_id = Some(2);
-        state.session.renderers = vec![renderer_info(1, "local-uuid"), renderer_info(2, "peer-uuid")];
+        state.session.renderers = vec![
+            renderer_info(1, "local-uuid"),
+            renderer_info(2, "peer-uuid"),
+        ];
     }
 
     /// SESSION_STATE writes session topology under the sync lock and reports the
@@ -2376,6 +2606,35 @@ mod tests {
         );
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn disconnect_aborts_runtime_owned_watchdog() {
+        let (app, sink, _transport, _rx) = build_connected_app().await;
+        seed_local_and_active_peer(&app).await;
+        let armed = app
+            .apply_session_management_event(
+                "MESSAGE_TYPE_SRVR_CTRL_RENDERER_STATE_UPDATED",
+                &json!({ "renderer_id": 2, "player_state": { "playing_state": 2 } }),
+                &local_identity("local-uuid"),
+            )
+            .await;
+        let (renderer_id, generation) = armed.watchdog_arm.expect("arm");
+        app.arm_renderer_watchdog(renderer_id, generation);
+
+        app.disconnect().await.expect("disconnect");
+        tokio::task::yield_now().await;
+        tokio::time::advance(std::time::Duration::from_millis(12_010)).await;
+        tokio::task::yield_now().await;
+
+        assert!(
+            !sink
+                .snapshot()
+                .await
+                .iter()
+                .any(|event| matches!(event, QconnectAppEvent::RendererUnreachable { .. })),
+            "a retired app watchdog must not retain or publish through its sink"
+        );
+    }
+
     /// ACTIVE_DISCONNECTED(status==2) for the active peer reports the
     /// disconnected renderer; freezing emits RendererDisconnected + UNKNOWN(0).
     #[tokio::test]
@@ -2447,6 +2706,42 @@ mod tests {
         );
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn disconnect_aborts_pending_timeout_and_resync() {
+        let (app, sink, transport, _events_rx) = build_connected_app().await;
+        let command = app
+            .build_queue_command(
+                QueueCommandType::CtrlSrvrQueueAddTracks,
+                json!({"track_ids":[101]}),
+            )
+            .await;
+        app.send_queue_command(command)
+            .await
+            .expect("send queue command");
+        let sent_before_disconnect = transport.sent_messages().await.len();
+
+        app.disconnect().await.expect("disconnect");
+        tokio::task::yield_now().await;
+        tokio::time::advance(std::time::Duration::from_millis(
+            QconnectApp::<InMemoryWsTransport, TestSink>::PENDING_ACTION_TIMEOUT_MS + 10,
+        ))
+        .await;
+        tokio::task::yield_now().await;
+
+        let events = sink.snapshot().await;
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, QconnectAppEvent::PendingActionTimedOut { .. })));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, QconnectAppEvent::QueueResyncTriggered)));
+        assert_eq!(
+            transport.sent_messages().await.len(),
+            sent_before_disconnect,
+            "retired timeout must not send ask-for-state"
+        );
+    }
+
     #[tokio::test]
     async fn concurrent_remote_event_cancels_pending_and_requests_resync() {
         let (app, sink, transport, _events_rx) = build_connected_app().await;
@@ -2488,6 +2783,35 @@ mod tests {
             sent.len() >= 2,
             "expected original command plus ask-for-state resync"
         );
+    }
+
+    #[test]
+    fn authoritative_queue_state_without_indexes_drops_stale_shuffle_order() {
+        let current = QConnectQueueState {
+            shuffle_mode: true,
+            shuffle_order: Some(vec![1, 0]),
+            ..Default::default()
+        };
+        let event = QueueServerEvent {
+            event_type: QueueEventType::SrvrCtrlQueueState,
+            action_uuid: None,
+            queue_version: Some(QueueVersion::new(2, 0)),
+            payload: json!({
+                "tracks": [
+                    {"track_id": 10, "queue_item_id": 100},
+                    {"track_id": 20, "queue_item_id": 200}
+                ],
+                "shuffle_mode": true
+            }),
+        };
+
+        let QueueEvent::QueueStateReplaced { state, .. } = map_server_event(&event, &current)
+        else {
+            panic!("expected queue-state replacement");
+        };
+
+        assert_eq!(state.queue_items.len(), 2);
+        assert_eq!(state.shuffle_order, None);
     }
 
     #[tokio::test]

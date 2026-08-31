@@ -34,8 +34,9 @@ pub enum ApiError {
     /// Qobuz answered 403 Forbidden on an authenticated request. The account is
     /// authenticated but not currently allowed to perform the action (entitlement
     /// not restored after an outage, geo/concurrency limit, or an edge/WAF block).
-    /// The string is a short body preview for diagnostics. Terminal, never a
-    /// per-quality restriction — abort the fallback loop instead of retrying.
+    /// The string contains only a redacted body-presence diagnostic. Terminal,
+    /// never a per-quality restriction — abort the fallback loop instead of
+    /// retrying.
     #[error("Access forbidden by Qobuz (HTTP 403){0}")]
     Forbidden(String),
 

@@ -442,15 +442,7 @@ pub(crate) fn windows_toast_identity_registered() -> bool {
     let mut handle: HKEY = std::ptr::null_mut();
     // SAFETY: `key` is NUL-terminated UTF-16 and outlives the call; `handle` is
     // a valid out-slot, only written on success. Read-only access.
-    let rc = unsafe {
-        RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            key.as_ptr(),
-            0,
-            KEY_READ,
-            &mut handle,
-        )
-    };
+    let rc = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, KEY_READ, &mut handle) };
     if rc != 0 {
         return false;
     }
@@ -1680,7 +1672,10 @@ fn gpu_power_choice() -> (Vec<String>, i32) {
     // Index 0 is Auto; UI positions are independent of Qt's process-local
     // Vulkan indices (which can contain gaps when a CPU adapter is filtered).
     let index = crate::renderer_qt::resolve_saved_gpu()
-        .and_then(|selected| gpus.iter().position(|gpu| gpu.identity == selected.identity))
+        .and_then(|selected| {
+            gpus.iter()
+                .position(|gpu| gpu.identity == selected.identity)
+        })
         .map(|position| position as i32 + 1)
         .unwrap_or(0);
     (opts, index)
@@ -2685,10 +2680,38 @@ pub async fn publish_snapshot() {
 // ---------------------------------------------------------------------------
 
 /// What a change requires of the live player (settings.rs `Apply`).
+#[derive(Clone, Copy)]
 enum Apply {
     None,
     Reload,
     Reinit,
+}
+
+/// Admit one live audio mutation owned by the local settings surface. Some
+/// callers persist before they reach the live-player seam, so the refusal is
+/// explicit about that split instead of pretending to roll back half an audio
+/// settings transaction.
+fn begin_audio_owner_action(
+    action: &str,
+    preference_may_be_saved: bool,
+) -> Option<crate::playback_qt::OwnerActionLease> {
+    match crate::playback_qt::begin_owner_action() {
+        Some(permit) => Some(permit),
+        None => {
+            log::info!("[qbz-qt] audio settings: {action} refused while QConnect owns playback");
+            let message = if preference_may_be_saved {
+                qbz_i18n::t(
+                    "The audio setting was saved but not applied to live playback because QConnect is in control. Try again after playback returns to QBZ.",
+                )
+            } else {
+                qbz_i18n::t(
+                    "QConnect is controlling playback. Return playback to QBZ and try again.",
+                )
+            };
+            crate::toast_qt::info(message);
+            None
+        }
+    }
 }
 
 async fn probe_selected_hardware_volume(
@@ -2918,7 +2941,7 @@ async fn set_alsa_hardware_volume(
     }
 }
 
-fn apply_audio(runtime: &Arc<AppRuntime<LoggingAdapter>>, apply: Apply) {
+fn apply_audio_with_owner(runtime: &Arc<AppRuntime<LoggingAdapter>>, apply: Apply) {
     let reinit = match apply {
         Apply::None => return,
         Apply::Reload => false,
@@ -2949,11 +2972,23 @@ fn apply_audio(runtime: &Arc<AppRuntime<LoggingAdapter>>, apply: Apply) {
     crate::publish_settings();
 }
 
+fn apply_audio(runtime: &Arc<AppRuntime<LoggingAdapter>>, apply: Apply) {
+    if matches!(apply, Apply::None) {
+        return;
+    }
+    let Some(_owner_action) = begin_audio_owner_action("apply live audio settings", true) else {
+        return;
+    };
+    apply_audio_with_owner(runtime, apply);
+}
+
 /// Release the live output and wait for the audio thread to confirm that the
 /// PCM/reservation is gone and any PipeWire sink QBZ suspended is awake.
 /// `Player::release_device` is intentionally blocking because the ack is the
 /// ordering guarantee; keep that wait off Tokio's worker threads.
-async fn release_output_device(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<(), String> {
+async fn release_output_device_with_owner(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+) -> Result<(), String> {
     let player = runtime.core().player();
     tokio::task::spawn_blocking(move || player.release_device())
         .await
@@ -2975,7 +3010,7 @@ fn requires_alsa_direct_unity(audio: &qbz_audio::settings::AudioSettings) -> boo
 /// volume seam does not reconfigure the protected device/backend; the DAC owns
 /// level in this mode. A QConnect peer is deliberately exempt because its
 /// remote volume is the active control.
-pub(crate) async fn maybe_force_bitperfect_volume(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+async fn force_bitperfect_volume_with_owner(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     let audio = match with_audio(|store| store.get_settings()) {
         Ok(audio) => audio,
         Err(error) => {
@@ -3001,11 +3036,23 @@ pub(crate) async fn maybe_force_bitperfect_volume(runtime: &Arc<AppRuntime<Loggi
     crate::now_playing::set_volume(1.0);
 }
 
+pub(crate) async fn maybe_force_bitperfect_volume(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    // Do not reject a delegated session merely for reading a setting whose
+    // active route needs no live correction.
+    if !requires_alsa_direct_unity(&audio_settings()) {
+        return;
+    }
+    let Some(_owner_action) = begin_audio_owner_action("force bit-perfect volume", true) else {
+        return;
+    };
+    force_bitperfect_volume_with_owner(runtime).await;
+}
+
 /// Revalidate a persisted hardware-volume preference after startup or a route
 /// change. A successful probe synchronizes QBZ to the physical mixer before
 /// any stream reinitialization. A failed probe disables the preference and
 /// reloads the player, leaving the protected direct path locked at unity.
-pub(crate) async fn reconcile_alsa_hardware_volume(
+async fn reconcile_alsa_hardware_volume_with_owner(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
 ) -> Option<f32> {
     let audio = match with_audio(|store| store.get_settings()) {
@@ -3049,7 +3096,7 @@ pub(crate) async fn reconcile_alsa_hardware_volume(
             }
             set_hardware_volume_ui_status(Some(device_id), HardwareVolumeUiStatus::Unsupported);
             if audio.alsa_hardware_volume {
-                apply_audio(runtime, Apply::Reinit);
+                apply_audio_with_owner(runtime, Apply::Reinit);
             }
             return None;
         }
@@ -3116,7 +3163,7 @@ pub(crate) async fn reconcile_alsa_hardware_volume(
                     Some(selection.control),
                     HardwareVolumeUiStatus::Unsupported,
                 );
-                apply_audio(runtime, Apply::Reinit);
+                apply_audio_with_owner(runtime, Apply::Reinit);
                 return None;
             };
             let migrated = selection.source != HardwareVolumeSelectionSource::Persisted;
@@ -3137,7 +3184,7 @@ pub(crate) async fn reconcile_alsa_hardware_volume(
                         Some(selection.control),
                         HardwareVolumeUiStatus::Unsupported,
                     );
-                    apply_audio(runtime, Apply::Reinit);
+                    apply_audio_with_owner(runtime, Apply::Reinit);
                     return None;
                 }
             }
@@ -3152,7 +3199,7 @@ pub(crate) async fn reconcile_alsa_hardware_volume(
                 // Legacy `alsa_hardware_volume=true` had no exact identity in
                 // the Player's startup snapshot. Reload the newly migrated map
                 // without reopening the protected PCM route.
-                apply_audio(runtime, Apply::Reload);
+                apply_audio_with_owner(runtime, Apply::Reload);
             } else {
                 publish_snapshot().await;
             }
@@ -3172,7 +3219,7 @@ pub(crate) async fn reconcile_alsa_hardware_volume(
                 None,
                 hardware_volume_choice_status(reason),
             );
-            apply_audio(runtime, Apply::Reinit);
+            apply_audio_with_owner(runtime, Apply::Reinit);
             None
         }
         HardwareVolumeDecision::Unsupported { reason, .. } => {
@@ -3189,10 +3236,19 @@ pub(crate) async fn reconcile_alsa_hardware_volume(
                 None,
                 hardware_volume_unsupported_status(&reason),
             );
-            apply_audio(runtime, Apply::Reinit);
+            apply_audio_with_owner(runtime, Apply::Reinit);
             None
         }
     }
+}
+
+pub(crate) async fn reconcile_alsa_hardware_volume(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+) -> Option<f32> {
+    // Reconciliation can await a mixer probe, seed the Player's live volume and
+    // reinitialize its output. One permit covers that whole sequence.
+    let _owner_action = begin_audio_owner_action("reconcile hardware volume", true)?;
+    reconcile_alsa_hardware_volume_with_owner(runtime).await
 }
 
 // ---------------------------------------------------------------------------
@@ -3201,6 +3257,18 @@ pub(crate) async fn reconcile_alsa_hardware_volume(
 // ---------------------------------------------------------------------------
 
 pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str, value: bool) {
+    // Hardware-volume toggles can await a physical mixer write, seed the live
+    // Player and reinitialize its output. Admit before the first persistence or
+    // cascade so a rejected delegated action is a complete no-op.
+    let _hardware_volume_owner_action = if key == "alsa-hardware-volume" {
+        let Some(owner_action) = begin_audio_owner_action("change hardware volume", false) else {
+            return;
+        };
+        Some(owner_action)
+    } else {
+        None
+    };
+
     // Cross-setting cascades (settings.rs) — force dependents off first.
     let mut cascaded = false;
     match key {
@@ -3526,9 +3594,11 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
             if key == "limit-quality-to-device" {
                 refresh_device_cap(runtime).await;
             }
-            apply_audio(runtime, apply);
             if key == "alsa-hardware-volume" {
-                maybe_force_bitperfect_volume(runtime).await;
+                apply_audio_with_owner(runtime, apply);
+                force_bitperfect_volume_with_owner(runtime).await;
+            } else {
+                apply_audio(runtime, apply);
             }
             publish_snapshot().await;
         }
@@ -3537,8 +3607,8 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
             if key == "alsa-hardware-volume" {
                 // The failed enable path persisted `false`; push that state to
                 // the player/document and explain why the toggle bounced back.
-                apply_audio(runtime, Apply::Reinit);
-                maybe_force_bitperfect_volume(runtime).await;
+                apply_audio_with_owner(runtime, Apply::Reinit);
+                force_bitperfect_volume_with_owner(runtime).await;
                 publish_snapshot().await;
                 crate::toast_qt::error(qbz_i18n::t(
                     "This ALSA device has no compatible hardware volume control. Direct playback remains fixed at 100%.",
@@ -3563,6 +3633,12 @@ async fn select_alsa_hardware_volume_control(
         log::warn!("[qbz-qt] ignored mixer selection outside ALSA Direct");
         return;
     }
+    // Selection validation can write a mixer control and seed live volume.
+    // Refuse before the async probe so it cannot straddle a handoff.
+    let Some(_owner_action) = begin_audio_owner_action("select hardware volume control", true)
+    else {
+        return;
+    };
     let device_id = audio
         .output_device
         .clone()
@@ -3592,7 +3668,7 @@ async fn select_alsa_hardware_volume_control(
             log::warn!("[qbz-qt] ALSA mixer revalidation failed: {error}");
             let _ = with_audio(|store| store.set_alsa_hardware_volume(false));
             set_hardware_volume_ui_status(Some(device_id), HardwareVolumeUiStatus::Unsupported);
-            apply_audio(runtime, Apply::Reinit);
+            apply_audio_with_owner(runtime, Apply::Reinit);
             publish_snapshot().await;
             return;
         }
@@ -3613,7 +3689,7 @@ async fn select_alsa_hardware_volume_control(
         );
         let _ = with_audio(|store| store.set_alsa_hardware_volume(false));
         set_hardware_volume_ui_probe(device_id, &probe, None, HardwareVolumeUiStatus::Stale);
-        apply_audio(runtime, Apply::Reinit);
+        apply_audio_with_owner(runtime, Apply::Reinit);
         publish_snapshot().await;
         return;
     };
@@ -3621,7 +3697,7 @@ async fn select_alsa_hardware_volume_control(
         log::warn!("[qbz-qt] ALSA mixer selection has no stable route identity");
         let _ = with_audio(|store| store.set_alsa_hardware_volume(false));
         set_hardware_volume_ui_probe(device_id, &probe, None, HardwareVolumeUiStatus::Unsupported);
-        apply_audio(runtime, Apply::Reinit);
+        apply_audio_with_owner(runtime, Apply::Reinit);
         publish_snapshot().await;
         return;
     };
@@ -3633,13 +3709,13 @@ async fn select_alsa_hardware_volume_control(
     };
     match enable_hardware_volume_selection(runtime, device_id, probe, selection).await {
         Ok(apply) => {
-            apply_audio(runtime, apply);
-            maybe_force_bitperfect_volume(runtime).await;
+            apply_audio_with_owner(runtime, apply);
+            force_bitperfect_volume_with_owner(runtime).await;
         }
         Err(error) => {
             log::error!("[qbz-qt] persist ALSA mixer selection failed: {error}");
             let _ = with_audio(|store| store.set_alsa_hardware_volume(false));
-            apply_audio(runtime, Apply::Reinit);
+            apply_audio_with_owner(runtime, Apply::Reinit);
         }
     }
     publish_snapshot().await;
@@ -3663,6 +3739,10 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             runtime.core().player().clear_audio_cache();
         }
         "backend" => {
+            let Some(_owner_action) = begin_audio_owner_action("change audio backend", false)
+            else {
+                return;
+            };
             // Index 0 = "Auto" (resolve-and-set, #470): PipeWire when present,
             // else System. Indices >= 1 map to the concrete backends list.
             let backend = if index == 0 {
@@ -3685,7 +3765,7 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
                 // initialized. Reinit used to drop the ALSA PCM but omitted
                 // the suspended-sink cleanup, while Refresh merely queued a
                 // release and raced its own re-enumeration.
-                if let Err(error) = release_output_device(runtime).await {
+                if let Err(error) = release_output_device_with_owner(runtime).await {
                     report_release_failure(&error);
                 }
             }
@@ -3736,10 +3816,14 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             // device SELECTION did not. D7 also makes the new backend the one
             // that resolves that default.
             refresh_device_cap(runtime).await;
-            apply_audio(runtime, Apply::Reinit);
-            maybe_force_bitperfect_volume(runtime).await;
+            apply_audio_with_owner(runtime, Apply::Reinit);
+            force_bitperfect_volume_with_owner(runtime).await;
         }
         "device" => {
+            let Some(_owner_action) = begin_audio_owner_action("change output device", false)
+            else {
+                return;
+            };
             let id = {
                 let ids = MAPS.lock().unwrap().1.clone();
                 ids.get(index).cloned()
@@ -3758,8 +3842,8 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             }
             // #638 fix 3, trigger 4 — a different DAC has a different ceiling.
             refresh_device_cap(runtime).await;
-            reconcile_alsa_hardware_volume(runtime).await;
-            apply_audio(runtime, Apply::Reinit);
+            reconcile_alsa_hardware_volume_with_owner(runtime).await;
+            apply_audio_with_owner(runtime, Apply::Reinit);
         }
         "dsd-mode" => {
             let Some(mode) = DSD_MODE_VALUES.get(index) else {
@@ -3772,6 +3856,9 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             apply_audio(runtime, Apply::Reinit);
         }
         "alsa-plugin" => {
+            let Some(_owner_action) = begin_audio_owner_action("change ALSA plugin", false) else {
+                return;
+            };
             let Some(plugin) = ALSA_PLUGIN_VALUES.get(index).copied() else {
                 return;
             };
@@ -3779,9 +3866,9 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
                 log::error!("[qbz-qt] persist alsa plugin failed: {e}");
                 return;
             }
-            reconcile_alsa_hardware_volume(runtime).await;
-            apply_audio(runtime, Apply::Reinit);
-            maybe_force_bitperfect_volume(runtime).await;
+            reconcile_alsa_hardware_volume_with_owner(runtime).await;
+            apply_audio_with_owner(runtime, Apply::Reinit);
+            force_bitperfect_volume_with_owner(runtime).await;
         }
         "retry-behavior" => {
             let Some(behavior) = RETRY_BEHAVIOR_VALUES.get(index) else {
@@ -4141,6 +4228,9 @@ pub async fn settings_string(key: &str, value: String) {
 /// "Reset to defaults" — restores Audio + Playback defaults
 /// (settings.rs handle_reset: store resets + apply + snapshot).
 pub async fn settings_reset(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    let Some(_owner_action) = begin_audio_owner_action("reset live audio settings", false) else {
+        return;
+    };
     if let Err(e) = with_audio(|s| s.reset_all().map(|_| ())) {
         log::error!("[qbz-qt] audio settings reset failed: {e}");
     }
@@ -4158,16 +4248,19 @@ pub async fn settings_reset(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     // so this refresh is the one that CLEARS the cap (and, through the
     // before/after comparison, drops the tier-keyed cache the old cap filled).
     refresh_device_cap(runtime).await;
-    apply_audio(runtime, Apply::Reinit);
+    apply_audio_with_owner(runtime, Apply::Reinit);
     publish_snapshot().await;
 }
 
 /// The refresh/release button next to the output device (settings.rs:
 /// frees a held ALSA-exclusive device and re-enumerates).
 pub async fn refresh_devices(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    let Some(_owner_action) = begin_audio_owner_action("refresh output devices", false) else {
+        return;
+    };
     // Release whatever the player holds, then re-enumerate from scratch (the
     // whole point of the button is a device that was not in the last list).
-    if let Err(error) = release_output_device(runtime).await {
+    if let Err(error) = release_output_device_with_owner(runtime).await {
         report_release_failure(&error);
     }
     invalidate_device_cache();
@@ -4178,7 +4271,7 @@ pub async fn refresh_devices(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     // default". Placed after the re-enumeration so the probe reads the new
     // device list, and before the publish so the row lands settled.
     refresh_device_cap(runtime).await;
-    reconcile_alsa_hardware_volume(runtime).await;
+    reconcile_alsa_hardware_volume_with_owner(runtime).await;
     publish_snapshot().await;
 }
 

@@ -1997,6 +1997,9 @@ pub async fn enqueue_playlist_by_id(
     if crate::playback_qt::route_enqueue_to_peer(&tracks, mode).await {
         return Ok(());
     }
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return Ok(());
+    };
     let added_castable = crate::playback_qt::batch_all_qconnect_castable(&tracks);
     match mode {
         "next" => {
@@ -2133,6 +2136,9 @@ async fn play_queue_at(
         return Err("playlist has no playable tracks".to_string());
     }
     let start = start.min(tracks.len() - 1);
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return Ok(());
+    };
     // F1 (contract §5.3): the anchor is whatever survived the seam's filter at
     // the remapped index. This is the playlist path, and playlists are where
     // the owner says pulled tracks show up MOST — reading the id off the
@@ -2186,6 +2192,9 @@ pub async fn enqueue_all(
 /// `play_album_shuffled` (playback.rs:3945-3957): mix the Vec, start at 0.
 /// The MODE is still raised, so continuing past this list stays shuffled.
 pub async fn play_shuffled(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<(), String> {
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return Ok(());
+    };
     runtime.core().set_shuffle(true).await;
     crate::now_playing::set_shuffle(true);
     let mut tracks = current_queue();
@@ -2228,6 +2237,9 @@ pub async fn enqueue_track(
     if crate::playback_qt::route_track_to_peer(&qt, mode).await {
         return Ok(());
     }
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return Ok(());
+    };
     let added_castable = crate::playback_qt::batch_all_qconnect_castable(std::slice::from_ref(&qt));
     match mode {
         "next" => runtime.core().add_track_next(qt).await,

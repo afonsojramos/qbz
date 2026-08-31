@@ -301,6 +301,9 @@ async fn enqueue_rows(rows: Vec<LocalTrack>, mode: &str) {
     .unwrap_or_default();
     let queue: Vec<QueueTrack> = rows.iter().map(local_queue_track).collect();
     log::info!("[qbz-qt] local bulk {mode}: {} track(s)", queue.len());
+    let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+        return;
+    };
     match mode {
         "play-next" => {
             for t in queue.into_iter().rev() {

@@ -66,6 +66,11 @@ pub const JOIN_SESSION_REASON_RECONNECTION: i32 = 2;
 /// while playingState==PLAY). See 05-sync-status-queue.md §1.
 pub const QCONNECT_RENDERER_LOST_TIMEOUT_MS: u64 = 12_000;
 
+/// Convert player/catalog seconds to the QConnect wire unit exactly once.
+pub const fn qconnect_millis_from_secs(seconds: u64) -> u64 {
+    seconds.saturating_mul(1_000)
+}
+
 /// Pure arming predicate for the renderer-liveness watchdog: arm only while the
 /// active renderer is a peer AND its reported playing_state is PLAYING.
 pub fn should_arm_renderer_watchdog(playing_state: Option<i32>, is_active_peer: bool) -> bool {
@@ -202,6 +207,17 @@ pub fn quality_from_max_audio_quality(level: Option<i32>) -> Quality {
         Some(3) => Quality::HiRes,
         Some(4) => Quality::UltraHiRes,
         _ => Quality::UltraHiRes,
+    }
+}
+
+/// Map the local quality cap to the exact QConnect `max_audio_quality` wire
+/// level. Join reports from every host adapter must use this one mapping.
+pub const fn max_audio_quality_from_quality(quality: Quality) -> i32 {
+    match quality {
+        Quality::Mp3 => 1,
+        Quality::Lossless => 2,
+        Quality::HiRes => 3,
+        Quality::UltraHiRes => 4,
     }
 }
 
@@ -498,6 +514,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn seconds_convert_to_qconnect_milliseconds_once() {
+        assert_eq!(qconnect_millis_from_secs(317), 317_000);
+        assert_eq!(qconnect_millis_from_secs(u64::MAX), u64::MAX);
+    }
+
+    #[test]
     fn deferred_join_reason_is_reconnection_only_after_a_drop() {
         assert_eq!(
             deferred_join_reason(false),
@@ -563,7 +585,10 @@ mod tests {
 
     #[test]
     fn renderer_status_from_wire_collapses_unknown_and_missing_to_inactive() {
-        assert_eq!(RendererStatus::from_wire(Some(99)), RendererStatus::Inactive); // UNRECOGNIZED
+        assert_eq!(
+            RendererStatus::from_wire(Some(99)),
+            RendererStatus::Inactive
+        ); // UNRECOGNIZED
         assert_eq!(RendererStatus::from_wire(None), RendererStatus::Inactive); // absent field
     }
 
@@ -609,6 +634,17 @@ mod tests {
         assert_eq!(quality_from_max_audio_quality(Some(4)), Quality::UltraHiRes);
         assert_eq!(quality_from_max_audio_quality(Some(5)), Quality::UltraHiRes);
         assert_eq!(quality_from_max_audio_quality(None), Quality::UltraHiRes);
-        assert_eq!(quality_from_max_audio_quality(Some(99)), Quality::UltraHiRes);
+        assert_eq!(
+            quality_from_max_audio_quality(Some(99)),
+            Quality::UltraHiRes
+        );
+    }
+
+    #[test]
+    fn local_quality_maps_to_exact_qconnect_wire_levels() {
+        assert_eq!(max_audio_quality_from_quality(Quality::Mp3), 1);
+        assert_eq!(max_audio_quality_from_quality(Quality::Lossless), 2);
+        assert_eq!(max_audio_quality_from_quality(Quality::HiRes), 3);
+        assert_eq!(max_audio_quality_from_quality(Quality::UltraHiRes), 4);
     }
 }

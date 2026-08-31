@@ -3,7 +3,9 @@
 //! Since rust_cast uses Rc (not Arc), it cannot be shared across threads.
 //! This module provides a thread-safe wrapper using channels.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -53,10 +55,28 @@ pub enum CastCommand {
     Shutdown,
 }
 
-/// Thread-safe handle to communicate with the Chromecast thread
-pub struct ChromecastHandle {
+const TEARDOWN_REPLY_TIMEOUT: Duration = Duration::from_millis(750);
+
+struct ChromecastThreadLifetime {
     sender: Sender<CastCommand>,
     _thread: JoinHandle<()>,
+    valid: AtomicBool,
+    command_gate: Mutex<()>,
+}
+
+impl Drop for ChromecastThreadLifetime {
+    fn drop(&mut self) {
+        self.valid.store(false, Ordering::Release);
+        let _ = self.sender.send(CastCommand::Shutdown);
+    }
+}
+
+/// Thread-safe handle to communicate with the Chromecast thread. Clones share
+/// one validity fence; a teardown timeout invalidates every clone before the
+/// blocked worker is detached from its async caller.
+#[derive(Clone)]
+pub struct ChromecastHandle {
+    lifetime: Arc<ChromecastThreadLifetime>,
 }
 
 impl ChromecastHandle {
@@ -68,21 +88,51 @@ impl ChromecastHandle {
         });
 
         Self {
-            sender,
-            _thread: thread,
+            lifetime: Arc::new(ChromecastThreadLifetime {
+                sender,
+                _thread: thread,
+                valid: AtomicBool::new(true),
+                command_gate: Mutex::new(()),
+            }),
+        }
+    }
+
+    fn send_command(&self, command: CastCommand) -> Result<(), CastError> {
+        let _gate = self
+            .lifetime
+            .command_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !self.lifetime.valid.load(Ordering::Acquire) {
+            return Err(CastError::NotConnected);
+        }
+        self.lifetime
+            .sender
+            .send(command)
+            .map_err(|_| CastError::Connection("Thread communication error".to_string()))
+    }
+
+    /// Fence all clones and request worker shutdown. A command already inside
+    /// rust-cast may finish later, but no handle can enqueue another command.
+    pub fn invalidate(&self) {
+        let _gate = self
+            .lifetime
+            .command_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.lifetime.valid.swap(false, Ordering::AcqRel) {
+            let _ = self.lifetime.sender.send(CastCommand::Shutdown);
         }
     }
 
     /// Connect to a Chromecast device
     pub fn connect(&self, ip: String, port: u16) -> Result<(), CastError> {
         let (reply_tx, reply_rx) = mpsc::channel();
-        self.sender
-            .send(CastCommand::Connect {
-                ip,
-                port,
-                reply: reply_tx,
-            })
-            .map_err(|_| CastError::Connection("Thread communication error".to_string()))?;
+        self.send_command(CastCommand::Connect {
+            ip,
+            port,
+            reply: reply_tx,
+        })?;
         reply_rx
             .recv()
             .map_err(|_| CastError::Connection("Thread response error".to_string()))?
@@ -90,21 +140,33 @@ impl ChromecastHandle {
 
     /// Disconnect from the current device
     pub fn disconnect(&self) -> Result<(), CastError> {
-        let (reply_tx, reply_rx) = mpsc::channel();
-        self.sender
-            .send(CastCommand::Disconnect { reply: reply_tx })
-            .map_err(|_| CastError::Connection("Thread communication error".to_string()))?;
-        reply_rx
-            .recv()
-            .map_err(|_| CastError::Connection("Thread response error".to_string()))?
+        let reply_rx = {
+            let _gate = self
+                .lifetime
+                .command_gate
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !self.lifetime.valid.swap(false, Ordering::AcqRel) {
+                return Ok(());
+            }
+            let (reply_tx, reply_rx) = mpsc::channel();
+            self.lifetime
+                .sender
+                .send(CastCommand::Disconnect { reply: reply_tx })
+                .map_err(|_| CastError::Connection("Thread communication error".to_string()))?;
+            // Disconnect permanently fences this handle. Queue shutdown now
+            // so the worker exits after the disconnect even when the caller
+            // retains an invalid clone.
+            let _ = self.lifetime.sender.send(CastCommand::Shutdown);
+            reply_rx
+        };
+        recv_teardown_reply(reply_rx, TEARDOWN_REPLY_TIMEOUT, "chromecast-disconnect")
     }
 
     /// Get device status
     pub fn get_status(&self) -> Result<CastStatus, CastError> {
         let (reply_tx, reply_rx) = mpsc::channel();
-        self.sender
-            .send(CastCommand::GetStatus { reply: reply_tx })
-            .map_err(|_| CastError::Connection("Thread communication error".to_string()))?;
+        self.send_command(CastCommand::GetStatus { reply: reply_tx })?;
         reply_rx
             .recv()
             .map_err(|_| CastError::Connection("Thread response error".to_string()))?
@@ -118,14 +180,12 @@ impl ChromecastHandle {
         metadata: MediaMetadata,
     ) -> Result<(), CastError> {
         let (reply_tx, reply_rx) = mpsc::channel();
-        self.sender
-            .send(CastCommand::LoadMedia {
-                url,
-                content_type,
-                metadata,
-                reply: reply_tx,
-            })
-            .map_err(|_| CastError::Connection("Thread communication error".to_string()))?;
+        self.send_command(CastCommand::LoadMedia {
+            url,
+            content_type,
+            metadata,
+            reply: reply_tx,
+        })?;
         reply_rx
             .recv()
             .map_err(|_| CastError::Connection("Thread response error".to_string()))?
@@ -134,9 +194,7 @@ impl ChromecastHandle {
     /// Play
     pub fn play(&self) -> Result<(), CastError> {
         let (reply_tx, reply_rx) = mpsc::channel();
-        self.sender
-            .send(CastCommand::Play { reply: reply_tx })
-            .map_err(|_| CastError::Connection("Thread communication error".to_string()))?;
+        self.send_command(CastCommand::Play { reply: reply_tx })?;
         reply_rx
             .recv()
             .map_err(|_| CastError::Connection("Thread response error".to_string()))?
@@ -145,9 +203,7 @@ impl ChromecastHandle {
     /// Pause
     pub fn pause(&self) -> Result<(), CastError> {
         let (reply_tx, reply_rx) = mpsc::channel();
-        self.sender
-            .send(CastCommand::Pause { reply: reply_tx })
-            .map_err(|_| CastError::Connection("Thread communication error".to_string()))?;
+        self.send_command(CastCommand::Pause { reply: reply_tx })?;
         reply_rx
             .recv()
             .map_err(|_| CastError::Connection("Thread response error".to_string()))?
@@ -156,23 +212,24 @@ impl ChromecastHandle {
     /// Stop
     pub fn stop(&self) -> Result<(), CastError> {
         let (reply_tx, reply_rx) = mpsc::channel();
-        self.sender
-            .send(CastCommand::Stop { reply: reply_tx })
-            .map_err(|_| CastError::Connection("Thread communication error".to_string()))?;
-        reply_rx
-            .recv()
-            .map_err(|_| CastError::Connection("Thread response error".to_string()))?
+        self.send_command(CastCommand::Stop { reply: reply_tx })?;
+        let result = recv_teardown_reply(reply_rx, TEARDOWN_REPLY_TIMEOUT, "chromecast-stop");
+        if matches!(
+            &result,
+            Err(CastError::Timeout(_) | CastError::Connection(_))
+        ) {
+            self.invalidate();
+        }
+        result
     }
 
     /// Set volume
     pub fn set_volume(&self, volume: f32) -> Result<(), CastError> {
         let (reply_tx, reply_rx) = mpsc::channel();
-        self.sender
-            .send(CastCommand::SetVolume {
-                volume,
-                reply: reply_tx,
-            })
-            .map_err(|_| CastError::Connection("Thread communication error".to_string()))?;
+        self.send_command(CastCommand::SetVolume {
+            volume,
+            reply: reply_tx,
+        })?;
         reply_rx
             .recv()
             .map_err(|_| CastError::Connection("Thread response error".to_string()))?
@@ -181,12 +238,10 @@ impl ChromecastHandle {
     /// Seek
     pub fn seek(&self, position_secs: f64) -> Result<(), CastError> {
         let (reply_tx, reply_rx) = mpsc::channel();
-        self.sender
-            .send(CastCommand::Seek {
-                position_secs,
-                reply: reply_tx,
-            })
-            .map_err(|_| CastError::Connection("Thread communication error".to_string()))?;
+        self.send_command(CastCommand::Seek {
+            position_secs,
+            reply: reply_tx,
+        })?;
         reply_rx
             .recv()
             .map_err(|_| CastError::Connection("Thread response error".to_string()))?
@@ -195,9 +250,7 @@ impl ChromecastHandle {
     /// Get media position for seekbar updates
     pub fn get_media_position(&self) -> Result<CastPositionInfo, CastError> {
         let (reply_tx, reply_rx) = mpsc::channel();
-        self.sender
-            .send(CastCommand::GetMediaPosition { reply: reply_tx })
-            .map_err(|_| CastError::Connection("Thread communication error".to_string()))?;
+        self.send_command(CastCommand::GetMediaPosition { reply: reply_tx })?;
         reply_rx
             .recv()
             .map_err(|_| CastError::Connection("Thread response error".to_string()))?
@@ -210,9 +263,67 @@ impl Default for ChromecastHandle {
     }
 }
 
-impl Drop for ChromecastHandle {
-    fn drop(&mut self) {
-        let _ = self.sender.send(CastCommand::Shutdown);
+fn recv_teardown_reply<T>(
+    reply: Receiver<Result<T, CastError>>,
+    timeout: Duration,
+    operation: &'static str,
+) -> Result<T, CastError> {
+    match reply.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(RecvTimeoutError::Timeout) => Err(CastError::Timeout(operation.to_string())),
+        Err(RecvTimeoutError::Disconnected) => Err(CastError::Connection(
+            "Chromecast worker response unavailable".to_string(),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn teardown_reply_preserves_worker_result() {
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Ok::<_, CastError>(7_u8)).unwrap();
+
+        assert_eq!(
+            recv_teardown_reply(receiver, Duration::ZERO, "test-operation").unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn teardown_reply_timeout_is_typed_and_sanitized() {
+        let (_sender, receiver) = mpsc::channel::<Result<(), CastError>>();
+
+        let result = recv_teardown_reply(receiver, Duration::ZERO, "test-operation");
+        assert!(matches!(
+            result,
+            Err(CastError::Timeout(operation)) if operation == "test-operation"
+        ));
+    }
+
+    #[test]
+    fn teardown_reply_disconnect_is_typed_and_sanitized() {
+        let (sender, receiver) = mpsc::channel::<Result<(), CastError>>();
+        drop(sender);
+
+        let result = recv_teardown_reply(receiver, Duration::ZERO, "test-operation");
+        assert!(matches!(
+            result,
+            Err(CastError::Connection(message))
+                if message == "Chromecast worker response unavailable"
+        ));
+    }
+
+    #[test]
+    fn invalidation_fences_every_clone() {
+        let handle = ChromecastHandle::new();
+        let clone = handle.clone();
+
+        handle.invalidate();
+
+        assert!(matches!(clone.play(), Err(CastError::NotConnected)));
     }
 }
 

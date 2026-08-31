@@ -10,8 +10,10 @@ qconnect-protocol = { path = "../qconnect-protocol" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 futures-util = { workspace = true }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 prost = "0.14"
 log = "0.4"
+zeroize = "1"

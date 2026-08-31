@@ -241,16 +241,16 @@ pub async fn ensure_remote_track_loaded(
     track_id: u64,
     max_audio_quality: Option<i32>,
     start_position_secs: u64,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     {
         let state = sync_state.lock().await;
         if is_recent_load_attempt(&state, track_id) {
-            return Ok(());
+            return Ok(false);
         }
     }
     let playback_state = engine.get_playback_state();
     if !should_reload_remote_track(&playback_state, track_id) {
-        return Ok(());
+        return Ok(false);
     }
 
     {
@@ -266,7 +266,8 @@ pub async fn ensure_remote_track_loaded(
         .unwrap_or(0);
     engine
         .start_track_stream(track_id, quality, duration_secs, start_position_secs)
-        .await
+        .await?;
+    Ok(true)
 }
 
 /// Force a (re)stream of `track_id` at `start_position_secs` when BECOMING the
@@ -292,16 +293,16 @@ pub async fn force_remote_track_stream(
     track_id: u64,
     max_audio_quality: Option<i32>,
     start_position_secs: u64,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let playback_state = engine.get_playback_state();
     if playback_state.track_id == track_id && engine.has_loaded_audio() {
-        return Ok(());
+        return Ok(false);
     }
 
     {
         let state = sync_state.lock().await;
         if is_recent_load_attempt(&state, track_id) {
-            return Ok(());
+            return Ok(false);
         }
     }
     {
@@ -317,7 +318,8 @@ pub async fn force_remote_track_stream(
         .unwrap_or(0);
     engine
         .start_track_stream(track_id, quality, duration_secs, start_position_secs)
-        .await
+        .await?;
+    Ok(true)
 }
 
 pub async fn apply_remote_loop_mode(
@@ -344,6 +346,7 @@ pub async fn apply_renderer_command(
             next_track,
             ..
         } => {
+            let mut loaded_at_reported_position = false;
             let resolved_playing_state = renderer_state.playing_state.or(*playing_state);
             let mut projection_renderer_state = renderer_state.clone();
             if projection_renderer_state.current_track.is_none() {
@@ -387,12 +390,8 @@ pub async fn apply_renderer_command(
                 let _ = projected_track; // retained for shuffle projection above
                 if let Some(command_track) = current_track.as_ref() {
                     if !projection_applied {
-                        if let Err(err) =
-                            align_queue_cursor(engine, command_track.track_id).await
-                        {
-                            log::warn!(
-                                "[QConnect] Failed to align CoreBridge queue cursor: {err}"
-                            );
+                        if let Err(err) = align_queue_cursor(engine, command_track.track_id).await {
+                            log::warn!("[QConnect] Failed to align CoreBridge queue cursor: {err}");
                         }
                     }
 
@@ -420,7 +419,7 @@ pub async fn apply_renderer_command(
                             .or(*current_position_ms)
                             .map(|ms| ms / 1000)
                             .unwrap_or(0);
-                        if let Err(err) = ensure_remote_track_loaded(
+                        match ensure_remote_track_loaded(
                             engine,
                             sync_state,
                             command_track.track_id,
@@ -429,10 +428,11 @@ pub async fn apply_renderer_command(
                         )
                         .await
                         {
-                            log::warn!(
+                            Ok(loaded) => loaded_at_reported_position |= loaded,
+                            Err(err) => log::warn!(
                                 "[QConnect] Failed to load remote track {}: {err}",
                                 command_track.track_id
-                            );
+                            ),
                         }
                     }
                 }
@@ -462,7 +462,7 @@ pub async fn apply_renderer_command(
                                 .or(*current_position_ms)
                                 .map(|ms| ms / 1000)
                                 .unwrap_or(0);
-                            if let Err(err) = force_remote_track_stream(
+                            match force_remote_track_stream(
                                 engine,
                                 sync_state,
                                 track_id,
@@ -471,9 +471,10 @@ pub async fn apply_renderer_command(
                             )
                             .await
                             {
-                                log::warn!(
+                                Ok(loaded) => loaded_at_reported_position |= loaded,
+                                Err(err) => log::warn!(
                                     "[QConnect] Cold-start load of remote track {track_id} failed: {err}"
-                                );
+                                ),
                             }
                         } else {
                             engine.resume()?;
@@ -492,9 +493,7 @@ pub async fn apply_renderer_command(
                 }
             }
 
-            if let Some(position_ms) =
-                renderer_state.current_position_ms.or(*current_position_ms)
-            {
+            if let Some(position_ms) = renderer_state.current_position_ms.or(*current_position_ms) {
                 let playback_state = engine.get_playback_state();
                 let current_pos_secs = playback_state.position;
                 let target_secs = position_ms / 1000;
@@ -524,7 +523,10 @@ pub async fn apply_renderer_command(
                 // to defend against in commit 147bcbd7. If hiccups return,
                 // revert this change and reintroduce a more targeted echo
                 // detector (UUID-based) instead of the all-or-nothing gate.
-                if !is_echo_reset && current_pos_secs.abs_diff(target_secs) > 2 {
+                if !loaded_at_reported_position
+                    && !is_echo_reset
+                    && current_pos_secs.abs_diff(target_secs) > 2
+                {
                     log::info!(
                         "[QConnect] SetState seek: current={}s target={}s",
                         current_pos_secs,
@@ -581,7 +583,13 @@ pub async fn apply_renderer_command(
                     }
                 }
             } else {
-                engine.stop()?;
+                // The official receiver ignores SetActive(false). Actual audio
+                // detachment belongs to ACTIVE_RENDERER_CHANGED, after session
+                // topology already names the peer. Stopping here opens a race
+                // where the local poll still sees QBZ as active and reports the
+                // synthetic stopped/paused edge to the session, pausing the new
+                // renderer during handoff.
+                log::debug!("[QConnect] SetActive(false) acknowledged; awaiting topology handoff");
             }
         }
         RendererCommand::SetMaxAudioQuality { max_audio_quality } => {
@@ -591,12 +599,13 @@ pub async fn apply_renderer_command(
         }
         RendererCommand::SetShuffleMode { shuffle_mode } => {
             let enabled = renderer_state.shuffle_mode.unwrap_or(*shuffle_mode);
-            // WS-authoritative: flip ONLY the flag here. Never generate a local
-            // shuffle order — the cloud owns queue order, which arrives separately
-            // via `sync_remote_shuffle_projection` / `materialize_remote_queue`.
-            // Calling the order-generating `set_shuffle` would produce a divergent
-            // local random order ("es un infierno" — the documented failure mode).
-            engine.set_shuffle_flag(enabled).await;
+            // Renderer commands carry only a flag, never the server seed/order.
+            // The queue channel is the sole authority allowed to mutate the
+            // local queue. Even a "flag-only" core write is unsafe here because
+            // it installs identity order and can race after QueueUpdated.
+            log::debug!(
+                "[QConnect] SetShuffleMode({enabled}) acknowledged; awaiting queue authority"
+            );
         }
     }
 
@@ -628,26 +637,9 @@ async fn sync_remote_shuffle_projection(
         return Ok(false);
     };
 
-    let core_shuffle_order = resolve_core_shuffle_order(
-        queue_state,
-        renderer_state
-            .current_track
-            .as_ref()
-            .map(|item| item.queue_item_id),
-        renderer_state
-            .current_track
-            .as_ref()
-            .map(|item| item.track_id),
-        renderer_state
-            .next_track
-            .as_ref()
-            .map(|item| item.queue_item_id),
-        renderer_state.next_track.as_ref().map(|item| item.track_id),
-    );
+    let core_shuffle_order = resolve_core_shuffle_order(queue_state);
 
-    // Same deferral rule as materialize_remote_queue: do not invent an
-    // identity shuffle when the cloud hasn't yet sent the authoritative
-    // shuffle_order. Wait for the second QueueUpdated.
+    // Do not invent an identity shuffle if no WS-authored order is available.
     if core_shuffle_order.is_none() {
         return Ok(false);
     }
@@ -833,21 +825,10 @@ pub async fn materialize_remote_queue(
     if start_index.is_none() && !queue_tracks.is_empty() {
         start_index = Some(0);
     }
-    let core_shuffle_order = resolve_core_shuffle_order(
-        queue_state,
-        renderer_queue_item_id,
-        renderer_track_id,
-        renderer_next_queue_item_id,
-        renderer_next_track_id,
-    );
-    // The cloud sends two QueueUpdated events during a shuffle toggle:
-    // first with shuffle_mode=true and shuffle_order=null (the flag
-    // broadcasts immediately), then ~400ms later with the computed
-    // shuffle_order. If we mark shuffle_enabled=true on the first event
-    // with an absent order, set_queue_with_order falls into its identity
-    // path (0,1,2,...) — that is qbz inventing a sequence that diverges
-    // from the order the cloud is about to authorize. Defer the engine
-    // shuffle activation until the authoritative order is present.
+    let core_shuffle_order = resolve_core_shuffle_order(queue_state);
+    // A queue update is usable only once it contains a WS-authored order,
+    // either copied from QueueState.shuffled_track_indexes or reproduced from
+    // the seed/pivot carried by the incremental queue event.
     let effective_shuffle_enabled = queue_state.shuffle_mode && core_shuffle_order.is_some();
     log::info!(
         "[QConnect] materialize_remote_queue: setting queue with {} tracks, start_index={:?}, local_track_id={:?}, remote_shuffle_mode={}, shuffle_order_present={}, engine_shuffle_enabled={}",
@@ -963,7 +944,9 @@ mod tests {
     use tokio::sync::Mutex;
 
     use crate::renderer_engine::QconnectRendererEngine;
-    use crate::{QConnectQueueState, QConnectRendererState, QconnectRemoteSyncState, RendererCommand};
+    use crate::{
+        QConnectQueueState, QConnectRendererState, QconnectRemoteSyncState, RendererCommand,
+    };
 
     #[derive(Default)]
     struct MockCalls {
@@ -974,7 +957,6 @@ mod tests {
         set_volumes: Vec<f32>,
         set_repeat_modes: u32,
         set_shuffles: Vec<bool>,
-        set_shuffle_flags: Vec<bool>,
         set_queue_with_order: Vec<(bool, Option<Vec<usize>>)>,
         materialized_tracks: Vec<QueueTrack>,
         set_queues: u32,
@@ -1043,9 +1025,6 @@ mod tests {
         }
         async fn set_shuffle(&self, enabled: bool) {
             self.calls().set_shuffles.push(enabled);
-        }
-        async fn set_shuffle_flag(&self, enabled: bool) {
-            self.calls().set_shuffle_flags.push(enabled);
         }
         async fn get_all_queue_tracks(&self) -> (Vec<QueueTrack>, Option<usize>) {
             (self.queue_tracks.clone(), self.queue_index)
@@ -1364,14 +1343,17 @@ mod tests {
         assert_eq!(calls.resumes, 1, "plain resume on a warm engine");
     }
 
-    /// #4 — WS-authoritative shuffle: a standalone SetShuffleMode must flip the
-    /// flag ONLY (set_shuffle_flag), NEVER generate a local order. It must not
-    /// call the order-generating set_shuffle, and must not apply any queue order
-    /// (set_queue_with_order) — the cloud's order arrives separately.
+    /// WS-authoritative shuffle: a standalone renderer command has no seed/order
+    /// and therefore must not mutate the core queue at all. The queue event is
+    /// the sole authority.
     #[tokio::test]
-    async fn apply_renderer_command_setshufflemode_is_flag_only() {
+    async fn apply_renderer_command_setshufflemode_does_not_touch_local_queue() {
         let mut engine = MockEngine::new();
-        engine.queue_tracks = vec![mock_queue_track(1), mock_queue_track(2), mock_queue_track(3)];
+        engine.queue_tracks = vec![
+            mock_queue_track(1),
+            mock_queue_track(2),
+            mock_queue_track(3),
+        ];
         engine.queue_index = Some(0);
         let sync = sync();
         let cmd = RendererCommand::SetShuffleMode { shuffle_mode: true };
@@ -1379,18 +1361,13 @@ mod tests {
             .await
             .unwrap();
         let calls = engine.calls();
-        assert_eq!(
-            calls.set_shuffle_flags,
-            vec![true],
-            "SetShuffleMode must take the flag-only path"
-        );
         assert!(
             calls.set_shuffles.is_empty(),
-            "SetShuffleMode must NEVER call the order-generating set_shuffle (WS-authoritative rule)"
+            "renderer command must not call local shuffle"
         );
         assert!(
             calls.set_queue_with_order.is_empty(),
-            "SetShuffleMode must not apply any local order; the cloud's order arrives separately"
+            "renderer command must not apply an order without queue authority"
         );
     }
 
@@ -1502,6 +1479,32 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn set_active_false_waits_for_topology_before_stopping_audio() {
+        let mut engine = MockEngine::new();
+        engine.playback = PlaybackState {
+            track_id: 7,
+            is_playing: true,
+            ..Default::default()
+        };
+        engine.loaded_audio = true;
+
+        apply_renderer_command(
+            &engine,
+            &sync(),
+            &RendererCommand::SetActive { active: false },
+            &QConnectRendererState::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            engine.calls().stops,
+            0,
+            "SetActive(false) must not synthesize a paused edge before ACTIVE_RENDERER_CHANGED"
+        );
+    }
+
     /// #1 (no-interrupt) — a SetActive(true) while the renderer is ALREADY
     /// streaming this exact track with audio loaded must NOT restart it (guards
     /// against a spurious activation tearing down live playback).
@@ -1554,6 +1557,11 @@ mod tests {
             calls.start_positions,
             vec![118],
             "takeback load must resume at the cloud position (118s), not 0"
+        );
+        assert_eq!(
+            calls.seeks,
+            Vec::<u64>::new(),
+            "the load already starts at 118s; the same SetState must not seek again"
         );
     }
 }

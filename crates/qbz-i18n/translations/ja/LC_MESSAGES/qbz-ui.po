@@ -6230,3 +6230,6 @@ msgstr "ミキサーコントロールを選択"
 
 msgid "Change mixer control"
 msgstr "ミキサーコントロールを変更"
+
+msgid "Qobuz Connect could not shut down safely. Quit and reopen QBZ, then try logging out again."
+msgstr "Qobuz Connect を安全に終了できませんでした。QBZ を終了して再度開き、もう一度ログアウトしてください。"

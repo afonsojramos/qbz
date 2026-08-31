@@ -446,6 +446,13 @@ fn begin_test(s: &mut State) {
     s.doc.test_negotiated_label = String::new();
 }
 
+fn reject_test_control(action: &str) {
+    log::info!("[qbz-qt] dac wizard: {action} refused while QConnect owns playback");
+    crate::toast_qt::info(qbz_i18n::t(
+        "QConnect is controlling playback. Return playback to QBZ before using the DAC test.",
+    ));
+}
+
 /// "Play test": resolve the four curated tracks (id-hint first, then an
 /// "artist title" search when the id 404s on a pulled licence — never
 /// raw-id-only), stash them so the user can jump between them, and play.
@@ -522,6 +529,10 @@ async fn play_from(tracks: Vec<Track>, start: usize) {
 /// the queue, so the user keeps whatever was loaded).
 pub fn stop_test() {
     crate::spawn(async move {
+        let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+            reject_test_control("stop test");
+            return;
+        };
         let _ = crate::app().core().pause();
         with_state(|s| s.doc.test_playing = false);
         publish();
@@ -533,6 +544,13 @@ pub fn stop_test() {
 /// read-back that would sit forever on "Nothing playing".
 pub fn verify_own() {
     crate::spawn(async move {
+        // Keep the permit over the queue read and the eventual resume: a
+        // handoff must either drain this whole action first or make it a clean
+        // refusal before any delegated queue/player state is observed.
+        let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
+            reject_test_control("use current queue");
+            return;
+        };
         let runtime = crate::app();
         let (tracks, _) = runtime.core().get_all_queue_tracks().await;
         if tracks.is_empty() {

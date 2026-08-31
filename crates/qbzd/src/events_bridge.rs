@@ -25,12 +25,26 @@ use tokio::sync::{broadcast, Notify};
 use tokio::task::JoinHandle;
 
 use crate::adapter::DaemonAdapter;
+use crate::qconnect::authority::{
+    AuthorityCell, OwnerAuthorityObservation, OwnerAuthorityToken,
+};
 
 type Runtime = Arc<AppRuntime<DaemonAdapter>>;
 
 /// The poll fallback cadence: only exercised when no edge pulse arrives (e.g.
 /// a stop cleared the track id, which suppresses `ReportEdge`).
 const FALLBACK_POLL: Duration = Duration::from_secs(2);
+
+/// One playback observation plus the exact owner authority that produced it.
+///
+/// `None` is deliberately meaningful: the observation began while delegated
+/// authority (or a handoff fence) was active and owner-only consumers must
+/// treat it as a handoff, even if owner authority is restored before delivery.
+#[derive(Clone, Debug)]
+pub struct AuthorityStampedEvent {
+    pub event: CoreEvent,
+    pub owner_token: Option<OwnerAuthorityToken>,
+}
 
 /// Spawn the bridge task. Emits, deduped against the last published values:
 /// * `TrackStarted` on a track-id change while playing (with the queue's
@@ -39,16 +53,52 @@ const FALLBACK_POLL: Duration = Duration::from_secs(2);
 /// * `PositionUpdated` on every wake while playing (~2 s cadence, the
 ///   scrobbler's timing source and the MPRIS progress feed),
 /// * `VolumeChanged` on a volume change.
-pub fn spawn(runtime: &Runtime, bus: broadcast::Sender<CoreEvent>, edge: Arc<Notify>) -> JoinHandle<()> {
+pub fn spawn(
+    runtime: &Runtime,
+    bus: broadcast::Sender<CoreEvent>,
+    owner_bus: broadcast::Sender<AuthorityStampedEvent>,
+    edge: Arc<Notify>,
+    authority: Arc<AuthorityCell>,
+) -> JoinHandle<()> {
     let weak: Weak<AppRuntime<DaemonAdapter>> = Arc::downgrade(runtime);
     tokio::spawn(async move {
         let mut last_track_id: u64 = 0;
         let mut last_state: Option<PlaybackState> = None;
         let mut last_volume: Option<f32> = None;
+        let mut last_owner_token: Option<OwnerAuthorityToken> = None;
         loop {
             // Wake on a driver edge, or fall back to a slow poll so a
             // track-id-clearing stop still surfaces as a transition.
             let _ = tokio::time::timeout(FALLBACK_POLL, edge.notified()).await;
+
+            // The observation is admitted before the first player/queue read.
+            // Keeping the permit alive through publication makes a handoff wait
+            // for this complete read -> event transaction. A delegated/fenced
+            // observation remains stamped `None` even if an owner is installed
+            // while the async queue lookup below is pending.
+            let (owner_token, owner_permit) = match authority.observe_owner_authority() {
+                OwnerAuthorityObservation::Owner { token, permit } => {
+                    (Some(token), Some(permit))
+                }
+                OwnerAuthorityObservation::Delegated => (None, None),
+                OwnerAuthorityObservation::Fenced => {
+                    // A candidate activation can hold the fence while the
+                    // installed authority is still owner and may ultimately
+                    // fail. Do not turn that transient pause into a fabricated
+                    // guest edge or disturb the dedup baseline.
+                    continue;
+                }
+            };
+
+            // Authority identity is part of the dedup key. In particular, a
+            // guest -> owner restore of the same track/state must publish fresh
+            // owner-stamped edges rather than leaving consumers on guest data.
+            if owner_token != last_owner_token {
+                last_track_id = 0;
+                last_state = None;
+                last_volume = None;
+                last_owner_token = owner_token;
+            }
 
             let Some(rt) = weak.upgrade() else { return };
             let core = rt.core();
@@ -62,10 +112,15 @@ pub fn spawn(runtime: &Runtime, bus: broadcast::Sender<CoreEvent>, edge: Arc<Not
                 // wake retries because last_track_id only advances on a send.
                 let queue = core.get_queue_state().await;
                 if let Some(track) = queue.current_track.as_ref().filter(|t| t.id == ev.track_id) {
-                    let _ = bus.send(CoreEvent::TrackStarted {
-                        track: track.clone(),
-                        position_secs: ev.position,
-                    });
+                    publish(
+                        &bus,
+                        &owner_bus,
+                        owner_token,
+                        CoreEvent::TrackStarted {
+                            track: track.clone(),
+                            position_secs: ev.position,
+                        },
+                    );
                     last_track_id = ev.track_id;
                 }
             }
@@ -82,7 +137,12 @@ pub fn spawn(runtime: &Runtime, bus: broadcast::Sender<CoreEvent>, edge: Arc<Not
                 PlaybackState::Stopped
             };
             if last_state != Some(state) {
-                let _ = bus.send(CoreEvent::PlaybackStateChanged { state });
+                publish(
+                    &bus,
+                    &owner_bus,
+                    owner_token,
+                    CoreEvent::PlaybackStateChanged { state },
+                );
                 last_state = Some(state);
                 // A stop ends the "current track": forget it so replaying the
                 // same track emits a fresh TrackStarted (scrobbling, hooks).
@@ -92,16 +152,42 @@ pub fn spawn(runtime: &Runtime, bus: broadcast::Sender<CoreEvent>, edge: Arc<Not
             }
 
             if ev.is_playing {
-                let _ = bus.send(CoreEvent::PositionUpdated {
-                    position_secs: ev.position,
-                    duration_secs: ev.duration,
-                });
+                publish(
+                    &bus,
+                    &owner_bus,
+                    owner_token,
+                    CoreEvent::PositionUpdated {
+                        position_secs: ev.position,
+                        duration_secs: ev.duration,
+                    },
+                );
             }
 
             if last_volume.is_none_or(|v| (v - ev.volume).abs() > 0.001) {
-                let _ = bus.send(CoreEvent::VolumeChanged { volume: ev.volume });
+                publish(
+                    &bus,
+                    &owner_bus,
+                    owner_token,
+                    CoreEvent::VolumeChanged { volume: ev.volume },
+                );
                 last_volume = Some(ev.volume);
             }
+            // Owner observations remain drain-visible through every async read
+            // and both bus publications in this wake.
+            drop(owner_permit);
         }
     })
+}
+
+fn publish(
+    bus: &broadcast::Sender<CoreEvent>,
+    owner_bus: &broadcast::Sender<AuthorityStampedEvent>,
+    owner_token: Option<OwnerAuthorityToken>,
+    event: CoreEvent,
+) {
+    let _ = owner_bus.send(AuthorityStampedEvent {
+        event: event.clone(),
+        owner_token,
+    });
+    let _ = bus.send(event);
 }
