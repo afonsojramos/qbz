@@ -1331,14 +1331,22 @@ Rectangle {
                 font.pixelSize: 13
                 horizontalAlignment: Text.AlignHCenter
             }
-            Text {
+            // The SAME bare badge the shared TrackRow's quality cell mounts
+            // (rows/TrackRow.qml:1048): tier label stacked over the exact
+            // "24-bit / 96 kHz" line. This fork used to render a lone tier
+            // word ("HI-RES") even though the document has carried
+            // qualityDetail all along.
+            Item {
                 width: cols.colQuality
-                anchors.verticalCenter: parent.verticalCenter
-                text: row.qualityTier === "hires" ? "HI-RES" : (row.qualityTier === "cd" ? "CD" : "")
-                color: theme.textMuted
-                font.pixelSize: 10
-                font.weight: theme.weightBold
-                horizontalAlignment: Text.AlignHCenter
+                height: parent.height
+                QualityBadgeFull {
+                    anchors.centerIn: parent
+                    tier: row.qualityTier || ""
+                    detail: row.qualityDetail || ""
+                    showIcon: false
+                    bare: true
+                    maxTextWidth: cols.colQuality
+                }
             }
             // Favorite (live). Reads through the override map so the state
             // survives a document republish (see root.localToggles).
@@ -1959,6 +1967,7 @@ Rectangle {
                     genre: modelData.genre
                     year: modelData.year
                     qualityTier: modelData.qualityTier
+                    qualityDetail: modelData.qualityDetail || ""
                     artSource: root.coverMap[modelData.artUrl] || ""
                     // artist_qt `map_release` stamps the pin state on every
                     // release row; SectionRail is the only other reader and
@@ -2636,6 +2645,7 @@ Rectangle {
                         genre: root.artist.lastRelease ? root.artist.lastRelease.genre : ""
                         year: root.artist.lastRelease ? root.artist.lastRelease.year : ""
                         qualityTier: root.artist.lastRelease ? root.artist.lastRelease.qualityTier : ""
+                        qualityDetail: root.artist.lastRelease ? (root.artist.lastRelease.qualityDetail || "") : ""
                         artSource: root.artist.lastRelease ? (root.coverMap[root.artist.lastRelease.artUrl] || "") : ""
                         // Same row shape as the release grids (map_release).
                         isPinned: root.artist.lastRelease ? root.artist.lastRelease.isPinned === true : false
@@ -2785,6 +2795,7 @@ Rectangle {
                                     genre: modelData.genre
                                     year: modelData.year
                                     qualityTier: modelData.qualityTier
+                                    qualityDetail: modelData.qualityDetail || ""
                                     artSource: root.coverMap[modelData.artUrl] || ""
                                     isPinned: modelData.isPinned === true
                                     artworkUrl: modelData.artUrl || ""
@@ -2865,6 +2876,7 @@ Rectangle {
                             genre: modelData.genre
                             year: modelData.year
                             qualityTier: modelData.qualityTier
+                            qualityDetail: modelData.qualityDetail || ""
                             artSource: root.coverMap[modelData.imageUrl] || ""
                             // These rows are LIBRARY feed items (FeedItem),
                             // not release cards: the remote url is
