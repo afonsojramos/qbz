@@ -114,6 +114,16 @@ strsim = "0.11"
 # Note: Linux-specific dependencies (alsa) go in individual crate Cargo.toml files
 # because workspace manifests cannot have [target] sections
 
+# Local patch of rust_cast 0.21.0 (see crates/vendor/rust_cast/QBZ_PATCH.md):
+# its NoCertificateVerification verifier delegates TLS signature checks to
+# rustls helpers that parse the server certificate with webpki, which rejects
+# the X.509 v1 self-signed certificates served by many Cast devices (AV
+# receivers with Chromecast built-in) during the handshake. The vendored copy
+# asserts signature validity instead, matching the verifier's no-validation
+# contract. Drop this patch once a rust_cast release carries the fix upstream.
+[patch.crates-io]
+rust_cast = { path = "vendor/rust_cast" }
+
 [profile.release]
 # Strip symbol tables from release binaries. Measured on 2026-07-02:
 # 400 MB -> 218 MB (-45%). Trade-off: panic backtraces show addresses instead
