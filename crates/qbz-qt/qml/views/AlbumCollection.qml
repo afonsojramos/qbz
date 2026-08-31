@@ -388,6 +388,7 @@ Column {
                     genre: gcell.modelData.genre
                     year: gcell.modelData.year
                     qualityTier: gcell.modelData.qualityTier
+                    qualityDetail: gcell.modelData.qualityDetail || ""
                     ribbon: gcell.modelData.ribbon || ""
                     ribbonKind: gcell.modelData.ribbonKind || ""
                     artSource: root.artOf(gcell.modelData)
@@ -562,6 +563,7 @@ Column {
                     genre: cell.cardData.genre
                     year: cell.cardData.year
                     qualityTier: cell.cardData.qualityTier
+                    qualityDetail: cell.cardData.qualityDetail || ""
                     ribbon: cell.cardData.ribbon || ""
                     ribbonKind: cell.cardData.ribbonKind || ""
                     artSource: root.artOf(cell.cardData)

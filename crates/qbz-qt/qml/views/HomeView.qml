@@ -607,6 +607,7 @@ Rectangle {
                         genre: modelData.genre
                         year: modelData.year
                         qualityTier: modelData.qualityTier
+                        qualityDetail: modelData.qualityLabel || modelData.qualityDetail || ""
                         ribbon: modelData.ribbon
                         ribbonKind: modelData.ribbonKind
                         artSource: root.sectionArtOf(modelData)
@@ -1262,6 +1263,7 @@ Rectangle {
                             genre: modelData.album.genre
                             year: modelData.album.year
                             qualityTier: modelData.album.qualityTier
+                            qualityDetail: modelData.album.qualityLabel || modelData.album.qualityDetail || ""
                             artSource: root.forYouArtOf(modelData.album)
                             artworkUrl: modelData.album.artUrl || ""
                             isPinned: modelData.album.isPinned === true

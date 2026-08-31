@@ -477,6 +477,7 @@ Item {
                                 genre: ""
                                 year: cardCell.slot.year
                                 qualityTier: cardCell.slot.qualityTier
+                                qualityDetail: cardCell.slot.qualityDetail || ""
                                 artSource: cardCell.slot.artPath || (root.view
                                     ? (root.view.artMap[cardCell.slot.artKey] || "") : "")
                                 pinArtworkUrl: artSource

@@ -351,6 +351,7 @@ Rectangle {
                         genre: resultCell.cardData.genre
                         year: resultCell.cardData.year
                         qualityTier: resultCell.cardData.qualityTier
+                        qualityDetail: resultCell.cardData.qualityDetail || ""
                         artSource: resultCell.cardData.artPath || ""
                         isFavorite: resultCell.cardData.isFavorite === true
                         isPinned: resultCell.cardData.isPinned === true
@@ -757,6 +758,7 @@ Rectangle {
                                     genre: (root.mp.album || ({})).genre || ""
                                     year: (root.mp.album || ({})).year || ""
                                     qualityTier: (root.mp.album || ({})).qualityTier || ""
+                                    qualityDetail: (root.mp.album || ({})).qualityDetail || ""
                                     artSource: (root.mp.album || ({})).artPath || ""
                                     // search_qt::map_album stamps the heart
                                     // from fav_cache; false inverted the
@@ -879,6 +881,7 @@ Rectangle {
                                     genre: modelData.genre
                                     year: modelData.year
                                     qualityTier: modelData.qualityTier
+                                    qualityDetail: modelData.qualityDetail || ""
                                     artSource: modelData.artPath || ""
                                     // search_qt::map_album stamps the heart
                                     // from fav_cache; false made the glyph lie

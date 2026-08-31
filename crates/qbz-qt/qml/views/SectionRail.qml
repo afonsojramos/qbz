@@ -63,6 +63,7 @@ Column {
                 genre: modelData.genre
                 year: modelData.year
                 qualityTier: modelData.qualityTier
+                qualityDetail: modelData.qualityDetail || ""
                 artSource: root.coverMap[modelData.artUrl] || ""
                 // The row carries the heart (home_qt / recommendations_qt
                 // stamp it from fav_cache at build time); hardcoding false

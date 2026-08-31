@@ -41,6 +41,11 @@ Rectangle {
     property string genre: ""
     property string year: ""
     property string qualityTier: ""
+    /// Exact stored quality ("24-bit / 96 kHz"), shown by the badge's hover
+    /// tooltip. Hosts whose model has no detail (un-hydrated Plex/remote
+    /// rows) may pass the bare filetype ("FLAC") — known limitation, and
+    /// still truthful; empty shows no tooltip at all.
+    property string qualityDetail: ""
     property string ribbon: ""
     property string ribbonKind: ""
     // Artwork image source (file://… or "") — the host's cache lookup.
@@ -831,10 +836,13 @@ Rectangle {
                     elide: Text.ElideRight
                 }
             }
-            // Icon-only quality badge (QualityBadge.slint).
+            // Icon-only quality badge (QualityBadge.slint). `label` feeds the
+            // badge's own hover tooltip with the exact stored quality; the
+            // badge shows nothing when the host has no detail to give.
             QualityMini {
                 id: qBadge
                 tier: root.qualityTier
+                label: root.qualityDetail
                 anchors.verticalCenter: parent.verticalCenter
             }
         }
