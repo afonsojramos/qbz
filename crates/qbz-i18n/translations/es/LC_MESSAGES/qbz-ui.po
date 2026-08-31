@@ -449,6 +449,9 @@ msgstr "Descubre música nueva a partir de tus listas más reproducidas."
 msgid "Open album"
 msgstr "Abrir álbum"
 
+msgid "Open containing album"
+msgstr "Abrir el álbum contenedor"
+
 msgid "Play"
 msgstr "Reproducir"
 

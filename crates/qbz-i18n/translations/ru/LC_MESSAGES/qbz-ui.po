@@ -445,6 +445,9 @@ msgstr "Откройте новую музыку из ваших любимых 
 msgid "Open album"
 msgstr "Открыть альбом"
 
+msgid "Open containing album"
+msgstr "Открыть альбом трека"
+
 msgid "Play"
 msgstr "Воспроизвести"
 

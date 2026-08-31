@@ -102,13 +102,20 @@ Item {
                 artistRows.push({ "label": t("Play", r), "icon": "play-fill", "action": "play" })
             return artistRows
         }
-        if (row.kind === "track") return [
-            { "label": t("Play", r), "icon": "play-fill", "action": "play" },
-            { "label": t("Play next", r), "icon": "list-start", "action": "next" },
-            { "label": t("Play later", r), "icon": "list-plus", "action": "later" },
-            { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" },
-            { "label": t("Add to playlist", r), "icon": "list-music", "action": "add-to-playlist" }
-        ]
+        if (row.kind === "track") {
+            var trackRows = [
+                { "label": t("Play", r), "icon": "play-fill", "action": "play" },
+                { "label": t("Play next", r), "icon": "list-start", "action": "next" },
+                { "label": t("Play later", r), "icon": "list-plus", "action": "later" },
+                { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" },
+                { "label": t("Add to playlist", r), "icon": "list-music", "action": "add-to-playlist" }
+            ]
+            // QoL round: gated on the payload actually carrying the album
+            // (a Qobuz id or a local group key — search_qt::CortRow.albumId).
+            if ((row.albumId || "") !== "")
+                trackRows.push({ "label": t("Open containing album", r), "icon": "disc-3", "action": "open-album" })
+            return trackRows
+        }
         if (row.kind === "playlist") return [
             { "label": t("Open playlist", r), "icon": "list-music", "action": "open" },
             { "label": t("Play", r), "icon": "play-fill", "action": "play" },
@@ -124,8 +131,8 @@ Item {
         if (fi === undefined || fi === null)
             return
         QbzSearch.cortinillaMenuAction(fi, action)
-        if ((action === "open" || action === "play" || action === "add-to-playlist")
-                && root.headerBar)
+        if ((action === "open" || action === "open-album" || action === "play"
+                || action === "add-to-playlist") && root.headerBar)
             root.headerBar.clearSearch()
     }
 

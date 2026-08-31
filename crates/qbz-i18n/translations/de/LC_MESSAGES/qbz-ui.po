@@ -446,6 +446,9 @@ msgstr "Entdecken Sie neue Musik aus Ihren meistgespielten Playlists."
 msgid "Open album"
 msgstr "Album öffnen"
 
+msgid "Open containing album"
+msgstr "Zugehöriges Album öffnen"
+
 msgid "Play"
 msgstr "Abspielen"
 

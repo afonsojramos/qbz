@@ -446,6 +446,9 @@ msgstr "Découvrez de nouvelles musiques à partir de vos playlists les plus éc
 msgid "Open album"
 msgstr "Ouvrir l'album"
 
+msgid "Open containing album"
+msgstr "Ouvrir l'album d'origine"
+
 msgid "Play"
 msgstr "Lecture"
 

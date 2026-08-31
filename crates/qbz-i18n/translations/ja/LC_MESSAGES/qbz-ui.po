@@ -445,6 +445,9 @@ msgstr "よく再生するプレイリストから新しい音楽を見つけま
 msgid "Open album"
 msgstr "アルバムを開く"
 
+msgid "Open containing album"
+msgstr "収録アルバムを開く"
+
 msgid "Play"
 msgstr "再生"
 
