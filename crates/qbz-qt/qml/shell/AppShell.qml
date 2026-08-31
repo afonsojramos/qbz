@@ -69,20 +69,32 @@ Rectangle {
     readonly property bool ambientModeOn: root.ambientOn && QbzShell.ambientMode === 1
     readonly property bool blurredModeOn: root.ambientOn && QbzShell.ambientMode === 2
 
-    // Mode 1 — the album-triad metaball field, plus the tunable dark scrim
-    // that keeps chrome text legible over a bright album palette
-    // (QBZ_BG_DIM, default 0.35). The scrim is mode 1 ONLY: mode 2's
-    // atmosphere applies the same dim internally (AppShell.slint:236).
+    // --- The polarity-aware legibility veil (owner, 2026-08-31) ------------
+    // The old scrim was a fixed BLACK layer at ambientDim — tuned for dark
+    // themes, where dark ground + light text is exactly right. Over a LIGHT
+    // theme the same dark scrim pushed the field to MID luminance, the worst
+    // possible ground for dark text (the weak grey ramp died completely).
+    // Light themes therefore veil with their own near-white surfaceMain, a
+    // notch stronger, and the in-shader/in-atmosphere darkening is turned
+    // OFF there (darkening and then whitening would just grey the field).
+    // Dark themes keep the exact previous look.
+    readonly property real veilStrength: theme.isDark
+        ? QbzShell.ambientDim
+        : Math.min(0.72, QbzShell.ambientDim + 0.2)
+
+    // Mode 1 — the album-triad metaball field, plus the veil that keeps text
+    // legible over a bright album palette (QBZ_BG_DIM, default 0.35).
     AmbientField {
         anchors.fill: parent
         visible: root.ambientModeOn
         running: root.ambientModeOn
+        dim: theme.isDark ? QbzShell.ambientDim : 0.0
     }
     Rectangle {
         anchors.fill: parent
         visible: root.ambientModeOn
-        color: "#000000"
-        opacity: QbzShell.ambientDim
+        color: theme.isDark ? "#000000" : theme.surfaceMain
+        opacity: root.veilStrength
     }
 
     // Mode 2 — Blurred art: the SAME ImmersiveAtmosphere the immersive view
@@ -90,14 +102,23 @@ Rectangle {
     // reuses the identical component). `animated` follows the transport, so a
     // paused player holds the static pose instead of drifting forever, and the
     // fallback is the plain cover for a track whose atmosphere bitmap has not
-    // been generated yet.
+    // been generated yet. On light themes its internal dark dim is disabled
+    // and the veil below provides the legibility layer instead (the
+    // atmosphere's baked gradient scrim stays — it reads as depth under the
+    // light veil, not as darkness).
     ImmersiveAtmosphere {
         anchors.fill: parent
         visible: root.blurredModeOn
         source: root.blurredModeOn ? QbzImmersive.atmosphereUrl : ""
         fallbackSource: root.blurredModeOn ? QbzPlayer.npArtworkPath : ""
         animated: root.blurredModeOn && QbzPlayer.npPlaying
-        dim: QbzShell.ambientDim
+        dim: theme.isDark ? QbzShell.ambientDim : 0.0
+    }
+    Rectangle {
+        anchors.fill: parent
+        visible: root.blurredModeOn && !theme.isDark
+        color: theme.surfaceMain
+        opacity: root.veilStrength
     }
 
     // The host ApplicationWindow (custom chrome: drag / maximize / resize).
