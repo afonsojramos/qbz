@@ -4794,6 +4794,12 @@ msgstr "Opcional — discos externos e NAS"
 msgid "Copy"
 msgstr "Copiar"
 
+msgid "Cut"
+msgstr "Recortar"
+
+msgid "Paste"
+msgstr "Colar"
+
 msgid "Copied!"
 msgstr "Copiado!"
 

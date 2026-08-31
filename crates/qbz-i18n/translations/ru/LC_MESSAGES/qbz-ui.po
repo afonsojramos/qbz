@@ -4810,6 +4810,12 @@ msgstr "Опционально — внешние диски и NAS"
 msgid "Copy"
 msgstr "Копировать"
 
+msgid "Cut"
+msgstr "Вырезать"
+
+msgid "Paste"
+msgstr "Вставить"
+
 msgid "Copied!"
 msgstr "Скопировано!"
 

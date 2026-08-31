@@ -4806,6 +4806,12 @@ msgstr "Optioneel — externe schijven & NAS"
 msgid "Copy"
 msgstr "Kopiëren"
 
+msgid "Cut"
+msgstr "Knippen"
+
+msgid "Paste"
+msgstr "Plakken"
+
 msgid "Copied!"
 msgstr "Gekopieerd!"
 

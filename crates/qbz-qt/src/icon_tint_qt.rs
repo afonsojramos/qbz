@@ -174,6 +174,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("circle-alert", include_str!("../qml/assets/icons/primary/circle-alert.svg")),
     ("circle-check-big", include_str!("../qml/assets/icons/primary/circle-check-big.svg")),
     ("circle-stop", include_str!("../qml/assets/icons/primary/circle-stop.svg")),
+    ("clipboard", include_str!("../qml/assets/icons/primary/clipboard.svg")),
     ("clock", include_str!("../qml/assets/icons/primary/clock.svg")),
     ("cloud-download", include_str!("../qml/assets/icons/primary/cloud-download.svg")),
     ("cloud-off", include_str!("../qml/assets/icons/primary/cloud-off.svg")),
@@ -266,6 +267,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("repeat", include_str!("../qml/assets/icons/primary/repeat.svg")),
     ("rotate-ccw", include_str!("../qml/assets/icons/primary/rotate-ccw.svg")),
     ("rows-3", include_str!("../qml/assets/icons/primary/rows-3.svg")),
+    ("scissors", include_str!("../qml/assets/icons/primary/scissors.svg")),
     ("search", include_str!("../qml/assets/icons/primary/search.svg")),
     // The GEAR. Distinct from settings-2 (two sliders) — the kiosk NavRail's
     // seventh tile uses this one (`shell/NavRail.slint:185`).

@@ -4783,6 +4783,12 @@ msgstr "任意 — 外部ドライブと NAS"
 msgid "Copy"
 msgstr "コピー"
 
+msgid "Cut"
+msgstr "切り取り"
+
+msgid "Paste"
+msgstr "貼り付け"
+
 msgid "Copied!"
 msgstr "コピーしました！"
 

@@ -4830,6 +4830,12 @@ msgstr "Opcional — discos externos y NAS"
 msgid "Copy"
 msgstr "Copiar"
 
+msgid "Cut"
+msgstr "Cortar"
+
+msgid "Paste"
+msgstr "Pegar"
+
 msgid "Copied!"
 msgstr "¡Copiado!"
 
