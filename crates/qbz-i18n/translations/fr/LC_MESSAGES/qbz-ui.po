@@ -6246,3 +6246,6 @@ msgstr "Choisir la commande de mixage"
 
 msgid "Change mixer control"
 msgstr "Changer la commande de mixage"
+
+msgid "Qobuz Connect could not shut down safely. Quit and reopen QBZ, then try logging out again."
+msgstr "Qobuz Connect n’a pas pu s’arrêter en toute sécurité. Quittez et rouvrez QBZ, puis réessayez de vous déconnecter."

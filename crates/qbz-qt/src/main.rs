@@ -1086,12 +1086,18 @@ pub(crate) fn do_logout() {
                 Ok(_) => {
                     integrations_qt::set_qobuz_authenticated(true);
                     deep_link_qt::set_online_session(true);
+                    crate::toast_qt::error(qbz_i18n::t(
+                        "Qobuz Connect could not shut down safely. Quit and reopen QBZ, then try logging out again.",
+                    ));
                     return;
                 }
                 Err(e) => {
                     log::error!("[qbz-qt] QConnect logout teardown failed: {e}");
                     integrations_qt::set_qobuz_authenticated(true);
                     deep_link_qt::set_online_session(true);
+                    crate::toast_qt::error(qbz_i18n::t(
+                        "Qobuz Connect could not shut down safely. Quit and reopen QBZ, then try logging out again.",
+                    ));
                     return;
                 }
             }
