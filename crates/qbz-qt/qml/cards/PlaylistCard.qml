@@ -45,7 +45,8 @@
 // --- Menu inventory vs discover/PlaylistCard.slint ---------------------
 //   Play · Play next · Play later · Add to queue ·
 //   Add to Library (is-owned) | Follow/Unfollow on Qobuz (!is-owned) ·
-//   Copy to your library (!is-owned && !is-copied)
+//   Add to mixtape · Make available offline (QoL round additions over the
+//     .slint inventory) · Copy to your library (!is-owned && !is-copied)
 // All live except the last — see `hasCopyByIdSeam`. The ⋯ button and a
 // right press on the cover or the title open the same menu.
 
@@ -376,6 +377,12 @@ Rectangle {
         else
             m.push({ "label": following ? t("Unfollow on Qobuz", r) : t("Follow on Qobuz", r),
                      "icon": following ? "check" : "user-plus", "action": "favorite" })
+        // QoL round additions over the .slint inventory: the container and
+        // offline actions every card mount can honour — this card is only
+        // ever mounted on Qobuz playlist rows (its play/enqueue actions all
+        // go through the by-id catalog invokables), so neither needs a gate.
+        m.push({ "label": t("Add to mixtape", r), "icon": "cassette-tape", "action": "mixtape" })
+        m.push({ "label": t("Make available offline", r), "icon": "cloud-download", "action": "cache" })
         if (root.hasCopyByIdSeam && !owned && root.item.playlistCopied !== true)
             m.push({ "label": t("Copy to your library", r), "icon": "copy", "action": "copy" })
         return m
@@ -387,5 +394,19 @@ Rectangle {
         else if (a === "play-later") QbzPlayer.enqueuePlaylistById(root.item.id, "later")
         else if (a === "queue") QbzPlayer.enqueuePlaylistById(root.item.id, "queue")
         else if (a === "favorite") root.toggleFavorite()
+        else if (a === "mixtape") {
+            // The payload is assembled at the call site (the SidebarRowMenu /
+            // PmGridCard idiom). `trackCount` is omitted on purpose — the card
+            // contract carries no member count and myqbz_add_qt PERSISTS the
+            // value, so absent (NULL) is the truthful "unknown".
+            QbzMyQbzAdd.open(JSON.stringify([{
+                "itemType": "playlist", "source": "qobuz",
+                "sourceItemId": String(root.item.id),
+                "title": root.item.title || "",
+                "subtitle": root.item.subtitle || "",
+                "artworkUrl": root.artworkUrl || ""
+            }]))
+        }
+        else if (a === "cache") QbzOffline.cachePlaylist(String(root.item.id))
     }
 }
