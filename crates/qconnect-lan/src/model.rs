@@ -93,6 +93,10 @@ impl LanJwtToken {
         Self { endpoint, exp, jwt }
     }
 
+    fn empty() -> Self {
+        Self::new(String::new(), 0, String::new())
+    }
+
     pub fn endpoint(&self) -> &str {
         &self.endpoint
     }
@@ -103,6 +107,16 @@ impl LanJwtToken {
 
     pub fn jwt(&self) -> &str {
         &self.jwt
+    }
+
+    /// Consume the token without cloning either sensitive allocation. The
+    /// returned endpoint and JWT become the caller's zeroization responsibility.
+    pub fn into_parts(mut self) -> (String, i64, String) {
+        (
+            std::mem::take(&mut self.endpoint),
+            self.exp,
+            std::mem::take(&mut self.jwt),
+        )
     }
 }
 
@@ -151,6 +165,16 @@ impl HandoffCandidate {
 
     pub const fn become_active(&self) -> bool {
         self.become_active
+    }
+
+    /// Consume the complete handoff without duplicating credential buffers.
+    pub fn into_parts(mut self) -> (String, LanJwtToken, LanJwtToken, bool) {
+        (
+            std::mem::take(&mut self.session_id),
+            std::mem::replace(&mut self.jwt_api, LanJwtToken::empty()),
+            std::mem::replace(&mut self.jwt_qconnect, LanJwtToken::empty()),
+            self.become_active,
+        )
     }
 }
 

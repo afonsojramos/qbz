@@ -109,6 +109,7 @@ fn validate_token(
 
     let url = Url::parse(&raw.endpoint).map_err(|_| ValidationError::EndpointInvalid)?;
     if url.scheme() != required_scheme
+        || url.port_or_known_default() != Some(443)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
@@ -139,6 +140,7 @@ fn validate_token(
 fn endpoint_host(endpoint: &str, required_scheme: &str) -> Result<String, ValidationError> {
     let url = Url::parse(endpoint).map_err(|_| ValidationError::EndpointInvalid)?;
     if url.scheme() != required_scheme
+        || url.port_or_known_default() != Some(443)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
@@ -195,6 +197,11 @@ mod tests {
         assert_eq!(candidate.session_id(), "controller-session");
         assert_eq!(candidate.api_token().jwt(), "api-secret");
         assert_eq!(candidate.qconnect_token().jwt(), "qws-secret");
+        let (session_id, api, qconnect, become_active) = candidate.into_parts();
+        assert_eq!(session_id, "controller-session");
+        assert_eq!(api.into_parts().2, "api-secret");
+        assert_eq!(qconnect.into_parts().2, "qws-secret");
+        assert!(become_active);
     }
 
     #[test]
@@ -233,6 +240,7 @@ mod tests {
     fn rejects_wrong_schemes_userinfo_and_inactive_handoff() {
         for api in [
             "http://api.qobuz.test",
+            "https://api.qobuz.test:8443",
             "https://user@api.qobuz.test",
             "https://api.qobuz.test/#fragment",
         ] {
@@ -241,6 +249,15 @@ mod tests {
                 ValidationError::EndpointInvalid
             );
         }
+        assert_eq!(
+            validation_error(&body(
+                "https://api.qobuz.test",
+                "wss://qws.qobuz.test:8443",
+                NOW + 600,
+                true,
+            )),
+            ValidationError::EndpointInvalid
+        );
         assert_eq!(
             validation_error(&body(
                 "https://api.qobuz.test",

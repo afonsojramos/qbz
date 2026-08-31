@@ -186,6 +186,7 @@ fn handoff(session_id: &str, become_active: bool) -> serde_json::Value {
 async fn serves_official_get_union_and_admits_exact_post_shape() {
     let (mut service, inbox, base, _) = start_service();
     let client = reqwest::Client::new();
+    assert!(service.is_running());
 
     let display = client
         .get(format!("{base}/get-display-info"))
@@ -246,6 +247,7 @@ async fn serves_official_get_union_and_admits_exact_post_shape() {
 
     service.shutdown();
     service.shutdown();
+    assert!(!service.is_running());
     assert!(inbox.is_closed());
 }
 

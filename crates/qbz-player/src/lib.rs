@@ -41,4 +41,4 @@ pub use player::{
     InMemorySource, PlaybackBufferState, PlaybackEvent, PlaybackState,
     Player, SharedState, StreamingConfig,
 };
-pub use queue::QueueManager;
+pub use queue::{QueueAuthoritySnapshot, QueueManager};

@@ -5343,9 +5343,9 @@ impl Player {
         let stream_url = client
             .get_stream_url_with_fallback(track_id, quality)
             .await
-            .map_err(|e| {
-                log::error!("Player: Failed to get stream URL: {}", e);
-                format!("Failed to get stream URL: {}", e)
+            .map_err(|_| {
+                log::error!("Player: Failed to get stream URL (details omitted)");
+                "Failed to get stream URL".to_string()
             })?;
 
         if !self.is_current_play(gen) {
@@ -5355,11 +5355,7 @@ impl Player {
             return Ok(());
         }
 
-        log::info!(
-            "Player: Got stream URL: {} (format: {})",
-            stream_url.url,
-            stream_url.mime_type
-        );
+        log::info!("Player: Got stream URL (format: {})", stream_url.mime_type);
 
         // Download the audio data
         log::info!("Player: Starting audio caching...");
@@ -6695,7 +6691,7 @@ impl Player {
             .timeout(Duration::from_secs(60))
             .connect_timeout(Duration::from_secs(10))
             .build()
-            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+            .map_err(|_| "Failed to create HTTP client".to_string())?;
 
         log::info!("Caching audio from URL...");
 
@@ -6704,7 +6700,10 @@ impl Player {
             .header("User-Agent", "Mozilla/5.0")
             .send()
             .await
-            .map_err(|e| format!("Failed to fetch audio: {}", e))?;
+            .map_err(|e| format!(
+                "Failed to fetch audio: {}",
+                crate::remote_stream::describe_reqwest_error(&e)
+            ))?;
 
         if !response.status().is_success() {
             return Err(format!("HTTP error: {}", response.status()));
@@ -6715,7 +6714,10 @@ impl Player {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| format!("Failed to read audio bytes: {}", e))?;
+            .map_err(|e| format!(
+                "Failed to read audio bytes: {}",
+                crate::remote_stream::describe_reqwest_error(&e)
+            ))?;
 
         log::info!("Cached {} bytes", bytes.len());
         Ok(bytes.to_vec())

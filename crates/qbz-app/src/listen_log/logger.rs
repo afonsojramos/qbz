@@ -1,10 +1,11 @@
 //! The async facade both hosts drive: a [`ListenTracker`] plus a
 //! [`ListenStore`], every store call inside `spawn_blocking`.
 //!
-//! Hosts call the five verbs (`track_started`, `tick`, `ended_naturally`,
-//! `stopped`, `shutdown`) and never touch SQLite or the state machine
-//! themselves. "Listening history OFF" (`paused`) is honoured HERE, in one
-//! place: a paused logger opens no row, so nothing downstream has to ask.
+//! Hosts call explicit lifecycle verbs (`track_started`, `tick`,
+//! `ended_naturally`, `stopped`, `handoff`, `shutdown`) and never touch SQLite
+//! or the state machine themselves. "Listening history OFF" (`paused`) is
+//! honoured HERE, in one place: a paused logger opens no row, so nothing
+//! downstream has to ask.
 
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -167,6 +168,14 @@ impl ListenLogger {
 
     pub async fn errored(&self) {
         let closed = self.tracker.lock().unwrap().errored(now_unix());
+        self.close(closed).await;
+    }
+
+    /// Playback authority moved away from this process. Close the owner row
+    /// as `handoff`; delegated tracks are intentionally never opened here.
+    /// Idempotent so repeated lifecycle observations cannot rewrite the row.
+    pub async fn handoff(&self) {
+        let closed = self.tracker.lock().unwrap().handoff(now_unix());
         self.close(closed).await;
     }
 
@@ -381,5 +390,25 @@ mod tests {
         assert_eq!(rows[0].origin_id, "qbzd:pi");
         assert_eq!(rows[0].end_reason, Some(EndReason::Natural));
         assert_eq!(rows[1].end_reason, Some(EndReason::Stop));
+    }
+
+    #[tokio::test]
+    async fn handoff_closes_the_owner_row_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = ListenLogger::open(dir.path().to_path_buf(), Origin::Install)
+            .await
+            .unwrap();
+        l.track_started(meta("1", 100_000), false).await;
+        l.tick(0, true).await;
+        l.tick(1_000, true).await;
+
+        l.handoff().await;
+        l.handoff().await;
+
+        assert!(!l.has_open_row());
+        let rows = l.rows().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].end_reason, Some(EndReason::Handoff));
+        assert_eq!(rows[0].played_ms, 1_000);
     }
 }

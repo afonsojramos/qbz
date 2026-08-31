@@ -167,6 +167,13 @@ impl ListenTracker {
         self.close_with(EndReason::Shutdown, now)
     }
 
+    /// Playback authority moved to another renderer. The owner row is closed
+    /// explicitly and no delegated playback is folded into it. Calling this
+    /// more than once is harmless: after the first close there is no open row.
+    pub fn handoff(&mut self, now: i64) -> Option<Closed> {
+        self.close_with(EndReason::Handoff, now)
+    }
+
     /// For hosts that only see "a different track started": was the previous
     /// one within 2 s of its end? Mirrors the desktop's
     /// `seen_position + 2 >= duration` (playback_driver.rs:226-264).
@@ -353,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_shutdown_error_reasons() {
+    fn stop_shutdown_error_handoff_reasons() {
         let mut t = ListenTracker::new();
         started(&mut t, 1);
         assert_eq!(t.stopped(2, false).unwrap().reason, EndReason::Stop);
@@ -361,7 +368,10 @@ mod tests {
         assert_eq!(t.shutdown(3).unwrap().reason, EndReason::Shutdown);
         started(&mut t, 3);
         assert_eq!(t.errored(4).unwrap().reason, EndReason::Error);
-        assert_eq!(t.shutdown(5), None);
+        started(&mut t, 4);
+        assert_eq!(t.handoff(5).unwrap().reason, EndReason::Handoff);
+        assert_eq!(t.handoff(6), None, "handoff is idempotent");
+        assert_eq!(t.shutdown(7), None);
     }
 
     #[test]

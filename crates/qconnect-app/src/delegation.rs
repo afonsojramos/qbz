@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use futures_util::FutureExt;
+use futures_util::{stream::FuturesUnordered, FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
@@ -426,9 +426,18 @@ impl<H: DelegationHost> DelegationCoordinator<H> {
     /// Declare that the already-prepared owner authority is ready. Intended for
     /// initial global-QConnect startup after owner authentication.
     pub async fn declare_owner_ready(&self) -> bool {
+        self.declare_owner_ready_if(|| true).await
+    }
+
+    /// Declare owner readiness only while an external lifecycle intent remains
+    /// current. The predicate runs inside the coordinator commit gate and must
+    /// be synchronous and bounded. This closes disable-vs-connect races without
+    /// making teardown wait behind owner network preparation.
+    pub async fn declare_owner_ready_if(&self, is_current: impl FnOnce() -> bool) -> bool {
         let _gate = self.inner.commit_gate.lock().await;
         let mut state = self.inner.state.lock().await;
-        if state.lifecycle != CoordinatorLifecycle::Disabled
+        if !is_current()
+            || state.lifecycle != CoordinatorLifecycle::Disabled
             || state.pending.is_some()
             || !matches!(state.active, ActiveControl::Owner)
         {
@@ -523,9 +532,7 @@ impl<H: DelegationHost> DelegationCoordinator<H> {
             let mut tasks = recover_std_lock(&self.inner.tasks);
             tasks.drain().map(|(_, task)| task).collect::<Vec<_>>()
         };
-        for task in tasks {
-            await_or_abort(task, self.inner.config.cleanup_timeout).await;
-        }
+        await_all_or_abort(tasks, self.inner.config.cleanup_timeout).await;
         let shutdown_timed_out = tokio::time::timeout(
             self.inner.config.cleanup_timeout,
             self.inner.host.shutdown_authority(),
@@ -1108,11 +1115,30 @@ fn recover_std_lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_,
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-async fn await_or_abort(mut task: JoinHandle<()>, timeout: Duration) {
-    if tokio::time::timeout(timeout, &mut task).await.is_err() {
-        task.abort();
-        let _ = task.await;
+/// Give every candidate/restore transaction one shared graceful-cleanup
+/// budget, then abort the remainder together. A hostile burst must not turn a
+/// nominal two-second shutdown budget into two seconds per generation.
+async fn await_all_or_abort(tasks: Vec<JoinHandle<()>>, timeout: Duration) {
+    let mut tasks = tasks.into_iter().collect::<FuturesUnordered<_>>();
+    let timed_out = tokio::time::timeout(timeout, async {
+        while tasks.next().await.is_some() {}
+    })
+    .await
+    .is_err();
+    if !timed_out {
+        return;
     }
+
+    for task in tasks.iter() {
+        task.abort();
+    }
+    // Aborted Tokio tasks normally join on the next poll. Keep even this tail
+    // bounded: cancellation-safe host cleanup and authority stamps own the
+    // late-resource safety if a task refuses to yield promptly.
+    let _ = tokio::time::timeout(Duration::from_millis(250), async {
+        while tasks.next().await.is_some() {}
+    })
+    .await;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1154,6 +1180,25 @@ mod tests {
     use std::sync::Mutex as StdMutex;
 
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn candidate_cleanup_uses_one_shared_shutdown_budget() {
+        let tasks = (0..3)
+            .map(|_| tokio::spawn(std::future::pending::<()>()))
+            .collect();
+        let cleanup = tokio::spawn(await_all_or_abort(tasks, Duration::from_secs(2)));
+
+        tokio::task::yield_now().await;
+        assert!(!cleanup.is_finished());
+        tokio::time::advance(Duration::from_secs(2)).await;
+        tokio::task::yield_now().await;
+
+        assert!(
+            cleanup.is_finished(),
+            "cleanup multiplied its timeout by the number of candidate tasks"
+        );
+        cleanup.await.expect("cleanup task panicked");
+    }
 
     #[derive(Clone, Copy)]
     struct FakeCandidate {
@@ -1680,6 +1725,21 @@ mod tests {
         })
         .await;
         assert!(!coordinator.declare_owner_ready().await);
+        coordinator.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn declare_owner_ready_revalidates_external_intent_inside_commit_gate() {
+        let host = Arc::new(FakeHost::default());
+        let coordinator = DelegationCoordinator::disabled(
+            Arc::clone(&host),
+            DelegationCoordinatorConfig::default(),
+        );
+
+        assert!(!coordinator.declare_owner_ready_if(|| false).await);
+        assert_eq!(coordinator.snapshot().phase, DelegationPhase::Disabled);
+        assert!(coordinator.declare_owner_ready_if(|| true).await);
+        assert_eq!(coordinator.snapshot().phase, DelegationPhase::OwnerReady);
         coordinator.shutdown().await;
     }
 

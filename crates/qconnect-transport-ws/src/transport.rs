@@ -32,6 +32,7 @@ const MSG_TYPE_SUBSCRIBE: u8 = 2;
 const MSG_TYPE_PAYLOAD: u8 = 6;
 const MSG_TYPE_ERROR: u8 = 9;
 const MSG_TYPE_DISCONNECT: u8 = 10;
+const SHUTDOWN_CLOSE_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TransportEvent {
@@ -78,14 +79,10 @@ pub enum TransportEvent {
     /// Decoded `MSG_TYPE_ERROR` (cloud_type=9) frame from Qobuz cloud, per the
     /// `qws.proto` `ErrorMessage` definition. Emitted whenever the qws frontend
     /// rejects a session (e.g. zombie session, conflicting device, expired
-    /// JWT). Carries the cloud-side `code` and human-readable `descr` so
-    /// downstream consumers can reason about *why* the cloud is rejecting us
-    /// instead of only seeing a payload byte count (issue #358).
-    CloudError {
-        msg_id: u32,
-        code: u32,
-        descr: String,
-    },
+    /// JWT). Only numeric protocol metadata crosses this boundary: `descr` is
+    /// server-controlled and may reflect credentials, endpoints, account data,
+    /// or session identifiers, so it is zeroized at decode time.
+    CloudError { msg_id: u32, code: u32 },
     InboundQueueServerEvent(QueueServerEvent),
     InboundRendererServerCommand(RendererServerCommand),
     InboundReceived(InboundEnvelope),
@@ -362,12 +359,8 @@ async fn run_native_transport_loop(
 
         let (mut ws, _) = match connect_result {
             Ok(Ok((ws, response))) => (ws, response),
-            Ok(Err(err)) => {
-                let reason = redact_sensitive(
-                    format!("connect_error:{err}"),
-                    config.jwt_qws.as_deref(),
-                    Some(&config.endpoint_url),
-                );
+            Ok(Err(_)) => {
+                let reason = "connect_error".to_string();
                 match handle_reconnect_delay(
                     &events_tx,
                     &mut shutdown_rx,
@@ -443,16 +436,15 @@ async fn run_native_transport_loop(
         emit(&events_tx, TransportEvent::Connected);
 
         if let Some(jwt_qws) = config.jwt_qws.as_ref() {
-            if let Err(err) = send_authenticate(&mut ws, &mut msg_id, jwt_qws).await {
+            if send_authenticate(&mut ws, &mut msg_id, jwt_qws)
+                .await
+                .is_err()
+            {
                 emit(
                     &events_tx,
                     TransportEvent::TransportError {
                         stage: "authenticate".to_string(),
-                        message: redact_sensitive(
-                            err.to_string(),
-                            config.jwt_qws.as_deref(),
-                            Some(&config.endpoint_url),
-                        ),
+                        message: "authenticate_failed".to_string(),
                     },
                 );
                 let _ = ws.close(None).await;
@@ -540,23 +532,20 @@ async fn run_native_transport_loop(
         }
 
         if config.auto_subscribe {
-            if let Err(err) = send_subscribe(
+            if send_subscribe(
                 &mut ws,
                 &mut msg_id,
                 config.qcloud_proto,
                 &config.subscribe_channels,
             )
             .await
+            .is_err()
             {
                 emit(
                     &events_tx,
                     TransportEvent::TransportError {
                         stage: "subscribe".to_string(),
-                        message: redact_sensitive(
-                            err.to_string(),
-                            config.jwt_qws.as_deref(),
-                            Some(&config.endpoint_url),
-                        ),
+                        message: "subscribe_failed".to_string(),
                     },
                 );
                 let _ = ws.close(None).await;
@@ -618,20 +607,24 @@ async fn run_native_transport_loop(
             tokio::select! {
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
-                        let _ = ws.close(None).await;
+                        let _ = tokio::time::timeout(
+                            SHUTDOWN_CLOSE_TIMEOUT,
+                            ws.close(None),
+                        )
+                        .await;
                         break "shutdown".to_string();
                     }
                 }
                 maybe_envelope = outbound_rx.recv() => {
                     match maybe_envelope {
                         Some(envelope) => {
-                            if let Err(err) = send_outbound_payload(
+                            if send_outbound_payload(
                                 &mut ws,
                                 &mut msg_id,
                                 config.qcloud_proto,
                                 &envelope,
-                            ).await {
-                                break format!("send_error:{err}");
+                            ).await.is_err() {
+                                break "send_error".to_string();
                             }
                             emit(
                                 &events_tx,
@@ -658,8 +651,8 @@ async fn run_native_transport_loop(
                     ) {
                         break "keepalive_timeout".to_string();
                     }
-                    if let Err(err) = ws.send(WsMessage::Ping(Vec::new().into())).await {
-                        break format!("keepalive_ping_error:{err}");
+                    if ws.send(WsMessage::Ping(Vec::new().into())).await.is_err() {
+                        break "keepalive_ping_error".to_string();
                     }
                     outstanding_pings = outstanding_pings.saturating_add(1);
                     emit(&events_tx, TransportEvent::KeepalivePingSent);
@@ -708,8 +701,8 @@ async fn run_native_transport_loop(
                             break "remote_close".to_string();
                         }
                         Some(Ok(_)) => {}
-                        Some(Err(err)) => {
-                            break format!("ws_read_error:{err}");
+                        Some(Err(_)) => {
+                            break "ws_read_error".to_string();
                         }
                         None => {
                             break "ws_stream_end".to_string();
@@ -979,25 +972,13 @@ fn handle_incoming_binary(
                 Ok(error) => {
                     let msg_id = error.msg_id.unwrap_or(0);
                     let code = error.code.unwrap_or(0);
-                    let descr = redact_sensitive(
-                        error.descr.unwrap_or_default(),
-                        jwt_qws,
-                        sensitive_endpoint,
-                    );
+                    let mut descr = error.descr.unwrap_or_default();
+                    descr.zeroize();
                     log::warn!(
-                        "[QConnect/Transport] Cloud error frame: msg_id={} code={} descr={:?}",
-                        msg_id,
-                        code,
-                        descr
+                        "[QConnect/Transport] Cloud error frame: msg_id={} code={}",
+                        msg_id, code
                     );
-                    emit(
-                        events_tx,
-                        TransportEvent::CloudError {
-                            msg_id,
-                            code,
-                            descr,
-                        },
-                    );
+                    emit(events_tx, TransportEvent::CloudError { msg_id, code });
                 }
                 Err(err) => {
                     log::warn!(
@@ -1320,7 +1301,7 @@ mod tests {
     }
 
     /// Issue #358: a qws-level `MSG_TYPE_ERROR` frame must surface as a
-    /// `CloudError` event carrying the decoded code + descr, NOT as an opaque
+    /// `CloudError` event carrying the decoded numeric code, NOT as an opaque
     /// `bytes=N` `TransportError`. Without this, the upper layer can't
     /// distinguish a zombie session from any other transport hiccup and the
     /// reconnect loop spins blindly.
@@ -1347,21 +1328,16 @@ mod tests {
         assert!(matches!(first, TransportEvent::InboundFrameDecoded { .. }));
 
         match events_rx.recv().await.expect("second event") {
-            TransportEvent::CloudError {
-                msg_id,
-                code,
-                descr,
-            } => {
+            TransportEvent::CloudError { msg_id, code } => {
                 assert_eq!(msg_id, 42);
                 assert_eq!(code, 403);
-                assert_eq!(descr, "zombie_session");
             }
             other => panic!("expected CloudError, got {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn cloud_error_redacts_reflected_jwt() {
+    async fn cloud_error_discards_server_description() {
         const JWT: &str = "header.payload.secret-signature";
         let (events_tx, mut events_rx) = broadcast::channel::<TransportEvent>(8);
 
@@ -1380,12 +1356,13 @@ mod tests {
         let event = events_rx.recv().await.expect("cloud error event");
         let debug = format!("{event:?}");
         assert!(!debug.contains(JWT));
-        match event {
-            TransportEvent::CloudError { descr, .. } => {
-                assert_eq!(descr, "rejected credential [REDACTED]");
+        assert!(matches!(
+            event,
+            TransportEvent::CloudError {
+                msg_id: 7,
+                code: 403
             }
-            other => panic!("expected CloudError, got {other:?}"),
-        }
+        ));
     }
 
     #[test]

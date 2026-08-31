@@ -19,6 +19,8 @@
 //   * `advance_and_play` — the full advance ritual (skip-walk → play → prefetch
 //                        → persist), reused verbatim by the CLI next/prev routes
 
+use std::any::Any;
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -83,6 +85,18 @@ pub enum DriverAction {
     /// The current track ended and nothing is playable — stop
     /// (`playback.rs:4751`).
     QueueFinished,
+}
+
+/// Whether an action may run under the current authority. Playback/queue
+/// mutation, owner-side resolution and session persistence are fenced while a
+/// delegated renderer owns playback; diagnostics and renderer reports remain
+/// live so the guest session stays observable.
+fn action_allowed(action: &DriverAction, owner_actions_allowed: bool) -> bool {
+    owner_actions_allowed
+        || matches!(
+            action,
+            DriverAction::LatchError(_) | DriverAction::ReportEdge
+        )
 }
 
 /// The previous tick's snapshot: the desktop loop's `last_track_id` /
@@ -422,6 +436,26 @@ pub fn advance_state(
     }
 }
 
+/// Keep delegated observations useful for reports without ever promoting them
+/// into the owner's carried playback state. The delegated state is discarded
+/// on the first owner-admitted tick; restore then plans only from the last
+/// owner snapshot captured before handoff.
+fn advance_authority_state(
+    owner_state: &mut DriverState,
+    delegated_state: &mut Option<DriverState>,
+    ev: &PlaybackEvent,
+    actions: &[DriverAction],
+    owner_actions_allowed: bool,
+) {
+    if owner_actions_allowed {
+        *owner_state = advance_state(owner_state, ev, actions);
+        *delegated_state = None;
+    } else {
+        let previous = delegated_state.take().unwrap_or_default();
+        *delegated_state = Some(advance_state(&previous, ev, actions));
+    }
+}
+
 /// Map the desktop `ui_prefs.streaming_quality` key to a request-layer
 /// [`Quality`]. Byte-identical contract to `crates/qbz/src/ui_prefs.rs:823`
 /// (`streaming_quality_for_key`), replicated here because the desktop crate is
@@ -445,12 +479,90 @@ pub fn quality_from_key(key: &str) -> Quality {
 pub struct DriverDeps {
     /// Resolve the streaming quality at play time (qbzd passes the daemon prefs).
     pub quality: Arc<dyn Fn() -> Quality + Send + Sync>,
+    /// True only while the daemon's owner authority may mutate/resolve/persist.
+    /// Delegated playback keeps the driver alive for diagnostics and reports,
+    /// but fences every owner-side action.
+    pub owner_actions_allowed: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// Atomically classify authority before reading player/queue state. An
+    /// owner result carries the exact generation and a drain-visible permit;
+    /// delegated ticks remain report-only, while fenced ticks retry unread.
+    pub observe_authority: Arc<dyn Fn() -> DriverAuthorityObservation + Send + Sync>,
+    /// Re-admit a spawned continuation only under the exact owner generation
+    /// that produced it. A guest round-trip must never promote stale work into
+    /// a later owner merely because owner actions are allowed again.
+    pub readmit_owner_action:
+        Arc<dyn Fn(&DriverOwnerToken) -> Option<DriverActionPermit> + Send + Sync>,
     /// Report-edge signal (T10 wires the QConnect renderer report).
     pub on_edge: Arc<dyn Fn() + Send + Sync>,
     /// Latch a drained error under a category ("stream" | "transport" | "auth").
     pub on_latch: Arc<dyn Fn(&str, String) + Send + Sync>,
     /// Called at the end of every tick (qbzd timestamps `driver_last_tick`).
     pub on_tick: Arc<dyn Fn() + Send + Sync>,
+}
+
+/// Type-erased RAII permit supplied by the host's authority coordinator.
+/// `qbz-app` needs only the drop boundary; it deliberately knows nothing about
+/// the daemon's concrete authority stamps.
+pub struct DriverActionPermit {
+    _inner: Box<dyn Send + Sync>,
+}
+
+/// Type-erased exact owner token supplied by the host authority coordinator.
+/// The concrete token remains opaque to `qbz-app`; only the host callback can
+/// downcast and validate it.
+#[derive(Clone)]
+pub struct DriverOwnerToken(Arc<dyn Any + Send + Sync>);
+
+impl DriverOwnerToken {
+    pub fn new<T: Send + Sync + 'static>(token: T) -> Self {
+        Self(Arc::new(token))
+    }
+
+    pub fn downcast_ref<T: Send + Sync + 'static>(&self) -> Option<&T> {
+        self.0.downcast_ref::<T>()
+    }
+}
+
+impl fmt::Debug for DriverOwnerToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("DriverOwnerToken(..)")
+    }
+}
+
+/// One exact owner observation plus the live permit covering the tick input.
+pub struct DriverOwnerAdmission {
+    token: DriverOwnerToken,
+    _permit: DriverActionPermit,
+}
+
+impl DriverOwnerAdmission {
+    pub fn new(token: DriverOwnerToken, permit: DriverActionPermit) -> Self {
+        Self {
+            token,
+            _permit: permit,
+        }
+    }
+
+    fn token(&self) -> DriverOwnerToken {
+        self.token.clone()
+    }
+}
+
+/// Host classification captured before a driver tick reads player or queue.
+/// A lifecycle fence is distinct from delegated playback: fenced ticks retry
+/// without reading or altering either authority's carried state.
+pub enum DriverAuthorityObservation {
+    Owner(DriverOwnerAdmission),
+    Delegated,
+    Fenced,
+}
+
+impl DriverActionPermit {
+    pub fn new<T: Send + Sync + 'static>(permit: T) -> Self {
+        Self {
+            _inner: Box::new(permit),
+        }
+    }
 }
 
 /// Result of a gapless byte fetch that ran outside the 450 ms control loop.
@@ -539,6 +651,7 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let mut state = DriverState::default();
+    let mut delegated_state: Option<DriverState> = None;
     let mut ticker = tokio::time::interval(Duration::from_millis(TICK_MS));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Gapless downloads may outlive the fixed ten-second arm window, but they
@@ -561,7 +674,13 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
             }
             completed = gapless_fetches.join_next(), if !gapless_fetches.is_empty() => {
                 match completed {
-                    Some(Ok(result)) => finish_gapless_fetch(&runtime, result).await,
+                    Some(Ok((owner_token, result))) => {
+                        if let Some(_permit) = (deps.readmit_owner_action)(&owner_token) {
+                            finish_gapless_fetch(&runtime, result).await;
+                        } else {
+                            log::debug!("[qbzd] driver: discarded gapless result from a stale owner authority");
+                        }
+                    }
                     Some(Err(error)) if error.is_cancelled() => {
                         log::debug!("[qbzd] driver: stale gapless fetch cancelled");
                     }
@@ -583,6 +702,25 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
             _ = ticker.tick() => {}
         }
 
+        // Capture owner admission BEFORE the first player/queue read. If this
+        // tick begins under guest authority it remains guest-only even when an
+        // owner restore completes during `queue_snapshot().await`.
+        let owner_admission = match (deps.observe_authority)() {
+            DriverAuthorityObservation::Owner(admission) => Some(admission),
+            DriverAuthorityObservation::Delegated => None,
+            DriverAuthorityObservation::Fenced => {
+                // The transition fence is waiting for every exact permit held
+                // by these network jobs. Abort them on the first fenced tick,
+                // not only after delegated authority is already installed, or
+                // a slow prefetch could stretch handoff to the stream timeout.
+                gapless_fetches.abort_all();
+                warm_tasks.abort_all();
+                continue;
+            }
+        };
+        let owner_token = owner_admission
+            .as_ref()
+            .map(DriverOwnerAdmission::token);
         let core = runtime.core();
         let player = core.player();
         let ev = player.get_playback_event();
@@ -590,7 +728,30 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
         let stream_error = player.state.take_stream_error_message();
         let queue = queue_snapshot(core).await;
 
-        let actions = plan_tick(&state, &ev, &queue, stream_error.as_deref());
+        let owner_actions_allowed = owner_admission.is_some();
+        if owner_actions_allowed && delegated_state.is_some() {
+            // Rebase on the first fully owner-admitted observation after a
+            // delegated span. Durable player generations may have advanced
+            // while the guest was active; comparing those guest edges with the
+            // pre-handoff owner snapshot could synthesize an owner auto-advance.
+            state = DriverState::after(&ev);
+            delegated_state = None;
+        }
+        let delegated_baseline = DriverState::default();
+        let planning_state = if owner_actions_allowed {
+            &state
+        } else {
+            delegated_state.as_ref().unwrap_or(&delegated_baseline)
+        };
+        let actions = plan_tick(planning_state, &ev, &queue, stream_error.as_deref());
+
+        // Authority can change while an owner prefetch is in flight. Cancel
+        // those best-effort jobs at the first observed delegated tick; their
+        // completion paths are fenced independently above.
+        if !owner_actions_allowed {
+            gapless_fetches.abort_all();
+            warm_tasks.abort_all();
+        }
 
         // Once the engine/queue edge has moved, an outstanding fetch belongs
         // to the old predecessor. Drop its network future immediately so it
@@ -607,7 +768,12 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
             gapless_fetches.abort_all();
         }
 
+        let mut executed_actions = Vec::with_capacity(actions.len());
         for action in &actions {
+            if !action_allowed(action, owner_actions_allowed) {
+                continue;
+            }
+            executed_actions.push(action.clone());
             match action {
                 DriverAction::SyncCursorTo(id) => {
                     core.sync_current_to_id(*id).await;
@@ -617,11 +783,28 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
                     let predecessor_id = ev.track_id;
                     let successor_id = *id;
                     let task_runtime = Arc::clone(&runtime);
+                    let task_owner_actions_allowed = Arc::clone(&deps.owner_actions_allowed);
+                    let task_readmit_owner_action = Arc::clone(&deps.readmit_owner_action);
+                    let task_owner_token = owner_token
+                        .as_ref()
+                        .expect("owner action admitted without an owner token")
+                        .clone();
                     log::info!(
                         "[qbzd] driver: fetching gapless track {successor_id} after {predecessor_id}"
                     );
                     let cached = player.is_track_cached(successor_id);
                     gapless_fetches.spawn(async move {
+                        let Some(_permit) = task_readmit_owner_action(&task_owner_token) else {
+                            return (
+                                task_owner_token,
+                                GaplessFetchResult {
+                                    predecessor_id,
+                                    successor_id,
+                                    bytes: None,
+                                    streamed: false,
+                                },
+                            );
+                        };
                         let core = task_runtime.core();
                         // COLD successor: append its initial CMAF buffer as an
                         // incremental source (the desktop's streaming
@@ -633,34 +816,57 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
                         if !cached {
                             match core.queue_gapless_streaming(successor_id, quality).await {
                                 Ok(()) => {
-                                    return GaplessFetchResult {
-                                        predecessor_id,
-                                        successor_id,
-                                        bytes: None,
-                                        streamed: true,
-                                    }
+                                    return (
+                                        task_owner_token,
+                                        GaplessFetchResult {
+                                            predecessor_id,
+                                            successor_id,
+                                            bytes: None,
+                                            streamed: true,
+                                        },
+                                    )
                                 }
                                 Err(error) => log::warn!(
                                     "[qbzd] driver: gapless stream setup for {successor_id} failed: {error}; trying byte fallback"
                                 ),
                             }
                         }
-                        let bytes = core
-                            .fetch_for_gapless_resolved(successor_id, quality, None, None)
-                            .await;
-                        GaplessFetchResult {
-                            predecessor_id,
-                            successor_id,
-                            bytes,
-                            streamed: false,
-                        }
+                        let bytes = if task_owner_actions_allowed() {
+                            core.fetch_for_gapless_resolved(successor_id, quality, None, None)
+                                .await
+                        } else {
+                            None
+                        };
+                        (
+                            task_owner_token,
+                            GaplessFetchResult {
+                                predecessor_id,
+                                successor_id,
+                                bytes,
+                                streamed: false,
+                            },
+                        )
                     });
                 }
                 DriverAction::WarmSuccessor => {
                     let quality = (deps.quality)();
                     let task_runtime = Arc::clone(&runtime);
+                    let task_owner_actions_allowed = Arc::clone(&deps.owner_actions_allowed);
+                    let task_readmit_owner_action = Arc::clone(&deps.readmit_owner_action);
+                    let task_owner_token = owner_token
+                        .as_ref()
+                        .expect("owner action admitted without an owner token")
+                        .clone();
                     warm_tasks.spawn(async move {
-                        prefetch_successors(task_runtime.as_ref(), quality).await;
+                        let Some(_permit) = task_readmit_owner_action(&task_owner_token) else {
+                            return;
+                        };
+                        prefetch_successors(
+                            task_runtime.as_ref(),
+                            quality,
+                            task_owner_actions_allowed.as_ref(),
+                        )
+                        .await;
                     });
                 }
                 DriverAction::PauseStopAfter => {
@@ -708,7 +914,13 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
             }
         }
 
-        state = advance_state(&state, &ev, &actions);
+        advance_authority_state(
+            &mut state,
+            &mut delegated_state,
+            &ev,
+            &executed_actions,
+            owner_actions_allowed,
+        );
         (deps.on_tick)();
     }
     warm_tasks.abort_all();
@@ -803,7 +1015,11 @@ pub async fn advance_and_play<A: FrontendAdapter + Send + Sync + 'static>(
 async fn prefetch_successors<A: FrontendAdapter + Send + Sync + 'static>(
     runtime: &AppRuntime<A>,
     quality: Quality,
+    owner_actions_allowed: &(dyn Fn() -> bool + Send + Sync),
 ) {
+    if !owner_actions_allowed() {
+        return;
+    }
     // Memory-pressure watchdog: critical pressure latched a halt — do not
     // start a new download (issue #660).
     if crate::memory_watchdog::prefetch_halted() {
@@ -830,6 +1046,9 @@ async fn prefetch_successors<A: FrontendAdapter + Send + Sync + 'static>(
     if player.is_track_cached(next.id) {
         return;
     }
+    if !owner_actions_allowed() {
+        return;
+    }
     let client_lock = core.client();
     let guard = client_lock.read().await;
     let Some(client) = guard.as_ref() else {
@@ -842,6 +1061,9 @@ async fn prefetch_successors<A: FrontendAdapter + Send + Sync + 'static>(
     let allow_hires =
         profile.allow_hires_prefetch && !crate::memory_watchdog::hires_prefetch_paused();
     let prefetch_quality = cap_prefetch_quality(quality, allow_hires);
+    if !owner_actions_allowed() {
+        return;
+    }
     if let Err(e) = player
         .prefetch_into_cache(client, next.id, prefetch_quality)
         .await
@@ -891,9 +1113,7 @@ async fn queue_snapshot<A: FrontendAdapter + Send + Sync + 'static>(
 /// `None`). Mirrors `crates/qbz/src/session_persist.rs::capture_and_save`, minus
 /// the desktop-only `persist_session` gate (the daemon's store IS its queue
 /// persistence, so it always saves).
-pub async fn save_session_now<A: FrontendAdapter + Send + Sync + 'static>(
-    runtime: &AppRuntime<A>,
-) {
+pub async fn save_session_now<A: FrontendAdapter + Send + Sync + 'static>(runtime: &AppRuntime<A>) {
     let core = runtime.core();
     let (tracks, current_index) = core.get_all_queue_tracks().await;
     let full = core.get_queue_state_full().await;
@@ -1074,9 +1294,102 @@ mod tests {
     }
 
     #[test]
+    fn delegated_authority_fences_every_owner_action() {
+        let owner_actions = [
+            DriverAction::SyncCursorTo(2),
+            DriverAction::ArmGapless(2),
+            DriverAction::WarmSuccessor,
+            DriverAction::AdvanceAndPlay,
+            DriverAction::PauseStopAfter,
+            DriverAction::SavePosition(17),
+            DriverAction::QueueFinished,
+        ];
+
+        for action in &owner_actions {
+            assert!(action_allowed(action, true), "owner rejected {action:?}");
+            assert!(
+                !action_allowed(action, false),
+                "delegated authority accepted {action:?}"
+            );
+        }
+
+        for action in [
+            DriverAction::LatchError("stream failed".to_string()),
+            DriverAction::ReportEdge,
+        ] {
+            assert!(action_allowed(&action, true));
+            assert!(action_allowed(&action, false));
+        }
+    }
+
+    #[test]
+    fn delegated_filter_keeps_diagnostics_in_planned_order() {
+        let state = DriverState::after(&ev(1, true, 580, 581));
+        let planned = plan_tick(
+            &state,
+            &ev(1, false, 581, 581),
+            &q(1, &[(2, true)], "off", None),
+            Some("stream failed"),
+        );
+        assert!(planned.contains(&DriverAction::AdvanceAndPlay));
+
+        let executable: Vec<_> = planned
+            .into_iter()
+            .filter(|action| action_allowed(action, false))
+            .collect();
+        assert_eq!(
+            executable,
+            vec![
+                DriverAction::LatchError("stream failed".to_string()),
+                DriverAction::ReportEdge,
+            ]
+        );
+    }
+
+    #[test]
+    fn delegated_snapshots_never_replace_owner_driver_state() {
+        let owner_event = ev(11, true, 42, 300);
+        let mut owner_state = DriverState::after(&owner_event);
+        let original_owner_state = owner_state.clone();
+        let mut delegated_state = None;
+        let guest_event = ev(99, true, 120, 240);
+
+        advance_authority_state(
+            &mut owner_state,
+            &mut delegated_state,
+            &guest_event,
+            &[DriverAction::ReportEdge],
+            false,
+        );
+
+        assert_eq!(owner_state, original_owner_state);
+        assert_eq!(
+            delegated_state.as_ref().map(|state| state.last.track_id),
+            Some(99)
+        );
+
+        let restored_event = ev(11, true, 43, 300);
+        advance_authority_state(
+            &mut owner_state,
+            &mut delegated_state,
+            &restored_event,
+            &[],
+            true,
+        );
+        assert_eq!(owner_state.last.track_id, 11);
+        assert_eq!(owner_state.last.position, 43);
+        assert!(delegated_state.is_none());
+    }
+
+    #[test]
     fn end_edge_advances() {
         let s = DriverState::after(&ev(1, true, 580, 581));
-        let a = plan_tick(&s, &ev(1, false, 581, 581), &q(1, &[(2, true)], "off", None), None);
+        let a = plan_tick(
+            &s,
+            &ev(1, false, 581, 581),
+            &q(1, &[(2, true)], "off", None),
+            None,
+        );
         assert!(a.contains(&DriverAction::AdvanceAndPlay));
         assert!(a.contains(&DriverAction::ReportEdge)); // play-state edge
     }
@@ -1091,12 +1404,7 @@ mod tests {
         current.engine_empty_generation = 1;
         current.engine_empty_track_id = 1;
 
-        let actions = plan_tick(
-            &s,
-            &current,
-            &q(1, &[(2, true)], "off", None),
-            None,
-        );
+        let actions = plan_tick(&s, &current, &q(1, &[(2, true)], "off", None), None);
         assert!(actions.contains(&DriverAction::AdvanceAndPlay));
     }
 
@@ -1165,7 +1473,12 @@ mod tests {
     #[test]
     fn mid_track_pause_does_not_advance() {
         let s = DriverState::after(&ev(1, true, 100, 581));
-        let a = plan_tick(&s, &ev(1, false, 100, 581), &q(1, &[(2, true)], "off", None), None);
+        let a = plan_tick(
+            &s,
+            &ev(1, false, 100, 581),
+            &q(1, &[(2, true)], "off", None),
+            None,
+        );
         assert!(!a.contains(&DriverAction::AdvanceAndPlay));
         assert!(a.contains(&DriverAction::ReportEdge));
     }
@@ -1179,12 +1492,7 @@ mod tests {
 
         let mut underrun = ready.clone();
         underrun.buffer_state = PlaybackBufferState::Underrun;
-        let actions = plan_tick(
-            &state,
-            &underrun,
-            &q(41, &[(42, true)], "off", None),
-            None,
-        );
+        let actions = plan_tick(&state, &underrun, &q(41, &[(42, true)], "off", None), None);
 
         assert!(actions.contains(&DriverAction::ReportEdge));
     }
@@ -1257,12 +1565,7 @@ mod tests {
         let mut current = ev(1, false, 581, 581);
         current.gapless_ready = true;
         let previous = DriverState::after(&ev(1, true, 580, 581));
-        let actions = plan_tick(
-            &previous,
-            &current,
-            &q(1, &[(2, true)], "off", None),
-            None,
-        );
+        let actions = plan_tick(&previous, &current, &q(1, &[(2, true)], "off", None), None);
         assert!(!actions
             .iter()
             .any(|action| matches!(action, DriverAction::ArmGapless(_))));
@@ -1342,13 +1645,21 @@ mod tests {
     #[test]
     fn queue_finished_when_nothing_playable() {
         let s = DriverState::after(&ev(1, true, 580, 581));
-        let a = plan_tick(&s, &ev(1, false, 581, 581), &q(1, &[(2, false)], "off", None), None);
+        let a = plan_tick(
+            &s,
+            &ev(1, false, 581, 581),
+            &q(1, &[(2, false)], "off", None),
+            None,
+        );
         assert!(a.contains(&DriverAction::QueueFinished));
     }
 
     #[test]
     fn skip_walk_bounds() {
-        assert_eq!(next_playable(&[(2, false), (3, false), (4, true)], 50), Some((2, 4)));
+        assert_eq!(
+            next_playable(&[(2, false), (3, false), (4, true)], 50),
+            Some((2, 4))
+        );
         let all_bad: Vec<(u64, bool)> = (0..60).map(|i| (i, false)).collect();
         assert_eq!(next_playable(&all_bad, 50), None); // bounded — never walks forever
     }
@@ -1371,7 +1682,12 @@ mod tests {
     #[test]
     fn seamless_gapless_transition_syncs_cursor() {
         let s = DriverState::after(&ev(1, true, 580, 581));
-        let a = plan_tick(&s, &ev(2, true, 0, 547), &q(1, &[(2, true)], "off", None), None);
+        let a = plan_tick(
+            &s,
+            &ev(2, true, 0, 547),
+            &q(1, &[(2, true)], "off", None),
+            None,
+        );
         assert!(a.contains(&DriverAction::SyncCursorTo(2)));
     }
 
@@ -1390,7 +1706,12 @@ mod tests {
     #[test]
     fn duration_zero_never_advances() {
         let s = DriverState::after(&ev(1, true, 580, 581));
-        let a = plan_tick(&s, &ev(1, false, 580, 0), &q(1, &[(2, true)], "off", None), None);
+        let a = plan_tick(
+            &s,
+            &ev(1, false, 580, 0),
+            &q(1, &[(2, true)], "off", None),
+            None,
+        );
         assert!(!a.contains(&DriverAction::AdvanceAndPlay));
         assert!(a.contains(&DriverAction::ReportEdge)); // play-state edge
     }

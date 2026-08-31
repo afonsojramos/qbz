@@ -23,22 +23,26 @@ use zeroize::Zeroizing;
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0";
 
-/// Read a short, log-safe preview of a response body — for diagnosing an
-/// unexpected non-2xx (e.g. distinguishing an edge/WAF HTML 403 from the API's
-/// JSON error envelope, issue #637). Bounded so a large/HTML body can't bloat
-/// the log; prefixed with " : " so it reads well appended to an error message.
+/// Return a bounded, content-free diagnostic for an unexpected response body.
+///
+/// Remote bodies are untrusted and can contain credentials or echo signed
+/// request parameters. They must never enter logs or a displayable `ApiError`.
+/// We retain only whether a body was present.
 async fn body_preview(response: reqwest::Response) -> String {
     match response.text().await {
         Ok(body) => {
-            let trimmed = body.trim();
-            if trimmed.is_empty() {
-                " : <empty body>".to_string()
-            } else {
-                let preview: String = trimmed.chars().take(200).collect();
-                format!(" : {preview}")
-            }
+            let body = Zeroizing::new(body);
+            redacted_body_diagnostic(body.as_str()).to_string()
         }
         Err(_) => String::new(),
+    }
+}
+
+fn redacted_body_diagnostic(body: &str) -> &'static str {
+    if body.trim().is_empty() {
+        " : <empty body>"
+    } else {
+        " : <response body omitted>"
     }
 }
 
@@ -3263,6 +3267,16 @@ impl Default for QobuzClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_body_diagnostic_never_echoes_payload() {
+        let marker = "jwt=secret&request_sig=signed-value";
+        let diagnostic = redacted_body_diagnostic(marker);
+        assert_eq!(diagnostic, " : <response body omitted>");
+        assert!(!diagnostic.contains(marker));
+        assert!(!diagnostic.contains("secret"));
+        assert_eq!(redacted_body_diagnostic("  \n"), " : <empty body>");
+    }
 
     /// Install the process-level rustls `CryptoProvider`, once.
     ///

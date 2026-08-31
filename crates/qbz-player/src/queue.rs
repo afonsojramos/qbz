@@ -21,6 +21,7 @@ enum QueueMoveDirection {
 const MAX_HISTORY_LEN: usize = 50;
 
 /// Internal queue state - all in one struct to avoid deadlocks
+#[derive(Clone)]
 struct InternalState {
     /// All tracks in the queue (original order)
     tracks: Vec<QueueTrack>,
@@ -44,6 +45,16 @@ struct InternalState {
     /// NOT extend it (it appends to the absolute end, untouched).
     manual_next_count: usize,
 }
+
+/// An exact, in-process snapshot of queue playback authority.
+///
+/// The payload is deliberately opaque: callers can preserve and later restore
+/// the queue, but cannot manufacture a partial or internally inconsistent
+/// state. It is not a persistence format and is intended for transactional
+/// authority handoffs such as QConnect delegation.
+#[must_use = "an authority snapshot must be retained until it is restored or deliberately discarded"]
+#[derive(Clone)]
+pub struct QueueAuthoritySnapshot(InternalState);
 
 /// Queue manager for handling playback queue
 pub struct QueueManager {
@@ -370,7 +381,10 @@ impl QueueManager {
                     // History stores indices into `tracks`. Remap by track id
                     // so entries for removed rows drop and any entry that still
                     // refers to the kept track points at index 0.
-                    Self::remap_history_by_track_id_internal(&mut state, std::slice::from_ref(&kept));
+                    Self::remap_history_by_track_id_internal(
+                        &mut state,
+                        std::slice::from_ref(&kept),
+                    );
                     state.tracks = vec![kept];
                     state.current_index = Some(0);
                 } else {
@@ -1058,9 +1072,7 @@ impl QueueManager {
         // shrinks the block; exhausting or wrapping the queue dissolves it.
         match next_idx {
             Some(0) | None => state.manual_next_count = 0,
-            Some(_) => {
-                state.manual_next_count = state.manual_next_count.saturating_sub(1)
-            }
+            Some(_) => state.manual_next_count = state.manual_next_count.saturating_sub(1),
         }
         next_idx.and_then(|idx| state.tracks.get(idx).cloned())
     }
@@ -1487,6 +1499,27 @@ impl QueueManager {
         (state.tracks.clone(), state.current_index)
     }
 
+    /// Capture the complete queue authority state under one lock.
+    ///
+    /// Unlike the frontend and persistence projections, this preserves every
+    /// playback-order detail without caps or normalization: canonical tracks,
+    /// current cursor, shuffle order and cursor, repeat mode, chronological
+    /// history, stop-after marker, and the manual-next block size.
+    pub fn capture_authority_snapshot(&self) -> QueueAuthoritySnapshot {
+        let state = self.state.lock().unwrap();
+        QueueAuthoritySnapshot(state.clone())
+    }
+
+    /// Atomically replace the complete queue authority state with `snapshot`.
+    ///
+    /// Consuming the opaque snapshot prevents callers from restoring only a
+    /// subset of the coupled queue fields or mutating them between capture and
+    /// restore.
+    pub fn restore_authority_snapshot(&self, snapshot: QueueAuthoritySnapshot) {
+        let mut state = self.state.lock().unwrap();
+        *state = snapshot.0;
+    }
+
     /// Capture the queue rows, cursor, and chronological play-history indices
     /// under one lock for durable session persistence.
     ///
@@ -1775,6 +1808,89 @@ mod tests {
             isrc: None,
             recording_mbid: None,
         }
+    }
+
+    #[test]
+    fn authority_snapshot_round_trips_complete_shuffled_state() {
+        let queue = QueueManager::new();
+        let mut tracks: Vec<_> = (101..=105).map(create_test_track).collect();
+        tracks[2].version = Some("Authority snapshot edition".to_string());
+        tracks[2].bit_depth = Some(24);
+        tracks[2].sample_rate = Some(192.0);
+        tracks[2].isrc = Some("TEST00000103".to_string());
+
+        let shuffle_order = vec![4, 2, 0, 3, 1];
+        queue.set_queue_with_order(tracks, Some(2), true, Some(shuffle_order.clone()));
+        queue.play_index(3);
+        queue.set_repeat(RepeatMode::All);
+        queue.set_stop_after(105);
+
+        let expected_tracks = {
+            let state = queue.state.lock().unwrap();
+            format!("{:?}", state.tracks)
+        };
+        let snapshot = queue.capture_authority_snapshot();
+
+        queue.clear(false);
+        queue.add_track(create_test_track(999));
+        queue.play_index(0);
+        queue.set_repeat(RepeatMode::One);
+
+        queue.restore_authority_snapshot(snapshot);
+
+        let state = queue.state.lock().unwrap();
+        assert_eq!(format!("{:?}", state.tracks), expected_tracks);
+        assert_eq!(state.current_index, Some(3));
+        assert!(state.shuffle);
+        assert_eq!(state.shuffle_order, shuffle_order);
+        assert_eq!(state.shuffle_position, 3);
+        assert_eq!(state.repeat, RepeatMode::All);
+        assert_eq!(state.history, VecDeque::from([2]));
+        assert_eq!(state.stop_after_track_id, Some(105));
+        assert_eq!(state.manual_next_count, 0);
+    }
+
+    #[test]
+    fn authority_snapshot_round_trips_manual_next_block() {
+        let queue = QueueManager::new();
+        queue.set_queue(
+            vec![
+                create_test_track(1),
+                create_test_track(2),
+                create_test_track(3),
+            ],
+            Some(0),
+        );
+        queue.add_track_next(create_test_track(10));
+        queue.add_track_later(create_test_track(11));
+        queue.set_repeat(RepeatMode::One);
+        queue.set_stop_after(3);
+
+        let (expected_shuffle_order, expected_shuffle_position) = {
+            let state = queue.state.lock().unwrap();
+            (state.shuffle_order.clone(), state.shuffle_position)
+        };
+        let snapshot = queue.capture_authority_snapshot();
+        queue.clear(false);
+        queue.restore_authority_snapshot(snapshot);
+
+        let state = queue.state.lock().unwrap();
+        assert_eq!(
+            state
+                .tracks
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![1, 10, 11, 2, 3]
+        );
+        assert_eq!(state.current_index, Some(0));
+        assert!(!state.shuffle);
+        assert_eq!(state.shuffle_order, expected_shuffle_order);
+        assert_eq!(state.shuffle_position, expected_shuffle_position);
+        assert_eq!(state.repeat, RepeatMode::One);
+        assert!(state.history.is_empty());
+        assert_eq!(state.stop_after_track_id, Some(3));
+        assert_eq!(state.manual_next_count, 2);
     }
 
     #[test]
@@ -3140,10 +3256,7 @@ mod tests {
     fn test_remove_upcoming_after_linear() {
         let queue = QueueManager::new();
         // 101 playing, upcoming = [102, 103, 104, 105].
-        queue.set_queue(
-            (101..=105).map(create_test_track).collect(),
-            Some(0),
-        );
+        queue.set_queue((101..=105).map(create_test_track).collect(), Some(0));
 
         // Keep upcoming positions 0..=1 (102, 103); drop 2, 3 (104, 105).
         let removed = queue.remove_upcoming_after(1);

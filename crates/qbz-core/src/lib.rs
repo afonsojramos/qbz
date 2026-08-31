@@ -61,7 +61,7 @@ pub mod system_capabilities;
 pub use qbz_models::{CoreEvent, FrontendAdapter, LoggingAdapter, NoOpAdapter};
 
 // Re-exports from this crate
-pub use core::{normalize_artist_name, QbzCore};
+pub use core::{normalize_artist_name, QbzCore, QueueAuthoritySnapshot};
 // Scene discovery ("artists from the same place"). A frontend driving it needs
 // all four: the token to cancel a run it has navigated away from, the phase for
 // the progress label, and the typed error to tell "offline" and "the upstreams

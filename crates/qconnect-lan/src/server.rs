@@ -11,7 +11,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use zeroize::Zeroizing;
 
 use crate::admission::{admission_channel, AdmissionInbox, AdmissionSender, SubmitError};
-use crate::mdns::MdnsRegistration;
+use crate::mdns::{MdnsRegistration, MdnsShutdownHandle};
 use crate::validation::{parse_and_validate, EndpointPolicy, ValidationError, MAX_BODY_BYTES};
 use crate::LanProjection;
 
@@ -115,10 +115,7 @@ impl LanServiceConfig {
 
 pub struct LanService {
     port: u16,
-    admission: AdmissionSender,
-    accepting: Arc<AtomicBool>,
-    accept_wake_addr: SocketAddr,
-    active_connections: Arc<ActiveConnections>,
+    lifecycle: Arc<ServiceLifecycle>,
     accept_thread: Option<JoinHandle<()>>,
     worker_threads: Vec<JoinHandle<()>>,
     mdns: Option<MdnsRegistration>,
@@ -171,6 +168,82 @@ impl ActiveConnections {
     }
 }
 
+struct ServiceLifecycle {
+    running: AtomicBool,
+    admission: AdmissionSender,
+    accept_wake_addr: SocketAddr,
+    active_connections: Arc<ActiveConnections>,
+    discovery: Mutex<Option<MdnsShutdownHandle>>,
+}
+
+impl ServiceLifecycle {
+    fn new(
+        admission: AdmissionSender,
+        accept_wake_addr: SocketAddr,
+        active_connections: Arc<ActiveConnections>,
+    ) -> Self {
+        Self {
+            running: AtomicBool::new(true),
+            admission,
+            accept_wake_addr,
+            active_connections,
+            discovery: Mutex::new(None),
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        self.running.load(Ordering::Acquire)
+    }
+
+    fn install_discovery(&self, discovery: MdnsShutdownHandle) {
+        let stop_immediately = {
+            let mut slot = recover_lock(&self.discovery);
+            if self.is_running() {
+                *slot = Some(discovery.clone());
+                false
+            } else {
+                true
+            }
+        };
+        if stop_immediately {
+            discovery.shutdown();
+        }
+    }
+
+    /// One fail-stop edge owns teardown. Every later caller observes the
+    /// fenced state and cannot revive admission or discovery.
+    fn stop(&self) {
+        if !self.running.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        self.admission.close();
+        // Withdraw discovery before interrupting the endpoint. This handle is
+        // also called from unexpected thread-exit guards, not only Drop.
+        let discovery = recover_lock(&self.discovery).clone();
+        if let Some(discovery) = discovery {
+            discovery.shutdown();
+        }
+        self.active_connections.shutdown_all();
+        wake_acceptor(self.accept_wake_addr);
+    }
+}
+
+struct UnexpectedThreadExit {
+    lifecycle: Arc<ServiceLifecycle>,
+}
+
+impl UnexpectedThreadExit {
+    fn new(lifecycle: Arc<ServiceLifecycle>) -> Self {
+        Self { lifecycle }
+    }
+}
+
+impl Drop for UnexpectedThreadExit {
+    fn drop(&mut self) {
+        self.lifecycle.stop();
+    }
+}
+
 struct ConnectionJob {
     stream: TcpStream,
     active_connections: Arc<ActiveConnections>,
@@ -195,145 +268,172 @@ impl LanService {
         let accept_wake_addr = accept_wake_addr(listener_addr);
 
         let (admission, inbox) = admission_channel();
-        let accepting = Arc::new(AtomicBool::new(true));
         let rate_limiter = Arc::new(Mutex::new(PostRateLimiter::default()));
         let (request_tx, request_rx) = mpsc::sync_channel::<ConnectionJob>(HTTP_WORKERS);
         let request_rx = Arc::new(Mutex::new(request_rx));
         let in_flight = Arc::new(AtomicUsize::new(0));
         let active_connections = Arc::new(ActiveConnections::default());
+        let lifecycle = Arc::new(ServiceLifecycle::new(
+            admission.clone(),
+            accept_wake_addr,
+            Arc::clone(&active_connections),
+        ));
+
+        // Discovery is prepared and its fail-stop handle installed before any
+        // supervised HTTP thread starts. Publication itself remains last, once
+        // the endpoint can actually serve official-client requests.
+        let mut mdns = if config.advertise_mdns {
+            let advertised_addresses = config.advertised_addresses.clone().or_else(|| {
+                (!config.bind_addr.ip().is_unspecified()).then(|| vec![config.bind_addr.ip()])
+            });
+            let registration = MdnsRegistration::prepare(
+                &config.device_uuid,
+                port,
+                &config.sdk_version,
+                advertised_addresses,
+            )?;
+            lifecycle.install_discovery(registration.shutdown_handle());
+            Some(registration)
+        } else {
+            None
+        };
 
         let mut worker_threads = Vec::with_capacity(HTTP_WORKERS);
         for _ in 0..HTTP_WORKERS {
             let worker_rx = Arc::clone(&request_rx);
-            let worker_accepting = Arc::clone(&accepting);
+            let worker_lifecycle = Arc::clone(&lifecycle);
             let worker_admission = admission.clone();
             let worker_projection = config.projection.clone();
             let worker_policy = config.endpoint_policy.clone();
             let worker_limiter = Arc::clone(&rate_limiter);
             let worker_observer = config.request_observer.clone();
             let read_timeout = config.read_timeout;
-            worker_threads.push(std::thread::spawn(move || loop {
-                let job = {
-                    let receiver = recover_lock(&worker_rx);
-                    receiver.recv()
-                };
-                let mut job = match job {
-                    Ok(job) => job,
-                    Err(_) => break,
-                };
-                if worker_accepting.load(Ordering::Acquire) {
-                    handle_connection(
-                        &mut job.stream,
-                        read_timeout,
-                        &worker_projection,
-                        &worker_policy,
-                        &worker_admission,
-                        &worker_limiter,
-                        worker_observer.as_ref(),
-                    );
-                } else {
-                    let _ = write_response(&mut job.stream, &error_response(503, "unavailable"));
+            worker_threads.push(std::thread::spawn(move || {
+                let _exit_guard = UnexpectedThreadExit::new(Arc::clone(&worker_lifecycle));
+                loop {
+                    let job = {
+                        let receiver = recover_lock(&worker_rx);
+                        receiver.recv()
+                    };
+                    let mut job = match job {
+                        Ok(job) => job,
+                        Err(_) => break,
+                    };
+                    if worker_lifecycle.is_running() {
+                        handle_connection(
+                            &mut job.stream,
+                            read_timeout,
+                            &worker_projection,
+                            &worker_policy,
+                            &worker_admission,
+                            &worker_limiter,
+                            worker_observer.as_ref(),
+                        );
+                    } else {
+                        let _ =
+                            write_response(&mut job.stream, &error_response(503, "unavailable"));
+                    }
                 }
             }));
         }
 
-        let thread_accepting = Arc::clone(&accepting);
+        let accept_lifecycle = Arc::clone(&lifecycle);
         let accept_in_flight = Arc::clone(&in_flight);
         let accept_active_connections = Arc::clone(&active_connections);
-        let accept_admission = admission.clone();
         let accept_observer = config.request_observer.clone();
         // The listener deliberately has no SO_RCVTIMEO: that option also
         // times out accept() on Linux. Shutdown wakes this blocking accept
-        // with one bounded local connection after clearing `accepting`.
-        let accept_thread = std::thread::spawn(move || loop {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    if !thread_accepting.load(Ordering::Acquire) {
-                        break;
-                    }
-                    let Some(permit) = InFlightPermit::try_acquire(Arc::clone(&accept_in_flight))
-                    else {
-                        observe_status(accept_observer.as_ref(), 429);
-                        reject_connection(&mut stream, &error_response(429, "busy"));
-                        continue;
-                    };
-                    let shutdown_stream = match stream.try_clone() {
-                        Ok(stream) => stream,
-                        Err(_) => {
-                            drop(permit);
-                            observe_status(accept_observer.as_ref(), 503);
-                            reject_connection(&mut stream, &error_response(503, "unavailable"));
-                            continue;
-                        }
-                    };
-                    let active_id = accept_active_connections.insert(shutdown_stream);
-                    let job = ConnectionJob {
-                        stream,
-                        active_connections: Arc::clone(&accept_active_connections),
-                        active_id,
-                        _permit: permit,
-                    };
-                    match request_tx.try_send(job) {
-                        Ok(()) => {}
-                        Err(TrySendError::Full(mut job)) => {
-                            observe_status(accept_observer.as_ref(), 429);
-                            reject_connection(&mut job.stream, &error_response(429, "busy"));
-                        }
-                        Err(TrySendError::Disconnected(mut job)) => {
-                            observe_status(accept_observer.as_ref(), 503);
-                            reject_connection(&mut job.stream, &error_response(503, "unavailable"));
-                            thread_accepting.store(false, Ordering::Release);
-                            accept_admission.close();
-                            accept_active_connections.shutdown_all();
+        // with one bounded local connection after fencing the lifecycle.
+        let accept_thread = std::thread::spawn(move || {
+            let _exit_guard = UnexpectedThreadExit::new(Arc::clone(&accept_lifecycle));
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        if !accept_lifecycle.is_running() {
                             break;
                         }
+                        let Some(permit) =
+                            InFlightPermit::try_acquire(Arc::clone(&accept_in_flight))
+                        else {
+                            observe_status(accept_observer.as_ref(), 429);
+                            reject_connection(&mut stream, &error_response(429, "busy"));
+                            continue;
+                        };
+                        let shutdown_stream = match stream.try_clone() {
+                            Ok(stream) => stream,
+                            Err(_) => {
+                                drop(permit);
+                                observe_status(accept_observer.as_ref(), 503);
+                                reject_connection(&mut stream, &error_response(503, "unavailable"));
+                                continue;
+                            }
+                        };
+                        let active_id = accept_active_connections.insert(shutdown_stream);
+                        let job = ConnectionJob {
+                            stream,
+                            active_connections: Arc::clone(&accept_active_connections),
+                            active_id,
+                            _permit: permit,
+                        };
+                        match request_tx.try_send(job) {
+                            Ok(()) => {}
+                            Err(TrySendError::Full(mut job)) => {
+                                observe_status(accept_observer.as_ref(), 429);
+                                reject_connection(&mut job.stream, &error_response(429, "busy"));
+                            }
+                            Err(TrySendError::Disconnected(mut job)) => {
+                                observe_status(accept_observer.as_ref(), 503);
+                                reject_connection(
+                                    &mut job.stream,
+                                    &error_response(503, "unavailable"),
+                                );
+                                accept_lifecycle.stop();
+                                break;
+                            }
+                        }
                     }
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) if !thread_accepting.load(Ordering::Acquire) => break,
-                Err(_) => {
-                    thread_accepting.store(false, Ordering::Release);
-                    accept_admission.close();
-                    accept_active_connections.shutdown_all();
-                    break;
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) if !accept_lifecycle.is_running() => break,
+                    Err(_) => {
+                        accept_lifecycle.stop();
+                        break;
+                    }
                 }
             }
         });
 
-        let mdns = if config.advertise_mdns {
-            let advertised_addresses = config.advertised_addresses.or_else(|| {
-                (!config.bind_addr.ip().is_unspecified()).then(|| vec![config.bind_addr.ip()])
-            });
-            match MdnsRegistration::register(
-                &config.device_uuid,
-                port,
-                &config.sdk_version,
-                advertised_addresses,
-            ) {
-                Ok(mdns) => Some(mdns),
-                Err(error) => {
-                    admission.close();
-                    accepting.store(false, Ordering::Release);
-                    active_connections.shutdown_all();
-                    wake_acceptor(accept_wake_addr);
-                    let _ = accept_thread.join();
-                    for worker in worker_threads {
-                        let _ = worker.join();
-                    }
-                    return Err(error);
+        if let Some(registration) = mdns.as_mut() {
+            let weak_lifecycle = Arc::downgrade(&lifecycle);
+            if let Err(error) = registration.publish(move || {
+                if let Some(lifecycle) = weak_lifecycle.upgrade() {
+                    lifecycle.stop();
                 }
+            }) {
+                lifecycle.stop();
+                registration.shutdown();
+                let _ = accept_thread.join();
+                for worker in worker_threads {
+                    let _ = worker.join();
+                }
+                return Err(error);
             }
-        } else {
-            None
-        };
+        }
+        if !lifecycle.is_running() {
+            lifecycle.stop();
+            if let Some(registration) = mdns.as_mut() {
+                registration.shutdown();
+            }
+            let _ = accept_thread.join();
+            for worker in worker_threads {
+                let _ = worker.join();
+            }
+            return Err(LanError::Mdns);
+        }
 
         Ok((
             Self {
                 port,
-                admission,
-                accepting,
-                accept_wake_addr,
-                active_connections,
+                lifecycle,
                 accept_thread: Some(accept_thread),
                 worker_threads,
                 mdns,
@@ -346,19 +446,17 @@ impl LanService {
         self.port
     }
 
+    /// False after explicit shutdown or any supervised HTTP/mDNS fatal exit.
+    pub fn is_running(&self) -> bool {
+        self.lifecycle.is_running()
+    }
+
     pub fn shutdown(&mut self) {
-        self.admission.close();
-        self.accepting.store(false, Ordering::Release);
-        // Stop advertising before making the HTTP endpoint unreachable. A
-        // strict official client may cache a discovered renderer for minutes,
-        // so publishing a dead port even briefly is worse than keeping the
-        // already-closed admission socket alive during the bounded goodbye.
-        if let Some(mdns) = self.mdns.take() {
+        self.lifecycle.stop();
+        if let Some(mut mdns) = self.mdns.take() {
             mdns.shutdown();
         }
-        self.active_connections.shutdown_all();
         if let Some(thread) = self.accept_thread.take() {
-            wake_acceptor(self.accept_wake_addr);
             let _ = thread.join();
         }
         for thread in self.worker_threads.drain(..) {
@@ -931,5 +1029,24 @@ mod tests {
         assert!(result.is_err());
         *recover_lock(&value) = 1;
         assert_eq!(*recover_lock(&value), 1);
+    }
+
+    #[test]
+    fn unexpected_thread_exit_fail_stops_admission_once() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let wake_addr = listener.local_addr().unwrap();
+        let (admission, inbox) = admission_channel();
+        let lifecycle = Arc::new(ServiceLifecycle::new(
+            admission,
+            wake_addr,
+            Arc::new(ActiveConnections::default()),
+        ));
+
+        drop(UnexpectedThreadExit::new(Arc::clone(&lifecycle)));
+        lifecycle.stop();
+
+        assert!(!lifecycle.is_running());
+        assert!(inbox.is_closed());
+        drop(listener);
     }
 }

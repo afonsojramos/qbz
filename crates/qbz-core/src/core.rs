@@ -6,6 +6,15 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use qbz_integrations::musicbrainz::cache::{MusicBrainzCache, QobuzArtistMatch};
+use qbz_integrations::musicbrainz::genre::{extract_affinity_seeds, genre_summary, is_broad_genre};
+use qbz_integrations::musicbrainz::location::compute_affinity_score;
+use qbz_integrations::musicbrainz::{
+    location, AffinitySeeds, AlbumAppearance, ArtistMetadata, ArtistRelationships,
+    DiscoveryArtist, DiscoveryResponse, LocationCandidate, LocationDiscoveryResponse,
+    MusicBrainzClient, MusicianAppearances, MusicianConfidence, Period, RelatedArtist,
+    ResolvedArtist, ResolvedMusician, Tag,
+};
 use qbz_models::{
     ArtistStoryResponse,
     AssetOrigin, ExternalStreamAsset, StreamQualityInfo,
@@ -17,16 +26,9 @@ use qbz_models::{
     RepeatMode, SearchAllResults, SearchResultsPage, StreamUrl, Track, TrackToAnalyse,
     TracksContainer, UserSession,
 };
-use qbz_integrations::musicbrainz::cache::{MusicBrainzCache, QobuzArtistMatch};
-use qbz_integrations::musicbrainz::genre::{extract_affinity_seeds, genre_summary, is_broad_genre};
-use qbz_integrations::musicbrainz::location::compute_affinity_score;
-use qbz_integrations::musicbrainz::{
-    location, AffinitySeeds, AlbumAppearance, ArtistMetadata, ArtistRelationships,
-    DiscoveryArtist, DiscoveryResponse, LocationCandidate, LocationDiscoveryResponse,
-    MusicBrainzClient, MusicianAppearances, MusicianConfidence, Period, RelatedArtist,
-    ResolvedArtist, ResolvedMusician, Tag,
+use qbz_player::{
+    PlaybackState, Player, QueueAuthoritySnapshot as PlayerQueueAuthoritySnapshot, QueueManager,
 };
-use qbz_player::{PlaybackState, Player, QueueManager};
 use qbz_qobuz::QobuzClient;
 
 use crate::error::CoreError;
@@ -264,11 +266,24 @@ pub struct QbzCore<A: FrontendAdapter> {
     initialized: Arc<RwLock<bool>>,
     /// D8 guard: true when the current queue was built from an OFFLINE-ONLY
     /// local playlist — such a queue must never be pushed to the Qobuz
-    /// Connect cloud. Cleared by every queue REPLACEMENT (`set_queue` /
-    /// `set_queue_with_order` / `clear_queue`); append-style ops preserve it.
-    /// Set explicitly by the frontend's local-playlist play path right after
-    /// its `set_queue`.
+    /// Connect cloud. Ordinary queue replacement (`set_queue` /
+    /// `set_queue_with_order` / `clear_queue`) clears it; append-style ops
+    /// preserve it. An offline local-playlist replacement sets it atomically
+    /// through `set_queue_with_offline_only` before publishing QueueUpdated.
     queue_offline_only: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Exact in-process playback authority owned by [`QbzCore`].
+///
+/// The player snapshot preserves the queue mechanics while `offline_only`
+/// preserves the cloud-publication policy coupled to that queue. Keeping both
+/// opaque prevents a delegation handoff from restoring an offline playlist as
+/// if it were eligible for QConnect synchronization.
+#[must_use = "an authority snapshot must be retained until it is restored or deliberately discarded"]
+#[derive(Clone)]
+pub struct QueueAuthoritySnapshot {
+    queue: PlayerQueueAuthoritySnapshot,
+    offline_only: bool,
 }
 
 impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
@@ -291,17 +306,19 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
     }
 
     /// Mark (or unmark) the current queue as built from an OFFLINE-ONLY local
-    /// playlist (D8). Call right after the `set_queue` that loaded it.
-    pub fn set_queue_offline_only(&self, on: bool) {
+    /// playlist (D8). Queue replacement code should prefer
+    /// [`Self::set_queue_with_offline_only`] so the flag is visible before the
+    /// `QueueUpdated` event can trigger cloud synchronization.
+    fn set_queue_offline_only(&self, on: bool) {
         self.queue_offline_only
-            .store(on, std::sync::atomic::Ordering::Relaxed);
+            .store(on, std::sync::atomic::Ordering::Release);
     }
 
     /// True when the current queue originates from an offline-only local
     /// playlist — QConnect must skip its cloud queue push.
     pub fn queue_is_offline_only(&self) -> bool {
         self.queue_offline_only
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Install a MusicBrainz cache. The frontend owns the data path
@@ -484,6 +501,59 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         queue.get_all_tracks()
     }
 
+    /// Capture the complete queue authority state atomically for a temporary
+    /// renderer handoff. The returned payload is opaque and in-process only.
+    pub async fn capture_authority_snapshot(&self) -> QueueAuthoritySnapshot {
+        let queue = self.queue.read().await;
+        QueueAuthoritySnapshot {
+            queue: queue.capture_authority_snapshot(),
+            offline_only: self.queue_is_offline_only(),
+        }
+    }
+
+    /// Restore a previously captured queue authority state in one atomic,
+    /// side-effect-free replacement. The authority coordinator publishes the
+    /// restored projection only after sealing its origin and generation.
+    pub async fn restore_authority_snapshot(&self, snapshot: QueueAuthoritySnapshot) {
+        let queue = self.queue.write().await;
+        self.set_queue_offline_only(snapshot.offline_only);
+        queue.restore_authority_snapshot(snapshot.queue);
+    }
+
+    /// Commit an authority stamp and restore its exact queue as one synchronous
+    /// visibility boundary. The outer Tokio lock is acquired with `try_write`
+    /// because authority coordinators call this from their non-async commit
+    /// gate. If either the queue is busy or `commit` rejects, ownership of the
+    /// opaque snapshot is returned unchanged and no queue state is mutated.
+    pub fn try_commit_authority_snapshot<F>(
+        &self,
+        snapshot: QueueAuthoritySnapshot,
+        commit: F,
+    ) -> Result<QueueState, QueueAuthoritySnapshot>
+    where
+        F: FnOnce() -> bool,
+    {
+        let QueueAuthoritySnapshot {
+            queue: queue_snapshot,
+            offline_only,
+        } = snapshot;
+        let Ok(queue) = self.queue.try_write() else {
+            return Err(QueueAuthoritySnapshot {
+                queue: queue_snapshot,
+                offline_only,
+            });
+        };
+        if !commit() {
+            return Err(QueueAuthoritySnapshot {
+                queue: queue_snapshot,
+                offline_only,
+            });
+        }
+        self.set_queue_offline_only(offline_only);
+        queue.restore_authority_snapshot(queue_snapshot);
+        Ok(queue.get_state())
+    }
+
     /// Capture queue rows, cursor, and oldest-first playback history under one
     /// queue lock for session persistence.
     pub async fn get_persistable_queue_state(
@@ -562,8 +632,8 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
     /// slot — use when nothing is actively playing and the user wants a full
     /// reset.
     pub async fn clear_queue(&self, keep_current: bool) {
-        self.set_queue_offline_only(false);
         let queue = self.queue.write().await;
+        self.set_queue_offline_only(false);
         queue.clear(keep_current);
         self.emit(CoreEvent::QueueUpdated {
             state: queue.get_state(),
@@ -615,10 +685,21 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
 
     /// Set the entire queue (replaces existing)
     pub async fn set_queue(&self, tracks: Vec<QueueTrack>, start_index: Option<usize>) {
-        // Any queue replacement drops the offline-only-playlist stamp; the
-        // local-playlist play path re-sets it right after when it applies.
-        self.set_queue_offline_only(false);
+        self.set_queue_with_offline_only(tracks, start_index, false)
+            .await;
+    }
+
+    /// Replace the queue and publish its offline-only origin as one ordered
+    /// operation. The flag is set before `QueueUpdated`, closing the window in
+    /// which a QConnect subscriber could upload an offline-only playlist.
+    pub async fn set_queue_with_offline_only(
+        &self,
+        tracks: Vec<QueueTrack>,
+        start_index: Option<usize>,
+        offline_only: bool,
+    ) {
         let queue = self.queue.write().await;
+        self.set_queue_offline_only(offline_only);
         queue.set_queue(tracks, start_index);
         self.emit(CoreEvent::QueueUpdated {
             state: queue.get_state(),
@@ -634,8 +715,8 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         shuffle_enabled: bool,
         shuffle_order: Option<Vec<usize>>,
     ) {
-        self.set_queue_offline_only(false);
         let queue = self.queue.write().await;
+        self.set_queue_offline_only(false);
         queue.set_queue_with_order(tracks, start_index, shuffle_enabled, shuffle_order);
         self.emit(CoreEvent::QueueUpdated {
             state: queue.get_state(),
