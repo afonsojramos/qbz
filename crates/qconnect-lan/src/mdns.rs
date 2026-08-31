@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -120,7 +120,8 @@ impl MdnsRegistration {
     }
 
     /// Publish only after the HTTP acceptor and workers exist. The monitor
-    /// supervises daemon health and reconciles route-selected IPv4 changes.
+    /// supervises daemon health and reconciles the complete operational IPv4
+    /// interface set.
     pub(crate) fn publish<F>(&mut self, on_fatal: F) -> Result<(), LanError>
     where
         F: Fn() + Send + Sync + 'static,
@@ -131,7 +132,7 @@ impl MdnsRegistration {
             .reconcile(initial_addresses, &monitor, Some(ANNOUNCE_TIMEOUT))?;
         if matches!(&self.control.address_source, AddressSource::Dynamic) {
             // The initial acknowledgement may have shared the monitor queue
-            // with an interface event. Re-read route selection once before the
+            // with an interface event. Re-read the interface set once before the
             // long-lived monitor takes over; runtime publishes do not consume
             // monitor events while waiting for an acknowledgement.
             self.control
@@ -367,7 +368,7 @@ where
 }
 
 /// Returns true for an unexpected exit. The receiver blocks between actual
-/// interface events. Its bounded wake only observes shutdown; route discovery
+/// interface events. Its bounded wake only observes shutdown; interface discovery
 /// remains a 30-second missed-event repair pass, not a fast polling loop.
 fn monitor_loop(control: &MdnsControl, monitor: &Receiver<DaemonEvent>) -> bool {
     let mut next_reconcile = Instant::now() + RECONCILE_INTERVAL;
@@ -540,23 +541,23 @@ fn service_info(
 }
 
 fn lan_ipv4_addresses() -> Result<Vec<IpAddr>, LanError> {
-    // A connected UDP socket performs route selection without sending data.
-    // Targeting the mDNS multicast group yields the IPv4 interface that can
-    // actually reach LAN controllers, excluding Docker/VM bridges and
-    // loopback records that make strict official clients choose a dead URL.
-    let socket = UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
-        .map_err(|_| LanError::AddressDiscovery)?;
-    socket
-        .connect(SocketAddr::from((Ipv4Addr::new(224, 0, 0, 251), 5353)))
-        .map_err(|_| LanError::AddressDiscovery)?;
-    let address = socket
-        .local_addr()
+    // The official receiver is reachable from every attached LAN. Advertising
+    // only the interface selected by one multicast route strands controllers
+    // on a second physical NIC. Point-to-point interfaces are excluded because
+    // they are normally VPN/tunnel links rather than mDNS LAN segments.
+    let addresses = if_addrs::get_if_addrs()
         .map_err(|_| LanError::AddressDiscovery)?
-        .ip();
-    if !address.is_ipv4() || address.is_loopback() || address.is_unspecified() {
+        .into_iter()
+        .filter(|interface| {
+            interface.is_oper_up() && !interface.is_loopback() && !interface.is_p2p()
+        })
+        .map(|interface| interface.ip())
+        .collect::<Vec<_>>();
+    let addresses = normalize_addresses(addresses);
+    if addresses.is_empty() {
         return Err(LanError::NoLanAddresses);
     }
-    Ok(vec![address])
+    Ok(addresses)
 }
 
 fn short_id(device_uuid: &str) -> String {

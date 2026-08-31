@@ -50,7 +50,6 @@ pub struct ConnectInfo {
 
 /// Raw official LAN token shape. Deliberately has no `Debug` implementation.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct RawLanJwtToken {
     pub endpoint: String,
     pub exp: i64,
@@ -66,7 +65,6 @@ impl Drop for RawLanJwtToken {
 
 /// Raw official handoff body. Deliberately has no `Debug` implementation.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct RawHandoffRequest {
     pub session_id: String,
     pub jwt_api: RawLanJwtToken,

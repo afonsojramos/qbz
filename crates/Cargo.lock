@@ -4746,6 +4746,7 @@ name = "qconnect-lan"
 version = "2.0.2"
 dependencies = [
  "base64 0.23.1",
+ "if-addrs 0.15.0",
  "mdns-sd",
  "qbz-credentials",
  "qbz-qobuz",

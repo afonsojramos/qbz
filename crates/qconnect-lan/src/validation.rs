@@ -205,6 +205,34 @@ mod tests {
     }
 
     #[test]
+    fn tolerates_future_fields_while_requiring_canonical_fields() {
+        let future = serde_json::json!({
+            "session_id": "controller-session",
+            "jwt_api": {
+                "endpoint": "https://api.qobuz.test/v1",
+                "exp": NOW + 600,
+                "jwt": "api-secret",
+                "future_claim": "ignored"
+            },
+            "jwt_qconnect": {
+                "endpoint": "wss://qws.qobuz.test/ws",
+                "exp": NOW + 600,
+                "jwt": "qws-secret",
+                "future_claim": { "version": 2 }
+            },
+            "become_active": true,
+            "future_capability": ["one", "two"]
+        });
+
+        let candidate =
+            parse_and_validate(&serde_json::to_vec(&future).unwrap(), &policy(), NOW).unwrap();
+
+        assert_eq!(candidate.session_id(), "controller-session");
+        assert_eq!(candidate.api_token().jwt(), "api-secret");
+        assert_eq!(candidate.qconnect_token().jwt(), "qws-secret");
+    }
+
+    #[test]
     fn rejects_aliases_expiry_and_untrusted_hosts() {
         let alias = serde_json::json!({
             "session_id": "controller-session",

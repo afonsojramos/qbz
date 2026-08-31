@@ -6,6 +6,7 @@ license.workspace = true
 description = "Official Qobuz Connect LAN receiver wire and discovery"
 
 [dependencies]
+if-addrs = "0.15"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
