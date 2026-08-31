@@ -69,6 +69,18 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="2.1.0" date="2026-08-31">
+      <description>
+        <p>QBZ 2.1.0 brings the Qt frontend to its first minor release: QConnect grows official LAN pairing parity, casting gets a second hardening round, and playlists, hotkeys and the audio stack all move forward.</p>
+        <ul>
+          <li>QConnect: LAN discovery and pairing aligned with the official clients, shuffle and volume authority fixes, and a hardened handoff/takeover lifecycle</li>
+          <li>Casting: progressive serving, a Plex proxy, visualizer while casting, and X.509 v1 device certificates for Chromecast built-in</li>
+          <li>Playlists: a redesigned Add-to-Playlist picker with membership badges, drag from the Library Explorer, and Jellyfin/Subsonic rows in playlists</li>
+          <li>Audio: ALSA hardware-volume hardening with capability-based control detection, and gapless fixes for the headless daemon</li>
+          <li>Quality of life: Spotify-parity hotkeys with a Vim preset, a listening log, playback stall recovery, and a fresher favorites view</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.0.2" date="2026-07-20">
       <description>
         <p>QBZ 2.0.2 is a big maintenance release: a brand-new headless daemon you can drive entirely from the terminal, a touch-first Kiosk mode, an app-wide dynamic album-art background, and a wave of audio, casting and rendering work — all on the 2.0 rebuild.</p>
