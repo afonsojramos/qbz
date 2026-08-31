@@ -1873,17 +1873,18 @@ Rectangle {
     // Popup reparents to the window overlay).
     AlbumInfoModal { id: albumInfo }
 
-    // Album ⋯ menu (AlbumContextMenu subset — "Play later" as a distinct
-    // block-tail insert has no mode in playback_qt::enqueue_album (next /
-    // append only), so "Add to queue" covers the append arm. The offline
-    // row swaps on the live all-cached aggregate).
+    // Album ⋯ menu (AlbumContextMenu subset — playback_qt::enqueue_album owns
+    // all three insertion modes since the QoL round gave it a real "later"
+    // (#442 block-tail) arm. The offline row swaps on the live all-cached
+    // aggregate).
     QbzContextMenu {
         id: albumMenu
         menuWidth: 196
             Repeater {
                 model: [
                     { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                    { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-plus", "action": "next" },
+                    { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
+                    { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
                     { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
                     { "label": root.toggleState("album", albumHeader.isFavorite) ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": root.toggleState("album", albumHeader.isFavorite) ? "heart-filled" : "heart", "action": "favorite" },
                     { "label": root.toggleState("pin", albumHeader.isPinned) ? QbzSession.tr("Unpin", QbzSession.trRev) : QbzSession.tr("Pin", QbzSession.trRev), "icon": root.toggleState("pin", albumHeader.isPinned) ? "pin-filled" : "pin", "action": "pin" },
@@ -1926,7 +1927,8 @@ Rectangle {
                             var a = modelData.action
                             if (a === "play") QbzPlayer.playAlbum(albumHeader.id)
                             else if (a === "next") QbzPlayer.enqueueAlbum(albumHeader.id, "next")
-                            else if (a === "queue") QbzPlayer.enqueueAlbum(albumHeader.id, "later")
+                            else if (a === "later") QbzPlayer.enqueueAlbum(albumHeader.id, "later")
+                            else if (a === "queue") QbzPlayer.enqueueAlbum(albumHeader.id, "queue")
                             else if (a === "favorite") {
                                 root.setToggleState("album", !root.toggleState("album", albumHeader.isFavorite))
                                 QbzLibrary.libraryToggleFavorite("album", albumHeader.id)
