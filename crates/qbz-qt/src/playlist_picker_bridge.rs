@@ -72,6 +72,12 @@ pub mod qbz_playlist_picker_bridge {
         #[qinvokable]
         fn open_for_tracks(self: Pin<&mut QbzPlaylistPicker>, ids_json: QString);
 
+        /// Same, for a WHOLE catalog album by id — the album-card ⋯ menu
+        /// entry. The album's streamable tracks are fetched off-thread and
+        /// become the carried payload (playlist_picker_qt::open_for_album).
+        #[qinvokable]
+        fn open_for_album(self: Pin<&mut QbzPlaylistPicker>, album_id: QString);
+
         /// Open the picker in LOCAL MODE for ONE row of the currently open
         /// LOCAL playlist detail. The ref is built by
         /// `local_playlist_qt::local_picker_ref_for_row` — never by QML, which
@@ -171,6 +177,10 @@ impl qbz_playlist_picker_bridge::QbzPlaylistPicker {
             return;
         }
         crate::playlist_picker_qt::open_for_ids(&crate::app(), ids);
+    }
+
+    pub fn open_for_album(self: Pin<&mut Self>, album_id: QString) {
+        crate::playlist_picker_qt::open_for_album(album_id.to_string());
     }
 
     pub fn open_for_local_row(self: Pin<&mut Self>, row_id: QString) {

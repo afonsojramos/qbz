@@ -312,6 +312,43 @@ pub fn open_for_ids(runtime: &Runtime, ids: Vec<String>) {
     open_payload(runtime, Payload::Qobuz(parsed));
 }
 
+/// Open the picker for a WHOLE catalog album. The album-card ⋯ menu carries
+/// only the album id, so the track list is fetched here (the
+/// `album_qt::add_to_mixtape` fetch pattern) and the streamable tracks'
+/// catalog ids become the carried payload. A withdrawn/empty album opens
+/// nothing.
+pub fn open_for_album(album_id: String) {
+    if album_id.is_empty() {
+        return;
+    }
+    let runtime = crate::app();
+    crate::spawn(async move {
+        let album = match runtime.core().get_album(&album_id).await {
+            Ok(a) => a,
+            Err(e) => {
+                log::warn!("[qbz-qt] playlist picker: album fetch failed: {e}");
+                return;
+            }
+        };
+        let ids: Vec<u64> = album
+            .tracks
+            .as_ref()
+            .map(|t| {
+                t.items
+                    .iter()
+                    .filter(|tr| tr.is_streamable())
+                    .map(|tr| tr.id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if ids.is_empty() {
+            log::warn!("[qbz-qt] playlist picker: album {album_id} has no addable tracks");
+            return;
+        }
+        open_payload(&runtime, Payload::Qobuz(ids));
+    });
+}
+
 /// Open the picker seeded with LocalLibrary local-mode refs — the reference's
 /// `open_for_ids(.., local = true)`. The refs are carried VERBATIM: nothing on
 /// this path may parse them as numbers (see the module header).
