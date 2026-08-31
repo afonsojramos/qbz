@@ -3607,6 +3607,7 @@ Rectangle {
             Repeater {
                 model: [
                     { "label": QbzSession.tr("Play all next", QbzSession.trRev), "icon": "list-start", "action": "next-all" },
+                    { "label": QbzSession.tr("Play all later", QbzSession.trRev), "icon": "list-plus", "action": "later-all" },
                     { "label": QbzSession.tr("Add all to queue", QbzSession.trRev), "icon": "list-end", "action": "queue-all" },
                     { "label": QbzSession.tr("Shuffle all", QbzSession.trRev), "icon": "shuffle", "action": "shuffle-all" },
                     { "label": QbzSession.tr("Add all to playlist", QbzSession.trRev), "icon": "list-music", "action": "playlist-all" },
@@ -3648,6 +3649,9 @@ Rectangle {
                             // over (ArtistPageView's twin in Slint enqueues,
                             // main.rs:15301).
                             else if (a === "next-all") QbzPlayer.enqueueArtistTop("next")
+                            // #442 block tail — enqueue_track_list_mode's
+                            // "later" arm, same funnel next-all/queue-all use.
+                            else if (a === "later-all") QbzPlayer.enqueueArtistTop("later")
                             else if (a === "queue-all") QbzPlayer.enqueueArtistTop("queue")
                             else if (a === "playlist-all") {
                                 // ArtistPageView.slint:797-802

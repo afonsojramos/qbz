@@ -314,6 +314,9 @@ msgstr "Populaire nummers"
 msgid "Play all next"
 msgstr "Alles hierna afspelen"
 
+msgid "Play all later"
+msgstr "Alles later afspelen"
+
 msgid "Add all to queue"
 msgstr "Alles aan wachtrij toevoegen"
 

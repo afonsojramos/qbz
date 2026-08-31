@@ -314,6 +314,9 @@ msgstr "Faixas Populares"
 msgid "Play all next"
 msgstr "Reproduzir tudo a seguir"
 
+msgid "Play all later"
+msgstr "Tocar tudo depois"
+
 msgid "Add all to queue"
 msgstr "Adicionar tudo à fila"
 

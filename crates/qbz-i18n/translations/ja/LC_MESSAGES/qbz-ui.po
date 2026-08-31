@@ -313,6 +313,9 @@ msgstr "人気のトラック"
 msgid "Play all next"
 msgstr "すべて次に再生"
 
+msgid "Play all later"
+msgstr "すべて後で再生"
+
 msgid "Add all to queue"
 msgstr "すべてキューに追加"
 

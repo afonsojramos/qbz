@@ -314,6 +314,9 @@ msgstr "Beliebte Titel"
 msgid "Play all next"
 msgstr "Alle als Nächstes wiedergeben"
 
+msgid "Play all later"
+msgstr "Alle später abspielen"
+
 msgid "Add all to queue"
 msgstr "Alle zur Warteschlange hinzufügen"
 

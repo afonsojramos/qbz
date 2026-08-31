@@ -313,6 +313,9 @@ msgstr "Популярные треки"
 msgid "Play all next"
 msgstr "Воспроизвести все далее"
 
+msgid "Play all later"
+msgstr "Слушать все позже"
+
 msgid "Add all to queue"
 msgstr "Добавить все в очередь"
 

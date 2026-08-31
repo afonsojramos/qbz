@@ -314,6 +314,9 @@ msgstr "Titres populaires"
 msgid "Play all next"
 msgstr "Tout lire ensuite"
 
+msgid "Play all later"
+msgstr "Tout lire plus tard"
+
 msgid "Add all to queue"
 msgstr "Tout ajouter à la file d'attente"
 

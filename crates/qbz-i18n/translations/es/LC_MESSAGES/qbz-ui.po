@@ -317,6 +317,9 @@ msgstr "Pistas Populares"
 msgid "Play all next"
 msgstr "Reproducir todo a continuación"
 
+msgid "Play all later"
+msgstr "Reproducir todo después"
+
 msgid "Add all to queue"
 msgstr "Añadir todo a la cola"
 
