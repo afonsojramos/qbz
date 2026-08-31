@@ -809,7 +809,26 @@ ApplicationWindow {
     // ICONIFIED, `WINDOW_SHOWN` is still true, so the next tray left-click
     // takes the hide arm rather than restoring. `showFromTray()` below at least
     // un-iconifies, so the SECOND click genuinely brings it back.
+    // The un-hide POSITION (owner report 2026-08-31). Qt keeps the window's
+    // SIZE across hide()/show(), but a remap is a fresh mapping to the WM and
+    // KWin's placement policy re-places it (observed: horizontally centred).
+    // The persisted geometry cannot help — saveWindowGeometry carries only
+    // width/height + flags, no x/y — so the position is captured at the hide
+    // and re-applied around the show. Session-local on purpose: across
+    // launches the WM's placement remains the authority, this only makes
+    // hide -> restore a round trip. On Wayland the x/y writes are no-ops and
+    // the behavior simply stays what it was.
+    property real trayRestoreX: 0
+    property real trayRestoreY: 0
+    property bool trayRestoreValid: false
+
     function hideToTray() {
+        // Only a real WINDOWED frame is worth restoring: a maximized/
+        // fullscreen window is re-placed by its latch, and an iconified
+        // window's x/y are whatever the WM left behind.
+        window.trayRestoreValid = window.visibility === Window.Windowed
+        window.trayRestoreX = window.x
+        window.trayRestoreY = window.y
         // Both reference close arms flush the session BEFORE hiding, "even when
         // only hiding — the process may be killed from the tray / shell without
         // a real quit afterwards" (crates/qbz/src/main.rs:23255-23256). The Qt
@@ -822,7 +841,27 @@ ApplicationWindow {
         window.hide()
         QbzTray.setWindowShown(false)
     }
+    // Re-assert shortly after the map: setting x/y before show() seeds the
+    // position hint, but a placement-policy WM can still apply its own frame
+    // ON the map, after which one late write wins. One-shot, user-action
+    // driven — not a continuous clock (repaint-pulse contract untouched).
+    Timer {
+        id: trayRestoreTimer
+        interval: 50
+        repeat: false
+        onTriggered: {
+            if (window.trayRestoreValid
+                    && window.visibility === Window.Windowed) {
+                window.x = window.trayRestoreX
+                window.y = window.trayRestoreY
+            }
+        }
+    }
     function showFromTray() {
+        if (window.trayRestoreValid) {
+            window.x = window.trayRestoreX
+            window.y = window.trayRestoreY
+        }
         window.show()
         // Un-iconify. Qt's hide() preserves windowStates, unlike the
         // reference's surface destruction (crates/qbz/src/tray/mod.rs:253-265),
@@ -839,6 +878,8 @@ ApplicationWindow {
         // exit() does not, and the port focuses on both paths.
         window.raise()
         window.requestActivate()
+        if (window.trayRestoreValid)
+            trayRestoreTimer.restart()
         QbzTray.setWindowShown(true)
     }
 
