@@ -38,8 +38,6 @@ Item {
     readonly property bool _noShaders: GraphicsInfo.api === GraphicsInfo.Software
         || GraphicsInfo.api === GraphicsInfo.Null
 
-    QbzTheme { id: theme }
-
     // Geometry from the owner's annotated 1280x720 composition. `stageTop` is
     // below the header; `playerTop` is the fixed y of ImmersivePlayerBar. The
     // card consumes 70% of that useful height and 85% of the viewport width.
@@ -76,14 +74,14 @@ Item {
     readonly property real cardBackdropOverscan: Math.max(36,
         Math.min(root.cardWidth, root.cardHeight) * 0.12)
 
-    // Exact complementary hue to the ambient primary, lifted just enough to
-    // stay legible over a dark atmosphere. Unlike FOCUS Wave Bed this is not
-    // mirrored: every column grows upward from one baseline.
-    readonly property color ambientPrimary: QbzShell.ambientPrimary
-    readonly property color waveColor: Qt.lighter(Qt.rgba(
-        1.0 - root.ambientPrimary.r,
-        1.0 - root.ambientPrimary.g,
-        1.0 - root.ambientPrimary.b, 1.0), 1.18)
+    // The album's OWN dominant hue, lifted for legibility (AmbientAccent).
+    // This used to be the exact COMPLEMENT of the ambient primary, which is
+    // how a deep-blue cover got an orange waveform/seek — the accent now
+    // stays in the album palette (2026-08-31 visual cleanup). Unlike FOCUS
+    // Wave Bed this is not mirrored: every column grows upward from one
+    // baseline.
+    AmbientAccent { id: ambientAccent }
+    readonly property color waveColor: ambientAccent.value
 
     readonly property string fontDir: "qrc:/qt/qml/com/blitzfc/qbz/qml/assets/fonts/"
     readonly property string fontSource: {
@@ -333,9 +331,6 @@ Item {
                 anchors.fill: parent
                 visible: !root.lyricsMode
 
-                readonly property string artistAlbum: QbzPlayer.npArtist
-                    + (QbzPlayer.npAlbum !== ""
-                        ? " — " + QbzPlayer.npAlbum : "")
                 readonly property real nominalTitleSize: Math.max(24,
                     Math.min(48, card.height * 0.105))
                 readonly property real nominalMetaSize: Math.max(13,
@@ -348,8 +343,14 @@ Item {
                     font.weight: Font.Bold
                 }
                 TextMetrics {
-                    id: artistAlbumMetrics
-                    text: nowPlayingPane.artistAlbum
+                    id: albumMetrics
+                    text: QbzPlayer.npAlbum
+                    font.pixelSize: nowPlayingPane.nominalMetaSize
+                    font.italic: true
+                }
+                TextMetrics {
+                    id: artistMetrics
+                    text: QbzPlayer.npArtist
                     font.pixelSize: nowPlayingPane.nominalMetaSize
                 }
                 // One shared scale is derived from whichever metadata line is
@@ -360,9 +361,12 @@ Item {
                     if (titleMetrics.advanceWidth > 0)
                         scale = Math.min(scale,
                             nowPlayingPane.width / titleMetrics.advanceWidth)
-                    if (artistAlbumMetrics.advanceWidth > 0)
+                    if (albumMetrics.advanceWidth > 0)
                         scale = Math.min(scale,
-                            nowPlayingPane.width / artistAlbumMetrics.advanceWidth)
+                            nowPlayingPane.width / albumMetrics.advanceWidth)
+                    if (artistMetrics.advanceWidth > 0)
+                        scale = Math.min(scale,
+                            nowPlayingPane.width / artistMetrics.advanceWidth)
                     return Math.max(0.05, Math.min(1.0, scale))
                 }
 
@@ -374,27 +378,31 @@ Item {
                     spacing: Math.max(3,
                         Math.round(7 * nowPlayingPane.typeScale))
 
+                    // "Now Playing" indicator at 1.5x, tinted with the
+                    // album-palette accent instead of the theme accent so it
+                    // matches the waveform/seek (owner request 2026-08-31).
                     Item {
                         visible: QbzPlayer.npPlaying
                         width: parent.width
-                        height: visible ? Math.max(12,
-                            Math.round(14 * nowPlayingPane.typeScale)) : 0
+                        height: visible ? Math.max(18,
+                            Math.round(21 * nowPlayingPane.typeScale)) : 0
                         Row {
                             anchors.left: parent.left
                             anchors.verticalCenter: parent.verticalCenter
-                            spacing: Math.max(4,
-                                Math.round(8 * nowPlayingPane.typeScale))
+                            spacing: Math.max(6,
+                                Math.round(12 * nowPlayingPane.typeScale))
                             EqualizerBars {
-                                tint: theme.accent
+                                tint: root.waveColor
+                                barScale: 1.5 * nowPlayingPane.typeScale
                                 active: root.visible && QbzImmersive.open
                                 anchors.verticalCenter: parent.verticalCenter
                             }
                             Text {
                                 text: QbzSession.tr("Now Playing",
                                     QbzSession.trRev)
-                                color: theme.accent
+                                color: root.waveColor
                                 font.pixelSize: Math.max(1,
-                                    12 * nowPlayingPane.typeScale)
+                                    18 * nowPlayingPane.typeScale)
                                 font.weight: Font.DemiBold
                                 font.letterSpacing: 0.5
                                 anchors.verticalCenter: parent.verticalCenter
@@ -402,6 +410,7 @@ Item {
                         }
                     }
 
+                    // Three metadata lines: title / album / artist.
                     Text {
                         width: parent.width
                         text: QbzPlayer.npTitle
@@ -414,9 +423,22 @@ Item {
                         elide: Text.ElideNone
                     }
                     Text {
+                        visible: QbzPlayer.npAlbum !== ""
                         width: parent.width
-                        text: nowPlayingPane.artistAlbum
-                        color: "#a8ffffff"
+                        text: QbzPlayer.npAlbum
+                        color: "#8cffffff"
+                        font.italic: true
+                        font.pixelSize: Math.max(1,
+                            nowPlayingPane.nominalMetaSize
+                                * nowPlayingPane.typeScale)
+                        wrapMode: Text.NoWrap
+                        elide: Text.ElideNone
+                    }
+                    Text {
+                        visible: QbzPlayer.npArtist !== ""
+                        width: parent.width
+                        text: QbzPlayer.npArtist
+                        color: "#b3ffffff"
                         font.pixelSize: Math.max(1,
                             nowPlayingPane.nominalMetaSize
                                 * nowPlayingPane.typeScale)
@@ -432,7 +454,8 @@ Item {
                             id: qualityBadge
                             anchors.left: parent.left
                             compact: true
-                            scaleFactor: nowPlayingPane.typeScale
+                            overAmbient: true
+                            scaleFactor: 1.5 * nowPlayingPane.typeScale
                             tier: QbzPlayer.npQualityTier
                             detail: QbzPlayer.npQualityDetail
                         }
@@ -500,6 +523,9 @@ Item {
                     uppercase: QbzLyrics.uppercase
                     fontFamily: root.lyricFontFamily
                     activeColor: "#ffffff"
+                    // 35% white so the karaoke fill reads (see
+                    // LyricsFocusPanel.qml).
+                    inactiveColor: "#59ffffff"
                     liteFill: false
                     centered: false
                     textShadow: true

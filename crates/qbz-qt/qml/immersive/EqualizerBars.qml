@@ -35,10 +35,15 @@ Item {
     /// Bar color follows the active theme unless a host deliberately overrides it.
     property color tint: theme.accent
 
-    width: 18
-    height: 14
-    implicitWidth: 18
-    implicitHeight: 14
+    /// Proportional size multiplier over the nominal 18x14 box — the
+    /// cinematic split card mounts the indicator at 1.5x. Bar geometry
+    /// (x 0/5/10/15, width 3) scales with it so the silhouette is identical.
+    property real barScale: 1.0
+
+    width: 18 * barScale
+    height: 14 * barScale
+    implicitWidth: 18 * barScale
+    implicitHeight: 14 * barScale
 
     // Loop phase 0..1, 800ms (ImmersiveTrackInfo.slint:32). Advanced on the
     // SHELL PULSE (QbzShell.pulseMs), not a NumberAnimation: an 800ms
@@ -80,37 +85,37 @@ Item {
     // bar 1: delay 0.0, base 60% (:42-48)
     Rectangle {
         x: 0
-        width: 3
+        width: 3 * root.barScale
         y: root.height - height
         height: root.height * 0.6 * root.wave(0.0)
-        radius: 1
+        radius: root.barScale
         color: root.tint
     }
     // bar 2: delay 0.2, base 100% (:50-56)
     Rectangle {
-        x: 5
-        width: 3
+        x: 5 * root.barScale
+        width: 3 * root.barScale
         y: root.height - height
         height: root.height * 1.0 * root.wave(0.25)
-        radius: 1
+        radius: root.barScale
         color: root.tint
     }
     // bar 3: delay 0.1, base 40% (:58-64)
     Rectangle {
-        x: 10
-        width: 3
+        x: 10 * root.barScale
+        width: 3 * root.barScale
         y: root.height - height
         height: root.height * 0.4 * root.wave(0.125)
-        radius: 1
+        radius: root.barScale
         color: root.tint
     }
     // bar 4: delay 0.3, base 80% (:66-72)
     Rectangle {
-        x: 15
-        width: 3
+        x: 15 * root.barScale
+        width: 3 * root.barScale
         y: root.height - height
         height: root.height * 0.8 * root.wave(0.375)
-        radius: 1
+        radius: root.barScale
         color: root.tint
     }
 }
