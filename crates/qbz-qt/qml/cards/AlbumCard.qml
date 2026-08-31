@@ -140,6 +140,11 @@ Rectangle {
     // album page agree. Do NOT let a host paint its own heart on top of the
     // card — see the `selectMode` note below for the same mistake's other half.
     property bool catalogAffordances: !root.localMode
+    /// Local-mode mounts whose `albumId` is a Local Library group key opt in
+    /// to the album-level "Add to playlist" row (LocalAlbumCollection sets
+    /// it). My QBZ's heterogeneous cells stay out: their local ids are
+    /// container items the local bulk seam cannot resolve.
+    property bool localPlaylistAffordance: false
     // Quick View is broader than the catalog-only heart/block family.
     // Catalog cards keep it by default; local and heterogeneous hosts opt in
     // only for rows whose id is genuinely an album key.
@@ -318,6 +323,10 @@ Rectangle {
             // #442 "Play later" — end of the manual block.
             m.push({ "label": t("Play later", r), "icon": "list-plus", "action": "later" })
             m.push({ "label": t("Add to queue", r), "icon": "list-end", "action": "queue" })
+            // Local albums get the row too (owner, 2026-08-31: playlists can
+            // be 100% local or mixed) — via the existing local bulk seam.
+            if (root.localMode && root.localPlaylistAffordance)
+                m.push({ "label": t("Add to playlist", r), "icon": "list-music", "action": "add-playlist" })
         }
         if (root.favoriteAffordance) {
             // Keep removal reachable even after Qobuz withdraws the old id.
@@ -374,7 +383,16 @@ Rectangle {
         // denormalized snapshot and a file:// cache path is dead on any other
         // machine, the same reason the pin payload uses it.
         if (a === "favorite") { root.toggleFavorite(); return }
-        if (a === "add-playlist") { QbzPlaylistPicker.openForAlbum(root.albumId); return }
+        if (a === "add-playlist") {
+            if (root.localMode)
+                // The bulk "album" scope resolves a local group key to its
+                // rows and opens the picker in LOCAL MODE (local_bulk.rs).
+                QbzLocal.bulkAction("album",
+                    JSON.stringify([String(root.albumId)]), "add-to-playlist")
+            else
+                QbzPlaylistPicker.openForAlbum(root.albumId)
+            return
+        }
         if (a === "mixtape") { QbzAlbum.addToMixtape(root.albumId); return }
         if (a === "cache-album") { QbzAlbum.albumCacheOffline(root.albumId); return }
         if (a === "block") {

@@ -468,6 +468,7 @@ Item {
                             AlbumCard {
                                 id: albumCard
                                 localMode: true
+                                localPlaylistAffordance: true
                                 quickViewAffordance: true
                                 pinAffordance: true
                                 albumId: cardCell.slot.id

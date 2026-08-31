@@ -97,6 +97,7 @@ Rectangle {
                     { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
                     { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
                     { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+                    { "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "action": "add-to-playlist" },
                     { "label": QbzSession.tr("Album info", QbzSession.trRev), "icon": "info", "action": "album-info" }
                 ]
                 if (root.item.favoriteable === true) {
@@ -114,7 +115,9 @@ Rectangle {
                 if (a === "open") root.opened()
                 else if (a === "play") root.playRequested()
                 else if (a === "favorite") root.favoriteRequested()
-                else if (a === "album-info")
+                else if (a === "album-info" || a === "add-to-playlist")
+                    // Both resolve the group key through the same bulk
+                    // "album" scope (local_bulk.rs resolve_blocking).
                     QbzLocal.bulkAction("album", JSON.stringify([String(root.item.id)]), a)
                 else root.enqueueRequested(a)
             }
