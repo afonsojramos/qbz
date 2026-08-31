@@ -4342,11 +4342,8 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                     && report_tick % QCONNECT_REPORT_EVERY_N_TICKS == 0;
                 if transition || periodic {
                     if let Some(svc) = crate::qconnect_qt::service() {
-                        let playing_state = if is_playing {
-                            qconnect_app::renderer::PLAYING_STATE_PLAYING
-                        } else {
-                            qconnect_app::renderer::PLAYING_STATE_PAUSED
-                        };
+                        let playing_state =
+                            qconnect_app::renderer_playing_state(is_playing, event.buffer_state);
                         let position_ms = (position as i64) * 1000;
                         let duration_ms = (duration as i64) * 1000;
                         svc.report_playback_state(

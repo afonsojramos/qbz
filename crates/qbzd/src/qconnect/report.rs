@@ -20,7 +20,8 @@ use qbz_app::shell::AppRuntime;
 use qbz_player::player::PlaybackBufferState;
 use qconnect_app::{
     build_renderer_playback_report, is_local_renderer_active, qconnect_report_track_id,
-    QconnectFileAudioQualitySnapshot, QconnectRemoteSyncState, RendererPlaybackSnapshot,
+    renderer_playing_state, QconnectFileAudioQualitySnapshot, QconnectRemoteSyncState,
+    RendererPlaybackSnapshot,
 };
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -246,8 +247,6 @@ pub async fn run_report_scheduler(
     runtime: Arc<AppRuntime<DaemonAdapter>>,
     authority: Arc<AuthorityCell>,
 ) {
-    use qconnect_app::renderer::{PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING};
-
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(2_000));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -296,11 +295,7 @@ pub async fn run_report_scheduler(
             continue;
         }
 
-        let playing_state = if ev.is_playing {
-            PLAYING_STATE_PLAYING
-        } else {
-            PLAYING_STATE_PAUSED
-        };
+        let playing_state = renderer_playing_state(ev.is_playing, ev.buffer_state);
         // `report_playback_state` wants MILLISECONDS; the player reports seconds.
         let position_ms = (ev.position as i64) * 1000;
         let duration_ms = (ev.duration as i64) * 1000;

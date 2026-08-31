@@ -7,6 +7,8 @@ use qbz_player::player::{PlaybackBufferState, PlaybackEvent};
 use qconnect_core::QueueVersion;
 use qconnect_protocol::{RendererBufferState, RendererReport, RendererReportType};
 
+use crate::renderer::{PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RendererPlaybackSnapshot {
     pub playing_state: i32,
@@ -23,6 +25,24 @@ pub const fn renderer_buffer_state(state: PlaybackBufferState) -> RendererBuffer
         PlaybackBufferState::InitialBuffering => RendererBufferState::Buffering,
         PlaybackBufferState::Underrun => RendererBufferState::Underrun,
         PlaybackBufferState::Error => RendererBufferState::Error,
+    }
+}
+
+/// Project player state onto the official renderer intent semantics.
+///
+/// During initial buffering the audio device has not started yet, so
+/// `PlaybackEvent::is_playing` is false. Official clients nevertheless retain
+/// the requested PLAYING intent alongside BUFFERING. An underrun likewise
+/// remains PLAYING while audio is temporarily starved.
+pub const fn renderer_playing_state(is_playing: bool, buffer_state: PlaybackBufferState) -> i32 {
+    if matches!(
+        buffer_state,
+        PlaybackBufferState::InitialBuffering | PlaybackBufferState::Underrun
+    ) || is_playing
+    {
+        PLAYING_STATE_PLAYING
+    } else {
+        PLAYING_STATE_PAUSED
     }
 }
 
@@ -82,6 +102,26 @@ mod tests {
         assert_eq!(
             renderer_buffer_state(PlaybackBufferState::Error).as_i32(),
             3
+        );
+    }
+
+    #[test]
+    fn buffering_and_underrun_preserve_playing_intent() {
+        assert_eq!(
+            renderer_playing_state(false, PlaybackBufferState::InitialBuffering),
+            PLAYING_STATE_PLAYING
+        );
+        assert_eq!(
+            renderer_playing_state(false, PlaybackBufferState::Underrun),
+            PLAYING_STATE_PLAYING
+        );
+        assert_eq!(
+            renderer_playing_state(false, PlaybackBufferState::Ready),
+            PLAYING_STATE_PAUSED
+        );
+        assert_eq!(
+            renderer_playing_state(true, PlaybackBufferState::Ready),
+            PLAYING_STATE_PLAYING
         );
     }
 

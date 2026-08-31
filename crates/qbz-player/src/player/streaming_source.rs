@@ -851,12 +851,15 @@ impl IncrementalStreamingSource {
                     // Add samples to queue
                     self.sample_queue
                         .extend(sample_buf.samples().iter().copied());
+                    let ready_edge = should_report_ready(self.packets_decoded, self.stalled);
                     self.packets_decoded += 1;
                     // Successful decode ends any stall episode; the next
                     // WouldBlock streak records a fresh underrun.
                     self.stalled = false;
-                    if let Some(reporter) = &self.buffer_reporter {
-                        reporter.report(PlaybackBufferState::Ready);
+                    if ready_edge {
+                        if let Some(reporter) = &self.buffer_reporter {
+                            reporter.report(PlaybackBufferState::Ready);
+                        }
                     }
                 }
                 Err(SymphoniaError::DecodeError(e)) => {
@@ -878,6 +881,10 @@ impl IncrementalStreamingSource {
             }
         }
     }
+}
+
+const fn should_report_ready(packets_decoded: u64, stalled: bool) -> bool {
+    packets_decoded == 0 || stalled
 }
 
 impl Source for IncrementalStreamingSource {
@@ -1153,6 +1160,15 @@ mod tests {
     use super::*;
     use std::thread;
     use std::time::Duration;
+
+    #[test]
+    fn ready_reports_only_on_first_decode_and_stall_recovery() {
+        assert!(should_report_ready(0, false));
+        assert!(!should_report_ready(1, false));
+        assert!(!should_report_ready(400, false));
+        assert!(should_report_ready(1, true));
+        assert!(should_report_ready(400, true));
+    }
 
     #[test]
     fn first_error_wins_over_later_generic_abort() {
