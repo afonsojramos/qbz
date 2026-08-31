@@ -249,6 +249,11 @@ pub fn is_playlist_favorite(playlist_id: u64) -> bool {
 /// favourites file would create a second, divergent record of the same flag.
 /// Use [`set_playlist`] (memory mirror only) right after the db write.
 pub fn set(kind: &str, id: &str, favorite: bool) {
+    // #690: the Library feed is loaded behind a session latch; a favorite
+    // mutation is exactly the event that makes that snapshot stale. Every
+    // caller of this funnel is a real user mutation (the warm paths use the
+    // set_all_* replacers), so this never fires on seeding.
+    crate::mark_library_stale();
     match kind {
         "album" => {
             mutate_str(&*FAV_ALBUMS, id, favorite);
@@ -291,6 +296,7 @@ pub fn set(kind: &str, id: &str, favorite: bool) {
 /// so the next card built (and the open playlist header) reads what just
 /// happened instead of the pre-toggle value.
 pub fn set_playlist(playlist_id: u64, favorite: bool) {
+    crate::mark_library_stale();
     mutate_u64(&*FAV_PLAYLISTS, playlist_id, favorite);
 }
 

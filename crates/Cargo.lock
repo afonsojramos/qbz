@@ -4580,7 +4580,6 @@ dependencies = [
  "qbz-integrations",
  "qbz-models",
  "qbz-qobuz",
- "rand 0.10.2",
  "rusqlite",
  "serde",
  "tokio",

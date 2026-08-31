@@ -2534,8 +2534,23 @@ pub(crate) fn transport_cycle_repeat() {
 
 // ============================ Library (phase 5) ===========================
 
-/// Whether the Library view has been loaded this session.
+/// Whether the Library view has been loaded this session — a STALENESS
+/// latch, not a pure once-flag: favorite mutations reset it
+/// (`mark_library_stale`), so the next Library visit refetches instead of
+/// painting the session-start snapshot. #690: an album favorited mid-session
+/// never appeared in the Library grid — the glyph caches updated, the FEED
+/// membership only changed on restart (or a language switch, the one other
+/// `reload_library` caller).
 static LIBRARY_LOADED: Mutex<bool> = Mutex::new(false);
+
+/// Favorite membership changed somewhere (album page heart, bulk bar, label
+/// follow…): make the next Library visit reload the feed. Deliberately NOT a
+/// live `reload_library()` — a per-click mutation must never republish a
+/// document (the `toggle_pin` doctrine); the reload waits for the next
+/// `hydrate_view("library")`.
+pub(crate) fn mark_library_stale() {
+    *LIBRARY_LOADED.lock().unwrap() = false;
+}
 
 /// TEMPORARY nav probe (QBZ_QT_NAV_PROBE=1) — the GUI-thread cost between the
 /// click and the moment the route reaches QML. Remove with the fix.
