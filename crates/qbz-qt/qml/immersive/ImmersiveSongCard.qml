@@ -131,6 +131,7 @@ Item {
         id: badge
         x: root.metaW - width
         y: titleRow.height + 3 + subRow.height + 3
+        overAmbient: true
         tier: QbzPlayer.npQualityTier
         detail: QbzPlayer.npQualityDetail
         showIcon: true

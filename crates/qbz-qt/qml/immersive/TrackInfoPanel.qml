@@ -105,6 +105,8 @@ Item {
             anchors.centerIn: parent
             text: QbzSession.tr("No track selected", QbzSession.trRev)
             color: "#b3ffffff"
+            style: Text.Raised
+            styleColor: "#b0000000"
             font.pixelSize: 18
         }
 
@@ -123,6 +125,9 @@ Item {
                 id: body
                 host: host
                 width: flick.width
+                // The panel sits on the ambient field — fixed light colors
+                // + native shadow (2026-08-31 visual cleanup).
+                overAmbient: true
             }
         }
 

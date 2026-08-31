@@ -19,6 +19,10 @@ Column {
     /// dictating its width.
     property int colW: 280
 
+    /// Immersive-panel legibility mode (see TrackInfoBody.qml): fixed light
+    /// colors + native shadow instead of the theme tokens.
+    property bool overAmbient: false
+
     signal nameClicked(string name, string roleRaw)
 
     QbzTheme { id: theme }
@@ -29,7 +33,9 @@ Column {
     Text {
         width: cc.colW
         text: cc.cell ? (cc.cell.role || "") : ""
-        color: theme.textMuted
+        color: cc.overAmbient ? "#b3ffffff" : theme.textMuted
+        style: cc.overAmbient ? Text.Raised : Text.Normal
+        styleColor: "#b0000000"
         font.pixelSize: 11
         font.weight: theme.weightSemibold
         font.letterSpacing: 0.5
@@ -49,7 +55,10 @@ Column {
                     id: nameText
                     width: cc.colW
                     text: nameRow.modelData
-                    color: nameArea.containsMouse ? theme.accent : theme.textPrimary
+                    color: nameArea.containsMouse ? theme.accent
+                        : (cc.overAmbient ? "#f2ffffff" : theme.textPrimary)
+                    style: cc.overAmbient ? Text.Raised : Text.Normal
+                    styleColor: "#b0000000"
                     font.pixelSize: 14
                     wrapMode: Text.WordWrap
                 }

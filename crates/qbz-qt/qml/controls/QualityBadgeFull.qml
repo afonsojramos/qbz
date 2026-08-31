@@ -35,6 +35,11 @@ Item {
     property bool bare: false
     /// ~20%-smaller variant for the now-playing stamp.
     property bool compact: false
+    /// Legibility mode for hosts sitting ON the ambient/immersive backdrop
+    /// (2026-08-31 visual cleanup): the chip swaps the theme surface for its
+    /// own translucent dark scrim — covering only the badge, keeping the
+    /// background visible — and fixed light text, so it reads over ANY cover.
+    property bool overAmbient: false
     /// Extra proportional scale on top of `compact` (1.0 = none).
     property real scaleFactor: 1.0
     /// Cap for the text column, in px. 0 = uncapped, which is what every
@@ -67,9 +72,10 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: 4
-        color: root.bare ? "transparent" : theme.surfaceHover
+        color: root.bare ? "transparent"
+            : (root.overAmbient ? "#8c000000" : theme.surfaceHover)
         border.width: root.bare ? 0 : 1
-        border.color: theme.borderSubtle
+        border.color: root.overAmbient ? "#33ffffff" : theme.borderSubtle
     }
 
     Row {
@@ -102,7 +108,7 @@ Item {
                 visible: !root.isHiRes
                 anchors.centerIn: parent
                 name: root.tier === "mp3" ? "mp3" : "cd"
-                tintName: "muted"
+                tintName: root.overAmbient ? "white" : "muted"
                 width: root.iconSide
                 height: root.iconSide
             }
@@ -128,7 +134,7 @@ Item {
                 id: tierText
                 width: parent.width
                 text: root.tierLabel
-                color: theme.textSecondary
+                color: root.overAmbient ? "#e6ffffff" : theme.textSecondary
                 font.pixelSize: Math.max(1, Math.round((root.compact ? 7 : 8) * root.sf))
                 font.weight: Font.Thin
                 font.letterSpacing: 0.5
@@ -139,7 +145,7 @@ Item {
                 id: detailText
                 width: parent.width
                 text: root.detail
-                color: theme.textMuted
+                color: root.overAmbient ? "#b3ffffff" : theme.textMuted
                 font.pixelSize: Math.max(1, Math.round((root.compact ? 8 : 9) * root.sf))
                 font.weight: Font.Thin
                 horizontalAlignment: root.bare ? Text.AlignHCenter : Text.AlignLeft
