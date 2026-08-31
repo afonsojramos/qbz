@@ -4541,6 +4541,8 @@ dependencies = [
  "qbz-text-utils",
  "qbz-theme",
  "qconnect-app",
+ "qconnect-lan",
+ "qconnect-protocol",
  "qconnect-transport-ws",
  "qt-build-utils",
  "rand 0.10.2",
@@ -4556,6 +4558,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "winresource",
  "zbus 5.19.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -4688,6 +4691,7 @@ dependencies = [
  "qbz-reco",
  "qconnect-app",
  "qconnect-core",
+ "qconnect-lan",
  "qconnect-protocol",
  "qconnect-transport-ws",
  "rand 0.10.2",
@@ -4703,6 +4707,7 @@ dependencies = [
  "urlencoding",
  "uuid 1.26.0",
  "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]

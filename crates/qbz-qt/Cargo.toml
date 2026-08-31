@@ -110,6 +110,8 @@ qbz-media-controls = { path = "../qbz-media-controls" }
 # consumed without a frontend fork. Driven by src/qconnect_transport_qt.rs,
 # src/qconnect_engine_qt.rs and the facade/event sink.
 qconnect-app = { path = "../qconnect-app" }
+qconnect-lan = { path = "../qconnect-lan" }
+qconnect-protocol = { path = "../qconnect-protocol" }
 qconnect-transport-ws = { path = "../qconnect-transport-ws" }
 # Type-level edge only, sanctioned by contract §1.1: the QConnect renderer
 # engine trait names `qbz_player::PlaybackState`, and the engine's feeder
@@ -123,6 +125,7 @@ qbz-player = { path = "../qbz-player" }
 uuid = { version = "1", features = ["v4"] }
 futures-util = { workspace = true }
 async-trait = "0.1"
+zeroize = "1"
 
 rusqlite = { version = "0.40", features = ["bundled"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
