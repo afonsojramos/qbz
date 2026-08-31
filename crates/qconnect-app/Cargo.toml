@@ -23,6 +23,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
+zeroize = "1"
 log = { workspace = true }
 
 [dev-dependencies]

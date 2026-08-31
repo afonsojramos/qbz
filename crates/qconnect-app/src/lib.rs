@@ -4,10 +4,15 @@
 
 mod app;
 mod authority;
+mod authority_transition;
 mod delegation;
+mod delegation_preflight;
+mod delegated_rejoin;
 mod error;
 mod events;
 mod feature_flags;
+mod lan_projection;
+mod lan_runtime;
 pub mod queue_resolution;
 pub mod renderer;
 mod renderer_engine;
@@ -26,10 +31,17 @@ pub use authority::{
     ExactOwnerAuthorityObservation, OwnerAuthorityObservation, OwnerAuthorityToken,
     QconnectDisabledToken, QconnectEnableIntent, QconnectEnableToken,
 };
+pub use authority_transition::{
+    acquire_transition_guard_and_fence, DeferredActivationRelease, OwnerActionFence,
+};
 pub use delegation::{
     CommitRejected, CredentialOrigin, DelegationCancellation, DelegationCandidate,
     DelegationCoordinator, DelegationCoordinatorConfig, DelegationCoordinatorError,
     DelegationErrorCode, DelegationHost, DelegationPhase, DelegationSnapshot, RestoreReason,
+};
+pub use delegation_preflight::DelegationPreflight;
+pub use delegated_rejoin::{
+    DelegatedRejoinWatchdog, DelegatedRuntimeEventDirective, DelegatedRuntimeEventState,
 };
 pub use error::{QconnectAppError, QconnectOwnerFailure};
 pub use events::{NoOpEventSink, QconnectAppEvent, QconnectEventSink};
@@ -37,6 +49,8 @@ pub use feature_flags::{
     QBZ_QCONNECT_PANEL_SWITCH, QBZ_QCONNECT_QUEUE_MODEL, QBZ_QCONNECT_STRICT_DOMAIN_ISOLATION,
     QBZ_QCONNECT_TRANSPORT,
 };
+pub use lan_projection::LanProjectionSlot;
+pub use lan_runtime::{lan_callback_is_current, LanRuntimeError, LanRuntimeLifecycle};
 pub use qconnect_core::{
     evaluate_remote_queue_admission, resolve_handoff_intent, validate_track_origins_for_admission,
     AdmissionDecision, HandoffIntent, QConnectQueueState, QConnectRendererState, QueueVersion,
@@ -48,17 +62,18 @@ pub use qconnect_protocol::{
 pub use renderer_engine::QconnectRendererEngine;
 pub use reporting::{
     build_renderer_playback_report, qconnect_report_track_id, renderer_buffer_state,
-    RendererPlaybackSnapshot,
+    renderer_playing_state, RendererPlaybackSnapshot,
 };
 pub use session::{
     build_effective_renderer_snapshot, build_session_renderer_snapshot, compute_connection_state,
     deferred_join_reason, find_unique_renderer_id, is_local_renderer_active,
-    is_peer_renderer_active, normalize_active_renderer_id, qconnect_millis_from_secs,
-    quality_from_max_audio_quality, queue_item_snapshot_for_cursor, refresh_local_renderer_id,
-    renderer_allows_remote_volume, should_arm_renderer_watchdog, should_reask_queue_state,
-    ConnectionDecision, LocalIdentity, QconnectFileAudioQualitySnapshot, QconnectLifecycleState,
-    QconnectRendererInfo, QconnectSessionRendererState, QconnectSessionState, RendererStatus,
-    ServerActiveState, JOIN_SESSION_REASON_CONTROLLER_REQUEST, JOIN_SESSION_REASON_RECONNECTION,
+    is_peer_renderer_active, max_audio_quality_from_quality, normalize_active_renderer_id,
+    qconnect_millis_from_secs, quality_from_max_audio_quality, queue_item_snapshot_for_cursor,
+    refresh_local_renderer_id, renderer_allows_remote_volume, should_arm_renderer_watchdog,
+    should_reask_queue_state, ConnectionDecision, LocalIdentity,
+    QconnectFileAudioQualitySnapshot, QconnectLifecycleState, QconnectRendererInfo,
+    QconnectSessionRendererState, QconnectSessionState, RendererStatus, ServerActiveState,
+    JOIN_SESSION_REASON_CONTROLLER_REQUEST, JOIN_SESSION_REASON_RECONNECTION,
     QCONNECT_RENDERER_LOST_TIMEOUT_MS,
 };
 pub use startup::{compute_effective_startup, QconnectStartupMode};

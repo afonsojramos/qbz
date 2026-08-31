@@ -602,7 +602,10 @@ fn normalize_opt_string(value: Option<String>) -> Option<String> {
 }
 
 pub fn parse_subscribe_channels(items: Vec<String>) -> Result<Vec<Vec<u8>>, String> {
-    items.into_iter().map(|item| decode_hex_channel(&item)).collect()
+    items
+        .into_iter()
+        .map(|item| decode_hex_channel(&item))
+        .collect()
 }
 
 pub fn decode_hex_channel(raw: &str) -> Result<Vec<u8>, String> {
@@ -657,10 +660,8 @@ mod tests {
 
     #[test]
     fn kv_helpers_round_trip_against_a_temp_daemon_db() {
-        let tmp = std::env::temp_dir().join(format!(
-            "qbzd_qconnect_kv_test_{}.db",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("qbzd_qconnect_kv_test_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
 
         // Unset -> defaults / None.

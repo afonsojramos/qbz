@@ -210,6 +210,17 @@ pub fn quality_from_max_audio_quality(level: Option<i32>) -> Quality {
     }
 }
 
+/// Map the local quality cap to the exact QConnect `max_audio_quality` wire
+/// level. Join reports from every host adapter must use this one mapping.
+pub const fn max_audio_quality_from_quality(quality: Quality) -> i32 {
+    match quality {
+        Quality::Mp3 => 1,
+        Quality::Lossless => 2,
+        Quality::HiRes => 3,
+        Quality::UltraHiRes => 4,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Session topology types (relocated from the Tauri adapter — slice 2+4).
 //
@@ -574,7 +585,10 @@ mod tests {
 
     #[test]
     fn renderer_status_from_wire_collapses_unknown_and_missing_to_inactive() {
-        assert_eq!(RendererStatus::from_wire(Some(99)), RendererStatus::Inactive); // UNRECOGNIZED
+        assert_eq!(
+            RendererStatus::from_wire(Some(99)),
+            RendererStatus::Inactive
+        ); // UNRECOGNIZED
         assert_eq!(RendererStatus::from_wire(None), RendererStatus::Inactive); // absent field
     }
 
@@ -620,6 +634,17 @@ mod tests {
         assert_eq!(quality_from_max_audio_quality(Some(4)), Quality::UltraHiRes);
         assert_eq!(quality_from_max_audio_quality(Some(5)), Quality::UltraHiRes);
         assert_eq!(quality_from_max_audio_quality(None), Quality::UltraHiRes);
-        assert_eq!(quality_from_max_audio_quality(Some(99)), Quality::UltraHiRes);
+        assert_eq!(
+            quality_from_max_audio_quality(Some(99)),
+            Quality::UltraHiRes
+        );
+    }
+
+    #[test]
+    fn local_quality_maps_to_exact_qconnect_wire_levels() {
+        assert_eq!(max_audio_quality_from_quality(Quality::Mp3), 1);
+        assert_eq!(max_audio_quality_from_quality(Quality::Lossless), 2);
+        assert_eq!(max_audio_quality_from_quality(Quality::HiRes), 3);
+        assert_eq!(max_audio_quality_from_quality(Quality::UltraHiRes), 4);
     }
 }

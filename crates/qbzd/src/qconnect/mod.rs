@@ -37,10 +37,11 @@ use std::time::Duration;
 use qbz_app::shell::AppRuntime;
 use qbz_models::CoreEvent;
 use qconnect_app::{
-    compute_effective_startup, CredentialOrigin, DelegationCoordinator,
+    compute_effective_startup, lan_callback_is_current, CredentialOrigin, DelegationCoordinator,
     DelegationCoordinatorConfig, DelegationErrorCode, DelegationHost, DelegationPhase,
-    DelegationSnapshot, QconnectApp, QconnectAppEvent, QconnectEnableIntent, QconnectEnableToken,
-    QconnectEventSink, QconnectLifecycleState, QconnectRemoteSyncState, SessionLoopHost,
+    DelegationSnapshot, LanRuntimeLifecycle, QconnectApp, QconnectAppEvent, QconnectEnableIntent,
+    QconnectEnableToken, QconnectEventSink, QconnectLifecycleState, QconnectRemoteSyncState,
+    SessionLoopHost,
 };
 use qconnect_lan::EndpointPolicy;
 use qconnect_transport_ws::{NativeWsTransport, WsTransportConfig};
@@ -61,24 +62,8 @@ use self::sink::{DaemonEventSink, DaemonQconnectApp};
 type Runtime = Arc<AppRuntime<DaemonAdapter>>;
 type SharedState = Arc<std::sync::Mutex<DaemonShared>>;
 
-const QCONNECT_LAN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
-const QCONNECT_LAN_START_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const QCONNECT_COORDINATOR_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const QCONNECT_AUTHORITY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
-
-async fn shutdown_lan_runtime(mut runtime: DaemonLanRuntime) -> Result<(), String> {
-    let mut shutdown = tokio::task::spawn_blocking(move || runtime.shutdown());
-    match tokio::time::timeout(QCONNECT_LAN_SHUTDOWN_TIMEOUT, &mut shutdown).await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(_)) => Err("qconnect-lan-shutdown-task-failed".to_string()),
-        Err(_) => {
-            // The detached blocking worker continues the idempotent shutdown;
-            // the daemon slot and projection have already been withdrawn.
-            drop(shutdown);
-            Err("qconnect-lan-shutdown-timed-out".to_string())
-        }
-    }
-}
 
 /// The live QConnect runtime for one connected session (app + its config + the
 /// spawned event loop + the shared sync accumulator).
@@ -209,12 +194,7 @@ pub struct DaemonQconnectService {
     delegation_host: Arc<DaemonDelegationHost>,
     coordinator: DaemonDelegationCoordinator,
     lan: AsyncMutex<Option<DaemonLanRuntime>>,
-    /// A cancelled blocking start remains physically live until its result is
-    /// joined and any listener it created is shut down.
-    lan_start_pending: Arc<AtomicBool>,
-    /// Permanent fail-closed fence for a LAN worker whose physical teardown
-    /// could not be confirmed.
-    lan_teardown_unsafe: Arc<AtomicBool>,
+    lan_lifecycle: LanRuntimeLifecycle<DaemonLanRuntime>,
     lifecycle_gate: AsyncMutex<()>,
     teardown_incomplete: AtomicBool,
 }
@@ -284,7 +264,7 @@ impl DaemonQconnectService {
         stamp: AuthorityStamp,
         qws_endpoint: &str,
     ) -> Result<(), String> {
-        if self.lan_teardown_unsafe.load(Ordering::Acquire) {
+        if !self.lan_lifecycle.teardown_safe() {
             return Err("qconnect-lan-physical-teardown-unsafe".to_string());
         }
         if !self.enable_intent.is_current(enable_token) {
@@ -330,9 +310,14 @@ impl DaemonQconnectService {
         }
         let coordinator = self.coordinator.clone();
         let callback_intent = Arc::clone(&self.enable_intent);
+        let callback_authority = Arc::clone(&self.authority);
         let runtime_handle = tokio::runtime::Handle::current();
         let callback = Arc::new(move |candidate| {
-            if !callback_intent.is_current(enable_token) {
+            if !lan_callback_is_current(
+                callback_intent.as_ref(),
+                callback_authority.as_ref(),
+                stamp,
+            ) {
                 return;
             }
             let result = runtime_handle.block_on(coordinator.admit(candidate));
@@ -346,65 +331,26 @@ impl DaemonQconnectService {
             }
         });
 
-        if self.lan_start_pending.swap(true, Ordering::AcqRel) {
-            return Err("qconnect-lan-start-already-pending".to_string());
-        }
-        let mut start_task = tokio::task::spawn_blocking(move || {
-            DaemonLanRuntime::start(
-                endpoint_policy,
-                app_id,
-                quality,
-                Some(current_session_id),
-                callback,
+        let started = self
+            .lan_lifecycle
+            .start(
+                move || {
+                    DaemonLanRuntime::start(
+                        endpoint_policy,
+                        app_id,
+                        quality,
+                        Some(current_session_id),
+                        callback,
+                    )
+                },
+                self.enable_intent.cancelled(enable_token),
             )
-        });
-        let start_result = tokio::select! {
-            biased;
-            _ = self.enable_intent.cancelled(enable_token) => {
-                let pending = Arc::clone(&self.lan_start_pending);
-                let unsafe_latch = Arc::clone(&self.lan_teardown_unsafe);
-                tokio::spawn(async move {
-                    let cleanup_safe = match start_task.await {
-                        Ok(Ok(runtime)) => match shutdown_lan_runtime(runtime).await {
-                            Ok(()) => true,
-                            Err(error) => {
-                                log::warn!(
-                                    "[QConnect LAN] cancelled listener cleanup failed: {error}"
-                                );
-                                false
-                            }
-                        },
-                        Ok(Err(_)) => true,
-                        Err(error) => {
-                            log::warn!(
-                                "[QConnect LAN] cancelled listener start worker failed: {error}"
-                            );
-                            false
-                        }
-                    };
-                    if !cleanup_safe {
-                        unsafe_latch.store(true, Ordering::Release);
-                    }
-                    pending.store(false, Ordering::Release);
-                });
-                return Err("qconnect-lan-disabled".to_string());
-            }
-            result = &mut start_task => result,
-        };
-        self.lan_start_pending.store(false, Ordering::Release);
-        let started = match start_result {
-            Ok(Ok(runtime)) => runtime,
-            Ok(Err(_)) => return Err("qconnect-lan-bind-failed".to_string()),
-            Err(_) => {
-                self.lan_teardown_unsafe.store(true, Ordering::Release);
-                return Err("qconnect-lan-start-task-failed".to_string());
-            }
-        };
+            .await
+            .map_err(|error| error.to_string())?;
 
         if !self.enable_intent.is_current(enable_token) || !self.authority.is_current(stamp) {
-            if let Err(error) = shutdown_lan_runtime(started).await {
+            if let Err(error) = self.lan_lifecycle.shutdown(started).await {
                 log::warn!("[QConnect LAN] stale listener teardown failed: {error}");
-                self.lan_teardown_unsafe.store(true, Ordering::Release);
             }
             return Err("qconnect-lan-owner-superseded".to_string());
         }
@@ -431,9 +377,8 @@ impl DaemonQconnectService {
         }
 
         if let Some(stale) = pending {
-            if let Err(error) = shutdown_lan_runtime(stale).await {
+            if let Err(error) = self.lan_lifecycle.shutdown(stale).await {
                 log::warn!("[QConnect LAN] rejected listener teardown failed: {error}");
-                self.lan_teardown_unsafe.store(true, Ordering::Release);
             }
         }
         Err("qconnect-lan-disabled-or-owner-superseded".to_string())
@@ -444,26 +389,15 @@ impl DaemonQconnectService {
         self.delegation_host.detach_projection();
         let runtime = self.lan.lock().await.take();
         if let Some(runtime) = runtime {
-            if let Err(error) = shutdown_lan_runtime(runtime).await {
-                self.lan_teardown_unsafe.store(true, Ordering::Release);
-                return Err(error);
-            }
+            self.lan_lifecycle
+                .shutdown(runtime)
+                .await
+                .map_err(|error| error.to_string())?;
         }
-        if self.lan_start_pending.load(Ordering::Acquire) {
-            let settled = tokio::time::timeout(QCONNECT_LAN_START_CLEANUP_TIMEOUT, async {
-                while self.lan_start_pending.load(Ordering::Acquire) {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-            })
+        self.lan_lifecycle
+            .settle()
             .await
-            .is_ok();
-            if !settled {
-                return Err("qconnect-lan-start-cleanup-timed-out".to_string());
-            }
-        }
-        if self.lan_teardown_unsafe.load(Ordering::Acquire) {
-            return Err("qconnect-lan-physical-teardown-unsafe".to_string());
-        }
+            .map_err(|error| error.to_string())?;
         Ok(())
     }
 
@@ -606,7 +540,8 @@ impl DaemonQconnectService {
         if self.enable_intent.current_token().is_some() {
             return Err("qconnect-disable-superseded-by-enable".to_string());
         }
-        self.disconnect_with_owner_policy_locked(restore_owner).await
+        self.disconnect_with_owner_policy_locked(restore_owner)
+            .await
     }
 
     async fn disconnect_with_owner_policy_locked(
@@ -627,17 +562,13 @@ impl DaemonQconnectService {
             log::warn!("[QConnect] LAN teardown failed: {error}");
             false
         } else {
-            !self.lan_start_pending.load(Ordering::Acquire)
-                && !self.lan_teardown_unsafe.load(Ordering::Acquire)
+            !self.lan_lifecycle.start_pending() && self.lan_lifecycle.teardown_safe()
         };
         // A tracked restore from the previous authority transition owns the
         // same gate coordinator shutdown needs. Observe its bounded result
         // first so the shorter shutdown timeout cannot detach a late owner
         // runtime that starts after enabled intent was cleared.
-        let prior_owner_restore = self
-            .delegation_host
-            .await_owner_playback_restore()
-            .await;
+        let prior_owner_restore = self.delegation_host.await_owner_playback_restore().await;
         self.delegation_host
             .set_shutdown_restore_owner(restore_owner);
         let coordinator_stopped = if tokio::time::timeout(
@@ -676,10 +607,7 @@ impl DaemonQconnectService {
             true
         };
 
-        let shutdown_owner_restore = self
-            .delegation_host
-            .await_owner_playback_restore()
-            .await;
+        let shutdown_owner_restore = self.delegation_host.await_owner_playback_restore().await;
         let owner_restored = prior_owner_restore.is_ok()
             && shutdown_owner_restore.is_ok()
             && !self.delegation_host.owner_restore_pending();
@@ -694,11 +622,11 @@ impl DaemonQconnectService {
 
         if authority_safe {
             if let Ok(mut shared) = self.shared.lock() {
-            shared.qconnect.state = "off".to_string();
-            shared.qconnect.session_active = false;
-            shared.qconnect.credential_origin = "owner".to_string();
-            shared.qconnect.candidate_generation = None;
-            shared.emit_qconnect_session_changed();
+                shared.qconnect.state = "off".to_string();
+                shared.qconnect.session_active = false;
+                shared.qconnect.credential_origin = "owner".to_string();
+                shared.qconnect.candidate_generation = None;
+                shared.emit_qconnect_session_changed();
             }
         }
         let outcome = QconnectDisconnectOutcome {
@@ -775,7 +703,10 @@ impl DaemonQconnectService {
         });
 
         let config = match self
-            .await_while_enabled(enable_token, transport::resolve_transport_config(&self.runtime))
+            .await_while_enabled(
+                enable_token,
+                transport::resolve_transport_config(&self.runtime),
+            )
             .await
         {
             Ok(Ok(config)) => config,
@@ -1339,8 +1270,9 @@ pub fn start(
         delegation_host,
         coordinator,
         lan: AsyncMutex::new(None),
-        lan_start_pending: Arc::new(AtomicBool::new(false)),
-        lan_teardown_unsafe: Arc::new(AtomicBool::new(false)),
+        lan_lifecycle: LanRuntimeLifecycle::new(|runtime: &mut DaemonLanRuntime| {
+            runtime.shutdown()
+        }),
         lifecycle_gate: AsyncMutex::new(()),
         teardown_incomplete: AtomicBool::new(false),
     });

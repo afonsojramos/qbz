@@ -116,27 +116,60 @@ fn observe_owner_action() -> OwnerActionObservation {
                     token: OwnerActionToken::Qconnect(token),
                 })
             }
-            qconnect_app::OwnerAuthorityObservation::Delegated => {
-                OwnerActionObservation::Delegated
-            }
+            qconnect_app::OwnerAuthorityObservation::Delegated => OwnerActionObservation::Delegated,
             qconnect_app::OwnerAuthorityObservation::Fenced => OwnerActionObservation::Fenced,
         },
     }
 }
 
+enum OwnerScopedSnapshot<T> {
+    Captured {
+        owner_action: Option<OwnerActionLease>,
+        snapshot: T,
+    },
+    Fenced,
+}
+
+/// Freeze the authority observation before reading a local playback snapshot.
+/// A fallible transition fence does not consume the snapshot at all; delegated
+/// playback may still be read for UI/reporting but carries no owner permit.
+fn capture_owner_scoped_snapshot<T>(
+    observe: impl FnOnce() -> OwnerActionObservation,
+    read: impl FnOnce() -> T,
+) -> OwnerScopedSnapshot<T> {
+    match observe() {
+        OwnerActionObservation::Owner(owner_action) => OwnerScopedSnapshot::Captured {
+            owner_action: Some(owner_action),
+            snapshot: read(),
+        },
+        OwnerActionObservation::Delegated => OwnerScopedSnapshot::Captured {
+            owner_action: None,
+            snapshot: read(),
+        },
+        OwnerActionObservation::Fenced => OwnerScopedSnapshot::Fenced,
+    }
+}
+
+fn owner_generation_changed(
+    observed: Option<OwnerActionToken>,
+    previous: Option<OwnerActionToken>,
+) -> bool {
+    observed.is_some() && observed != previous
+}
+
 /// Re-admit a queued continuation only for the authority generation that read
 /// its input. This is deliberately different from [`begin_owner_action`]: a
 /// guest -> owner promotion must not legitimize work derived from guest state.
-pub(crate) async fn begin_owner_action_exact(
-    token: OwnerActionToken,
-) -> Option<OwnerActionLease> {
+pub(crate) async fn begin_owner_action_exact(token: OwnerActionToken) -> Option<OwnerActionLease> {
     match token {
-        OwnerActionToken::BeforeService => crate::qconnect_qt::service()
-            .is_none()
-            .then_some(OwnerActionLease {
-                _permit: None,
-                token,
-            }),
+        OwnerActionToken::BeforeService => {
+            crate::qconnect_qt::service()
+                .is_none()
+                .then_some(OwnerActionLease {
+                    _permit: None,
+                    token,
+                })
+        }
         OwnerActionToken::Qconnect(token) => crate::qconnect_qt::service()?
             .wait_for_exact_owner_action_permit(token)
             .await
@@ -278,9 +311,7 @@ where
     let generation = owner_playback_task_generation();
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
-        if start_rx.await.is_err()
-            || owner_playback_task_generation() != generation
-        {
+        if start_rx.await.is_err() || owner_playback_task_generation() != generation {
             return;
         }
         future.await;
@@ -319,7 +350,10 @@ pub(crate) fn cancel_owner_playback_tasks() {
         let mut tasks = owner_playback_tasks()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        tasks.drain(..).map(|(_, handle)| handle).collect::<Vec<_>>()
+        tasks
+            .drain(..)
+            .map(|(_, handle)| handle)
+            .collect::<Vec<_>>()
     };
     for handle in handles {
         handle.abort();
@@ -1312,7 +1346,9 @@ pub(crate) async fn restore_owner_playback(
         match qbz_source::registry().claim(&raw) {
             Ok(item) => Some(item),
             Err(error) if track.is_local => {
-                return Err(format!("owner source restore could not claim its row: {error}"));
+                return Err(format!(
+                    "owner source restore could not claim its row: {error}"
+                ));
             }
             // Legacy Qobuz queue snapshots may predate the explicit `source`
             // field. Preserve their catalog fallback when `is_local` is false.
@@ -3714,15 +3750,20 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 // The error slot is itself a playback snapshot. Admit before
                 // draining it so a guest error cannot be applied to an owner
                 // row after a guest -> owner promotion.
-                let error_owner_snapshot = match observe_owner_action() {
-                    OwnerActionObservation::Owner(owner_action) => Some(owner_action),
-                    OwnerActionObservation::Delegated => None,
-                    // Do not drain an owner error or perturb playback edge
-                    // bookkeeping merely because a candidate is still inside
-                    // its fallible, pre-commit fence.
-                    OwnerActionObservation::Fenced => continue,
-                };
-                if let Some(msg) = runtime.core().player().state.take_stream_error_message() {
+                let (error_owner_snapshot, stream_error) =
+                    match capture_owner_scoped_snapshot(observe_owner_action, || {
+                        runtime.core().player().state.take_stream_error_message()
+                    }) {
+                        OwnerScopedSnapshot::Captured {
+                            owner_action,
+                            snapshot,
+                        } => (owner_action, snapshot),
+                        // Do not drain an owner error or perturb playback edge
+                        // bookkeeping merely because a candidate is still inside
+                        // its fallible, pre-commit fence.
+                        OwnerScopedSnapshot::Fenced => continue,
+                    };
+                if let Some(msg) = stream_error {
                     log::error!("[qbz-qt] audio output error: {msg}");
                     let sandboxed = !matches!(
                         qbz_audio::health::detect_sandbox(),
@@ -3948,15 +3989,19 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // snapshot. `None` is a valid delegated observation: UI/QConnect
             // reporting remain live, but owner-only consumers must use this
             // exact result and may not obtain a fresh permit later in the tick.
-            let owner_snapshot = match observe_owner_action() {
-                OwnerActionObservation::Owner(owner_action) => Some(owner_action),
-                OwnerActionObservation::Delegated => None,
-                // Preserve last_track_id / last_owner_token and every owner
-                // integration across a candidate that may still fail. Only an
-                // actually installed guest is an authority edge.
-                OwnerActionObservation::Fenced => continue,
-            };
-            let event = runtime.core().player().get_playback_event();
+            let (owner_snapshot, event) =
+                match capture_owner_scoped_snapshot(observe_owner_action, || {
+                    runtime.core().player().get_playback_event()
+                }) {
+                    OwnerScopedSnapshot::Captured {
+                        owner_action,
+                        snapshot,
+                    } => (owner_action, snapshot),
+                    // Preserve last_track_id / last_owner_token and every owner
+                    // integration across a candidate that may still fail. Only an
+                    // actually installed guest is an authority edge.
+                    OwnerScopedSnapshot::Fenced => continue,
+                };
             let track_id = event.track_id;
             let position = event.position;
             let duration = event.duration;
@@ -4003,9 +4048,8 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // numeric track id nor the sampled Option-ness changed. The old
             // delayed integrations were invalidated by that authority cycle,
             // so this fresh snapshot must re-arm their edge work.
-            let owner_generation_changed = observed_owner_token.is_some()
-                && observed_owner_token != last_owner_token;
-            if track_id != 0 && (track_id != last_track_id || owner_generation_changed) {
+            let owner_changed = owner_generation_changed(observed_owner_token, last_owner_token);
+            if track_id != 0 && (track_id != last_track_id || owner_changed) {
                 if owner_snapshot.is_some() {
                     // A cold OWNER start that reached audio is no longer
                     // pending. Guest playback must not consume this latch.
@@ -4382,18 +4426,17 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             let explicit_recovery_edge = event.engine_empty_generation
                 != seen_engine_empty_generation
                 || event.source_failure_generation != seen_source_failure_generation;
-            let queue_track_id = if owner_snapshot.is_some()
-                && (explicit_recovery_edge || sampled_track_end)
-            {
-                runtime
-                    .core()
-                    .current_track()
-                    .await
-                    .map(|t| t.id)
-                    .unwrap_or(0)
-            } else {
-                0
-            };
+            let queue_track_id =
+                if owner_snapshot.is_some() && (explicit_recovery_edge || sampled_track_end) {
+                    runtime
+                        .core()
+                        .current_track()
+                        .await
+                        .map(|t| t.id)
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
             let recovery_cause = playback_recovery_cause(
                 &event,
                 queue_track_id,
@@ -4559,20 +4602,23 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests (pure functions only — no Qt, no engine, no session)
+// Tests (no Qt, engine, audio device or session)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_queue_with, gapless_edge_matches, playback_recovery_cause, prefetch_track_ids,
-        quality_badge_from, reconcile_device_cap, should_stream_gapless_successor,
-        stream_error_text, xorshift_shuffle_seeded, PlaybackRecoveryCause, PrefetchCandidate,
-        PrefetchTrackEdge,
+        cancel_owner_playback_tasks, capture_owner_scoped_snapshot, filter_queue_with,
+        gapless_edge_matches, owner_generation_changed, playback_recovery_cause,
+        prefetch_track_ids, quality_badge_from, reconcile_device_cap,
+        should_stream_gapless_successor, spawn_owner_playback_task, stream_error_text,
+        xorshift_shuffle_seeded, OwnerActionObservation, OwnerActionToken, OwnerScopedSnapshot,
+        PlaybackRecoveryCause, PrefetchCandidate, PrefetchTrackEdge,
     };
     use qbz_models::{Quality, QualityLimit, QueueTrack};
     use qbz_player::PlaybackEvent;
     use qbz_source::QualityHint;
+    use std::sync::Arc;
 
     fn remote(id: u64) -> PrefetchCandidate {
         PrefetchCandidate {
@@ -4612,58 +4658,71 @@ mod tests {
     }
 
     #[test]
-    fn poll_freezes_owner_authority_before_its_playback_snapshot() {
-        let source = include_str!("playback_qt.rs");
-        let poll = source
-            .split_once("pub fn start_poll_loop")
-            .expect("poll loop source")
-            .1
-            .split_once("// Tests (pure functions only")
-            .expect("poll loop terminator")
-            .0;
-        let lease = poll
-            .find("let owner_snapshot = match observe_owner_action()")
-            .expect("owner snapshot admission");
-        let event = poll
-            .find("let event = runtime.core().player().get_playback_event();")
-            .expect("playback event read");
-        assert!(lease < event, "owner admission must precede PlaybackEvent");
-        assert!(
-            poll[lease..event].contains("OwnerActionObservation::Fenced => continue"),
-            "a fallible candidate fence must preserve the prior owner snapshot"
-        );
+    fn owner_observation_precedes_snapshot_and_fence_does_not_consume_it() {
+        use std::cell::RefCell;
 
-        let after_event = &poll[event..];
-        assert!(
-            !after_event.contains("let Some(_owner_action) = begin_owner_action()"),
-            "a fresh owner permit must not promote work derived from this snapshot"
+        let order = RefCell::new(Vec::new());
+        let captured = capture_owner_scoped_snapshot(
+            || {
+                order.borrow_mut().push("observe");
+                OwnerActionObservation::Delegated
+            },
+            || {
+                order.borrow_mut().push("read");
+                41_u64
+            },
         );
-        assert!(
-            after_event.contains("begin_owner_action_exact(owner_token).await"),
-            "spawned continuations must re-admit the exact observed owner"
+        assert!(matches!(
+            captured,
+            OwnerScopedSnapshot::Captured {
+                owner_action: None,
+                snapshot: 41
+            }
+        ));
+        assert_eq!(*order.borrow(), ["observe", "read"]);
+
+        order.borrow_mut().clear();
+        let fenced = capture_owner_scoped_snapshot(
+            || {
+                order.borrow_mut().push("observe");
+                OwnerActionObservation::Fenced
+            },
+            || {
+                order.borrow_mut().push("read");
+                99_u64
+            },
         );
-        assert!(
-            after_event.contains("observed_owner_token != last_owner_token"),
-            "same-track owner generation changes must re-arm owner-only edges"
-        );
+        assert!(matches!(fenced, OwnerScopedSnapshot::Fenced));
+        assert_eq!(*order.borrow(), ["observe"]);
+
+        let first = OwnerActionToken::BeforeService;
+        assert!(owner_generation_changed(Some(first), None));
+        assert!(!owner_generation_changed(Some(first), Some(first)));
+        assert!(!owner_generation_changed(None, Some(first)));
     }
 
-    #[test]
-    fn owner_background_task_is_registered_before_it_can_start_io() {
-        let source = include_str!("playback_qt.rs");
-        let body = source
-            .split_once("fn spawn_owner_playback_task")
-            .expect("owner playback task registry")
-            .1
-            .split_once("pub(crate) fn cancel_owner_playback_tasks")
-            .expect("owner playback cancellation boundary")
-            .0;
-        let register = body
-            .find("tasks.push((generation, abort.clone()))")
-            .expect("abort handle registration");
-        let start = body.find("start_tx.send(())").expect("task start gate");
+    #[tokio::test(flavor = "current_thread")]
+    async fn owner_background_task_is_cancelable_before_it_can_start_io() {
+        use std::sync::atomic::{AtomicBool, Ordering};
 
-        assert!(register < start);
+        cancel_owner_playback_tasks();
+        let ran = Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&ran);
+        let task = spawn_owner_playback_task(async move {
+            observed.store(true, Ordering::Release);
+        });
+        cancel_owner_playback_tasks();
+        let _ = task.await;
+        assert!(!ran.load(Ordering::Acquire));
+
+        let completed = Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&completed);
+        spawn_owner_playback_task(async move {
+            observed.store(true, Ordering::Release);
+        })
+        .await
+        .unwrap();
+        assert!(completed.load(Ordering::Acquire));
     }
 
     #[test]

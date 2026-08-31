@@ -127,6 +127,11 @@ pub struct DelegationCancellation {
 }
 
 impl DelegationCancellation {
+    #[cfg(test)]
+    pub(crate) fn from_receiver(receiver: watch::Receiver<bool>) -> Self {
+        Self { receiver }
+    }
+
     pub fn is_cancelled(&self) -> bool {
         *self.receiver.borrow()
     }
@@ -1120,11 +1125,9 @@ fn recover_std_lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_,
 /// nominal two-second shutdown budget into two seconds per generation.
 async fn await_all_or_abort(tasks: Vec<JoinHandle<()>>, timeout: Duration) {
     let mut tasks = tasks.into_iter().collect::<FuturesUnordered<_>>();
-    let timed_out = tokio::time::timeout(timeout, async {
-        while tasks.next().await.is_some() {}
-    })
-    .await
-    .is_err();
+    let timed_out = tokio::time::timeout(timeout, async { while tasks.next().await.is_some() {} })
+        .await
+        .is_err();
     if !timed_out {
         return;
     }

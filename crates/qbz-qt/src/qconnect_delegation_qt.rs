@@ -4,9 +4,16 @@
 //! installed runtime remains authoritative. The synchronous commit methods do
 //! only a short stamped runtime swap; teardown, queue restoration and cloud
 //! bootstrap happen afterwards.
+//!
+//! Race-sensitive policy is deliberately shared by `qconnect-app`: authority
+//! fences and deferred release, QWS preflight/join/rejoin, LAN projection and
+//! physical LAN lifecycle. The code left here is an adapter boundary for Qt's
+//! playback-task registry, UI projection and Cast ownership lane. Do not mirror
+//! new policy into the qbzd adapter; extract it with behavioral tests in
+//! `qconnect-app`.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
@@ -15,19 +22,18 @@ use qbz_app::shell::AppRuntime;
 use qbz_core::{LoggingAdapter, QueueAuthoritySnapshot};
 use qbz_models::Quality;
 use qbz_qobuz::{DelegatedApiConfig, DelegatedApiEndpoint, DelegatedQobuzClient, QobuzClient};
-use qconnect_app::renderer::PLAYING_STATE_STOPPED;
 use qconnect_app::{
-    AuthorityCell, AuthorityOrigin, AuthorityStamp, CommitRejected, DelegationCancellation,
-    DelegationCoordinator, DelegationErrorCode, DelegationHost, QconnectApp, QconnectAppEvent,
-    QconnectEventSink, QconnectLifecycleState, QconnectRemoteSyncState, QconnectSessionState,
-    RendererBufferState, RendererReport, RendererReportType, RestoreReason, SessionLoopHost,
-    JOIN_SESSION_REASON_CONTROLLER_REQUEST,
+    acquire_transition_guard_and_fence, max_audio_quality_from_quality, AuthorityCell,
+    AuthorityOrigin, AuthorityStamp, CommitRejected, DeferredActivationRelease,
+    DelegatedRejoinWatchdog, DelegatedRuntimeEventDirective, DelegatedRuntimeEventState,
+    DelegationCancellation, DelegationCoordinator, DelegationErrorCode, DelegationHost,
+    DelegationPreflight, OwnerActionFence, QconnectApp, QconnectAppEvent, QconnectEventSink,
+    QconnectLifecycleState, QconnectRemoteSyncState, QconnectSessionState, RestoreReason,
+    SessionLoopHost,
 };
 use qconnect_lan::{HandoffCandidate, LanProjection};
-use qconnect_protocol::RendererCommandType;
 use qconnect_transport_ws::{NativeWsTransport, TransportEvent, WsTransportConfig};
 use tokio::sync::{broadcast, oneshot, watch, Mutex as AsyncMutex, OwnedMutexGuard};
-use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::qconnect_engine_qt::QtRendererEngine;
@@ -44,91 +50,8 @@ use crate::qconnect_transport_qt::{
 type Runtime = Arc<AppRuntime<LoggingAdapter>>;
 pub type QtDelegationCoordinator = DelegationCoordinator<QtDelegationHost>;
 
-const PREFLIGHT_BUFFER_EVENTS: usize = 256;
-const PREFLIGHT_BUFFER_BYTES: usize = 256 * 1024;
-const DELEGATED_REJOIN_SESSION_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_RESTORE_OWNER: u8 = 0;
 const SHUTDOWN_DISCARD_OWNER: u8 = 1;
-
-#[derive(Default)]
-struct RejoinWatchdogGeneration(AtomicU64);
-
-impl RejoinWatchdogGeneration {
-    fn advance(&self) -> u64 {
-        self.0.fetch_add(1, Ordering::AcqRel).wrapping_add(1)
-    }
-
-    /// Claims an armed generation exactly once. A reconnect, successful
-    /// establishment, runtime drop, or replacement arm advances the epoch and
-    /// makes the stale deadline harmless.
-    fn claim(&self, expected: u64) -> bool {
-        self.0
-            .compare_exchange(
-                expected,
-                expected.wrapping_add(1),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
-    }
-}
-
-struct DelegatedRejoinWatchdog {
-    generation: Arc<RejoinWatchdogGeneration>,
-    task: Option<tokio::task::JoinHandle<()>>,
-}
-
-impl DelegatedRejoinWatchdog {
-    fn new() -> Self {
-        Self {
-            generation: Arc::new(RejoinWatchdogGeneration::default()),
-            task: None,
-        }
-    }
-
-    fn arm(
-        &mut self,
-        authority: Arc<AuthorityCell>,
-        stamp: AuthorityStamp,
-        delegation_generation: u64,
-        coordinator: Option<QtDelegationCoordinator>,
-    ) {
-        // Advance before aborting so even a task already waking at the
-        // deadline loses its compare-exchange against this newer rejoin.
-        let watchdog_generation = self.generation.advance();
-        if let Some(task) = self.task.take() {
-            task.abort();
-        }
-        let generation = Arc::clone(&self.generation);
-        self.task = Some(tokio::spawn(async move {
-            tokio::time::sleep(DELEGATED_REJOIN_SESSION_TIMEOUT).await;
-            if !generation.claim(watchdog_generation)
-                || stamp.origin()
-                    != (AuthorityOrigin::Delegated {
-                        generation: delegation_generation,
-                    })
-                || !authority.is_current(stamp)
-            {
-                return;
-            }
-            request_restore(coordinator.as_ref(), delegation_generation).await;
-        }));
-    }
-
-    fn cancel(&mut self) {
-        // Invalidate first: abort is cooperative and may race a waking task.
-        self.generation.advance();
-        if let Some(task) = self.task.take() {
-            task.abort();
-        }
-    }
-}
-
-impl Drop for DelegatedRejoinWatchdog {
-    fn drop(&mut self) {
-        self.cancel();
-    }
-}
 
 #[derive(Clone)]
 struct OwnerSnapshot {
@@ -145,48 +68,18 @@ struct OwnerPlaybackSnapshot {
     had_loaded_audio: bool,
 }
 
-struct OwnerActionFence {
-    authority: Arc<AuthorityCell>,
-}
-
-impl OwnerActionFence {
-    fn acquire(authority: Arc<AuthorityCell>) -> Self {
-        authority.suspend_owner_actions();
-        Self { authority }
-    }
-
-    async fn acquire_drained(authority: Arc<AuthorityCell>) -> Self {
-        // Close admission before cancellation: a task registered concurrently
-        // is then either in playback_qt's abort registry or can only wait on
-        // this fence without acquiring a drain-visible permit.
-        let fence = Self::acquire(authority);
-        crate::playback_qt::cancel_owner_playback_tasks();
-        fence.authority.wait_for_actions_drained().await;
-        fence
-    }
-}
-
-impl Drop for OwnerActionFence {
-    fn drop(&mut self) {
-        self.authority.resume_owner_actions();
-    }
-}
-
+/// Adapter payload only: the shared preparation/activation policy lives in
+/// `qconnect-app`; these concrete Qt app/sink handles cannot cross the crate
+/// boundary without coupling the shared layer back to the frontend.
 struct PreparedCommon {
     app: Arc<QtQconnectApp>,
     sink: Arc<QtQconnectEventSink>,
     config: WsTransportConfig,
     sync_state: Arc<AsyncMutex<QconnectRemoteSyncState>>,
-    receiver: broadcast::Receiver<TransportEvent>,
-    buffered: VecDeque<TransportEvent>,
-    buffered_bytes: usize,
+    preflight: DelegationPreflight,
     stamp: AuthorityStamp,
     expected_current: AuthorityStamp,
     custom_name: Option<String>,
-    /// Captured from owner SESSION_STATE during preparation. `prepare_owner`
-    /// cannot return until the matching SessionEstablished signal also arrives,
-    /// and this value stays private until `commit_owner` installs that runtime.
-    confirmed_owner_session_id: Option<Zeroizing<String>>,
 }
 
 pub struct PreparedDelegation {
@@ -226,56 +119,6 @@ struct PendingActivation {
     owner_restore_task: Arc<StdMutex<Option<OwnerRestoreTask>>>,
 }
 
-/// Final edge of an installed transition.
-///
-/// Owner rollback moves this guard into the tracked restore task. Its `Drop`
-/// implementation is the cancellation boundary: even if coordinator cleanup,
-/// shutdown, or the restore task itself is cancelled, the installed runtime is
-/// woken and both the owner-action fence and host transition gate are released.
-struct DeferredActivationRelease {
-    start: Option<oneshot::Sender<()>>,
-    transition_fence: Option<OwnerActionFence>,
-    transition_guard: Option<OwnedMutexGuard<()>>,
-}
-
-impl DeferredActivationRelease {
-    fn new(
-        start: Option<oneshot::Sender<()>>,
-        transition_fence: Option<OwnerActionFence>,
-        transition_guard: Option<OwnedMutexGuard<()>>,
-    ) -> Self {
-        Self {
-            start,
-            transition_fence,
-            transition_guard,
-        }
-    }
-
-    fn wake_runtime(&mut self) {
-        // Admission opens before the prepared loop wakes so every buffered
-        // command is retained and can obtain its normal stamped action permit.
-        self.transition_fence.take();
-        if let Some(start) = self.start.take() {
-            let _ = start.send(());
-        }
-    }
-
-    fn unlock_transition(&mut self) {
-        self.transition_guard.take();
-    }
-
-    fn release(&mut self) {
-        self.wake_runtime();
-        self.unlock_transition();
-    }
-}
-
-impl Drop for DeferredActivationRelease {
-    fn drop(&mut self) {
-        self.release();
-    }
-}
-
 /// A restore remains owned by the host until it publishes a terminal result.
 /// Waiters clone only the watch receiver, so cancelling or timing out a waiter
 /// never drops (and therefore never detaches) the underlying `JoinHandle`.
@@ -288,6 +131,12 @@ impl OwnerRestoreTask {
     fn is_pending(&self) -> bool {
         self.result.borrow().is_none() && !self.handle.is_finished()
     }
+}
+
+fn observe_owner_restore(
+    slot: &StdMutex<Option<OwnerRestoreTask>>,
+) -> Option<watch::Receiver<Option<Result<(), &'static str>>>> {
+    recover_lock(slot).as_ref().map(|task| task.result.clone())
 }
 
 impl Drop for OwnerRestoreTask {
@@ -426,9 +275,7 @@ impl QtDelegationHost {
         // Clone only the result channel. The host keeps owning the JoinHandle,
         // so cancellation of this future or expiry of this wait cannot detach
         // a rollback that still owns the transition gate/fence.
-        let result = recover_lock(&self.owner_restore_task)
-            .as_ref()
-            .map(|task| task.result.clone());
+        let result = observe_owner_restore(&self.owner_restore_task);
         let Some(result) = result else {
             return Ok(());
         };
@@ -613,13 +460,10 @@ impl DelegationHost for QtDelegationHost {
             sink,
             config,
             sync_state,
-            receiver,
-            buffered: VecDeque::new(),
-            buffered_bytes: 0,
+            preflight: DelegationPreflight::new(receiver),
             stamp,
             expected_current,
             custom_name,
-            confirmed_owner_session_id: None,
         };
         let api_validation = async {
             delegated_client
@@ -629,7 +473,7 @@ impl DelegationHost for QtDelegationHost {
         };
         tokio::try_join!(
             api_validation,
-            wait_for_qws_ready(&mut common, cancellation)
+            common.preflight.wait_for_qws_ready(cancellation)
         )?;
 
         Ok(PreparedDelegation {
@@ -655,15 +499,15 @@ impl DelegationHost for QtDelegationHost {
         // The host gate carries this critical section through commit, retirement
         // and any owner playback rollback. A candidate therefore waits for a
         // valid prior rollback instead of cancelling it.
-        prepared.transition_guard = Some(Arc::clone(&self.transition_gate).lock_owned().await);
-        if !self.authority.is_current(prepared.common.expected_current) {
-            return Err(DelegationErrorCode::CandidateCancelled);
-        }
-        prepared.transition_fence =
-            Some(OwnerActionFence::acquire_drained(Arc::clone(&self.authority)).await);
-        if !self.authority.is_current(prepared.common.expected_current) {
-            return Err(DelegationErrorCode::CandidateCancelled);
-        }
+        let (transition_guard, transition_fence) = acquire_transition_guard_and_fence(
+            Arc::clone(&self.transition_gate),
+            Arc::clone(&self.authority),
+            prepared.common.expected_current,
+            crate::playback_qt::cancel_owner_playback_tasks,
+        )
+        .await?;
+        prepared.transition_guard = Some(transition_guard);
+        prepared.transition_fence = Some(transition_fence);
         if prepared.common.expected_current.origin() == AuthorityOrigin::Owner {
             let queue = self.runtime.core().capture_authority_snapshot().await;
             if !self.authority.is_current(prepared.common.expected_current) {
@@ -701,7 +545,11 @@ impl DelegationHost for QtDelegationHost {
             effective_delegated_quality(),
         )
         .await?;
-        wait_for_activation(&mut prepared.common, cancellation).await?;
+        prepared
+            .common
+            .preflight
+            .wait_for_activation(cancellation)
+            .await?;
         if !self.authority.is_current(prepared.common.expected_current) {
             return Err(DelegationErrorCode::CandidateCancelled);
         }
@@ -824,28 +672,31 @@ impl DelegationHost for QtDelegationHost {
             sink,
             config,
             sync_state,
-            receiver,
-            buffered: VecDeque::new(),
-            buffered_bytes: 0,
+            preflight: DelegationPreflight::new(receiver),
             stamp,
             expected_current,
             custom_name,
-            confirmed_owner_session_id: None,
         };
-        wait_for_qws_ready(&mut common, cancellation.clone())
+        common
+            .preflight
+            .wait_for_qws_ready(cancellation.clone())
             .await
             .map_err(|_| DelegationErrorCode::OwnerRestoreFailed)?;
         bootstrap_prepared_owner_presence(&common.app, common.custom_name.clone())
             .await
             .map_err(|_| DelegationErrorCode::OwnerRestoreFailed)?;
-        wait_for_owner_session(&mut common, cancellation)
+        common
+            .preflight
+            .wait_for_owner_session(cancellation)
             .await
             .map_err(|_| DelegationErrorCode::OwnerRestoreFailed)?;
-        let transition_guard = Arc::clone(&self.transition_gate).lock_owned().await;
-        let transition_fence = OwnerActionFence::acquire_drained(Arc::clone(&self.authority)).await;
-        if !self.authority.is_current(expected_current) {
-            return Err(DelegationErrorCode::CandidateCancelled);
-        }
+        let (transition_guard, transition_fence) = acquire_transition_guard_and_fence(
+            Arc::clone(&self.transition_gate),
+            Arc::clone(&self.authority),
+            expected_current,
+            crate::playback_qt::cancel_owner_playback_tasks,
+        )
+        .await?;
         Ok(PreparedOwner {
             common,
             transition_guard,
@@ -869,7 +720,12 @@ impl DelegationHost for QtDelegationHost {
             ));
         }
         let stamp = prepared.common.stamp;
-        let Some(owner_session_id) = prepared.common.confirmed_owner_session_id.clone() else {
+        let Some(owner_session_id) = prepared
+            .common
+            .preflight
+            .confirmed_owner_session_id()
+            .map(|session_id| Zeroizing::new(session_id.to_string()))
+        else {
             return Err(CommitRejected::new(
                 prepared,
                 DelegationErrorCode::CommitRejected,
@@ -971,7 +827,11 @@ impl DelegationHost for QtDelegationHost {
         // because disable/logout arrived: its queue snapshot was already
         // consumed at commit and cannot be reconstructed after cancellation.
         let transition_guard = Arc::clone(&self.transition_gate).lock_owned().await;
-        let shutdown_fence = OwnerActionFence::acquire_drained(Arc::clone(&self.authority)).await;
+        let shutdown_fence = OwnerActionFence::acquire_drained(
+            Arc::clone(&self.authority),
+            crate::playback_qt::cancel_owner_playback_tasks,
+        )
+        .await;
         let previous = self.projection.clear_authority(&self.authority);
         let was_delegated = previous
             .is_some_and(|stamp| matches!(stamp.origin(), AuthorityOrigin::Delegated { .. }));
@@ -1235,163 +1095,6 @@ fn effective_delegated_quality() -> Quality {
     crate::playback_qt::local_playback_quality().0
 }
 
-fn quality_wire(quality: Quality) -> i32 {
-    match quality {
-        Quality::Mp3 => 1,
-        Quality::Lossless => 2,
-        Quality::HiRes => 3,
-        Quality::UltraHiRes => 4,
-    }
-}
-
-fn retained_event_bytes(event: &TransportEvent) -> usize {
-    match event {
-        TransportEvent::InboundPayloadBytes { payload, .. } => payload.len(),
-        _ => 0,
-    }
-}
-
-fn should_retain(event: &TransportEvent) -> bool {
-    matches!(
-        event,
-        TransportEvent::Connected
-            | TransportEvent::Disconnected
-            | TransportEvent::SessionEstablished
-            | TransportEvent::InboundPayloadBytes { .. }
-            | TransportEvent::InboundQueueServerEvent(_)
-            | TransportEvent::InboundRendererServerCommand(_)
-            | TransportEvent::InboundReceived(_)
-    )
-}
-
-fn retain_event(
-    common: &mut PreparedCommon,
-    event: TransportEvent,
-) -> Result<(), DelegationErrorCode> {
-    if !should_retain(&event) {
-        return Ok(());
-    }
-    let bytes = retained_event_bytes(&event);
-    if common.buffered.len() >= PREFLIGHT_BUFFER_EVENTS
-        || common.buffered_bytes.saturating_add(bytes) > PREFLIGHT_BUFFER_BYTES
-    {
-        return Err(DelegationErrorCode::Internal);
-    }
-    common.buffered_bytes = common.buffered_bytes.saturating_add(bytes);
-    common.buffered.push_back(event);
-    Ok(())
-}
-
-async fn next_preflight_event(
-    common: &mut PreparedCommon,
-    mut cancellation: DelegationCancellation,
-) -> Result<TransportEvent, DelegationErrorCode> {
-    tokio::select! {
-        _ = cancellation.cancelled() => Err(DelegationErrorCode::CandidateCancelled),
-        event = common.receiver.recv() => match event {
-            Ok(event) => Ok(event),
-            Err(broadcast::error::RecvError::Lagged(_)) => Err(DelegationErrorCode::Internal),
-            Err(broadcast::error::RecvError::Closed) => Err(DelegationErrorCode::QwsRejected),
-        }
-    }
-}
-
-async fn wait_for_qws_ready(
-    common: &mut PreparedCommon,
-    cancellation: DelegationCancellation,
-) -> Result<(), DelegationErrorCode> {
-    let mut authenticated = false;
-    let mut subscribed = false;
-    while !(authenticated && subscribed) {
-        let event = next_preflight_event(common, cancellation.clone()).await?;
-        match &event {
-            TransportEvent::Authenticated => authenticated = true,
-            TransportEvent::Subscribed => subscribed = true,
-            TransportEvent::Disconnected
-            | TransportEvent::CloudError { .. }
-            | TransportEvent::MaxReconnectAttemptsExceeded { .. } => {
-                return Err(DelegationErrorCode::QwsRejected)
-            }
-            _ => {}
-        }
-        retain_event(common, event)?;
-    }
-    Ok(())
-}
-
-async fn wait_for_activation(
-    common: &mut PreparedCommon,
-    cancellation: DelegationCancellation,
-) -> Result<(), DelegationErrorCode> {
-    loop {
-        let event = next_preflight_event(common, cancellation.clone()).await?;
-        let accepted = matches!(
-            &event,
-            TransportEvent::InboundRendererServerCommand(command)
-                if command.command_type == RendererCommandType::SrvrRndrSetActive
-                    && command.payload.get("active").and_then(serde_json::Value::as_bool)
-                        == Some(true)
-        );
-        if matches!(
-            &event,
-            TransportEvent::Disconnected
-                | TransportEvent::CloudError { .. }
-                | TransportEvent::MaxReconnectAttemptsExceeded { .. }
-        ) {
-            return Err(DelegationErrorCode::ActivationRejected);
-        }
-        retain_event(common, event)?;
-        if accepted {
-            return Ok(());
-        }
-    }
-}
-
-/// Owner preparation is complete only after the cloud has accepted the
-/// controller-side join and emitted the same establishment signal consumed by
-/// a live session loop. Authentication/subscription and a successful socket
-/// send are necessary but not sufficient to publish `OwnerReady`.
-async fn wait_for_owner_session(
-    common: &mut PreparedCommon,
-    cancellation: DelegationCancellation,
-) -> Result<(), DelegationErrorCode> {
-    let mut established = false;
-    loop {
-        let event = next_preflight_event(common, cancellation.clone()).await?;
-        if let Some(session_id) = owner_session_id_from_event(&event).map(str::to_string) {
-            common.confirmed_owner_session_id = Some(Zeroizing::new(session_id));
-        }
-        established |= matches!(&event, TransportEvent::SessionEstablished);
-        if matches!(
-            &event,
-            TransportEvent::Disconnected
-                | TransportEvent::CloudError { .. }
-                | TransportEvent::MaxReconnectAttemptsExceeded { .. }
-        ) {
-            return Err(DelegationErrorCode::OwnerRestoreFailed);
-        }
-        retain_event(common, event)?;
-        if established && common.confirmed_owner_session_id.is_some() {
-            return Ok(());
-        }
-    }
-}
-
-fn owner_session_id_from_event(event: &TransportEvent) -> Option<&str> {
-    match event {
-        TransportEvent::InboundQueueServerEvent(event)
-            if event.message_type() == "MESSAGE_TYPE_SRVR_CTRL_SESSION_STATE" =>
-        {
-            event
-                .payload
-                .get("session_uuid")
-                .and_then(serde_json::Value::as_str)
-                .filter(|session_id| !session_id.is_empty())
-        }
-        _ => None,
-    }
-}
-
 async fn send_delegated_join(
     app: &Arc<QtQconnectApp>,
     session_id: &str,
@@ -1401,33 +1104,15 @@ async fn send_delegated_join(
 ) -> Result<(), DelegationErrorCode> {
     let mut device_info = default_qconnect_device_info_with_name(custom_name);
     if let Some(capabilities) = device_info.capabilities.as_mut() {
-        capabilities.max_audio_quality = Some(quality_wire(quality));
+        capabilities.max_audio_quality = Some(max_audio_quality_from_quality(quality));
     }
-    let queue_version = app.queue_state_snapshot().await.version;
-    let report = RendererReport::new(
-        RendererReportType::RndrSrvrJoinSession,
-        Uuid::new_v4().to_string(),
-        queue_version,
-        serde_json::json!({
-            "session_uuid": session_id,
-            "device_info": serde_json::to_value(device_info).unwrap_or_default(),
-            "is_active": become_active,
-            "reason": JOIN_SESSION_REASON_CONTROLLER_REQUEST,
-            "initial_state": {
-                "playing_state": PLAYING_STATE_STOPPED,
-                "buffer_state": RendererBufferState::Ok.as_i32(),
-                "current_position": 0,
-                "duration": 0,
-                "queue_version": {
-                    "major": queue_version.major,
-                    "minor": queue_version.minor,
-                }
-            }
-        }),
-    );
-    app.send_renderer_report_command(report)
-        .await
-        .map_err(|_| DelegationErrorCode::ActivationRejected)
+    app.send_delegated_join(
+        session_id,
+        become_active,
+        serde_json::to_value(device_info).unwrap_or_default(),
+    )
+    .await
+    .map_err(|_| DelegationErrorCode::ActivationRejected)
 }
 
 /// Apply a delegated-runtime lifecycle edge only while the exact stamped Qt
@@ -1473,12 +1158,12 @@ fn spawn_delegated_runtime(
         sink,
         config,
         sync_state,
-        receiver,
-        buffered,
+        preflight,
         stamp,
         custom_name,
         ..
     } = common;
+    let (receiver, buffered) = preflight.into_session_events();
     let (start, started) = oneshot::channel();
     let loop_app = Arc::clone(&app);
     let loop_sink = Arc::clone(&sink);
@@ -1531,11 +1216,11 @@ fn spawn_owner_runtime(
         sink,
         config,
         sync_state,
-        receiver,
-        buffered,
+        preflight,
         stamp,
         ..
     } = common;
+    let (receiver, buffered) = preflight.into_session_events();
     let idle_retry_active = config.reconnect_idle_retry_ms > 0;
     let host: Arc<dyn SessionLoopHost> = Arc::new(QtSessionLoopHost {
         app: Arc::clone(&app),
@@ -1585,7 +1270,7 @@ async fn run_delegated_loop(
     coordinator: Option<QtDelegationCoordinator>,
     custom_name: Option<String>,
 ) {
-    let mut disconnected = false;
+    let mut reconnect_state = DelegatedRuntimeEventState::default();
     let mut rejoin_watchdog = DelegatedRejoinWatchdog::new();
     for event in buffered {
         if !handle_delegated_event(
@@ -1599,7 +1284,7 @@ async fn run_delegated_loop(
             stamp,
             coordinator.as_ref(),
             custom_name.as_deref(),
-            &mut disconnected,
+            &mut reconnect_state,
             &mut rejoin_watchdog,
         )
         .await
@@ -1630,7 +1315,7 @@ async fn run_delegated_loop(
             stamp,
             coordinator.as_ref(),
             custom_name.as_deref(),
-            &mut disconnected,
+            &mut reconnect_state,
             &mut rejoin_watchdog,
         )
         .await
@@ -1652,15 +1337,14 @@ async fn handle_delegated_event(
     stamp: AuthorityStamp,
     coordinator: Option<&QtDelegationCoordinator>,
     custom_name: Option<&str>,
-    disconnected: &mut bool,
+    reconnect_state: &mut DelegatedRuntimeEventState,
     rejoin_watchdog: &mut DelegatedRejoinWatchdog,
 ) -> bool {
     if !authority.is_current(stamp) {
         return false;
     }
-    match &event {
-        TransportEvent::Disconnected => {
-            *disconnected = true;
+    match reconnect_state.observe(&event) {
+        DelegatedRuntimeEventDirective::Reconnecting => {
             rejoin_watchdog.cancel();
             update_lifecycle_state_if_running(
                 inner,
@@ -1671,7 +1355,7 @@ async fn handle_delegated_event(
             )
             .await;
         }
-        TransportEvent::Subscribed if *disconnected => {
+        DelegatedRuntimeEventDirective::Rejoin => {
             if send_delegated_join(
                 app,
                 session_id,
@@ -1685,15 +1369,12 @@ async fn handle_delegated_event(
                 request_restore(coordinator, generation).await;
                 return false;
             }
-            rejoin_watchdog.arm(
-                Arc::clone(authority),
-                stamp,
-                generation,
-                coordinator.cloned(),
-            );
+            let coordinator = coordinator.cloned();
+            rejoin_watchdog.arm(Arc::clone(authority), stamp, generation, move |generation| {
+                async move { request_restore(coordinator.as_ref(), generation).await }
+            });
         }
-        TransportEvent::SessionEstablished => {
-            *disconnected = false;
+        DelegatedRuntimeEventDirective::Connected => {
             rejoin_watchdog.cancel();
             update_lifecycle_state_if_running(
                 inner,
@@ -1704,11 +1385,11 @@ async fn handle_delegated_event(
             )
             .await;
         }
-        TransportEvent::CloudError { .. } | TransportEvent::MaxReconnectAttemptsExceeded { .. } => {
+        DelegatedRuntimeEventDirective::RestoreOwner => {
             request_restore(coordinator, generation).await;
             return false;
         }
-        _ => {}
+        DelegatedRuntimeEventDirective::Forward => {}
     }
     if !authority.is_current(stamp) {
         return false;
@@ -1735,114 +1416,16 @@ async fn request_restore(coordinator: Option<&QtDelegationCoordinator>, generati
 mod tests {
     use super::*;
 
-    #[test]
-    fn quality_mapping_never_exceeds_the_configured_cap() {
-        assert_eq!(quality_wire(Quality::Mp3), 1);
-        assert_eq!(quality_wire(Quality::Lossless), 2);
-        assert_eq!(quality_wire(Quality::HiRes), 3);
-        assert_eq!(quality_wire(Quality::UltraHiRes), 4);
-    }
+    #[tokio::test]
+    async fn restore_observer_leaves_the_tracked_worker_owned_by_its_slot() {
+        let (_result_sender, result) = watch::channel(None);
+        let handle = tokio::spawn(std::future::pending::<()>());
+        let slot = StdMutex::new(Some(OwnerRestoreTask { handle, result }));
 
-    #[test]
-    fn preflight_retains_only_events_needed_after_commit() {
-        assert!(!should_retain(&TransportEvent::Authenticated));
-        assert!(!should_retain(&TransportEvent::KeepalivePingSent));
-        assert!(should_retain(&TransportEvent::Disconnected));
-        assert!(should_retain(&TransportEvent::SessionEstablished));
-    }
-
-    #[test]
-    fn rejoin_watchdog_generation_is_claimed_once() {
-        let generation = RejoinWatchdogGeneration::default();
-        let armed = generation.advance();
-
-        assert!(generation.claim(armed));
-        assert!(!generation.claim(armed));
-    }
-
-    #[test]
-    fn rejoin_watchdog_ignores_cancelled_and_replaced_generations() {
-        let generation = RejoinWatchdogGeneration::default();
-        let cancelled = generation.advance();
-        generation.advance();
-        let replacement = generation.advance();
-
-        assert!(!generation.claim(cancelled));
-        assert!(generation.claim(replacement));
-    }
-
-    #[test]
-    fn transition_fence_precedes_playback_task_cancel_and_drain() {
-        let source = include_str!("qconnect_delegation_qt.rs");
-        let body = source
-            .split_once("async fn acquire_drained")
-            .expect("owner fence helper")
-            .1
-            .split_once("impl Drop for OwnerActionFence")
-            .expect("owner fence helper terminator")
-            .0;
-        let fence = body.find("Self::acquire(authority)").expect("fence close");
-        let cancel = body
-            .find("cancel_owner_playback_tasks()")
-            .expect("playback task cancellation");
-        let drain = body
-            .find("wait_for_actions_drained().await")
-            .expect("authority drain");
-        assert!(fence < cancel && cancel < drain);
-    }
-
-    #[test]
-    fn candidate_activation_waits_for_prior_restore_instead_of_cancelling_it() {
-        let source = include_str!("qconnect_delegation_qt.rs");
-        let body = source
-            .split_once("async fn activate_delegation")
-            .expect("delegation activation")
-            .1
-            .split_once("fn commit_delegation")
-            .expect("delegation commit boundary")
-            .0;
-        let gate = body
-            .find("lock_owned().await")
-            .expect("host transition gate");
-        let fence = body
-            .find("OwnerActionFence::acquire_drained")
-            .expect("owner-action fence");
-
-        assert!(gate < fence);
-        assert!(!body.contains("cancel_owner_playback_restore"));
-    }
-
-    #[test]
-    fn restore_waiter_does_not_consume_the_tracked_join_handle() {
-        let source = include_str!("qconnect_delegation_qt.rs");
-        let body = source
-            .split_once("pub async fn await_owner_playback_restore")
-            .expect("restore waiter")
-            .1
-            .split_once("pub fn owner_restore_pending")
-            .expect("restore waiter boundary")
-            .0;
-
-        assert!(body.contains("task.result.clone()"));
-        assert!(!body.contains("owner_restore_task).take()"));
-        assert!(!body.contains("task.handle"));
-    }
-
-    #[test]
-    fn restored_owner_loop_wakes_only_after_the_fence_opens() {
-        let source = include_str!("qconnect_delegation_qt.rs");
-        let body = source
-            .split_once("fn wake_runtime")
-            .expect("deferred activation release")
-            .1
-            .split_once("fn unlock_transition")
-            .expect("deferred activation boundary")
-            .0;
-        let fence = body
-            .find("transition_fence.take()")
-            .expect("owner admission reopen");
-        let start = body.find("start.send(())").expect("owner loop wake");
-
-        assert!(fence < start);
+        let observer = observe_owner_restore(&slot).expect("restore observation");
+        drop(observer);
+        assert!(recover_lock(&slot)
+            .as_ref()
+            .is_some_and(OwnerRestoreTask::is_pending));
     }
 }

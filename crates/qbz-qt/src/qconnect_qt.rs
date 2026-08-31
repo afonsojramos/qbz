@@ -56,14 +56,14 @@ use qconnect_app::renderer::{PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING, PLAYIN
 use qconnect_app::{
     build_effective_renderer_snapshot, build_renderer_playback_report,
     ensure_session_renderer_state, is_local_renderer_active, is_peer_renderer_active,
-    queue_item_snapshot_for_cursor, renderer_allows_remote_volume, AuthorityActionPermit,
-    AuthorityCell, AuthorityOrigin, AuthorityStamp, DelegationCoordinatorConfig, DelegationHost,
-    OwnerAuthorityObservation, OwnerAuthorityToken, QConnectQueueState, QConnectRendererState,
-    QconnectApp, QconnectAppEvent, QconnectDisabledToken, QconnectEnableIntent,
-    QconnectEnableToken, QconnectEventSink, QconnectFileAudioQualitySnapshot,
-    QconnectLifecycleState, QconnectRemoteSyncState, QconnectSessionState, QueueCommandType,
-    RendererBufferState, RendererPlaybackSnapshot, RendererReport, RendererReportType,
-    SessionLoopHost,
+    lan_callback_is_current, queue_item_snapshot_for_cursor, renderer_allows_remote_volume,
+    AuthorityActionPermit, AuthorityCell, AuthorityOrigin, AuthorityStamp,
+    DelegationCoordinatorConfig, DelegationHost, LanRuntimeLifecycle, OwnerAuthorityObservation,
+    OwnerAuthorityToken, QConnectQueueState, QConnectRendererState, QconnectApp, QconnectAppEvent,
+    QconnectDisabledToken, QconnectEnableIntent, QconnectEnableToken, QconnectEventSink,
+    QconnectFileAudioQualitySnapshot, QconnectLifecycleState, QconnectRemoteSyncState,
+    QconnectSessionState, QueueCommandType, RendererBufferState, RendererPlaybackSnapshot,
+    RendererReport, RendererReportType, SessionLoopHost,
 };
 use qconnect_lan::EndpointPolicy;
 use qconnect_transport_ws::{NativeWsTransport, WsTransportConfig};
@@ -85,25 +85,8 @@ use crate::qconnect_transport_qt::{
 
 const QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS: u64 = 1_500;
 const QCONNECT_PLAY_TRACK_HANDOFF_POLL_MS: u64 = 50;
-const QCONNECT_LAN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
-const QCONNECT_LAN_START_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const QCONNECT_COORDINATOR_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const QCONNECT_AUTHORITY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
-
-async fn shutdown_lan_runtime(mut runtime: QtLanRuntime) -> Result<(), String> {
-    let mut shutdown = tokio::task::spawn_blocking(move || runtime.shutdown_blocking());
-    match tokio::time::timeout(QCONNECT_LAN_SHUTDOWN_TIMEOUT, &mut shutdown).await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(_)) => Err("qconnect-lan-shutdown-task-failed".to_string()),
-        Err(_) => {
-            // A running spawn_blocking task cannot be preempted safely. Drop
-            // its handle and let the runtime finish its idempotent teardown;
-            // the service slot and projection have already been detached.
-            drop(shutdown);
-            Err("qconnect-lan-shutdown-timed-out".to_string())
-        }
-    }
-}
 
 /// Wall-clock now in ms (mirrors the Tauri `qconnect_now_ms`, which is
 /// Tauri-local; reimplemented inline here per the controller-port spec).
@@ -482,14 +465,6 @@ pub(crate) fn lock_inner(inner: &StdMutex<QtQconnectInner>) -> StdMutexGuard<'_,
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn lan_callback_is_current(
-    enable_intent: &QconnectEnableIntent,
-    authority: &AuthorityCell,
-    stamp: AuthorityStamp,
-) -> bool {
-    enable_intent.current_token().is_some() && authority.is_current(stamp)
-}
-
 /// Dedup + gate a lifecycle transition: only emit while a runtime is alive and
 /// the state actually changes. Mirrors the Tauri `update_lifecycle_state_if_running`.
 async fn update_lifecycle_state_if_running(
@@ -527,15 +502,7 @@ pub struct QtQconnectService {
     delegation_host: Arc<QtDelegationHost>,
     coordinator: QtDelegationCoordinator,
     lan: Mutex<Option<QtLanRuntime>>,
-    /// `QtLanRuntime::start` runs on the blocking pool and cannot be aborted
-    /// after it begins. Keep that physical work visible after enabled intent
-    /// is cancelled so teardown cannot report success while a late listener
-    /// is still capable of appearing.
-    lan_start_pending: Arc<AtomicBool>,
-    /// A LAN worker that could not be joined or physically shut down is a
-    /// process-lifetime fail-closed fence. Logical slot removal is not enough
-    /// to admit another QConnect authority in that state.
-    lan_teardown_unsafe: Arc<AtomicBool>,
+    lan_lifecycle: LanRuntimeLifecycle<QtLanRuntime>,
     lifecycle_gate: Mutex<()>,
     /// Controller-mode mirror of the local queue's manual block (#442 "Play
     /// later"): steers `insert_after` for play-later routing. See the struct
@@ -937,8 +904,9 @@ impl QtQconnectService {
             delegation_host,
             coordinator,
             lan: Mutex::new(None),
-            lan_start_pending: Arc::new(AtomicBool::new(false)),
-            lan_teardown_unsafe: Arc::new(AtomicBool::new(false)),
+            lan_lifecycle: LanRuntimeLifecycle::new(|runtime: &mut QtLanRuntime| {
+                runtime.shutdown_blocking()
+            }),
             lifecycle_gate: Mutex::new(()),
             controller_manual: Mutex::new(ControllerManualBlock::default()),
             teardown_incomplete: AtomicBool::new(false),
@@ -1111,7 +1079,7 @@ impl QtQconnectService {
         stamp: AuthorityStamp,
         qws_endpoint: &str,
     ) -> Result<(), String> {
-        if self.lan_teardown_unsafe.load(Ordering::Acquire) {
+        if !self.lan_lifecycle.teardown_safe() {
             return Err("qconnect-lan-physical-teardown-unsafe".to_string());
         }
         if !self.enable_intent.is_current(enable_token) {
@@ -1156,95 +1124,48 @@ impl QtQconnectService {
         let runtime_handle = tokio::runtime::Handle::current();
         let bridge_handle = runtime_handle.clone();
 
-        if self.lan_start_pending.swap(true, Ordering::AcqRel) {
-            return Err("qconnect-lan-start-already-pending".to_string());
-        }
-        let mut start_task = tokio::task::spawn_blocking(move || {
-            QtLanRuntime::start(
-                bridge_handle,
-                endpoint_policy,
-                app_id,
-                max_audio_quality,
-                Some(current_session_id),
-                move |candidate| {
-                    let coordinator = coordinator.clone();
-                    let callback_intent = Arc::clone(&callback_intent);
-                    let callback_authority = Arc::clone(&callback_authority);
-                    async move {
-                        // The listener belongs to the installed authority, not
-                        // to the one-shot connect epoch that installed it. A
-                        // fresh manual intent may reuse that runtime; disable
-                        // or authority replacement still closes admission.
-                        if !lan_callback_is_current(
-                            callback_intent.as_ref(),
-                            callback_authority.as_ref(),
-                            stamp,
-                        ) {
-                            return;
-                        }
-                        match coordinator.admit(candidate).await {
-                            Ok(generation) => log::info!(
-                                "[QConnect LAN] handoff admitted generation={generation}"
-                            ),
-                            Err(error) => {
-                                log::warn!("[QConnect LAN] handoff admission rejected: {error}")
-                            }
-                        }
-                    }
-                },
-            )
-        });
-        let start_result = tokio::select! {
-            biased;
-            _ = self.enable_intent.cancelled(enable_token) => {
-                // `spawn_blocking` cannot be aborted once running. Keep its
-                // result owned and withdraw any listener it manages to create.
-                // The pending bit remains raised until that physical cleanup
-                // finishes, so the disconnect path must fail closed meanwhile.
-                let pending = Arc::clone(&self.lan_start_pending);
-                let unsafe_latch = Arc::clone(&self.lan_teardown_unsafe);
-                tokio::spawn(async move {
-                    let cleanup_safe = match start_task.await {
-                        Ok(Ok(runtime)) => match shutdown_lan_runtime(runtime).await {
-                            Ok(()) => true,
-                            Err(error) => {
-                                log::warn!(
-                                    "[QConnect LAN] cancelled listener cleanup failed: {error}"
-                                );
-                                false
+        let started = self
+            .lan_lifecycle
+            .start(
+                move || {
+                    QtLanRuntime::start(
+                        bridge_handle,
+                        endpoint_policy,
+                        app_id,
+                        max_audio_quality,
+                        Some(current_session_id),
+                        move |candidate| {
+                            let coordinator = coordinator.clone();
+                            let callback_intent = Arc::clone(&callback_intent);
+                            let callback_authority = Arc::clone(&callback_authority);
+                            async move {
+                                if !lan_callback_is_current(
+                                    callback_intent.as_ref(),
+                                    callback_authority.as_ref(),
+                                    stamp,
+                                ) {
+                                    return;
+                                }
+                                match coordinator.admit(candidate).await {
+                                    Ok(generation) => log::info!(
+                                        "[QConnect LAN] handoff admitted generation={generation}"
+                                    ),
+                                    Err(error) => log::warn!(
+                                        "[QConnect LAN] handoff admission rejected: {error}"
+                                    ),
+                                }
                             }
                         },
-                        Ok(Err(_)) => true,
-                        Err(error) => {
-                            log::warn!(
-                                "[QConnect LAN] cancelled listener start worker failed: {error}"
-                            );
-                            false
-                        }
-                    };
-                    if !cleanup_safe {
-                        unsafe_latch.store(true, Ordering::Release);
-                    }
-                    pending.store(false, Ordering::Release);
-                });
-                return Err("qconnect-lan-disabled".to_string());
-            }
-            result = &mut start_task => result,
-        };
-        self.lan_start_pending.store(false, Ordering::Release);
-        let started = match start_result {
-            Ok(Ok(runtime)) => runtime,
-            Ok(Err(_)) => return Err("qconnect-lan-bind-failed".to_string()),
-            Err(_) => {
-                self.lan_teardown_unsafe.store(true, Ordering::Release);
-                return Err("qconnect-lan-start-task-failed".to_string());
-            }
-        };
+                    )
+                },
+                self.enable_intent.cancelled(enable_token),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
 
         if !self.enable_intent.is_current(enable_token) || !self.authority.is_current(stamp) {
-            if let Err(error) = shutdown_lan_runtime(started).await {
+            if let Err(error) = self.lan_lifecycle.shutdown(started).await {
                 log::warn!("[QConnect LAN] stale listener teardown failed: {error}");
-                self.lan_teardown_unsafe.store(true, Ordering::Release);
             }
             return Err("qconnect-lan-owner-superseded".to_string());
         }
@@ -1277,9 +1198,8 @@ impl QtQconnectService {
         }
 
         if let Some(stale) = pending {
-            if let Err(error) = shutdown_lan_runtime(stale).await {
+            if let Err(error) = self.lan_lifecycle.shutdown(stale).await {
                 log::warn!("[QConnect LAN] rejected listener teardown failed: {error}");
-                self.lan_teardown_unsafe.store(true, Ordering::Release);
             }
         }
         Err("qconnect-lan-disabled-or-owner-superseded".to_string())
@@ -1289,26 +1209,15 @@ impl QtQconnectService {
         self.delegation_host.detach_projection();
         let runtime = self.lan.lock().await.take();
         if let Some(runtime) = runtime {
-            if let Err(error) = shutdown_lan_runtime(runtime).await {
-                self.lan_teardown_unsafe.store(true, Ordering::Release);
-                return Err(error);
-            }
+            self.lan_lifecycle
+                .shutdown(runtime)
+                .await
+                .map_err(|error| error.to_string())?;
         }
-        if self.lan_start_pending.load(Ordering::Acquire) {
-            let settled = tokio::time::timeout(QCONNECT_LAN_START_CLEANUP_TIMEOUT, async {
-                while self.lan_start_pending.load(Ordering::Acquire) {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-            })
+        self.lan_lifecycle
+            .settle()
             .await
-            .is_ok();
-            if !settled {
-                return Err("qconnect-lan-start-cleanup-timed-out".to_string());
-            }
-        }
-        if self.lan_teardown_unsafe.load(Ordering::Acquire) {
-            return Err("qconnect-lan-physical-teardown-unsafe".to_string());
-        }
+            .map_err(|error| error.to_string())?;
         Ok(())
     }
 
@@ -1419,8 +1328,8 @@ impl QtQconnectService {
         let inner = lock_inner(&self.inner);
         inner.runtime.is_some()
             || inner.connecting_token.is_some()
-            || self.lan_start_pending.load(Ordering::Acquire)
-            || self.lan_teardown_unsafe.load(Ordering::Acquire)
+            || self.lan_lifecycle.start_pending()
+            || !self.lan_lifecycle.teardown_safe()
             || self.teardown_incomplete.load(Ordering::Acquire)
     }
 
@@ -2069,8 +1978,7 @@ impl QtQconnectService {
             log::warn!("[QConnect] LAN teardown failed: {error}");
             false
         } else {
-            !self.lan_start_pending.load(Ordering::Acquire)
-                && !self.lan_teardown_unsafe.load(Ordering::Acquire)
+            !self.lan_lifecycle.start_pending() && self.lan_lifecycle.teardown_safe()
         };
         // A restore scheduled by the preceding delegated -> owner transition
         // still owns the delegation transition gate. Let that tracked task
@@ -3498,14 +3406,13 @@ impl QtQconnectService {
     ///
     /// WS-AUTHORITATIVE (load-bearing): QBZ sends ONLY `{shuffle_mode,
     /// shuffle_seed, shuffle_pivot_queue_item_id}` — never a local order. The
-    /// cloud generates the order and echoes it; QBZ applies ONLY that echoed
-    /// order (inbound SetShuffleMode is flag-only + materialize applies the
-    /// cloud's `shuffled_track_indexes`). The local `playback::toggle_shuffle`
-    /// path (which DOES invent a local random order — the documented failure
-    /// mode) is reachable ONLY when NOT connected (this returns `Ok(false)` then,
-    /// so the caller runs it offline). The previous peer-only gate let that local
-    /// path run while connected-as-renderer, which both did nothing visible AND
-    /// risked the divergent-order bug.
+    /// server-authorized seed/pivot or `shuffled_track_indexes` is the sole
+    /// input to the deterministic playback order applied by every client.
+    /// Inbound `SetShuffleMode` alone cannot mutate the local queue. The local
+    /// `playback::toggle_shuffle` path (which invents local entropy) is reachable
+    /// ONLY when NOT connected (this returns `Ok(false)` then, so the caller runs
+    /// it offline). The previous peer-only gate let that local path run while
+    /// connected-as-renderer, producing the documented divergent-order bug.
     pub async fn toggle_shuffle_if_remote(&self) -> Result<bool, String> {
         let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
             return Ok(false);
@@ -3529,9 +3436,10 @@ impl QtQconnectService {
         // never populates for a peer.
         let next_shuffle = !queue.shuffle_mode;
 
-        // The cloud REQUIRES a `shuffle_seed` when enabling ("shuffleSeed is
-        // undefined" otherwise) and uses it to GENERATE the order — QBZ supplies
-        // only the seed + pivot, never an order. No `rand` crate here (unlike
+        // The server REQUIRES a `shuffle_seed` when enabling ("shuffleSeed is
+        // undefined" otherwise). QBZ originates one only while acting as the
+        // controller that requested this toggle; renderers consume the echoed
+        // WS seed/pivot and never generate another. No `rand` crate here (unlike
         // Tauri); seed from the wall clock, masked to i32::MAX for the wire
         // `fixed32`. Pivot keeps the current track at the front. Mirrors the
         // Tauri `apply_qconnect_shuffle_mode` payload.
@@ -4527,9 +4435,8 @@ async fn deferred_renderer_join(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_qconnect_queue_track, lan_callback_is_current};
+    use super::is_qconnect_queue_track;
     use qbz_models::QueueTrack;
-    use qconnect_app::{AuthorityCell, AuthorityOrigin, QconnectEnableIntent};
 
     fn track(source: Option<&str>, is_local: bool) -> QueueTrack {
         QueueTrack {
@@ -4585,44 +4492,6 @@ mod tests {
         let mut row = track(Some("qobuz"), false);
         row.id = 0;
         assert!(!is_qconnect_queue_track(&row));
-    }
-
-    #[test]
-    fn installed_lan_callback_survives_enabled_epoch_refresh_only() {
-        let intent = QconnectEnableIntent::new(true);
-        let original = intent.current_token().expect("initial enabled intent");
-        let authority = AuthorityCell::new();
-        let stamp = authority.reserve(AuthorityOrigin::Owner);
-        assert!(authority.install(stamp));
-        assert!(lan_callback_is_current(&intent, &authority, stamp));
-
-        let refreshed = intent.enable_new_intent();
-        assert!(!intent.is_current(original));
-        assert!(intent.is_current(refreshed));
-        assert!(lan_callback_is_current(&intent, &authority, stamp));
-
-        let disabled = intent.disable();
-        assert!(!lan_callback_is_current(&intent, &authority, stamp));
-        assert!(intent.enable_if_disabled(disabled).is_some());
-        assert!(lan_callback_is_current(&intent, &authority, stamp));
-
-        authority.clear();
-        assert!(!lan_callback_is_current(&intent, &authority, stamp));
-    }
-
-    #[test]
-    fn lan_candidate_callback_uses_live_intent_and_exact_authority() {
-        let source = include_str!("qconnect_qt.rs");
-        let body = source
-            .split_once("move |candidate|")
-            .expect("LAN candidate callback")
-            .1
-            .split_once("match coordinator.admit(candidate).await")
-            .expect("LAN candidate admission")
-            .0;
-
-        assert!(body.contains("lan_callback_is_current("));
-        assert!(!body.contains("is_current(enable_token)"));
     }
 
     #[test]
