@@ -6305,3 +6305,59 @@ msgstr "Patrocinadores"
 
 msgid "And all those anonymous sponsors..."
 msgstr "Y todos esos patrocinadores anónimos..."
+
+msgid "Qobuz Connect can't resolve local tracks. {} track was skipped and wasn't added to the queue. Turn off Qobuz Connect to play it."
+msgid_plural "Qobuz Connect can't resolve local tracks. {} tracks were skipped and weren't added to the queue. Turn off Qobuz Connect to play them."
+msgstr[0] "Qobuz Connect no puede resolver tracks locales. Se ignoró {} track y no se incluyó en la lista. Si deseas reproducirlo, apaga Qobuz Connect."
+msgstr[1] "Qobuz Connect no puede resolver tracks locales. Se ignoraron {} tracks y no se incluyeron en la lista. Si deseas reproducirlos, apaga Qobuz Connect."
+
+msgid "Qobuz Connect device"
+msgstr "Dispositivo Qobuz Connect"
+
+msgid "Continue playback on %1"
+msgstr "Continuar la reproducción en %1"
+
+msgid "Use the Qobuz Connect queue and keep that device active."
+msgstr "Usar la cola de Qobuz Connect y mantener activo ese dispositivo."
+
+msgid "Continue playback on this device"
+msgstr "Continuar la reproducción en este dispositivo"
+
+msgid "Use the Qobuz Connect queue and replace the local queue."
+msgstr "Usar la cola de Qobuz Connect y reemplazar la cola local."
+
+msgid "Continue this device's current playback"
+msgstr "Continuar la reproducción actual de este dispositivo"
+
+msgid "Replace the Qobuz Connect queue and playback state with this device's current queue and position."
+msgstr "Reemplazar la cola y el estado de reproducción de Qobuz Connect con la cola y la posición actuales de este dispositivo."
+
+msgid "Cancel Qobuz Connect"
+msgstr "Cancelar Qobuz Connect"
+
+msgid "Keep both queues unchanged and continue the current local playback."
+msgstr "Conservar ambas colas sin cambios y continuar la reproducción local actual."
+
+msgid "Choose how to continue"
+msgstr "Elegir cómo continuar"
+
+msgid "This device and another Qobuz Connect renderer both have playback in progress. Choose which queue and device should continue."
+msgstr "Este dispositivo y otro reproductor de Qobuz Connect tienen una reproducción en curso. Elige qué cola y dispositivo deben continuar."
+
+msgid "Ask every time"
+msgstr "Preguntar siempre"
+
+msgid "Continue on the active renderer"
+msgstr "Continuar en el renderer activo"
+
+msgid "Continue here with the Qobuz Connect queue"
+msgstr "Continuar aquí con la cola de Qobuz Connect"
+
+msgid "Continue local playback and replace the Qobuz Connect queue"
+msgstr "Continuar la reproducción local y reemplazar la cola de Qobuz Connect"
+
+msgid "When playback conflicts"
+msgstr "Cuando la reproducción entre en conflicto"
+
+msgid "Ask each time or automatically choose which queue and device should continue."
+msgstr "Preguntar cada vez o elegir automáticamente qué cola y dispositivo deben continuar."

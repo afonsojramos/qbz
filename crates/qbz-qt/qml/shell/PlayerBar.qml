@@ -556,7 +556,7 @@ Rectangle {
                             onClicked: {
                                 if (root.tooltip)
                                     root.tooltip.hide("qconnect")
-                                qcFlyout.openBelowRight(qconnectBtn)
+                                qcFlyout.openAboveRight(qconnectBtn)
                             }
                             // The ONE bar tooltip the reference binds (always
                             // shows on hover, even while connected — Slint
@@ -703,7 +703,7 @@ Rectangle {
 
     // Qobuz Connect device flyout — the ONE shared component both bars mount
     // (contract §8; the Slint `qconnect-menu` PopupWindow, PlayerBar.slint:
-    // 412-642). Opened below-right of the Connect button.
+    // 412-642). Opened above-right of the Connect button.
     QconnectFlyout { id: qcFlyout }
 
     // "Add to…" flyout behind the transport "+" (TransportControls.slint's

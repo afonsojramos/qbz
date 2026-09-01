@@ -57,6 +57,15 @@ pub mod qbz_qconnect {
         #[qproperty(QString, devices_json)]
         // -1 = none.
         #[qproperty(i32, active_renderer_id)]
+        // --- Playback-conflict modal --------------------------------------
+        // Raised when local audio is already playing and SESSION_STATE names a
+        // peer renderer. No remote queue/renderer command is applied until QML
+        // resolves one of the four explicit choices.
+        #[qproperty(bool, playback_conflict_open)]
+        #[qproperty(QString, playback_conflict_renderer_name)]
+        // 0=ask every time, 1..=3 mirror the modal's non-cancel choices.
+        // Both the flyout and Settings bind this same persisted value.
+        #[qproperty(i32, playback_conflict_policy_index)]
         // --- Diagnostics modal (DeveloperSettings > QOBUZ CONNECT) ---------
         // QML-driven open/close (DeveloperSettings sets it true; the modal's
         // own close sets it false).
@@ -82,6 +91,11 @@ pub mod qbz_qconnect {
         #[qinvokable]
         fn set_active(self: Pin<&mut QbzQConnect>, renderer_id: i32);
 
+        /// Resolve the playback-conflict modal. Values 1..=4 match the visual
+        /// order and are validated again by the Rust facade.
+        #[qinvokable]
+        fn resolve_playback_conflict(self: Pin<&mut QbzQConnect>, choice: i32);
+
         /// Diagnostics modal footer: clear the rolling event log.
         #[qinvokable]
         fn diag_clear(self: Pin<&mut QbzQConnect>);
@@ -105,6 +119,9 @@ pub struct QbzQConnectRust {
     qconnect_connected: bool,
     devices_json: QString,
     active_renderer_id: i32,
+    playback_conflict_open: bool,
+    playback_conflict_renderer_name: QString,
+    playback_conflict_policy_index: i32,
     diag_open: bool,
     diag_status: QString,
     diag_log_text: QString,
@@ -118,6 +135,9 @@ impl Default for QbzQConnectRust {
             // frame (the home_bridge / cast_bridge convention).
             devices_json: QString::from("[]"),
             active_renderer_id: -1,
+            playback_conflict_open: false,
+            playback_conflict_renderer_name: QString::default(),
+            playback_conflict_policy_index: 0,
             diag_open: false,
             diag_status: QString::default(),
             diag_log_text: QString::default(),
@@ -140,10 +160,13 @@ pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzQConnect>) + Send + 'static) {
 }
 
 impl qbz_qconnect::QbzQConnect {
-    pub fn boot(self: Pin<&mut Self>) {
+    pub fn boot(mut self: Pin<&mut Self>) {
         if QT_THREAD.set(self.qt_thread()).is_err() {
             log::warn!("[qbz-qt] qconnect Qt thread already registered");
         }
+        let policy_index = crate::qconnect_transport_qt::load_playback_conflict_policy().index();
+        self.as_mut()
+            .set_playback_conflict_policy_index(policy_index);
     }
 
     pub fn connect_toggle(self: Pin<&mut Self>) {
@@ -227,6 +250,10 @@ impl qbz_qconnect::QbzQConnect {
                 crate::toast_qt::error("Failed to switch renderer");
             }
         });
+    }
+
+    pub fn resolve_playback_conflict(self: Pin<&mut Self>, choice: i32) {
+        crate::qconnect_qt::resolve_playback_conflict_choice(choice);
     }
 
     pub fn diag_clear(self: Pin<&mut Self>) {

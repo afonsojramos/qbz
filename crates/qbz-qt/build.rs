@@ -669,6 +669,7 @@ fn main() {
                 // device flyout both bars mount + the diagnostics modal
                 // AppShell mounts last.
                 "qml/shell/QconnectFlyout.qml",
+                "qml/shell/QconnectPlaybackConflictModal.qml",
                 "qml/shell/LogViewerModal.qml",
                 "qml/shell/ReportIssueModal.qml",
                 "qml/shell/QconnectDevModal.qml",

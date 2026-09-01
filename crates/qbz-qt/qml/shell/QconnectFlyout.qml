@@ -7,10 +7,11 @@
 //
 // STRUCTURE + BEHAVIOR are 1:1 with the Slint; geometry follows this port's
 // own popup conventions (controls/QbzContextMenu.qml): a Popup parented to
-// the Overlay, opened below-right of the trigger and clamped into the window
-// with an 8px margin — the same placement ViewModeMenu / AudioSettingsMenu
-// use from the same bars. Slint's fixed 280x244 panel, 14px padding and 12px
-// block spacing are kept.
+// the Overlay, opened above the bottom-bar trigger with right edges aligned
+// and clamped into the window with an 8px margin. The original 280x244 panel
+// grows vertically only
+// for the persisted playback-conflict policy added to this live Qt surface;
+// its 14px padding and 12px block spacing are kept.
 //
 // STATE: all session data is push-driven off the QbzQConnect singleton
 // (src/qconnect_bridge.rs) — `devicesJson` is parsed here exactly like
@@ -36,7 +37,7 @@ Popup {
 
     parent: Overlay.overlay
     width: 280
-    height: 244
+    height: 310
     padding: 14
     closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
 
@@ -58,6 +59,13 @@ Popup {
         }
     }
 
+    readonly property var conflictPolicyOptions: [
+        QbzSession.tr("Ask every time", QbzSession.trRev),
+        QbzSession.tr("Continue on the active renderer", QbzSession.trRev),
+        QbzSession.tr("Continue here with the Qobuz Connect queue", QbzSession.trRev),
+        QbzSession.tr("Continue local playback and replace the Qobuz Connect queue", QbzSession.trRev)
+    ]
+
     // Discovery timer — bounds the spinner so the "no devices" empty state
     // shows if none appear within ~8s (Slint :486-493). Started on a Connect
     // click; stopped on disconnect. Single-shot, so triggering self-stops.
@@ -67,9 +75,9 @@ Popup {
         onTriggered: root.qcConnecting = false
     }
 
-    // Placement — byte-for-byte the QbzContextMenu convention: below the
-    // trigger, right edges aligned, clamped 8px into the window. From the
-    // bottom bar the y clamp is what lifts the panel into view.
+    // Bottom-bar placement: explicitly above the trigger, right edges
+    // aligned, then clamped 8px into the window. Computing the upward anchor
+    // before clamping prevents the panel from covering its own button.
     function _place(gx, gy, win) {
         if (win) {
             x = Math.max(8, Math.min(gx, win.width - width - 8))
@@ -81,8 +89,8 @@ Popup {
         open()
     }
 
-    function openBelowRight(sourceItem) {
-        var g = sourceItem.mapToItem(null, sourceItem.width - width, sourceItem.height + 4)
+    function openAboveRight(sourceItem) {
+        var g = sourceItem.mapToItem(null, sourceItem.width - width, -height - 4)
         _place(g.x, g.y, sourceItem.Window.window)
     }
 
@@ -211,13 +219,44 @@ Popup {
             }
         }
 
+        Column {
+            id: conflictPolicy
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: connectBtn.top
+            anchors.bottomMargin: 12
+            spacing: 5
+
+            Text {
+                width: parent.width
+                text: QbzSession.tr("When playback conflicts", QbzSession.trRev)
+                color: theme.textSecondary
+                font.pixelSize: 11
+                font.weight: theme.weightMedium
+                elide: Text.ElideRight
+            }
+
+            QbzSelect {
+                width: parent.width
+                menuWidth: parent.width
+                popupWidth: 420
+                sm: true
+                popupPlacement: "left"
+                options: root.conflictPolicyOptions
+                currentIndex: QbzQConnect.playbackConflictPolicyIndex
+                onSelected: function (i) {
+                    QbzBridge.settingsSelect("qconnect-conflict-policy", i)
+                }
+            }
+        }
+
         // Device list / empty state — the Slint's vertical-stretch block
         // (:495-602): surface-elevated, Radius.sm, clipped.
         Rectangle {
             id: listBox
             anchors.top: topCol.bottom
             anchors.topMargin: 12
-            anchors.bottom: connectBtn.top
+            anchors.bottom: conflictPolicy.top
             anchors.bottomMargin: 12
             anchors.left: parent.left
             anchors.right: parent.right

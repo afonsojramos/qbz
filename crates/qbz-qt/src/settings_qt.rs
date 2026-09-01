@@ -1524,6 +1524,12 @@ const RETRY_BEHAVIOR_LABELS: &[&str] =
 const RETRY_BEHAVIOR_VALUES: &[&str] = &["ask", "always_fallback", "always_skip"];
 const QCONNECT_STARTUP_LABELS: &[&str] = &["Remember state", "On by default", "Off by default"];
 const QCONNECT_STARTUP_VALUES: &[&str] = &["remember_last", "on", "off"];
+const QCONNECT_CONFLICT_POLICY_LABELS: &[&str] = &[
+    "Ask every time",
+    "Continue on the active renderer",
+    "Continue here with the Qobuz Connect queue",
+    "Continue local playback and replace the Qobuz Connect queue",
+];
 // Appearance option tables (AppearanceSettings.slint / ui_prefs.rs).
 const APP_BACKGROUND_LABELS: &[&str] = &["Off", "Ambient", "Blurred art"];
 const APP_BACKGROUND_VALUES: &[&str] = &["off", "ambient", "blurred"];
@@ -1993,6 +1999,10 @@ pub struct SettingsDoc {
     pub qconnect_startup_modes: Vec<String>,
     #[serde(rename = "qconnectStartupIndex")]
     pub qconnect_startup_index: i32,
+    #[serde(rename = "qconnectConflictPolicies")]
+    pub qconnect_conflict_policies: Vec<String>,
+    #[serde(rename = "qconnectConflictPolicyIndex")]
+    pub qconnect_conflict_policy_index: i32,
     #[serde(rename = "qconnectDeviceName")]
     pub qconnect_device_name: String,
     #[serde(rename = "qconnectDeviceNameDefault")]
@@ -2407,6 +2417,8 @@ pub async fn publish_snapshot() {
         let qconnect_startup = crate::qconnect_transport_qt::load_startup_mode()
             .as_str()
             .to_string();
+        let qconnect_conflict_policy =
+            crate::qconnect_transport_qt::load_playback_conflict_policy();
         let scrobble_snap = crate::integrations_qt::scrobble_settings();
         let integ_ui = crate::integrations_qt::ui_snapshot();
         let qconnect_startup_index = QCONNECT_STARTUP_VALUES
@@ -2485,6 +2497,11 @@ pub async fn publish_snapshot() {
                 .map(|l| qbz_i18n::t(l))
                 .collect(),
             qconnect_startup_index: qconnect_startup_index as i32,
+            qconnect_conflict_policies: QCONNECT_CONFLICT_POLICY_LABELS
+                .iter()
+                .map(|label| qbz_i18n::t(label))
+                .collect(),
+            qconnect_conflict_policy_index: qconnect_conflict_policy.index(),
             qconnect_device_name: crate::qconnect_transport_qt::load_persisted_device_name()
                 .unwrap_or_default(),
             qconnect_device_name_default:
@@ -3887,6 +3904,18 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             if let Some(mode) = qconnect_app::QconnectStartupMode::from_str(mode) {
                 crate::qconnect_transport_qt::save_startup_mode(mode);
             }
+        }
+        "qconnect-conflict-policy" => {
+            let Some(policy) = qconnect_app::QconnectPlaybackConflictPolicy::from_index(index)
+            else {
+                return;
+            };
+            crate::qconnect_transport_qt::save_playback_conflict_policy(policy);
+            crate::qconnect_qt::publish::playback_conflict_policy_index(policy.index());
+            log::info!(
+                "[QConnect] playback conflict policy changed to {}",
+                policy.as_str()
+            );
         }
         // --- Appearance (phase 19) ----------------------------------------
         "app-background" => {

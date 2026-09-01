@@ -6287,3 +6287,59 @@ msgstr "Sponsors"
 
 msgid "And all those anonymous sponsors..."
 msgstr "En al die anonieme sponsors..."
+
+msgid "Qobuz Connect can't resolve local tracks. {} track was skipped and wasn't added to the queue. Turn off Qobuz Connect to play it."
+msgid_plural "Qobuz Connect can't resolve local tracks. {} tracks were skipped and weren't added to the queue. Turn off Qobuz Connect to play them."
+msgstr[0] "Qobuz Connect kan lokale tracks niet vinden. {} track is overgeslagen en niet aan de wachtrij toegevoegd. Schakel Qobuz Connect uit om deze af te spelen."
+msgstr[1] "Qobuz Connect kan lokale tracks niet vinden. {} tracks zijn overgeslagen en niet aan de wachtrij toegevoegd. Schakel Qobuz Connect uit om ze af te spelen."
+
+msgid "Qobuz Connect device"
+msgstr "Qobuz Connect-apparaat"
+
+msgid "Continue playback on %1"
+msgstr "Afspelen voortzetten op %1"
+
+msgid "Use the Qobuz Connect queue and keep that device active."
+msgstr "De Qobuz Connect-wachtrij gebruiken en dat apparaat actief houden."
+
+msgid "Continue playback on this device"
+msgstr "Afspelen voortzetten op dit apparaat"
+
+msgid "Use the Qobuz Connect queue and replace the local queue."
+msgstr "De Qobuz Connect-wachtrij gebruiken en de lokale wachtrij vervangen."
+
+msgid "Continue this device's current playback"
+msgstr "Huidige weergave op dit apparaat voortzetten"
+
+msgid "Replace the Qobuz Connect queue and playback state with this device's current queue and position."
+msgstr "De Qobuz Connect-wachtrij en afspeelstatus vervangen door de huidige wachtrij en positie van dit apparaat."
+
+msgid "Cancel Qobuz Connect"
+msgstr "Qobuz Connect annuleren"
+
+msgid "Keep both queues unchanged and continue the current local playback."
+msgstr "Beide wachtrijen ongewijzigd laten en de huidige lokale weergave voortzetten."
+
+msgid "Choose how to continue"
+msgstr "Kies hoe je wilt doorgaan"
+
+msgid "This device and another Qobuz Connect renderer both have playback in progress. Choose which queue and device should continue."
+msgstr "Op dit apparaat en een andere Qobuz Connect-speler wordt afgespeeld. Kies welke wachtrij en welk apparaat moeten doorgaan."
+
+msgid "Ask every time"
+msgstr "Altijd vragen"
+
+msgid "Continue on the active renderer"
+msgstr "Doorgaan op de actieve speler"
+
+msgid "Continue here with the Qobuz Connect queue"
+msgstr "Hier doorgaan met de Qobuz Connect-wachtrij"
+
+msgid "Continue local playback and replace the Qobuz Connect queue"
+msgstr "Lokale weergave voortzetten en de Qobuz Connect-wachtrij vervangen"
+
+msgid "When playback conflicts"
+msgstr "Bij een afspeelconflict"
+
+msgid "Ask each time or automatically choose which queue and device should continue."
+msgstr "Vraag het elke keer of kies automatisch welke wachtrij en welk apparaat doorgaan."

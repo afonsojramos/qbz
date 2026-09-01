@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 use qbz_app::shell::AppRuntime;
 use qbz_player::player::PlaybackBufferState;
 use qconnect_app::{
-    build_renderer_playback_report, is_local_renderer_active, qconnect_report_track_id,
-    renderer_playing_state, QconnectFileAudioQualitySnapshot, QconnectRemoteSyncState,
-    RendererPlaybackSnapshot,
+    build_renderer_playback_report, confirm_local_playback_state_asserted,
+    is_local_renderer_active, qconnect_report_track_id, renderer_playing_state,
+    QconnectFileAudioQualitySnapshot, QconnectRemoteSyncState, RendererPlaybackSnapshot,
 };
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -96,11 +96,20 @@ pub async fn report_playback_state(
     if !authority.is_current(stamp) {
         return;
     }
-    if let Err(err) = app.send_renderer_report_command(report).await {
-        if !authority.is_current(stamp) {
-            return;
+    match app.send_renderer_report_command(report).await {
+        Ok(()) if authority.is_current(stamp) => {
+            let mut state = sync_state.lock().await;
+            if authority.is_current(stamp) {
+                confirm_local_playback_state_asserted(&mut state);
+            }
         }
-        log::warn!("[QConnect] Failed to report playback state: {err}");
+        Ok(()) => return,
+        Err(err) => {
+            if !authority.is_current(stamp) {
+                return;
+            }
+            log::warn!("[QConnect] Failed to report playback state: {err}");
+        }
     }
 
     if position_ms >= 0 && authority.is_current(stamp) {

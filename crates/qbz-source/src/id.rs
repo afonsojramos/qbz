@@ -51,6 +51,7 @@ impl SourceId {
     /// | word | where | → |
     /// |---|---|---|
     /// | `"qobuz"` | `QueueTrack.source`, `AlbumSource::Qobuz` | `QOBUZ` |
+    /// | `"qobuz_connect_remote"` | legacy persisted QConnect queue rows | `QOBUZ` |
     /// | `""` / absent | `local_tracks.source`, `HomeCard` (no field at all) | `None` |
     /// | `"local"`, `"user"` | `QueueTrack.source`, `LocalTrack.source` | `LOCAL` |
     /// | `"qobuz_download"`, `"qobuz_purchase"`, `"offline"` | `LocalTrack.source`, badges | `LOCAL` (an offline copy is a FILE; the distinction is a [`SourceBadge`]) |
@@ -64,7 +65,7 @@ impl SourceId {
     /// is `myqbz_add_qt::source_from_str`'s bug (survey IC-6).
     pub fn from_word(w: &str) -> Option<SourceId> {
         match w.trim().to_ascii_lowercase().as_str() {
-            "qobuz" => Some(SourceId::QOBUZ),
+            "qobuz" | "qobuz_connect_remote" => Some(SourceId::QOBUZ),
             "plex" => Some(SourceId::PLEX),
             "jellyfin" => Some(SourceId::JELLYFIN),
             // The Subsonic FLAVOURS fold into one source. They speak one API
@@ -344,6 +345,13 @@ mod tests {
         let r = RawRef::new("qobuz_download", ItemKind::Track, "139578884");
         assert_eq!(r.source, Some(SourceId::LOCAL));
         assert_eq!(r.badge, SourceBadge::Offline);
+    }
+
+    #[test]
+    fn legacy_qconnect_queue_source_is_qobuz() {
+        let r = RawRef::new("qobuz_connect_remote", ItemKind::Track, "128659874");
+        assert_eq!(r.source, Some(SourceId::QOBUZ));
+        assert_eq!(r.badge, SourceBadge::Qobuz);
     }
 
     #[test]

@@ -6299,3 +6299,59 @@ msgstr "Sponsoren"
 
 msgid "And all those anonymous sponsors..."
 msgstr "Und all die anonymen Sponsoren..."
+
+msgid "Qobuz Connect can't resolve local tracks. {} track was skipped and wasn't added to the queue. Turn off Qobuz Connect to play it."
+msgid_plural "Qobuz Connect can't resolve local tracks. {} tracks were skipped and weren't added to the queue. Turn off Qobuz Connect to play them."
+msgstr[0] "Qobuz Connect kann lokale Tracks nicht auflösen. {} Track wurde übersprungen und nicht zur Warteschlange hinzugefügt. Schalte Qobuz Connect aus, um ihn abzuspielen."
+msgstr[1] "Qobuz Connect kann lokale Tracks nicht auflösen. {} Tracks wurden übersprungen und nicht zur Warteschlange hinzugefügt. Schalte Qobuz Connect aus, um sie abzuspielen."
+
+msgid "Qobuz Connect device"
+msgstr "Qobuz-Connect-Gerät"
+
+msgid "Continue playback on %1"
+msgstr "Wiedergabe auf %1 fortsetzen"
+
+msgid "Use the Qobuz Connect queue and keep that device active."
+msgstr "Die Qobuz-Connect-Warteschlange verwenden und dieses Gerät aktiv lassen."
+
+msgid "Continue playback on this device"
+msgstr "Wiedergabe auf diesem Gerät fortsetzen"
+
+msgid "Use the Qobuz Connect queue and replace the local queue."
+msgstr "Die Qobuz-Connect-Warteschlange verwenden und die lokale Warteschlange ersetzen."
+
+msgid "Continue this device's current playback"
+msgstr "Aktuelle Wiedergabe dieses Geräts fortsetzen"
+
+msgid "Replace the Qobuz Connect queue and playback state with this device's current queue and position."
+msgstr "Die Qobuz-Connect-Warteschlange und den Wiedergabestatus durch die aktuelle Warteschlange und Position dieses Geräts ersetzen."
+
+msgid "Cancel Qobuz Connect"
+msgstr "Qobuz Connect abbrechen"
+
+msgid "Keep both queues unchanged and continue the current local playback."
+msgstr "Beide Warteschlangen unverändert lassen und die aktuelle lokale Wiedergabe fortsetzen."
+
+msgid "Choose how to continue"
+msgstr "Auswählen, wie fortgefahren werden soll"
+
+msgid "This device and another Qobuz Connect renderer both have playback in progress. Choose which queue and device should continue."
+msgstr "Auf diesem Gerät und einem anderen Qobuz-Connect-Wiedergabegerät läuft eine Wiedergabe. Wähle aus, welche Warteschlange und welches Gerät fortfahren sollen."
+
+msgid "Ask every time"
+msgstr "Jedes Mal nachfragen"
+
+msgid "Continue on the active renderer"
+msgstr "Auf dem aktiven Wiedergabegerät fortsetzen"
+
+msgid "Continue here with the Qobuz Connect queue"
+msgstr "Hier mit der Qobuz-Connect-Warteschlange fortsetzen"
+
+msgid "Continue local playback and replace the Qobuz Connect queue"
+msgstr "Lokale Wiedergabe fortsetzen und Qobuz-Connect-Warteschlange ersetzen"
+
+msgid "When playback conflicts"
+msgstr "Bei Wiedergabekonflikten"
+
+msgid "Ask each time or automatically choose which queue and device should continue."
+msgstr "Jedes Mal nachfragen oder automatisch auswählen, welche Warteschlange und welches Gerät fortfahren sollen."

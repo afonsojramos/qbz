@@ -779,41 +779,38 @@ pub(crate) fn play_inline_track(item_source_item_id: String, track_id: String, a
                 crate::queue_qt::publish(&runtime).await;
             }
             InlineTrackMode::PlayNext => {
-                let mut stamped = crate::playback_qt::stamped(vec![track], None);
-                if let Some(track) = stamped.pop() {
-                    // QConnect CONTROLLER mode (§7): route the insert to the
-                    // peer's queue — early-returns when handled (stamped
-                    // first: a blacklisted track must not reach the peer when
-                    // the local path would drop it).
-                    if crate::playback_qt::route_track_to_peer(&track, "next").await {
-                        return;
-                    }
-                    let added_castable = crate::playback_qt::batch_all_qconnect_castable(
-                        std::slice::from_ref(&track),
-                    );
-                    runtime.core().add_track_next(track).await;
-                    crate::playback_qt::sync_qconnect_after_add(added_castable).await;
+                let Some(track) = crate::playback_qt::stamped(vec![track], None).pop() else {
+                    return;
+                };
+                // QConnect CONTROLLER mode (§7): route the insert to the
+                // peer's queue — early-returns when handled (stamped first: a
+                // blocked track must not reach the peer when the local path
+                // would drop it).
+                if crate::playback_qt::route_track_to_peer(&track, "next").await {
+                    return;
                 }
+                let added_castable =
+                    crate::playback_qt::batch_all_qconnect_castable(std::slice::from_ref(&track));
+                runtime.core().add_track_next(track).await;
+                crate::playback_qt::sync_qconnect_after_add(added_castable).await;
                 crate::queue_qt::publish(&runtime).await;
                 crate::toast_qt::success(qbz_i18n::t("Playing next"));
             }
             InlineTrackMode::PlayLater => {
-                let mut stamped = crate::playback_qt::stamped(vec![track], None);
-                if let Some(track) = stamped.pop() {
-                    // QConnect CONTROLLER mode (§7): route the add to the
-                    // peer's queue. Mode "queue", NOT "later": the local op
-                    // here appends via `add_tracks` (the documented inline/row
-                    // divergence above), so the route matches what the LOCAL
-                    // path does.
-                    if crate::playback_qt::route_track_to_peer(&track, "queue").await {
-                        return;
-                    }
-                    let added_castable = crate::playback_qt::batch_all_qconnect_castable(
-                        std::slice::from_ref(&track),
-                    );
-                    runtime.core().add_tracks(vec![track]).await;
-                    crate::playback_qt::sync_qconnect_after_add(added_castable).await;
+                let Some(track) = crate::playback_qt::stamped(vec![track], None).pop() else {
+                    return;
+                };
+                // QConnect CONTROLLER mode (§7): route the add to the peer's
+                // queue. Mode "queue", NOT "later": the local op here appends
+                // via `add_tracks` (the documented inline/row divergence
+                // above), so the route matches what the LOCAL path does.
+                if crate::playback_qt::route_track_to_peer(&track, "queue").await {
+                    return;
                 }
+                let added_castable =
+                    crate::playback_qt::batch_all_qconnect_castable(std::slice::from_ref(&track));
+                runtime.core().add_tracks(vec![track]).await;
+                crate::playback_qt::sync_qconnect_after_add(added_castable).await;
                 crate::queue_qt::publish(&runtime).await;
                 crate::toast_qt::success(qbz_i18n::t("Added to queue"));
             }

@@ -113,7 +113,7 @@ impl SourceBadge {
             Some("qobuz_download") | Some("qobuz_purchase") | Some("offline") => {
                 SourceBadge::Offline
             }
-            Some("qobuz") => SourceBadge::Qobuz,
+            Some("qobuz") | Some("qobuz_connect_remote") => SourceBadge::Qobuz,
             _ => SourceBadge::Local,
         }
     }

@@ -934,6 +934,10 @@ Rectangle {
         }
     }
 
+    // Qobuz Connect bootstrap conflict: mounted globally because it fences the
+    // session loop until the user chooses which queue/renderer wins.
+    QconnectPlaybackConflictModal { }
+
     // Qobuz Connect diagnostics modal (DeveloperSettings > QOBUZ CONNECT) —
     // mounted LAST, mirroring QconnectDevModal.slint's topmost mount in
     // AppShell.slint. Ordering against the tooltip above is a non-issue: this
