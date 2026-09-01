@@ -511,45 +511,57 @@ Item {
             }
 
             // --- Footer, pinned to the card bottom --------------------
+            // Keep a real footer band around the modal-standard 36px
+            // controls. The old divider was anchored directly to the Row's
+            // top edge, so both buttons physically touched the separator.
+            Item {
+                id: footerBar
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 69
+
+                Row {
+                    id: footerRow
+                    anchors.right: parent.right
+                    anchors.rightMargin: 24
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 10
+
+                    SettingsButton {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: QbzSession.tr("Cancel", QbzSession.trRev)
+                        btnHeight: 36
+                        minWidth: 0
+                        onClicked: QbzPlaylistPicker.close()
+                    }
+                    // The single accent confirm (ADR-008). Disabled until
+                    // valid; QbzPrimaryButton supplies the active theme's
+                    // primary fill and matching on-accent label colour.
+                    QbzPrimaryButton {
+                        anchors.verticalCenter: parent.verticalCenter
+                        btnHeight: 36
+                        labelSize: 15
+                        label: root.creating
+                            ? QbzSession.tr("Saving...", QbzSession.trRev)
+                            : (root.creatingOpen
+                                ? QbzSession.tr("Create & Add", QbzSession.trRev)
+                                : QbzSession.tr("Add", QbzSession.trRev))
+                        btnEnabled: !root.creating
+                            && (root.creatingOpen
+                                ? root.createName.trim() !== ""
+                                : root.selectedId !== "")
+                        onClicked: root.confirm()
+                    }
+                }
+            }
             Rectangle {
                 id: footerDivider
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.bottom: footerRow.top
+                anchors.bottom: footerBar.top
                 height: 1
                 color: theme.borderSubtle
-            }
-            Row {
-                id: footerRow
-                anchors.right: parent.right
-                anchors.rightMargin: 24
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: 16
-                spacing: 12
-
-                SettingsButton {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: QbzSession.tr("Cancel", QbzSession.trRev)
-                    btnHeight: 34
-                    minWidth: 0
-                    onClicked: QbzPlaylistPicker.close()
-                }
-                // The single accent confirm (ADR-008). Disabled until valid —
-                // this is what replaces Tauri's in-body error box.
-                QbzPrimaryButton {
-                    anchors.verticalCenter: parent.verticalCenter
-                    btnHeight: 34
-                    label: root.creating
-                        ? QbzSession.tr("Saving...", QbzSession.trRev)
-                        : (root.creatingOpen
-                            ? QbzSession.tr("Create & Add", QbzSession.trRev)
-                            : QbzSession.tr("Add", QbzSession.trRev))
-                    btnEnabled: !root.creating
-                        && (root.creatingOpen
-                            ? root.createName.trim() !== ""
-                            : root.selectedId !== "")
-                    onClicked: root.confirm()
-                }
             }
 
             // --- Dropdown overlay -------------------------------------
