@@ -225,10 +225,15 @@ ApplicationWindow {
     // The four Window paddings are Qt 6.9 API (SafeArea landed in 6.9). The
     // Linux pin is Qt 6.8 LTS, where declaring them here refuses the whole
     // component ("Cannot assign to non-existent property") — measured on the
-    // CI VM, 2026-08-25. They only matter on macOS, so they are set there,
-    // imperatively, from a Loader that never instantiates elsewhere.
+    // CI VM, 2026-08-25. They matter on BOTH ExpandedClientAreaHint arms:
+    // macOS AND Windows (the Windows arm arrived later, in 415cba57d, and
+    // this gate was not widened with it — the result was the caption-height
+    // safe-area band auto-padding the contentItem down, painted with the
+    // window's #1a1a1a background: a dark grey strip above the QBZ header,
+    // owner-reported 2026-09-01). Set imperatively from a Loader that never
+    // instantiates on Linux/6.8.
     Loader {
-        active: QbzShell.isMacos
+        active: QbzShell.isMacos || QbzShell.isWindows
         sourceComponent: Component {
             Item {
                 Component.onCompleted: {
