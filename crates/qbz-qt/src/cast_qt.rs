@@ -2005,27 +2005,22 @@ impl CastService {
             return Ok(None);
         }
 
-        let source = if track.is_local {
-            "local"
-        } else {
-            track.source.as_deref().unwrap_or("qobuz")
-        };
-
         // Resolve + register per source. The fetch happens OUTSIDE the lock.
         // Qobuz has its own tiers (cache / progressive download); every
         // other source goes through the registry's playback ticket: a file on
         // disk is served from disk, a server-streamed item (Plex / Jellyfin /
         // Subsonic) is PROXIED to the renderer with the source's own request
         // contract — the media-server arm the Slint service left as a TODO.
-        let info_result = match source {
-            "qobuz" | "qobuz_download" => self.register_qobuz(media_stamp).await,
-            _ => match resolve_castable(track).await {
+        let info_result = if uses_qobuz_cast_pipeline(track) {
+            self.register_qobuz(media_stamp).await
+        } else {
+            match resolve_castable(track).await {
                 Ok(Castable::File(path)) => self.register_local(media_stamp, &path).await,
                 Ok(Castable::Stream { url, headers }) => {
                     self.register_proxy(media_stamp, url, headers).await
                 }
                 Err(error) => Err(error),
-            },
+            }
         };
         let mut info = match info_result {
             Ok(info) => info,
@@ -3845,6 +3840,20 @@ enum Castable {
     },
 }
 
+/// Whether this row names a Qobuz catalog track that Cast must fetch through
+/// the core's cache/progressive-stream path.
+///
+/// New QConnect materializations are stamped `qobuz`. The legacy transport tag
+/// remains accepted so queues persisted by an older build — or materialized
+/// before a manual disconnect in the same process — can still hand off to Cast.
+fn uses_qobuz_cast_pipeline(track: &QueueTrack) -> bool {
+    !track.is_local
+        && matches!(
+            track.source.as_deref(),
+            None | Some("qobuz") | Some("qobuz_download") | Some("qobuz_connect_remote")
+        )
+}
+
 async fn resolve_castable(track: &QueueTrack) -> Result<Castable, String> {
     let ticket = qbz_source::registry()
         .playback(track)
@@ -4660,5 +4669,26 @@ mod tests {
         assert!(body.contains("if !qconnect_running && !consumed_restore_in_flight"));
         assert!(body.contains("qc.disconnect_for_cast(transition_epoch).await"));
         assert!(!body.contains("qconnect_restore_token = None"));
+    }
+
+    #[test]
+    fn qconnect_queue_rows_remain_castable_after_disconnect() {
+        for source in ["qobuz", "qobuz_connect_remote"] {
+            let track: QueueTrack = serde_json::from_value(serde_json::json!({
+                "id": 128659874_u64,
+                "title": "Burning Ambition",
+                "artist": "Iron Maiden",
+                "album": "Best Of The B-Sides",
+                "duration_secs": 162_u64,
+                "artwork_url": null,
+                "bit_depth": 16_u32,
+                "sample_rate": 44100.0,
+                "album_id": null,
+                "artist_id": null,
+                "source": source
+            }))
+            .expect("queue track");
+            assert!(uses_qobuz_cast_pipeline(&track), "{source}");
+        }
     }
 }

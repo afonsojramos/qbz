@@ -13,10 +13,10 @@
 //! The gates are the desktop's EXACT set, in the same order: live runtime ->
 //! `is_local_renderer_active` (a peer owns playback -> the peer publishes) ->
 //! offline-only skip -> non-empty -> echo-suppress vs the cloud's last-applied
-//! queue -> per-session `last_pushed_queue_ids` latch -> all-or-nothing
-//! admission (any local/Plex track refuses the WHOLE push; offline
-//! qobuz_download stays eligible — its id is the real Qobuz id). The desktop
-//! toasts on refusal; the daemon logs.
+//! queue -> per-session `last_pushed_queue_ids` latch -> resolvable projection
+//! (local/Plex tracks are dropped while Qobuz and offline `qobuz_download`
+//! tracks stay eligible — the latter carry their real Qobuz id). The desktop
+//! toasts when rows are dropped; the daemon logs.
 //!
 //! Trigger: the desktop calls it on every track transition from its poll loop.
 //! The daemon instead runs a debounced `CoreEvent::QueueUpdated` subscriber
@@ -26,8 +26,11 @@
 use std::sync::{Arc, Mutex as StdMutex};
 
 use qbz_app::shell::AppRuntime;
-use qbz_models::CoreEvent;
-use qconnect_app::{is_local_renderer_active, QueueCommandType};
+use qbz_models::{CoreEvent, QueueTrack};
+use qconnect_app::{
+    arm_local_queue_takeover, is_local_renderer_active, local_queue_takeover_needs_retry,
+    qconnect_queue_track_is_resolvable, set_local_playback_conflict_pending, QueueCommandType,
+};
 use serde_json::json;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -48,6 +51,52 @@ pub async fn publish_local_queue_if_changed(
     authority: &AuthorityCell,
     expected_stamp: AuthorityStamp,
 ) {
+    let _ = publish_local_queue(inner, runtime, authority, expected_stamp, false).await;
+}
+
+/// Takeover variant used when the daemon is already playing and no peer is.
+/// It bypasses only the active-renderer echo gate; all authority, offline, and
+/// provenance checks remain in force.
+pub async fn publish_local_queue_for_takeover(
+    inner: &Arc<StdMutex<DaemonQconnectInner>>,
+    runtime: &Arc<AppRuntime<DaemonAdapter>>,
+    authority: &AuthorityCell,
+    expected_stamp: AuthorityStamp,
+) -> bool {
+    publish_local_queue(inner, runtime, authority, expected_stamp, true).await
+}
+
+fn resolvable_queue_projection(
+    tracks: &[QueueTrack],
+    current_index: Option<usize>,
+) -> (Vec<u64>, Option<usize>, usize) {
+    let clicked = current_index.unwrap_or(0);
+    let mut kept = Vec::with_capacity(tracks.len());
+    let mut projected_start = None;
+    let mut dropped = 0;
+    for (index, track) in tracks.iter().enumerate() {
+        if !qconnect_queue_track_is_resolvable(track) {
+            dropped += 1;
+            continue;
+        }
+        if projected_start.is_none() && index >= clicked {
+            projected_start = Some(kept.len());
+        }
+        kept.push(track.id);
+    }
+    if projected_start.is_none() && !kept.is_empty() {
+        projected_start = Some(kept.len() - 1);
+    }
+    (kept, projected_start, dropped)
+}
+
+async fn publish_local_queue(
+    inner: &Arc<StdMutex<DaemonQconnectInner>>,
+    runtime: &Arc<AppRuntime<DaemonAdapter>>,
+    authority: &AuthorityCell,
+    expected_stamp: AuthorityStamp,
+    force_takeover: bool,
+) -> bool {
     let (app, sync_state, stamp) = {
         let guard = inner
             .lock()
@@ -56,12 +105,12 @@ pub async fn publish_local_queue_if_changed(
             Some(rt) if rt.stamp == expected_stamp => {
                 (Arc::clone(&rt.app), Arc::clone(&rt.sync_state), rt.stamp)
             }
-            None => return,
-            Some(_) => return,
+            None => return false,
+            Some(_) => return false,
         }
     };
     if !authority.is_current(stamp) {
-        return;
+        return false;
     }
 
     // Only push while WE are the active renderer (the user is driving the
@@ -69,10 +118,10 @@ pub async fn publish_local_queue_if_changed(
     {
         let state = sync_state.lock().await;
         if !authority.is_current(stamp) {
-            return;
+            return false;
         }
-        if !is_local_renderer_active(&state.session) {
-            return;
+        if !force_takeover && !is_local_renderer_active(&state.session) {
+            return false;
         }
     }
 
@@ -81,24 +130,31 @@ pub async fn publish_local_queue_if_changed(
     // must not spam the log.
     if runtime.core().queue_is_offline_only() {
         log::debug!("[QConnect] queue is from an offline-only playlist; skipping cloud push");
-        return;
+        return false;
     }
 
     let (tracks, current_index) = runtime.core().get_all_queue_tracks().await;
     if !authority.is_current(stamp) {
-        return;
+        return false;
     }
     if tracks.is_empty() {
-        return;
+        return false;
     }
-    let ordered_ids: Vec<u64> = tracks.iter().map(|track| track.id).collect();
+    let source_ordered_ids: Vec<u64> = tracks.iter().map(|track| track.id).collect();
+    let takeover_retry = {
+        let state = sync_state.lock().await;
+        if !authority.is_current(stamp) {
+            return false;
+        }
+        local_queue_takeover_needs_retry(&state)
+    };
 
     // Echo-suppress: skip when this is the cloud's current queue (materialized
     // inbound) so our own adoption / a remote queue change never bounces back.
-    {
+    if !force_takeover && !takeover_retry {
         let state = sync_state.lock().await;
         if !authority.is_current(stamp) {
-            return;
+            return false;
         }
         if let Some(applied) = &state.last_applied_queue_state {
             let applied_ids: Vec<u64> = applied
@@ -106,58 +162,48 @@ pub async fn publish_local_queue_if_changed(
                 .iter()
                 .map(|item| item.track_id)
                 .collect();
-            if applied_ids == ordered_ids {
-                return;
+            if applied_ids == source_ordered_ids {
+                return false;
             }
         }
     }
     // ...and skip when we already pushed this exact queue (cloud echo pending).
     if !authority.is_current(stamp) {
-        return;
+        return false;
     }
-    {
+    if !force_takeover && !takeover_retry {
         let guard = inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if !installed_runtime_matches(&guard, stamp) {
-            return;
+            return false;
         }
-        if guard.last_pushed_queue_ids.as_deref() == Some(ordered_ids.as_slice()) {
-            return;
+        if guard.last_pushed_queue_ids.as_deref() == Some(source_ordered_ids.as_slice()) {
+            return false;
         }
     }
 
-    // Admission: refuse the whole push if any track isn't Qobuz-castable.
-    let all_eligible = tracks.iter().all(|track| {
-        let source = track
-            .source
-            .as_deref()
-            .unwrap_or("qobuz")
-            .to_ascii_lowercase();
-        source != "local" && source != "plex" && track.id > 0
-    });
-    if !all_eligible {
-        if !authority.is_current(stamp) {
-            return;
-        }
-        log::info!("[QConnect] Local queue has non-Qobuz tracks; not casting to Connect");
-        // Remember it so we don't re-log on every queue event within this queue.
-        if !authority.is_current(stamp) {
-            return;
-        }
+    let (ordered_ids, projected_start, dropped) =
+        resolvable_queue_projection(&tracks, current_index);
+    if dropped > 0 {
+        log::info!(
+            "[QConnect] Queue projection skipped {dropped} non-Qobuz track(s) before cloud sync"
+        );
+    }
+    if ordered_ids.is_empty() {
         let mut guard = inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if !installed_runtime_matches(&guard, stamp) {
-            return;
+            return false;
         }
-        guard.last_pushed_queue_ids = Some(ordered_ids);
-        return;
+        guard.last_pushed_queue_ids = Some(source_ordered_ids);
+        return false;
     }
 
     let count = ordered_ids.len();
     let track_ids: Vec<i64> = ordered_ids.iter().map(|id| *id as i64).collect();
-    let start_index = current_index.unwrap_or(0);
+    let start_index = projected_start.unwrap_or(0);
     let payload = json!({
         "track_ids": track_ids,
         "queue_position": start_index,
@@ -171,31 +217,41 @@ pub async fn publish_local_queue_if_changed(
         .build_queue_command(QueueCommandType::CtrlSrvrQueueLoadTracks, payload)
         .await;
     if !authority.is_current(stamp) {
-        return;
+        return false;
     }
     match app.send_queue_command(command).await {
-        Ok(_) => {
+        Ok(action_uuid) => {
             if !authority.is_current(stamp) {
-                return;
+                return false;
+            }
+            if force_takeover || takeover_retry {
+                let mut state = sync_state.lock().await;
+                if !authority.is_current(stamp) {
+                    return false;
+                }
+                arm_local_queue_takeover(&mut state, ordered_ids, action_uuid);
+                set_local_playback_conflict_pending(&mut state, false);
             }
             log::info!(
                 "[QConnect] Pushed local queue to Connect ({count} tracks, start={start_index})"
             );
             if !authority.is_current(stamp) {
-                return;
+                return false;
             }
             let mut guard = inner
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if !installed_runtime_matches(&guard, stamp) {
-                return;
+                return false;
             }
-            guard.last_pushed_queue_ids = Some(ordered_ids);
+            guard.last_pushed_queue_ids = Some(source_ordered_ids);
+            true
         }
         Err(err) if authority.is_current(stamp) => {
-            log::warn!("[QConnect] Failed to push local queue: {err}")
+            log::warn!("[QConnect] Failed to push local queue: {err}");
+            false
         }
-        Err(_) => {}
+        Err(_) => false,
     }
 }
 

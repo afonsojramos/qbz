@@ -68,6 +68,29 @@ pub struct DaemonSessionLoopHost {
 
 #[async_trait::async_trait]
 impl SessionLoopHost for DaemonSessionLoopHost {
+    fn local_playback_is_playing(&self) -> bool {
+        self.authority.is_current(self.stamp) && self.runtime.core().get_playback_state().is_playing
+    }
+
+    async fn publish_local_queue_for_takeover(&self) -> bool {
+        super::publish::publish_local_queue_for_takeover(
+            &self.inner,
+            &self.runtime,
+            &self.authority,
+            self.stamp,
+        )
+        .await
+    }
+
+    async fn stop_local_playback_for_remote_queue(&self) {
+        if !self.authority.is_current(self.stamp) {
+            return;
+        }
+        if let Err(error) = self.runtime.core().stop() {
+            log::warn!("[QConnect] Failed to stop daemon playback for remote queue: {error}");
+        }
+    }
+
     async fn update_lifecycle(&self, state: QconnectLifecycleState) {
         if !self.authority.is_current(self.stamp) {
             return;

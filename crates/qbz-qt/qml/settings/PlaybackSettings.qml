@@ -81,6 +81,17 @@ Column {
         }
     }
     SettingRow {
+        label: QbzSession.tr("When playback conflicts", QbzSession.trRev)
+        description: QbzSession.tr("Ask each time or automatically choose which queue and device should continue.", QbzSession.trRev)
+        QbzSelect {
+            menuWidth: 300
+            popupWidth: 420
+            options: root.doc.qconnectConflictPolicies || []
+            currentIndex: root.doc.qconnectConflictPolicyIndex || 0
+            onSelected: function (i) { QbzBridge.settingsSelect("qconnect-conflict-policy", i) }
+        }
+    }
+    SettingRow {
         label: QbzSession.tr("Qobuz Connect device name", QbzSession.trRev)
         description: QbzSession.tr("The name other Qobuz Connect apps see for this device. Applies on the next connection.", QbzSession.trRev)
         QbzLineEdit {

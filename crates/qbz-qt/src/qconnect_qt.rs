@@ -54,11 +54,13 @@ use qconnect_app::queue_resolution::{
 };
 use qconnect_app::renderer::{PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING, PLAYING_STATE_STOPPED};
 use qconnect_app::{
-    build_effective_renderer_snapshot, build_renderer_playback_report,
+    active_peer_renderer_is_playing, arm_local_queue_takeover, build_effective_renderer_snapshot,
+    build_renderer_playback_report, confirm_local_playback_state_asserted,
     ensure_session_renderer_state, is_local_renderer_active, is_peer_renderer_active,
-    lan_callback_is_current, queue_item_snapshot_for_cursor, renderer_allows_remote_volume,
-    AuthorityActionPermit, AuthorityCell, AuthorityOrigin, AuthorityStamp,
-    DelegationCoordinatorConfig, DelegationHost, LanRuntimeLifecycle, OwnerAuthorityObservation,
+    lan_callback_is_current, local_queue_takeover_needs_retry, queue_item_snapshot_for_cursor,
+    renderer_allows_remote_volume, set_local_playback_conflict_pending, AuthorityActionPermit,
+    AuthorityCell, AuthorityOrigin, AuthorityStamp, DelegationCoordinatorConfig, DelegationHost,
+    LanRuntimeLifecycle, LocalPlaybackConflictChoice, OwnerAuthorityObservation,
     OwnerAuthorityToken, QConnectQueueState, QConnectRendererState, QconnectApp, QconnectAppEvent,
     QconnectDisabledToken, QconnectEnableIntent, QconnectEnableToken, QconnectEventSink,
     QconnectFileAudioQualitySnapshot, QconnectLifecycleState, QconnectRemoteSyncState,
@@ -103,22 +105,144 @@ type Runtime = Arc<AppRuntime<LoggingAdapter>>;
 /// download is still the same catalog id and is eligible; every server/file
 /// source is not, even when its numeric id happens to look like a Qobuz id.
 pub(crate) fn is_qconnect_queue_track(track: &qbz_models::QueueTrack) -> bool {
-    if track.id == 0 {
+    qconnect_app::qconnect_queue_track_is_resolvable(track)
+}
+
+/// Queue admission follows the user's enabled intent, not the transient
+/// transport badge. Otherwise a reconnect window can admit local rows that
+/// poison the next cloud sync even though QConnect was never turned off.
+pub(crate) fn queue_admission_enabled() -> bool {
+    service().is_some_and(|service| service.has_enabled_intent())
+}
+
+/// One user-facing notice per queue action, pluralized across all locales.
+/// The caller owns batching; this helper never emits once per row.
+pub(crate) fn toast_unresolvable_tracks(count: usize) {
+    if count == 0 {
+        return;
+    }
+    crate::toast_qt::info(qbz_i18n::tf(
+        "Qobuz Connect can't resolve local tracks. {} track was skipped and wasn't added to the queue. Turn off Qobuz Connect to play it.",
+        "Qobuz Connect can't resolve local tracks. {} tracks were skipped and weren't added to the queue. Turn off Qobuz Connect to play them.",
+        count as i64,
+        &[&count.to_string()],
+    ));
+}
+
+fn resolvable_track_ids(tracks: &[(u64, Option<String>)]) -> (Vec<u64>, usize) {
+    let mut kept = Vec::with_capacity(tracks.len());
+    let mut dropped = 0;
+    for (track_id, source) in tracks {
+        if qconnect_app::qconnect_source_is_resolvable(*track_id, source.as_deref()) {
+            kept.push(*track_id);
+        } else {
+            dropped += 1;
+        }
+    }
+    (kept, dropped)
+}
+
+/// Defensive projection for queues that predate the admission seam (session
+/// restore, an older build, or an internal caller). Keeps catalog order and
+/// maps the old cursor onto the first surviving row at/after it, falling back
+/// to the last survivor when the remainder of the queue was local-only.
+fn resolvable_queue_projection(
+    tracks: &[qbz_models::QueueTrack],
+    start: Option<usize>,
+) -> (Vec<u64>, Option<usize>, usize) {
+    let clicked = start.unwrap_or(0);
+    let mut kept = Vec::with_capacity(tracks.len());
+    let mut new_start = None;
+    let mut dropped = 0;
+    for (index, track) in tracks.iter().enumerate() {
+        if !is_qconnect_queue_track(track) {
+            dropped += 1;
+            continue;
+        }
+        if new_start.is_none() && index >= clicked {
+            new_start = Some(kept.len());
+        }
+        kept.push(track.id);
+    }
+    if new_start.is_none() && !kept.is_empty() {
+        new_start = Some(kept.len() - 1);
+    }
+    (kept, new_start, dropped)
+}
+
+/// Publish the local queue while QBZ takes renderer ownership because it is
+/// already playing and no peer is. This deliberately bypasses the ordinary
+/// `is_local_renderer_active` gate: the SET_ACTIVE command was just sent, but
+/// its cloud echo has not landed yet. The upload is still authority-stamped and
+/// only contains Qobuz-resolvable rows.
+async fn publish_local_queue_for_takeover(
+    app: &Arc<QtQconnectApp>,
+    sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
+    inner: &Arc<StdMutex<QtQconnectInner>>,
+    runtime: &Runtime,
+    authority: &AuthorityCell,
+    stamp: AuthorityStamp,
+) -> bool {
+    if !authority.is_current(stamp) || runtime.core().queue_is_offline_only() {
         return false;
     }
-    match track
-        .source
-        .as_deref()
-        .map(str::trim)
-        .filter(|source| !source.is_empty())
-    {
-        Some(source) => matches!(
-            source.to_ascii_lowercase().as_str(),
-            "qobuz" | "qobuz_download" | "qobuz_purchase" | "offline"
-        ),
-        // Legacy catalog rows predate the source stamp. Their explicit
-        // non-local bit is the compatibility discriminator.
-        None => !track.is_local,
+    let (tracks, current_index) = runtime.core().get_all_queue_tracks().await;
+    if !authority.is_current(stamp) || tracks.is_empty() {
+        return false;
+    }
+    let source_ordered_ids: Vec<u64> = tracks.iter().map(|track| track.id).collect();
+    let (ordered_ids, projected_start, dropped) =
+        resolvable_queue_projection(&tracks, current_index);
+    if dropped > 0 {
+        log::info!("[QConnect] Local-playing takeover skipped {dropped} non-Qobuz track(s)");
+        toast_unresolvable_tracks(dropped);
+    }
+    if ordered_ids.is_empty() || !authority.is_current(stamp) {
+        lock_inner(inner).last_pushed_queue_ids = Some(source_ordered_ids);
+        return false;
+    }
+
+    let start_index = projected_start.unwrap_or(0);
+    let count = ordered_ids.len();
+    let payload = json!({
+        "track_ids": ordered_ids.iter().map(|id| *id as i64).collect::<Vec<_>>(),
+        "queue_position": start_index,
+        "shuffle_mode": false,
+        "shuffle_pivot_index": start_index,
+        "context_uuid": Uuid::new_v4().to_string(),
+        "autoplay_reset": true,
+        "autoplay_loading": false,
+    });
+    let command = app
+        .build_queue_command(QueueCommandType::CtrlSrvrQueueLoadTracks, payload)
+        .await;
+    if !authority.is_current(stamp) {
+        return false;
+    }
+    match app.send_queue_command(command).await {
+        Ok(action_uuid) if authority.is_current(stamp) => {
+            {
+                let mut state = sync_state.lock().await;
+                if !authority.is_current(stamp) {
+                    return false;
+                }
+                arm_local_queue_takeover(&mut state, ordered_ids, action_uuid);
+                set_local_playback_conflict_pending(&mut state, false);
+            }
+            lock_inner(inner).last_pushed_queue_ids = Some(source_ordered_ids);
+            log::info!(
+                "[QConnect] Local playback kept; published filtered queue ({count} tracks, start={start_index})"
+            );
+            dev_push_event(format!(
+                "-> local-playing takeover QueueLoadTracks {count} start={start_index}"
+            ));
+            true
+        }
+        Ok(_) => false,
+        Err(error) => {
+            log::warn!("[QConnect] Local-playing queue publication failed: {error}");
+            false
+        }
     }
 }
 
@@ -138,17 +262,6 @@ pub(crate) fn is_qconnect_queue_track(track: &qbz_models::QueueTrack) -> bool {
 // ---------------------------------------------------------------------------
 pub(crate) mod publish {
     use cxx_qt_lib::QString;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    /// Rust-side mirror of the bridge bit. Queue projections are assembled off
-    /// the Qt thread, so they cannot read `QbzQConnect.qconnectConnected`
-    /// directly. Keeping the mirror at the one publish funnel makes the QML
-    /// greyout and the Rust action guards agree on the same session edge.
-    static CONNECTED: AtomicBool = AtomicBool::new(false);
-
-    pub(crate) fn is_connected() -> bool {
-        CONNECTED.load(Ordering::SeqCst)
-    }
 
     /// One device-picker row (the Slint `QconnectDevice` struct), serialized
     /// onto `QbzQConnect.devices_json` by [`devices`] (same JSON precedent as
@@ -167,7 +280,6 @@ pub(crate) mod publish {
     /// `NowPlayingState.qconnect-connected` -> `QbzQConnect.qconnect_connected`
     /// (the golden ConnectButton badge).
     pub(crate) fn connected(connected: bool) {
-        CONNECTED.store(connected, Ordering::SeqCst);
         crate::qconnect_bridge::ui(move |mut b| {
             b.as_mut().set_qconnect_connected(connected);
         });
@@ -203,6 +315,24 @@ pub(crate) mod publish {
     pub(crate) fn active_renderer_id(renderer_id: i32) {
         crate::qconnect_bridge::ui(move |mut b| {
             b.as_mut().set_active_renderer_id(renderer_id);
+        });
+    }
+
+    /// Open/close the global playback-conflict modal. The session loop remains
+    /// fenced while it is open, so this publish is presentation only.
+    pub(crate) fn playback_conflict(open: bool, renderer_name: String) {
+        crate::qconnect_bridge::ui(move |mut b| {
+            b.as_mut()
+                .set_playback_conflict_renderer_name(QString::from(renderer_name.as_str()));
+            b.as_mut().set_playback_conflict_open(open);
+        });
+    }
+
+    /// Shared persisted conflict-policy selection. The flyout binds this
+    /// property directly; Settings receives the same index in its snapshot.
+    pub(crate) fn playback_conflict_policy_index(index: i32) {
+        crate::qconnect_bridge::ui(move |mut b| {
+            b.as_mut().set_playback_conflict_policy_index(index);
         });
     }
 
@@ -261,6 +391,49 @@ pub struct RemoteNowPlaying {
 /// QueueController). Initialized once at shell setup; the connect trigger + the
 /// future `*_if_remote` transport routing reach it through `service()`.
 static SERVICE: std::sync::OnceLock<Arc<QtQconnectService>> = std::sync::OnceLock::new();
+
+type PlaybackConflictSender = tokio::sync::oneshot::Sender<LocalPlaybackConflictChoice>;
+static PLAYBACK_CONFLICT_SENDER: std::sync::OnceLock<StdMutex<Option<PlaybackConflictSender>>> =
+    std::sync::OnceLock::new();
+
+fn playback_conflict_sender() -> &'static StdMutex<Option<PlaybackConflictSender>> {
+    PLAYBACK_CONFLICT_SENDER.get_or_init(|| StdMutex::new(None))
+}
+
+async fn request_playback_conflict_choice(renderer_name: String) -> LocalPlaybackConflictChoice {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let previous = playback_conflict_sender()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .replace(sender);
+    drop(previous);
+    publish::playback_conflict(true, renderer_name);
+    receiver
+        .await
+        .unwrap_or(LocalPlaybackConflictChoice::CancelConnection)
+}
+
+/// QML result for the conflict modal. Invalid values fail closed as Cancel.
+pub(crate) fn resolve_playback_conflict_choice(choice: i32) {
+    let choice = match choice {
+        1 => LocalPlaybackConflictChoice::ContinueOnActiveRenderer,
+        2 => LocalPlaybackConflictChoice::ContinueOnThisDevice,
+        3 => LocalPlaybackConflictChoice::ContinueLocalPlaybackAndReplaceQueue,
+        4 => LocalPlaybackConflictChoice::CancelConnection,
+        value => {
+            log::warn!("[QConnect] invalid playback-conflict choice: {value}");
+            LocalPlaybackConflictChoice::CancelConnection
+        }
+    };
+    publish::playback_conflict(false, String::new());
+    let sender = playback_conflict_sender()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
+    if let Some(sender) = sender {
+        let _ = sender.send(choice);
+    }
+}
 
 /// Initialize the QConnect service singleton (idempotent — a second call returns
 /// the existing instance, ignoring the new args).
@@ -1481,8 +1654,12 @@ impl QtQconnectService {
                 next_queue_item_id: next_qid,
             },
         );
-        if let Err(err) = app.send_renderer_report_command(report).await {
-            log::warn!("[QConnect] Failed to report playback state: {err}");
+        match app.send_renderer_report_command(report).await {
+            Ok(()) => {
+                let mut state = sync_state.lock().await;
+                confirm_local_playback_state_asserted(&mut state);
+            }
+            Err(err) => log::warn!("[QConnect] Failed to report playback state: {err}"),
         }
 
         if position_ms >= 0 {
@@ -2058,10 +2235,10 @@ impl QtQconnectService {
     ///
     /// Echo-safe by construction: the inbound materialize path never calls this,
     /// and we skip when the local queue already equals the cloud's last-applied
-    /// queue OR the last queue we pushed. Admission mirrors the webplayer's
-    /// `assessQconnectQueueSync` — all-or-nothing: a queue containing any local /
-    /// Plex track is refused whole (a renderer can only play Qobuz catalog ids;
-    /// offline qobuz_download IS eligible — its id is the real Qobuz id).
+    /// queue OR the last queue we pushed. Admission normally happened before
+    /// the core queue mutation. A defensive
+    /// projection here also repairs restored/legacy mixed queues instead of
+    /// refusing the whole cloud update.
     pub async fn sync_local_queue_if_changed(&self) {
         let Ok(Some(_runtime_action)) = self.begin_runtime_action_if_running() else {
             return;
@@ -2094,11 +2271,15 @@ impl QtQconnectService {
         if tracks.is_empty() {
             return;
         }
-        let ordered_ids: Vec<u64> = tracks.iter().map(|track| track.id).collect();
+        let source_ordered_ids: Vec<u64> = tracks.iter().map(|track| track.id).collect();
+        let takeover_retry = {
+            let state = sync_state.lock().await;
+            local_queue_takeover_needs_retry(&state)
+        };
 
         // Echo-suppress: skip when this is the cloud's current queue (materialized
         // inbound) so our own adoption / a remote queue change never bounces back.
-        {
+        if !takeover_retry {
             let state = sync_state.lock().await;
             if let Some(applied) = &state.last_applied_queue_state {
                 let applied_ids: Vec<u64> = applied
@@ -2106,33 +2287,38 @@ impl QtQconnectService {
                     .iter()
                     .map(|item| item.track_id)
                     .collect();
-                if applied_ids == ordered_ids {
+                if applied_ids == source_ordered_ids {
                     return;
                 }
             }
         }
         // ...and skip when we already pushed this exact queue (cloud echo pending).
-        {
+        if !takeover_retry {
             let guard = lock_inner(&self.inner);
-            if guard.last_pushed_queue_ids.as_deref() == Some(ordered_ids.as_slice()) {
+            if guard.last_pushed_queue_ids.as_deref() == Some(source_ordered_ids.as_slice()) {
                 return;
             }
         }
 
-        // Admission: refuse the whole push if any track isn't Qobuz-castable.
-        let all_eligible = tracks.iter().all(is_qconnect_queue_track);
-        if !all_eligible {
-            log::info!("[QConnect] Local queue has non-Qobuz tracks; not casting to Connect");
-            crate::toast_qt::error(qbz_i18n::t("Mixed queue — not cast to Qobuz Connect"));
-            dev_push_event("-> queue push REFUSED (mixed/non-Qobuz)".to_string());
-            // Remember it so we don't re-toast on every track tick within this queue.
-            lock_inner(&self.inner).last_pushed_queue_ids = Some(ordered_ids);
+        let (ordered_ids, projected_start, dropped) =
+            resolvable_queue_projection(&tracks, current_index);
+        if dropped > 0 {
+            log::info!(
+                "[QConnect] Queue projection skipped {dropped} non-Qobuz track(s) before cloud sync"
+            );
+            toast_unresolvable_tracks(dropped);
+            dev_push_event(format!(
+                "-> queue projection skipped {dropped} non-Qobuz track(s)"
+            ));
+        }
+        if ordered_ids.is_empty() {
+            lock_inner(&self.inner).last_pushed_queue_ids = Some(source_ordered_ids);
             return;
         }
 
         let count = ordered_ids.len();
         let track_ids: Vec<i64> = ordered_ids.iter().map(|id| *id as i64).collect();
-        let start_index = current_index.unwrap_or(0);
+        let start_index = projected_start.unwrap_or(0);
         let payload = json!({
             "track_ids": track_ids,
             "queue_position": start_index,
@@ -2146,14 +2332,18 @@ impl QtQconnectService {
             .build_queue_command(QueueCommandType::CtrlSrvrQueueLoadTracks, payload)
             .await;
         match app.send_queue_command(command).await {
-            Ok(_) => {
+            Ok(action_uuid) => {
+                if takeover_retry {
+                    let mut state = sync_state.lock().await;
+                    arm_local_queue_takeover(&mut state, ordered_ids, action_uuid);
+                }
                 log::info!(
                     "[QConnect] Pushed local queue to Connect ({count} tracks, start={start_index})"
                 );
                 dev_push_event(format!(
                     "-> QueueLoadTracks {count} tracks start={start_index}"
                 ));
-                lock_inner(&self.inner).last_pushed_queue_ids = Some(ordered_ids);
+                lock_inner(&self.inner).last_pushed_queue_ids = Some(source_ordered_ids);
             }
             Err(err) => log::warn!("[QConnect] Failed to push local queue: {err}"),
         }
@@ -2168,13 +2358,9 @@ impl QtQconnectService {
     /// Unlike `sync_local_queue_if_changed`, the queue push here is
     /// UNCONDITIONAL (no echo-gate, no is_local_renderer_active gate) — the user
     /// just issued a fresh play, so the current core queue IS what should run on
-    /// the peer. Admission is the SAME all-or-nothing rule: a queue containing
-    /// any local / Plex track is refused whole (a renderer can only play Qobuz
-    /// catalog ids; offline qobuz_download IS eligible). On refusal it toasts and
-    /// returns `true` (handled — do NOT fall back to playing a mixed queue
-    /// locally that we just declined to cast). On any send error it logs and
-    /// still returns `true` (a peer owns playback; falling back to local audio
-    /// would double-play).
+    /// the peer. Any legacy non-Qobuz rows are projected out while preserving
+    /// order and cursor. On any send error it logs and still returns `true` (a
+    /// peer owns playback; falling back to local audio would double-play).
     pub async fn play_on_peer_if_active(&self, track_id: u64) -> bool {
         let (app, sync_state) = {
             let guard = lock_inner(&self.inner);
@@ -2192,9 +2378,8 @@ impl QtQconnectService {
         }
 
         // D8 guard: an offline-only-playlist queue is never pushed to the
-        // cloud. Returning false lets the play proceed LOCALLY (unlike the
-        // mixed-queue refusal below, local playback of these tracks is fine —
-        // the prohibition is only on the cloud push).
+        // cloud. Returning false lets the play proceed LOCALLY; playback of
+        // these tracks is fine, the prohibition is only on the cloud push.
         if self.runtime.core().queue_is_offline_only() {
             log::info!(
                 "[QConnect] queue is from an offline-only playlist; not routing to peer renderer"
@@ -2207,23 +2392,24 @@ impl QtQconnectService {
         if tracks.is_empty() {
             return false;
         }
-        let ordered_ids: Vec<u64> = tracks.iter().map(|track| track.id).collect();
-
-        // Admission: refuse the whole push if any track isn't Qobuz-castable.
-        let all_eligible = tracks.iter().all(is_qconnect_queue_track);
-        if !all_eligible {
-            log::info!("[QConnect] Local queue has non-Qobuz tracks; not casting to Connect");
-            crate::toast_qt::error(qbz_i18n::t("Mixed queue — not cast to Qobuz Connect"));
-            dev_push_event("-> queue push REFUSED (mixed/non-Qobuz)".to_string());
-            // Remember it so the poll loop's sync doesn't re-toast this queue.
-            lock_inner(&self.inner).last_pushed_queue_ids = Some(ordered_ids);
-            // Handled: do NOT play a refused queue locally.
+        let source_ordered_ids: Vec<u64> = tracks.iter().map(|track| track.id).collect();
+        let (ordered_ids, projected_start, dropped) =
+            resolvable_queue_projection(&tracks, current_index);
+        if dropped > 0 {
+            log::info!("[QConnect] play_on_peer projected out {dropped} non-Qobuz track(s)");
+            toast_unresolvable_tracks(dropped);
+            dev_push_event(format!(
+                "-> play_on_peer skipped {dropped} non-Qobuz track(s)"
+            ));
+        }
+        if ordered_ids.is_empty() || !ordered_ids.contains(&track_id) {
+            lock_inner(&self.inner).last_pushed_queue_ids = Some(source_ordered_ids);
             return true;
         }
 
         let count = ordered_ids.len();
         let track_ids: Vec<i64> = ordered_ids.iter().map(|id| *id as i64).collect();
-        let start_index = current_index.unwrap_or(0);
+        let start_index = projected_start.unwrap_or(0);
         let payload = json!({
             "track_ids": track_ids,
             "queue_position": start_index,
@@ -2244,7 +2430,7 @@ impl QtQconnectService {
                 dev_push_event(format!(
                     "-> play_on_peer QueueLoadTracks {count} start={start_index}"
                 ));
-                lock_inner(&self.inner).last_pushed_queue_ids = Some(ordered_ids);
+                lock_inner(&self.inner).last_pushed_queue_ids = Some(source_ordered_ids);
             }
             Err(err) => {
                 log::warn!("[QConnect] play_on_peer: queue push failed: {err}");
@@ -2290,7 +2476,7 @@ impl QtQconnectService {
             log::info!(
                 "[QConnect] play_next_on_peer: track {track_id} not Qobuz-castable; refusing"
             );
-            crate::toast_qt::error(qbz_i18n::t("Track not castable to Qobuz Connect"));
+            toast_unresolvable_tracks(1);
             dev_push_event(format!("-> play_next REFUSED (non-Qobuz track {track_id})"));
             // Handled: do NOT add a non-castable track to the local queue while a
             // peer owns playback.
@@ -2363,7 +2549,7 @@ impl QtQconnectService {
             log::info!(
                 "[QConnect] add_to_queue_on_peer: track {track_id} not Qobuz-castable; refusing"
             );
-            crate::toast_qt::error(qbz_i18n::t("Track not castable to Qobuz Connect"));
+            toast_unresolvable_tracks(1);
             dev_push_event(format!(
                 "-> add_to_queue REFUSED (non-Qobuz track {track_id})"
             ));
@@ -2394,10 +2580,8 @@ impl QtQconnectService {
 
     /// Controller add-to-queue routing for a MULTI-track batch (album / playlist /
     /// favorites bulk). Same contract as the single-track
-    /// `add_to_queue_on_peer_if_active`, but admission is ALL-OR-NOTHING: if ANY
-    /// track in the batch is non-castable (`local` / `plex`), the WHOLE batch is
-    /// refused (toast + `return true`, nothing routed and nothing added locally) —
-    /// mirroring the queue-sync's all-or-nothing rule. A single
+    /// `add_to_queue_on_peer_if_active`. Admission is partial: non-Qobuz rows
+    /// are counted once and omitted while every resolvable row keeps its order. A single
     /// `CtrlSrvrQueueAddTracks` carries every id (the protocol `track_ids` is a
     /// full `Vec`), and the cloud echoes a `QueueUpdated` that
     /// `materialize_remote_queue` applies locally, so we never mutate the local
@@ -2414,22 +2598,22 @@ impl QtQconnectService {
             return false;
         }
 
-        if let Some((bad_id, _)) = tracks
-            .iter()
-            .find(|(id, source)| !self.is_track_castable(*id, source.as_deref()))
-        {
+        let (ids_u64, dropped) = resolvable_track_ids(tracks);
+        if dropped > 0 {
             log::info!(
-                "[QConnect] add_to_queue_batch_on_peer: track {bad_id} not Qobuz-castable; refusing whole batch"
+                "[QConnect] add_to_queue_batch_on_peer: skipped {dropped} non-Qobuz track(s)"
             );
-            crate::toast_qt::error(qbz_i18n::t("Some tracks can't be cast to Qobuz Connect"));
+            toast_unresolvable_tracks(dropped);
             dev_push_event(format!(
-                "-> add_to_queue REFUSED (non-Qobuz track {bad_id} in batch of {})",
-                tracks.len()
+                "-> add_to_queue skipped {dropped} non-Qobuz track(s) from batch of {}",
+                tracks.len(),
             ));
+        }
+        if ids_u64.is_empty() {
             return true;
         }
 
-        let ids: Vec<i64> = tracks.iter().map(|(id, _)| *id as i64).collect();
+        let ids: Vec<i64> = ids_u64.iter().map(|id| *id as i64).collect();
         let count = ids.len();
         let payload = json!({
             "track_ids": ids,
@@ -2453,7 +2637,7 @@ impl QtQconnectService {
         true
     }
 
-    /// Controller play-next routing for a MULTI-track batch. Same all-or-nothing
+    /// Controller play-next routing for a MULTI-track batch. Same partial
     /// admission as `add_to_queue_batch_on_peer_if_active`. The server
     /// `CtrlSrvrQueueInsertTracks` inserts the whole `track_ids` block right after
     /// `insert_after` and PRESERVES the list order, so the ids are passed in
@@ -2470,18 +2654,16 @@ impl QtQconnectService {
             return false;
         }
 
-        if let Some((bad_id, _)) = tracks
-            .iter()
-            .find(|(id, source)| !self.is_track_castable(*id, source.as_deref()))
-        {
-            log::info!(
-                "[QConnect] play_next_batch_on_peer: track {bad_id} not Qobuz-castable; refusing whole batch"
-            );
-            crate::toast_qt::error(qbz_i18n::t("Some tracks can't be cast to Qobuz Connect"));
+        let (ids_u64, dropped) = resolvable_track_ids(tracks);
+        if dropped > 0 {
+            log::info!("[QConnect] play_next_batch_on_peer: skipped {dropped} non-Qobuz track(s)");
+            toast_unresolvable_tracks(dropped);
             dev_push_event(format!(
-                "-> play_next REFUSED (non-Qobuz track {bad_id} in batch of {})",
-                tracks.len()
+                "-> play_next skipped {dropped} non-Qobuz track(s) from batch of {}",
+                tracks.len(),
             ));
+        }
+        if ids_u64.is_empty() {
             return true;
         }
 
@@ -2498,7 +2680,6 @@ impl QtQconnectService {
                     .and_then(|item| i64::try_from(item.queue_item_id).ok())
             });
 
-        let ids_u64: Vec<u64> = tracks.iter().map(|(id, _)| *id).collect();
         let ids: Vec<i64> = ids_u64.iter().map(|id| *id as i64).collect();
         let count = ids.len();
         let mut payload = json!({
@@ -2576,7 +2757,7 @@ impl QtQconnectService {
             log::info!(
                 "[QConnect] play_later_on_peer: track {track_id} not Qobuz-castable; refusing"
             );
-            crate::toast_qt::error(qbz_i18n::t("Track not castable to Qobuz Connect"));
+            toast_unresolvable_tracks(1);
             dev_push_event(format!(
                 "-> play_later REFUSED (non-Qobuz track {track_id})"
             ));
@@ -2661,7 +2842,7 @@ impl QtQconnectService {
         }
         if !self.is_track_castable(track_id, source) {
             log::info!("[QConnect] insert_at_slot: track {track_id} not Qobuz-castable; refusing");
-            crate::toast_qt::error(qbz_i18n::t("Track not castable to Qobuz Connect"));
+            toast_unresolvable_tracks(1);
             dev_push_event(format!(
                 "-> insert_at_slot REFUSED (non-Qobuz track {track_id})"
             ));
@@ -2719,8 +2900,8 @@ impl QtQconnectService {
     }
 
     /// Controller play-LATER routing for a MULTI-track batch (#442). Same
-    /// all-or-nothing admission as `play_next_batch_on_peer_if_active`; the
-    /// whole block lands after the manual-block tail in NATURAL order (the
+    /// partial admission as `play_next_batch_on_peer_if_active`; the surviving
+    /// block lands after the manual-block tail in NATURAL order (the
     /// server preserves list order), mirroring the local
     /// `enqueue_queue_tracks_later` semantics.
     pub async fn play_later_batch_on_peer_if_active(
@@ -2734,24 +2915,21 @@ impl QtQconnectService {
             return false;
         }
 
-        if let Some((bad_id, _)) = tracks
-            .iter()
-            .find(|(id, source)| !self.is_track_castable(*id, source.as_deref()))
-        {
-            log::info!(
-                "[QConnect] play_later_batch_on_peer: track {bad_id} not Qobuz-castable; refusing whole batch"
-            );
-            crate::toast_qt::error(qbz_i18n::t("Some tracks can't be cast to Qobuz Connect"));
+        let (ids_u64, dropped) = resolvable_track_ids(tracks);
+        if dropped > 0 {
+            log::info!("[QConnect] play_later_batch_on_peer: skipped {dropped} non-Qobuz track(s)");
+            toast_unresolvable_tracks(dropped);
             dev_push_event(format!(
-                "-> play_later REFUSED (non-Qobuz track {bad_id} in batch of {})",
-                tracks.len()
+                "-> play_later skipped {dropped} non-Qobuz track(s) from batch of {}",
+                tracks.len(),
             ));
+        }
+        if ids_u64.is_empty() {
             return true;
         }
 
         let insert_after = self.controller_later_anchor().await;
 
-        let ids_u64: Vec<u64> = tracks.iter().map(|(id, _)| *id).collect();
         let ids: Vec<i64> = ids_u64.iter().map(|id| *id as i64).collect();
         let count = ids.len();
         let mut payload = json!({
@@ -2799,13 +2977,9 @@ impl QtQconnectService {
         is_peer_renderer_active(&state.session)
     }
 
-    /// Single-track castability check, mirroring `sync_local_queue_if_changed`'s
-    /// all-or-nothing rule: castable = a positive id whose `source` is not
-    /// `local` / `plex` (offline `qobuz_download` IS eligible; the default/None
-    /// is treated as `qobuz`).
+    /// Single-track form of the shared source-aware admission contract.
     fn is_track_castable(&self, track_id: u64, source: Option<&str>) -> bool {
-        let source = source.unwrap_or("qobuz").to_ascii_lowercase();
-        track_id > 0 && source != "local" && source != "plex"
+        qconnect_app::qconnect_source_is_resolvable(track_id, source)
     }
 
     // -----------------------------------------------------------------------
@@ -3879,6 +4053,111 @@ pub(crate) struct QtSessionLoopHost {
 
 #[async_trait::async_trait]
 impl SessionLoopHost for QtSessionLoopHost {
+    fn local_playback_is_playing(&self) -> bool {
+        self.authority.is_current(self.stamp) && self.runtime.core().get_playback_state().is_playing
+    }
+
+    async fn publish_local_queue_for_takeover(&self) -> bool {
+        publish_local_queue_for_takeover(
+            &self.app,
+            &self.sync_state,
+            &self.inner,
+            &self.runtime,
+            &self.authority,
+            self.stamp,
+        )
+        .await
+    }
+
+    async fn resolve_local_playback_conflict(
+        &self,
+        active_renderer_id: i32,
+        _peer_was_playing: bool,
+    ) -> LocalPlaybackConflictChoice {
+        if !self.authority.is_current(self.stamp) {
+            return LocalPlaybackConflictChoice::CancelConnection;
+        }
+        let policy = crate::qconnect_transport_qt::load_playback_conflict_policy();
+        if let Some(choice) = policy.automatic_choice() {
+            log::info!(
+                "[QConnect] Local playback conflicts with active renderer {active_renderer_id}; applying persisted policy {}",
+                policy.as_str()
+            );
+            return choice;
+        }
+        let renderer_name = {
+            let state = self.sync_state.lock().await;
+            state
+                .session
+                .renderers
+                .iter()
+                .find(|renderer| renderer.renderer_id == active_renderer_id)
+                .and_then(|renderer| renderer.friendly_name.clone())
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| "Qobuz Connect".to_string())
+        };
+        log::info!(
+            "[QConnect] Local playback conflicts with active renderer {active_renderer_id}; awaiting user choice"
+        );
+        request_playback_conflict_choice(renderer_name).await
+    }
+
+    async fn stop_local_playback_for_remote_queue(&self) {
+        if !self.authority.is_current(self.stamp) {
+            return;
+        }
+        if let Err(error) = self.runtime.core().stop() {
+            log::warn!("[QConnect] Failed to stop local playback for remote queue: {error}");
+        }
+    }
+
+    async fn continue_active_renderer_playback(&self) {
+        if !self.authority.is_current(self.stamp) {
+            return;
+        }
+        let peer_is_playing = {
+            let state = self.sync_state.lock().await;
+            active_peer_renderer_is_playing(&state)
+        };
+        if peer_is_playing {
+            return;
+        }
+        let Some(service) = service() else {
+            return;
+        };
+        if let Err(error) = service.toggle_remote_renderer_playback_if_active().await {
+            log::warn!("[QConnect] Failed to continue active renderer: {error}");
+        }
+    }
+
+    async fn cancel_connection_for_playback_conflict(&self) {
+        publish::playback_conflict(false, String::new());
+        let Some(service) = service() else {
+            return;
+        };
+        crate::spawn(async move {
+            match service.disconnect_safely().await {
+                Ok(outcome) if outcome.authority_safe => {
+                    publish::connected(false);
+                    let _ = tokio::task::spawn_blocking(|| {
+                        if crate::qconnect_transport_qt::load_startup_mode()
+                            == qconnect_app::QconnectStartupMode::RememberLast
+                        {
+                            crate::qconnect_transport_qt::save_last_known_state(false);
+                        }
+                    })
+                    .await;
+                }
+                Ok(_) => log::warn!(
+                    "[QConnect] Playback-conflict cancellation left authority teardown incomplete"
+                ),
+                Err(error) => {
+                    log::warn!("[QConnect] Playback-conflict cancellation failed: {error}")
+                }
+            }
+        });
+    }
+
     async fn update_lifecycle(&self, state: QconnectLifecycleState) {
         update_lifecycle_state_if_running(
             &self.inner,
@@ -4435,7 +4714,7 @@ async fn deferred_renderer_join(
 
 #[cfg(test)]
 mod tests {
-    use super::is_qconnect_queue_track;
+    use super::{is_qconnect_queue_track, resolvable_queue_projection, resolvable_track_ids};
     use qbz_models::QueueTrack;
 
     fn track(source: Option<&str>, is_local: bool) -> QueueTrack {
@@ -4467,7 +4746,13 @@ mod tests {
 
     #[test]
     fn qconnect_admits_catalog_and_offline_catalog_rows() {
-        for source in ["qobuz", "qobuz_download", "qobuz_purchase", "offline"] {
+        for source in [
+            "qobuz",
+            "qobuz_download",
+            "qobuz_purchase",
+            "offline",
+            "qobuz_connect_remote",
+        ] {
             assert!(
                 is_qconnect_queue_track(&track(Some(source), true)),
                 "{source}"
@@ -4492,6 +4777,33 @@ mod tests {
         let mut row = track(Some("qobuz"), false);
         row.id = 0;
         assert!(!is_qconnect_queue_track(&row));
+    }
+
+    #[test]
+    fn controller_batches_keep_resolvable_rows_in_original_order() {
+        let tracks = vec![
+            (11, Some("qobuz".to_string())),
+            (12, Some("local".to_string())),
+            (13, Some("qobuz_connect_remote".to_string())),
+            (14, Some("jellyfin".to_string())),
+            (15, Some("qobuz_download".to_string())),
+        ];
+        let (kept, dropped) = resolvable_track_ids(&tracks);
+        assert_eq!(kept, vec![11, 13, 15]);
+        assert_eq!(dropped, 2);
+    }
+
+    #[test]
+    fn defensive_queue_projection_remaps_a_dropped_cursor_forward() {
+        let tracks = vec![
+            track(Some("qobuz"), false),
+            track(Some("local"), true),
+            track(Some("qobuz_connect_remote"), false),
+        ];
+        let (kept, start, dropped) = resolvable_queue_projection(&tracks, Some(1));
+        assert_eq!(kept, vec![42, 42]);
+        assert_eq!(start, Some(1));
+        assert_eq!(dropped, 1);
     }
 
     #[test]

@@ -105,13 +105,12 @@ pub struct ConnectionDecision {
 }
 
 /// Pure takeover arbitration ported from the web controller's
-/// `computeConnectionState`. This is a REDUCED matrix: it captures the
-/// shape and named outputs faithfully from the appendix prose, but the
-/// exact web truth-table cell values were not dumped verbatim. The
-/// `OtherPaused` vs `OtherPlaying` divergence and repeat-mode
-/// reconciliation are pending a decompiled-bundle cross-check; repeat-mode
-/// reconciliation is intentionally OUT of P1-3 scope (it overlaps the
-/// existing `session_loop_mode` handling in `event_sink.rs`).
+/// `computeConnectionState` and completed with QBZ's local-playback rule. A
+/// playing peer remains authoritative. When QBZ itself is already playing and
+/// the active peer is paused/stopped (or the session is idle), QBZ keeps
+/// playback, claims the renderer slot, and publishes its resolvable queue.
+/// Repeat-mode reconciliation remains outside this function; it overlaps the
+/// existing `session_loop_mode` handling in the event sinks.
 pub fn compute_connection_state(
     was_active: bool,
     was_playing: bool,
@@ -128,9 +127,9 @@ pub fn compute_connection_state(
             // "Play here" click when QBZ is the only candidate. This NEVER steals
             // from an active peer: an active peer is server==Other*/Me, not None,
             // and those branches keep should_set_active_renderer=false.
-            should_be_active: was_active || auto_take_when_idle,
-            should_set_active_renderer: was_active || auto_take_when_idle,
-            should_set_queue: was_active,
+            should_be_active: was_active || was_playing || auto_take_when_idle,
+            should_set_active_renderer: was_active || was_playing || auto_take_when_idle,
+            should_set_queue: was_active || was_playing,
             should_ask_queue: false,
         },
         Me => ConnectionDecision {
@@ -139,7 +138,19 @@ pub fn compute_connection_state(
             should_set_queue: !queue_equal && (was_active || was_playing),
             should_ask_queue: queue_equal,
         },
-        OtherPlaying | OtherPaused => ConnectionDecision {
+        OtherPlaying => ConnectionDecision {
+            should_be_active: false,
+            should_set_active_renderer: false,
+            should_set_queue: false,
+            should_ask_queue: true,
+        },
+        OtherPaused if was_playing => ConnectionDecision {
+            should_be_active: true,
+            should_set_active_renderer: true,
+            should_set_queue: true,
+            should_ask_queue: false,
+        },
+        OtherPaused => ConnectionDecision {
             should_be_active: false,
             should_set_active_renderer: false,
             should_set_queue: false,
@@ -552,6 +563,13 @@ mod tests {
         assert!(d.should_ask_queue && !d.should_set_queue && !d.should_set_active_renderer);
         let d = compute_connection_state(false, false, OtherPlaying, false, false);
         assert!(!d.should_be_active && !d.should_set_active_renderer && d.should_ask_queue);
+        // A paused/stopped peer does not interrupt real local playback: QBZ
+        // claims the slot and publishes its filtered queue.
+        let d = compute_connection_state(false, true, OtherPaused, false, false);
+        assert!(d.should_be_active && d.should_set_active_renderer && d.should_set_queue);
+        // A genuinely playing peer remains authoritative.
+        let d = compute_connection_state(false, true, OtherPlaying, false, false);
+        assert!(!d.should_be_active && !d.should_set_active_renderer && !d.should_set_queue);
         let d = compute_connection_state(false, false, None, false, false);
         assert!(
             !d.should_be_active
@@ -563,6 +581,10 @@ mod tests {
         // QBZ claims the render (no extra "Play here" click).
         let d = compute_connection_state(false, false, None, false, true);
         assert!(d.should_be_active && d.should_set_active_renderer);
+        // Local playback itself is sufficient to claim an idle session and
+        // upload its queue, even without the generic idle auto-take flag.
+        let d = compute_connection_state(false, true, None, false, false);
+        assert!(d.should_be_active && d.should_set_active_renderer && d.should_set_queue);
         // An active peer is server==OtherPlaying/Other Paused, never None, so
         // auto_take_when_idle can never steal it (guard at the call site too).
         let d = compute_connection_state(false, false, OtherPlaying, false, true);

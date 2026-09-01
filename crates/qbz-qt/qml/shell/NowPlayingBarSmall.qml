@@ -502,7 +502,7 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: smallQcFlyout.openBelowRight(smallQconnectBtn)
+                            onClicked: smallQcFlyout.openAboveRight(smallQconnectBtn)
                         }
                     }
                     // Cast (Chromecast / DLNA) — opens the picker modal and,
@@ -628,8 +628,8 @@ Rectangle {
     AudioSettingsMenu { id: smallAudioMenu; doc: root.settingsDoc }
 
     // Qobuz Connect device flyout — the ONE shared component both bars mount
-    // (contract §8; the Slint `qconnect-menu` PopupWindow). Opened below-
-    // right of the Connect button.
+    // (contract §8; the Slint `qconnect-menu` PopupWindow). Opened above-
+    // right of the Connect button so it never covers its own trigger.
     QconnectFlyout { id: smallQcFlyout }
 
     // "Add to…" flyout behind the transport "+" (TransportControls.slint's

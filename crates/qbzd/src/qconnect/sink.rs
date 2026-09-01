@@ -21,9 +21,11 @@ use std::sync::{Arc, OnceLock, Weak};
 
 use async_trait::async_trait;
 use qconnect_app::{
-    build_session_renderer_snapshot, cache_renderer_snapshot, is_peer_renderer_active, QconnectApp,
-    QconnectAppEvent, QconnectEventSink, QconnectRemoteSyncState, QconnectRendererEngine,
-    RendererBufferState, RendererCommand, RendererReport, RendererReportType,
+    active_peer_renderer_is_playing, build_session_renderer_snapshot, cache_renderer_snapshot,
+    is_peer_renderer_active, remote_renderer_commands_are_fenced, should_materialize_remote_queue,
+    QconnectApp, QconnectAppEvent, QconnectEventSink, QconnectRemoteSyncState,
+    QconnectRendererEngine, RendererBufferState, RendererCommand, RendererReport,
+    RendererReportType,
 };
 use qconnect_transport_ws::NativeWsTransport;
 use serde_json::Value;
@@ -224,7 +226,11 @@ impl DaemonEventSink {
         let was_peer_active = self
             .last_peer_active
             .swap(peer_active_now, std::sync::atomic::Ordering::Relaxed);
-        if peer_active_now && !was_peer_active {
+        let conflict_pending = {
+            let state = self.sync_state.lock().await;
+            state.local_playback_conflict_pending
+        };
+        if peer_active_now && !was_peer_active && !conflict_pending {
             if !self.is_current() {
                 return;
             }
@@ -239,21 +245,24 @@ impl DaemonEventSink {
         }
     }
 
-    /// When an active PEER renderer now owns playback, stop our local playback so
-    /// the two don't double-play. Mirrors the Tauri helper, with the engine seam
-    /// in place of `CoreBridge`.
+    /// When the active PEER renderer is actually playing, stop our local playback
+    /// so the two don't double-play. A paused/stale peer must not interrupt QBZ.
     async fn sync_local_playback_for_renderer_ownership(&self) {
         if !self.is_current() {
             return;
         }
-        let peer_renderer_active = {
+        let peer_renderer_playing = {
             let state = self.sync_state.lock().await;
             if !self.is_current() {
                 return;
             }
-            is_peer_renderer_active(&state.session)
+            if state.local_playback_conflict_pending {
+                false
+            } else {
+                active_peer_renderer_is_playing(&state)
+            }
         };
-        if !peer_renderer_active {
+        if !peer_renderer_playing {
             return;
         }
 
@@ -268,7 +277,7 @@ impl DaemonEventSink {
         }
 
         log::info!(
-            "[QConnect] Stopping local playback because active renderer is a peer (track_id={})",
+            "[QConnect] Stopping local playback because the active peer is playing (track_id={})",
             playback_state.track_id
         );
         if let Err(err) = self.engine.stop() {
@@ -395,12 +404,31 @@ impl QconnectEventSink for DaemonEventSink {
                     queue_state.version.major,
                     queue_state.version.minor,
                 );
-                {
+                let (should_materialize, accepted_local_echo) = {
                     let mut sync_state = self.sync_state.lock().await;
                     if !self.is_current() {
                         return;
                     }
                     sync_state.last_remote_queue_state = Some(queue_state.clone());
+                    let had_local_takeover = sync_state.pending_local_queue_takeover.is_some();
+                    let should_materialize =
+                        should_materialize_remote_queue(&mut sync_state, queue_state);
+                    let accepted_local_echo = had_local_takeover
+                        && sync_state.pending_local_queue_takeover.is_none()
+                        && sync_state.local_playback_state_assertion_pending;
+                    (should_materialize, accepted_local_echo)
+                };
+                if !should_materialize {
+                    if accepted_local_echo {
+                        log::info!(
+                            "[QConnect] Local queue accepted by Connect; preserving live player cursor"
+                        );
+                    } else {
+                        log::debug!(
+                            "[QConnect] Ignoring stale remote queue while local-playing takeover settles"
+                        );
+                    }
+                    return;
                 }
                 if !self.is_current() {
                     return;
@@ -419,6 +447,16 @@ impl QconnectEventSink for DaemonEventSink {
                 }
             }
             QconnectAppEvent::RendererCommandApplied { command, state } => {
+                let fenced = {
+                    let sync_state = self.sync_state.lock().await;
+                    remote_renderer_commands_are_fenced(&sync_state)
+                };
+                if fenced {
+                    log::info!(
+                        "[QConnect] Ignoring stale renderer command while local queue authority settles"
+                    );
+                    return;
+                }
                 log::info!(
                     "[QConnect] Renderer command applied: {}",
                     renderer_command_name(command)

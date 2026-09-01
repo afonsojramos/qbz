@@ -6281,3 +6281,58 @@ msgstr "スポンサー"
 
 msgid "And all those anonymous sponsors..."
 msgstr "そして、すべての匿名スポンサーの皆さん…"
+
+msgid "Qobuz Connect can't resolve local tracks. {} track was skipped and wasn't added to the queue. Turn off Qobuz Connect to play it."
+msgid_plural "Qobuz Connect can't resolve local tracks. {} tracks were skipped and weren't added to the queue. Turn off Qobuz Connect to play them."
+msgstr[0] "Qobuz Connect はローカルトラックを解決できません。{} 曲をスキップし、キューに追加しませんでした。再生するには Qobuz Connect をオフにしてください。"
+
+msgid "Qobuz Connect device"
+msgstr "Qobuz Connect デバイス"
+
+msgid "Continue playback on %1"
+msgstr "%1 で再生を続ける"
+
+msgid "Use the Qobuz Connect queue and keep that device active."
+msgstr "Qobuz Connect のキューを使用し、そのデバイスをアクティブのままにします。"
+
+msgid "Continue playback on this device"
+msgstr "このデバイスで再生を続ける"
+
+msgid "Use the Qobuz Connect queue and replace the local queue."
+msgstr "Qobuz Connect のキューを使用し、ローカルキューを置き換えます。"
+
+msgid "Continue this device's current playback"
+msgstr "このデバイスの現在の再生を続ける"
+
+msgid "Replace the Qobuz Connect queue and playback state with this device's current queue and position."
+msgstr "Qobuz Connect のキューと再生状態を、このデバイスの現在のキューと再生位置に置き換えます。"
+
+msgid "Cancel Qobuz Connect"
+msgstr "Qobuz Connect をキャンセル"
+
+msgid "Keep both queues unchanged and continue the current local playback."
+msgstr "両方のキューを変更せず、現在のローカル再生を続けます。"
+
+msgid "Choose how to continue"
+msgstr "続行方法を選択"
+
+msgid "This device and another Qobuz Connect renderer both have playback in progress. Choose which queue and device should continue."
+msgstr "このデバイスと別の Qobuz Connect レンダラーの両方で再生中です。続行するキューとデバイスを選択してください。"
+
+msgid "Ask every time"
+msgstr "毎回確認する"
+
+msgid "Continue on the active renderer"
+msgstr "アクティブなレンダラーで再生を続ける"
+
+msgid "Continue here with the Qobuz Connect queue"
+msgstr "Qobuz Connect のキューを使用してこのデバイスで続ける"
+
+msgid "Continue local playback and replace the Qobuz Connect queue"
+msgstr "ローカル再生を続け、Qobuz Connect のキューを置き換える"
+
+msgid "When playback conflicts"
+msgstr "再生が競合した場合"
+
+msgid "Ask each time or automatically choose which queue and device should continue."
+msgstr "毎回確認するか、続行するキューとデバイスを自動的に選択します。"

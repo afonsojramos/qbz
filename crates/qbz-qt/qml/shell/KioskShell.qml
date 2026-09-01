@@ -613,6 +613,10 @@ Rectangle {
         onTriggered: root.forceActiveFocus()
     }
 
+    // QConnect bootstrap conflicts are global and can also originate from the
+    // compact player bar used by kiosk mode.
+    QconnectPlaybackConflictModal { }
+
     // =====================================================================
     // 4. The kiosk's OWN Immersive mount (KioskShell.slint:737-747)
     // =====================================================================

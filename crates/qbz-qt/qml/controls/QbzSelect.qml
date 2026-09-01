@@ -18,6 +18,10 @@ Rectangle {
     property int currentIndex: 0
     property int menuWidth: 240
     property int popupWidth: 0
+    // The default keeps the standard dropdown below the field. Flyouts near a
+    // window edge may opt into a lateral list without changing every other
+    // QbzSelect instance. Supported values: "below" and "left".
+    property string popupPlacement: "below"
     property bool enabled: true
     property bool searchable: false
     // Bootstrap-style small variant (QbzSelect.slint:74-76). The default is the
@@ -131,7 +135,7 @@ Rectangle {
             }
         }
         QbzIcon {
-            name: "chevron-down"
+            name: selectRoot.popupPlacement === "left" ? "chevron-left" : "chevron-down"
             width: selectRoot.sm ? 14 : 16
             height: selectRoot.sm ? 14 : 16
             anchors.verticalCenter: parent.verticalCenter
@@ -153,9 +157,15 @@ Rectangle {
     Popup {
         id: popup
         parent: selectRoot
-        // Right-anchored: a list wider than the control grows leftward.
-        x: selectRoot.width - selectRoot.listWidth
-        y: selectRoot.height + 4
+        // Standard selects grow down and left-align their right edge. A
+        // right-edge flyout may place the list beside the field instead; its
+        // bottom edge stays aligned so it cannot fall into the player bar.
+        x: selectRoot.popupPlacement === "left"
+            ? -selectRoot.listWidth - 4
+            : selectRoot.width - selectRoot.listWidth
+        y: selectRoot.popupPlacement === "left"
+            ? selectRoot.height - popup.height
+            : selectRoot.height + 4
         width: selectRoot.listWidth
         height: selectRoot.searchHeight + Math.min(listContent.contentHeight, selectRoot.maxListHeight) + 10
         padding: 0

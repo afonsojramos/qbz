@@ -427,6 +427,35 @@ pub fn save_startup_mode(mode: qconnect_app::QconnectStartupMode) {
     );
 }
 
+/// Load the persisted ownership policy used only when local audio conflicts
+/// with an already-playing Qobuz Connect renderer. Missing or invalid values
+/// fail open to AskEveryTime.
+pub fn load_playback_conflict_policy() -> qconnect_app::QconnectPlaybackConflictPolicy {
+    let Some(conn) = open_qconnect_settings_conn() else {
+        return qconnect_app::QconnectPlaybackConflictPolicy::default();
+    };
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = 'playback_conflict_policy'",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+    .as_deref()
+    .and_then(qconnect_app::QconnectPlaybackConflictPolicy::from_str)
+    .unwrap_or_default()
+}
+
+/// Persist the ownership policy shared by the flyout and Settings dropdowns.
+pub fn save_playback_conflict_policy(policy: qconnect_app::QconnectPlaybackConflictPolicy) {
+    let Some(conn) = open_qconnect_settings_conn() else {
+        return;
+    };
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('playback_conflict_policy', ?1)",
+        rusqlite::params![policy.as_str()],
+    );
+}
+
 /// Load the last-known QConnect on/off state, if recorded. Same key/values as
 /// Tauri (`last_known_state` = "on" | "off").
 pub fn load_last_known_state() -> Option<bool> {

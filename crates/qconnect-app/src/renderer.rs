@@ -35,9 +35,59 @@ pub const PLAYING_STATE_PAUSED: i32 = 3;
 /// `track_id` comparison would re-fire during that buffer/decode gap.
 const LOAD_ATTEMPT_DEDUP_WINDOW: Duration = Duration::from_secs(5);
 
-/// Source tag stamped on remote queue tracks materialized from a QConnect cloud
-/// queue. Matches the Tauri adapter's prior `QCONNECT_REMOTE_QUEUE_SOURCE`.
-pub const QCONNECT_REMOTE_QUEUE_SOURCE: &str = "qobuz_connect_remote";
+/// Canonical source stamped on tracks materialized from a QConnect cloud queue.
+///
+/// The wire supplies Qobuz catalog ids. Keeping the old transport-only
+/// `qobuz_connect_remote` tag in the core queue leaked QConnect lifecycle state
+/// into downstream renderers: after a manual disconnect, Cast no longer chose
+/// its Qobuz progressive-stream path. Materialized rows therefore use the same
+/// portable provenance as every other Qobuz catalog row.
+pub const QCONNECT_REMOTE_QUEUE_SOURCE: &str = "qobuz";
+
+/// Backward-compatible spelling found in persisted queues and in queues
+/// materialized by an older runtime before an in-process upgrade/reconnect.
+pub const LEGACY_QCONNECT_REMOTE_QUEUE_SOURCE: &str = "qobuz_connect_remote";
+
+/// Whether a queue row can be named by Qobuz Connect without looking the id up.
+///
+/// Source provenance is the authority: local-library and media-server ids can
+/// overlap the numeric Qobuz id space, while offline Qobuz downloads retain the
+/// real catalog id and remain resolvable. A missing source is accepted only by
+/// the [`QueueTrack`] wrapper below, where the legacy `is_local` discriminator
+/// is still available.
+pub fn qconnect_source_is_resolvable(track_id: u64, source: Option<&str>) -> bool {
+    if track_id == 0 {
+        return false;
+    }
+    match source.map(str::trim).filter(|source| !source.is_empty()) {
+        Some(source) => matches!(
+            source.to_ascii_lowercase().as_str(),
+            QCONNECT_REMOTE_QUEUE_SOURCE
+                | "qobuz_download"
+                | "qobuz_purchase"
+                | "offline"
+                | LEGACY_QCONNECT_REMOTE_QUEUE_SOURCE
+        ),
+        // Callers with only the wire-shaped `(id, source)` pair have no local
+        // bit. Every current local producer stamps an explicit source, so the
+        // source-less shape is the legacy catalog case.
+        None => true,
+    }
+}
+
+/// Queue-row form of [`qconnect_source_is_resolvable`]. This is the canonical
+/// admission predicate for desktop queue filtering and daemon publication.
+pub fn qconnect_queue_track_is_resolvable(track: &QueueTrack) -> bool {
+    match track
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|source| !source.is_empty())
+    {
+        Some(source) => qconnect_source_is_resolvable(track.id, Some(source)),
+        None => track.id > 0 && !track.is_local,
+    }
+}
 
 pub fn qconnect_repeat_mode_from_loop_mode(loop_mode: i32) -> Option<RepeatMode> {
     // QConnect protocol loop mode values: 1 = off, 2 = repeat one, 3 = repeat all.
@@ -96,7 +146,9 @@ pub fn model_track_to_core_queue_track(track: &Track) -> QueueTrack {
         // A queue pushed by a QConnect peer carries real Qobuz tracks, so the
         // flag is worth keeping — but resolved through `is_streamable()`, since
         // a peer's payload is one more endpoint we have never captured and a
-        // terse one must not arrive here marked dead.
+        // terse one must not arrive here marked dead. Its source is canonical
+        // Qobuz provenance, not a transport-lifecycle tag: this queue remains
+        // playable by local and Cast renderers after QConnect disconnects.
         streamable: track.is_streamable(),
         source: Some(QCONNECT_REMOTE_QUEUE_SOURCE.to_string()),
         parental_warning: track.parental_warning,
@@ -322,6 +374,41 @@ pub async fn force_remote_track_stream(
     Ok(true)
 }
 
+/// Resolve the track for a state-only PLAYING command on a cold engine.
+/// Official clients can omit `current_track`; the synchronized queue cursor is
+/// then the next authority. The id that `stop()` deliberately preserved is
+/// accepted only when it still names a resolvable row in that queue; a bare
+/// local-library id is never guessed to be Qobuz.
+async fn takeback_track_id(
+    engine: &impl QconnectRendererEngine,
+    renderer_state: &QConnectRendererState,
+) -> Option<u64> {
+    if let Some(track_id) = renderer_state
+        .current_track
+        .as_ref()
+        .map(|track| track.track_id)
+        .filter(|track_id| *track_id > 0)
+    {
+        return Some(track_id);
+    }
+
+    let (tracks, current_index) = engine.get_all_queue_tracks().await;
+    if let Some(track_id) = current_index
+        .and_then(|index| tracks.get(index))
+        .filter(|track| qconnect_queue_track_is_resolvable(track))
+        .map(|track| track.id)
+        .filter(|track_id| *track_id > 0)
+    {
+        return Some(track_id);
+    }
+
+    let track_id = engine.get_playback_state().track_id;
+    tracks
+        .iter()
+        .find(|track| track.id == track_id && qconnect_queue_track_is_resolvable(track))
+        .map(|track| track.id)
+}
+
 pub async fn apply_remote_loop_mode(
     engine: &impl QconnectRendererEngine,
     loop_mode: i32,
@@ -454,14 +541,20 @@ pub async fn apply_renderer_command(
                         // SetActive takeback path; the has_loaded_audio gate
                         // keeps echoes and live playback on the plain resume.
                         let cold_engine = !engine.has_loaded_audio();
-                        let cold_track = projection_renderer_state.current_track.as_ref();
-                        if cold_engine && cold_track.is_some() {
-                            let track_id = cold_track.map(|t| t.track_id).unwrap_or(0);
+                        if cold_engine {
+                            let Some(track_id) =
+                                takeback_track_id(engine, &projection_renderer_state).await
+                            else {
+                                return Err(
+                                    "cold-start resume has no projected, queued, or preserved track"
+                                        .to_string(),
+                                );
+                            };
                             let start_position_secs = renderer_state
                                 .current_position_ms
                                 .or(*current_position_ms)
                                 .map(|ms| ms / 1000)
-                                .unwrap_or(0);
+                                .unwrap_or_else(|| engine.get_playback_state().position);
                             match force_remote_track_stream(
                                 engine,
                                 sync_state,
@@ -556,6 +649,20 @@ pub async fn apply_renderer_command(
         }
         RendererCommand::SetActive { active } => {
             if *active {
+                let local_playback = engine.get_playback_state();
+                if engine.has_loaded_audio() && local_playback.is_playing {
+                    // SESSION_STATE arbitration may have chosen the live local
+                    // queue while a stale SetActive from the old cloud snapshot
+                    // was already in flight. Activation acknowledges ownership;
+                    // it is not authority to replace audible local playback with
+                    // an unrelated renderer cursor. An intentional remote-queue
+                    // takeover stops local audio before claiming this renderer.
+                    log::info!(
+                        "[QConnect] SetActive(true) preserved active local playback (track_id={})",
+                        local_playback.track_id
+                    );
+                    return Ok(());
+                }
                 // Becoming the active renderer (takeback). FORCE a stream of the
                 // current track instead of a plain ensure-loaded: a prior
                 // controller->renderer transition tore the local stream down via
@@ -677,7 +784,7 @@ pub async fn materialize_remote_queue(
     engine: &impl QconnectRendererEngine,
     sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
     queue_state: &QConnectQueueState,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let (
         renderer_queue_item_id,
         renderer_track_id,
@@ -716,7 +823,7 @@ pub async fn materialize_remote_queue(
             queue_state.version.major,
             queue_state.version.minor
         );
-        return Ok(());
+        return Ok(false);
     }
 
     log::info!(
@@ -738,7 +845,7 @@ pub async fn materialize_remote_queue(
         let mut state = sync_state.lock().await;
         state.last_materialized_start_index = None;
         state.last_materialized_core_shuffle_order = None;
-        return Ok(());
+        return Ok(true);
     }
 
     // Preserve the richer QueueTrack built by album/playlist entry points
@@ -888,7 +995,7 @@ pub async fn materialize_remote_queue(
         let _ = engine.stop();
     }
 
-    Ok(())
+    Ok(true)
 }
 
 pub async fn align_queue_cursor(
@@ -1093,6 +1200,43 @@ mod tests {
         model_track_to_core_queue_track(&mock_track(id))
     }
 
+    #[test]
+    fn qconnect_admission_uses_provenance_and_accepts_materialized_rows() {
+        for source in [
+            "qobuz",
+            "qobuz_download",
+            "qobuz_purchase",
+            "offline",
+            LEGACY_QCONNECT_REMOTE_QUEUE_SOURCE,
+        ] {
+            let mut track = mock_queue_track(7);
+            track.source = Some(source.to_string());
+            track.is_local = source == "qobuz_download";
+            assert!(qconnect_queue_track_is_resolvable(&track), "{source}");
+        }
+
+        for source in ["local", "plex", "jellyfin", "subsonic", "navidrome"] {
+            let mut track = mock_queue_track(7);
+            track.source = Some(source.to_string());
+            track.is_local = true;
+            assert!(!qconnect_queue_track_is_resolvable(&track), "{source}");
+        }
+    }
+
+    #[test]
+    fn qconnect_admission_legacy_rows_require_non_local_positive_ids() {
+        let mut track = mock_queue_track(7);
+        track.source = None;
+        track.is_local = false;
+        assert!(qconnect_queue_track_is_resolvable(&track));
+
+        track.is_local = true;
+        assert!(!qconnect_queue_track_is_resolvable(&track));
+        track.id = 0;
+        track.is_local = false;
+        assert!(!qconnect_queue_track_is_resolvable(&track));
+    }
+
     fn queue_state(
         version: QueueVersion,
         items: Vec<QueueItem>,
@@ -1166,7 +1310,7 @@ mod tests {
         assert_eq!(track.bit_depth, Some(24));
         assert_eq!(track.sample_rate, Some(96_000.0));
         assert!(track.hires);
-        assert_eq!(track.source.as_deref(), Some(QCONNECT_REMOTE_QUEUE_SOURCE));
+        assert_eq!(track.source.as_deref(), Some("qobuz"));
         assert!(
             track.context_kind.is_none(),
             "remote context remains authoritative"
@@ -1306,6 +1450,70 @@ mod tests {
             "load must resume at the handed-off position"
         );
         assert_eq!(calls.resumes, 0, "no bare resume on a cold engine");
+    }
+
+    /// The field shape from the owner's 2026-08-31 regression: both the
+    /// command and renderer projection omit current_track, but the synchronized
+    /// queue still has the authoritative cursor. This must cold-load that row,
+    /// never fall through to `resume()` on an empty engine.
+    #[tokio::test]
+    async fn cold_resume_falls_back_to_queue_cursor_when_projection_omits_track() {
+        let mut engine = MockEngine::new();
+        engine.playback = PlaybackState {
+            track_id: 7,
+            position: 38,
+            ..Default::default()
+        };
+        engine.queue_tracks = vec![mock_queue_track(6), mock_queue_track(7)];
+        engine.queue_index = Some(1);
+        engine.loaded_audio = false;
+        let sync = sync();
+        let cmd = RendererCommand::SetState {
+            playing_state: Some(PLAYING_STATE_PLAYING),
+            current_position_ms: None,
+            current_track: None,
+            next_track: None,
+        };
+
+        apply_renderer_command(&engine, &sync, &cmd, &QConnectRendererState::default())
+            .await
+            .unwrap();
+
+        let calls = engine.calls();
+        assert_eq!(calls.start_track_streams, vec![7]);
+        assert_eq!(calls.start_positions, vec![38]);
+        assert_eq!(calls.resumes, 0);
+    }
+
+    #[tokio::test]
+    async fn cold_resume_never_guesses_a_local_queue_id_is_qobuz() {
+        let mut engine = MockEngine::new();
+        engine.playback = PlaybackState {
+            track_id: 7,
+            ..Default::default()
+        };
+        let mut local = mock_queue_track(7);
+        local.source = Some("local".to_string());
+        local.is_local = true;
+        engine.queue_tracks = vec![local];
+        engine.queue_index = Some(0);
+        engine.loaded_audio = false;
+        let cmd = RendererCommand::SetState {
+            playing_state: Some(PLAYING_STATE_PLAYING),
+            current_position_ms: None,
+            current_track: None,
+            next_track: None,
+        };
+
+        let error =
+            apply_renderer_command(&engine, &sync(), &cmd, &QConnectRendererState::default())
+                .await
+                .expect_err("local ids must not be sent to Qobuz");
+
+        assert!(error.contains("no projected, queued, or preserved track"));
+        let calls = engine.calls();
+        assert!(calls.start_track_streams.is_empty());
+        assert_eq!(calls.resumes, 0);
     }
 
     /// The cold-start load never fires while audio is loaded: a resume during
@@ -1530,6 +1738,41 @@ mod tests {
             engine.calls().start_track_streams.is_empty(),
             "must not restart an already-streaming track on a spurious SetActive"
         );
+    }
+
+    /// Regression (2026-09-01): local track 7 was actively playing when a
+    /// stale SetActive carried remote track 99. The command created a one-track
+    /// queue and destroyed the local session before its queue upload settled.
+    #[tokio::test]
+    async fn set_active_does_not_replace_different_active_local_track() {
+        let mut engine = MockEngine::new();
+        engine.playback = PlaybackState {
+            track_id: 7,
+            is_playing: true,
+            ..Default::default()
+        };
+        engine.loaded_audio = true;
+        engine.queue_tracks = vec![mock_queue_track(7), mock_queue_track(8)];
+        engine.queue_index = Some(0);
+
+        let renderer_state = QConnectRendererState {
+            current_track: Some(qi(99, 9)),
+            current_position_ms: Some(71_000),
+            ..Default::default()
+        };
+        apply_renderer_command(
+            &engine,
+            &sync(),
+            &RendererCommand::SetActive { active: true },
+            &renderer_state,
+        )
+        .await
+        .unwrap();
+
+        let calls = engine.calls();
+        assert!(calls.start_track_streams.is_empty());
+        assert_eq!(calls.set_queues, 0);
+        assert!(calls.play_indexes.is_empty());
     }
 
     /// #1 (takeback first-load via SetState) — when the FIRST load on a takeback
