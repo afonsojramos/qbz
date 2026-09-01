@@ -22,33 +22,12 @@ import com.blitzfc.qbz
 LineBedItem {
     id: root
 
-    // The empirical orientation matrix (2026-08-15, BOTH verified today):
-    //   owner's Vulkan + mirror=false  -> bed UPSIDE-DOWN
-    //   Xvfb Mesa GL  + mirror=true    -> bed UPSIDE-DOWN (peaks hang down)
-    // So the correct rule is mirror on everything EXCEPT OpenGL — my first
-    // guess (GL-only) had it exactly backwards, and "unconditional" broke GL.
-    // METAL JOINED THE MATRIX 2026-08-19, and it sides with OpenGL.
-    //
-    // The rule was derived from two data points and generalised to a negation:
-    //   owner's Vulkan + mirror=false -> upside-down  (Vulkan needs the mirror)
-    //   Xvfb Mesa GL   + mirror=true  -> upside-down  (GL does not)
-    // "mirror on everything EXCEPT OpenGL" fit both, and it was wrong about the
-    // API nobody had run: on the Mac mini M2 (Metal) the bed came out
-    // upside-down, i.e. Metal wants mirror=false like GL, not =true like
-    // Vulkan.
-    //
-    // Kept as a NEGATION with Metal excluded rather than rewritten as
-    // "Vulkan || D3D": naming the APIs that DO mirror would silently stop
-    // mirroring on any enum this file does not list — an unknown member is
-    // `undefined` in QML and compares false, so a typo or a future backend
-    // degrades to "no mirror" with no error. This way only Metal changes and
-    // every other backend keeps exactly the behaviour it was verified with.
-    //
-    // LineBed is what made it visible — it is the one directional scene, so a
-    // flip reads instantly. The convention belongs to the graphics API and not
-    // to the scene, so all four RHI items carry the same line.
-    mirrorVertically: GraphicsInfo.api !== GraphicsInfo.OpenGL
-                      && GraphicsInfo.api !== GraphicsInfo.Metal
+    // Empirical orientation matrix: Vulkan needs the item-level mirror; OpenGL,
+    // Metal and Windows/D3D do not. Keep the established macOS/Linux rule and
+    // override Windows only, since Line Bed was verified upside-down there.
+    mirrorVertically: Qt.platform.os === "windows" ? false
+        : GraphicsInfo.api !== GraphicsInfo.OpenGL
+          && GraphicsInfo.api !== GraphicsInfo.Metal
 
     // The ambient palette triad (shell_bridge.rs; pushed per track by
     // playback_qt.rs). The Slint reference defaults #00dcc8 / #3fd9c8 live

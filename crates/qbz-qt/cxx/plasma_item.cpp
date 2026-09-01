@@ -251,7 +251,14 @@ private:
         m_read = 0;
 
         for (int i = 0; i < 2; ++i) {
-            m_hist[i].reset(r->newTexture(QRhiTexture::RGBA8, size));
+            // These textures are both sampled and rendered into. Vulkan's
+            // driver path happened to accept the missing usage bit, while the
+            // D3D backend correctly refused the texture render target and left
+            // Plasma black on Windows.
+            m_hist[i].reset(r->newTexture(QRhiTexture::RGBA8,
+                                          size,
+                                          1,
+                                          QRhiTexture::RenderTarget));
             if (!m_hist[i]->create()) {
                 qWarning("[plasma] history texture creation failed — the scene stays dark");
                 m_hist[0].reset();

@@ -242,7 +242,13 @@ private:
         m_read = 0;
 
         for (int i = 0; i < 2; ++i) {
-            m_hist[i].reset(r->newTexture(QRhiTexture::RGBA8, size));
+            // The feedback texture is sampled on one pass and is the color
+            // target on the next. D3D requires the RenderTarget usage bit;
+            // without it Tunnel Flow stays black on Windows.
+            m_hist[i].reset(r->newTexture(QRhiTexture::RGBA8,
+                                          size,
+                                          1,
+                                          QRhiTexture::RenderTarget));
             if (!m_hist[i]->create()) {
                 qWarning("[tunnelflow] history texture creation failed — the scene stays dark");
                 m_hist[0].reset();
