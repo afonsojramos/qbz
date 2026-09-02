@@ -84,8 +84,16 @@ Rectangle {
     readonly property bool loading: root.doc.loading === true
     readonly property string loadError: root.doc.error || ""
 
-    readonly property bool onAlbums: root.tab !== "tracks"
-    readonly property var rows: root.onAlbums ? root.albums : root.tracks
+    // NOT `onAlbums`: with a sibling property called `albums` on this same
+    // object, QML files `onAlbums: …` as a signal HANDLER — no error, no
+    // warning, the initializer never binds and the property sits at `false`
+    // forever. That single name blanked the Albums tab for every account with
+    // real purchases (2026-09-01; reproduced standalone with the `qml`
+    // runtime, the identical expression under another name gives `true`).
+    // scripts/qml-audits/qml_on_prefixed_property_audit.py now fails the
+    // build on any `on<Upper>` property name.
+    readonly property bool albumsTab: root.tab !== "tracks"
+    readonly property var rows: root.albumsTab ? root.albums : root.tracks
     readonly property bool grouped: root.group !== "off" && root.group !== ""
 
     // ── entry / exit ──────────────────────────────────────────────────────
@@ -431,35 +439,35 @@ Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
                     iconName: root.search !== ""
                         ? "search"
-                        : (root.onAlbums ? "shopping-bag" : "music")
+                        : (root.albumsTab ? "shopping-bag" : "music")
                     iconSize: 48
                     titleMuted: true
                     titleWeight: theme.weightRegular
                     title: root.search !== ""
                         ? root.t("No results")
-                        : (root.onAlbums ? root.t("No purchases yet")
+                        : (root.albumsTab ? root.t("No purchases yet")
                                          : root.t("No purchased tracks yet"))
                 }
             }
 
             // --- ALBUMS, flat -------------------------------------------------
             PurchaseAlbumsCollection {
-                visible: !root.loading && root.loadError === "" && root.onAlbums
+                visible: !root.loading && root.loadError === "" && root.albumsTab
                     && !root.grouped && root.albums.length > 0
                 width: page.contentW
-                albums: (root.onAlbums && !root.grouped) ? root.albums : []
+                albums: (root.albumsTab && !root.grouped) ? root.albums : []
                 viewMode: root.viewMode
                 onOpenAlbum: function (id) { root.openAlbum(id) }
             }
 
             // --- ALBUMS, grouped ----------------------------------------------
             Column {
-                visible: !root.loading && root.loadError === "" && root.onAlbums
+                visible: !root.loading && root.loadError === "" && root.albumsTab
                     && root.grouped && root.albums.length > 0
                 width: page.contentW
                 spacing: 16
                 Repeater {
-                    model: (root.onAlbums && root.grouped) ? root.albumGroups() : []
+                    model: (root.albumsTab && root.grouped) ? root.albumGroups() : []
                     delegate: Column {
                         required property var modelData
                         width: page.contentW
@@ -484,12 +492,12 @@ Rectangle {
 
             // --- TRACKS, flat -------------------------------------------------
             Column {
-                visible: !root.loading && root.loadError === "" && !root.onAlbums
+                visible: !root.loading && root.loadError === "" && !root.albumsTab
                     && !root.grouped && root.tracks.length > 0
                 width: page.contentW
                 spacing: 2
                 Repeater {
-                    model: (!root.onAlbums && !root.grouped) ? root.tracks : []
+                    model: (!root.albumsTab && !root.grouped) ? root.tracks : []
                     delegate: PurchaseTrackRow {
                         required property var modelData
                         width: page.contentW
@@ -501,12 +509,12 @@ Rectangle {
 
             // --- TRACKS, grouped ----------------------------------------------
             Column {
-                visible: !root.loading && root.loadError === "" && !root.onAlbums
+                visible: !root.loading && root.loadError === "" && !root.albumsTab
                     && root.grouped && root.tracks.length > 0
                 width: page.contentW
                 spacing: 16
                 Repeater {
-                    model: (!root.onAlbums && root.grouped) ? root.trackGroups() : []
+                    model: (!root.albumsTab && root.grouped) ? root.trackGroups() : []
                     delegate: Column {
                         required property var modelData
                         width: page.contentW

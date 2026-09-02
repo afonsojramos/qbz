@@ -154,7 +154,11 @@ if [[ "${NO_AUDIT:-0}" != 1 ]]; then
     # per-tint svgs, so an icon name with no bake renders NOTHING — no error,
     # no failing test, no complaint from the other four. Three menu rows
     # shipped iconless through a green build before anyone looked at the menu.
-    for a in qml_resolution_audit.py qml_singleton_xref.py qml_eager_tab_audit.py qml_module_registration_audit.py qml_icon_bake_audit.py; do
+    # qml_on_prefixed_property_audit.py joined on 2026-09-01: a property named
+    # `on<Upper>` is filed as a signal handler as soon as a sibling member
+    # `<upper>` exists, its initializer never binds and it sits at the type
+    # default with no error — `onAlbums` next to `albums` blanked Purchases.
+    for a in qml_resolution_audit.py qml_singleton_xref.py qml_eager_tab_audit.py qml_module_registration_audit.py qml_icon_bake_audit.py qml_on_prefixed_property_audit.py; do
       [[ -r "${AUDIT_DIR}/${a}" ]] || { warn "audit ${a} not found — skipped"; continue; }
       if ! python3 "${AUDIT_DIR}/${a}" "${audit_abs}"; then
         die "${a} FAILED — fix it before burning a build (QML resolves lazily; this is what cargo cannot tell you)."

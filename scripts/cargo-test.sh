@@ -71,7 +71,7 @@ hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbzd -e normal \
 [[ "${QT:-0}" == 1 ]] || { say "done (set QT=1 for the Qt gates)"; exit 0; }
 
 say "qt gate 1/5: QML audits"
-for a in qml_resolution_audit qml_singleton_xref qml_eager_tab_audit qml_module_registration_audit qml_icon_bake_audit; do
+for a in qml_resolution_audit qml_singleton_xref qml_eager_tab_audit qml_module_registration_audit qml_icon_bake_audit qml_on_prefixed_property_audit; do
   python3 "scripts/qml-audits/$a.py" "$ROOT/crates/qbz-qt"
 done
 

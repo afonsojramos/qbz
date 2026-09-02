@@ -38,7 +38,7 @@ Rectangle {
     /// "mixtape" | "collection" — assigned by ContentRouter's Binding
     /// (ContentRouter.qml:139-147), which sources it from the route.
     property string kind: "mixtape"
-    readonly property bool onCollections: root.kind === "collection"
+    readonly property bool collectionsTab: root.kind === "collection"
 
     readonly property real pad: 16
 
@@ -54,7 +54,7 @@ Rectangle {
     // ONE guarded parse per document. A raw JSON.parse inside a binding throws
     // on the pre-publish frame and takes the whole view down
     // (MyQbzGridView.qml:91-93).
-    readonly property var doc: root.docFor(root.onCollections)
+    readonly property var doc: root.docFor(root.collectionsTab)
     function docFor(collections) {
         try {
             return JSON.parse(collections ? QbzMyQbz.collectionsJson
@@ -67,7 +67,7 @@ Rectangle {
 
     // ---- Nav geometry publish: 2 tabs + the active list, 6 columns.
     //
-    // Re-derives the card count from `onCollections` AT CALL TIME rather than
+    // Re-derives the card count from `collectionsTab` AT CALL TIME rather than
     // reading `cards`, and that is load-bearing. `onOnCollectionsChanged`
     // below is connected to the very notify that dirties `doc` — and through
     // it `cards` — and the handler runs BEFORE the dependent bindings
@@ -77,7 +77,7 @@ Rectangle {
     // focus ring on the wrong row. Same hazard, same remedy, as
     // KioskArtist.qml:102-110 and the note at Main.qml:233-247.
     function publishNav() {
-        var d = root.docFor(root.onCollections)
+        var d = root.docFor(root.collectionsTab)
         QbzKioskNav.publishNav(2, 6, 2 + (d.cards || []).length, false)
     }
 
@@ -135,7 +135,7 @@ Rectangle {
 
             MyQbzTab {
                 label: root.t("Mixtapes")
-                active: !root.onCollections
+                active: !root.collectionsTab
                 navFocused: QbzKioskNav.navActive
                             && QbzKioskNav.zone === "content"
                             && QbzKioskNav.index === 0
@@ -144,7 +144,7 @@ Rectangle {
 
             MyQbzTab {
                 label: root.t("Collections")
-                active: root.onCollections
+                active: root.collectionsTab
                 navFocused: QbzKioskNav.navActive
                             && QbzKioskNav.zone === "content"
                             && QbzKioskNav.index === 1

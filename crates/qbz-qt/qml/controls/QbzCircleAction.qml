@@ -92,7 +92,7 @@ Rectangle {
 
     /// Slint's `Theme.text-primary` glyph tint (CircleAction.slint:73),
     /// runtime-tinted so it is the real token under every theme.
-    readonly property string onSurfaceTint: "textPrimary"
+    readonly property string surfaceTint: "textPrimary"
 
     readonly property bool largePrimary: primary && !compactPrimary
     readonly property int resolvedDiameter: diameterOverride > 0
@@ -159,7 +159,7 @@ Rectangle {
         // overlay ghost, themed on-surface.
         tintName: root.overlay
             ? (root.primary ? "black" : "white")
-            : (root.primary ? theme.accentGlyphTint : root.onSurfaceTint)
+            : (root.primary ? theme.accentGlyphTint : root.surfaceTint)
     }
 
     QbzIcon {
@@ -205,7 +205,7 @@ Rectangle {
             ? "accent"
             : (root.overlay
                 ? (root.primary ? "black" : "white")
-                : (root.primary ? theme.accentGlyphTint : root.onSurfaceTint))
+                : (root.primary ? theme.accentGlyphTint : root.surfaceTint))
     }
     MouseArea {
         id: cbArea
