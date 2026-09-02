@@ -41,8 +41,9 @@ Item {
 
     // Manual tier label: hires→HI-RES, mp3→MP3, lossless→LOSSLESS, else→CD.
     readonly property string tierLabel: QbzPlayer.npQualityTier === "hires" ? "HI-RES"
+        : (QbzPlayer.npQualityTier === "dsd" ? "DSD"
         : (QbzPlayer.npQualityTier === "mp3" ? "MP3"
-        : (QbzPlayer.npQualityTier === "lossless" ? "LOSSLESS" : "CD"))
+        : (QbzPlayer.npQualityTier === "lossless" ? "LOSSLESS" : "CD")))
 
     // DELIVERED-first main line: while downgraded, row 1 reports what is
     // actually playing and the catalog max moves to the tooltip's "Source".
@@ -50,7 +51,8 @@ Item {
         && QbzPlayer.npQualityTrueDetail !== ""
     readonly property string deliveredTierLabel: QbzPlayer.npQualityEffectiveTier === "hires"
         ? "HI-RES"
-        : (QbzPlayer.npQualityEffectiveTier === "mp3" ? "MP3" : "CD")
+        : (QbzPlayer.npQualityEffectiveTier === "dsd" ? "DSD"
+        : (QbzPlayer.npQualityEffectiveTier === "mp3" ? "MP3" : "CD"))
 
     // WHY the stream is below the catalog max, keyed by the QualityLimit
     // discriminant. Informative, not alarming: a downgrade caused by the

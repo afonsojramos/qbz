@@ -32,7 +32,11 @@ Item {
     QbzTheme { id: theme }
 
     // ---- Slint inputs -----------------------------------------------------
-    /// "hires" | "cd" | "mp3" | "lossless" | "" — empty hides the badge.
+    /// "hires" | "dsd" | "cd" | "mp3" | "lossless" | "" — empty hides the
+    /// badge. `dsd` is ours (2026-09-02): a purchased or local 1-bit master
+    /// wears the DSD mark, never the Hi-Res one — Qobuz streams nothing above
+    /// 24/192, so "HI-RES 24-bit / 352.8 kHz" on a DSD album described a
+    /// stream that does not exist.
     /// Named `tierOverride` (not `tier`) because QualityMini declares
     /// `property alias tier: ...tierOverride`; see `resolvedTier` below.
     property string tierOverride: ""
@@ -79,6 +83,7 @@ Item {
     }
 
     readonly property bool isHiRes: resolvedTier === "hires"
+    readonly property bool isDsd: resolvedTier === "dsd"
 
     // Tooltip copy. Slint passes the model's own quality-detail as `label` and
     // shows NOTHING when it is empty. The Qt card/row models do not carry a
@@ -92,7 +97,8 @@ Item {
     }
 
     visible: resolvedTier !== ""
-    implicitWidth: resolvedTier === "hires" ? 42 : (resolvedTier === "lossless" ? 36 : 30)
+    implicitWidth: (resolvedTier === "hires" || resolvedTier === "dsd") ? 42
+        : (resolvedTier === "lossless" ? 36 : 30)
     implicitHeight: 30
     width: implicitWidth
     height: implicitHeight
@@ -107,6 +113,22 @@ Item {
         y: Math.round((root.height - height) / 2)
         fillMode: Image.PreserveAspectFit
         sourceSize: Qt.size(84, 56)
+    }
+
+    // --- dsd: the DSD mark, monochrome, so it follows the theme ------------
+    // Two bakes (light glyph for dark themes, dark glyph for light ones): the
+    // official logo is a single flat colour and QML Image cannot tint an SVG.
+    Image {
+        visible: root.isDsd
+        source: theme.isDark
+            ? "qrc:/qt/qml/com/blitzfc/qbz/qml/assets/dsd-light.svg"
+            : "qrc:/qt/qml/com/blitzfc/qbz/qml/assets/dsd-dark.svg"
+        width: 42
+        height: 21
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        fillMode: Image.PreserveAspectFit
+        sourceSize: Qt.size(84, 42)
     }
 
     // --- cd / mp3 / lossless: the framed chip ------------------------------

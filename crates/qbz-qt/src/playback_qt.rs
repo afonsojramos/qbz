@@ -3605,8 +3605,9 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
 /// had forked from in three ways, each of them visible on the NPB AudioStamp:
 ///
 ///  - **DSD.** `bit_depth == Some(1)` marks a DSD stream (1-bit, `sample_rate`
-///    = the DSD bit rate). The reference tiers it "hires" and labels it
-///    through `dsd_multiple_label` ("DSD64"); the forked version tiered it
+///    = the DSD bit rate). It tiers "dsd" (its own mark since 2026-09-02; the
+///    reference said "hires") and labels it through `dsd_multiple_label`
+///    ("DSD64"); the forked version tiered it
 ///    "cd" and printed "1-bit / 2822.4 kHz".
 ///  - **Hz vs kHz.** `quality_state::detail` normalizes either unit (the
 ///    `>= 1000` guard) exactly like the track rows do, so the stamp and the
@@ -3663,7 +3664,9 @@ fn quality_badge_from(
     }
 
     let tier = match bit_depth {
-        Some(1) => "hires",
+        // 1-bit is DSD, and it wears its own mark: the Hi-Res logo on a DSD
+        // master described a 24/352.8 stream Qobuz never serves.
+        Some(1) => "dsd",
         Some(d) if d >= 24 => "hires",
         Some(_) => "cd",
         None if sample_rate.is_some_and(|rate| rate > 0.0) => "cd",
