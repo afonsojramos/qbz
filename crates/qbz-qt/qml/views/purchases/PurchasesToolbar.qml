@@ -324,6 +324,7 @@ Item {
             label: root.sortKey === "artist" ? root.t("Sort: Artist")
                  : root.sortKey === "album" ? root.t("Sort: Album")
                  : root.sortKey === "quality" ? root.t("Sort: Quality")
+                 : root.sortKey === "released" ? root.t("Sort: Release date")
                  : root.t("Sort: Date")
             onClicked: sortMenu.openBelowLeft(sortBtn)
 
@@ -351,6 +352,12 @@ Item {
                     selected: root.sortKey === "purchased"
                     arrow: sortBtn.arrowFor("purchased")
                     onPicked: sortBtn.pick("purchased")
+                }
+                MenuRow {
+                    label: root.t("Release date")
+                    selected: root.sortKey === "released"
+                    arrow: sortBtn.arrowFor("released")
+                    onPicked: sortBtn.pick("released")
                 }
                 MenuRow {
                     label: root.t("Artist")

@@ -6346,3 +6346,12 @@ msgstr "Bei Wiedergabekonflikten"
 
 msgid "Ask each time or automatically choose which queue and device should continue."
 msgstr "Jedes Mal nachfragen oder automatisch auswählen, welche Warteschlange und welches Gerät fortfahren sollen."
+
+msgid "Purchased"
+msgstr "Gekauft"
+
+msgid "Sort: Release date"
+msgstr "Sortierung: Veröffentlichungsdatum"
+
+msgid "Until the purchased file is downloaded, Play streams the best quality Qobuz offers for this album. Once it is on disk, Play uses your copy."
+msgstr "Solange die gekaufte Datei nicht heruntergeladen ist, streamt Wiedergabe die beste Qualität, die Qobuz für dieses Album anbietet. Sobald sie auf der Festplatte liegt, verwendet Wiedergabe deine Kopie."

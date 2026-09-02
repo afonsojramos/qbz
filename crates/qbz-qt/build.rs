@@ -890,6 +890,7 @@ fn main() {
                 "qml/views/purchases/PurchaseAlbumsCollection.qml",
                 "qml/views/purchases/PurchaseGridCard.qml",
                 "qml/views/purchases/PurchaseListRow.qml",
+                "qml/views/purchases/PurchaseListHeader.qml",
                 "qml/views/purchases/PurchaseTrackRow.qml",
                 "qml/views/purchases/PurchasesToolbar.qml",
                 // Playlist Manager (route "playlistmanager"): the router target

@@ -6365,3 +6365,12 @@ msgstr "При конфликте воспроизведения"
 
 msgid "Ask each time or automatically choose which queue and device should continue."
 msgstr "Спрашивать каждый раз или автоматически выбирать, какая очередь и устройство продолжат воспроизведение."
+
+msgid "Purchased"
+msgstr "Куплено"
+
+msgid "Sort: Release date"
+msgstr "Сортировка: Дата выхода"
+
+msgid "Until the purchased file is downloaded, Play streams the best quality Qobuz offers for this album. Once it is on disk, Play uses your copy."
+msgstr "Пока купленный файл не скачан, воспроизведение идёт в лучшем качестве, которое Qobuz предлагает для этого альбома. Как только он окажется на диске, воспроизводится ваша копия."

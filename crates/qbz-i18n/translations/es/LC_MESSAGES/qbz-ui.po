@@ -6352,3 +6352,12 @@ msgstr "Cuando la reproducción entre en conflicto"
 
 msgid "Ask each time or automatically choose which queue and device should continue."
 msgstr "Preguntar cada vez o elegir automáticamente qué cola y dispositivo deben continuar."
+
+msgid "Purchased"
+msgstr "Comprado"
+
+msgid "Sort: Release date"
+msgstr "Orden: Fecha de lanzamiento"
+
+msgid "Until the purchased file is downloaded, Play streams the best quality Qobuz offers for this album. Once it is on disk, Play uses your copy."
+msgstr "Mientras no descargues el archivo comprado, Reproducir usa la mejor calidad que Qobuz ofrece para este álbum. Cuando ya esté en disco, Reproducir usa tu copia."

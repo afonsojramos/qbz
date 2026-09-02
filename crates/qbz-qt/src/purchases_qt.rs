@@ -132,6 +132,11 @@ struct AlbumRow {
     #[serde(rename = "artPath")]
     art_path: String,
     year: String,
+    /// ADDITIVE: the full `release_date_original` (ISO `YYYY-MM-DD`, `""` when
+    /// the listing has none), so the list can show a readable release date
+    /// next to the purchase date and sort by it.
+    #[serde(rename = "releaseDate")]
+    release_date: String,
     genre: String,
     #[serde(rename = "qualityTier")]
     quality_tier: String,
@@ -962,7 +967,8 @@ fn build_list_doc(s: &ListState) -> ListDoc {
     }
 }
 
-/// `sortAlbums` (`:211-…`): `dir = asc ? 1 : -1`, applied to one of four keys.
+/// `sortAlbums` (`:211-…`): `dir = asc ? 1 : -1`, applied to one of five keys
+/// (`released` is ours — the reference had no release-date sort).
 /// `"purchased"` is §G.2's spelling of the reference's `"date"`; both are
 /// accepted so a QML lane written against either name works.
 fn sort_albums(list: &mut [&PurchaseAlbum], key: &str, ascending: bool) {
@@ -970,6 +976,16 @@ fn sort_albums(list: &mut [&PurchaseAlbum], key: &str, ascending: bool) {
     match key {
         "artist" => list.sort_by(|a, b| flip(a.artist.name.cmp(&b.artist.name))),
         "album" | "title" => list.sort_by(|a, b| flip(a.title.cmp(&b.title))),
+        // ISO dates compare as strings; an album without one sorts first
+        // ascending / last descending, never among the dated ones.
+        "released" => list.sort_by(|a, b| {
+            flip(
+                a.release_date_original
+                    .as_deref()
+                    .unwrap_or("")
+                    .cmp(b.release_date_original.as_deref().unwrap_or("")),
+            )
+        }),
         // `(a.sr||0)-(b.sr||0) || (a.bd||0)-(b.bd||0)`
         "quality" => list.sort_by(|a, b| {
             let asr = a.maximum_sampling_rate.unwrap_or(0.0);
@@ -1017,6 +1033,7 @@ fn album_row(a: &PurchaseAlbum) -> AlbumRow {
         year: svc::parse_release_year(a.release_date_original.as_deref())
             .map(|y| y.to_string())
             .unwrap_or_default(),
+        release_date: a.release_date_original.clone().unwrap_or_default(),
         genre: a.genre.as_ref().map(|g| g.name.clone()).unwrap_or_default(),
         quality_tier: quality.0,
         quality_detail: quality.1,
@@ -2859,6 +2876,22 @@ mod tests {
         let mut by_date: Vec<&PurchaseAlbum> = vec![&a, &b];
         sort_albums(&mut by_date, "date", false);
         assert_eq!(by_date[0].id, "2");
+    }
+
+    #[test]
+    fn sorting_by_release_date_orders_iso_strings_and_parks_the_undated() {
+        let mut a = album("a", "A", "X");
+        a.release_date_original = Some("2024-03-01".to_string());
+        let mut b = album("b", "B", "X");
+        b.release_date_original = Some("1990-09-24".to_string());
+        let c = album("c", "C", "X");
+        let mut list: Vec<&PurchaseAlbum> = vec![&a, &b, &c];
+        sort_albums(&mut list, "released", false);
+        let ids: Vec<&str> = list.iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "b", "c"], "newest first, undated last");
+        sort_albums(&mut list, "released", true);
+        let ids: Vec<&str> = list.iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(ids, vec!["c", "b", "a"]);
     }
 
     #[test]
