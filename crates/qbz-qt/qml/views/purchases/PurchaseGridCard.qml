@@ -30,6 +30,7 @@
 
 import QtQuick
 import com.blitzfc.qbz
+import "../../controls"
 import "../../theme"
 
 Item {
@@ -106,41 +107,44 @@ Item {
             }
         }
 
-        // --- Title / artist / quality ------------------------------------
-        Column {
+        // --- Title / artist + quality badge ------------------------------
+        // The SAME icon-only badge every other album card draws
+        // (cards/AlbumCard.qml): tier glyph, exact quality in its tooltip.
+        // The .slint printed the raw tier word ("hires") as a third text
+        // line, which is the one thing on this page no other surface does.
+        Row {
             width: parent.width
-            spacing: 2
-
-            Text {
-                width: parent.width
-                height: 20
-                text: root.album.title || ""
-                color: theme.textPrimary
-                font.pixelSize: theme.fontBody
-                font.weight: theme.weightMedium
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
+            height: 40
+            spacing: theme.spacingSm
+            Column {
+                width: parent.width - (qBadge.visible ? qBadge.width + theme.spacingSm : 0)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 2
+                Text {
+                    width: parent.width
+                    height: 20
+                    text: root.album.title || ""
+                    color: theme.textPrimary
+                    font.pixelSize: theme.fontBody
+                    font.weight: theme.weightMedium
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+                Text {
+                    width: parent.width
+                    height: 17
+                    text: root.album.artist || ""
+                    color: theme.textMuted
+                    font.pixelSize: theme.fontLegal
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
             }
-            Text {
-                width: parent.width
-                height: 17
-                text: root.album.artist || ""
-                color: theme.textMuted
-                font.pixelSize: theme.fontLegal
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
-            }
-            // .slint:288 — the quality line is dropped entirely when the row
-            // carries no tier, rather than reserving an empty band.
-            Text {
-                visible: (root.album.qualityTier || "") !== ""
-                width: parent.width
-                height: visible ? 17 : 0
-                text: root.album.qualityTier || ""
-                color: theme.textSecondary
-                font.pixelSize: theme.fontLegal
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
+            QualityMini {
+                id: qBadge
+                tier: root.album.qualityTier || ""
+                label: root.album.qualityDetail || ""
+                anchors.verticalCenter: parent.verticalCenter
             }
         }
     }

@@ -17,6 +17,7 @@
 
 import QtQuick
 import com.blitzfc.qbz
+import "../../controls"
 import "../../theme"
 
 Rectangle {
@@ -116,16 +117,17 @@ Rectangle {
             }
         }
 
-        // Quality column.
-        Text {
+        // Quality column — the SAME badge the album list rows show
+        // (views/AlbumListRow.qml): tier label over the exact quality line.
+        Item {
             width: 110
             height: parent.height
-            text: root.album.qualityTier || ""
-            color: theme.textSecondary
-            font.pixelSize: theme.fontLegal
-            horizontalAlignment: Text.AlignRight
-            verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
+            QualityBadgeFull {
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                tier: root.album.qualityTier || ""
+                detail: root.album.qualityDetail || ""
+            }
         }
 
         // Purchase-date column.
