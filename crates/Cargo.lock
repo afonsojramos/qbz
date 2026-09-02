@@ -4030,6 +4030,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
+name = "qbz-account-migration"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "log",
+ "qbz-models",
+ "qbz-qobuz",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "qbz-app"
 version = "2.1.0"
 dependencies = [
@@ -4042,6 +4057,7 @@ dependencies = [
  "qbz-core",
  "qbz-credentials",
  "qbz-models",
+ "qbz-offline-cache",
  "qbz-player",
  "qbz-qobuz",
  "rand 0.10.2",
@@ -4510,6 +4526,7 @@ dependencies = [
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
  "open",
+ "qbz-account-migration",
  "qbz-app",
  "qbz-audio",
  "qbz-cache",
