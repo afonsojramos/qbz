@@ -34,6 +34,17 @@ pub struct SessionInfo {
     pub subscription: String,
 }
 
+/// The plan label the header shows. Qobuz's `short_label` ("Studio",
+/// "Sublime") is a proper noun and stays as sent; the one label QBZ makes up
+/// itself — "Member", an account without a subscription — is translated.
+pub fn display_subscription(label: &str) -> String {
+    if label == "Member" {
+        qbz_i18n::t("Member")
+    } else {
+        label.to_string()
+    }
+}
+
 /// Progress milestones of the browser OAuth, reported to the login UI so
 /// the screen can narrate the flow.
 #[derive(Clone, Copy, Debug)]

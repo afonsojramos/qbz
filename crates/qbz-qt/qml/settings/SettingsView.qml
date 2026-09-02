@@ -14,6 +14,9 @@
 //   6 Integrations   -> IntegrationsSettings.qml
 //   7 Developer      -> DeveloperSettings.qml
 //   8 Flatpak/Snap   -> SandboxSettings.qml (only on a sandboxed install)
+//   9 Import/Export  -> ImportExportSettings.qml (shown between
+//                       Integrations and Developer; index 9 keeps the
+//                       persisted section numbers of 0-8 stable)
 //
 // All state is ONE JSON document (QbzBridge.settingsJson, settings_qt.rs
 // SettingsDoc). Controls never keep local truth: they call the
@@ -197,6 +200,12 @@ Item {
                         onClicked: QbzBridge.settingsSetSection(6)
                     }
                     SubNavItem {
+                        name: "import"
+                        label: QbzSession.tr("Import / Export", QbzSession.trRev)
+                        active: root.section === 9
+                        onClicked: QbzBridge.settingsSetSection(9)
+                    }
+                    SubNavItem {
                         name: "bug"
                         label: QbzSession.tr("Developer", QbzSession.trRev)
                         active: root.section === 7
@@ -354,6 +363,15 @@ Item {
                                     width: parent.width
                                     doc: root.doc
                                     confirmHost: confirmHost
+                                }
+                            }
+                        }
+                        Panel {
+                            panelIndex: 9
+                            sourceComponent: Component {
+                                ImportExportSettings {
+                                    width: parent.width
+                                    doc: root.doc
                                 }
                             }
                         }

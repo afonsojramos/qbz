@@ -1,4 +1,5 @@
 pub mod artist_blacklist;
+pub mod blacklist_portable;
 pub mod bundle;
 pub mod daemon_prefs;
 pub mod developer;

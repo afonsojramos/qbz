@@ -795,6 +795,7 @@ fn main() {
                 "qml/settings/BlacklistSettings.qml",
                 "qml/settings/DacWizardModal.qml",
                 "qml/settings/DeveloperSettings.qml",
+                "qml/settings/ImportExportSettings.qml",
                 "qml/settings/DiagnosticsPanel.qml",
                 "qml/settings/LibFolderEditModal.qml",
                 "qml/settings/LibraryFolderTable.qml",

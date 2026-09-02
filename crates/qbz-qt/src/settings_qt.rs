@@ -45,6 +45,7 @@ use serde::Serialize;
 // controller can be split by concern without touching the app root: a
 // `mod x;` in `settings_qt.rs` resolves to `src/settings_qt/x.rs`.
 pub mod devtools;
+pub mod import_export;
 pub mod library;
 pub mod offline;
 
@@ -2215,6 +2216,10 @@ pub struct SettingsDoc {
     pub offline: offline::Snapshot,
     /// Settings > Developer + Blacklist counters + the sandbox gate.
     pub dev: devtools::Snapshot,
+    /// Settings > Import / Export (settings bundle, portable blacklist,
+    /// account migration).
+    #[serde(rename = "importExport")]
+    pub import_export: import_export::Snapshot,
 }
 
 /// Index -> value maps the select handlers resolve against.
@@ -2681,6 +2686,7 @@ pub async fn publish_snapshot() {
             library: library::snapshot(),
             offline: offline::snapshot(),
             dev: devtools::snapshot(),
+            import_export: import_export::snapshot(),
         }
     })
     .await
@@ -4248,7 +4254,12 @@ pub async fn settings_string(key: &str, value: String) {
         "open-log-file" => devtools::open_log_file(),
         // The value is the include-auth gate ("with-auth" or empty) — see
         // DeveloperSettings.qml for why it is session state and not a pref.
-        "export-settings" => devtools::export_settings(value == "with-auth").await,
+        // --- Import / Export ---------------------------------------------
+        "export-settings" => import_export::export_settings(value == "with-auth").await,
+        "export-blacklist" => import_export::export_blacklist().await,
+        "import-blacklist" => import_export::import_blacklist().await,
+        "account-snapshot" => import_export::create_snapshot().await,
+        "account-migrate" => import_export::migrate(value).await,
         other => log::warn!("[qbz-qt] unknown settings string key: {other}"),
     }
     publish_snapshot().await;

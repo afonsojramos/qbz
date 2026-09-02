@@ -14,7 +14,6 @@
 //! - The settings export keeps the reference's include-auth gate, defaulting
 //!   to OFF, as an inline toggle instead of a separate modal.
 
-use qbz_app::settings::bundle::{self, ExportOptions, ExportSource};
 use serde::Serialize;
 use std::sync::{LazyLock, Mutex};
 
@@ -92,39 +91,4 @@ pub fn open_log_file() {
         *STATUS.lock().unwrap_or_else(|e| e.into_inner()) =
             qbz_i18n::t("Could not open the log file.");
     }
-}
-
-/// Developer > Export settings… — writes `qbz-settings-YYYYMMDD.qbzb` (0600),
-/// then reports the path inline.
-///
-/// `include_auth` is the reference's single `--include-auth` gate
-/// (`SettingsExportModal.slint`, one checkbox, default OFF, read in
-/// `crates/qbz/src/settings.rs:1412-1425`). It used to be hard-coded `false`
-/// here, so the Qt build could never produce the bundle the CLI's
-/// `--include-auth` describes — the row said "portable bundle of your
-/// settings" and quietly shipped one that could not sign you in.
-pub async fn export_settings(include_auth: bool) {
-    let text = tokio::task::spawn_blocking(move || {
-        let bundle = match bundle::export(ExportSource::Desktop, &ExportOptions { include_auth }) {
-            Ok(b) => b,
-            Err(e) => {
-                log::error!("[qbz-qt] settings export failed: {e:?}");
-                return qbz_i18n::t("Export failed.");
-            }
-        };
-        let Some(dir) = dirs::download_dir().or_else(dirs::home_dir) else {
-            return qbz_i18n::t("Export failed.");
-        };
-        let path = dir.join(bundle::default_filename());
-        match bundle::write_bundle_file(&path, &bundle) {
-            Ok(()) => qbz_i18n::t("Saved to {}").replacen("{}", &path.to_string_lossy(), 1),
-            Err(e) => {
-                log::error!("[qbz-qt] settings bundle write failed: {e:?}");
-                qbz_i18n::t("Export failed.")
-            }
-        }
-    })
-    .await
-    .unwrap_or_else(|_| qbz_i18n::t("Export failed."));
-    *STATUS.lock().unwrap_or_else(|e| e.into_inner()) = text;
 }
