@@ -887,6 +887,9 @@ Rectangle {
                             albumId: modelData.id
                             title: modelData.title
                             artist: modelData.artist
+                            hostArtistLink: (modelData.artist || "") !== ""
+                            onArtistRequested: QbzHome.openPinnedAlbumArtist(
+                                modelData.id, modelData.artist || "")
                             artSource: modelData.artPath || ""
                             isPinned: true
                             // home_qt::pinned_cards stamps the heart per row,

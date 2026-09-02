@@ -377,6 +377,10 @@ fn emit_changed(kind: &str, id: &str, value: bool) {
 fn republish_all() {
     publish();
     crate::publish_settings();
+    // Discover keeps the raw index candidates in memory, so a blacklist
+    // mutation can remove OR restore Home rows immediately without another
+    // network fetch. This also refreshes the targeted recent-history rails.
+    crate::home_qt::blacklist_changed();
     // Drop the 30-day Artist Scene cache (contract B3, requirement 3).
     //
     // THIS IS A CORRECTNESS CALL, NOT HOUSEKEEPING. Scene discovery caches a

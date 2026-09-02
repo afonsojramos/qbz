@@ -295,6 +295,10 @@ pub async fn import_blacklist() {
     .unwrap_or_else(|_| qbz_i18n::t("Import failed."));
     set_blacklist_status(text);
     crate::blacklist_qt::publish();
+    // The additive import mutates the same live blacklist singleton as the
+    // manager actions; refresh cached Discover candidates as well so imported
+    // artists do not remain visible until the next /discover/index fetch.
+    crate::home_qt::blacklist_changed();
 }
 
 // ======================= ACCOUNT MIGRATION ===========================

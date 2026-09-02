@@ -170,6 +170,15 @@ pub mod qbz_home {
         /// "All categories" — drop the whole selection.
         #[qinvokable]
         fn clear_playlist_tags(self: Pin<&mut QbzHome>);
+        /// Pinned album snapshots predate artist-id storage. Resolve the
+        /// artist lazily from the album (or route local albums by name) so the
+        /// persisted card's artist line remains navigable.
+        #[qinvokable]
+        fn open_pinned_album_artist(
+            self: Pin<&mut QbzHome>,
+            album_id: QString,
+            artist_name: QString,
+        );
         /// Configurator > "Refresh now": rebuild every row, bypassing the
         /// results blob. The engine still honours its own per-week
         /// ListenBrainz cache, so this is not a way to hammer that service.
@@ -534,6 +543,10 @@ impl qbz_home::QbzHome {
 
     pub fn toggle_playlist_tag(self: Pin<&mut Self>, slug: QString) {
         crate::home_qt::toggle_playlist_tag(&slug.to_string());
+    }
+
+    pub fn open_pinned_album_artist(self: Pin<&mut Self>, album_id: QString, artist_name: QString) {
+        crate::home_qt::open_pinned_album_artist(album_id.to_string(), artist_name.to_string());
     }
 
     pub fn clear_playlist_tags(self: Pin<&mut Self>) {

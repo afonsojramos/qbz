@@ -7,8 +7,6 @@
 //! `publish_sections` for why not QVariantList-of-QVariantMap.
 //!
 //! Known parity deltas:
-//! - Artist/album blacklist filtering: the shared store is live, but Home's
-//!   section assembly does not yet consult it, so no rows are dropped here.
 //! - Reco-scored taste ordering of favorite albums (reco store skipped):
 //!   favorites render in plain favorite order, and Rediscover falls back to
 //!   the local "not in the recently-played window" heuristic (the same
@@ -32,7 +30,7 @@
 //! - Recommendations tab: ported in `recommendations_qt` (this module only
 //!   supplies the shared `HomeSection`/`HomeCard` transport).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -61,6 +59,18 @@ pub struct HomeCard {
     pub subtitle: String,
     #[serde(rename = "artistId")]
     pub artist_id: String,
+    /// Complete Qobuz contributor set used only while assembling Home. The
+    /// wire keeps the historical primary `artistId`, but blacklist matching
+    /// must also catch featured artists (`DiscoverAlbum.artists[]`). Keeping
+    /// this off the JSON preserves the card contract while the raw candidate
+    /// cache remains rich enough to re-filter live after an unblock.
+    #[serde(skip)]
+    pub(crate) blacklist_artist_ids: Vec<u64>,
+    /// Album id used by the orthogonal album-blacklist axis. For album cards
+    /// this equals `id`; track-shaped Home rows need the containing album id
+    /// separately because their public `id` is the track id.
+    #[serde(skip)]
+    pub(crate) blacklist_album_id: String,
     pub genre: String,
     pub year: String,
     #[serde(rename = "qualityTier")]
@@ -184,6 +194,97 @@ pub struct HomeSection {
     pub items: Vec<HomeCard>,
 }
 
+/// One lock-free snapshot per assembly, rather than taking the blacklist
+/// singleton mutex once per card. The candidate cache stays UNFILTERED: an
+/// unblock can therefore restore rows immediately without refetching the
+/// discover index.
+#[derive(Default)]
+struct HomeBlacklistSnapshot {
+    enabled: bool,
+    artists: HashSet<u64>,
+    albums: HashSet<String>,
+}
+
+impl HomeBlacklistSnapshot {
+    fn live() -> Self {
+        Self {
+            enabled: crate::artist_blacklist::is_enabled(),
+            artists: crate::artist_blacklist::ids_snapshot(),
+            albums: crate::artist_blacklist::album_ids_snapshot(),
+        }
+    }
+
+    fn blocks(&self, section_kind: &str, card: &HomeCard) -> bool {
+        if !self.enabled {
+            return false;
+        }
+
+        // Home mixes Qobuz and Local Library history. A local/server copy is
+        // never hidden merely because its metadata carries a matching Qobuz
+        // id (the same hard source guard used by queue filtering).
+        if !card.source.is_empty() && !card.source.eq_ignore_ascii_case("qobuz") {
+            return false;
+        }
+        let album_id = if card.blacklist_album_id.is_empty() {
+            card.id.as_str()
+        } else {
+            card.blacklist_album_id.as_str()
+        };
+        if card.source.is_empty()
+            && matches!(section_kind, "album" | "slim" | "slimTracks")
+            && crate::library_qt::is_local_album_key(album_id)
+        {
+            return false;
+        }
+
+        let album_blocked = matches!(section_kind, "album" | "slim" | "slimTracks")
+            && !album_id.is_empty()
+            && self.albums.contains(album_id);
+        if album_blocked {
+            return true;
+        }
+
+        if !matches!(section_kind, "album" | "slim" | "slimTracks" | "artists") {
+            return false;
+        }
+        if card
+            .blacklist_artist_ids
+            .iter()
+            .any(|id| self.artists.contains(id))
+        {
+            return true;
+        }
+        let fallback = if section_kind == "artists" && card.artist_id.is_empty() {
+            card.id.as_str()
+        } else {
+            card.artist_id.as_str()
+        };
+        fallback
+            .parse::<u64>()
+            .is_ok_and(|id| self.artists.contains(&id))
+    }
+}
+
+fn blacklist_visible_candidates(
+    candidates: &[HomeSection],
+    blacklist: &HomeBlacklistSnapshot,
+) -> Vec<HomeSection> {
+    if !blacklist.enabled {
+        return candidates.to_vec();
+    }
+    candidates
+        .iter()
+        .filter_map(|section| {
+            let mut visible = section.clone();
+            let had_items = !visible.items.is_empty();
+            visible
+                .items
+                .retain(|card| !blacklist.blocks(&visible.kind, card));
+            (!had_items || !visible.items.is_empty()).then_some(visible)
+        })
+        .collect()
+}
+
 /// One offered playlist category tag. `name` arrives already localized from
 /// the discover index.
 #[derive(Clone, Serialize)]
@@ -298,6 +399,16 @@ fn pinned_cards() -> Vec<HomeCard> {
         .collect()
 }
 
+static PINNED_PUBLISH_REVISION: AtomicU64 = AtomicU64::new(0);
+
+fn pinned_local_source(id: &str) -> String {
+    id.split_once(':')
+        .and_then(|(word, _)| qbz_source::SourceId::from_word(word))
+        .filter(|source| *source != qbz_source::SourceId::QOBUZ)
+        .map(|source| source.as_str().to_string())
+        .unwrap_or_else(|| "local".to_string())
+}
+
 /// Serialize the pinned rows onto their own bridge property.
 fn push_pinned(cards: &[HomeCard]) {
     let json = serde_json::to_string(cards).unwrap_or_else(|_| "[]".to_string());
@@ -317,20 +428,108 @@ fn push_pinned(cards: &[HomeCard]) {
 /// re-created. Every OTHER surface's pin glyph is corrected in place by the
 /// `QbzLibrary.pinChanged` fan-out the cards listen to — the port's
 /// equivalent of the Slint `set_*_row_pinned` model walks.
-pub(crate) fn publish_pinned() {
-    let mut cards = pinned_cards();
+fn publish_pinned_cards(mut cards: Vec<HomeCard>, revision: u64, download_artwork: bool) {
+    if PINNED_PUBLISH_REVISION.load(Ordering::Acquire) != revision {
+        return;
+    }
     let missing = attach_card_art(&mut cards);
     push_pinned(&cards);
-    if missing.is_empty() {
+    if missing.is_empty() || !download_artwork {
         return;
     }
     // A just-pinned row usually has an uncached cover; it lands with one
     // more publish of this same property, exactly like the initial load.
     crate::spawn(async move {
         crate::artwork_qt::download_missing(missing).await;
+        if PINNED_PUBLISH_REVISION.load(Ordering::Acquire) != revision {
+            return;
+        }
         let mut cards = cards;
         let _ = attach_card_art(&mut cards);
         push_pinned(&cards);
+    });
+}
+
+pub(crate) fn publish_pinned() {
+    let revision = PINNED_PUBLISH_REVISION.fetch_add(1, Ordering::AcqRel) + 1;
+    let cards = pinned_cards();
+    let local_candidates: Vec<(String, String)> = cards
+        .iter()
+        .filter(|card| card.is_local_album)
+        .map(|card| (card.id.clone(), pinned_local_source(&card.id)))
+        .collect();
+    if local_candidates.is_empty() {
+        publish_pinned_cards(cards, revision, true);
+        return;
+    }
+
+    // Never let a stale local pin from the previous snapshot linger while the
+    // availability query runs. Catalog/artist/playlist pins can paint now;
+    // valid Local Library albums join a moment later from the authoritative
+    // local/server caches.
+    publish_pinned_cards(
+        cards
+            .iter()
+            .filter(|card| !card.is_local_album)
+            .cloned()
+            .collect(),
+        revision,
+        false,
+    );
+    crate::spawn(async move {
+        let checked = tokio::task::spawn_blocking(move || {
+            crate::local_albums::existing_favorite_album_ids_blocking(local_candidates)
+        })
+        .await;
+        if PINNED_PUBLISH_REVISION.load(Ordering::Acquire) != revision {
+            return;
+        }
+        let existing = match checked {
+            Ok(Ok(ids)) => Some(ids),
+            Ok(Err(error)) => {
+                // Availability uncertainty must fail open: a temporarily
+                // unavailable DB is not proof that every local pin is stale.
+                log::warn!("[qbz-qt] pinned local-album availability failed: {error}");
+                None
+            }
+            Err(error) => {
+                log::warn!("[qbz-qt] pinned local-album worker failed: {error}");
+                None
+            }
+        };
+        let visible = cards
+            .into_iter()
+            .filter(|card| {
+                !card.is_local_album || existing.as_ref().is_none_or(|ids| ids.contains(&card.id))
+            })
+            .collect();
+        publish_pinned_cards(visible, revision, true);
+    });
+}
+
+/// Open the artist behind a persisted Pinned album snapshot. The pinned store
+/// intentionally keeps only display metadata, so old rows have no artist id.
+/// Local Library albums route by the stored artist name; catalog rows resolve
+/// one album on demand, only when the user clicks the link.
+pub(crate) fn open_pinned_album_artist(album_id: String, artist_name: String) {
+    if album_id.is_empty() || artist_name.trim().is_empty() {
+        return;
+    }
+    if crate::library_qt::is_local_album_key(&album_id) {
+        crate::local_album_actions::open_artist_by_name(artist_name);
+        return;
+    }
+    let runtime = crate::app();
+    crate::spawn(async move {
+        match runtime.core().get_album(&album_id).await {
+            Ok(album) if album.artist.id != 0 => crate::open_artist(album.artist.id.to_string()),
+            Ok(_) => {
+                log::warn!("[qbz-qt] pinned album {album_id} has no resolvable primary artist")
+            }
+            Err(error) => {
+                log::warn!("[qbz-qt] pinned album artist lookup failed for {album_id}: {error}")
+            }
+        }
     });
 }
 
@@ -348,10 +547,7 @@ fn build_recent_sections() -> Vec<HomeSection> {
     let mut stored_tracks = crate::recently_qt::load_tracks();
     backfill_recent_artwork(&mut stored_albums, &mut stored_tracks);
 
-    let recent_albums: Vec<HomeCard> = stored_albums
-        .into_iter()
-        .map(map_recent_album)
-        .collect();
+    let recent_albums: Vec<HomeCard> = stored_albums.into_iter().map(map_recent_album).collect();
     if recent_albums.is_empty() {
         out.push(HomeSection {
             id: "recentlyPlayedAlbums".to_string(),
@@ -424,7 +620,34 @@ fn build_recent_sections() -> Vec<HomeSection> {
         });
     }
 
+    apply_blacklist_to_recent_sections(&mut out);
     out
+}
+
+/// Recent rails ride a targeted bridge document after the first playback
+/// edge, so filtering only the full Home assembly would let them reintroduce
+/// a blocked row. Rebuild these three short lists from their stores whenever
+/// the blacklist changes and turn an emptied rail back into its normal
+/// placeholder shape.
+fn apply_blacklist_to_recent_sections(sections: &mut [HomeSection]) {
+    let blacklist = HomeBlacklistSnapshot::live();
+    if !blacklist.enabled {
+        return;
+    }
+    for section in sections {
+        let had_items = !section.items.is_empty();
+        let kind = section.kind.clone();
+        section.items.retain(|card| !blacklist.blocks(&kind, card));
+        if !had_items || !section.items.is_empty() {
+            continue;
+        }
+        section.kind = "recentPlaceholder".to_string();
+        section.hint = match section.id.as_str() {
+            "recentlyPlayedAlbums" => qbz_i18n::t("Albums you play will appear here."),
+            "recentlyPlayedPlaylists" => qbz_i18n::t("Playlists you play will appear here."),
+            _ => qbz_i18n::t("Tracks you play will appear here."),
+        };
+    }
 }
 
 /// Repair artwork snapshots written by older builds from the authoritative
@@ -465,18 +688,21 @@ fn backfill_recent_artwork(
             "" if album_id.starts_with("subsonic:") => "subsonic",
             other => other,
         };
-        cache.entry((source.to_string(), album_id.to_string())).or_insert_with(|| {
-            let mut rows = match source {
-                "local" => crate::local_albums::fetch_album_tracks_blocking(album_id),
-                "plex" => crate::local_plex::album_tracks(album_id),
-                "jellyfin" | "subsonic" => {
-                    crate::media_servers_qt::album_tracks(album_id).unwrap_or_default()
-                }
-                _ => Vec::new(),
-            };
-            crate::local_playback::fill_missing_covers(&mut rows);
-            rows
-        }).clone()
+        cache
+            .entry((source.to_string(), album_id.to_string()))
+            .or_insert_with(|| {
+                let mut rows = match source {
+                    "local" => crate::local_albums::fetch_album_tracks_blocking(album_id),
+                    "plex" => crate::local_plex::album_tracks(album_id),
+                    "jellyfin" | "subsonic" => {
+                        crate::media_servers_qt::album_tracks(album_id).unwrap_or_default()
+                    }
+                    _ => Vec::new(),
+                };
+                crate::local_playback::fill_missing_covers(&mut rows);
+                rows
+            })
+            .clone()
     };
     for track in tracks.iter_mut() {
         if !track.artwork_url.is_empty() && !track.album_artwork_url.is_empty() {
@@ -484,11 +710,7 @@ fn backfill_recent_artwork(
         }
         let rows = rows_for(&track.source, &track.album_id);
         let row_id = track.id.parse::<u64>().ok().map(|id| id as i64);
-        let art = recent_artwork_from_rows(
-            &rows,
-            row_id,
-            crate::local_rows::ArtworkScope::Track,
-        );
+        let art = recent_artwork_from_rows(&rows, row_id, crate::local_rows::ArtworkScope::Track);
         if !art.is_empty() {
             if track.artwork_url.is_empty() {
                 track.artwork_url = art.clone();
@@ -498,13 +720,13 @@ fn backfill_recent_artwork(
             }
         }
     }
-    for album in albums.iter_mut().filter(|album| album.artwork_url.is_empty()) {
+    for album in albums
+        .iter_mut()
+        .filter(|album| album.artwork_url.is_empty())
+    {
         let rows = rows_for(&album.source, &album.id);
-        album.artwork_url = recent_artwork_from_rows(
-            &rows,
-            None,
-            crate::local_rows::ArtworkScope::Album,
-        );
+        album.artwork_url =
+            recent_artwork_from_rows(&rows, None, crate::local_rows::ArtworkScope::Album);
     }
 }
 
@@ -987,12 +1209,14 @@ fn assemble(
     prefs: &qbz_app::settings::discover_prefs::DiscoverPrefs,
 ) -> DiscoverSections {
     use qbz_app::settings::discover_prefs::DiscoveryTab;
+    let blacklist = HomeBlacklistSnapshot::live();
+    let visible = blacklist_visible_candidates(candidates, &blacklist);
     // "Items per carousel" — PER RAIL (the Tauri shape; a single global number
     // was this port's simplification and it lost the point of the feature). One
     // store read for all three tabs.
     let sizes = crate::discover_config_qt::rail_sizes();
     let home = order_by_prefs(
-        candidates,
+        &visible,
         prefs,
         DiscoveryTab::Home,
         "mostStreamed",
@@ -1000,7 +1224,7 @@ fn assemble(
         &sizes,
     );
     let editor = order_by_prefs(
-        candidates,
+        &visible,
         prefs,
         DiscoveryTab::EditorPicks,
         "mostStreamed#album",
@@ -1012,7 +1236,7 @@ fn assemble(
     // a targeted recent-rails update reveal it after the first play without a
     // full Home document republish.
     let for_you = order_by_prefs(
-        candidates,
+        &visible,
         prefs,
         DiscoveryTab::ForYou,
         "mostStreamed",
@@ -1243,6 +1467,19 @@ pub(crate) fn republish_cached() {
     }
 }
 
+/// A blacklist row or its global enabled flag changed. Home's discover-index
+/// candidates are intentionally cached UNFILTERED, so this is a local
+/// reassembly (no network) that can both remove and restore rows. The recent
+/// rails have their own targeted document and are rebuilt from their tiny
+/// stores in parallel so that overlay cannot resurrect a blocked item.
+pub(crate) fn blacklist_changed() {
+    republish_cached();
+    let revision = RECENT_REFRESH_REVISION.fetch_add(1, Ordering::AcqRel) + 1;
+    crate::spawn(async move {
+        publish_recent_rails(revision).await;
+    });
+}
+
 /// A pin/unpin just landed in the per-user store: patch the CACHED candidate
 /// rows and rebuild the Pinned rail. NOTHING here republishes the three tab
 /// documents.
@@ -1462,6 +1699,8 @@ where
 // ---------------------------------------------------------------------------
 
 pub(crate) fn map_album(album: DiscoverAlbum) -> HomeCard {
+    let blacklist_artist_ids = album.artists.iter().map(|a| a.id).collect();
+    let blacklist_album_id = album.id.clone();
     let artist = album
         .artists
         .first()
@@ -1504,6 +1743,8 @@ pub(crate) fn map_album(album: DiscoverAlbum) -> HomeCard {
         title: album.title,
         artist,
         artist_id,
+        blacklist_artist_ids,
+        blacklist_album_id,
         genre,
         year,
         quality_tier: quality_tier(album.audio_info.as_ref()).to_string(),
@@ -1580,6 +1821,13 @@ fn map_slim(index: usize, album: DiscoverAlbum) -> HomeCard {
         .or(album.image.small)
         .or(album.image.large)
         .unwrap_or_default();
+    let artist_id = album
+        .artists
+        .first()
+        .map(|a| a.id.to_string())
+        .unwrap_or_default();
+    let blacklist_artist_ids = album.artists.iter().map(|a| a.id).collect();
+    let blacklist_album_id = album.id.clone();
     HomeCard {
         // `SlimCard.qml` draws neither heart nor pin today, so nothing reads
         // this — it is stamped anyway because HomeCard is ONE struct shared by
@@ -1590,6 +1838,9 @@ fn map_slim(index: usize, album: DiscoverAlbum) -> HomeCard {
         id: album.id,
         title: album.title,
         artist: subtitle,
+        artist_id,
+        blacklist_artist_ids,
+        blacklist_album_id,
         rank: (index + 1).to_string(),
         art_url,
         ..HomeCard::default()
@@ -1775,6 +2026,15 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
         (Some(bd), Some(sr)) => format!("{}-bit / {} kHz", bd, sr),
         _ => String::new(),
     };
+    let mut blacklist_artist_ids = vec![album.artist.id];
+    if let Some(contributors) = album.artists.as_ref() {
+        for contributor in contributors {
+            if !blacklist_artist_ids.contains(&contributor.id) {
+                blacklist_artist_ids.push(contributor.id);
+            }
+        }
+    }
+    let blacklist_album_id = album.id.clone();
     HomeCard {
         // Pin badge state from the per-user store (foryou.rs `album_items`).
         // These are the personalized rails — Library Albums, Release Watch,
@@ -1789,6 +2049,8 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
         title: album.title,
         artist: album.artist.name,
         artist_id: album.artist.id.to_string(),
+        blacklist_artist_ids,
+        blacklist_album_id,
         year,
         // Never set here before, so the hover meta's genre line was empty on
         // every card this mapper feeds — the card renders it, the collection
@@ -1809,12 +2071,14 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
 /// Map one recently-played album (local history) onto a card. The stored ISO
 /// release date is localized here exactly as the discover cards do.
 pub(crate) fn map_recent_album(a: crate::recently_qt::RecentAlbum) -> HomeCard {
+    let blacklist_album_id = a.id.clone();
     HomeCard {
         is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
         is_favorite: crate::fav_cache_qt::is_album_favorite(&a.id),
         id: a.id,
         title: a.title,
         artist: a.artist,
+        blacklist_album_id,
         genre: a.genre,
         year: if a.release_date.is_empty() {
             String::new()
@@ -1823,6 +2087,7 @@ pub(crate) fn map_recent_album(a: crate::recently_qt::RecentAlbum) -> HomeCard {
         },
         quality_tier: a.quality_tier,
         quality_label: a.quality_label,
+        source: a.source,
         art_url: a.artwork_url,
         ..HomeCard::default()
     }
@@ -1885,6 +2150,11 @@ pub(crate) fn map_recent_playlist(
 
 /// Map one recently-played track onto a slim row (`slimTracks` — click plays).
 fn map_recent_track(t: crate::recently_qt::RecentTrack) -> HomeCard {
+    let blacklist_artist_ids: Vec<u64> = t.artist_id.into_iter().collect();
+    let artist_id = blacklist_artist_ids
+        .first()
+        .map(u64::to_string)
+        .unwrap_or_default();
     HomeCard {
         // TRACK ids here, not album ids — the `slimTracks` rail is the one
         // place a HomeCard row is a track.
@@ -1896,6 +2166,9 @@ fn map_recent_track(t: crate::recently_qt::RecentTrack) -> HomeCard {
         id: t.id,
         title: t.title,
         artist: t.subtitle,
+        artist_id,
+        blacklist_artist_ids,
+        blacklist_album_id: t.album_id,
         // The one line this whole fix turns on: the history stores the origin
         // and the card used to drop it on the floor via `..default()`.
         source: t.source,
@@ -1926,8 +2199,8 @@ where
     }
 }
 
-/// "Release Watch" — `/release/watch` artists, capped 18. Home-level blacklist
-/// filtering is a known parity delta.
+/// "Release Watch" — `/release/watch` artists, capped 18. Home assembly
+/// applies the same live artist/album blacklist snapshot as every other rail.
 async fn fetch_release_watch<A>(runtime: &Arc<AppRuntime<A>>) -> Vec<HomeCard>
 where
     A: FrontendAdapter + Send + Sync + 'static,
@@ -1959,6 +2232,7 @@ where
 }
 
 fn map_fav_artist(a: Artist) -> HomeCard {
+    let blacklist_artist_ids = vec![a.id];
     HomeCard {
         is_pinned: crate::sidebar_qt::is_pinned("artist", &a.id.to_string()),
         // Follow state. This mapper feeds BOTH "Your Top Artists" (all
@@ -1972,6 +2246,7 @@ fn map_fav_artist(a: Artist) -> HomeCard {
         is_favorite: crate::fav_cache_qt::is_artist_favorite(a.id),
         id: a.id.to_string(),
         title: a.name,
+        blacklist_artist_ids,
         item_kind: "artist".to_string(),
         // Artist grid card on Home: full variant (best()) — the down-tier
         // was reverted after the 2026-08-15 owner smoke (contract 04 §3).
@@ -2230,5 +2505,106 @@ mod tests {
             recent_artwork_from_rows(&rows, None, crate::local_rows::ArtworkScope::Album),
             "jellyfin:album-7/tag"
         );
+    }
+
+    #[test]
+    fn home_blacklist_filters_album_artist_and_contributors() {
+        let blacklist = HomeBlacklistSnapshot {
+            enabled: true,
+            artists: [42, 99].into_iter().collect(),
+            albums: ["blocked-album".to_string()].into_iter().collect(),
+        };
+        let primary = HomeCard {
+            id: "album-a".to_string(),
+            artist_id: "42".to_string(),
+            ..Default::default()
+        };
+        let contributor = HomeCard {
+            id: "album-b".to_string(),
+            artist_id: "7".to_string(),
+            blacklist_artist_ids: vec![7, 99],
+            ..Default::default()
+        };
+        let album = HomeCard {
+            id: "blocked-album".to_string(),
+            artist_id: "7".to_string(),
+            ..Default::default()
+        };
+        let kept = HomeCard {
+            id: "album-c".to_string(),
+            artist_id: "7".to_string(),
+            ..Default::default()
+        };
+
+        assert!(blacklist.blocks("album", &primary));
+        assert!(blacklist.blocks("album", &contributor));
+        assert!(blacklist.blocks("album", &album));
+        assert!(!blacklist.blocks("album", &kept));
+    }
+
+    #[test]
+    fn home_blacklist_protects_non_qobuz_rows_and_disabled_mode() {
+        let enabled = HomeBlacklistSnapshot {
+            enabled: true,
+            artists: [42].into_iter().collect(),
+            albums: HashSet::new(),
+        };
+        let local = HomeCard {
+            id: "plex:album-1".to_string(),
+            artist_id: "42".to_string(),
+            source: "plex".to_string(),
+            ..Default::default()
+        };
+        assert!(!enabled.blocks("album", &local));
+
+        let disabled = HomeBlacklistSnapshot {
+            enabled: false,
+            ..enabled
+        };
+        let qobuz = HomeCard {
+            id: "album-1".to_string(),
+            artist_id: "42".to_string(),
+            ..Default::default()
+        };
+        assert!(!disabled.blocks("album", &qobuz));
+    }
+
+    #[test]
+    fn filtered_home_cache_can_restore_rows_after_unblock() {
+        let raw = vec![HomeSection {
+            id: "mostStreamed".to_string(),
+            title: "Popular albums".to_string(),
+            kind: "slim".to_string(),
+            hint: String::new(),
+            endpoint: String::new(),
+            items: vec![HomeCard {
+                id: "bad-bunny-album".to_string(),
+                artist_id: "42".to_string(),
+                ..Default::default()
+            }],
+        }];
+        let blocked = HomeBlacklistSnapshot {
+            enabled: true,
+            artists: [42].into_iter().collect(),
+            albums: HashSet::new(),
+        };
+        assert!(blacklist_visible_candidates(&raw, &blocked).is_empty());
+        assert_eq!(raw[0].items.len(), 1, "raw cache must remain intact");
+
+        let unblocked = HomeBlacklistSnapshot {
+            enabled: true,
+            artists: HashSet::new(),
+            albums: HashSet::new(),
+        };
+        assert_eq!(blacklist_visible_candidates(&raw, &unblocked).len(), 1);
+    }
+
+    #[test]
+    fn pinned_local_source_normalizes_server_brands() {
+        assert_eq!(pinned_local_source("plex:123"), "plex");
+        assert_eq!(pinned_local_source("jellyfin:abc"), "jellyfin");
+        assert_eq!(pinned_local_source("navidrome:def"), "subsonic");
+        assert_eq!(pinned_local_source("logical:hash"), "local");
+        assert_eq!(pinned_local_source("/music/album"), "local");
     }
 }

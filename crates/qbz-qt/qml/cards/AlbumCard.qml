@@ -40,6 +40,11 @@ Rectangle {
     property string title: ""
     property string artist: ""
     property string artistId: ""
+    // Hosts with only a display snapshot (Home's persisted Pinned row) can
+    // still make the artist line a link and resolve the destination lazily.
+    // Normal catalog cards keep the direct artistId path and pay no lookup.
+    property bool hostArtistLink: false
+    signal artistRequested()
     property string genre: ""
     property string year: ""
     property string qualityTier: ""
@@ -850,7 +855,8 @@ Rectangle {
                     width: parent.width
                     height: 18
                     text: root.artist
-                    color: root.artistId !== "" && artistArea.containsMouse
+                    color: (root.artistId !== "" || root.hostArtistLink)
+                        && artistArea.containsMouse
                         ? theme.textPrimary : theme.textMuted
                     font.pixelSize: theme.fontLink - 1
                     verticalAlignment: Text.AlignVCenter
@@ -859,8 +865,14 @@ Rectangle {
                         id: artistArea
                         anchors.fill: parent
                         hoverEnabled: true
-                        cursorShape: root.artistId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: if (root.artistId !== "") QbzArtist.openArtist(root.artistId)
+                        cursorShape: root.artistId !== "" || root.hostArtistLink
+                            ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: {
+                            if (root.artistId !== "")
+                                QbzArtist.openArtist(root.artistId)
+                            else if (root.hostArtistLink)
+                                root.artistRequested()
+                        }
                     }
                 }
                 // Play count — Most Played Albums only (see `plays`).
