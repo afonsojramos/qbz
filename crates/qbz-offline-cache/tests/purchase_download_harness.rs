@@ -142,8 +142,8 @@ fn minimal_flac() -> Vec<u8> {
     let mut info = vec![0u8; 34];
     info[0..2].copy_from_slice(&4096u16.to_be_bytes()); // min block size
     info[2..4].copy_from_slice(&4096u16.to_be_bytes()); // max block size
-    // Sample rate 44100 (20 bits), then channels-1 (3 bits) and bits-per-sample-1
-    // (5 bits), packed across bytes 10..13 as the FLAC spec lays STREAMINFO out.
+                                                        // Sample rate 44100 (20 bits), then channels-1 (3 bits) and bits-per-sample-1
+                                                        // (5 bits), packed across bytes 10..13 as the FLAC spec lays STREAMINFO out.
     let sample_rate: u32 = 44_100;
     info[10] = (sample_rate >> 12) as u8;
     info[11] = ((sample_rate >> 4) & 0xFF) as u8;
@@ -264,9 +264,18 @@ fn asset_failures_never_raise() {
     let server = FixtureServer::start(routes);
 
     let runtime = rt();
-    assert_eq!(runtime.block_on(svc::fetch_asset_bytes(&server.url("/empty"))), None);
-    assert_eq!(runtime.block_on(svc::fetch_asset_bytes(&server.url("/boom"))), None);
-    assert_eq!(runtime.block_on(svc::fetch_asset_bytes(&server.url("/nope"))), None);
+    assert_eq!(
+        runtime.block_on(svc::fetch_asset_bytes(&server.url("/empty"))),
+        None
+    );
+    assert_eq!(
+        runtime.block_on(svc::fetch_asset_bytes(&server.url("/boom"))),
+        None
+    );
+    assert_eq!(
+        runtime.block_on(svc::fetch_asset_bytes(&server.url("/nope"))),
+        None
+    );
     assert_eq!(runtime.block_on(svc::fetch_asset_bytes("")), None);
     // Nothing is listening on port 1; the connect timeout bounds the attempt.
     assert_eq!(
@@ -283,23 +292,31 @@ fn cover_files_are_written_beside_the_tracks() {
     std::fs::create_dir_all(&album_dir).unwrap();
 
     let cover = fake_jpeg();
-    svc::write_album_cover_files(&album_dir, Some(&cover), None);
+    svc::write_album_cover_files(&album_dir, Some(&cover), None, None);
     assert_eq!(std::fs::read(album_dir.join("cover.jpg")).unwrap(), cover);
     assert!(
         !album_dir.join("back.jpg").exists(),
         "an absent back cover must write nothing"
     );
+    assert!(!album_dir.join("large_cover.jpg").exists());
 
     let back = b"back-cover-bytes".to_vec();
-    svc::write_album_cover_files(&album_dir, Some(&cover), Some(&back));
+    let large = b"large-cover-bytes".to_vec();
+    svc::write_album_cover_files(&album_dir, Some(&cover), Some(&back), Some(&large));
     assert_eq!(std::fs::read(album_dir.join("back.jpg")).unwrap(), back);
+    assert_eq!(
+        std::fs::read(album_dir.join("large_cover.jpg")).unwrap(),
+        large,
+        "the master-size cover lands under the desktop client's name"
+    );
 
     // Empty slices count as absent, not as 0-byte files.
     let empty_dir = tmp.path().join("empty");
     std::fs::create_dir_all(&empty_dir).unwrap();
-    svc::write_album_cover_files(&empty_dir, Some(&[]), Some(&[]));
+    svc::write_album_cover_files(&empty_dir, Some(&[]), Some(&[]), Some(&[]));
     assert!(!empty_dir.join("cover.jpg").exists());
     assert!(!empty_dir.join("back.jpg").exists());
+    assert!(!empty_dir.join("large_cover.jpg").exists());
 }
 
 /// A goodie is fetched and written into the album folder under a sanitized name.
@@ -362,7 +379,10 @@ fn a_goodie_name_cannot_escape_the_album_folder() {
 fn a_goodie_without_a_url_is_skipped() {
     let tmp = tempfile::tempdir().unwrap();
     assert_eq!(
-        rt().block_on(svc::download_goodie(&goody("Nameless", "   ".to_string()), tmp.path())),
+        rt().block_on(svc::download_goodie(
+            &goody("Nameless", "   ".to_string()),
+            tmp.path()
+        )),
         None
     );
 }
@@ -476,8 +496,15 @@ fn a_downloaded_file_is_written_registered_and_tagged() {
     // Tagging twice must not accumulate art — the guard that makes a retry safe.
     svc::tag_downloaded_file(&file_path, &track, &ctx);
     let retagged = lofty::read_from_path(std::path::Path::new(&file_path)).unwrap();
-    let tag2 = retagged.primary_tag().or_else(|| retagged.first_tag()).unwrap();
-    assert_eq!(tag2.pictures().len(), 1, "re-tagging must not duplicate the cover");
+    let tag2 = retagged
+        .primary_tag()
+        .or_else(|| retagged.first_tag())
+        .unwrap();
+    assert_eq!(
+        tag2.pictures().len(),
+        1,
+        "re-tagging must not duplicate the cover"
+    );
 }
 
 /// THE regression test for the worst failure this pipeline had, and the reason
@@ -550,7 +577,11 @@ fn tagging_a_missing_or_unreadable_file_is_survivable() {
     let ctx = svc::PurchaseAlbumContext::default();
 
     // Missing file.
-    svc::tag_downloaded_file(&tmp.path().join("nope.flac").to_string_lossy(), &track, &ctx);
+    svc::tag_downloaded_file(
+        &tmp.path().join("nope.flac").to_string_lossy(),
+        &track,
+        &ctx,
+    );
 
     // Present but not audio.
     let junk = tmp.path().join("junk.flac");

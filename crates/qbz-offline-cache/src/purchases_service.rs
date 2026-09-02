@@ -995,7 +995,7 @@ pub async fn fetch_asset_bytes(url: &str) -> Option<Vec<u8>> {
     Some(bytes.to_vec())
 }
 
-/// Write `cover.jpg` / `back.jpg` beside the album's tracks (§14.2).
+/// Write `cover.jpg` / `back.jpg` / `large_cover.jpg` beside the album's tracks (§14.2).
 ///
 /// `album/get`'s `image` object carries exactly `small`, `thumbnail`, `large`
 /// and `back` — measured 2026-08-15; there is no `mega`, matching the earlier
@@ -1007,8 +1007,16 @@ pub fn write_album_cover_files(
     album_dir: &std::path::Path,
     cover_jpeg: Option<&[u8]>,
     back_jpeg: Option<&[u8]>,
+    large_cover_jpeg: Option<&[u8]>,
 ) {
-    for (bytes, name) in [(cover_jpeg, "cover.jpg"), (back_jpeg, "back.jpg")] {
+    // `large_cover.jpg` is the name the Qobuz desktop client writes beside its
+    // own `folder.jpg` (Finder, 2026-09-02): the `_max` variant, the master's
+    // own size. `cover.jpg` stays the 600 px one every scanner picks up.
+    for (bytes, name) in [
+        (cover_jpeg, "cover.jpg"),
+        (back_jpeg, "back.jpg"),
+        (large_cover_jpeg, "large_cover.jpg"),
+    ] {
         let Some(bytes) = bytes.filter(|b| !b.is_empty()) else {
             continue;
         };

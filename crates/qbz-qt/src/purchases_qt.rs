@@ -2127,6 +2127,20 @@ async fn run_album_download(plan: DownloadPlan) {
         _ => None,
     };
     let cover = ctx.cover_jpeg.clone();
+    // The master-size cover (`_max`), written as `large_cover.jpg` — the file
+    // the Qobuz desktop client leaves beside its `folder.jpg`. Best effort:
+    // an album whose cover url has no size suffix simply gets none.
+    let large = match plan
+        .catalog
+        .image
+        .large
+        .as_deref()
+        .or(plan.catalog.image.best().map(String::as_str))
+        .and_then(|url| qbz_models::qobuz_cover_at_px(url, 3000))
+    {
+        Some(url) => svc::fetch_asset_bytes(&url).await,
+        None => None,
+    };
 
     let loop_plan = plan.clone();
     let ids = plan.track_ids.clone();
@@ -2156,15 +2170,81 @@ async fn run_album_download(plan: DownloadPlan) {
             &plan.quality_dir,
         )
     });
-    if cover.is_some() || back.is_some() {
+    if cover.is_some() || back.is_some() || large.is_some() {
+        let write_folder = folder.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            svc::write_album_cover_files(&folder, cover.as_deref(), back.as_deref());
+            svc::write_album_cover_files(
+                &write_folder,
+                cover.as_deref(),
+                back.as_deref(),
+                large.as_deref(),
+            );
         })
         .await;
     }
 
+    // Everything the album ships with goes with it: booklets and any other
+    // goodie the catalog lists are fetched into the same folder without a
+    // second click. The desktop client does the same (smoke 2026-09-02); the
+    // "Download goodies" control stays as the re-download for a folder that
+    // lost them. Best effort, counted separately from the tracks (§14.3).
+    let goodies = catalog_goodies(&plan.catalog);
+    if !goodies.is_empty() {
+        run_goodies_download(&plan, &goodies, &folder, false).await;
+    }
+
     refresh_after_download().await;
     toast_album_outcome(&plan);
+}
+
+/// The catalog's goodies that carry a url — the only ones worth a request.
+fn catalog_goodies(catalog: &Album) -> Vec<qbz_models::Goody> {
+    catalog
+        .goodies
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|g| g.best_url().is_some())
+        .collect()
+}
+
+/// Fetch `goodies` into `folder`, driving the separate goodies counter (§14.3).
+/// Shared by the album download (unprompted, no toast of its own) and the
+/// "Download goodies" control (`toast` = true).
+async fn run_goodies_download(
+    plan: &DownloadPlan,
+    goodies: &[qbz_models::Goody],
+    folder: &std::path::Path,
+    toast: bool,
+) {
+    let total = goodies.len() as u32;
+    with_store(|st| {
+        let state = st.entry(&plan.album_id);
+        state.goodies_active = true;
+        state.goodies_done = 0;
+        state.goodies_total = total;
+    });
+    publish_album();
+
+    for goody in goodies {
+        // A goodie failure never fails anything: `download_goodie` returns
+        // `None` and logs, and the counter advances either way so the block
+        // cannot hang on "3 of 5".
+        if svc::download_goodie(goody, folder).await.is_none() {
+            log::warn!(
+                "[qbz-qt] purchases: goodie {:?} could not be downloaded",
+                goody.display_name()
+            );
+        }
+        with_store(|st| st.entry(&plan.album_id).goodies_done += 1);
+        publish_album();
+    }
+
+    with_store(|st| st.entry(&plan.album_id).goodies_active = false);
+    publish_album();
+    if toast {
+        crate::toast_qt::success(qbz_i18n::t("Download complete"));
+    }
 }
 
 /// THE LOOP — strictly sequential, CONCURRENCY 1, keyed by album id, honouring
@@ -2376,14 +2456,7 @@ pub fn download_goodies() {
     let Some(plan) = build_plan() else {
         return;
     };
-    let goodies: Vec<qbz_models::Goody> = plan
-        .catalog
-        .goodies
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|g| g.best_url().is_some())
-        .collect();
+    let goodies = catalog_goodies(&plan.catalog);
     if goodies.is_empty() {
         // Nothing to do and nothing to say: the affordance is hidden when the
         // list is empty, so reaching here at all means the document moved
@@ -2395,15 +2468,6 @@ pub fn download_goodies() {
         let Some(plan) = ensure_destination(plan).await else {
             return;
         };
-        let total = goodies.len() as u32;
-        with_store(|st| {
-            let state = st.entry(&plan.album_id);
-            state.goodies_active = true;
-            state.goodies_done = 0;
-            state.goodies_total = total;
-        });
-        publish_album();
-
         // The album folder the tracks went into, or the one they WOULD go into
         // — a booklet is worth downloading before any audio is.
         let folder = with_store(|st| {
@@ -2420,24 +2484,7 @@ pub fn download_goodies() {
                 &plan.quality_dir,
             )
         });
-
-        for goody in &goodies {
-            // A goodie failure never fails anything: `download_goodie` returns
-            // `None` and logs, and the counter advances either way so the block
-            // cannot hang on "3 of 5".
-            if svc::download_goodie(goody, &folder).await.is_none() {
-                log::warn!(
-                    "[qbz-qt] purchases: goodie {:?} could not be downloaded",
-                    goody.display_name()
-                );
-            }
-            with_store(|st| st.entry(&plan.album_id).goodies_done += 1);
-            publish_album();
-        }
-
-        with_store(|st| st.entry(&plan.album_id).goodies_active = false);
-        publish_album();
-        crate::toast_qt::success(qbz_i18n::t("Download complete"));
+        run_goodies_download(&plan, &goodies, &folder, true).await;
     });
 }
 
