@@ -316,7 +316,13 @@ pub fn purchase_formats(album: &Album, entitlement_ids: &[u32]) -> Vec<PurchaseF
     let top = menu.iter().map(|f| format_rank(f.id)).max().unwrap_or(0);
     for mut extra in synth_formats(album) {
         let owned = menu.iter().any(|f| f.id == extra.id);
-        if !owned && format_rank(extra.id) < top {
+        // The hi-res rungs (27/7) exist on the streaming side only when the
+        // catalog STREAMS hi-res. `album.hires` alone is not that: the live
+        // DSD album is hires:true with a 16/44.1 stream, and offering
+        // "[FLAC][24-bit,192kHz]" there wrote a folder by that name full of
+        // CD-quality files (smoke 2026-09-02).
+        let streams = !matches!(extra.id, 27 | 7) || album.hires_streamable;
+        if !owned && streams && format_rank(extra.id) < top {
             extra.streaming = true;
             menu.push(extra);
         }
@@ -1493,13 +1499,22 @@ mod tests {
         let menu = purchase_formats(&album, &[7, 6, 5]);
         let ids: Vec<(u32, bool)> = menu.iter().map(|f| (f.id, f.streaming)).collect();
         assert_eq!(ids, vec![(7, false), (6, false), (5, false)]);
-        // A DSD128 purchase on a hi-res catalog: 27/7/6/5 all sit below it.
-        let menu = purchase_formats(&album, &[56]);
+        // A DSD128 purchase on a catalog that STREAMS hi-res: 27/7/6/5 all
+        // sit below it.
+        let hires_streams = album_streaming(true, Some(192.0), true);
+        let menu = purchase_formats(&hires_streams, &[56]);
         let ids: Vec<(u32, bool)> = menu.iter().map(|f| (f.id, f.streaming)).collect();
         assert_eq!(
             ids,
             vec![(56, false), (27, true), (7, true), (6, true), (5, true)]
         );
+        // The same purchase on a catalog that streams CD only (the live DSD
+        // album: hires:true, hires_streamable:false): no 27/7 — the CDN would
+        // serve 16/44.1 under a "24-bit,192kHz" folder name.
+        let cd_streams = album_streaming(true, Some(352.8), false);
+        let menu = purchase_formats(&cd_streams, &[56]);
+        let ids: Vec<(u32, bool)> = menu.iter().map(|f| (f.id, f.streaming)).collect();
+        assert_eq!(ids, vec![(56, false), (6, true), (5, true)]);
     }
 
     #[test]
@@ -1623,6 +1638,14 @@ mod tests {
             None => format!(r#"{{"hires":{hires}}}"#),
         };
         serde_json::from_str(&json).expect("minimal Album JSON deserializes")
+    }
+
+    /// Like `album_with`, with the catalog's own word on whether hi-res
+    /// STREAMS (`hires_streamable`), which the streaming ladder reads.
+    fn album_streaming(hires: bool, max_sr: Option<f64>, hires_streamable: bool) -> Album {
+        let mut album = album_with(hires, max_sr);
+        album.hires_streamable = hires_streamable;
+        album
     }
 
     #[test]
