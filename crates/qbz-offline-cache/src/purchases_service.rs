@@ -608,6 +608,20 @@ fn tags_supported(extension: &str) -> bool {
     matches!(extension, "flac" | "mp3")
 }
 
+/// The artist FOLDER of a downloaded track: the album artist when the caller
+/// supplied the album context, else the track's own performer, else the
+/// reference's `"Unknown Artist"`. The ARTIST tag is a different question and
+/// keeps the performer (`tag_downloaded_file`): a Various-Artists compilation
+/// is one folder on disk and fourteen performers in its tags.
+pub fn path_artist(album_artist: Option<&str>, performer: Option<&str>) -> String {
+    album_artist
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| performer.map(str::trim).filter(|s| !s.is_empty()))
+        .unwrap_or("Unknown Artist")
+        .to_string()
+}
+
 /// Build the deterministic on-disk target path for a purchased track
 /// (§7.3, ported byte-for-byte from `v2_purchase_target_path`
 /// `legacy_compat.rs:2561-2592`):
@@ -1113,8 +1127,12 @@ fn goodie_target_path(album_dir: &std::path::Path, display_name: &str, url: &str
 ///      (`QobuzClient::download_audio_to_path`). A DSD128 track is ~650 MB; the
 ///      old `Vec<u8>` round trip held every byte in memory before the first
 ///      write.
-///   4. Resolve names: artist = `track.performer.name` else `"Unknown Artist"`;
-///      album = `track.album.title` else `"Singles"`.
+///   4. Resolve names: the artist FOLDER is the album artist from `ctx`
+///      (`path_artist`), so a compilation lands in ONE folder — the reference
+///      used `track.performer.name` here and split "Audiophile Analog
+///      Collection Vol.3" into fourteen artist folders of one track each
+///      (smoke 2026-09-01); the performer is only the fallback for a call
+///      without a context. Album = `track.album.title` else `"Singles"`.
 ///   5. Extension from the RESPONSE `format_id`/`mime_type` (B.2); the served
 ///      container's magic is checked before the `.part`→final rename; registry
 ///      write with the REQUESTED `format_id`.
@@ -1150,11 +1168,10 @@ pub async fn download_purchase_track(
         .await
         .map_err(|e| format!("Failed to get download URL for track {}: {}", track_id, e))?;
 
-    let artist_name = track
-        .performer
-        .as_ref()
-        .map(|artist| artist.name.clone())
-        .unwrap_or_else(|| "Unknown Artist".to_string());
+    let artist_name = path_artist(
+        ctx.map(|c| c.album_artist.as_str()),
+        track.performer.as_ref().map(|artist| artist.name.as_str()),
+    );
     let album_title = track
         .album
         .as_ref()
@@ -1465,6 +1482,19 @@ mod tests {
         for t in &built.tracks.unwrap().items {
             assert_eq!(t.downloadable_format_ids, vec![55]);
         }
+    }
+
+    // ── One folder per album, whoever performs the track ──────────────────
+
+    #[test]
+    fn the_artist_folder_is_the_album_artist_not_the_performer() {
+        assert_eq!(
+            path_artist(Some("Various Artists"), Some("Ben Webster")),
+            "Various Artists"
+        );
+        assert_eq!(path_artist(Some("  "), Some("Ben Webster")), "Ben Webster");
+        assert_eq!(path_artist(None, Some("Ben Webster")), "Ben Webster");
+        assert_eq!(path_artist(None, None), "Unknown Artist");
     }
 
     // ── The served container decides the extension ────────────────────────
