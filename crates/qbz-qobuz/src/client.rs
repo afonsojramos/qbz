@@ -425,6 +425,39 @@ impl QobuzClient {
         }
     }
 
+    /// Raw `POST /user/login` with an OAuth `user_auth_token`: HTTP status
+    /// and body, verbatim. Same request as [`Self::login_with_token`], but it
+    /// never parses the payload and never stores a session, so an account
+    /// the parser rejects today (`IneligibleUser`) can still be captured for
+    /// the redacted fixtures in `qbz-nix-docs/qobuz-api/`. Probe support
+    /// only (`examples/member_login_probe.rs`).
+    pub async fn login_with_token_raw(&self, token: &str) -> Result<(u16, String)> {
+        use reqwest::header::{HeaderMap, HeaderValue};
+
+        let app_id = self.app_id().await?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-App-Id",
+            HeaderValue::from_str(&app_id).map_err(|_| ApiError::InvalidAppId)?,
+        );
+        headers.insert(
+            "X-User-Auth-Token",
+            HeaderValue::from_str(token)
+                .map_err(|_| ApiError::AuthenticationError("Invalid token format".into()))?,
+        );
+        let response = self
+            .http
+            .post(endpoints::build_url(endpoints::paths::USER_LOGIN))
+            .headers(headers)
+            .header("Content-Type", "text/plain;charset=UTF-8")
+            .body("extra=partner")
+            .send()
+            .await?;
+        let status = response.status().as_u16();
+        let body = response.text().await?;
+        Ok((status, body))
+    }
+
     /// Check if logged in
     pub async fn is_logged_in(&self) -> bool {
         self.session.read().await.is_some()
@@ -455,9 +488,11 @@ impl QobuzClient {
     /// Exchange an OAuth code for a full user session.
     ///
     /// This implements the new Qobuz OAuth flow:
-    /// 1. GET /oauth/callback?code=CODE&private_key=KEY → { token }
-    /// 2. POST /user/login with X-User-Auth-Token: token, body=extra=partner → UserSession
-    pub async fn login_with_oauth_code(&self, code: &str) -> Result<UserSession> {
+    /// OAuth step 1 on its own: `GET /oauth/callback?code&private_key&app_id`
+    /// → the `user_auth_token`. Nothing is stored; `login_with_oauth_code`
+    /// is this plus the `/user/login` session fetch, and the member-mode
+    /// probe uses it alone so it can capture that second response raw.
+    pub async fn exchange_oauth_code(&self, code: &str) -> Result<String> {
         use reqwest::header::{HeaderMap, HeaderValue};
 
         let tokens = self.tokens.read().await;
@@ -468,9 +503,8 @@ impl QobuzClient {
         let private_key = tokens.private_key.clone().ok_or_else(|| {
             ApiError::BundleExtractionError("OAuth private key not available in bundle".to_string())
         })?;
-        let _ = tokens; // drop read lock
+        drop(tokens);
 
-        // Step 1: Exchange code for token
         let callback_url = endpoints::build_url(endpoints::paths::OAUTH_CALLBACK);
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -501,12 +535,23 @@ impl QobuzClient {
         }
 
         let callback_json: serde_json::Value = callback_response.json().await?;
-        let token = callback_json["token"]
+        callback_json["token"]
             .as_str()
+            .map(str::to_string)
             .ok_or_else(|| {
                 ApiError::ApiResponse("OAuth callback: no token in response".to_string())
-            })?
-            .to_string();
+            })
+    }
+
+    /// 1. GET /oauth/callback?code=CODE&private_key=KEY → { token }
+    /// 2. POST /user/login with X-User-Auth-Token: token, body=extra=partner → UserSession
+    pub async fn login_with_oauth_code(&self, code: &str) -> Result<UserSession> {
+        use reqwest::header::{HeaderMap, HeaderValue};
+
+        let app_id = self.app_id().await?;
+
+        // Step 1: Exchange code for token
+        let token = self.exchange_oauth_code(code).await?;
 
         log::info!("[OAuth] Got token, fetching user session via /user/login");
 
@@ -2462,6 +2507,38 @@ impl QobuzClient {
     // === Authenticated endpoints ===
 
     /// Get stream URL for a track (requires auth + signature)
+    /// Raw `/track/getFileUrl` (`intent=stream`): HTTP status and body,
+    /// verbatim, no parsing. Probe support only — the typed reader is
+    /// [`Self::get_stream_url`]. Same signing, same headers, same breaker.
+    pub async fn get_stream_url_raw(
+        &self,
+        track_id: u64,
+        quality: Quality,
+    ) -> Result<(u16, String)> {
+        self.forbidden_guard()?;
+        let url = endpoints::build_url(paths::TRACK_GET_FILE_URL);
+        let timestamp = get_timestamp();
+        let secret = self.secret().await?;
+        let signature = sign_get_file_url(track_id, quality.id(), timestamp, &secret);
+        let response = self
+            .http()?
+            .get(&url)
+            .headers(self.authenticated_headers().await?)
+            .query(&[
+                ("track_id", track_id.to_string()),
+                ("format_id", quality.id().to_string()),
+                ("intent", "stream".to_string()),
+                ("request_ts", timestamp.to_string()),
+                ("request_sig", signature),
+            ])
+            .send()
+            .await?;
+        let status = response.status();
+        self.note_forbidden_status(status);
+        let body = response.text().await?;
+        Ok((status.as_u16(), body))
+    }
+
     pub async fn get_stream_url(&self, track_id: u64, quality: Quality) -> Result<StreamUrl> {
         // Back off before the network if the 403 breaker is open (issue #637).
         self.forbidden_guard()?;
