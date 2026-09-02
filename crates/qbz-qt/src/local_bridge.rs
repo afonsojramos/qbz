@@ -2090,7 +2090,9 @@ fn media_kind(server: &QString) -> Option<qbz_app::settings::media_servers::Medi
 async fn run_media_sync(kind: qbz_app::settings::media_servers::MediaServerKind, full: bool) {
     use qbz_app::settings::media_servers::MediaServerKind;
     let result = match kind {
-        MediaServerKind::Jellyfin => crate::media_sync_qt::sync_jellyfin(full).await,
+        MediaServerKind::Jellyfin => crate::media_sync_qt::sync_jellyfin(full)
+            .await
+            .map_err(crate::media_sync_qt::SyncError::Failed),
         MediaServerKind::Subsonic => crate::media_sync_qt::sync_subsonic(full).await,
     };
     match result {
@@ -2107,6 +2109,12 @@ async fn run_media_sync(kind: qbz_app::settings::media_servers::MediaServerKind,
             crate::settings_qt::publish_snapshot().await;
             reload_browse();
         }
-        Err(e) => crate::toast_qt::error(e),
+        Err(crate::media_sync_qt::SyncError::ServerRefreshing { server, scanned }) => {
+            crate::toast_qt::info(qbz_i18n::t_args(
+                "{} is refreshing its library ({} items scanned). Wait for it to finish, then sync again.",
+                &[&server, &scanned.to_string()],
+            ));
+        }
+        Err(crate::media_sync_qt::SyncError::Failed(error)) => crate::toast_qt::error(error),
     }
 }

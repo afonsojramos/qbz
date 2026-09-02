@@ -55,6 +55,11 @@ pub struct LocalReport {
     /// The destination already had library folders: only missing folders
     /// were added; tracks and per-track links were not copied.
     pub needs_rescan: bool,
+    /// Meaningful Plex / Jellyfin / Subsonic connection records present in
+    /// the source stores. Default placeholder rows are deliberately excluded.
+    pub media_connections_found: usize,
+    /// Source connection records whose containing store copied successfully.
+    pub media_connections_copied: usize,
     /// Human-readable notes (missing source files, skipped tables).
     pub notes: Vec<String>,
 }
@@ -119,6 +124,60 @@ fn user_tables(conn: &Connection) -> Result<Vec<String>, String> {
         .filter_map(Result::ok)
         .collect();
     Ok(names)
+}
+
+/// Count rows that contain actual connection state rather than the empty
+/// placeholder inserted when a settings store is first opened. The candidate
+/// columns are intersected with the live schema so this also works with older
+/// QBZ profile databases.
+fn meaningful_connection_rows(
+    src_dir: &Path,
+    file: &str,
+    table: &str,
+    candidate_columns: &[&str],
+) -> Result<usize, String> {
+    let path = src_dir.join(file);
+    if !path.is_file() {
+        return Ok(0);
+    }
+    let conn = open_ro(&path)?;
+    let present = columns(&conn, table)?;
+    let present: HashSet<&str> = present.iter().map(String::as_str).collect();
+    let selected: Vec<&str> = candidate_columns
+        .iter()
+        .copied()
+        .filter(|column| present.contains(column))
+        .collect();
+    if selected.is_empty() {
+        return Ok(0);
+    }
+    let projection = selected
+        .iter()
+        .map(|column| format!("\"{column}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut statement = conn
+        .prepare(&format!("SELECT {projection} FROM \"{table}\""))
+        .map_err(|e| e.to_string())?;
+    let mut rows = statement.query([]).map_err(|e| e.to_string())?;
+    let mut count = 0;
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let mut meaningful = false;
+        for index in 0..selected.len() {
+            meaningful |= match row.get::<_, Value>(index).map_err(|e| e.to_string())? {
+                Value::Null => false,
+                Value::Integer(value) => value != 0,
+                Value::Real(value) => value != 0.0,
+                Value::Text(value) => {
+                    let value = value.trim();
+                    !value.is_empty() && value != "[]"
+                }
+                Value::Blob(value) => !value.is_empty(),
+            };
+        }
+        count += usize::from(meaningful);
+    }
+    Ok(count)
 }
 
 /// Copy one table by column intersection. `remap` names a column holding
@@ -598,10 +657,50 @@ pub fn copy_profile(
         }
     }
     if options.media_servers {
-        for file in ["media_servers.db", "plex_settings.db"] {
-            if let Err(e) = copy_store(src_dir, dst_dir, file, Conflict::Replace, &[], &mut report)
-            {
-                report.notes.push(format!("{file}: {e}"));
+        const CONNECTION_STORES: [(&str, &str, &[&str]); 2] = [
+            (
+                "media_servers.db",
+                "media_server_settings",
+                &[
+                    "enabled",
+                    "base_url",
+                    "server_name",
+                    "server_id",
+                    "username",
+                    "token",
+                    "password",
+                    "selected_libraries",
+                ],
+            ),
+            (
+                "plex_settings.db",
+                "plex_settings",
+                &[
+                    "enabled",
+                    "base_url",
+                    // Pre-profile schema used this name.
+                    "server_url",
+                    "token",
+                    "selected_section_key",
+                    "selected_section_keys",
+                    "machine_id",
+                ],
+            ),
+        ];
+        for (file, table, candidate_columns) in CONNECTION_STORES {
+            let found = match meaningful_connection_rows(src_dir, file, table, candidate_columns) {
+                Ok(found) => found,
+                Err(error) => {
+                    report.notes.push(format!(
+                        "{file}: could not inspect connection records: {error}"
+                    ));
+                    0
+                }
+            };
+            report.media_connections_found += found;
+            match copy_store(src_dir, dst_dir, file, Conflict::Replace, &[], &mut report) {
+                Ok(()) => report.media_connections_copied += found,
+                Err(e) => report.notes.push(format!("{file}: {e}")),
             }
         }
     }
@@ -816,7 +915,15 @@ mod tests {
             .unwrap();
         let ms_ddl = "CREATE TABLE media_server_settings (server TEXT PRIMARY KEY, token TEXT NOT NULL DEFAULT '');";
         db(&src_dir.join("media_servers.db"), ms_ddl)
-            .execute_batch("INSERT INTO media_server_settings VALUES ('jellyfin', 'secret');")
+            .execute_batch(
+                "INSERT INTO media_server_settings VALUES ('jellyfin', 'fixture-token');",
+            )
+            .unwrap();
+        let plex_ddl = "CREATE TABLE plex_settings (id INTEGER PRIMARY KEY CHECK (id = 1), server_url TEXT NOT NULL DEFAULT '', token TEXT NOT NULL DEFAULT '');";
+        db(&src_dir.join("plex_settings.db"), plex_ddl)
+            .execute_batch(
+                "INSERT INTO plex_settings VALUES (1, 'http://plex.test', 'fixture-plex-token');",
+            )
             .unwrap();
         std::fs::write(src_dir.join("lyrics_prefs.json"), "{\"font\":\"x\"}").unwrap();
 
@@ -856,12 +963,82 @@ mod tests {
         assert_eq!(flag, 1);
         // Media servers were opted out: nothing written.
         assert!(!dst_dir.join("media_servers.db").exists());
+        assert!(!dst_dir.join("plex_settings.db").exists());
         // JSON sidecar copied because absent.
         assert_eq!(report.copied["lyrics_prefs.json"], 1);
         assert!(dst_dir.join("lyrics_prefs.json").is_file());
         // Never-copied stores are not even created.
         assert!(!dst_dir.join("favorites_cache.db").exists());
         assert!(!dst_dir.join("subscription_state.db").exists());
+
+        // A later repair run with the option enabled must still copy both
+        // server stores, including credentials. This is the local-only rerun
+        // the UI now allows after the cloud plan reaches zero changes.
+        let repair = copy_profile(
+            &src_dir,
+            &dst_dir,
+            &Ledger::default(),
+            LocalOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(repair.media_connections_found, 2);
+        assert_eq!(repair.media_connections_copied, 2);
+        let media_token: String = Connection::open(dst_dir.join("media_servers.db"))
+            .unwrap()
+            .query_row(
+                "SELECT token FROM media_server_settings WHERE server = 'jellyfin'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(media_token, "fixture-token");
+        let plex: (String, String) = Connection::open(dst_dir.join("plex_settings.db"))
+            .unwrap()
+            .query_row("SELECT server_url, token FROM plex_settings", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(
+            plex,
+            ("http://plex.test".into(), "fixture-plex-token".into())
+        );
+    }
+
+    #[test]
+    fn empty_media_placeholders_are_not_reported_as_copied_connections() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("10");
+        let dst_dir = tmp.path().join("20");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&dst_dir).unwrap();
+        let media = "CREATE TABLE media_server_settings (
+            server TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0,
+            base_url TEXT NOT NULL DEFAULT '', token TEXT NOT NULL DEFAULT '',
+            username TEXT NOT NULL DEFAULT '', password TEXT NOT NULL DEFAULT '',
+            selected_libraries TEXT NOT NULL DEFAULT '');";
+        db(&src_dir.join("media_servers.db"), media)
+            .execute_batch(
+                "INSERT INTO media_server_settings (server) VALUES ('jellyfin'), ('subsonic');",
+            )
+            .unwrap();
+        let plex = "CREATE TABLE plex_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1), enabled INTEGER NOT NULL DEFAULT 0,
+            base_url TEXT NOT NULL DEFAULT '', token TEXT NOT NULL DEFAULT '',
+            selected_section_keys TEXT NOT NULL DEFAULT '[]');";
+        db(&src_dir.join("plex_settings.db"), plex)
+            .execute_batch("INSERT INTO plex_settings (id) VALUES (1);")
+            .unwrap();
+
+        let report = copy_profile(
+            &src_dir,
+            &dst_dir,
+            &Ledger::default(),
+            LocalOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(report.media_connections_found, 0);
+        assert_eq!(report.media_connections_copied, 0);
     }
 
     #[test]

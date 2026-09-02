@@ -63,7 +63,7 @@ Item {
         root.draftOverride = root.st.userOverrideNetwork === true
         root.draftFsIndex = root.st.fsTypeIndex || 0
         aliasField.text = root.draftAlias
-        keyScope.forceActiveFocus()
+        closeButton.forceActiveFocus()
     }
 
     function close() {
@@ -81,12 +81,9 @@ Item {
         }))
     }
 
-    // Esc dismiss. No visual and no MouseArea, so it never intercepts a press
-    // meant for the scrim (the QbzConfirmModal idiom).
-    FocusScope {
-        id: keyScope
-        anchors.fill: parent
-        Keys.onEscapePressed: root.close()
+    Keys.onEscapePressed: function (event) {
+        root.close()
+        event.accepted = true
     }
 
     // Scrim — click dismisses.
@@ -149,12 +146,28 @@ Item {
                     font.weight: theme.weightSemibold
                 }
                 Rectangle {
+                    id: closeButton
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     width: 28
                     height: 28
                     radius: theme.radiusSm
                     color: closeArea.containsMouse ? theme.surfaceHover : "transparent"
+                    activeFocusOnTab: root.visible
+                    border.width: activeFocus ? 2 : 0
+                    border.color: theme.accent
+                    Accessible.role: Accessible.Button
+                    Accessible.name: QbzSession.tr("Close", QbzSession.trRev)
+                    Accessible.onPressAction: root.close()
+                    Keys.onPressed: function (event) {
+                        if (!event.isAutoRepeat
+                                && (event.key === Qt.Key_Space
+                                    || event.key === Qt.Key_Return
+                                    || event.key === Qt.Key_Enter)) {
+                            root.close()
+                            event.accepted = true
+                        }
+                    }
                     QbzIcon {
                         anchors.centerIn: parent
                         name: "x"
@@ -167,6 +180,7 @@ Item {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
+                        onPressed: closeButton.forceActiveFocus()
                         onClicked: root.close()
                     }
                 }
@@ -422,11 +436,27 @@ Item {
                     // this same way (:218-232), including the
                     // `accentGlyphColor` selector for the label.
                     Rectangle {
+                        id: saveButton
                         anchors.verticalCenter: parent.verticalCenter
                         width: saveLabel.implicitWidth + 36
                         height: 36
                         radius: theme.radiusSm
                         color: saveArea.containsMouse ? theme.accentHover : theme.accent
+                        activeFocusOnTab: root.visible
+                        border.width: activeFocus ? 2 : 0
+                        border.color: theme.accentGlyphColor
+                        Accessible.role: Accessible.Button
+                        Accessible.name: QbzSession.tr("Save", QbzSession.trRev)
+                        Accessible.onPressAction: root.save()
+                        Keys.onPressed: function (event) {
+                            if (!event.isAutoRepeat
+                                    && (event.key === Qt.Key_Space
+                                        || event.key === Qt.Key_Return
+                                        || event.key === Qt.Key_Enter)) {
+                                root.save()
+                                event.accepted = true
+                            }
+                        }
                         Text {
                             id: saveLabel
                             anchors.centerIn: parent
@@ -440,6 +470,7 @@ Item {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
+                            onPressed: saveButton.forceActiveFocus()
                             onClicked: root.save()
                         }
                     }

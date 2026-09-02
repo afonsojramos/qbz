@@ -131,12 +131,32 @@ Column {
             anchors.verticalCenter: parent.verticalCenter
             spacing: 8
             Rectangle {
+                id: collapseButton
                 visible: root.state.enabled === true
                 width: 28
                 height: 28
                 radius: theme.radiusSm
                 anchors.verticalCenter: parent.verticalCenter
                 color: chevArea.containsMouse ? theme.surfaceHover : "transparent"
+                activeFocusOnTab: visible && enabled
+                border.width: activeFocus ? 2 : 0
+                border.color: theme.accent
+                Accessible.role: Accessible.Button
+                Accessible.name: root.title
+                Accessible.onPressAction: collapseButton.activate()
+                function activate() {
+                    QbzBridge.settingsBool(
+                        root.server + "-collapse", root.state.collapsed !== true)
+                }
+                Keys.onPressed: function (event) {
+                    if (!event.isAutoRepeat
+                            && (event.key === Qt.Key_Space
+                                || event.key === Qt.Key_Return
+                                || event.key === Qt.Key_Enter)) {
+                        collapseButton.activate()
+                        event.accepted = true
+                    }
+                }
                 QbzIcon {
                     anchors.centerIn: parent
                     name: root.state.collapsed === true ? "chevron-right" : "chevron-down"
@@ -149,8 +169,8 @@ Column {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.settingsBool(
-                        root.server + "-collapse", root.state.collapsed !== true)
+                    onPressed: collapseButton.forceActiveFocus()
+                    onClicked: collapseButton.activate()
                 }
             }
             QbzToggle {

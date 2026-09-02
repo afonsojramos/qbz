@@ -92,16 +92,35 @@ Column {
         spacing: 6
 
         Rectangle {
+            id: swatch
             width: 56
             height: 32
             radius: theme.radiusSm
-            border.width: cell.open ? 2 : 1
-            border.color: cell.open ? theme.accent : theme.borderSubtle
+            border.width: cell.open || swatch.activeFocus ? 2 : 1
+            border.color: cell.open || swatch.activeFocus
+                ? theme.accent : theme.borderSubtle
             color: root.tokenColor(cell.tokenKey)
+            activeFocusOnTab: visible && enabled
+            Accessible.role: Accessible.Button
+            Accessible.name: cell.label
+            Accessible.onPressAction: swatch.activate()
+            function activate() {
+                root.openToken = cell.open ? "" : cell.tokenKey
+            }
+            Keys.onPressed: function (event) {
+                if (!event.isAutoRepeat
+                        && (event.key === Qt.Key_Space
+                            || event.key === Qt.Key_Return
+                            || event.key === Qt.Key_Enter)) {
+                    swatch.activate()
+                    event.accepted = true
+                }
+            }
             MouseArea {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.openToken = cell.open ? "" : cell.tokenKey
+                onPressed: swatch.forceActiveFocus()
+                onClicked: swatch.activate()
             }
         }
         Text {

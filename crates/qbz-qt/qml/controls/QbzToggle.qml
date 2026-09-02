@@ -8,6 +8,8 @@ import com.blitzfc.qbz
 import "../theme"
 
 Rectangle {
+    id: root
+
     property bool checked: false
     property bool enabled: true
     signal toggled(bool value)
@@ -19,6 +21,25 @@ Rectangle {
     radius: 11
     color: checked ? theme.accent : theme.surfaceElevated
     opacity: enabled ? 1.0 : 0.4
+    activeFocusOnTab: enabled
+    Accessible.role: Accessible.CheckBox
+    Accessible.checked: checked
+    border.width: activeFocus ? 2 : 0
+    border.color: checked ? theme.accentGlyphColor : theme.accent
+
+    // Space is the conventional toggle key. Accepting it here is
+    // load-bearing: it prevents the event from bubbling to AppShell's global
+    // play/pause binding while this control owns keyboard focus.
+    Keys.onPressed: function (event) {
+        if (root.enabled && !event.isAutoRepeat
+                && (event.key === Qt.Key_Space
+                    || event.key === Qt.Key_Return
+                    || event.key === Qt.Key_Enter)) {
+            root.toggled(!root.checked)
+            event.accepted = true
+        }
+    }
+    Accessible.onToggleAction: if (root.enabled) root.toggled(!root.checked)
 
     Rectangle {
         width: 16
@@ -32,6 +53,7 @@ Rectangle {
     MouseArea {
         anchors.fill: parent
         cursorShape: parent.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onClicked: if (parent.enabled) parent.toggled(!parent.checked)
+        onPressed: if (root.enabled) root.forceActiveFocus()
+        onClicked: if (root.enabled) root.toggled(!root.checked)
     }
 }

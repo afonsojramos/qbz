@@ -936,8 +936,8 @@ impl Default for QbzShellRust {
             window_width,
             window_height,
             window_maximized: crate::settings_qt::window_maximized(),
-            window_min_width: crate::settings_qt::WINDOW_MIN_WIDTH,
-            window_min_height: crate::settings_qt::WINDOW_MIN_HEIGHT,
+            window_min_width: crate::settings_qt::window_min_size().0,
+            window_min_height: crate::settings_qt::window_min_size().1,
             reduce_motion: reduce_motion_at_boot(),
             // The tier starts GPU-capable: both platforms were MEASURED on the
             // GPU (OpenGL RHI / Metal, 2026-07-29), so it is the honest prior,

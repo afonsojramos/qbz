@@ -6489,3 +6489,95 @@ msgstr "移行したローカルプロファイルを表示するには QBZ を�
 
 msgid "The local profile could not be copied; see the log."
 msgstr "ローカルプロファイルをコピーできませんでした。ログを確認してください。"
+msgid "Delete…"
+msgstr "削除…"
+
+msgid "Delete migration snapshot?"
+msgstr "移行スナップショットを削除しますか？"
+
+msgid "This removes only the migration bundle. The old account's QBZ profile and user data are kept."
+msgstr "移行バンドルのみを削除します。以前のアカウントのQBZプロファイルとユーザーデータは保持されます。"
+
+msgid "Delete snapshot"
+msgstr "スナップショットを削除"
+
+msgid "Migration snapshot deleted."
+msgstr "移行スナップショットを削除しました。"
+
+msgid "Could not delete the migration snapshot."
+msgstr "移行スナップショットを削除できませんでした。"
+
+msgid "{} is refreshing its library ({} items scanned). Wait for it to finish, then sync again."
+msgstr "{} はライブラリを更新中です（{} 件をスキャン済み）。完了してからもう一度同期してください。"
+
+msgid "No Plex, Jellyfin or Subsonic connection was stored in the source profile, so none could be copied."
+msgstr "移行元プロファイルに Plex、Jellyfin、Subsonic の接続が保存されていなかったため、コピーできませんでした。"
+
+msgid "Media server connections copied: {} of {}."
+msgstr "メディアサーバー接続のコピー：{} / {}。"
+
+msgid "Copying local profile…"
+msgstr "ローカルプロファイルをコピーしています…"
+
+msgid "Refreshing migrated data…"
+msgstr "移行したデータを更新しています…"
+
+msgid "This only happens once. Please wait for it to finish and do not close the window."
+msgstr "この処理は一度だけ行われます。完了するまで待ち、ウィンドウを閉じないでください。"
+
+msgid "You can close this panel; the migration will continue in the background."
+msgstr "このパネルを閉じても、移行はバックグラウンドで続行されます。"
+
+msgid "From"
+msgstr "移行元"
+
+msgid "To"
+msgstr "移行先"
+
+msgid "Step {} of {}"
+msgstr "ステップ {} / {}"
+
+msgid "Elapsed: {}"
+msgstr "経過時間：{}"
+
+msgid "Review the saved source profiles, choose what to copy, and confirm the signed-in destination account."
+msgstr "保存済みの移行元プロファイルを確認し、コピーする項目を選択して、現在サインイン中の移行先アカウントを確認します。"
+
+msgid "Migrate account data"
+msgstr "アカウントデータを移行"
+
+msgid "Start migration"
+msgstr "移行を開始"
+
+msgid "What is a migration profile?"
+msgstr "移行プロファイルとは？"
+
+msgid "It is a one-time bundle created from the source account. It preserves that account's Qobuz favorites and playlists so they can be added to the account signed in now. Optional local data is copied directly from the old QBZ profile on this computer. Deleting the bundle does not delete the old profile or either account's data."
+msgstr "移行元アカウントから作成される一度限りのバンドルです。そのアカウントのQobuzのお気に入りとプレイリストを保存し、現在サインイン中のアカウントに追加できます。任意のローカルデータは、このコンピューター上の古いQBZプロファイルから直接コピーされます。バンドルを削除しても、古いプロファイルや各アカウントのデータは削除されません。"
+
+msgid "SAVED SOURCE PROFILES"
+msgstr "保存済みの移行元プロファイル"
+
+msgid "No saved migration profiles are available."
+msgstr "利用できる保存済み移行プロファイルはありません。"
+
+msgid "Selected"
+msgstr "選択済み"
+
+msgid "Select"
+msgstr "選択"
+
+msgid "MIGRATION DIRECTION"
+msgstr "移行方向"
+
+msgid "Select a source profile above"
+msgstr "上で移行元プロファイルを選択してください"
+
+msgid "Signed-in Qobuz account · ID {}"
+msgstr "サインイン中のQobuzアカウント · ID {}"
+
+msgid "WHAT TO COPY"
+msgstr "コピーする項目"
+
+msgid "Migration is additive: it does not remove favorites or playlists from either account."
+msgstr "移行は追加のみです。どちらのアカウントからもお気に入りやプレイリストは削除されません。"

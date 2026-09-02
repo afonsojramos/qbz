@@ -44,6 +44,7 @@ Item {
     function open() {
         root.draftOrder = root.storedOrder()
         root._open = true
+        Qt.callLater(function () { closeButton.forceActiveFocus() })
     }
 
     function close() { root._open = false }
@@ -74,6 +75,10 @@ Item {
     visible: root._open
     enabled: root._open
     z: 3100
+    Keys.onEscapePressed: function (event) {
+        root.close()
+        event.accepted = true
+    }
 
     Rectangle {
         anchors.fill: parent
@@ -122,12 +127,28 @@ Item {
                     font.weight: theme.weightSemibold
                 }
                 Rectangle {
+                    id: closeButton
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     width: 28
                     height: 28
                     radius: 6
                     color: closeArea.containsMouse ? theme.surfaceHover : "transparent"
+                    activeFocusOnTab: root.opened
+                    border.width: activeFocus ? 2 : 0
+                    border.color: theme.accent
+                    Accessible.role: Accessible.Button
+                    Accessible.name: QbzSession.tr("Close", QbzSession.trRev)
+                    Accessible.onPressAction: root.close()
+                    Keys.onPressed: function (event) {
+                        if (!event.isAutoRepeat
+                                && (event.key === Qt.Key_Space
+                                    || event.key === Qt.Key_Return
+                                    || event.key === Qt.Key_Enter)) {
+                            root.close()
+                            event.accepted = true
+                        }
+                    }
                     QbzIcon {
                         anchors.centerIn: parent
                         name: "x"
@@ -140,6 +161,7 @@ Item {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
+                        onPressed: closeButton.forceActiveFocus()
                         onClicked: root.close()
                     }
                 }
@@ -234,12 +256,30 @@ Item {
             }
 
             Rectangle {
+                id: resetButton
                 width: resetRow.width + 24
                 height: 34
                 radius: theme.radiusSm
                 color: resetArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
                 border.width: 1
-                border.color: theme.borderSubtle
+                border.color: activeFocus ? theme.accent : theme.borderSubtle
+                activeFocusOnTab: root.opened
+                Accessible.role: Accessible.Button
+                Accessible.name: QbzSession.tr("Reset to defaults", QbzSession.trRev)
+                Accessible.onPressAction: resetButton.activate()
+                function activate() {
+                    root.draftOrder = root.defaultOrder.slice()
+                    QbzBridge.settingsString("local-tab-order-reset", "")
+                }
+                Keys.onPressed: function (event) {
+                    if (!event.isAutoRepeat
+                            && (event.key === Qt.Key_Space
+                                || event.key === Qt.Key_Return
+                                || event.key === Qt.Key_Enter)) {
+                        resetButton.activate()
+                        event.accepted = true
+                    }
+                }
                 Row {
                     id: resetRow
                     anchors.centerIn: parent
@@ -263,10 +303,8 @@ Item {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        root.draftOrder = root.defaultOrder.slice()
-                        QbzBridge.settingsString("local-tab-order-reset", "")
-                    }
+                    onPressed: resetButton.forceActiveFocus()
+                    onClicked: resetButton.activate()
                 }
             }
         }
@@ -284,6 +322,20 @@ Item {
         opacity: reorderRoot.buttonEnabled ? 1.0 : 0.3
         color: reorderRoot.buttonEnabled && reorderArea.containsMouse
             ? theme.surfaceHover : "transparent"
+        activeFocusOnTab: reorderRoot.buttonEnabled
+        border.width: activeFocus ? 2 : 0
+        border.color: theme.accent
+        Accessible.role: Accessible.Button
+        Accessible.onPressAction: if (reorderRoot.buttonEnabled) reorderRoot.clicked()
+        Keys.onPressed: function (event) {
+            if (reorderRoot.buttonEnabled && !event.isAutoRepeat
+                    && (event.key === Qt.Key_Space
+                        || event.key === Qt.Key_Return
+                        || event.key === Qt.Key_Enter)) {
+                reorderRoot.clicked()
+                event.accepted = true
+            }
+        }
 
         QbzIcon {
             anchors.centerIn: parent
@@ -298,6 +350,7 @@ Item {
             enabled: reorderRoot.buttonEnabled
             hoverEnabled: reorderRoot.buttonEnabled
             cursorShape: reorderRoot.buttonEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            onPressed: reorderRoot.forceActiveFocus()
             onClicked: reorderRoot.clicked()
         }
     }

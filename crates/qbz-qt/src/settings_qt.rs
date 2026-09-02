@@ -1003,9 +1003,8 @@ pub fn show_context_icon() -> bool {
 // main.rs:1399-1435). SAME shared file, SAME types: the sizes are JSON floats
 // holding LOGICAL (device-independent) pixels, the flag is a bool. Both
 // frontends read each other's numbers, so a type or unit change here silently
-// corrupts the Slint profile — and "unit" includes the interface-size preset,
-// which Slint bakes into its scale factor and this frontend does not
-// (`ui_scale_factor_for` converts; identity under the default preset).
+// corrupts the shared profile — and "unit" includes the interface-size
+// preset. Both frontends now bake it into their native high-DPI scale.
 //
 // Why this exists at all: Main.qml used to hardcode 1280x800 and never save,
 // so the Qt build opened one responsive tier below the Slint build on the same
@@ -1026,42 +1025,19 @@ pub fn show_context_icon() -> bool {
 /// `min-width: 940px / UiScale.factor` and the restore clamp repeats it at
 /// `main.rs:8214-8215`.
 ///
-/// It stays a FLAT 940 here because the divisor is mirrored in the unit
-/// conversion instead (see `ui_scale_factor_for`), not in the gate: the Qt
-/// POC applies no interface-size preset, so its logical pixel IS the
-/// preset-free one, and 940 preset-free pixels is exactly what Slint's
-/// `940 / factor` scaled-logical minimum comes out to.
+/// The constants are the preset-free physical floor. [`window_min_size`]
+/// converts them to Qt's scaled logical coordinate system at startup.
 pub const WINDOW_MIN_WIDTH: f32 = 940.0;
 pub const WINDOW_MIN_HEIGHT: f32 = 600.0;
 
 /// The interface-size preset factor for a persisted `ui_scale` slug — the SAME
 /// table as Slint's `ui_prefs::ui_scale_factor` (ui_prefs.rs:243-251).
 ///
-/// Why this matters for geometry: Slint bakes the preset into its scale factor
-/// (`SLINT_SCALE_FACTOR = last_dpr * factor`, main.rs:8354-8362), so the
-/// `window_width` it stores is `physical / (dpr * factor)`. Qt applies no
-/// preset, so ITS logical pixel is `physical / dpr`. The two numbers are the
-/// same window only after multiplying by the factor:
-///
-///   qt_logical = slint_logical * factor
-///
-/// which is why the restore multiplies and the save divides. Under the default
-/// preset the factor is exactly 1.0 and both are identities — nothing about
-/// the owner's current profile changes.
-///
-/// Why NOT the alternative (refuse to write while the preset is non-default):
-/// it fixes the corruption but leaves geometry restore silently dead for every
-/// non-default user, and it would have to keep refusing forever, whereas the
-/// conversion is exact. Its one assumption is that both frontends see the same
-/// display DPR — the same assumption Slint's own `last_dpr` bake-in makes, and
-/// wrong only for a window dragged between mismatched monitors between runs,
-/// where the WM clamp catches it anyway.
-///
-/// Mirroring only the GATES (940 / factor on both sides, no conversion) would
-/// be wrong here: a value Slint saved at 752 scaled-logical would then pass and
-/// be applied as a 752-pixel Qt window — below the app's real minimum, because
-/// Qt's content does not shrink with the preset the way the `.slint` bindings
-/// do.
+/// Qt receives this factor before `QGuiApplication` is constructed, through
+/// `QT_SCALE_FACTOR`. It therefore uses the same scaled-logical coordinate
+/// system as the persisted geometry: text, vector graphics and controls are
+/// laid out and rasterized at the effective DPR instead of enlarging a
+/// finished scene texture.
 fn ui_scale_factor_for(slug: &str) -> f32 {
     match slug {
         "xs" => 0.8,
@@ -1072,6 +1048,62 @@ fn ui_scale_factor_for(slug: &str) -> f32 {
     }
 }
 
+/// The persisted interface-size multiplier consumed before Qt starts.
+pub fn ui_scale_factor() -> f32 {
+    ui_scale_factor_for(&pref_str("ui_scale", "default"))
+}
+
+/// The factor Qt is actually using. Normally `main` writes the persisted
+/// preset into `QT_SCALE_FACTOR`, so this equals [`ui_scale_factor`]. Keeping
+/// the explicit-environment case exact matters for developer DPI tests: the
+/// shared geometry must not be rewritten in the override's units.
+fn qt_effective_scale_factor() -> f32 {
+    std::env::var("QT_SCALE_FACTOR")
+        .ok()
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or_else(ui_scale_factor)
+}
+
+/// The app floor in Qt's native high-DPI logical coordinates. Multiplying the
+/// result by the interface factor returns the same 940x600 baseline on every
+/// preset, matching the reference frontend's `min-width / UiScale.factor`.
+pub fn window_min_size() -> (f32, f32) {
+    let factor = qt_effective_scale_factor();
+    (WINDOW_MIN_WIDTH / factor, WINDOW_MIN_HEIGHT / factor)
+}
+
+/// Change the scale slug while keeping the persisted native window footprint
+/// stable. Stored geometry is expressed in Slint scaled-logical units, so a
+/// slug change without this rebase would make the next launch multiply the old
+/// units by the new factor and unexpectedly resize the window.
+fn set_ui_scale_in_doc(doc: &mut serde_json::Map<String, serde_json::Value>, slug: &str) -> bool {
+    let old_slug = doc
+        .get("ui_scale")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("default");
+    if old_slug == slug {
+        return false;
+    }
+    let ratio = ui_scale_factor_for(old_slug) as f64 / ui_scale_factor_for(slug) as f64;
+    for key in ["window_width", "window_height"] {
+        if let Some(value) = doc.get(key).and_then(serde_json::Value::as_f64) {
+            if value.is_finite() && value > 0.0 {
+                doc.insert(key.to_string(), serde_json::Value::from(value * ratio));
+            }
+        }
+    }
+    doc.insert(
+        "ui_scale".to_string(),
+        serde_json::Value::String(slug.to_string()),
+    );
+    true
+}
+
+fn save_ui_scale(slug: &str) {
+    update_prefs(|doc| set_ui_scale_in_doc(doc, slug));
+}
+
 /// The never-saved size. 1180x760 is both `app.slint:47-48`'s preferred size
 /// (what Slint falls back to by doing nothing) and the literal Slint plugs in
 /// at `main.rs:8223-8224` when it has to size the window itself. One number
@@ -1079,9 +1111,9 @@ fn ui_scale_factor_for(slug: &str) -> f32 {
 pub const WINDOW_DEFAULT_WIDTH: f32 = 1180.0;
 pub const WINDOW_DEFAULT_HEIGHT: f32 = 760.0;
 
-/// Restored floating size in QT logical pixels, one file read for both axes
-/// AND the preset they were written under (`ui_scale_factor_for`) — one
-/// document backs all three, so a preset change mid-read cannot mix units.
+/// Restored floating size in Qt high-DPI logical pixels. Qt and the persisted
+/// document now use the same interface-size-aware coordinate system, so no
+/// second conversion is allowed here.
 ///
 /// The all-or-nothing gate is Slint's `has_saved_size` (main.rs:8220-8221):
 /// BOTH axes must clear the minimum or the pair counts as never saved. A
@@ -1118,7 +1150,8 @@ pub fn window_size() -> (f32, f32) {
     let floor_w = (WINDOW_MIN_WIDTH / factor).min(WINDOW_MIN_WIDTH);
     let floor_h = (WINDOW_MIN_HEIGHT / factor).min(WINDOW_MIN_HEIGHT);
     if stored_w >= floor_w && stored_h >= floor_h {
-        (stored_w * factor, stored_h * factor)
+        let qt_factor = qt_effective_scale_factor();
+        (stored_w * factor / qt_factor, stored_h * factor / qt_factor)
     } else {
         (WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
     }
@@ -1159,19 +1192,17 @@ pub fn save_window_geometry(width: f32, height: f32, maximized: bool, fullscreen
         return;
     }
     update_prefs(|doc| {
-        // The preset comes out of the SAME document the sizes go into, so the
-        // stored value and the unit it is stored in can never disagree.
-        // `width`/`height` arrive in QT logical pixels; the file speaks SLINT
-        // scaled-logical (see `ui_scale_factor_for`), so divide on the way in
-        // exactly as `window_size` multiplies on the way out. Identity under
-        // the default preset.
+        // Qt normally receives this same persisted factor before
+        // QGuiApplication starts. An explicit QT_SCALE_FACTOR is allowed for
+        // diagnostics, so convert between the two only in that override case.
         let factor = ui_scale_factor_for(
             doc.get("ui_scale")
                 .and_then(|v| v.as_str())
                 .unwrap_or("default"),
         );
-        let stored_width = width / factor;
-        let stored_height = height / factor;
+        let qt_factor = qt_effective_scale_factor();
+        let stored_width = width * qt_factor / factor;
+        let stored_height = height * qt_factor / factor;
 
         // Read the three previous values first — the dirty comparison decides
         // whether the document is touched at all, and it compares stored
@@ -1189,12 +1220,11 @@ pub fn save_window_geometry(width: f32, height: f32, maximized: bool, fullscreen
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0) as f32;
 
-        // The minimum is checked in QT pixels (the frame we were actually
-        // handed); `WINDOW_MIN_*` is already the preset-free floor.
+        // The minimum is checked in Qt's scaled logical pixels.
         let size_dirty = !maximized
             && !fullscreen
-            && width >= WINDOW_MIN_WIDTH
-            && height >= WINDOW_MIN_HEIGHT
+            && width >= WINDOW_MIN_WIDTH / qt_factor
+            && height >= WINDOW_MIN_HEIGHT / qt_factor
             && ((prev_width - stored_width).abs() > 0.5
                 || (prev_height - stored_height).abs() > 0.5);
         if !size_dirty && was_maximized == maximized {
@@ -3964,8 +3994,8 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             let Some(scale) = UI_SCALE_VALUES.get(index) else {
                 return;
             };
-            save_pref("ui_scale", serde_json::json!(scale));
-            log::info!("[qbz-qt] ui_scale -> {scale} (restart to apply)");
+            save_ui_scale(scale);
+            log::info!("[qbz-qt] ui_scale -> {scale} (applies at next start)");
         }
         "immersive-search-action" => {
             let Some(v) = IMMERSIVE_SEARCH_VALUES.get(index) else {
@@ -4259,6 +4289,7 @@ pub async fn settings_string(key: &str, value: String) {
         "export-blacklist" => import_export::export_blacklist().await,
         "import-blacklist" => import_export::import_blacklist().await,
         "account-snapshot" => import_export::create_snapshot().await,
+        "account-delete-snapshot" => import_export::delete_snapshot(value).await,
         "account-migrate" => import_export::migrate(value).await,
         other => log::warn!("[qbz-qt] unknown settings string key: {other}"),
     }
@@ -4355,6 +4386,33 @@ mod local_tab_order_tests {
             normalize_local_tab_order(Some(&serde_json::json!("albums"))),
             expected
         );
+    }
+
+    #[test]
+    fn changing_interface_scale_preserves_the_native_window_footprint() {
+        let mut doc = serde_json::json!({
+            "ui_scale": "small",
+            "window_width": 1200.0,
+            "window_height": 700.0
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let native_before = (
+            doc["window_width"].as_f64().unwrap() * ui_scale_factor_for("small") as f64,
+            doc["window_height"].as_f64().unwrap() * ui_scale_factor_for("small") as f64,
+        );
+
+        assert!(set_ui_scale_in_doc(&mut doc, "xl"));
+
+        let native_after = (
+            doc["window_width"].as_f64().unwrap() * ui_scale_factor_for("xl") as f64,
+            doc["window_height"].as_f64().unwrap() * ui_scale_factor_for("xl") as f64,
+        );
+        assert!((native_before.0 - native_after.0).abs() < 0.001);
+        assert!((native_before.1 - native_after.1).abs() < 0.001);
+        assert_eq!(doc["ui_scale"].as_str(), Some("xl"));
+        assert!(!set_ui_scale_in_doc(&mut doc, "xl"));
     }
 
     #[test]

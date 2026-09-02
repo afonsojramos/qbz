@@ -70,16 +70,16 @@ Item {
         root._open = true
         // AFTER _open, so `visible` is already true — an invisible item cannot
         // take active focus and the Esc handler would be dead.
-        keyScope.forceActiveFocus()
+        Qt.callLater(function () { cancelButton.forceActiveFocus() })
     }
     function close() {
         root._open = false
         root._restoreShellFocus()
     }
-    // §1.4.3 (2026-08-03 hotkeys-port contract): keyScope GRABS focus on open
-    // and Qt strands activeFocus on the now-invisible item at close, which
-    // kills the AppShell key dispatcher until the next click. Restore the
-    // shell root — the dispatcher's fallback focus item — on every close
+    // §1.4.3 (2026-08-03 hotkeys-port contract): a modal control GRABS focus
+    // on open and Qt strands activeFocus on that now-invisible item at close,
+    // which kills the AppShell key dispatcher until the next click. Restore
+    // the shell root — the dispatcher's fallback focus item — on every close
     // path. Duck-walk, because this modal mounts under several parents (the
     // Blacklist manager, FolderModals, MyQBZ delete).
     function _restoreShellFocus() {
@@ -105,15 +105,9 @@ Item {
     enabled: root._open
     z: 3100
 
-    // Esc dismiss (the Slint esc-scope FocusScope, :1006-1017). No visual and
-    // no MouseArea, so it never intercepts a press meant for the scrim.
-    FocusScope {
-        id: keyScope
-        anchors.fill: parent
-        Keys.onEscapePressed: function (event) {
-            root._cancel()
-            event.accepted = true
-        }
+    Keys.onEscapePressed: function (event) {
+        root._cancel()
+        event.accepted = true
     }
 
     // Scrim. `radius` is load-bearing, not decoration: this Item fills the
@@ -197,11 +191,29 @@ Item {
                     spacing: 10
 
                     Rectangle {
+                        id: cancelButton
                         width: cancelLbl.implicitWidth + 32
                         height: 36
                         radius: theme.radiusSm
                         color: cancelArea.containsMouse ? theme.surfaceHover
                                                         : theme.surfaceElevated
+                        activeFocusOnTab: root.opened
+                        border.width: activeFocus ? 2 : 0
+                        border.color: theme.accent
+                        Accessible.role: Accessible.Button
+                        Accessible.name: root.cancelLabel
+                        Accessible.onPressAction: root._cancel()
+                        KeyNavigation.tab: confirmButton
+                        KeyNavigation.backtab: confirmButton
+                        Keys.onPressed: function (event) {
+                            if (!event.isAutoRepeat
+                                    && (event.key === Qt.Key_Space
+                                        || event.key === Qt.Key_Return
+                                        || event.key === Qt.Key_Enter)) {
+                                root._cancel()
+                                event.accepted = true
+                            }
+                        }
                         Text {
                             id: cancelLbl
                             anchors.centerIn: parent
@@ -214,10 +226,12 @@ Item {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
+                            onPressed: cancelButton.forceActiveFocus()
                             onClicked: root._cancel()
                         }
                     }
                     Rectangle {
+                        id: confirmButton
                         width: confirmLbl.implicitWidth + 32
                         height: 36
                         radius: theme.radiusSm
@@ -225,6 +239,23 @@ Item {
                             ? (confirmArea.containsMouse ? Qt.darker(theme.danger, 1.12)
                                                          : theme.danger)
                             : (confirmArea.containsMouse ? theme.accentHover : theme.accent)
+                        activeFocusOnTab: root.opened
+                        border.width: activeFocus ? 2 : 0
+                        border.color: root.danger ? "#ffffff" : theme.accentGlyphColor
+                        Accessible.role: Accessible.Button
+                        Accessible.name: root.confirmLabel
+                        Accessible.onPressAction: root._confirm()
+                        KeyNavigation.tab: cancelButton
+                        KeyNavigation.backtab: cancelButton
+                        Keys.onPressed: function (event) {
+                            if (!event.isAutoRepeat
+                                    && (event.key === Qt.Key_Space
+                                        || event.key === Qt.Key_Return
+                                        || event.key === Qt.Key_Enter)) {
+                                root._confirm()
+                                event.accepted = true
+                            }
+                        }
                         Text {
                             id: confirmLbl
                             anchors.centerIn: parent
@@ -244,6 +275,7 @@ Item {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
+                            onPressed: confirmButton.forceActiveFocus()
                             onClicked: root._confirm()
                         }
                     }

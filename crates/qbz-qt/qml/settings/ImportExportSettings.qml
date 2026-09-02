@@ -20,6 +20,8 @@ Column {
     id: root
 
     property var doc: ({})
+    /// View-level migration setup surface. Kept nullable for isolated previews.
+    property var migrationSetupModal: null
     readonly property var ie: doc.importExport || ({})
 
     QbzTheme { id: theme }
@@ -129,74 +131,13 @@ Column {
     SettingRow {
         label: QbzSession.tr("Migrate into this account", QbzSession.trRev)
         description: (root.ie.snapshots || []).length > 0
-            ? QbzSession.tr("Sign in with the account you are moving TO, then pick a snapshot below. Safe to repeat: a second run adds nothing.", QbzSession.trRev)
+            ? QbzSession.tr("Review the saved source profiles, choose what to copy, and confirm the signed-in destination account.", QbzSession.trRev)
             : QbzSession.tr("No snapshots yet. Sign in with the old account and create one first.", QbzSession.trRev)
-    }
-    // What the local half carries besides library, playlist folders, pinned
-    // items, blacklist and preferences. Asked every time, all on by
-    // default (owner decision 2026-09-02); session state, not persisted.
-    property bool copyLocalProfile: true
-    property bool copyMediaServers: true
-    property bool copyScrobblers: true
-    property bool copyListeningHistory: true
-    SettingRow {
-        label: QbzSession.tr("Also copy the local profile", QbzSession.trRev)
-        description: QbzSession.tr("Library folders, playlist folders and order, pinned items, blacklist and preferences of the old account's QBZ profile on this computer.", QbzSession.trRev)
-        QbzToggle {
-            checked: root.copyLocalProfile
-            onToggled: function (v) { root.copyLocalProfile = v }
-        }
-    }
-    SettingRow {
-        rowEnabled: root.copyLocalProfile
-        label: QbzSession.tr("Media server connections", QbzSession.trRev)
-        description: QbzSession.tr("Plex, Jellyfin and Subsonic settings, including their credentials.", QbzSession.trRev)
-        QbzToggle {
-            checked: root.copyMediaServers
-            onToggled: function (v) { root.copyMediaServers = v }
-        }
-    }
-    SettingRow {
-        rowEnabled: root.copyLocalProfile
-        label: QbzSession.tr("Scrobbler accounts", QbzSession.trRev)
-        description: QbzSession.tr("Last.fm and ListenBrainz settings, including their credentials.", QbzSession.trRev)
-        QbzToggle {
-            checked: root.copyScrobblers
-            onToggled: function (v) { root.copyScrobblers = v }
-        }
-    }
-    SettingRow {
-        rowEnabled: root.copyLocalProfile
-        label: QbzSession.tr("Listening history", QbzSession.trRev)
-        description: QbzSession.tr("The listen log and the events behind offline recommendations.", QbzSession.trRev)
-        QbzToggle {
-            checked: root.copyListeningHistory
-            onToggled: function (v) { root.copyListeningHistory = v }
-        }
-    }
-    Repeater {
-        model: root.ie.snapshots || []
-        delegate: SettingRow {
-            required property var modelData
-            label: modelData.label
-            description: QbzSession.tr("{} favorites · {} playlists · {} followed", QbzSession.trRev)
-                .replace("{}", modelData.favorites)
-                .replace("{}", modelData.playlists)
-                .replace("{}", modelData.subscriptions)
-                + (modelData.isCurrentAccount
-                    ? " · " + QbzSession.tr("this account", QbzSession.trRev)
-                    : "")
-            SettingsButton {
-                text: QbzSession.tr("Migrate…", QbzSession.trRev)
-                enabled: !root.ie.migrationBusy && !modelData.isCurrentAccount
-                onClicked: QbzBridge.settingsString("account-migrate", JSON.stringify({
-                    path: modelData.path,
-                    local_profile: root.copyLocalProfile,
-                    media_servers: root.copyMediaServers,
-                    scrobblers: root.copyScrobblers,
-                    listening_history: root.copyListeningHistory
-                }))
-            }
+        SettingsButton {
+            text: QbzSession.tr("Migrate…", QbzSession.trRev)
+            enabled: !root.ie.migrationBusy
+                && (root.ie.snapshots || []).length > 0
+            onClicked: if (root.migrationSetupModal) root.migrationSetupModal.open()
         }
     }
     Text {

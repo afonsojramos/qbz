@@ -133,12 +133,32 @@ Column {
             anchors.verticalCenter: parent.verticalCenter
             spacing: 8
             Rectangle {
+                id: collapseButton
                 visible: QbzLocal.plexEnabled
                 width: 28
                 height: 28
                 radius: theme.radiusSm
                 anchors.verticalCenter: parent.verticalCenter
                 color: chevArea.containsMouse ? theme.surfaceHover : "transparent"
+                activeFocusOnTab: visible && enabled
+                border.width: activeFocus ? 2 : 0
+                border.color: theme.accent
+                Accessible.role: Accessible.Button
+                Accessible.name: "Plex"
+                Accessible.onPressAction: collapseButton.activate()
+                function activate() {
+                    QbzBridge.settingsBool(
+                        "plex-collapse", root.plex.collapsed !== true)
+                }
+                Keys.onPressed: function (event) {
+                    if (!event.isAutoRepeat
+                            && (event.key === Qt.Key_Space
+                                || event.key === Qt.Key_Return
+                                || event.key === Qt.Key_Enter)) {
+                        collapseButton.activate()
+                        event.accepted = true
+                    }
+                }
                 QbzIcon {
                     anchors.centerIn: parent
                     name: root.plex.collapsed === true ? "chevron-right" : "chevron-down"
@@ -151,7 +171,8 @@ Column {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.settingsBool("plex-collapse", root.plex.collapsed !== true)
+                    onPressed: collapseButton.forceActiveFocus()
+                    onClicked: collapseButton.activate()
                 }
             }
             QbzToggle {
