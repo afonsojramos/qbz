@@ -25,6 +25,9 @@ Rectangle {
 
     /// One row of `list_json.albums` (§G.2).
     property var album: ({})
+    /// Row index — the odd-row zebra every other list in the app draws
+    /// (views/AlbumListRow.qml).
+    property int rowIndex: 0
     signal clicked()
 
     QbzTheme { id: theme }
@@ -35,7 +38,7 @@ Rectangle {
 
     /// Column widths, shared with PurchaseListHeader so the labels sit on
     /// their columns.
-    readonly property int colQuality: 110
+    readonly property int colQuality: 150
     readonly property int colReleased: 120
     readonly property int colPurchased: 130
 
@@ -74,7 +77,8 @@ Rectangle {
     width: parent ? parent.width : 0
     height: 60
     radius: theme.radiusSm
-    color: (rowArea.containsMouse && root.avail) ? theme.surfaceHover : "transparent"
+    color: (rowArea.containsMouse && root.avail) ? theme.surfaceHover
+         : (root.rowIndex % 2 === 1 ? theme.alphaTier(4) : "transparent")
     opacity: root.avail ? 1.0 : 0.5
 
     MouseArea {

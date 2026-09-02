@@ -500,8 +500,10 @@ Rectangle {
                     model: (!root.albumsTab && !root.grouped) ? root.tracks : []
                     delegate: PurchaseTrackRow {
                         required property var modelData
+                        required property int index
                         width: page.contentW
                         track: modelData
+                        rowIndex: index
                         onPlayRequested: QbzPlayer.playTrack(modelData.id || "")
                     }
                 }
@@ -534,8 +536,10 @@ Rectangle {
                                 model: modelData.items
                                 delegate: PurchaseTrackRow {
                                     required property var modelData
+                                    required property int index
                                     width: parent ? parent.width : 0
                                     track: modelData
+                                    rowIndex: index
                                     onPlayRequested: QbzPlayer.playTrack(modelData.id || "")
                                 }
                             }

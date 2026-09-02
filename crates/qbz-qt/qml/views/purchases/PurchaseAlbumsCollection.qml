@@ -95,8 +95,10 @@ Item {
             model: root.viewMode === "list" ? root.albums : []
             delegate: PurchaseListRow {
                 required property var modelData
+                required property int index
                 width: parent ? parent.width : 0
                 album: modelData
+                rowIndex: index
                 onClicked: root.openAlbum(modelData.id || "")
             }
         }

@@ -14,7 +14,7 @@ Item {
 
     function t(s) { return QbzSession.tr(s, QbzSession.trRev) }
 
-    readonly property int colQuality: 110
+    readonly property int colQuality: 150
     readonly property int colReleased: 120
     readonly property int colPurchased: 130
 

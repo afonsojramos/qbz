@@ -129,6 +129,10 @@ pub mod qbz_purchases_bridge {
         #[qinvokable]
         fn set_quality_filter(self: Pin<&mut QbzPurchases>, value: QString);
 
+        /// The genre filter (albums tab). Transient; `""` = all genres.
+        #[qinvokable]
+        fn set_genre_filter(self: Pin<&mut QbzPurchases>, value: QString);
+
         /// Dismiss the one-time region notice. Persisted
         /// (`purchases_region_notice_seen`).
         #[qinvokable]
@@ -276,6 +280,10 @@ impl qbz_purchases_bridge::QbzPurchases {
 
     pub fn set_quality_filter(self: Pin<&mut Self>, value: QString) {
         crate::purchases_qt::set_quality_filter(value.to_string());
+    }
+
+    pub fn set_genre_filter(self: Pin<&mut Self>, value: QString) {
+        crate::purchases_qt::set_genre_filter(value.to_string());
     }
 
     pub fn dismiss_region_notice(self: Pin<&mut Self>) {

@@ -109,6 +109,12 @@ struct ToolbarDoc {
     hide_downloaded: bool,
     #[serde(rename = "qualityFilter")]
     quality_filter: String,
+    /// ADDITIVE: the distinct genres of the loaded albums (sorted) and the
+    /// one selected (`""` = all). Transient like group/sort — it dies with
+    /// the screen (§10-F), it is not one of the four persisted prefs.
+    genres: Vec<String>,
+    #[serde(rename = "genreFilter")]
+    genre_filter: String,
 }
 
 /// One Albums-tab row.
@@ -468,9 +474,10 @@ impl DownloadStore {
     }
 
     /// The albums with anything in flight — a whole-album loop, a single
-    /// track, or goodies — as the flyout's `{ id, title }` rows.
-    fn active_downloads(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self
+    /// track, or goodies — as `(id, title, done, total)` for the sidebar's
+    /// download rows and the compact progress ring.
+    fn active_downloads(&self) -> Vec<(String, String, u32, u32)> {
+        let mut out: Vec<(String, String, u32, u32)> = self
             .albums
             .iter()
             .filter(|(_, a)| {
@@ -480,7 +487,19 @@ impl DownloadStore {
                         .values()
                         .any(|st| matches!(st, DlStatus::Downloading))
             })
-            .map(|(id, _)| (id.clone(), self.titles.get(id).cloned().unwrap_or_default()))
+            .map(|(id, a)| {
+                let done = a
+                    .statuses
+                    .values()
+                    .filter(|st| matches!(st, DlStatus::Complete))
+                    .count() as u32;
+                (
+                    id.clone(),
+                    self.titles.get(id).cloned().unwrap_or_default(),
+                    done,
+                    a.statuses.len() as u32,
+                )
+            })
             .collect();
         out.sort();
         out
@@ -787,6 +806,7 @@ struct ListState {
     hide_unavailable: bool,
     hide_downloaded: bool,
     quality_filter: String,
+    genre_filter: String,
     albums_raw: Vec<PurchaseAlbum>,
     tracks_raw: Vec<PurchaseTrack>,
     albums_loaded: bool,
@@ -824,6 +844,7 @@ impl Default for ListState {
             hide_unavailable: false,
             hide_downloaded: false,
             quality_filter: "all".to_string(),
+            genre_filter: String::new(),
             albums_raw: Vec::new(),
             tracks_raw: Vec::new(),
             albums_loaded: false,
@@ -929,7 +950,15 @@ fn publish_album() {
         serde_json::to_string(
             &st.active_downloads()
                 .into_iter()
-                .map(|(id, title)| serde_json::json!({ "id": id, "title": title }))
+                .map(|(id, title, done, total)| {
+                    serde_json::json!({
+                        "id": id,
+                        "title": title,
+                        "done": done,
+                        "total": total,
+                        "percent": if total > 0 { done * 100 / total } else { 0 }
+                    })
+                })
                 .collect::<Vec<_>>(),
         )
         .unwrap_or_else(|_| "[]".into())
@@ -970,8 +999,19 @@ fn build_list_doc(s: &ListState) -> ListDoc {
             )
         })
         .filter(|a| !s.hide_downloaded || !a.downloaded)
+        .filter(|a| {
+            s.genre_filter.is_empty() || a.genre.as_ref().is_some_and(|g| g.name == s.genre_filter)
+        })
         .collect();
     sort_albums(&mut albums, &s.sort, s.ascending);
+    let mut genres: Vec<String> = s
+        .albums_raw
+        .iter()
+        .filter_map(|a| a.genre.as_ref().map(|g| g.name.clone()))
+        .filter(|g| !g.trim().is_empty())
+        .collect();
+    genres.sort();
+    genres.dedup();
 
     // `applyTrackFilters` (`:204-209`): hide-downloaded then quality. Tracks
     // have NO hide-unavailable filter (availability is albums-only) and are
@@ -1009,6 +1049,8 @@ fn build_list_doc(s: &ListState) -> ListDoc {
             hide_unavailable: s.hide_unavailable,
             hide_downloaded: s.hide_downloaded,
             quality_filter: s.quality_filter.clone(),
+            genres,
+            genre_filter: s.genre_filter.clone(),
         },
         albums: albums.into_iter().map(album_row).collect(),
         tracks: tracks.into_iter().map(track_row).collect(),
@@ -1811,6 +1853,12 @@ pub fn set_hide_unavailable(on: bool) {
 pub fn set_hide_downloaded(on: bool) {
     crate::settings_qt::save_pref(PREF_HIDE_DOWNLOADED, serde_json::json!(on));
     with_list(|s| s.hide_downloaded = on);
+    publish_list();
+}
+
+/// The genre filter — transient, albums only; `""` = all.
+pub fn set_genre_filter(value: String) {
+    with_list(|s| s.genre_filter = value);
     publish_list();
 }
 
