@@ -58,17 +58,25 @@ PDEPEND="
 S="${WORKDIR}/qbz-${MY_PV}"
 
 src_compile() {
+	# cxx-qt-build locates Qt through qmake; Gentoo installs it as qmake6
+	# only, so name it explicitly (CI does the same via the QMAKE env var).
+	export QMAKE="${QMAKE:-$(command -v qmake6 || command -v /usr/lib64/qt6/bin/qmake)}"
+
 	# Symbols are stripped by the workspace release profile. The live Qt graph
 	# has no Slint memory wall, so let Cargo use the builder's available cores.
-	cargo build --release --manifest-path crates/Cargo.toml \
+	# --locked: build exactly the committed Cargo.lock, no resolver drift.
+	cargo build --release --locked --manifest-path crates/Cargo.toml \
 		-p qbz-qt || die "cargo build failed"
 }
 
 src_install() {
 	dobin "crates/target/release/qbz"
 
+	# MPRIS publishes DesktopEntry=com.blitzfc.qbz: the installed basename
+	# MUST match or the GNOME/Plasma media widget loses its icon
+	# (scripts/packaging/desktop_entry_check.sh documents the invariant).
 	insinto /usr/share/applications
-	newins packaging/linux/qbz.desktop qbz.desktop
+	newins packaging/linux/qbz.desktop com.blitzfc.qbz.desktop
 
 	local size
 	for size in 32 48 64 128 256; do

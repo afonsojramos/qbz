@@ -36,8 +36,10 @@ package() {
     # Install binary
     install -Dm755 "qbz" "${pkgdir}/usr/bin/qbz"
 
-    # Install desktop file
-    install -Dm644 "qbz.desktop" "${pkgdir}/usr/share/applications/qbz.desktop"
+    # Install desktop file. MPRIS publishes DesktopEntry=com.blitzfc.qbz:
+    # the installed basename MUST match or the GNOME/Plasma media widget
+    # loses its icon (scripts/packaging/desktop_entry_check.sh).
+    install -Dm644 "qbz.desktop" "${pkgdir}/usr/share/applications/com.blitzfc.qbz.desktop"
 
     # Install icons (freedesktop hicolor structure)
     install -Dm644 "icons/hicolor/32x32/apps/qbz.png" "${pkgdir}/usr/share/icons/hicolor/32x32/apps/qbz.png"

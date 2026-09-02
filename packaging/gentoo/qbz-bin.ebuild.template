@@ -24,10 +24,22 @@ RESTRICT="mirror strip"
 
 # v2.1+ Qt binary: no webkit/gtk/appindicator. qtsvg provides the imageformats
 # plugin used by the shipped SVG icon set.
+# Per-arch floors mirror what CI links against (build-qt-linux.yml): amd64
+# builds on Qt 6.8.3 / ubuntu-22.04 (glibc 2.35); arm64 builds on Qt 6.9.3 /
+# ubuntu-24.04-arm (glibc 2.39) because aqt's arm64 6.8 host tools segfault.
 RDEPEND="
-	>=dev-qt/qtbase-6.8:6[dbus,gui,network,opengl,wayland,X]
-	>=dev-qt/qtdeclarative-6.8:6
-	>=dev-qt/qtsvg-6.8:6
+	amd64? (
+		>=dev-qt/qtbase-6.8:6[dbus,gui,network,opengl,wayland,X]
+		>=dev-qt/qtdeclarative-6.8:6
+		>=dev-qt/qtsvg-6.8:6
+		>=sys-libs/glibc-2.35
+	)
+	arm64? (
+		>=dev-qt/qtbase-6.9:6[dbus,gui,network,opengl,wayland,X]
+		>=dev-qt/qtdeclarative-6.9:6
+		>=dev-qt/qtsvg-6.9:6
+		>=sys-libs/glibc-2.39
+	)
 	media-libs/alsa-lib
 	media-libs/fontconfig
 	media-libs/freetype
@@ -61,8 +73,11 @@ src_unpack() {
 src_install() {
 	dobin qbz
 
+	# MPRIS publishes DesktopEntry=com.blitzfc.qbz: the installed basename
+	# MUST match or the GNOME/Plasma media widget loses its icon
+	# (scripts/packaging/desktop_entry_check.sh documents the invariant).
 	insinto /usr/share/applications
-	newins qbz.desktop qbz.desktop
+	newins qbz.desktop com.blitzfc.qbz.desktop
 
 	local size
 	for size in 32 48 64 128 256; do
