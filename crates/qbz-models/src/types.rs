@@ -232,9 +232,8 @@ pub struct AudioParams {
 /// path can measure the bytes it actually serves (#638 fix 1).
 pub fn probe_streaminfo(bytes: &[u8]) -> Option<AudioParams> {
     if bytes.len() >= 26 && bytes.starts_with(b"fLaC") {
-        let sample_rate = ((bytes[18] as u32) << 12)
-            | ((bytes[19] as u32) << 4)
-            | ((bytes[20] as u32) >> 4);
+        let sample_rate =
+            ((bytes[18] as u32) << 12) | ((bytes[19] as u32) << 4) | ((bytes[20] as u32) >> 4);
         let channels = ((bytes[20] >> 1) & 0x07) + 1;
         let bit_depth = ((bytes[20] & 0x01) << 4) | ((bytes[21] >> 4) & 0x0F);
         Some(AudioParams {
@@ -1181,6 +1180,18 @@ pub struct PurchaseAlbum {
     pub maximum_bit_depth: Option<u32>,
     #[serde(default = "crate::purchase_serde::serde_true")]
     pub downloadable: bool,
+    /// THE ENTITLEMENT: the `format_id`s this purchase may be downloaded in.
+    /// First seen on a real account 2026-09-01 — `[55]` (DSD64), `[56]`
+    /// (DSD128), `[7, 6, 5]` (a hi-res FLAC purchase) — and it is the only
+    /// authority for the download menu: a DSD purchase reports `hires:false`
+    /// with a 16/44.1 streaming catalog, so nothing can be inferred from the
+    /// album's own quality fields. Empty on older captures.
+    #[serde(default)]
+    pub downloadable_format_ids: Vec<u32>,
+    /// Purchased AS hi-res, independent of what the catalog streams
+    /// (`hires:false, hires_purchased:true` on the DSD64 album).
+    #[serde(default)]
+    pub hires_purchased: bool,
     #[serde(default)]
     pub downloaded: bool,
     #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
@@ -1205,7 +1216,10 @@ pub struct PurchaseAlbum {
 /// used for disc-grouping. `purchased_at` is unix epoch seconds.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PurchaseTrack {
-    #[serde(default, deserialize_with = "crate::purchase_serde::deserialize_u64_id")]
+    #[serde(
+        default,
+        deserialize_with = "crate::purchase_serde::deserialize_u64_id"
+    )]
     pub id: u64,
     #[serde(default)]
     pub title: String,
@@ -1239,6 +1253,11 @@ pub struct PurchaseTrack {
     pub downloaded: bool,
     #[serde(default)]
     pub downloaded_format_ids: Vec<u32>,
+    /// The per-track entitlement, same meaning as the album's. Not yet observed
+    /// on a real `type=tracks` page (every capture so far had zero standalone
+    /// track purchases); defaulted so an absent key costs nothing.
+    #[serde(default)]
+    pub downloadable_format_ids: Vec<u32>,
     #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
     pub purchased_at: Option<i64>,
 }
@@ -1271,7 +1290,10 @@ pub struct RadioResponse {
     pub radio_type: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
-    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_page_flexible")]
+    #[serde(
+        default,
+        deserialize_with = "crate::purchase_serde::lenient_page_flexible"
+    )]
     pub tracks: SearchResultsPage<Track>,
 }
 
@@ -1976,8 +1998,7 @@ mod purchase_deserializer_tests {
     /// `true`.
     #[test]
     fn catalog_track_streamable_false_is_honoured() {
-        let t: Track =
-            serde_json::from_str(r#"{"id":1,"title":"T","streamable":false}"#).unwrap();
+        let t: Track = serde_json::from_str(r#"{"id":1,"title":"T","streamable":false}"#).unwrap();
         assert_eq!(t.streamable, Some(false));
         assert!(
             !t.is_streamable(),
@@ -1994,10 +2015,8 @@ mod purchase_deserializer_tests {
 
     #[test]
     fn catalog_album_streamable_false_is_honoured() {
-        let album: Album = serde_json::from_str(
-            r#"{"id":"a","title":"A","streamable":false}"#,
-        )
-        .unwrap();
+        let album: Album =
+            serde_json::from_str(r#"{"id":"a","title":"A","streamable":false}"#).unwrap();
         assert_eq!(album.streamable, Some(false));
         assert!(!album.is_streamable());
     }
@@ -2009,7 +2028,10 @@ mod purchase_deserializer_tests {
     fn purchase_album_downloadable_defaults_true() {
         let a: PurchaseAlbum = serde_json::from_str(r#"{"id":"x","title":"A"}"#).unwrap();
         assert!(a.downloadable);
-        assert!(!a.downloaded, "downloaded is local-only, never from the wire");
+        assert!(
+            !a.downloaded,
+            "downloaded is local-only, never from the wire"
+        );
         assert!(a.tracks.is_none());
         assert!(a.purchased_at.is_none());
     }
@@ -2066,7 +2088,10 @@ mod purchase_deserializer_tests {
         }"#;
         let r: PurchaseResponse = serde_json::from_str(json).unwrap();
         assert!(r.albums.items.is_empty());
-        assert!(r.tracks.items.is_empty(), "absent sibling defaults, never fails");
+        assert!(
+            r.tracks.items.is_empty(),
+            "absent sibling defaults, never fails"
+        );
         assert_eq!(r.tracks.total, 0);
     }
 

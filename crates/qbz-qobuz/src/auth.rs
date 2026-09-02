@@ -17,10 +17,37 @@ pub fn generate_signature(method: &str, params: &str, timestamp: u64, secret: &s
     format!("{:x}", hasher.finalize())
 }
 
-/// Generate signature for track/getFileUrl endpoint
-pub fn sign_get_file_url(track_id: u64, format_id: u32, timestamp: u64, secret: &str) -> String {
-    let params = format!("format_id{}intentstreamtrack_id{}", format_id, track_id);
+/// Generate the signature for `track/getFileUrl`. The `intent` is PART OF THE
+/// PREIMAGE, not just a query parameter: measured live 2026-09-01 on a
+/// purchased DSD128 track (format 56), the request signed with `stream`
+/// answered HTTP 400 and the one signed with `download` answered 200 with the
+/// DSF. Parameters are alphabetical and unseparated, as on every RPC call.
+pub fn sign_get_file_url_with_intent(
+    track_id: u64,
+    format_id: u32,
+    intent: &str,
+    timestamp: u64,
+    secret: &str,
+) -> String {
+    let params = format!("format_id{}intent{}track_id{}", format_id, intent, track_id);
     generate_signature("trackgetFileUrl", &params, timestamp, secret)
+}
+
+/// Playback: `intent=stream`.
+pub fn sign_get_file_url(track_id: u64, format_id: u32, timestamp: u64, secret: &str) -> String {
+    sign_get_file_url_with_intent(track_id, format_id, "stream", timestamp, secret)
+}
+
+/// A purchased file: `intent=download`. The Qobuz desktop client signs this
+/// exact form when it writes a purchase to disk, and it is the only signature
+/// the CDN accepts for a DSD entitlement.
+pub fn sign_get_file_url_download(
+    track_id: u64,
+    format_id: u32,
+    timestamp: u64,
+    secret: &str,
+) -> String {
+    sign_get_file_url_with_intent(track_id, format_id, "download", timestamp, secret)
 }
 
 /// Generate signature for favorite/getUserFavorites endpoint
@@ -52,7 +79,12 @@ pub fn sign_search(
 /// `method` is the endpoint path with slashes removed, e.g. "/album/get" → "albumget".
 /// `kv_pairs` are (key, value) pairs sorted alphabetically by key.
 /// The params string is built as key1value1key2value2... (same as mobile app interceptor).
-pub fn sign_request(method: &str, kv_pairs: &[(&str, &str)], timestamp: u64, secret: &str) -> String {
+pub fn sign_request(
+    method: &str,
+    kv_pairs: &[(&str, &str)],
+    timestamp: u64,
+    secret: &str,
+) -> String {
     let mut sorted = kv_pairs.to_vec();
     sorted.sort_by_key(|(k, _)| *k);
     let params: String = sorted.iter().map(|(k, v)| format!("{}{}", k, v)).collect();
@@ -209,6 +241,23 @@ mod tests {
     fn test_generate_signature() {
         let sig = generate_signature("test", "params", 1234567890, "secret");
         assert_eq!(sig.len(), 32); // MD5 hex is 32 chars
+    }
+
+    #[test]
+    fn download_intent_signs_a_different_preimage_than_stream() {
+        let (tid, fid, ts, secret) = (123_456_u64, 56_u32, 1_700_000_000_u64, "s3cr3t");
+        let expected = generate_signature(
+            "trackgetFileUrl",
+            &format!("format_id{fid}intentdownloadtrack_id{tid}"),
+            ts,
+            secret,
+        );
+        assert_eq!(sign_get_file_url_download(tid, fid, ts, secret), expected);
+        assert_ne!(
+            sign_get_file_url_download(tid, fid, ts, secret),
+            sign_get_file_url(tid, fid, ts, secret),
+            "intent is inside the preimage; the two operations cannot share a signature"
+        );
     }
 
     #[test]

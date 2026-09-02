@@ -647,6 +647,30 @@ fn tier(hires: bool, bit_depth: Option<u32>) -> String {
 /// with no quality data at all that is a number nobody sent us. Knowing
 /// nothing prints nothing; everything else goes through the shared formatter so
 /// the string matches every other surface character for character.
+/// The badge for what the account BOUGHT. A DSD purchase streams as CD
+/// (`hires:false`, 16/44.1 on the catalog — the live DSD64 album), so the
+/// catalog's depth/rate describe the stream, not the purchase; the entitlement
+/// ids are the only honest source. The badge control knows hires | cd | mp3,
+/// so DSD rides the hires tier and says which DSD it is in the detail line.
+/// Anything without a DSD id keeps the catalog-derived pair unchanged.
+fn purchased_quality(
+    hires: bool,
+    bit_depth: Option<u32>,
+    sampling_rate: Option<f64>,
+    entitlement: &[u32],
+) -> (String, String) {
+    if entitlement.contains(&56) {
+        return ("hires".to_string(), "DSD128".to_string());
+    }
+    if entitlement.contains(&55) {
+        return ("hires".to_string(), "DSD64".to_string());
+    }
+    (
+        tier(hires, bit_depth),
+        quality_detail(bit_depth, sampling_rate),
+    )
+}
+
 fn quality_detail(bit_depth: Option<u32>, sampling_rate: Option<f64>) -> String {
     if bit_depth.is_none() && sampling_rate.is_none() {
         return String::new();
@@ -973,6 +997,12 @@ fn sort_albums(list: &mut [&PurchaseAlbum], key: &str, ascending: bool) {
 
 fn album_row(a: &PurchaseAlbum) -> AlbumRow {
     let url = a.image.best().cloned().unwrap_or_default();
+    let quality = purchased_quality(
+        a.hires,
+        a.maximum_bit_depth,
+        a.maximum_sampling_rate,
+        &a.downloadable_format_ids,
+    );
     AlbumRow {
         id: a.id.clone(),
         title: a.title.clone(),
@@ -988,8 +1018,8 @@ fn album_row(a: &PurchaseAlbum) -> AlbumRow {
             .map(|y| y.to_string())
             .unwrap_or_default(),
         genre: a.genre.as_ref().map(|g| g.name.clone()).unwrap_or_default(),
-        quality_tier: tier(a.hires, a.maximum_bit_depth),
-        quality_detail: quality_detail(a.maximum_bit_depth, a.maximum_sampling_rate),
+        quality_tier: quality.0,
+        quality_detail: quality.1,
         tracks_count: a.tracks_count.unwrap_or(0),
         downloadable: a.downloadable,
         downloaded: a.downloaded,
@@ -1100,6 +1130,12 @@ fn build_album_doc(s: &DetailState) -> AlbumDoc {
         .as_ref()
         .map(|p| p.items.as_slice())
         .unwrap_or(&[]);
+    let header_quality = purchased_quality(
+        album.hires,
+        album.maximum_bit_depth,
+        album.maximum_sampling_rate,
+        &album.downloadable_format_ids,
+    );
 
     // Disc grouping: item order preserved, bucketed by `media_number ?? 1`.
     let mut discs: Vec<DiscRow> = Vec::new();
@@ -1180,8 +1216,8 @@ fn build_album_doc(s: &DetailState) -> AlbumDoc {
             .as_ref()
             .map(|g| g.name.clone())
             .unwrap_or_default(),
-        quality_tier: tier(album.hires, album.maximum_bit_depth),
-        quality_detail: quality_detail(album.maximum_bit_depth, album.maximum_sampling_rate),
+        quality_tier: header_quality.0,
+        quality_detail: header_quality.1,
         tracks_count: album.tracks_count.unwrap_or(tracks.len() as u32),
         duration: album
             .duration
@@ -1405,11 +1441,11 @@ pub fn open_list() {
 /// The metadata load: the registry and the two per-type totals, ONCE and
 /// CONCURRENTLY.
 ///
-/// The totals need **two** `getUserPurchasesIds(limit=1, offset=0, type)` calls,
-/// one per type, each falling back to `None` on error (§2.4). NEVER one combined
-/// call: a single unfiltered ids page carries only the first type's total, and
-/// `get_user_purchases_all_typed` zeroes (in fact omits) the sibling page, so
-/// the list response can never supply these counters.
+/// The totals need **two** `getUserPurchases(type, limit=1)` calls, one per
+/// type, each falling back to `None` on error — see `svc::get_purchase_total`
+/// for why the ids endpoint is the wrong source (it counts album tracks as
+/// tracks). NEVER one combined call: a typed page omits the sibling type's key
+/// entirely, so the list response can never supply both counters at once.
 async fn load_metadata(generation: u64) {
     let client = snapshot_client().await;
     let (reg, albums_total, tracks_total) = tokio::join!(
@@ -1752,13 +1788,19 @@ pub fn open_album(album_id: String) {
 /// `purchased_at`), and CONCURRENTLY a SECOND `/album/get` for the formats.
 ///
 /// **Divergence, recorded rather than taken for free (§6):** the duplicate
-/// `/album/get` is consolidated into one call whose result feeds both
-/// `build_purchase_album` and `synth_formats`. The formats are synthesized
-/// purely from `album.hires` + `maximum_sampling_rate` (§4.3), which is exactly
-/// what the second fetch returned, so nothing about the dropdown changes. The
-/// failure semantics are preserved: `/album/get` is the one purchase-path call
-/// that hard-checks status and parses the STRICT structs, so a bad payload
-/// fails the whole screen — and it now fails it once instead of twice.
+/// `/album/get` is consolidated into one call. The failure semantics are
+/// preserved: `/album/get` is the one purchase-path call that hard-checks
+/// status and parses the STRICT structs, so a bad payload fails the whole
+/// screen — and it now fails it once instead of twice.
+///
+/// **The format menu is the ENTITLEMENT (2026-09-01 contract §1.4), not a
+/// synthesis from the catalog.** The purchases listing fetched here carries
+/// `downloadable_format_ids` per album — `[55]` for a DSD64 purchase whose
+/// catalog streams at 16/44.1, `[56]` for DSD128, `[7, 6, 5]` for a hi-res
+/// FLAC — and those are the only ids `getFileUrl(intent=download)` will
+/// honour. The old `synth_formats` ladder (27/7/6/5 from `album.hires`) stays
+/// as the fallback for a listing that does not carry the field, so an older
+/// wire still gets a menu instead of nothing.
 async fn load_album(generation: u64, album_id: String) {
     let Some(client) = snapshot_client().await else {
         fail_album(generation);
@@ -1796,7 +1838,10 @@ async fn load_album(generation: u64, album_id: String) {
 
     let album =
         svc::build_purchase_album(&catalog, &purchases, &reg.downloaded_ids, &reg.format_map);
-    let formats = svc::synth_formats(&catalog);
+    let formats = svc::purchase_formats(
+        &catalog,
+        &svc::entitlement_format_ids(&purchases, &album_id),
+    );
     let cover_url = catalog.image.best().cloned().unwrap_or_default();
 
     let applied = with_detail(|s| {
@@ -2891,6 +2936,24 @@ mod tests {
     fn an_empty_quality_dir_drops_the_separating_space() {
         let derived = album_dir_for("/music", "Artist", "Album", "");
         assert_eq!(derived, PathBuf::from("/music/Artist/Album"));
+    }
+
+    // ---- What was bought, not what streams -------------------------------
+
+    #[test]
+    fn a_dsd_purchase_badges_as_hires_with_the_dsd_in_the_detail() {
+        // Rust In Peace on the live account: hires:false, 16/44.1, [55].
+        let (tier, detail) = purchased_quality(false, Some(16), Some(44.1), &[55]);
+        assert_eq!((tier.as_str(), detail.as_str()), ("hires", "DSD64"));
+        let (tier, detail) = purchased_quality(true, Some(24), Some(352.8), &[56]);
+        assert_eq!((tier.as_str(), detail.as_str()), ("hires", "DSD128"));
+        // A FLAC purchase keeps the catalog-derived pair untouched.
+        let (tier, detail) = purchased_quality(true, Some(24), Some(96.0), &[7, 6, 5]);
+        assert_eq!(tier, "hires");
+        assert_eq!(detail, quality_detail(Some(24), Some(96.0)));
+        // And so does a listing without the field.
+        let (tier, _) = purchased_quality(false, Some(16), Some(44.1), &[]);
+        assert_eq!(tier, "cd");
     }
 
     // ---- Document shape --------------------------------------------------
