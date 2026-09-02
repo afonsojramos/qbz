@@ -129,11 +129,6 @@ pub mod qbz_purchases_bridge {
         #[qinvokable]
         fn dismiss_region_notice(self: Pin<&mut QbzPurchases>);
 
-        /// OK on the one-time disclaimer modal. Persisted
-        /// (`purchases_disclaimer_seen`).
-        #[qinvokable]
-        fn dismiss_disclaimer(self: Pin<&mut QbzPurchases>);
-
         /// Open the purchased-album detail. RECORDS the album and starts the
         /// fetch; the QML caller then calls `QbzShell.navigateTo("purchase-album")`
         /// — in THAT order (§C.2).
@@ -277,10 +272,6 @@ impl qbz_purchases_bridge::QbzPurchases {
 
     pub fn dismiss_region_notice(self: Pin<&mut Self>) {
         crate::purchases_qt::dismiss_region_notice();
-    }
-
-    pub fn dismiss_disclaimer(self: Pin<&mut Self>) {
-        crate::purchases_qt::dismiss_disclaimer();
     }
 
     pub fn open_album(self: Pin<&mut Self>, album_id: QString) {
