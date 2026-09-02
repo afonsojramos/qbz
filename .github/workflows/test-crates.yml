@@ -5,7 +5,10 @@
 #               excludes the frozen Slint crates and qbz-qt), then the named
 #               listen-log suite check (qbz-app::listen_log must exist and be
 #               green — the per-user listen store's schema, accumulator, end
-#               reasons and pause/clear rules). ~5 min cold.
+#               reasons and pause/clear rules), and the account-migration +
+#               portable-blacklist suite check (Settings > Import / Export:
+#               snapshot/plan/apply/ledger/local copy, additive blacklist
+#               merge). ~5 min cold.
 #   qt-gate   — the Qt frontend: the five static QML audits, `cargo test -p
 #               qbz-qt`, the Slint-free dep-graph gate, and an OFFSCREEN BOOT of
 #               the debug binary. This is the thing `cargo check` cannot give:

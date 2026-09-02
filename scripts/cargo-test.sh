@@ -63,6 +63,21 @@ n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-app --lib -- --list list
 (( n >= 25 )) || { echo "listen_log suite has $n tests (expected >= 25)"; exit 1; }
 cargo test --manifest-path crates/Cargo.toml -p qbz-app --lib -- listen_log::
 
+say "gate: account-migration and portable-blacklist suites present and green"
+# Same shape as the listen-log check: the workspace run already executed
+# these; the count keeps a renamed module or a dropped cfg from shrinking the
+# coverage silently. qbz-account-migration is the crate behind Settings >
+# Import / Export (snapshot, plan, apply, ledger, local-profile copy);
+# blacklist_portable is the JSON one user hands to another.
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-account-migration --lib -- --list 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 12 )) || { echo "qbz-account-migration has $n tests (expected >= 12)"; exit 1; }
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-app --lib -- --list blacklist_portable:: 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 3 )) || { echo "blacklist_portable suite has $n tests (expected >= 3)"; exit 1; }
+cargo test --manifest-path crates/Cargo.toml -p qbz-account-migration --lib
+cargo test --manifest-path crates/Cargo.toml -p qbz-app --lib -- blacklist_portable::
+
 say "gate: qbzd resolves no Slint crate"
 hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbzd -e normal \
        | grep -E '\b(slint|qbz-ui|qbz-slint-common|qbz-dac-wizard) v' || true)
