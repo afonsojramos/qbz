@@ -110,9 +110,14 @@ impl SourceBadge {
             Some("jellyfin") => SourceBadge::Jellyfin,
             Some("subsonic") | Some("navidrome") | Some("gonic") | Some("airsonic")
             | Some("astiga") => SourceBadge::Subsonic,
-            Some("qobuz_download") | Some("qobuz_purchase") | Some("offline") => {
-                SourceBadge::Offline
-            }
+            // `offline` is the ENCRYPTED CMAF download only qbz-core's offline
+            // tier can open. A PURCHASE (`qobuz_purchase`) is a plain DRM-free
+            // file the scanner found on disk; badging it `Offline` made the
+            // local source refuse it as "a CMAF bundle" and the album the
+            // user had just downloaded and added answered "File not
+            // available — is the drive mounted?" (smoke 2026-09-02).
+            Some("qobuz_download") | Some("offline") => SourceBadge::Offline,
+            Some("qobuz_purchase") => SourceBadge::Local,
             Some("qobuz") | Some("qobuz_connect_remote") => SourceBadge::Qobuz,
             _ => SourceBadge::Local,
         }
@@ -161,9 +166,10 @@ mod tests {
             SourceBadge::from_word(Some("qobuz_download")),
             SourceBadge::Offline
         );
+        // A purchase is a plain file: LOCAL, never the encrypted-bundle badge.
         assert_eq!(
             SourceBadge::from_word(Some("qobuz_purchase")),
-            SourceBadge::Offline
+            SourceBadge::Local
         );
         assert_eq!(SourceBadge::from_word(Some("user")), SourceBadge::Local);
         assert_eq!(SourceBadge::from_word(None), SourceBadge::Local);
