@@ -205,6 +205,27 @@ Rectangle {
     readonly property bool headerCompactOn: QbzShell.sidebarState === 2
         || (!QbzShell.navInSidebar && QbzShell.navHeaderCompact)
 
+    // Purchases downloading now (see Sidebar.qml's twin block).
+    readonly property var activeDownloads: {
+        try { return JSON.parse(QbzPurchases.activeDownloadsJson || "[]") } catch (e) { return [] }
+    }
+    readonly property real activeDownloadsOverall: {
+        var rows = root.activeDownloads
+        if (rows.length === 0) return 0
+        var sum = 0
+        for (var i = 0; i < rows.length; i++) sum += (rows[i].percent || 0)
+        return sum / rows.length / 100
+    }
+    readonly property string activeDownloadsSummary: {
+        var rows = root.activeDownloads
+        var lines = []
+        for (var i = 0; i < rows.length; i++)
+            lines.push((rows[i].title || QbzSession.tr("Purchases", QbzSession.trRev))
+                + " — " + (rows[i].done || 0) + "/" + (rows[i].total || 0)
+                + " · " + (rows[i].percent || 0) + "%")
+        return lines.join("\n")
+    }
+
     // Full text tab (HeaderBar.slint NavTab): 30px tall, radius sm, icon 14
     // (dropped under 1140px), label 11px — semibold + elevated fill when the
     // section is the current view.
@@ -463,6 +484,51 @@ Rectangle {
                 visible: root.purchasesInHeader
                 compact: true
                 anchors.verticalCenter: parent.verticalCenter
+            }
+            // Purchases downloading now, as one ring (the sidebar is closed
+            // or the nav lives up here, so there is no row to list them in);
+            // the per-album detail is the hover bubble. Absent while idle.
+            Item {
+                visible: root.activeDownloads.length > 0
+                width: visible ? 30 : 0
+                height: 30
+                anchors.verticalCenter: parent.verticalCenter
+                QbzProgressRing {
+                    anchors.centerIn: parent
+                    size: 18
+                    value: root.activeDownloadsOverall
+                }
+                MouseArea {
+                    id: hdrRingArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: QbzShell.navigateTo("purchases")
+                }
+                ToolTip {
+                    visible: hdrRingArea.containsMouse
+                    delay: 0
+                    timeout: -1
+                    text: root.activeDownloadsSummary
+                    x: Math.round((parent.width - width) / 2)
+                    y: parent.height + 6
+                    contentItem: Text {
+                        text: root.activeDownloadsSummary
+                        color: theme.textPrimary
+                        font.pixelSize: 11
+                        font.weight: theme.weightMedium
+                        leftPadding: 9
+                        rightPadding: 9
+                        topPadding: 6
+                        bottomPadding: 6
+                    }
+                    background: Rectangle {
+                        color: theme.surfaceElevated
+                        radius: 4
+                        border.width: 1
+                        border.color: theme.borderMuted
+                    }
+                }
             }
             // Thin separator + the playlists flyout button — ONLY while the
             // sidebar is really closed. In the opt-in always-compact mode the
