@@ -1272,6 +1272,14 @@ pub struct PurchaseFormatOption {
     pub label: String,
     pub bit_depth: Option<u32>,
     pub sampling_rate: Option<f64>,
+    /// `false` = the purchased file, fetched through the purchase grant
+    /// (`getFileUrl`, `intent=download`), which the store only issues for the
+    /// ids in the entitlement. `true` = a lower quality the store does NOT
+    /// sell for this purchase, fetched through the streaming grant
+    /// (`intent=stream`) instead — the route the Slint/Tauri builds used for
+    /// every download, kept only BELOW the purchased quality.
+    #[serde(default)]
+    pub streaming: bool,
 }
 
 /// Response from `/album/suggest` — albums similar to a seed album.

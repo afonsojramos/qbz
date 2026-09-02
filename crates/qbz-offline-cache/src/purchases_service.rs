@@ -189,6 +189,7 @@ pub fn synth_formats(album: &Album) -> Vec<PurchaseFormatOption> {
             label: "[FLAC][24-bit,192kHz]".to_string(),
             bit_depth: Some(24),
             sampling_rate: Some(192.0),
+            streaming: false,
         });
     }
 
@@ -198,6 +199,7 @@ pub fn synth_formats(album: &Album) -> Vec<PurchaseFormatOption> {
             label: "[FLAC][24-bit,96kHz]".to_string(),
             bit_depth: Some(24),
             sampling_rate: Some(96.0),
+            streaming: false,
         });
     }
 
@@ -206,6 +208,7 @@ pub fn synth_formats(album: &Album) -> Vec<PurchaseFormatOption> {
         label: "[FLAC][16-bit,44.1kHz]".to_string(),
         bit_depth: Some(16),
         sampling_rate: Some(44.1),
+        streaming: false,
     });
 
     formats.push(PurchaseFormatOption {
@@ -255,6 +258,7 @@ pub fn format_option(id: u32) -> PurchaseFormatOption {
                 label: format!("[Format {other}]"),
                 bit_depth: None,
                 sampling_rate: None,
+                streaming: false,
             }
         }
     };
@@ -263,6 +267,7 @@ pub fn format_option(id: u32) -> PurchaseFormatOption {
         label: label.to_string(),
         bit_depth,
         sampling_rate,
+        streaming: false,
     }
 }
 
@@ -277,25 +282,43 @@ pub fn entitlement_formats(ids: &[u32]) -> Vec<PurchaseFormatOption> {
     ids.into_iter().map(format_option).collect()
 }
 
-/// The download menu for a purchased album: the entitlement when the listing
-/// carried one, else the historical synthesis from the catalog's own quality
-/// fields — the only source there was before 2026-09-01, kept so a listing
-/// that predates the field (or an account whose wire omits it) still offers
-/// the FLAC/MP3 ladder rather than nothing.
+/// The download menu for a purchased album.
 ///
-/// The two are never merged: a DSD64 purchase streams as 16/44.1, so the
-/// synthesis would ADD a CD-quality FLAC the user never bought, and Qobuz
-/// answers a non-entitled `intent=download` with HTTP 400.
+/// The ENTITLEMENT comes first, highest quality on top: those are the ids the
+/// store grants through `getFileUrl(intent=download)` — measured 2026-09-01
+/// on the live account, it grants exactly them and denies everything else
+/// (a DSD64 purchase: 55 only; a hi-res FLAC purchase: 7, 6, 5 only).
+///
+/// BELOW it, the streaming ladder for whatever the entitlement does not
+/// already cover at a LOWER quality: the same 27/7/6/5 the catalog's own
+/// fields synthesize, fetched through the streaming grant (`intent=stream`)
+/// — the route the Slint and Tauri builds used for every purchase download.
+/// It is kept only downward, so a DSD purchase can still be saved as a CD
+/// FLAC for the car, and never upward, so nothing is offered that the
+/// account did not buy and could not stream in that quality anyway. Each
+/// option carries its route (`streaming`), and the download path signs the
+/// grant accordingly.
+///
+/// A listing without the field (older wire) gets the catalog synthesis alone,
+/// all of it through the purchase grant as before.
 pub fn purchase_formats(album: &Album, entitlement_ids: &[u32]) -> Vec<PurchaseFormatOption> {
-    let from_entitlement = entitlement_formats(entitlement_ids);
-    if from_entitlement.is_empty() {
+    let mut menu = entitlement_formats(entitlement_ids);
+    if menu.is_empty() {
         log::info!(
             "[Purchases] album {}: no downloadable_format_ids on the wire, synthesizing from the catalog",
             album.id
         );
         return synth_formats(album);
     }
-    from_entitlement
+    let top = menu.iter().map(|f| format_rank(f.id)).max().unwrap_or(0);
+    for mut extra in synth_formats(album) {
+        let owned = menu.iter().any(|f| f.id == extra.id);
+        if !owned && format_rank(extra.id) < top {
+            extra.streaming = true;
+            menu.push(extra);
+        }
+    }
+    menu
 }
 
 /// The entitlement ids of one album in a purchases listing (`[]` when the
@@ -1117,12 +1140,13 @@ fn goodie_target_path(album_dir: &std::path::Path, display_name: &str, url: &str
 /// (`qt-frontend/2026-09-01-purchases-local-playback/00-CONTRACT.md` §4):
 ///   1. `client.get_track(track_id)` → metadata. Error → `"Failed to fetch track
 ///      {id}: {e}"`.
-///   2. `client.get_purchase_file_url(track_id, format_id)` → SIGNED
-///      `getFileUrl` with **`intent=download`**. The old `intent=stream` grant
-///      answers HTTP 400 for a DSD entitlement (measured on format 56) and, for
-///      the FLAC ids, hands out the STREAMING representation rather than the
-///      purchased master. Error → `"Failed to get download URL for track {id}:
-///      {e}"`.
+///   2. The grant. `streaming == false`: `get_purchase_file_url` — SIGNED
+///      `getFileUrl` with **`intent=download`**, the purchased master; the
+///      store grants it only for entitled ids (a DSD entitlement answers 400
+///      to `intent=stream`). `streaming == true`: `get_track_file_url_by_format`
+///      — the streaming grant, for a below-the-purchase quality the store
+///      does not sell (`purchase_formats`). Error → `"Failed to get download
+///      URL for track {id}: {e}"`.
 ///   3. The body is STREAMED straight into the `.part` file
 ///      (`QobuzClient::download_audio_to_path`). A DSD128 track is ~650 MB; the
 ///      old `Vec<u8>` round trip held every byte in memory before the first
@@ -1152,6 +1176,7 @@ pub async fn download_purchase_track(
     track_id: u64,
     album_id: Option<&str>,
     format_id: u32,
+    streaming: bool,
     destination: &str,
     quality_dir: &str,
     ctx: Option<&PurchaseAlbumContext>,
@@ -1163,10 +1188,17 @@ pub async fn download_purchase_track(
         .get_track_for_purchase(track_id)
         .await
         .map_err(|e| format!("Failed to fetch track {}: {}", track_id, e))?;
-    let grant = client
-        .get_purchase_file_url(track_id, format_id)
-        .await
-        .map_err(|e| format!("Failed to get download URL for track {}: {}", track_id, e))?;
+    // The route is the option's, not a guess: a purchased id goes through the
+    // purchase grant; a below-the-purchase quality the store does not sell
+    // goes through the streaming grant (`purchase_formats`).
+    let grant = if streaming {
+        client
+            .get_track_file_url_by_format(track_id, format_id)
+            .await
+    } else {
+        client.get_purchase_file_url(track_id, format_id).await
+    }
+    .map_err(|e| format!("Failed to get download URL for track {}: {}", track_id, e))?;
 
     let artist_name = path_artist(
         ctx.map(|c| c.album_artist.as_str()),
@@ -1432,9 +1464,31 @@ mod tests {
         // FLAC + MP3"; the entitlement says DSD64 and nothing else.
         let album = album_with(false, Some(44.1));
         let menu = purchase_formats(&album, &[55]);
-        assert_eq!(menu.len(), 1);
-        assert_eq!(menu[0].id, 55);
+        let ids: Vec<(u32, bool)> = menu.iter().map(|f| (f.id, f.streaming)).collect();
+        assert_eq!(
+            ids,
+            vec![(55, false), (6, true), (5, true)],
+            "the purchase on top through the purchase grant; the CD/MP3 the \
+             catalog streams below it, through the streaming grant"
+        );
         assert_eq!(menu[0].label, "[DSF][DSD64]");
+    }
+
+    #[test]
+    fn the_streaming_ladder_only_reaches_below_the_purchase_and_never_duplicates_it() {
+        // A hi-res FLAC purchase already owns 7/6/5: nothing to add, and 27
+        // (above the purchase) is never offered even on a 24/192 catalog.
+        let album = album_with(true, Some(192.0));
+        let menu = purchase_formats(&album, &[7, 6, 5]);
+        let ids: Vec<(u32, bool)> = menu.iter().map(|f| (f.id, f.streaming)).collect();
+        assert_eq!(ids, vec![(7, false), (6, false), (5, false)]);
+        // A DSD128 purchase on a hi-res catalog: 27/7/6/5 all sit below it.
+        let menu = purchase_formats(&album, &[56]);
+        let ids: Vec<(u32, bool)> = menu.iter().map(|f| (f.id, f.streaming)).collect();
+        assert_eq!(
+            ids,
+            vec![(56, false), (27, true), (7, true), (6, true), (5, true)]
+        );
     }
 
     #[test]

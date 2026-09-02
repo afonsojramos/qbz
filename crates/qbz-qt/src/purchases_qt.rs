@@ -1971,6 +1971,8 @@ struct DownloadPlan {
     artist: String,
     album_title: String,
     format_id: u32,
+    /// The selected option's route (`PurchaseFormatOption::streaming`).
+    streaming: bool,
     quality_dir: String,
     destination: String,
     track_ids: Vec<u64>,
@@ -1991,6 +1993,7 @@ fn build_plan() -> Option<DownloadPlan> {
             artist: album.artist.name.clone(),
             album_title: album.title.clone(),
             format_id: format.id,
+            streaming: format.streaming,
             quality_dir: quality_dir(&format.label),
             // The user-picked ROOT. Reading the store's resolved album folder
             // here nested the tree one level deeper on every later download of
@@ -2242,6 +2245,7 @@ fn run_sequential(
                 track_id,
                 Some(plan.album_id.as_str()),
                 plan.format_id,
+                plan.streaming,
                 &plan.destination,
                 &plan.quality_dir,
                 Some(&ctx),
