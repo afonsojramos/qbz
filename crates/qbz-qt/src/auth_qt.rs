@@ -105,14 +105,7 @@ where
         let client = guard.as_ref().ok_or("Qobuz client not initialized")?;
         match client.login_with_oauth_code(&code).await {
             Ok(session) => session,
-            Err(e) => {
-                // D4 producer: ONLY an explicit ineligible-account verdict
-                // starts the grace clock. Generic 401/network errors never do.
-                if matches!(e, qbz_qobuz::ApiError::IneligibleUser) {
-                    crate::offline_fwd::subscription_mark_invalid();
-                }
-                return Err(e.to_string());
-            }
+            Err(e) => return Err(e.to_string()),
         }
     };
     let user_id = session.user_id;
@@ -160,7 +153,11 @@ where
         crate::playlist_qt::set_user_id(user_id);
         bind_per_user_stores(&dir, user_id).await;
     }
-    crate::offline_fwd::subscription_mark_valid();
+    // The subscription verdict (D4) and the offline-cache purge run in the
+    // shared session activation (`qbz_app::subscription_lifecycle`); the
+    // shell only hands the runtime its cache, which activates after the
+    // session and is enforced against on registration.
+    runtime.set_offline_cache(crate::offline_qt::get().await);
     crate::offline_fwd::engine().set_offline_session(false);
     crate::media_sync_qt::resume_jellyfin_quality();
 
@@ -336,7 +333,7 @@ where
                 crate::playlist_qt::set_user_id(user_id);
                 bind_per_user_stores(&dir, user_id).await;
             }
-            crate::offline_fwd::subscription_mark_valid();
+            runtime.set_offline_cache(crate::offline_qt::get().await);
             crate::offline_fwd::engine().set_offline_session(false);
             crate::media_sync_qt::resume_jellyfin_quality();
             log::info!("[qbz-qt] restored saved session for user {user_id}");
@@ -348,14 +345,6 @@ where
         Err(e) if is_auth_rejection(&e) => {
             log::warn!("[qbz-qt] saved token rejected by Qobuz, clearing: {e}");
             let _ = qbz_credentials::clear_oauth_token();
-            // D4 producer: only the explicit ineligible verdict starts the
-            // grace clock; a plain 401 does not.
-            if matches!(
-                &e,
-                qbz_core::CoreError::Api(qbz_qobuz::ApiError::IneligibleUser)
-            ) {
-                crate::offline_fwd::subscription_mark_invalid();
-            }
             Ok(None)
         }
         Err(e) => {
@@ -487,6 +476,7 @@ where
     // The offline download cache (index.db/library connections + the cached
     // id set) — torn down so the next account never reads this one's rows.
     crate::offline_qt::deactivate().await;
+    runtime.set_offline_cache(None);
     runtime.deactivate().await?;
     log::info!("[qbz-qt] logged out");
     Ok(())

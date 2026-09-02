@@ -11,6 +11,7 @@ pub mod runtime;
 pub mod scrobble_timing;
 pub mod session_persist;
 pub mod session_store;
+pub mod subscription_lifecycle;
 pub mod shell;
 pub mod settings;
 pub mod user_data;
