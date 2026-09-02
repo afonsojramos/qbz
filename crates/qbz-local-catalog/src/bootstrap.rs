@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -104,6 +104,13 @@ pub struct BootstrapManifest {
     pub active_generation: u64,
     pub previous_generation: Option<u64>,
     pub activated_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GenerationPruneReport {
+    pub removed_generations: usize,
+    pub reclaimed_bytes: u64,
+    pub failed_generations: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,7 +338,134 @@ impl BootstrapLayout {
         }
         fs::rename(&temporary, &path)?;
         sync_directory(&self.data_dir)?;
+        self.prune_obsolete_generations(manifest);
         Ok(())
+    }
+
+    /// Retain only the active catalog and its immediate rollback generation.
+    ///
+    /// The manifest is the source of truth and is always published before this
+    /// maintenance runs. Cleanup is deliberately best-effort: Windows may
+    /// still have an older generation open briefly, and a failed unlink must
+    /// never make a successfully activated catalog look like a failed one.
+    /// A later startup or activation will retry any generation left behind.
+    pub fn prune_obsolete_generations(
+        &self,
+        manifest: &BootstrapManifest,
+    ) -> GenerationPruneReport {
+        let entries = match fs::read_dir(&self.data_dir) {
+            Ok(entries) => entries,
+            Err(error) => {
+                log::warn!(
+                    "[local-catalog] generation cleanup could not scan {}: {error}",
+                    self.data_dir.display()
+                );
+                return GenerationPruneReport {
+                    failed_generations: 1,
+                    ..GenerationPruneReport::default()
+                };
+            }
+        };
+        let mut generations = BTreeSet::new();
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let generation = [".db", ".db-wal", ".db-shm"]
+                .into_iter()
+                .find_map(|suffix| parse_generation_name(&name, suffix));
+            if let Some(generation) = generation {
+                generations.insert(generation);
+            }
+        }
+        // A schema rebuild may not be able to validate the previous manifest,
+        // leaving `previous_generation` empty even though the immediately
+        // preceding finalized database is still the safest rollback artifact.
+        let previous_generation = manifest.previous_generation.or_else(|| {
+            generations
+                .range(..manifest.active_generation)
+                .next_back()
+                .copied()
+        });
+        let keep = [Some(manifest.active_generation), previous_generation]
+            .into_iter()
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        let stale = generations
+            .into_iter()
+            .filter(|generation| !keep.contains(generation))
+            .collect::<Vec<_>>();
+
+        let mut report = GenerationPruneReport::default();
+        for generation in stale {
+            let database = self.generation_path(generation);
+            let mut failed = false;
+            let mut removed_any = false;
+            let database_bytes = fs::metadata(&database)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            let database_gone = match fs::remove_file(&database) {
+                Ok(()) => {
+                    removed_any = true;
+                    report.reclaimed_bytes = report.reclaimed_bytes.saturating_add(database_bytes);
+                    true
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Err(error) => {
+                    failed = true;
+                    log::warn!(
+                        "[local-catalog] generation cleanup could not remove {}: {error}",
+                        database.display()
+                    );
+                    false
+                }
+            };
+            // If Windows still has the database open, leave its WAL/SHM pair
+            // untouched as well. The next maintenance pass retries the trio.
+            for path in database_gone
+                .then(|| {
+                    [
+                        PathBuf::from(format!("{}-wal", database.display())),
+                        PathBuf::from(format!("{}-shm", database.display())),
+                    ]
+                })
+                .into_iter()
+                .flatten()
+            {
+                let bytes = fs::metadata(&path)
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0);
+                match fs::remove_file(&path) {
+                    Ok(()) => {
+                        removed_any = true;
+                        report.reclaimed_bytes = report.reclaimed_bytes.saturating_add(bytes);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        failed = true;
+                        log::warn!(
+                            "[local-catalog] generation cleanup could not remove {}: {error}",
+                            path.display()
+                        );
+                    }
+                }
+            }
+            if failed {
+                report.failed_generations += 1;
+            } else if removed_any {
+                report.removed_generations += 1;
+            }
+        }
+        if report.removed_generations > 0 || report.failed_generations > 0 {
+            log::info!(
+                "[local-catalog] generation cleanup: removed={} reclaimed_bytes={} failed={} retained_active={} retained_previous={:?}",
+                report.removed_generations,
+                report.reclaimed_bytes,
+                report.failed_generations,
+                manifest.active_generation,
+                previous_generation
+            );
+        }
+        report
     }
 
     pub(crate) fn next_building_generation(&self, active_generation: Option<u64>) -> Result<u64> {

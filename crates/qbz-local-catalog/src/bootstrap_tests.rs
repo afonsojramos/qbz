@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
@@ -180,6 +181,51 @@ fn building_file_is_never_active_and_previous_generation_survives() {
     }
     drop(second);
     assert_eq!(layout.read_manifest().unwrap().active_generation, 1);
+}
+
+#[test]
+fn activation_prunes_generations_older_than_the_rollback_generation() {
+    let temp = tempdir().unwrap();
+    let layout = BootstrapLayout::new(temp.path());
+    let key = source(SourceKind::Local, "library");
+
+    for generation in 1..=3 {
+        let snapshot = format!("v{generation}");
+        let current_probe = probe(&temp.path().join("library.db"), &key, &snapshot, generation);
+        let (mut session, _) = layout
+            .prepare(&[current_probe.clone()], Some(u64::MAX))
+            .unwrap();
+        apply_range(&mut session, &key, &snapshot, 0, generation, generation);
+        session.activate(&[current_probe]).unwrap();
+
+        if generation == 2 {
+            fs::write(
+                PathBuf::from(format!("{}-wal", layout.generation_path(1).display())),
+                b"stale wal",
+            )
+            .unwrap();
+            fs::write(
+                PathBuf::from(format!("{}-shm", layout.generation_path(1).display())),
+                b"stale shm",
+            )
+            .unwrap();
+            fs::write(
+                temp.path().join("local_catalog-v1-g1.db.backup"),
+                b"keep me",
+            )
+            .unwrap();
+        }
+    }
+
+    let manifest = layout.read_manifest().unwrap();
+    assert_eq!(manifest.active_generation, 3);
+    assert_eq!(manifest.previous_generation, Some(2));
+    assert!(!layout.generation_path(1).exists());
+    assert!(!PathBuf::from(format!("{}-wal", layout.generation_path(1).display())).exists());
+    assert!(!PathBuf::from(format!("{}-shm", layout.generation_path(1).display())).exists());
+    assert!(layout.generation_path(2).is_file());
+    assert!(layout.generation_path(3).is_file());
+    assert!(temp.path().join("local_catalog-v1-g1.db.backup").is_file());
 }
 
 #[test]

@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+log.workspace = true
 rusqlite = { version = "0.40", features = ["backup", "bundled"] }
 serde.workspace = true
 serde_json.workspace = true

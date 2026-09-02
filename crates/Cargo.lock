@@ -4277,6 +4277,7 @@ dependencies = [
 name = "qbz-local-catalog"
 version = "0.1.0"
 dependencies = [
+ "log",
  "rusqlite",
  "rustix 1.1.4",
  "serde",

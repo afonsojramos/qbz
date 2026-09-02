@@ -92,6 +92,9 @@ pub fn bootstrap_legacy_caches_at_with_progress(
 ) -> Result<BootstrapOutcome> {
     let layout = BootstrapLayout::new(&locations.catalog_dir);
     if let ActiveCatalog::Ready { catalog, manifest } = layout.open_active() {
+        // Also performs the one-time migration for profiles created by builds
+        // that published generations but never removed obsolete ones.
+        layout.prune_obsolete_generations(&manifest);
         return Ok(BootstrapOutcome::Activated {
             generation: manifest.active_generation,
             track_count: catalog.stats()?.track_count,

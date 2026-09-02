@@ -13,8 +13,8 @@ mod schema;
 
 pub use bootstrap::{
     ActiveCatalog, BootstrapBatch, BootstrapLayout, BootstrapManifest, BootstrapOutcome,
-    BootstrapProgress, BootstrapSession, FallbackReason, PreflightReport, SourceCheckpoint,
-    SourceProbe, BOOTSTRAP_BATCH_ROWS,
+    BootstrapProgress, BootstrapSession, FallbackReason, GenerationPruneReport, PreflightReport,
+    SourceCheckpoint, SourceProbe, BOOTSTRAP_BATCH_ROWS,
 };
 pub use catalog::{
     normalize_artist_key, normalize_sort_key, Catalog, CatalogStats, IntegrityReport, QueryMetrics,
