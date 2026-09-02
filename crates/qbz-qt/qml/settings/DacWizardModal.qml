@@ -69,6 +69,9 @@ Item {
     property bool showManual: false
 
     readonly property int openSeq: doc.openSeq || 0
+    onVisibleChanged: if (visible) {
+        Qt.callLater(function () { closeX.forceActiveFocus() })
+    }
     onOpenSeqChanged: {
         root.step = 0
         root.welcomeConfirmed = false
@@ -77,6 +80,13 @@ Item {
         root.reviewRestartDone = false
         root.showManual = false
         manualInput.text = ""
+        if (root.visible)
+            Qt.callLater(function () { closeX.forceActiveFocus() })
+    }
+
+    Keys.onEscapePressed: function (event) {
+        QbzDacWizard.close()
+        event.accepted = true
     }
 
     // Step labels for the header rail (index = step).
@@ -116,12 +126,34 @@ Item {
 
         width: parent ? parent.width : 0
         height: 28
+        activeFocusOnTab: visible && enabled
+        Accessible.role: Accessible.CheckBox
+        Accessible.name: label
+        Accessible.checked: checked
+        Accessible.onToggleAction: toggled()
+        Keys.onPressed: function (event) {
+            if (!event.isAutoRepeat
+                    && (event.key === Qt.Key_Space
+                        || event.key === Qt.Key_Return
+                        || event.key === Qt.Key_Enter)) {
+                checkRow.toggled()
+                event.accepted = true
+            }
+        }
+        Rectangle {
+            anchors.fill: parent
+            radius: theme.radiusSm
+            color: "transparent"
+            border.width: checkRow.activeFocus ? 2 : 0
+            border.color: theme.accent
+        }
 
         QbzCheckbox {
             id: box
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             checked: checkRow.checked
+            enabled: false
             // DISPLAY-ONLY. The row MouseArea below is declared last, so it
             // sits on top and owns every click — exactly as the reference
             // shadows QbzCheckbox's internal toggle. No `onToggled` here on
@@ -142,6 +174,7 @@ Item {
         MouseArea {
             anchors.fill: parent
             cursorShape: Qt.PointingHandCursor
+            onPressed: checkRow.forceActiveFocus()
             onClicked: checkRow.toggled()
         }
     }
@@ -231,6 +264,26 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 width: 28
                 height: 28
+                activeFocusOnTab: root.visible
+                Accessible.role: Accessible.Button
+                Accessible.name: QbzSession.tr("Close", QbzSession.trRev)
+                Accessible.onPressAction: QbzDacWizard.close()
+                Keys.onPressed: function (event) {
+                    if (!event.isAutoRepeat
+                            && (event.key === Qt.Key_Space
+                                || event.key === Qt.Key_Return
+                                || event.key === Qt.Key_Enter)) {
+                        QbzDacWizard.close()
+                        event.accepted = true
+                    }
+                }
+                Rectangle {
+                    anchors.fill: parent
+                    radius: theme.radiusSm
+                    color: "transparent"
+                    border.width: closeX.activeFocus ? 2 : 0
+                    border.color: theme.accent
+                }
                 QbzIcon {
                     anchors.centerIn: parent
                     width: 17
@@ -243,6 +296,7 @@ Item {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
+                    onPressed: closeX.forceActiveFocus()
                     onClicked: QbzDacWizard.close()
                 }
             }
@@ -535,9 +589,33 @@ Item {
                     // Escape-hatch toggle (only when enumeration found devices;
                     // otherwise the manual block shows unconditionally).
                     Item {
+                        id: manualEntryToggle
                         visible: root.doc.hasEnumeration === true
                         width: parent.width
                         height: visible ? 22 : 0
+                        activeFocusOnTab: visible && enabled
+                        Accessible.role: Accessible.Button
+                        Accessible.name: manualToggle.text
+                        Accessible.onPressAction: root.showManual = !root.showManual
+                        Keys.onPressed: function (event) {
+                            if (!event.isAutoRepeat
+                                    && (event.key === Qt.Key_Space
+                                        || event.key === Qt.Key_Return
+                                        || event.key === Qt.Key_Enter)) {
+                                root.showManual = !root.showManual
+                                event.accepted = true
+                            }
+                        }
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            width: manualToggle.implicitWidth
+                            height: parent.height
+                            radius: theme.radiusSm
+                            color: "transparent"
+                            border.width: manualEntryToggle.activeFocus ? 2 : 0
+                            border.color: theme.accent
+                        }
                         Text {
                             id: manualToggle
                             anchors.verticalCenter: parent.verticalCenter
@@ -553,6 +631,7 @@ Item {
                             anchors.bottom: parent.bottom
                             width: manualToggle.implicitWidth
                             cursorShape: Qt.PointingHandCursor
+                            onPressed: manualEntryToggle.forceActiveFocus()
                             onClicked: root.showManual = !root.showManual
                         }
                     }
@@ -667,12 +746,26 @@ Item {
                             spacing: 8
 
                             Rectangle {
+                                id: configHeader
                                 width: parent.width
                                 height: 40
                                 radius: theme.radiusSm
                                 color: cfgHead.containsMouse ? theme.surfaceHover : theme.surfaceElevated
                                 border.width: 1
-                                border.color: theme.borderSubtle
+                                border.color: activeFocus ? theme.accent : theme.borderSubtle
+                                activeFocusOnTab: visible && enabled
+                                Accessible.role: Accessible.Button
+                                Accessible.name: cfgCol.modelData.name || ""
+                                Accessible.onPressAction: QbzDacWizard.toggleConfig(cfgCol.index)
+                                Keys.onPressed: function (event) {
+                                    if (!event.isAutoRepeat
+                                            && (event.key === Qt.Key_Space
+                                                || event.key === Qt.Key_Return
+                                                || event.key === Qt.Key_Enter)) {
+                                        QbzDacWizard.toggleConfig(cfgCol.index)
+                                        event.accepted = true
+                                    }
+                                }
 
                                 QbzIcon {
                                     id: cfgChevron
@@ -701,6 +794,7 @@ Item {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
+                                    onPressed: configHeader.forceActiveFocus()
                                     onClicked: QbzDacWizard.toggleConfig(cfgCol.index)
                                 }
                             }
@@ -776,6 +870,24 @@ Item {
                                 radius: theme.radiusSm
                                 color: (trackTa.containsMouse && testStep.playing)
                                     ? theme.surfaceHover : "transparent"
+                                activeFocusOnTab: testStep.playing
+                                border.width: activeFocus ? 2 : 0
+                                border.color: theme.accent
+                                Accessible.role: Accessible.Button
+                                Accessible.name: trackRow.modelData
+                                Accessible.onPressAction: {
+                                    if (testStep.playing)
+                                        QbzDacWizard.testPlayIndex(trackRow.index)
+                                }
+                                Keys.onPressed: function (event) {
+                                    if (testStep.playing && !event.isAutoRepeat
+                                            && (event.key === Qt.Key_Space
+                                                || event.key === Qt.Key_Return
+                                                || event.key === Qt.Key_Enter)) {
+                                        QbzDacWizard.testPlayIndex(trackRow.index)
+                                        event.accepted = true
+                                    }
+                                }
 
                                 // Fixed glyph slot (width AND height) so the
                                 // ♪→▶ hover swap can never reflow the row.
@@ -809,6 +921,7 @@ Item {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: testStep.playing ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                    onPressed: if (testStep.playing) trackRow.forceActiveFocus()
                                     onClicked: {
                                         if (testStep.playing)
                                             QbzDacWizard.testPlayIndex(trackRow.index)
@@ -841,12 +954,26 @@ Item {
                         // playing (the 4 test tracks or the user's own), which
                         // is why they call the PLAYER, not the wizard.
                         Rectangle {
+                            id: prevButton
                             visible: testStep.playing
                             width: visible ? 34 : 0
                             height: 34
                             radius: theme.radiusSm
                             border.width: 1
-                            border.color: theme.borderSubtle
+                            border.color: activeFocus ? theme.accent : theme.borderSubtle
+                            activeFocusOnTab: visible && enabled
+                            Accessible.role: Accessible.Button
+                            Accessible.name: QbzSession.tr("Previous", QbzSession.trRev)
+                            Accessible.onPressAction: QbzPlayer.previous()
+                            Keys.onPressed: function (event) {
+                                if (!event.isAutoRepeat
+                                        && (event.key === Qt.Key_Space
+                                            || event.key === Qt.Key_Return
+                                            || event.key === Qt.Key_Enter)) {
+                                    QbzPlayer.previous()
+                                    event.accepted = true
+                                }
+                            }
                             color: prevTa.containsMouse ? theme.surfaceHover : theme.surfaceElevated
                             QbzIcon {
                                 anchors.centerIn: parent
@@ -860,16 +987,31 @@ Item {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
+                                onPressed: prevButton.forceActiveFocus()
                                 onClicked: QbzPlayer.previous()
                             }
                         }
                         Rectangle {
+                            id: nextButton
                             visible: testStep.playing
                             width: visible ? 34 : 0
                             height: 34
                             radius: theme.radiusSm
                             border.width: 1
-                            border.color: theme.borderSubtle
+                            border.color: activeFocus ? theme.accent : theme.borderSubtle
+                            activeFocusOnTab: visible && enabled
+                            Accessible.role: Accessible.Button
+                            Accessible.name: QbzSession.tr("Next", QbzSession.trRev)
+                            Accessible.onPressAction: QbzPlayer.next()
+                            Keys.onPressed: function (event) {
+                                if (!event.isAutoRepeat
+                                        && (event.key === Qt.Key_Space
+                                            || event.key === Qt.Key_Return
+                                            || event.key === Qt.Key_Enter)) {
+                                    QbzPlayer.next()
+                                    event.accepted = true
+                                }
+                            }
                             color: nextTa.containsMouse ? theme.surfaceHover : theme.surfaceElevated
                             QbzIcon {
                                 anchors.centerIn: parent
@@ -883,6 +1025,7 @@ Item {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
+                                onPressed: nextButton.forceActiveFocus()
                                 onClicked: QbzPlayer.next()
                             }
                         }

@@ -120,8 +120,29 @@ Column {
         visible: (section.rows || []).length > 0
 
         Item {
+            id: sectionHeader
             width: parent.width
             height: 28
+            activeFocusOnTab: visible && enabled
+            Accessible.role: Accessible.Button
+            Accessible.name: section.title
+            Accessible.onPressAction: section.open = !section.open
+            Keys.onPressed: function (event) {
+                if (!event.isAutoRepeat
+                        && (event.key === Qt.Key_Space
+                            || event.key === Qt.Key_Return
+                            || event.key === Qt.Key_Enter)) {
+                    section.open = !section.open
+                    event.accepted = true
+                }
+            }
+            Rectangle {
+                anchors.fill: parent
+                radius: theme.radiusSm
+                color: "transparent"
+                border.width: sectionHeader.activeFocus ? 2 : 0
+                border.color: theme.accent
+            }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: section.title
@@ -140,6 +161,7 @@ Column {
             MouseArea {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
+                onPressed: sectionHeader.forceActiveFocus()
                 onClicked: section.open = !section.open
             }
         }
@@ -180,8 +202,35 @@ Column {
 
     // ------------------------------------------------------------- header
     Item {
+        id: panelHeader
         width: parent.width
         height: 44
+        activeFocusOnTab: visible && enabled
+        Accessible.role: Accessible.Button
+        Accessible.name: root.t("Diagnostics")
+        Accessible.onPressAction: panelHeader.activate()
+        function activate() {
+            root.expanded = !root.expanded
+            QbzShell.diagSetOpen(root.expanded)
+            if (root.expanded && root.doc.loaded !== true && root.doc.loading !== true)
+                QbzShell.diagRefresh()
+        }
+        Keys.onPressed: function (event) {
+            if (!event.isAutoRepeat
+                    && (event.key === Qt.Key_Space
+                        || event.key === Qt.Key_Return
+                        || event.key === Qt.Key_Enter)) {
+                panelHeader.activate()
+                event.accepted = true
+            }
+        }
+        Rectangle {
+            anchors.fill: parent
+            radius: theme.radiusSm
+            color: "transparent"
+            border.width: panelHeader.activeFocus ? 2 : 0
+            border.color: theme.accent
+        }
         Column {
             anchors.verticalCenter: parent.verticalCenter
             spacing: 2
@@ -208,16 +257,8 @@ Column {
         MouseArea {
             anchors.fill: parent
             cursorShape: Qt.PointingHandCursor
-            onClicked: {
-                root.expanded = !root.expanded
-                // Gates the publisher: a collapsed panel is not reading, and a
-                // publish can carry a hundred rows.
-                QbzShell.diagSetOpen(root.expanded)
-                // First expand collects; afterwards Refresh is explicit, 1:1
-                // with DiagnosticsPanel.slint:201-203.
-                if (root.expanded && root.doc.loaded !== true && root.doc.loading !== true)
-                    QbzShell.diagRefresh()
-            }
+            onPressed: panelHeader.forceActiveFocus()
+            onClicked: panelHeader.activate()
         }
     }
 

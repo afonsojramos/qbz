@@ -149,8 +149,9 @@ Rectangle {
     // Escape stack) lives in Rust behind QbzHotkeys.keyPressed; the QML side
     // only computes the gate (§1.4.4). Null activeFocusItem passes the gate
     // (the semantically right case). Every existing Keys. handler accepts
-    // only what it owns, and all buttons are MouseArea-based and can never
-    // take keyboard focus — verified non-conflicts (§4.1).
+    // only what it owns. Shared controls accept their Space/Enter events
+    // before they bubble here; in particular a focused Settings toggle owns
+    // Space, so toggling it cannot also trigger global play/pause (§4.1).
     Keys.onPressed: function (event) {
         var w = root.Window.window
         var afi = w !== null ? w.activeFocusItem : null

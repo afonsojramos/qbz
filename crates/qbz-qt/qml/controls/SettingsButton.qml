@@ -8,6 +8,8 @@ import com.blitzfc.qbz
 import "../theme"
 
 Rectangle {
+    id: root
+
     property string text: ""
     property string iconName: ""
     // Trailing chevron/glyph AFTER the label (the Slint settings rows that open
@@ -29,10 +31,25 @@ Rectangle {
     width: Math.max(iconName !== "" && text === "" ? 34 : minWidth, row.implicitWidth + 24)
     height: btnHeight
     radius: theme.radiusSm
-    border.width: 1
-    border.color: danger ? theme.danger : theme.borderSubtle
+    border.width: root.activeFocus ? 2 : 1
+    border.color: root.activeFocus ? theme.accent
+        : (danger ? theme.danger : theme.borderSubtle)
     color: enabled && btnArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
     opacity: enabled ? 1.0 : 0.4
+    activeFocusOnTab: enabled
+    Accessible.role: Accessible.Button
+    Accessible.name: text
+    Accessible.onPressAction: if (root.enabled) root.clicked()
+
+    Keys.onPressed: function (event) {
+        if (root.enabled && !event.isAutoRepeat
+                && (event.key === Qt.Key_Space
+                    || event.key === Qt.Key_Return
+                    || event.key === Qt.Key_Enter)) {
+            root.clicked()
+            event.accepted = true
+        }
+    }
 
     Row {
         id: row
@@ -68,6 +85,7 @@ Rectangle {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: parent.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onClicked: if (parent.enabled) parent.clicked()
+        onPressed: if (root.enabled) root.forceActiveFocus()
+        onClicked: if (root.enabled) root.clicked()
     }
 }

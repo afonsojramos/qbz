@@ -489,6 +489,30 @@ pub enum SweepMode {
     PerAlbum,
 }
 
+/// The server's own media-library scan state (`getScanStatus`). `count` is
+/// the number of items processed so far; the Subsonic protocol exposes no
+/// total, so callers must not turn it into a percentage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanStatus {
+    pub scanning: bool,
+    pub count: u64,
+}
+
+fn scan_status_of(response: &serde_json::Value) -> Result<ScanStatus> {
+    let status = response
+        .get("scanStatus")
+        .ok_or_else(|| SubsonicError::Decode("response has no scanStatus member".into()))?;
+    let scanning = status
+        .get("scanning")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| SubsonicError::Decode("scanStatus has no scanning flag".into()))?;
+    let count = status
+        .get("count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    Ok(ScanStatus { scanning, count })
+}
+
 // ---------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------
@@ -614,6 +638,15 @@ impl SubsonicClient {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
         })
+    }
+
+    /// `getScanStatus.view` — the server's own library refresh, distinct from
+    /// QBZ copying that catalog into its local cache. Navidrome implements the
+    /// standard endpoint and may expose incomplete/disabled rows while this is
+    /// true, so callers should defer an authoritative QBZ sweep.
+    pub async fn scan_status(&self) -> Result<ScanStatus> {
+        let response = self.get("getScanStatus.view", "").await?;
+        scan_status_of(&response)
     }
 
     /// `getMusicFolders.view`.
@@ -893,6 +926,28 @@ mod tests {
         let body = br#"{"subsonic-response":{"status":"ok","version":"1.16.1","musicFolders":{"musicFolder":[{"id":1,"name":"Music Library"}]}}}"#;
         let v = parse_envelope(body).expect("ok envelope");
         assert_eq!(v["musicFolders"]["musicFolder"][0]["name"], "Music Library");
+    }
+
+    #[test]
+    fn scan_status_preserves_server_progress_without_inventing_a_total() {
+        let body = br#"{"subsonic-response":{"status":"ok","version":"1.16.1","type":"navidrome","scanStatus":{"scanning":true,"count":5512}}}"#;
+        let response = parse_envelope(body).expect("ok envelope");
+        assert_eq!(
+            scan_status_of(&response).unwrap(),
+            ScanStatus {
+                scanning: true,
+                count: 5_512,
+            }
+        );
+    }
+
+    #[test]
+    fn malformed_scan_status_cannot_claim_the_server_is_idle() {
+        let response = serde_json::json!({ "scanStatus": { "count": 12 } });
+        assert!(matches!(
+            scan_status_of(&response),
+            Err(SubsonicError::Decode(_))
+        ));
     }
 
     #[test]

@@ -3507,6 +3507,25 @@ fn apply_scroll_physics() {
     }
 }
 
+/// Apply Settings > Appearance > Interface size through Qt's native high-DPI
+/// path. This must run before `QGuiApplication::new()`: Qt then lays out the
+/// scene in device-independent pixels and rasterizes text/vector content at
+/// the effective DPR. A QML `scale` transform instead enlarges an already
+/// rendered scene and produces the blurred text this setting exists to avoid.
+fn apply_interface_scale_preference() {
+    const QT_SCALE_FACTOR: &str = "QT_SCALE_FACTOR";
+    let explicit = std::env::var_os(QT_SCALE_FACTOR)
+        .map(|value| !value.to_string_lossy().trim().is_empty())
+        .unwrap_or(false);
+    if explicit {
+        log::info!("[qbz-qt] explicit {QT_SCALE_FACTOR} preserved");
+        return;
+    }
+    let factor = settings_qt::ui_scale_factor();
+    std::env::set_var(QT_SCALE_FACTOR, factor.to_string());
+    log::info!("[qbz-qt] native interface scale -> {factor} (QT_SCALE_FACTOR)");
+}
+
 // ============================ Shutdown guarantee ==========================
 
 /// One-shot latch for [`arm_hard_exit_watchdog`].
@@ -3572,6 +3591,9 @@ pub(crate) fn arm_hard_exit_watchdog(source: &'static str) {
 
 fn main() {
     qbz_log::install("info");
+    // Before even the disposable GPU-preflight QGuiApplication. A child
+    // spawned later inherits the resolved factor and takes the same path.
+    apply_interface_scale_preference();
     // Internal, disposable graphics child. It must branch before the normal
     // instance lock, navigation crash-chain, runtime and audio thread: a GPU
     // whose DMA-BUFs the active Wayland compositor rejects is expected to kill

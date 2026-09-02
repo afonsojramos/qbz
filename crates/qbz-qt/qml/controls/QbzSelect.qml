@@ -38,8 +38,8 @@ Rectangle {
     width: sm ? Math.max(0, menuWidth - 40) : menuWidth
     height: sm ? 30 : 34
     radius: sm ? 6 : theme.radiusSm
-    border.width: sm ? 0 : 1
-    border.color: theme.borderSubtle
+    border.width: selectRoot.activeFocus ? 2 : (sm ? 0 : 1)
+    border.color: selectRoot.activeFocus ? theme.accent : theme.borderSubtle
     // Resting fill goes translucent under the dynamic background so the field
     // shows through the control (QbzSelect.slint:110-116). Hover keeps its own
     // token, which is already translucent.
@@ -47,6 +47,33 @@ Rectangle {
         ? theme.surfaceHover
         : (theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated)
     opacity: enabled ? 1.0 : 0.4
+    activeFocusOnTab: enabled
+    Accessible.role: Accessible.ComboBox
+    Accessible.name: currentIndex >= 0 && currentIndex < options.length
+        ? optLabel(currentIndex) : ""
+    Accessible.onPressAction: selectRoot.openPopup()
+
+    Keys.onPressed: function (event) {
+        if (!selectRoot.enabled || event.isAutoRepeat)
+            return
+        if (event.key === Qt.Key_Space
+                || event.key === Qt.Key_Return
+                || event.key === Qt.Key_Enter) {
+            if (popup.opened)
+                popup.close()
+            else
+                selectRoot.openPopup()
+        } else if (event.key === Qt.Key_Up && selectRoot.currentIndex > 0) {
+            selectRoot.selected(selectRoot.currentIndex - 1)
+        } else if (event.key === Qt.Key_Down
+                   && selectRoot.currentIndex + 1 < selectRoot.options.length) {
+            selectRoot.selected(selectRoot.currentIndex + 1)
+        } else {
+            return
+        }
+        // Do not let Space reach the global play/pause binding.
+        event.accepted = true
+    }
 
     // `width`, NOT `menuWidth`: QbzSelect.slint:89-91 resolves the open list as
     // `max(popup-width, EFF-WIDTH)`, and eff-width is `menu-width - 40px` at
@@ -88,9 +115,36 @@ Rectangle {
         if (!selectRoot.enabled || selectRoot.options.length === 0)
             return
         selectRoot.filter = ""
+        listContent.currentIndex = selectRoot.currentIndex
         popup.open()
         if (selectRoot.searchable)
             searchInput.forceActiveFocus()
+    }
+    function optionMatches(i) {
+        return i >= 0 && i < options.length
+            && (filter === ""
+                || optLabel(i).toLowerCase().indexOf(filter.toLowerCase()) >= 0)
+    }
+    function moveSearchHighlight(delta) {
+        let i = listContent.currentIndex
+        for (let n = 0; n < options.length; n++) {
+            i += delta
+            if (i < 0 || i >= options.length)
+                break
+            if (optionMatches(i)) {
+                listContent.currentIndex = i
+                listContent.positionViewAtIndex(i, ListView.Contain)
+                return
+            }
+        }
+    }
+    function acceptSearchHighlight() {
+        const i = listContent.currentIndex
+        if (!optionMatches(i))
+            return
+        popup.close()
+        selectRoot.forceActiveFocus()
+        selectRoot.selected(i)
     }
 
     Row {
@@ -149,6 +203,7 @@ Rectangle {
         cursorShape: selectRoot.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
         onClicked: {
             if (selectRoot.enabled) {
+                selectRoot.forceActiveFocus()
                 selectRoot.openPopup()
             }
         }
@@ -214,7 +269,30 @@ Rectangle {
                             verticalAlignment: Text.AlignVCenter
                             clip: true
                             text: selectRoot.filter
-                            onTextChanged: selectRoot.filter = text
+                            onTextChanged: {
+                                selectRoot.filter = text
+                                if (!listContent)
+                                    return
+                                for (let i = 0; i < selectRoot.options.length; i++) {
+                                    if (selectRoot.optionMatches(i)) {
+                                        listContent.currentIndex = i
+                                        return
+                                    }
+                                }
+                                listContent.currentIndex = -1
+                            }
+                            Keys.onPressed: function (event) {
+                                if (event.key === Qt.Key_Down)
+                                    selectRoot.moveSearchHighlight(1)
+                                else if (event.key === Qt.Key_Up)
+                                    selectRoot.moveSearchHighlight(-1)
+                                else if (event.key === Qt.Key_Return
+                                         || event.key === Qt.Key_Enter)
+                                    selectRoot.acceptSearchHighlight()
+                                else
+                                    return
+                                event.accepted = true
+                            }
                         }
                         Text {
                             visible: searchInput.text === ""

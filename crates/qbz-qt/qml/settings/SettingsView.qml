@@ -24,6 +24,18 @@
 // republishes, and the rows re-render from the new document (the Slint
 // "single source of truth in SettingsState" pattern).
 //
+// KEYBOARD FOCUS CONTRACT (for every new setting): Qt Quick has no HTML-like
+// numeric tabindex; its tab index is the declaration order of enabled,
+// visible items with `activeFocusOnTab`. Therefore settings and their controls
+// MUST be declared in the same top-to-bottom order in which they are drawn and
+// MUST use the shared QbzToggle/QbzSelect/QbzSlider/QbzLineEdit/SettingsButton/
+// QbzCheckbox controls. Do not put a bare MouseArea on a new setting action:
+// the shared controls provide the focus ring and Enter/Space activation, and
+// accept Space so it cannot bubble into AppShell's global play/pause hotkey.
+// If a custom interactive item is genuinely necessary, it inherits this same
+// contract. This comment is intentionally at the composition root so both
+// contributors and coding agents encounter it when adding a settings row.
+//
 // The NavButtons row inside the 92px header is a 0px placeholder — nav
 // history lives in the global HeaderBar in this port, like every other view.
 
@@ -53,6 +65,8 @@ Item {
     // `root.section = n` would work once and then re-introduce the bug one
     // navigation later, in a way that looks fixed under casual testing.
     readonly property int section: QbzBridge.settingsSection
+    readonly property bool migrationRunning:
+        (doc.importExport || ({})).migrationRunning === true
 
     readonly property bool sandboxed: {
         const m = (doc.dev || ({})).installMethod || ""
@@ -74,8 +88,12 @@ Item {
 
     // ============================ the view ================================
     Column {
+        id: settingsContent
         anchors.fill: parent
         spacing: 0
+        // A migration may be hidden, but its settings tree remains inert until
+        // Rust finishes. Global navigation is outside this view and stays live.
+        enabled: !root.migrationRunning
 
         // --- Header (92px; NavButtons is a 0px placeholder in this port) --
         Item {
@@ -114,6 +132,22 @@ Item {
                     radius: theme.radiusSm
                     color: active ? theme.surfaceElevated
                         : snArea.containsMouse ? theme.surfaceHover : "transparent"
+                    activeFocusOnTab: visible && enabled
+                    border.width: activeFocus ? 2 : 0
+                    border.color: theme.accent
+                    Accessible.role: Accessible.Button
+                    Accessible.name: label
+                    Accessible.onPressAction: clicked()
+
+                    Keys.onPressed: function (event) {
+                        if (!event.isAutoRepeat
+                                && (event.key === Qt.Key_Space
+                                    || event.key === Qt.Key_Return
+                                    || event.key === Qt.Key_Enter)) {
+                            clicked()
+                            event.accepted = true
+                        }
+                    }
                     Row {
                         anchors.fill: parent
                         anchors.leftMargin: 12
@@ -144,6 +178,7 @@ Item {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
+                        onPressed: parent.forceActiveFocus()
                         onClicked: parent.clicked()
                     }
                 }
@@ -260,6 +295,37 @@ Item {
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
 
+                    // Tab can move into a control below the viewport. Reveal
+                    // that control as focus changes so keyboard navigation is
+                    // never technically correct but visually lost offscreen.
+                    function revealFocusItem(item) {
+                        if (!item)
+                            return
+                        var ancestor = item
+                        while (ancestor && ancestor !== panelCol)
+                            ancestor = ancestor.parent
+                        if (ancestor !== panelCol)
+                            return
+                        const point = item.mapToItem(flick.contentItem, 0, 0)
+                        const margin = 12
+                        if (point.y < flick.contentY + margin)
+                            flick.contentY = Math.max(0, point.y - margin)
+                        else if (point.y + item.height > flick.contentY + flick.height - margin)
+                            flick.contentY = Math.min(
+                                Math.max(0, flick.contentHeight - flick.height),
+                                point.y + item.height - flick.height + margin)
+                    }
+
+                    Connections {
+                        target: root.Window.window
+                        function onActiveFocusItemChanged() {
+                            const win = root.Window.window
+                            Qt.callLater(function () {
+                                flick.revealFocusItem(win ? win.activeFocusItem : null)
+                            })
+                        }
+                    }
+
                     Column {
                         id: panelCol
                         x: 20
@@ -332,7 +398,7 @@ Item {
                                 OfflineSettings {
                                     width: parent.width
                                     doc: root.doc
-                                confirmHost: confirmHost
+                                    confirmHost: settingsConfirmHost
                                 }
                             }
                         }
@@ -342,7 +408,7 @@ Item {
                                 LocalLibrarySettings {
                                     width: parent.width
                                     doc: root.doc
-                                    confirmHost: confirmHost
+                                    confirmHost: settingsConfirmHost
                                     tabOrderModal: localTabsConfigModal
                                 }
                             }
@@ -362,7 +428,7 @@ Item {
                                 IntegrationsSettings {
                                     width: parent.width
                                     doc: root.doc
-                                    confirmHost: confirmHost
+                                    confirmHost: settingsConfirmHost
                                 }
                             }
                         }
@@ -372,6 +438,7 @@ Item {
                                 ImportExportSettings {
                                     width: parent.width
                                     doc: root.doc
+                                    migrationSetupModal: migrationSetupOverlay
                                 }
                             }
                         }
@@ -416,7 +483,7 @@ Item {
     // declaration order alone puts it over every panel and the sub-nav.
     // Panels that need it are handed the reference (see LocalLibrarySettings
     // / PlexSettings `confirmHost`).
-    SettingsConfirmHost { id: confirmHost }
+    SettingsConfirmHost { id: settingsConfirmHost }
 
     // App-wide Local Library order. Mounted at the view root so its scrim
     // covers the sub-navigation and the scrolled panel alike.
@@ -440,4 +507,18 @@ Item {
     // area, and the reference is an overlay inside the app shell too, not a
     // separate window (DacWizardModal.slint:8-9).
     DacWizardModal { }
+
+    MigrationSetupModal {
+        id: migrationSetupOverlay
+        anchors.fill: parent
+        doc: root.doc
+        confirmHost: settingsConfirmHost
+    }
+
+    // Mounted last so a long account migration has one unmistakable progress
+    // surface over every Settings section. Closing it never cancels the task.
+    MigrationProgressModal {
+        anchors.fill: parent
+        doc: root.doc
+    }
 }

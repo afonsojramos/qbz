@@ -62,6 +62,18 @@ Rectangle {
     width: expandable ? collapsedSize : 240
     height: (searchMode || expandable) ? collapsedSize : 34
     color: "transparent"
+    activeFocusOnTab: root.enabled && root.expandable && !root.open
+
+    Keys.onPressed: function (event) {
+        if (root.enabled && root.expandable && !root.open
+                && !event.isAutoRepeat
+                && (event.key === Qt.Key_Space
+                    || event.key === Qt.Key_Return
+                    || event.key === Qt.Key_Enter)) {
+            root.open = true
+            event.accepted = true
+        }
+    }
 
     /// Set by `clearSearch()`, released the moment the CALLER publishes anything
     /// into `text`. While it is set, the focus-loss re-seed Binding below is
@@ -212,6 +224,7 @@ Rectangle {
                     verticalAlignment: Text.AlignVCenter
                     clip: true
                     selectByMouse: true
+                    activeFocusOnTab: root.enabled && (!root.expandable || root.open)
                     echoMode: root.isPassword ? TextInput.Password : TextInput.Normal
                     text: root.text
                     onAccepted: { root.accepted(text); root.committed(text) }

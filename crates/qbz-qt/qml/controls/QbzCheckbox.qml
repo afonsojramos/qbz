@@ -20,8 +20,24 @@ Rectangle {
     height: 18
     radius: 4
     color: root.checked ? theme.accent : "transparent"
-    border.width: root.checked ? 0 : 2
-    border.color: theme.textMuted
+    border.width: root.activeFocus ? 2 : (root.checked ? 0 : 2)
+    border.color: root.activeFocus
+        ? (root.checked ? theme.accentGlyphColor : theme.accent)
+        : theme.textMuted
+    activeFocusOnTab: root.enabled
+    Accessible.role: Accessible.CheckBox
+    Accessible.checked: root.checked
+    Accessible.onToggleAction: if (root.enabled) root.toggled()
+
+    Keys.onPressed: function (event) {
+        if (root.enabled && !event.isAutoRepeat
+                && (event.key === Qt.Key_Space
+                    || event.key === Qt.Key_Return
+                    || event.key === Qt.Key_Enter)) {
+            root.toggled()
+            event.accepted = true
+        }
+    }
 
     QbzIcon {
         anchors.centerIn: parent
@@ -46,6 +62,7 @@ Rectangle {
     MouseArea {
         anchors.fill: parent
         cursorShape: Qt.PointingHandCursor
+        onPressed: root.forceActiveFocus()
         onClicked: root.toggled()
     }
 }

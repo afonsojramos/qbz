@@ -134,11 +134,31 @@ Column {
             spacing: 8
             // Collapse chevron (only when the master toggle is on).
             Rectangle {
+                id: collapseButton
                 visible: root.doc.scrobbleEnabled === true
                 width: 28
                 height: 28
                 radius: theme.radiusSm
                 color: colArea.containsMouse ? theme.surfaceHover : "transparent"
+                activeFocusOnTab: visible && enabled
+                border.width: activeFocus ? 2 : 0
+                border.color: theme.accent
+                Accessible.role: Accessible.Button
+                Accessible.name: QbzSession.tr("Scrobbling", QbzSession.trRev)
+                Accessible.onPressAction: collapseButton.activate()
+                function activate() {
+                    QbzBridge.settingsBool(
+                        "scrobble-collapse", root.doc.scrobbleUiCollapsed !== true)
+                }
+                Keys.onPressed: function (event) {
+                    if (!event.isAutoRepeat
+                            && (event.key === Qt.Key_Space
+                                || event.key === Qt.Key_Return
+                                || event.key === Qt.Key_Enter)) {
+                        collapseButton.activate()
+                        event.accepted = true
+                    }
+                }
                 QbzIcon {
                     anchors.centerIn: parent
                     // 28px hit-box / 18px glyph (IntegrationsSettings.slint:129).
@@ -152,7 +172,8 @@ Column {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.settingsBool("scrobble-collapse", root.doc.scrobbleUiCollapsed !== true)
+                    onPressed: collapseButton.forceActiveFocus()
+                    onClicked: collapseButton.activate()
                 }
             }
             QbzToggle {

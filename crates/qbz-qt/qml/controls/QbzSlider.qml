@@ -8,6 +8,8 @@ import com.blitzfc.qbz
 import "../theme"
 
 Item {
+    id: root
+
     property int minimum: 0
     property int maximum: 10
     property int value: 0
@@ -27,6 +29,17 @@ Item {
     // Disabled = inert (the bit-perfect ALSA direct path locks volume).
     // `enabled` already disarms the MouseArea; this is the matching dim.
     opacity: enabled ? 1.0 : 0.3
+    activeFocusOnTab: enabled
+    Accessible.role: Accessible.Slider
+
+    Rectangle {
+        anchors.fill: parent
+        anchors.margins: -3
+        radius: theme.radiusSm
+        color: "transparent"
+        border.width: root.activeFocus ? 2 : 0
+        border.color: theme.accent
+    }
 
     readonly property int thumbSize: 16
     readonly property real travel: width - thumbSize
@@ -40,6 +53,29 @@ Item {
     function commit(frac) {
         const v = Math.round(minimum + Math.max(0, Math.min(1, frac)) * (maximum - minimum))
         if (v !== value) changed(v)
+    }
+
+    function keyboardCommit(nextValue) {
+        const v = Math.max(minimum, Math.min(maximum, nextValue))
+        if (v !== value)
+            changed(v)
+        released(v)
+    }
+
+    Keys.onPressed: function (event) {
+        if (!root.enabled || event.isAutoRepeat)
+            return
+        if (event.key === Qt.Key_Left || event.key === Qt.Key_Down)
+            root.keyboardCommit(root.value - 1)
+        else if (event.key === Qt.Key_Right || event.key === Qt.Key_Up)
+            root.keyboardCommit(root.value + 1)
+        else if (event.key === Qt.Key_Home)
+            root.keyboardCommit(root.minimum)
+        else if (event.key === Qt.Key_End)
+            root.keyboardCommit(root.maximum)
+        else
+            return
+        event.accepted = true
     }
 
     Rectangle { // track
@@ -70,19 +106,20 @@ Item {
         anchors.fill: parent
         cursorShape: Qt.PointingHandCursor
         onPressed: {
-            parent.dragging = true
-            parent.dragFraction = Math.max(0, Math.min(1, (mouse.x - parent.thumbSize / 2) / parent.travel))
-            parent.commit(parent.dragFraction)
+            root.forceActiveFocus()
+            root.dragging = true
+            root.dragFraction = Math.max(0, Math.min(1, (mouse.x - root.thumbSize / 2) / root.travel))
+            root.commit(root.dragFraction)
         }
         onPositionChanged: {
             if (pressed) {
-                parent.dragFraction = Math.max(0, Math.min(1, (mouse.x - parent.thumbSize / 2) / parent.travel))
-                parent.commit(parent.dragFraction)
+                root.dragFraction = Math.max(0, Math.min(1, (mouse.x - root.thumbSize / 2) / root.travel))
+                root.commit(root.dragFraction)
             }
         }
         onReleased: {
-            parent.dragging = false
-            parent.released(parent.value)
+            root.dragging = false
+            root.released(root.value)
         }
     }
 }

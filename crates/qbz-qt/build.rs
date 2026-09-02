@@ -796,6 +796,8 @@ fn main() {
                 "qml/settings/DacWizardModal.qml",
                 "qml/settings/DeveloperSettings.qml",
                 "qml/settings/ImportExportSettings.qml",
+                "qml/settings/MigrationSetupModal.qml",
+                "qml/settings/MigrationProgressModal.qml",
                 "qml/settings/DiagnosticsPanel.qml",
                 "qml/settings/LibFolderEditModal.qml",
                 "qml/settings/LibraryFolderTable.qml",

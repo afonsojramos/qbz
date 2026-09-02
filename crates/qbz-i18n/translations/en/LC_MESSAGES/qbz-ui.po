@@ -2095,3 +2095,95 @@ msgstr "Restart QBZ to see the migrated local profile."
 
 msgid "The local profile could not be copied; see the log."
 msgstr "The local profile could not be copied; see the log."
+msgid "Delete…"
+msgstr "Delete…"
+
+msgid "Delete migration snapshot?"
+msgstr "Delete migration snapshot?"
+
+msgid "This removes only the migration bundle. The old account's QBZ profile and user data are kept."
+msgstr "This removes only the migration bundle. The old account's QBZ profile and user data are kept."
+
+msgid "Delete snapshot"
+msgstr "Delete snapshot"
+
+msgid "Migration snapshot deleted."
+msgstr "Migration snapshot deleted."
+
+msgid "Could not delete the migration snapshot."
+msgstr "Could not delete the migration snapshot."
+
+msgid "{} is refreshing its library ({} items scanned). Wait for it to finish, then sync again."
+msgstr "{} is refreshing its library ({} items scanned). Wait for it to finish, then sync again."
+
+msgid "No Plex, Jellyfin or Subsonic connection was stored in the source profile, so none could be copied."
+msgstr "No Plex, Jellyfin or Subsonic connection was stored in the source profile, so none could be copied."
+
+msgid "Media server connections copied: {} of {}."
+msgstr "Media server connections copied: {} of {}."
+
+msgid "Copying local profile…"
+msgstr "Copying local profile…"
+
+msgid "Refreshing migrated data…"
+msgstr "Refreshing migrated data…"
+
+msgid "This only happens once. Please wait for it to finish and do not close the window."
+msgstr "This only happens once. Please wait for it to finish and do not close the window."
+
+msgid "You can close this panel; the migration will continue in the background."
+msgstr "You can close this panel; the migration will continue in the background."
+
+msgid "From"
+msgstr "From"
+
+msgid "To"
+msgstr "To"
+
+msgid "Step {} of {}"
+msgstr "Step {} of {}"
+
+msgid "Elapsed: {}"
+msgstr "Elapsed: {}"
+
+msgid "Review the saved source profiles, choose what to copy, and confirm the signed-in destination account."
+msgstr "Review the saved source profiles, choose what to copy, and confirm the signed-in destination account."
+
+msgid "Migrate account data"
+msgstr "Migrate account data"
+
+msgid "Start migration"
+msgstr "Start migration"
+
+msgid "What is a migration profile?"
+msgstr "What is a migration profile?"
+
+msgid "It is a one-time bundle created from the source account. It preserves that account's Qobuz favorites and playlists so they can be added to the account signed in now. Optional local data is copied directly from the old QBZ profile on this computer. Deleting the bundle does not delete the old profile or either account's data."
+msgstr "It is a one-time bundle created from the source account. It preserves that account's Qobuz favorites and playlists so they can be added to the account signed in now. Optional local data is copied directly from the old QBZ profile on this computer. Deleting the bundle does not delete the old profile or either account's data."
+
+msgid "SAVED SOURCE PROFILES"
+msgstr "SAVED SOURCE PROFILES"
+
+msgid "No saved migration profiles are available."
+msgstr "No saved migration profiles are available."
+
+msgid "Selected"
+msgstr "Selected"
+
+msgid "Select"
+msgstr "Select"
+
+msgid "MIGRATION DIRECTION"
+msgstr "MIGRATION DIRECTION"
+
+msgid "Select a source profile above"
+msgstr "Select a source profile above"
+
+msgid "Signed-in Qobuz account · ID {}"
+msgstr "Signed-in Qobuz account · ID {}"
+
+msgid "WHAT TO COPY"
+msgstr "WHAT TO COPY"
+
+msgid "Migration is additive: it does not remove favorites or playlists from either account."
+msgstr "Migration is additive: it does not remove favorites or playlists from either account."

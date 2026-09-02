@@ -226,6 +226,30 @@ pub struct SyncReport {
     pub total: u64,
 }
 
+/// A media-cache sweep failure that the UI can present at the right severity.
+/// A server-side library refresh is not a broken connection: Navidrome keeps
+/// answering requests while its own catalog is incomplete, and exposes that
+/// state through `getScanStatus`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncError {
+    Failed(String),
+    ServerRefreshing { server: String, scanned: u64 },
+}
+
+impl std::fmt::Display for SyncError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Failed(message) => f.write_str(message),
+            Self::ServerRefreshing { server, scanned } => {
+                write!(
+                    f,
+                    "{server} is refreshing its library ({scanned} items scanned)"
+                )
+            }
+        }
+    }
+}
+
 /// Push a progress line to the UI. Cheap enough to call once per bounded page.
 fn report(kind: MediaServerKind, done: u64, total: u64) {
     log::info!("[qbz-qt] {} sync: {done}/{total}", kind.as_str());
@@ -740,31 +764,66 @@ fn iso8601(unix_secs: i64) -> String {
 /// behaviour most likely to differ on a server that was never on the bench, so
 /// a probe decides and the portable `getAlbumList2` + `getAlbum` walk is the
 /// fallback.
-pub async fn sync_subsonic(_full: bool) -> Result<SyncReport, String> {
+pub async fn sync_subsonic(_full: bool) -> Result<SyncReport, SyncError> {
     let kind = MediaServerKind::Subsonic;
     let Some(_guard) = BusyGuard::acquire(kind) else {
-        return Err("a subsonic sync is already running".into());
+        return Err(SyncError::Failed(
+            "a subsonic sync is already running".into(),
+        ));
     };
     let cfg = crate::media_servers_qt::get(kind);
     let Some((base, creds)) = crate::media_servers_qt::subsonic_credentials() else {
-        return Err("subsonic is not configured".into());
+        return Err(SyncError::Failed("subsonic is not configured".into()));
     };
+    let client = qbz_subsonic::SubsonicClient::new(&base, creds)
+        .map_err(|error| SyncError::Failed(error.to_string()))?;
+    // This is the SERVER'S scan, not QBZ's cache sweep. Navidrome may keep
+    // answering search/list calls with an incomplete catalog while it runs;
+    // importing that intermediate view would look like a broken integration
+    // and could authorize a misleading empty generation. The endpoint has no
+    // total, only a processed count, so the UI reports exactly that.
+    match client.scan_status().await {
+        Ok(status) if status.scanning => {
+            let raw_server = cfg
+                .server_name
+                .split_whitespace()
+                .next()
+                .filter(|name| !name.is_empty())
+                .unwrap_or("Subsonic");
+            let server = match raw_server.to_ascii_lowercase().as_str() {
+                "navidrome" => "Navidrome".to_string(),
+                "gonic" => "Gonic".to_string(),
+                "airsonic" => "Airsonic".to_string(),
+                _ => raw_server.to_string(),
+            };
+            return Err(SyncError::ServerRefreshing {
+                server,
+                scanned: status.count,
+            });
+        }
+        Ok(_) => {}
+        Err(error) => {
+            // Some older/partial Subsonic servers omit this standard endpoint.
+            // That cannot disable an otherwise working integration; continue
+            // with QBZ's guarded generation and retain its failure semantics.
+            log::warn!("[media-sync] source=subsonic server scan status unavailable: {error}");
+        }
+    }
     let sync_epoch = SUBSONIC_EPOCH.fetch_add(1, Ordering::AcqRel) + 1;
     set_syncing_ui(true);
-    let out = sync_subsonic_inner(cfg, base, creds, sync_epoch).await;
+    let out = sync_subsonic_inner(cfg, client, sync_epoch)
+        .await
+        .map_err(SyncError::Failed);
     set_syncing_ui(false);
     out
 }
 
 async fn sync_subsonic_inner(
     cfg: MediaServerSettings,
-    base: String,
-    creds: qbz_subsonic::Credentials,
+    client: qbz_subsonic::SubsonicClient,
     sync_epoch: u64,
 ) -> Result<SyncReport, String> {
     let kind = MediaServerKind::Subsonic;
-    let client = qbz_subsonic::SubsonicClient::new(&base, creds).map_err(|e| e.to_string())?;
-
     let folders = client.music_folders().await.map_err(|e| e.to_string())?;
     if !source_epoch_is_current(RemoteSource::Subsonic, sync_epoch) {
         return Err("subsonic sync cancelled".to_string());

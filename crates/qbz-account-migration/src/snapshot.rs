@@ -154,6 +154,10 @@ pub struct SnapshotSource {
     pub user_id: u64,
     #[serde(default)]
     pub display_name: String,
+    /// Stored only to help the owner identify bundles belonging to accounts
+    /// with similar display names. Older snapshots deserialize without it.
+    #[serde(default)]
+    pub email: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,6 +184,7 @@ impl AccountSnapshot {
             source: SnapshotSource {
                 user_id,
                 display_name: display_name.to_string(),
+                email: String::new(),
             },
             favorites: Favorites::default(),
             playlists: Vec::new(),
@@ -316,10 +321,12 @@ pub async fn capture<A: MigrationApi, S: MigrationSink>(
     api: &A,
     user_id: u64,
     display_name: &str,
+    email: &str,
     sink: &S,
 ) -> Result<AccountSnapshot, String> {
     sink.emit(MigrationEvent::Phase(MigrationPhase::ReadingSource));
     let mut snap = AccountSnapshot::empty(user_id, display_name);
+    snap.source.email = email.to_string();
     for (i, kind) in FavoriteKind::ALL.iter().enumerate() {
         sink.emit(MigrationEvent::Progress {
             done: i,
@@ -408,4 +415,82 @@ pub fn list_snapshots(data_root: &Path) -> Vec<(u64, PathBuf)> {
         .into_iter()
         .map(|(uid, path, _)| (uid, path))
         .collect()
+}
+
+/// Delete one snapshot returned by [`list_snapshots`].
+///
+/// The exact-membership check is intentional: the UI passes a path as a
+/// string, so accepting an arbitrary path (or merely checking its suffix)
+/// would turn a cleanup button into a general file-delete primitive. This
+/// removes only the snapshot bundle; the source profile and all of its other
+/// user data remain untouched.
+pub fn delete_snapshot(data_root: &Path, requested: &Path) -> Result<(), String> {
+    let allowed = list_snapshots(data_root)
+        .into_iter()
+        .any(|(_, path)| path == requested);
+    if !allowed {
+        return Err(format!(
+            "refusing to delete a path outside the migration snapshot list: {}",
+            requested.display()
+        ));
+    }
+    std::fs::remove_file(requested).map_err(|e| format!("{}: {e}", requested.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "qbz-account-migration-{label}-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ))
+    }
+
+    #[test]
+    fn snapshots_created_before_email_identity_remain_readable() {
+        let snapshot = AccountSnapshot::empty(42, "Old account");
+        let mut value = serde_json::to_value(snapshot).unwrap();
+        value["source"].as_object_mut().unwrap().remove("email");
+
+        let parsed = AccountSnapshot::parse(&value.to_string()).unwrap();
+
+        assert_eq!(parsed.source.display_name, "Old account");
+        assert_eq!(parsed.source.user_id, 42);
+        assert!(parsed.source.email.is_empty());
+    }
+
+    #[test]
+    fn delete_snapshot_removes_only_a_listed_bundle() {
+        let root = temp_root("delete");
+        let dir = root.join("users/42").join(SNAPSHOT_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        let snapshot = dir.join("snapshot-20260902-120000.json");
+        let keep = root.join("users/42/profile.db");
+        std::fs::write(&snapshot, "{}").unwrap();
+        std::fs::write(&keep, "profile").unwrap();
+
+        delete_snapshot(&root, &snapshot).unwrap();
+
+        assert!(!snapshot.exists());
+        assert!(keep.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_snapshot_refuses_an_unlisted_path() {
+        let root = temp_root("refuse");
+        let profile = root.join("users/42");
+        std::fs::create_dir_all(&profile).unwrap();
+        let keep = profile.join("profile.db");
+        std::fs::write(&keep, "profile").unwrap();
+
+        let error = delete_snapshot(&root, &keep).unwrap_err();
+
+        assert!(error.contains("outside the migration snapshot list"));
+        assert!(keep.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
