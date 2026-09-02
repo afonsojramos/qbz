@@ -72,7 +72,7 @@ impl MediaFilter {
             let tier =
                 crate::local_rows::tier_of(&track.format, track.bit_depth, track.sample_rate);
             let quality = match tier {
-                "hires" | "max" => "hires",
+                "hires" | "max" | "dsd" => "hires",
                 "cd" => "cd",
                 _ => "lossy",
             };

@@ -60,7 +60,7 @@ pub(crate) fn badge(
     sample_rate: Option<f64>,
 ) -> (String, String) {
     if is_dsd_format(format) {
-        return ("hires".to_string(), dsd_multiple_label(sample_rate));
+        return ("dsd".to_string(), dsd_multiple_label(sample_rate));
     }
     let tier = if format.trim().eq_ignore_ascii_case("mp3") {
         "mp3"
@@ -92,11 +92,11 @@ mod tests {
         // as depth 1 / rate 2 822 400, which the generic arms read as CD.
         assert_eq!(
             badge("DSD", Some(1), Some(2_822_400.0)),
-            ("hires".to_string(), "DSD64".to_string())
+            ("dsd".to_string(), "DSD64".to_string())
         );
         assert_eq!(
             badge("dsf", Some(1), Some(5_644_800.0)),
-            ("hires".to_string(), "DSD128".to_string())
+            ("dsd".to_string(), "DSD128".to_string())
         );
     }
 

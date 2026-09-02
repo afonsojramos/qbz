@@ -1543,7 +1543,7 @@ mod tests {
         assert_eq!(badge("Unknown", None, None).0, "");
         assert_eq!(
             badge("DSF", Some(1), Some(2822.4)),
-            ("hires".to_string(), "DSD64".to_string())
+            ("dsd".to_string(), "DSD64".to_string())
         );
     }
 }

@@ -58,7 +58,7 @@ impl QualityHint {
         }
     }
 
-    /// `""` | `"mp3"` | `"cd"` | `"hires"` | `"max"`.
+    /// `""` | `"mp3"` | `"cd"` | `"hires"` | `"max"` | `"dsd"`.
     ///
     /// Moved from `local_rows::tier_of` (local_rows.rs:180-196) so a local card
     /// and a Qobuz card can never disagree — which was its whole reason for
@@ -67,6 +67,15 @@ impl QualityHint {
     pub fn tier(&self) -> &'static str {
         if self.format.eq_ignore_ascii_case("mp3") {
             return "mp3";
+        }
+        // 1-bit is DSD and wears its own mark (2026-09-02), whatever the
+        // container word the server used (dsf / dff / dsd).
+        if self.bit_depth == Some(1)
+            || ["dsf", "dff", "dsd"]
+                .iter()
+                .any(|w| self.format.eq_ignore_ascii_case(w))
+        {
+            return "dsd";
         }
         let khz = self.sample_rate_khz.unwrap_or(0.0);
         match self.bit_depth {
@@ -157,6 +166,8 @@ mod tests {
         assert_eq!(QualityHint::from_hz(None, 0.0, "").tier(), "");
         // kHz input passes through untouched (the QueueTrack convention).
         assert_eq!(QualityHint::from_hz(Some(24), 192.0, "FLAC").tier(), "max");
+        assert_eq!(QualityHint::from_hz(Some(1), 2_822_400.0, "DSF").tier(), "dsd");
+        assert_eq!(QualityHint::from_hz(None, 0.0, "dff").tier(), "dsd");
     }
 
     #[test]
