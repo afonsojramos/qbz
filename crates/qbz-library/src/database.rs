@@ -1489,7 +1489,9 @@ impl LibraryDatabase {
             .map(|count| count > 0)
             .unwrap_or(false);
         if !has_isrc {
-            log::info!("Running migration: adding identity columns (isrc, musicbrainz_*) to local_tracks");
+            log::info!(
+                "Running migration: adding identity columns (isrc, musicbrainz_*) to local_tracks"
+            );
             self.conn
                 .execute_batch(
                     "ALTER TABLE local_tracks ADD COLUMN isrc TEXT;
@@ -3893,14 +3895,14 @@ impl LibraryDatabase {
             genres,
             duration_secs: row.get::<_, i64>(11)? as u64, // duration_secs
             format: Self::parse_format(&row.get::<_, String>(12)?), // format
-            bit_depth: row.get(13)?,     // bit_depth
-            sample_rate: row.get::<_, f64>(14)?, // sample_rate
-            channels: row.get(15)?,      // channels
+            bit_depth: row.get(13)?,                      // bit_depth
+            sample_rate: row.get::<_, f64>(14)?,          // sample_rate
+            channels: row.get(15)?,                       // channels
             file_size_bytes: row.get::<_, i64>(16)? as u64, // file_size_bytes
-            cue_file_path: row.get(17)?, // cue_file_path
-            cue_start_secs: row.get(18)?, // cue_start_secs
-            cue_end_secs: row.get(19)?,  // cue_end_secs
-            artwork_path: row.get(20)?,  // artwork_path
+            cue_file_path: row.get(17)?,                  // cue_file_path
+            cue_start_secs: row.get(18)?,                 // cue_start_secs
+            cue_end_secs: row.get(19)?,                   // cue_end_secs
+            artwork_path: row.get(20)?,                   // artwork_path
             collection_artwork_path: None,
             last_modified: row.get(21)?, // last_modified
             indexed_at: row.get(22)?,    // indexed_at
@@ -6752,6 +6754,34 @@ impl LibraryDatabase {
                 LibraryError::Database(format!("Failed to mark purchase downloaded: {}", e))
             })?;
         Ok(())
+    }
+
+    /// Every registered download of ONE purchased track: `(format_id,
+    /// file_path)`, newest first. This is the playback resolver's read
+    /// (`purchase_playback_qt`): it decides per format and probes each path
+    /// itself with the bounded reachability probe, so this accessor neither
+    /// stats nor prunes — the prune stays with `get_downloaded_purchase_track_ids`
+    /// so there is exactly one writer.
+    pub fn get_downloaded_purchase_files(
+        &self,
+        track_id: i64,
+    ) -> Result<Vec<(i64, String)>, LibraryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT format_id, file_path FROM downloaded_purchases
+                 WHERE track_id = ?1 ORDER BY downloaded_at DESC",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare statement: {}", e)))?;
+        let rows = stmt
+            .query_map(rusqlite::params![track_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to query downloaded purchase files: {}", e))
+            })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| LibraryError::Database(format!("Failed to collect purchase files: {}", e)))
     }
 
     /// Remove ONE downloaded purchase record (e.g. the user deleted the file).

@@ -216,15 +216,18 @@ pub fn synth_formats(album: &Album) -> Vec<PurchaseFormatOption> {
         label: "[MP3][320kbps]".to_string(),
         bit_depth: None,
         sampling_rate: None,
+        streaming: false,
     });
 
     formats
 }
 
-/// Menu rank of a purchase `format_id` — HIGHEST quality first, because the
-/// detail screen default-selects `formats[0]`. Unknown ids sort after every
-/// known one so a new Qobuz id is still offered, never hidden.
-fn format_rank(id: u32) -> u32 {
+/// Rank of a purchase `format_id` — HIGHEST quality first. Orders the detail
+/// menu (which default-selects `formats[0]`) and, on the playback side, picks
+/// which downloaded copy of a track plays when several formats are on disk.
+/// Unknown ids rank below every known one so a new Qobuz id is still offered,
+/// never hidden.
+pub fn format_rank(id: u32) -> u32 {
     match id {
         56 => 6, // DSD128
         55 => 5, // DSD64

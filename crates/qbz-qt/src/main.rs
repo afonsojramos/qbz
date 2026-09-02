@@ -350,6 +350,7 @@ mod track_replace_qt;
 // the FRONTEND album-download loop (concurrency 1, cancellable, per-track
 // progress) and the format re-scoping. Plain module — it declares no
 // #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
+mod purchase_playback_qt;
 mod purchases_qt;
 mod queue_qt;
 mod search_qt;

@@ -560,6 +560,27 @@ Rectangle {
                         font.pixelSize: theme.fontLegal
                         elide: Text.ElideMiddle
                     }
+
+                    // What Play actually does. A DSD purchase streams as CD
+                    // quality (the catalog has no DSD stream), so the first
+                    // smoke saw a "downgrade" badge on a Hi-Res album and
+                    // wondered which one was lying: neither — Play is the
+                    // stream until the file is on disk, and the purchased
+                    // copy after that (purchase_playback_qt).
+                    Item {
+                        visible: streamNote.visible
+                        width: 1
+                        height: 8
+                    }
+                    Text {
+                        id: streamNote
+                        visible: root.downloadable && root.anyStreamable
+                        width: parent.width
+                        text: root.t("Until the purchased file is downloaded, Play streams the best quality Qobuz offers for this album. Once it is on disk, Play uses your copy.")
+                        color: theme.textMuted
+                        font.pixelSize: theme.fontLegal
+                        wrapMode: Text.WordWrap
+                    }
                 }
             }
 

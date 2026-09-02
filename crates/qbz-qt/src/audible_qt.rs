@@ -200,7 +200,19 @@ pub(crate) async fn queue_gapless_successor(
         .playback(track)
         .await
         .map_err(|e| e.to_string())?;
-    let next_id = track.id;
+    queue_gapless_ticket(runtime, predecessor_id, track.id, ticket).await
+}
+
+/// The ticket half of [`queue_gapless_successor`], for a caller that already
+/// holds a ticket — the purchased-copy path resolves one from the download
+/// registry rather than from a source (`purchase_playback_qt`). Same guards:
+/// the predecessor must still be current and no successor may be queued yet.
+pub(crate) async fn queue_gapless_ticket(
+    runtime: &Runtime,
+    predecessor_id: u64,
+    next_id: u64,
+    ticket: PlaybackTicket,
+) -> Result<bool, String> {
     let player = runtime.core().player();
 
     let bytes = match ticket {
