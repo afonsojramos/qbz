@@ -3714,6 +3714,17 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
     }
     crate::spawn(async move {
         let mut last_track_id: u64 = 0;
+        // The id of a track that just ENDED, while the poll has advanced past
+        // it and the successor's stream has not started yet. The player keeps
+        // reporting the ended id through that window (CMAF session + init
+        // segment, or a DSD→PCM conversion: 1-2 s), and with `last_track_id`
+        // reset by the recovery, the edge block below read it as a NEW track:
+        // `sync_current_to_id` rewound the queue cursor to the previous row,
+        // now-playing/MPRIS/notifications flip-flopped old → new → old (three
+        // notifications per track change, the middle one a ghost), and a
+        // gapless stage that sampled `peek_upcoming` in that window was handed
+        // the track already playing (smoke 2026-09-02: Hangar 18 twice).
+        let mut stale_after_advance: u64 = 0;
         // Exact owner generation that produced the last local snapshot. Keep
         // this separate from `last_track_id`: an owner restored after guest
         // playback may legitimately resume the same numeric track id, and
@@ -4115,6 +4126,19 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // delayed integrations were invalidated by that authority cycle,
             // so this fresh snapshot must re-arm their edge work.
             let owner_changed = owner_generation_changed(observed_owner_token, last_owner_token);
+            // The ended track, still reported while its successor is loading,
+            // is NOT an edge (see `stale_after_advance`). Only while nothing
+            // plays: the moment audio runs, the reported id is the truth again
+            // — including a deliberate replay of that same track.
+            if stale_after_advance != 0 {
+                if track_id == stale_after_advance && !is_playing {
+                    seen_position = position;
+                    was_playing = is_playing;
+                    last_owner_token = observed_owner_token;
+                    continue;
+                }
+                stale_after_advance = 0;
+            }
             if track_id != 0 && (track_id != last_track_id || owner_changed) {
                 if owner_snapshot.is_some() {
                     // A cold OWNER start that reached audio is no longer
@@ -4275,8 +4299,18 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                     let owner_token = owner_snapshot.token();
                     let upcoming = runtime.core().peek_upcoming(1).await;
                     if let Some(next) = upcoming.into_iter().next() {
-                        // Never queue the current track as its own successor.
-                        if next.id != track_id && !next.is_local {
+                        // Never queue the current track as its own successor —
+                        // by the poll's id AND by the player's own: the two
+                        // disagree exactly when the queue cursor is off by one
+                        // (the stale-edge rewind above), and a successor equal
+                        // to what is playing plays the track twice.
+                        let playing_now = runtime.core().player().state.current_track_id();
+                        if next.id == playing_now {
+                            log::warn!(
+                                "[qbz-qt] [GAPLESS] upcoming {} is the track already playing; cursor off by one, successor skipped",
+                                next.id
+                            );
+                        } else if next.id != track_id && !next.is_local {
                             gapless_requested_for = track_id;
                             let runtime = runtime.clone();
                             let next_id = next.id;
@@ -4655,6 +4689,14 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 // (PARITY-DEBT #2).
                 if let Some(track) = runtime.core().next_track().await {
                     let next_id = track.id;
+                    // Repeat-one advances to the same id; there the ended id IS
+                    // the next one and nothing can be told apart, so the old
+                    // behaviour stands.
+                    stale_after_advance = if next_id != ended_track_id {
+                        ended_track_id
+                    } else {
+                        0
+                    };
                     log::info!("[qbz-qt] poll: advancing to {next_id}");
                     play_queue_track(&runtime, next_id, 0).await;
                 } else if try_infinite_refill(&runtime, ended_track_id).await {
