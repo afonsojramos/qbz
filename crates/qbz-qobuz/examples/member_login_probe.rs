@@ -300,12 +300,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set_session(UserSession {
             user_auth_token: session_token,
             user_id,
-            email: String::new(),
-            display_name: String::new(),
-            subscription_label: String::new(),
-            subscription_valid_until: None,
-            country_code: None,
-            language_code: None,
+            ..UserSession::default()
         })
         .await;
 

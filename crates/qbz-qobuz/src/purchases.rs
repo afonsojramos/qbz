@@ -527,6 +527,10 @@ impl QobuzClient {
                         .map(|v| v as u32),
                     track_id,
                     restrictions,
+                    sample: json
+                        .get("sample")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
                 })
             }
             StatusCode::BAD_REQUEST => match intent {

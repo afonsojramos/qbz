@@ -415,6 +415,10 @@ impl DelegatedQobuzClient {
                 .map(|depth| depth as u32),
             track_id,
             restrictions,
+            sample: value
+                .get("sample")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         })
     }
 

@@ -495,15 +495,18 @@ impl QobuzClient {
     pub async fn exchange_oauth_code(&self, code: &str) -> Result<String> {
         use reqwest::header::{HeaderMap, HeaderValue};
 
-        let tokens = self.tokens.read().await;
-        let tokens = tokens
-            .as_ref()
-            .ok_or_else(|| ApiError::BundleExtractionError("Client not initialized".to_string()))?;
-        let app_id = tokens.app_id.clone();
-        let private_key = tokens.private_key.clone().ok_or_else(|| {
-            ApiError::BundleExtractionError("OAuth private key not available in bundle".to_string())
-        })?;
-        drop(tokens);
+        let (app_id, private_key) = {
+            let guard = self.tokens.read().await;
+            let tokens = guard.as_ref().ok_or_else(|| {
+                ApiError::BundleExtractionError("Client not initialized".to_string())
+            })?;
+            let private_key = tokens.private_key.clone().ok_or_else(|| {
+                ApiError::BundleExtractionError(
+                    "OAuth private key not available in bundle".to_string(),
+                )
+            })?;
+            (tokens.app_id.clone(), private_key)
+        };
 
         let callback_url = endpoints::build_url(endpoints::paths::OAUTH_CALLBACK);
         let mut headers = HeaderMap::new();
@@ -2609,6 +2612,7 @@ impl QobuzClient {
                     bit_depth: json["bit_depth"].as_u64().map(|v| v as u32),
                     track_id,
                     restrictions,
+                    sample: json["sample"].as_bool().unwrap_or(false),
                 })
             }
             StatusCode::BAD_REQUEST => Err(ApiError::InvalidAppSecret),
@@ -3396,9 +3400,9 @@ mod tests {
             email: "owner@example.test".to_string(),
             display_name: "Owner".to_string(),
             subscription_label: "Studio".to_string(),
-            subscription_valid_until: None,
             country_code: Some("MX".to_string()),
             language_code: Some("es".to_string()),
+            ..UserSession::default()
         });
 
         let credentials = client.delegated_app_credentials().await.unwrap();
