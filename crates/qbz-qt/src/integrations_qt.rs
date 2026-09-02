@@ -199,6 +199,44 @@ fn set_status(text: String, kind: i32) {
     g.status_kind = kind;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListenBrainzValidationStart {
+    Started,
+    Busy,
+    MissingToken,
+}
+
+/// Acquire the ListenBrainz validation slot and publish its first honest UI
+/// state atomically. The busy check deliberately precedes the empty-token
+/// check: QML used to submit the real token on blur and an accidental empty
+/// value on click, so the empty request overwrote "Validating..." while the
+/// real request was still in flight.
+fn begin_listenbrainz_validation(
+    ui: &mut IntegrationUi,
+    has_token: bool,
+    validating_status: String,
+    missing_status: String,
+) -> ListenBrainzValidationStart {
+    if ui.listenbrainz_busy {
+        return ListenBrainzValidationStart::Busy;
+    }
+    if !has_token {
+        ui.status_text = missing_status;
+        ui.status_kind = 3;
+        return ListenBrainzValidationStart::MissingToken;
+    }
+    ui.listenbrainz_busy = true;
+    ui.status_text = validating_status;
+    ui.status_kind = 1;
+    ListenBrainzValidationStart::Started
+}
+
+fn finish_listenbrainz_validation(ui: &mut IntegrationUi, status: String, kind: i32) {
+    ui.listenbrainz_busy = false;
+    ui.status_text = status;
+    ui.status_kind = kind;
+}
+
 // ---------------------------------------------------------------------------
 // Snapshot fields (folded into SettingsDoc by settings_qt::publish_snapshot)
 // ---------------------------------------------------------------------------
@@ -557,24 +595,27 @@ pub fn discord_clear() {
 /// sign-in), and force-enable on the first connect.
 pub async fn listenbrainz_set_token(token: &str) {
     let token = token.trim().to_string();
-    if token.is_empty() {
-        set_status(qbz_i18n::t("Paste your ListenBrainz user token first"), 3);
-        crate::settings_qt::publish_snapshot().await;
-        return;
-    }
-    // Re-entrancy guard: the field commits on blur AND the button submits, so
-    // both can land back-to-back; one validation at a time.
-    {
+    let start = {
         let mut g = ui_state().lock().unwrap();
-        if g.listenbrainz_busy {
+        begin_listenbrainz_validation(
+            &mut g,
+            !token.is_empty(),
+            qbz_i18n::t("Validating..."),
+            qbz_i18n::t("Paste your ListenBrainz user token first"),
+        )
+    };
+    match start {
+        ListenBrainzValidationStart::Busy => return,
+        ListenBrainzValidationStart::MissingToken => {
+            crate::settings_qt::publish_snapshot().await;
             return;
         }
-        g.listenbrainz_busy = true;
+        ListenBrainzValidationStart::Started => {}
     }
     crate::settings_qt::publish_snapshot().await;
 
     let client = ListenBrainzClient::new();
-    match client.set_token(&token).await {
+    let (status, kind) = match client.set_token(&token).await {
         Ok(info) => {
             if let Err(e) = scrobble().set_listenbrainz_token(&token, &info.user_name) {
                 log::error!("[qbz-qt] persist listenbrainz token failed: {e}");
@@ -593,15 +634,13 @@ pub async fn listenbrainz_set_token(token: &str) {
                 })
                 .await;
             }
-            set_status(
-                qbz_i18n::t_args("Connected as {}", &[info.user_name.as_str()]),
-                2,
-            );
+            let status = qbz_i18n::t_args("Connected as {}", &[info.user_name.as_str()]);
             request_flush();
+            (status, 2)
         }
-        Err(e) => set_status(qbz_i18n::t_args("Error: {}", &[&e.to_string()]), 3),
-    }
-    ui_state().lock().unwrap().listenbrainz_busy = false;
+        Err(e) => (qbz_i18n::t_args("Error: {}", &[&e.to_string()]), 3),
+    };
+    finish_listenbrainz_validation(&mut ui_state().lock().unwrap(), status, kind);
     crate::settings_qt::publish_snapshot().await;
 }
 
@@ -1451,6 +1490,60 @@ mod tests {
             induced: mode == OfflineMode::InducedOffline,
             offline_session,
         }
+    }
+
+    #[test]
+    fn listenbrainz_validation_reports_progress_and_ignores_reentrant_empty_submit() {
+        let mut ui = IntegrationUi::default();
+        assert_eq!(
+            begin_listenbrainz_validation(
+                &mut ui,
+                true,
+                "Validating...".into(),
+                "Missing token".into(),
+            ),
+            ListenBrainzValidationStart::Started
+        );
+        assert!(ui.listenbrainz_busy);
+        assert_eq!(ui.status_text, "Validating...");
+        assert_eq!(ui.status_kind, 1);
+
+        // Regression: blur submitted the real token, then the button's broken
+        // child lookup submitted "" and painted a false error over progress.
+        assert_eq!(
+            begin_listenbrainz_validation(
+                &mut ui,
+                false,
+                "Validating again...".into(),
+                "Missing token".into(),
+            ),
+            ListenBrainzValidationStart::Busy
+        );
+        assert!(ui.listenbrainz_busy);
+        assert_eq!(ui.status_text, "Validating...");
+        assert_eq!(ui.status_kind, 1);
+
+        finish_listenbrainz_validation(&mut ui, "Connected as listener".into(), 2);
+        assert!(!ui.listenbrainz_busy);
+        assert_eq!(ui.status_text, "Connected as listener");
+        assert_eq!(ui.status_kind, 2);
+    }
+
+    #[test]
+    fn listenbrainz_missing_token_is_an_idle_error() {
+        let mut ui = IntegrationUi::default();
+        assert_eq!(
+            begin_listenbrainz_validation(
+                &mut ui,
+                false,
+                "Validating...".into(),
+                "Missing token".into(),
+            ),
+            ListenBrainzValidationStart::MissingToken
+        );
+        assert!(!ui.listenbrainz_busy);
+        assert_eq!(ui.status_text, "Missing token");
+        assert_eq!(ui.status_kind, 3);
     }
 
     #[test]

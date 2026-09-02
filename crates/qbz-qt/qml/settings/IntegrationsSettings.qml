@@ -19,6 +19,9 @@ Column {
     id: root
 
     property var doc: ({})
+    // Password drafts never enter settingsJson. Keep the live token inside
+    // this component until the user explicitly submits it.
+    property string listenbrainzTokenDraft: ""
     /// The view-level SettingsConfirmHost (SettingsView.qml), for the
     /// destructive "Clear listening history" row. Null in previews.
     property var confirmHost: null
@@ -27,19 +30,10 @@ Column {
 
     spacing: 4
 
-    // The Slint mirrors the in-progress token in
-    // ScrobbleState.listenbrainz-token-input so its "Connect ListenBrainz"
-    // button can submit it. QbzLineEdit only publishes the COMMITTED value
-    // (it commits on Enter / focus loss, and a SettingsButton click does not
-    // steal focus from the TextInput), so read the live value off its inner
-    // input — the one child that has an echoMode.
-    function lbTokenText() {
-        for (var i = 0; i < lbTokenField.children.length; ++i) {
-            var c = lbTokenField.children[i]
-            if (c && c.echoMode !== undefined)
-                return c.text
-        }
-        return ""
+    function submitListenBrainzToken() {
+        if (root.doc.listenbrainzBusy === true)
+            return
+        QbzBridge.settingsString("listenbrainz-token", root.listenbrainzTokenDraft)
     }
 
     // ======================= RECOMMENDATIONS =============================
@@ -242,7 +236,9 @@ Column {
         GroupHeader { text: QbzSession.tr("LISTENBRAINZ", QbzSession.trRev) }
         SettingRow {
             label: QbzSession.tr("Scrobble to ListenBrainz", QbzSession.trRev)
-            description: root.doc.listenbrainzAuthed === true
+            description: root.doc.listenbrainzBusy === true
+                ? QbzSession.tr("Validating...", QbzSession.trRev)
+                : root.doc.listenbrainzAuthed === true
                 ? QbzSession.tr("Signed in as {}.", QbzSession.trRev).replace("{}", root.doc.listenbrainzUsername || "")
                 : QbzSession.tr("Paste your ListenBrainz user token to enable scrobbling.", QbzSession.trRev)
             QbzToggle {
@@ -259,11 +255,21 @@ Column {
                 isPassword: true
                 enabled: root.doc.listenbrainzBusy !== true
                 placeholder: QbzSession.tr("ListenBrainz token", QbzSession.trRev)
-                // Enter (and focus loss) validates, like the Slint `accepted`.
-                onCommitted: function (v) { QbzBridge.settingsString("listenbrainz-token", v) }
+                // Typing only updates the local draft. Enter submits once;
+                // focus loss merely settles the draft, so a button click can
+                // never race an implicit blur validation.
+                onEdited: function (v) { root.listenbrainzTokenDraft = v }
+                onCommitted: function (v) { root.listenbrainzTokenDraft = v }
+                onAccepted: function (v) {
+                    root.listenbrainzTokenDraft = v
+                    root.submitListenBrainzToken()
+                }
                 // The row hides once the sign-in lands; drop the typed token
                 // with it (Slint resets listenbrainz-token-input on success).
-                onVisibleChanged: if (!visible) text = ""
+                onVisibleChanged: if (!visible) {
+                    text = ""
+                    root.listenbrainzTokenDraft = ""
+                }
             }
         }
         SettingRow {
@@ -275,7 +281,8 @@ Column {
                     ? QbzSession.tr("Validating...", QbzSession.trRev)
                     : QbzSession.tr("Connect ListenBrainz", QbzSession.trRev)
                 enabled: root.doc.listenbrainzBusy !== true
-                onClicked: QbzBridge.settingsString("listenbrainz-token", root.lbTokenText())
+                    && root.listenbrainzTokenDraft.trim().length > 0
+                onClicked: root.submitListenBrainzToken()
             }
         }
         SettingRow {
