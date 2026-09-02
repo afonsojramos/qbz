@@ -6346,3 +6346,153 @@ msgstr "Zolang het gekochte bestand niet is gedownload, streamt Afspelen de best
 
 msgid "Open in Local Library"
 msgstr "Openen in lokale bibliotheek"
+
+msgid "Import / Export"
+msgstr "Importeren / Exporteren"
+
+msgid "This bundle holds the app's own settings: audio, playback, appearance, integrations. It does not contain your Qobuz favorites, playlists, blacklist or purchases."
+msgstr "Deze bundel bevat de instellingen van de app: audio, afspelen, uiterlijk, integraties. Je Qobuz-favorieten, playlists, blacklist en aankopen zitten er niet in."
+
+msgid "BLACKLIST"
+msgstr "BLACKLIST"
+
+msgid "Export blacklist…"
+msgstr "Blacklist exporteren…"
+
+msgid "Save your blocked artists and albums as a file you can hand to another QBZ user."
+msgstr "Slaat je geblokkeerde artiesten en albums op als bestand dat je aan een andere QBZ-gebruiker kunt geven."
+
+msgid "Import blacklist…"
+msgstr "Blacklist importeren…"
+
+msgid "Add blocked artists and albums from a file. Nothing already on your blacklist is removed."
+msgstr "Voegt geblokkeerde artiesten en albums toe uit een bestand. Niets dat al op je blacklist staat wordt verwijderd."
+
+msgid "Import…"
+msgstr "Importeren…"
+
+msgid "Import failed."
+msgstr "Importeren mislukt."
+
+msgid "Not a QBZ blacklist file."
+msgstr "Geen QBZ-blacklistbestand."
+
+msgid "Choose a blacklist file"
+msgstr "Kies een blacklistbestand"
+
+msgid "Imported {} artists and {} albums ({} already blocked)."
+msgstr "{} artiesten en {} albums geïmporteerd ({} al geblokkeerd)."
+
+msgid "Member"
+msgstr "Lid"
+
+msgid "QBZ requires a Qobuz™ account. Without an active subscription, playback is limited to 30-second previews; favorites, playlists and purchases still work. Your credentials are sent directly to Qobuz™."
+msgstr "QBZ vereist een Qobuz™-account. Zonder actief abonnement is afspelen beperkt tot voorbeelden van 30 seconden; favorieten, playlists en aankopen blijven werken. Je inloggegevens gaan rechtstreeks naar Qobuz™."
+
+msgid "ACCOUNT MIGRATION"
+msgstr "ACCOUNTMIGRATIE"
+
+msgid "Moves favorites, playlists and followed playlists from one Qobuz account into another, adding only what is missing and deleting nothing on either side. It does not move subscriptions or purchases: those stay with the Qobuz account that holds them."
+msgstr "Verplaatst favorieten, playlists en gevolgde playlists van het ene Qobuz-account naar het andere; alleen wat ontbreekt wordt toegevoegd en er wordt aan geen van beide kanten iets verwijderd. Abonnementen en aankopen gaan niet mee: die blijven bij het Qobuz-account dat ze bezit."
+
+msgid "Create migration snapshot"
+msgstr "Migratiesnapshot maken"
+
+msgid "Sign in with the account you are moving FROM, then save its favorites and playlists to a file in its QBZ profile."
+msgstr "Meld je aan met het account waar je VANDAAN verhuist en sla zijn favorieten en playlists op in een bestand in zijn QBZ-profiel."
+
+msgid "Create…"
+msgstr "Maken…"
+
+msgid "Migrate into this account"
+msgstr "Migreren naar dit account"
+
+msgid "Sign in with the account you are moving TO, then pick a snapshot below. Safe to repeat: a second run adds nothing."
+msgstr "Meld je aan met het account waar je NAARTOE verhuist en kies hieronder een snapshot. Veilig te herhalen: een tweede keer voegt niets toe."
+
+msgid "No snapshots yet. Sign in with the old account and create one first."
+msgstr "Nog geen snapshots. Meld je aan met het oude account en maak er eerst een."
+
+msgid "{} favorites · {} playlists · {} followed"
+msgstr "{} favorieten · {} playlists · {} gevolgd"
+
+msgid "this account"
+msgstr "dit account"
+
+msgid "Migrate…"
+msgstr "Migreren…"
+
+msgid "Account {} · {}"
+msgstr "Account {} · {}"
+
+msgid "Reading favorites and playlists…"
+msgstr "Favorieten en playlists lezen…"
+
+msgid "Reading this account…"
+msgstr "Dit account lezen…"
+
+msgid "Adding favorites…"
+msgstr "Favorieten toevoegen…"
+
+msgid "Adding playlists…"
+msgstr "Playlists toevoegen…"
+
+msgid "Following playlists…"
+msgstr "Playlists volgen…"
+
+msgid "{} / {} — {}"
+msgstr "{} / {} — {}"
+
+msgid "Snapshot failed."
+msgstr "Snapshot mislukt."
+
+msgid "Migration failed."
+msgstr "Migratie mislukt."
+
+msgid "Saved {} favorites, {} playlists and {} followed playlists to {}"
+msgstr "{} favorieten, {} playlists en {} gevolgde playlists opgeslagen in {}"
+
+msgid "That snapshot was taken from this same account."
+msgstr "Die snapshot komt van ditzelfde account."
+
+msgid "Nothing to migrate: everything is already in this account."
+msgstr "Niets te migreren: alles staat al in dit account."
+
+msgid "Added {} favorites, {} playlists ({} tracks) and {} followed playlists; {} were already there."
+msgstr "{} favorieten, {} playlists ({} nummers) en {} gevolgde playlists toegevoegd; {} waren er al."
+
+msgid "{} items failed; see the log."
+msgstr "{} items mislukt; zie het logboek."
+
+msgid "Also copy the local profile"
+msgstr "Ook het lokale profiel kopiëren"
+
+msgid "Library folders, playlist folders and order, pinned items, blacklist and preferences of the old account's QBZ profile on this computer."
+msgstr "Bibliotheekmappen, playlistmappen en -volgorde, vastgezette items, blacklist en voorkeuren van het QBZ-profiel van het oude account op deze computer."
+
+msgid "Media server connections"
+msgstr "Mediaserververbindingen"
+
+msgid "Plex, Jellyfin and Subsonic settings, including their credentials."
+msgstr "Plex-, Jellyfin- en Subsonic-instellingen, inclusief inloggegevens."
+
+msgid "Scrobbler accounts"
+msgstr "Scrobbler-accounts"
+
+msgid "Last.fm and ListenBrainz settings, including their credentials."
+msgstr "Last.fm- en ListenBrainz-instellingen, inclusief inloggegevens."
+
+msgid "The listen log and the events behind offline recommendations."
+msgstr "Het luisterlogboek en de gebeurtenissen achter offline aanbevelingen."
+
+msgid "Local profile: {} rows copied; {} playlist rows had no match."
+msgstr "Lokaal profiel: {} rijen gekopieerd; {} playlistrijen zonder overeenkomst."
+
+msgid "The library already had folders: run a rescan to index the added ones."
+msgstr "De bibliotheek had al mappen: voer een nieuwe scan uit om de toegevoegde te indexeren."
+
+msgid "Restart QBZ to see the migrated local profile."
+msgstr "Herstart QBZ om het gemigreerde lokale profiel te zien."
+
+msgid "The local profile could not be copied; see the log."
+msgstr "Het lokale profiel kon niet worden gekopieerd; zie het logboek."

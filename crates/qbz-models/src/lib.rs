@@ -148,5 +148,6 @@ pub use types::{
     TrackFileUrl,
     TrackToAnalyse,
     TracksContainer,
+    Entitlements,
     UserSession,
 };

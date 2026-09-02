@@ -6339,3 +6339,153 @@ msgstr "購入したファイルをダウンロードするまでは、このア
 
 msgid "Open in Local Library"
 msgstr "ローカルライブラリで開く"
+
+msgid "Import / Export"
+msgstr "インポート / エクスポート"
+
+msgid "This bundle holds the app's own settings: audio, playback, appearance, integrations. It does not contain your Qobuz favorites, playlists, blacklist or purchases."
+msgstr "このバンドルにはアプリ自体の設定（オーディオ、再生、外観、連携）が含まれます。Qobuz のお気に入り、プレイリスト、ブラックリスト、購入は含まれません。"
+
+msgid "BLACKLIST"
+msgstr "ブラックリスト"
+
+msgid "Export blacklist…"
+msgstr "ブラックリストをエクスポート…"
+
+msgid "Save your blocked artists and albums as a file you can hand to another QBZ user."
+msgstr "ブロック中のアーティストとアルバムを、他の QBZ ユーザーに渡せるファイルとして保存します。"
+
+msgid "Import blacklist…"
+msgstr "ブラックリストをインポート…"
+
+msgid "Add blocked artists and albums from a file. Nothing already on your blacklist is removed."
+msgstr "ファイルからブロック中のアーティストとアルバムを追加します。既にブラックリストにあるものは削除されません。"
+
+msgid "Import…"
+msgstr "インポート…"
+
+msgid "Import failed."
+msgstr "インポートに失敗しました。"
+
+msgid "Not a QBZ blacklist file."
+msgstr "QBZ のブラックリストファイルではありません。"
+
+msgid "Choose a blacklist file"
+msgstr "ブラックリストファイルを選択"
+
+msgid "Imported {} artists and {} albums ({} already blocked)."
+msgstr "アーティスト {} 件とアルバム {} 件をインポートしました（{} 件はブロック済み）。"
+
+msgid "Member"
+msgstr "メンバー"
+
+msgid "QBZ requires a Qobuz™ account. Without an active subscription, playback is limited to 30-second previews; favorites, playlists and purchases still work. Your credentials are sent directly to Qobuz™."
+msgstr "QBZ には Qobuz™ アカウントが必要です。有効なサブスクリプションがない場合、再生は 30 秒のプレビューに制限されますが、お気に入り、プレイリスト、購入は引き続き利用できます。認証情報は Qobuz™ に直接送信されます。"
+
+msgid "ACCOUNT MIGRATION"
+msgstr "アカウント移行"
+
+msgid "Moves favorites, playlists and followed playlists from one Qobuz account into another, adding only what is missing and deleting nothing on either side. It does not move subscriptions or purchases: those stay with the Qobuz account that holds them."
+msgstr "お気に入り、プレイリスト、フォロー中のプレイリストを Qobuz アカウント間で移行します。足りないものだけを追加し、どちら側からも何も削除しません。サブスクリプションと購入は移行されません。それらは所有する Qobuz アカウントに残ります。"
+
+msgid "Create migration snapshot"
+msgstr "移行用スナップショットを作成"
+
+msgid "Sign in with the account you are moving FROM, then save its favorites and playlists to a file in its QBZ profile."
+msgstr "移行元のアカウントでサインインし、そのお気に入りとプレイリストを QBZ プロファイル内のファイルに保存します。"
+
+msgid "Create…"
+msgstr "作成…"
+
+msgid "Migrate into this account"
+msgstr "このアカウントに移行"
+
+msgid "Sign in with the account you are moving TO, then pick a snapshot below. Safe to repeat: a second run adds nothing."
+msgstr "移行先のアカウントでサインインし、下のスナップショットを選択します。繰り返しても安全です。2 回目の実行では何も追加されません。"
+
+msgid "No snapshots yet. Sign in with the old account and create one first."
+msgstr "スナップショットはまだありません。まず古いアカウントでサインインして作成してください。"
+
+msgid "{} favorites · {} playlists · {} followed"
+msgstr "お気に入り {} · プレイリスト {} · フォロー {}"
+
+msgid "this account"
+msgstr "このアカウント"
+
+msgid "Migrate…"
+msgstr "移行…"
+
+msgid "Account {} · {}"
+msgstr "アカウント {} · {}"
+
+msgid "Reading favorites and playlists…"
+msgstr "お気に入りとプレイリストを読み込み中…"
+
+msgid "Reading this account…"
+msgstr "このアカウントを読み込み中…"
+
+msgid "Adding favorites…"
+msgstr "お気に入りを追加中…"
+
+msgid "Adding playlists…"
+msgstr "プレイリストを追加中…"
+
+msgid "Following playlists…"
+msgstr "プレイリストをフォロー中…"
+
+msgid "{} / {} — {}"
+msgstr "{} / {} — {}"
+
+msgid "Snapshot failed."
+msgstr "スナップショットに失敗しました。"
+
+msgid "Migration failed."
+msgstr "移行に失敗しました。"
+
+msgid "Saved {} favorites, {} playlists and {} followed playlists to {}"
+msgstr "お気に入り {} 件、プレイリスト {} 件、フォロー中 {} 件を {} に保存しました"
+
+msgid "That snapshot was taken from this same account."
+msgstr "そのスナップショットはこのアカウント自身のものです。"
+
+msgid "Nothing to migrate: everything is already in this account."
+msgstr "移行するものはありません。すべてこのアカウントにあります。"
+
+msgid "Added {} favorites, {} playlists ({} tracks) and {} followed playlists; {} were already there."
+msgstr "お気に入り {} 件、プレイリスト {} 件（{} トラック）、フォロー {} 件を追加しました。{} 件は既にありました。"
+
+msgid "{} items failed; see the log."
+msgstr "{} 件が失敗しました。ログを確認してください。"
+
+msgid "Also copy the local profile"
+msgstr "ローカルプロファイルもコピー"
+
+msgid "Library folders, playlist folders and order, pinned items, blacklist and preferences of the old account's QBZ profile on this computer."
+msgstr "このコンピューター上の古いアカウントの QBZ プロファイルにあるライブラリフォルダー、プレイリストのフォルダーと順序、ピン留め、ブラックリスト、設定。"
+
+msgid "Media server connections"
+msgstr "メディアサーバー接続"
+
+msgid "Plex, Jellyfin and Subsonic settings, including their credentials."
+msgstr "Plex、Jellyfin、Subsonic の設定（認証情報を含む）。"
+
+msgid "Scrobbler accounts"
+msgstr "スクロブラーアカウント"
+
+msgid "Last.fm and ListenBrainz settings, including their credentials."
+msgstr "Last.fm と ListenBrainz の設定（認証情報を含む）。"
+
+msgid "The listen log and the events behind offline recommendations."
+msgstr "再生ログとオフラインおすすめの元になるイベント。"
+
+msgid "Local profile: {} rows copied; {} playlist rows had no match."
+msgstr "ローカルプロファイル: {} 行をコピー。プレイリストの {} 行は対応がありませんでした。"
+
+msgid "The library already had folders: run a rescan to index the added ones."
+msgstr "ライブラリには既にフォルダーがありました。追加分を索引化するには再スキャンしてください。"
+
+msgid "Restart QBZ to see the migrated local profile."
+msgstr "移行したローカルプロファイルを表示するには QBZ を再起動してください。"
+
+msgid "The local profile could not be copied; see the log."
+msgstr "ローカルプロファイルをコピーできませんでした。ログを確認してください。"

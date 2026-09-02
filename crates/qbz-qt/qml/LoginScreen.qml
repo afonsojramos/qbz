@@ -422,7 +422,7 @@ Rectangle {
             // --- Legal disclaimer ------------------------------------
             Text {
                 width: parent.width
-                text: QbzSession.tr("QBZ requires an active Qobuz™ subscription. Your credentials are sent directly to Qobuz™.", QbzSession.trRev)
+                text: QbzSession.tr("QBZ requires a Qobuz™ account. Without an active subscription, playback is limited to 30-second previews; favorites, playlists and purchases still work. Your credentials are sent directly to Qobuz™.", QbzSession.trRev)
                     + "\n"
                     + QbzSession.tr("QBZ can be used as an offline player without a Qobuz™ account (no access to the Qobuz™ library).", QbzSession.trRev)
                     + "\n"

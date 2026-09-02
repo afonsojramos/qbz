@@ -1269,9 +1269,7 @@ mod tests {
             email: "a@b.c".into(),
             display_name: "Tester".into(),
             subscription_label: "studio".into(),
-            subscription_valid_until: None,
-            country_code: None,
-            language_code: None,
+            ..UserSession::default()
         };
         set_logged_in(&shared, &session);
         let s = shared.lock().unwrap();

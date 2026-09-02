@@ -117,8 +117,40 @@ pub enum QualityLimit {
 
 // ============ User Session ============
 
+/// What the account is entitled to, straight from
+/// `user.credential.parameters` of the `/user/login` payload (wire names,
+/// verified against Qobuz's own embedded fixture — see
+/// `qbz-nix-docs/offline-mode/tauri-review-2026-06-09/10-subscription-trial-offline-gating.md`
+/// §1.2). An account without an active subscription ("Qobuz member") has
+/// no `parameters` at all and therefore every flag `false`; Qobuz still
+/// serves it favorites, playlists, purchases and 30-second previews.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Entitlements {
+    #[serde(default)]
+    pub lossy_streaming: bool,
+    #[serde(default)]
+    pub lossless_streaming: bool,
+    #[serde(default)]
+    pub hires_streaming: bool,
+    #[serde(default)]
+    pub hires_purchases_streaming: bool,
+    #[serde(default)]
+    pub offline_streaming: bool,
+    #[serde(default)]
+    pub mobile_streaming: bool,
+}
+
+impl Entitlements {
+    /// No streaming entitlement of any kind: a Qobuz member without a
+    /// subscription. Purchases and previews still work; full-length
+    /// catalog playback and offline do not.
+    pub fn is_member_only(&self) -> bool {
+        !(self.lossy_streaming || self.lossless_streaming || self.hires_streaming)
+    }
+}
+
 /// User credentials and session info
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UserSession {
     pub user_auth_token: String,
     pub user_id: u64,
@@ -127,6 +159,20 @@ pub struct UserSession {
     pub subscription_label: String,
     #[serde(default)]
     pub subscription_valid_until: Option<String>,
+    /// Entitlement flags from `credential.parameters`. `serde(default)`
+    /// keeps persisted pre-member-mode sessions loadable (all `false`,
+    /// which the next real login corrects).
+    #[serde(default)]
+    pub entitlements: Entitlements,
+    /// `user.subscription.end_date` (`YYYY-MM-DD`), when Qobuz sends the
+    /// `subscription` object at all. Informational: the entitlement flags
+    /// are the server's verdict, not this date (the embedded fixture has a
+    /// past `end_date` with every flag still `true`).
+    #[serde(default)]
+    pub subscription_end_date: Option<String>,
+    /// `user.subscription.offer` (e.g. "studio", "sublime"), when present.
+    #[serde(default)]
+    pub subscription_offer: Option<String>,
     /// Account territory (ISO 3166-1 alpha-2, e.g. "FR") from the login
     /// response. `serde(default)` keeps pre-v10 persisted sessions loadable.
     #[serde(default)]
@@ -149,6 +195,12 @@ pub struct StreamUrl {
     pub bit_depth: Option<u32>,
     pub track_id: u64,
     pub restrictions: Vec<StreamRestriction>,
+    /// `true` when Qobuz served a 30-second preview instead of the track
+    /// (an account without the streaming entitlement, or a track that is
+    /// not streamable in the territory). The URL still plays; the player
+    /// must say so and must not count it as a listen.
+    #[serde(default)]
+    pub sample: bool,
 }
 
 impl StreamUrl {

@@ -86,6 +86,23 @@ fn with_service<T>(default: T, f: impl FnOnce(&BlacklistService) -> T) -> T {
         .unwrap_or(default)
 }
 
+/// Settings > Import / Export: the bound store as a portable bundle.
+pub fn export_portable() -> Result<qbz_app::settings::blacklist_portable::BlacklistBundle, String> {
+    with_service(Err("no blacklist store is bound".to_string()), |s| {
+        qbz_app::settings::blacklist_portable::export(s)
+    })
+}
+
+/// Settings > Import / Export: additive merge of a portable bundle into the
+/// bound store (see `blacklist_portable::import` for what "additive" means).
+pub fn import_portable(
+    bundle: &qbz_app::settings::blacklist_portable::BlacklistBundle,
+) -> Result<qbz_app::settings::blacklist_portable::ImportReport, String> {
+    with_service(Err("no blacklist store is bound".to_string()), |s| {
+        qbz_app::settings::blacklist_portable::import(s, bundle)
+    })
+}
+
 /// True when the artist id is blacklisted (and the feature is enabled).
 /// Fail-open `false` when no session is bound.
 pub fn is_blacklisted(artist_id: u64) -> bool {

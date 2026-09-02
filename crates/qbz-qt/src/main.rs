@@ -965,8 +965,9 @@ fn enter_shell(session: auth_qt::SessionInfo) {
     session_bridge::ui(move |mut b| {
         b.as_mut()
             .set_session_user_name(QString::from(session.display_name.as_str()));
-        b.as_mut()
-            .set_session_subscription(QString::from(session.subscription.as_str()));
+        b.as_mut().set_session_subscription(QString::from(
+            crate::auth_qt::display_subscription(&session.subscription).as_str(),
+        ));
         b.as_mut().set_has_previous_session(true);
         b.as_mut().set_login_error(QString::from(""));
         b.as_mut().set_restore_error(QString::from(""));
