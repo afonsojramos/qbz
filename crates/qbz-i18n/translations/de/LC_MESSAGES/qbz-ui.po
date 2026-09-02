@@ -6355,3 +6355,6 @@ msgstr "Sortierung: Veröffentlichungsdatum"
 
 msgid "Until the purchased file is downloaded, Play streams the best quality Qobuz offers for this album. Once it is on disk, Play uses your copy."
 msgstr "Solange die gekaufte Datei nicht heruntergeladen ist, streamt Wiedergabe die beste Qualität, die Qobuz für dieses Album anbietet. Sobald sie auf der Festplatte liegt, verwendet Wiedergabe deine Kopie."
+
+msgid "Open in Local Library"
+msgstr "In lokaler Bibliothek öffnen"

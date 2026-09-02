@@ -116,7 +116,8 @@ Item {
     // (QbzSession.trRev is the translation revision counter every other
     // tr() call site binds to).
     readonly property var sections:
-        buildSections(QbzSession.trRev, showRecommendations, localTabOrder)
+        buildSections(QbzSession.trRev, showRecommendations, localTabOrder,
+                      QbzPurchases.activeDownloadsJson)
 
     function trs(s) { return QbzSession.tr(s, QbzSession.trRev) }
 
@@ -129,7 +130,7 @@ Item {
     //                  `icon`"; a non-empty path is a user-supplied image
     //                  rendered raw by shell/NavSectionGlyph.qml. Only the
     //                  MyQBZ section can carry one. }
-    function buildSections(rev, reco, localOrder) {
+    function buildSections(rev, reco, localOrder, downloadsJson) {
         // Discover — glyph-less rows (Slint has-glyph: false).
         var discover = [
             { "label": nav.trs("Home"), "icon": "", "view": "home", "tab": "home", "enabled": true },
@@ -173,7 +174,29 @@ Item {
             "icon": "folder-open", "view": "", "tab": "", "enabled": true,
             "hasSubmenu": true, "submenu": nav.openMediaEntries()
         })
-        return [
+        // Purchases in flight. A download is process-wide and survives
+        // leaving its page (purchases_qt's store), so this is how the user
+        // finds it again — and sees at a glance that something is still
+        // running. Absent entirely while nothing downloads.
+        var downloads = []
+        try {
+            var active = JSON.parse(downloadsJson || "[]")
+            for (var di = 0; di < active.length; di++)
+                downloads.push({
+                    "label": active[di].title || nav.trs("Purchases"),
+                    "icon": "cloud-download", "view": "", "tab": "", "enabled": true,
+                    "action": "openPurchase", "albumId": active[di].id || ""
+                })
+        } catch (e) {}
+        var downloadsSection = downloads.length === 0 ? [] : [{
+            "id": "downloads",
+            "icon": "cloud-download",
+            "label": nav.trs("Downloads") + " · " + downloads.length,
+            "qobuz": true,
+            "enabled": true,
+            "entries": downloads
+        }]
+        return downloadsSection.concat([
             {
                 "id": "discover",
                 "icon": "compass",
@@ -234,7 +257,7 @@ Item {
                     { "label": nav.trs("Mixtapes"), "icon": "cassette-tape", "view": "mixtapes", "tab": "", "enabled": true }
                 ]
             }
-        ]
+        ])
     }
 
     /// Second-level catalog for Local Library > Open. When a medium already
@@ -354,6 +377,12 @@ Item {
         }
         if (entry.action === "closeMedia") {
             QbzLocal.ephemeralClear()
+            return
+        }
+        if (entry.action === "openPurchase") {
+            // Same two-step every purchase entry uses: record, then route.
+            QbzPurchases.openAlbum(entry.albumId || "")
+            QbzShell.navigateTo("purchase-album")
             return
         }
         if (entry.view === "") return

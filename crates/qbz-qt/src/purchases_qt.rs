@@ -214,6 +214,9 @@ struct ListDoc {
 struct FormatRow {
     id: u32,
     label: String,
+    /// Every track of the album is registered as downloaded IN THIS FORMAT
+    /// (the registry, not the transient store): the dropdown marks it.
+    downloaded: bool,
 }
 
 /// One detail-screen track.
@@ -328,6 +331,11 @@ struct AlbumDoc {
     goodies_progress: GoodiesProgressDoc,
     #[serde(rename = "addToLibraryVisible")]
     add_to_library_visible: bool,
+    /// The download folder of this album that the Local Library has indexed
+    /// (`""` = none yet). It is the id the local album page opens, so the
+    /// detail can link straight to the copy on disk.
+    #[serde(rename = "localAlbumId")]
+    local_album_id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -410,6 +418,9 @@ struct AlbumDownload {
 #[derive(Debug, Default)]
 struct DownloadStore {
     albums: HashMap<String, AlbumDownload>,
+    /// Album titles for the nav flyout's Downloads section — the store keys
+    /// by id and a menu row cannot show an id.
+    titles: HashMap<String, String>,
     /// `album_id -> abort?` (the reference's module-level `abortFlags`, NOT
     /// part of the store itself — cooperative cancellation checked BETWEEN
     /// tracks).
@@ -450,6 +461,29 @@ impl DownloadStore {
 
     fn mark(&mut self, album_id: &str, track_id: u64, status: DlStatus) {
         self.entry(album_id).statuses.insert(track_id, status);
+    }
+
+    fn remember_title(&mut self, album_id: &str, title: &str) {
+        self.titles.insert(album_id.to_string(), title.to_string());
+    }
+
+    /// The albums with anything in flight — a whole-album loop, a single
+    /// track, or goodies — as the flyout's `{ id, title }` rows.
+    fn active_downloads(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self
+            .albums
+            .iter()
+            .filter(|(_, a)| {
+                a.downloading_all
+                    || a.goodies_active
+                    || a.statuses
+                        .values()
+                        .any(|st| matches!(st, DlStatus::Downloading))
+            })
+            .map(|(id, _)| (id.clone(), self.titles.get(id).cloned().unwrap_or_default()))
+            .collect();
+        out.sort();
+        out
     }
 
     /// Resolve the album folder from the FIRST successful track (`:160-165`).
@@ -655,9 +689,9 @@ fn tier(hires: bool, bit_depth: Option<u32>) -> String {
 /// The badge for what the account BOUGHT. A DSD purchase streams as CD
 /// (`hires:false`, 16/44.1 on the catalog — the live DSD64 album), so the
 /// catalog's depth/rate describe the stream, not the purchase; the entitlement
-/// ids are the only honest source. The badge control knows hires | cd | mp3,
-/// so DSD rides the hires tier and says which DSD it is in the detail line.
-/// Anything without a DSD id keeps the catalog-derived pair unchanged.
+/// ids are the only honest source. 55/56 wear the `dsd` tier (the DSD mark)
+/// with the multiple in the detail line; anything without a DSD id keeps the
+/// catalog-derived pair unchanged.
 fn purchased_quality(
     hires: bool,
     bit_depth: Option<u32>,
@@ -665,10 +699,10 @@ fn purchased_quality(
     entitlement: &[u32],
 ) -> (String, String) {
     if entitlement.contains(&56) {
-        return ("hires".to_string(), "DSD128".to_string());
+        return ("dsd".to_string(), "DSD128".to_string());
     }
     if entitlement.contains(&55) {
-        return ("hires".to_string(), "DSD64".to_string());
+        return ("dsd".to_string(), "DSD64".to_string());
     }
     (
         tier(hires, bit_depth),
@@ -818,6 +852,9 @@ struct DetailState {
     /// The folder the user picked for THIS album, before any download has
     /// rewritten the store's copy to the album subfolder.
     destination: String,
+    /// See `AlbumDoc::local_album_id`. Resolved on load and after every
+    /// download / add-to-library, never guessed.
+    local_album_id: String,
 }
 
 static LIST: Mutex<Option<ListState>> = Mutex::new(None);
@@ -888,8 +925,19 @@ fn publish_list() {
 fn publish_album() {
     let json =
         with_detail(|s| serde_json::to_string(&build_album_doc(s)).unwrap_or_else(|_| "{}".into()));
+    let active = with_store(|st| {
+        serde_json::to_string(
+            &st.active_downloads()
+                .into_iter()
+                .map(|(id, title)| serde_json::json!({ "id": id, "title": title }))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| "[]".into())
+    });
     crate::purchases_bridge::ui(move |mut b| {
         b.as_mut().set_album_json(QString::from(json.as_str()));
+        b.as_mut()
+            .set_active_downloads_json(QString::from(active.as_str()));
         let next = b.as_ref().purchases_rev() + 1;
         b.as_mut().set_purchases_rev(next);
     });
@@ -1045,6 +1093,12 @@ fn album_row(a: &PurchaseAlbum) -> AlbumRow {
 }
 
 fn track_row(t: &PurchaseTrack) -> TrackRow {
+    let track_quality = purchased_quality(
+        t.hires,
+        t.maximum_bit_depth,
+        t.maximum_sampling_rate,
+        &t.downloadable_format_ids,
+    );
     let (album_title, album_id, url) = match &t.album {
         Some(al) => (
             al.title.clone(),
@@ -1063,8 +1117,8 @@ fn track_row(t: &PurchaseTrack) -> TrackRow {
         art_path: cached_art(&url),
         artwork_url: url,
         duration: t.duration,
-        quality_tier: tier(t.hires, t.maximum_bit_depth),
-        quality_detail: quality_detail(t.maximum_bit_depth, t.maximum_sampling_rate),
+        quality_tier: track_quality.0,
+        quality_detail: track_quality.1,
         streamable: t.streamable,
         downloaded: t.downloaded,
         purchased_at: t.purchased_at.unwrap_or(0),
@@ -1139,6 +1193,7 @@ fn build_album_doc(s: &DetailState) -> AlbumDoc {
             progress: ProgressDoc::default(),
             goodies_progress: GoodiesProgressDoc::default(),
             add_to_library_visible: false,
+            local_album_id: String::new(),
         };
     };
 
@@ -1158,6 +1213,12 @@ fn build_album_doc(s: &DetailState) -> AlbumDoc {
     let mut discs: Vec<DiscRow> = Vec::new();
     for t in tracks {
         let number = t.media_number.unwrap_or(1);
+        let row_quality = purchased_quality(
+            t.hires,
+            t.maximum_bit_depth,
+            t.maximum_sampling_rate,
+            &album.downloadable_format_ids,
+        );
         let row = AlbumTrackRow {
             id: t.id.to_string(),
             title: t.title.clone(),
@@ -1165,8 +1226,10 @@ fn build_album_doc(s: &DetailState) -> AlbumDoc {
             artist: t.performer.name.clone(),
             track_number: t.track_number,
             duration: t.duration,
-            quality_tier: tier(t.hires, t.maximum_bit_depth),
-            quality_detail: quality_detail(t.maximum_bit_depth, t.maximum_sampling_rate),
+            // The purchase's own quality (DSD128 on a DSD purchase), not the
+            // catalog's 24/352.8 that no stream ever delivers.
+            quality_tier: row_quality.0,
+            quality_detail: row_quality.1,
             streamable: t.streamable,
             // `isDownloadedForFormat || status === 'complete'` (`:446`, and the
             // per-row derive at `:406-415`). BOTH halves are format-scoped,
@@ -1247,6 +1310,10 @@ fn build_album_doc(s: &DetailState) -> AlbumDoc {
             .map(|f| FormatRow {
                 id: f.id,
                 label: f.label.clone(),
+                downloaded: !tracks.is_empty()
+                    && tracks
+                        .iter()
+                        .all(|t| t.downloaded_format_ids.contains(&f.id)),
             })
             .collect(),
         selected_format_id: selected.unwrap_or(0) as i32,
@@ -1289,6 +1356,7 @@ fn build_album_doc(s: &DetailState) -> AlbumDoc {
             && dl_ref
                 .and_then(|d| d.resolved_album_folder.as_ref())
                 .is_some(),
+        local_album_id: s.local_album_id.clone(),
     }
 }
 
@@ -1852,6 +1920,7 @@ async fn load_album(generation: u64, album_id: String) {
         });
 
     let reg = ensure_registry().await;
+    let local_album_id = resolve_local_album(album_id.clone()).await;
 
     let album =
         svc::build_purchase_album(&catalog, &purchases, &reg.downloaded_ids, &reg.format_map);
@@ -1875,6 +1944,7 @@ async fn load_album(generation: u64, album_id: String) {
         s.album = Some(album);
         s.catalog = Some(catalog);
         s.formats = formats;
+        s.local_album_id = local_album_id;
         s.art_path = cached_art(&cover_url);
         s.loading = false;
         s.error.clear();
@@ -2049,7 +2119,10 @@ pub fn download_track(track_id: String) {
         let Some(plan) = ensure_destination(plan).await else {
             return;
         };
-        with_store(|st| st.merge_track_start(&plan.album_id, track_id, plan.format_id));
+        with_store(|st| {
+            st.remember_title(&plan.album_id, &plan.album_title);
+            st.merge_track_start(&plan.album_id, track_id, plan.format_id)
+        });
         publish_album();
 
         let Some(client) = snapshot_client().await else {
@@ -2102,7 +2175,10 @@ async fn build_context(catalog: &Album) -> svc::PurchaseAlbumContext {
 }
 
 async fn run_album_download(plan: DownloadPlan) {
-    with_store(|st| st.seed_album(&plan.album_id, plan.format_id));
+    with_store(|st| {
+        st.remember_title(&plan.album_id, &plan.album_title);
+        st.seed_album(&plan.album_id, plan.format_id)
+    });
     publish_album();
 
     let Some(client) = snapshot_client().await else {
@@ -2395,10 +2471,51 @@ fn toast_album_outcome(plan: &DownloadPlan) {
     }
 }
 
+/// The download folder of `album_id` the Local Library has INDEXED, or `""`.
+/// Walks the registry's folders for the album (newest first) and asks the
+/// library for rows under each; the first folder with rows is the local album
+/// id (`local_bridge::open_album_by_id` opens a plain local album by its
+/// folder path). Off the UI thread; a missing library answers `""`.
+async fn resolve_local_album(album_id: String) -> String {
+    tokio::task::spawn_blocking(move || {
+        crate::library_db_qt::with_db(false, |db| {
+            for folder in db.get_downloaded_purchase_folders(&album_id)? {
+                if !db.list_folder_tracks(&folder, false)?.is_empty() {
+                    return Ok(folder);
+                }
+            }
+            Ok(String::new())
+        })
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Recompute `local_album_id` for the open detail and republish if it moved.
+async fn refresh_local_album_link() {
+    let Some(album_id) = with_detail(|s| (!s.album_id.is_empty()).then(|| s.album_id.clone()))
+    else {
+        return;
+    };
+    let id = resolve_local_album(album_id.clone()).await;
+    let changed = with_detail(|s| {
+        if s.album_id != album_id || s.local_album_id == id {
+            return false;
+        }
+        s.local_album_id = id;
+        true
+    });
+    if changed {
+        publish_album();
+    }
+}
+
 /// Re-read the registry and re-annotate everything the download just changed, so
 /// the green checks survive a reload instead of living only in the transient
 /// store.
 async fn refresh_after_download() {
+    refresh_local_album_link().await;
     let reg = read_registry().await;
     set_registry(reg.clone());
 
@@ -2554,6 +2671,11 @@ pub fn add_to_library() {
         // re-walk the user's entire library, which on a large one is minutes of
         // disk for a single new album.
         crate::settings_qt::library::scan(Some(folder_id));
+        // The scan runs on its own; the link appears once its rows exist.
+        // One look after a generous delay is enough for an album-sized
+        // folder, and re-entering the page resolves it again anyway.
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        refresh_local_album_link().await;
     });
 }
 
@@ -3025,12 +3147,12 @@ mod tests {
     // ---- What was bought, not what streams -------------------------------
 
     #[test]
-    fn a_dsd_purchase_badges_as_hires_with_the_dsd_in_the_detail() {
+    fn a_dsd_purchase_wears_the_dsd_tier_with_the_multiple_in_the_detail() {
         // Rust In Peace on the live account: hires:false, 16/44.1, [55].
         let (tier, detail) = purchased_quality(false, Some(16), Some(44.1), &[55]);
-        assert_eq!((tier.as_str(), detail.as_str()), ("hires", "DSD64"));
+        assert_eq!((tier.as_str(), detail.as_str()), ("dsd", "DSD64"));
         let (tier, detail) = purchased_quality(true, Some(24), Some(352.8), &[56]);
-        assert_eq!((tier.as_str(), detail.as_str()), ("hires", "DSD128"));
+        assert_eq!((tier.as_str(), detail.as_str()), ("dsd", "DSD128"));
         // A FLAC purchase keeps the catalog-derived pair untouched.
         let (tier, detail) = purchased_quality(true, Some(24), Some(96.0), &[7, 6, 5]);
         assert_eq!(tier, "hires");

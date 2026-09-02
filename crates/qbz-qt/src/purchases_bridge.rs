@@ -60,6 +60,11 @@ pub mod qbz_purchases_bridge {
         /// (re-opening the same album, or a filter toggle that changes nothing
         /// visible), the same trick `QbzSession.trRev` plays.
         #[qproperty(i32, purchases_rev)]
+        /// The purchases with a download IN FLIGHT right now, as a JSON array
+        /// of `{ id, title }` — the nav flyout's "Downloads · N" section. A
+        /// download is process-wide and survives leaving its page; this is
+        /// how the user finds it again. `"[]"` while nothing runs.
+        #[qproperty(QString, active_downloads_json)]
         type QbzPurchases = super::QbzPurchasesRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain
@@ -189,6 +194,7 @@ pub struct QbzPurchasesRust {
     list_json: QString,
     album_json: QString,
     purchases_rev: i32,
+    active_downloads_json: QString,
 }
 
 impl Default for QbzPurchasesRust {
@@ -199,6 +205,8 @@ impl Default for QbzPurchasesRust {
             list_json: QString::from("{}"),
             album_json: QString::from("{}"),
             purchases_rev: 0,
+            // Same rule: the flyout JSON.parses it on the first frame.
+            active_downloads_json: QString::from("[]"),
         }
     }
 }

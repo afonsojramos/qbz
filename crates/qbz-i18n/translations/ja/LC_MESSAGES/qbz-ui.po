@@ -6336,3 +6336,6 @@ msgstr "並び替え: 発売日"
 
 msgid "Until the purchased file is downloaded, Play streams the best quality Qobuz offers for this album. Once it is on disk, Play uses your copy."
 msgstr "購入したファイルをダウンロードするまでは、このアルバムに Qobuz が提供する最高品質でストリーミング再生します。ディスクに保存されると、再生はあなたのコピーを使います。"
+
+msgid "Open in Local Library"
+msgstr "ローカルライブラリで開く"

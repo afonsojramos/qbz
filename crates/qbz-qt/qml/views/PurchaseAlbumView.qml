@@ -104,11 +104,41 @@ Rectangle {
             if (root.formats[i].id === want) return i
         return 0
     }
+    // "✓" after every format whose download is COMPLETE for the whole album
+    // (`FormatRow.downloaded`, from the registry): the dropdown then says
+    // which versions are already on disk without opening each one.
     readonly property var formatLabels: {
         var out = []
         for (var i = 0; i < root.formats.length; i++)
-            out.push(root.formats[i].label || "")
+            out.push((root.formats[i].label || "")
+                     + (root.formats[i].downloaded === true ? "  ✓" : ""))
         return out
+    }
+
+    // The track filter's text and its matcher (title / performer, case-folded).
+    property string query: ""
+    function matches(track) {
+        var q = root.query.trim().toLowerCase()
+        if (q === "")
+            return true
+        var t = (track.title || "").toLowerCase()
+        var a = (track.artist || "").toLowerCase()
+        return t.indexOf(q) >= 0 || a.indexOf(q) >= 0
+    }
+    readonly property int trackTotal: {
+        var n = 0
+        for (var d = 0; d < root.discs.length; d++)
+            n += (root.discs[d].tracks || []).length
+        return n
+    }
+    readonly property int matchCount: {
+        var n = 0
+        for (var d = 0; d < root.discs.length; d++) {
+            var ts = root.discs[d].tracks || []
+            for (var i = 0; i < ts.length; i++)
+                if (root.matches(ts[i])) n++
+        }
+        return n
     }
 
     // Click-to-play is gated on `streamable`, which on THIS screen defaults
@@ -445,9 +475,15 @@ Rectangle {
                         width: parent.width
                         spacing: 12
 
+                        // On THIS screen the download is the point and Play
+                        // is the convenience, so the accent goes to the
+                        // cloud and both share one intermediate size — the
+                        // 44px primary Play of the catalog album page read as
+                        // the main event here (smoke 2026-09-02).
                         QbzCircleAction {
                             visible: root.anyStreamable
-                            primary: true
+                            primary: false
+                            diameterOverride: 38
                             name: "play-fill"
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: QbzPlayer.playAlbum(root.doc.id || "")
@@ -458,7 +494,9 @@ Rectangle {
                         // it (§4.3: the four formats come from album metadata,
                         // and an album can legitimately offer none).
                         QbzCircleAction {
-                            primary: !root.anyStreamable
+                            primary: true
+                            compactPrimary: true
+                            diameterOverride: 38
                             name: "cloud-download"
                             btnEnabled: !(root.progress.active === true)
                                         && root.formats.length > 0
@@ -499,6 +537,20 @@ Rectangle {
                             iconName: "folder-open"
                             btnEnabled: !(root.progress.active === true)
                             onClicked: QbzPurchases.chooseDestination()
+                        }
+                        // The album is ALREADY in the Local Library: jump to
+                        // it. `localAlbumId` is the download folder the
+                        // library indexed (purchases_qt::resolve_local_album),
+                        // which is exactly the id the local album page opens.
+                        IconTextButton {
+                            visible: (root.doc.localAlbumId || "") !== ""
+                            anchors.verticalCenter: parent.verticalCenter
+                            label: root.t("Open in Local Library")
+                            iconName: "hard-drive"
+                            onClicked: {
+                                QbzLocal.openAlbum(root.doc.localAlbumId)
+                                QbzShell.navigateTo("localalbum")
+                            }
                         }
                         // GOODIES — album-level only, never per-track, and
                         // completely absent when the list is empty (§14.3).
@@ -772,6 +824,35 @@ Rectangle {
                 width: parent.width - 64
                 spacing: 0
 
+                // Track filter — the Local Library album page's "Filter
+                // tracks" box, so a 30-track purchase is searchable in place.
+                // Presentation-only: rows that do not match collapse to 0px.
+                Item {
+                    visible: root.discs.length > 0
+                    width: parent.width
+                    height: visible ? 44 : 0
+                    QbzLineEdit {
+                        id: trackFilter
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 260
+                        sm: true
+                        searchMode: true
+                        placeholder: root.t("Filter tracks")
+                        text: root.query
+                        onEdited: function (v) { root.query = v }
+                    }
+                    Text {
+                        anchors.right: trackFilter.left
+                        anchors.rightMargin: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: root.query.trim() !== ""
+                        text: root.matchCount + " / " + root.trackTotal
+                        color: theme.textMuted
+                        font.pixelSize: theme.fontLegal
+                    }
+                }
+
                 // Column header. The arms MIRROR the delegate's arms below —
                 // no heart, no shared offline column, no ⋯ — and
                 // `trailingReserve` is the 28px status cell plus its 14px gap,
@@ -839,7 +920,9 @@ Rectangle {
                                 required property var modelData
                                 required property int index
                                 width: parent ? parent.width : 0
-                                height: 50
+                                readonly property bool shown: root.matches(modelData)
+                                visible: shown
+                                height: shown ? 50 : 0
 
                                 readonly property bool streamable: modelData.streamable === true
                                 readonly property string trackId: modelData.id || ""

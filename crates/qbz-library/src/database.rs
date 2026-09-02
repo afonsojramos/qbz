@@ -6784,6 +6784,39 @@ impl LibraryDatabase {
             .map_err(|e| LibraryError::Database(format!("Failed to collect purchase files: {}", e)))
     }
 
+    /// The DISTINCT folders the registered downloads of one purchased album
+    /// sit in (a folder per format, e.g. `…/Album [DSF][DSD128]` and
+    /// `…/Album [FLAC][16-bit,44.1kHz]`), newest first. No stat, no prune.
+    pub fn get_downloaded_purchase_folders(
+        &self,
+        album_id: &str,
+    ) -> Result<Vec<String>, LibraryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT file_path FROM downloaded_purchases
+                 WHERE album_id = ?1 ORDER BY downloaded_at DESC",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare statement: {}", e)))?;
+        let paths = stmt
+            .query_map(rusqlite::params![album_id], |row| row.get::<_, String>(0))
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to query purchase folders: {}", e))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| LibraryError::Database(format!("Failed to collect folders: {}", e)))?;
+        let mut folders: Vec<String> = Vec::new();
+        for p in paths {
+            if let Some(dir) = std::path::Path::new(&p).parent() {
+                let dir = dir.to_string_lossy().into_owned();
+                if !folders.contains(&dir) {
+                    folders.push(dir);
+                }
+            }
+        }
+        Ok(folders)
+    }
+
     /// Remove ONE downloaded purchase record (e.g. the user deleted the file).
     ///
     /// The table's primary key is `(track_id, format_id)` — the same purchased

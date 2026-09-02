@@ -6353,3 +6353,6 @@ msgstr "Tri : Date de sortie"
 
 msgid "Until the purchased file is downloaded, Play streams the best quality Qobuz offers for this album. Once it is on disk, Play uses your copy."
 msgstr "Tant que le fichier acheté n’est pas téléchargé, Lecture diffuse la meilleure qualité que Qobuz propose pour cet album. Une fois sur le disque, Lecture utilise votre copie."
+
+msgid "Open in Local Library"
+msgstr "Ouvrir dans la bibliothèque locale"
