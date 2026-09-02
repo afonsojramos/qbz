@@ -46,6 +46,8 @@ Item {
     readonly property bool hideUnavailable: root.toolbar.hideUnavailable === true
     readonly property bool hideDownloaded: root.toolbar.hideDownloaded === true
     readonly property string qualityFilter: root.toolbar.qualityFilter || "all"
+    readonly property var genres: root.toolbar.genres || []
+    readonly property string genreFilter: root.toolbar.genreFilter || ""
 
     /// The funnel's badge. Counted GLOBALLY — the Tracks bar hides the
     /// Availability section but the preference itself is still in force, which
@@ -54,6 +56,7 @@ Item {
           (root.hideUnavailable ? 1 : 0)
         + (root.hideDownloaded ? 1 : 0)
         + (root.qualityFilter !== "all" ? 1 : 0)
+        + (root.genreFilter !== "" && root.tab !== "tracks" ? 1 : 0)
 
     /// The same three settings as the badge, but SAID — the applied-filters
     /// tooltip. Counted the same way and in the menu's own order, so the number
@@ -71,9 +74,11 @@ Item {
             q.push(root.t("CD"))
         else if (root.qualityFilter === "lossy")
             q.push(root.t("Lossy"))
+        var g = root.genreFilter !== "" && root.tab !== "tracks" ? [root.genreFilter] : []
         return [
             { group: root.t("Availability"), values: avail },
-            { group: root.t("Quality"), values: q }
+            { group: root.t("Quality"), values: q },
+            { group: root.t("Genre"), values: g }
         ]
     }
 
@@ -324,6 +329,7 @@ Item {
             label: root.sortKey === "artist" ? root.t("Sort: Artist")
                  : root.sortKey === "album" ? root.t("Sort: Album")
                  : root.sortKey === "quality" ? root.t("Sort: Quality")
+                 : root.sortKey === "released" ? root.t("Sort: Release date")
                  : root.t("Sort: Date")
             onClicked: sortMenu.openBelowLeft(sortBtn)
 
@@ -351,6 +357,12 @@ Item {
                     selected: root.sortKey === "purchased"
                     arrow: sortBtn.arrowFor("purchased")
                     onPicked: sortBtn.pick("purchased")
+                }
+                MenuRow {
+                    label: root.t("Release date")
+                    selected: root.sortKey === "released"
+                    arrow: sortBtn.arrowFor("released")
+                    onPicked: sortBtn.pick("released")
                 }
                 MenuRow {
                     label: root.t("Artist")
@@ -463,6 +475,7 @@ Item {
                                 QbzPurchases.setHideUnavailable(false)
                                 QbzPurchases.setHideDownloaded(false)
                                 QbzPurchases.setQualityFilter("all")
+                                QbzPurchases.setGenreFilter("")
                             }
                         }
                     }
@@ -512,6 +525,30 @@ Item {
                         // filter predicate names (`QualityFilter::Lossy`).
                         selected: root.qualityFilter === "lossy"
                         onPicked: QbzPurchases.setQualityFilter("lossy")
+                    }
+                }
+
+                // Genre — ALBUMS ONLY, from the catalog's own genre on each
+                // purchased album (the tracks page carries none). Absent
+                // entirely while the listing has no genres to offer.
+                Column {
+                    visible: root.tab !== "tracks" && root.genres.length > 0
+                    width: parent ? parent.width : 0
+                    spacing: 4
+                    FilterSectionLabel { text: root.t("Genre") }
+                    QualityRadioRow {
+                        label: root.t("All genres")
+                        selected: root.genreFilter === ""
+                        onPicked: QbzPurchases.setGenreFilter("")
+                    }
+                    Repeater {
+                        model: root.genres
+                        delegate: QualityRadioRow {
+                            required property var modelData
+                            label: modelData
+                            selected: root.genreFilter === modelData
+                            onPicked: QbzPurchases.setGenreFilter(modelData)
+                        }
                     }
                 }
 

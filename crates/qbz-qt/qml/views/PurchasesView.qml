@@ -84,8 +84,16 @@ Rectangle {
     readonly property bool loading: root.doc.loading === true
     readonly property string loadError: root.doc.error || ""
 
-    readonly property bool onAlbums: root.tab !== "tracks"
-    readonly property var rows: root.onAlbums ? root.albums : root.tracks
+    // NOT `onAlbums`: with a sibling property called `albums` on this same
+    // object, QML files `onAlbums: …` as a signal HANDLER — no error, no
+    // warning, the initializer never binds and the property sits at `false`
+    // forever. That single name blanked the Albums tab for every account with
+    // real purchases (2026-09-01; reproduced standalone with the `qml`
+    // runtime, the identical expression under another name gives `true`).
+    // scripts/qml-audits/qml_on_prefixed_property_audit.py now fails the
+    // build on any `on<Upper>` property name.
+    readonly property bool albumsTab: root.tab !== "tracks"
+    readonly property var rows: root.albumsTab ? root.albums : root.tracks
     readonly property bool grouped: root.group !== "off" && root.group !== ""
 
     // ── entry / exit ──────────────────────────────────────────────────────
@@ -431,35 +439,35 @@ Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
                     iconName: root.search !== ""
                         ? "search"
-                        : (root.onAlbums ? "shopping-bag" : "music")
+                        : (root.albumsTab ? "shopping-bag" : "music")
                     iconSize: 48
                     titleMuted: true
                     titleWeight: theme.weightRegular
                     title: root.search !== ""
                         ? root.t("No results")
-                        : (root.onAlbums ? root.t("No purchases yet")
+                        : (root.albumsTab ? root.t("No purchases yet")
                                          : root.t("No purchased tracks yet"))
                 }
             }
 
             // --- ALBUMS, flat -------------------------------------------------
             PurchaseAlbumsCollection {
-                visible: !root.loading && root.loadError === "" && root.onAlbums
+                visible: !root.loading && root.loadError === "" && root.albumsTab
                     && !root.grouped && root.albums.length > 0
                 width: page.contentW
-                albums: (root.onAlbums && !root.grouped) ? root.albums : []
+                albums: (root.albumsTab && !root.grouped) ? root.albums : []
                 viewMode: root.viewMode
                 onOpenAlbum: function (id) { root.openAlbum(id) }
             }
 
             // --- ALBUMS, grouped ----------------------------------------------
             Column {
-                visible: !root.loading && root.loadError === "" && root.onAlbums
+                visible: !root.loading && root.loadError === "" && root.albumsTab
                     && root.grouped && root.albums.length > 0
                 width: page.contentW
                 spacing: 16
                 Repeater {
-                    model: (root.onAlbums && root.grouped) ? root.albumGroups() : []
+                    model: (root.albumsTab && root.grouped) ? root.albumGroups() : []
                     delegate: Column {
                         required property var modelData
                         width: page.contentW
@@ -484,16 +492,18 @@ Rectangle {
 
             // --- TRACKS, flat -------------------------------------------------
             Column {
-                visible: !root.loading && root.loadError === "" && !root.onAlbums
+                visible: !root.loading && root.loadError === "" && !root.albumsTab
                     && !root.grouped && root.tracks.length > 0
                 width: page.contentW
                 spacing: 2
                 Repeater {
-                    model: (!root.onAlbums && !root.grouped) ? root.tracks : []
+                    model: (!root.albumsTab && !root.grouped) ? root.tracks : []
                     delegate: PurchaseTrackRow {
                         required property var modelData
+                        required property int index
                         width: page.contentW
                         track: modelData
+                        rowIndex: index
                         onPlayRequested: QbzPlayer.playTrack(modelData.id || "")
                     }
                 }
@@ -501,12 +511,12 @@ Rectangle {
 
             // --- TRACKS, grouped ----------------------------------------------
             Column {
-                visible: !root.loading && root.loadError === "" && !root.onAlbums
+                visible: !root.loading && root.loadError === "" && !root.albumsTab
                     && root.grouped && root.tracks.length > 0
                 width: page.contentW
                 spacing: 16
                 Repeater {
-                    model: (!root.onAlbums && root.grouped) ? root.trackGroups() : []
+                    model: (!root.albumsTab && root.grouped) ? root.trackGroups() : []
                     delegate: Column {
                         required property var modelData
                         width: page.contentW
@@ -526,8 +536,10 @@ Rectangle {
                                 model: modelData.items
                                 delegate: PurchaseTrackRow {
                                     required property var modelData
+                                    required property int index
                                     width: parent ? parent.width : 0
                                     track: modelData
+                                    rowIndex: index
                                     onPlayRequested: QbzPlayer.playTrack(modelData.id || "")
                                 }
                             }
@@ -548,89 +560,5 @@ Rectangle {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         target: flick
-    }
-
-    // ── One-time disclaimer modal (QoL round) ────────────────────────────
-    // The WindowsDisclaimerModal mechanism on the purchases pref seam:
-    // seeded from `purchases_disclaimer_seen` on entry, OK persists it and
-    // it never returns. Overlay shape + wheel-lock are the
-    // DiscoverConfigModal pattern (plain Item, not a Popup — each surface
-    // eats its own wheel; ADR-009 z ≥ 3000). The scrim does NOT dismiss:
-    // like the Windows disclaimer, the only way out is the button, so a
-    // stray click cannot silently acknowledge it forever.
-    Item {
-        visible: root.doc.disclaimerVisible === true
-        enabled: visible
-        anchors.fill: parent
-        z: 3100
-
-        Rectangle {
-            anchors.fill: parent
-            radius: theme.radiusMd
-            color: "#bf000000"
-            MouseArea {
-                anchors.fill: parent
-                onClicked: {}
-                onWheel: function (wheel) { wheel.accepted = true }
-            }
-        }
-
-        Rectangle {
-            width: Math.min(parent.width - 80, 520)
-            height: Math.min(discCol.implicitHeight + 48, parent.height - 80)
-            x: Math.round((parent.width - width) / 2)
-            y: Math.round((parent.height - height) / 2)
-            radius: theme.radiusMd
-            color: theme.surfaceCard
-            border.width: 1
-            border.color: theme.borderSubtle
-            clip: true
-
-            MouseArea {
-                anchors.fill: parent
-                onWheel: function (wheel) { wheel.accepted = true }
-            }
-
-            Column {
-                id: discCol
-                x: 24
-                y: 24
-                width: parent.width - 48
-                spacing: 14
-
-                Text {
-                    width: parent.width
-                    text: QbzSession.tr("About music purchases", QbzSession.trRev)
-                    color: theme.textPrimary
-                    font.pixelSize: 17
-                    font.weight: Font.DemiBold
-                    wrapMode: Text.WordWrap
-                }
-                Text {
-                    width: parent.width
-                    text: QbzSession.tr("Music purchases are not available in every country or region where the platform offers streaming. One of those countries, where nothing can be bought and only the streaming subscription is offered, is Mexico.", QbzSession.trRev)
-                    color: theme.textSecondary
-                    font.pixelSize: 13
-                    wrapMode: Text.WordWrap
-                }
-                Text {
-                    width: parent.width
-                    text: QbzSession.tr("As it happens, the developer and maintainer of this software is from Mexico, so this section was built in blind mode — 'I am one with the Force and the Force is with me' — with some feedback from a couple of contributors, but in the end, in blind mode: it ships with no guarantee that it works and no promise to fix whatever is broken.", QbzSession.trRev)
-                    color: theme.textSecondary
-                    font.pixelSize: 13
-                    wrapMode: Text.WordWrap
-                }
-                Item {
-                    width: parent.width
-                    height: 32
-                    QbzPrimaryButton {
-                        anchors.right: parent.right
-                        label: QbzSession.tr("OK", QbzSession.trRev)
-                        btnHeight: 32
-                        onClicked: QbzPurchases.dismissDisclaimer()
-                    }
-                }
-            }
-        }
     }
 }

@@ -240,7 +240,7 @@ pub fn tier_of(format: &AudioFormat, bit_depth: Option<u32>, sample_rate_hz: f64
         return "mp3";
     }
     if matches!(format, AudioFormat::Dsd) {
-        return "hires";
+        return "dsd";
     }
     let khz = if sample_rate_hz >= 1000.0 {
         sample_rate_hz / 1000.0

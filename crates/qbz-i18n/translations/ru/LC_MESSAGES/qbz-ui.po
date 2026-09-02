@@ -6300,15 +6300,6 @@ msgstr "{} из {}"
 msgid "Last playlist"
 msgstr "Последний плейлист"
 
-msgid "About music purchases"
-msgstr "О покупке музыки"
-
-msgid "Music purchases are not available in every country or region where the platform offers streaming. One of those countries, where nothing can be bought and only the streaming subscription is offered, is Mexico."
-msgstr "Покупка музыки доступна не во всех странах и регионах, где платформа предлагает стриминг. Одна из таких стран, где ничего нельзя купить и доступна только подписка на стриминг, — Мексика."
-
-msgid "As it happens, the developer and maintainer of this software is from Mexico, so this section was built in blind mode — 'I am one with the Force and the Force is with me' — with some feedback from a couple of contributors, but in the end, in blind mode: it ships with no guarantee that it works and no promise to fix whatever is broken."
-msgstr "Так уж вышло, что разработчик и мейнтейнер этой программы из Мексики, поэтому этот раздел разрабатывался вслепую — 'I am one with the Force and the Force is with me' — с некоторой обратной связью от пары контрибьюторов, но в итоге всё же вслепую: он поставляется без гарантии работоспособности и без обещания чинить то, что сломано."
-
 msgid "OK"
 msgstr "OK"
 
@@ -6374,3 +6365,15 @@ msgstr "При конфликте воспроизведения"
 
 msgid "Ask each time or automatically choose which queue and device should continue."
 msgstr "Спрашивать каждый раз или автоматически выбирать, какая очередь и устройство продолжат воспроизведение."
+
+msgid "Purchased"
+msgstr "Куплено"
+
+msgid "Sort: Release date"
+msgstr "Сортировка: Дата выхода"
+
+msgid "Until the purchased file is downloaded, Play streams the best quality Qobuz offers for this album. Once it is on disk, Play uses your copy."
+msgstr "Пока купленный файл не скачан, воспроизведение идёт в лучшем качестве, которое Qobuz предлагает для этого альбома. Как только он окажется на диске, воспроизводится ваша копия."
+
+msgid "Open in Local Library"
+msgstr "Открыть в локальной библиотеке"

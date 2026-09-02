@@ -158,7 +158,7 @@ jobs:
           QBZ_QT_QML_DIR: ${{ env.QT_ROOT_DIR }}/qml
         run: |
           set -euo pipefail
-          for a in qml_resolution_audit qml_singleton_xref qml_eager_tab_audit qml_module_registration_audit qml_icon_bake_audit; do
+          for a in qml_resolution_audit qml_singleton_xref qml_eager_tab_audit qml_module_registration_audit qml_icon_bake_audit qml_on_prefixed_property_audit; do
             echo "::group::$a"
             python3 "scripts/qml-audits/$a.py" "$PWD/crates/qbz-qt"
             echo "::endgroup::"

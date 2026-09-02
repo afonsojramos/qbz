@@ -133,6 +133,9 @@ pub fn delivered_tier_str(downgraded: bool, requested_id: u32, eff_bits: u32) ->
     if requested_id == Quality::Mp3.id() {
         return "mp3";
     }
+    if eff_bits == 1 {
+        return "dsd";
+    }
     if eff_bits >= 24 {
         "hires"
     } else {
@@ -283,6 +286,7 @@ mod tests {
         assert_eq!(delivered_tier_str(true, Quality::Mp3.id(), 16), "mp3");
         assert_eq!(delivered_tier_str(true, Quality::HiRes.id(), 16), "cd");
         assert_eq!(delivered_tier_str(true, Quality::HiRes.id(), 24), "hires");
+        assert_eq!(delivered_tier_str(true, Quality::HiRes.id(), 1), "dsd");
     }
 
     #[test]

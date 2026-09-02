@@ -115,7 +115,7 @@ Column {
         id: led
         property string label: ""
         property bool on: false
-        property color onColor: "#22c55e"
+        property color litColor: "#22c55e"
         property string tooltip: ""
         implicitWidth: ledRow.implicitWidth
         implicitHeight: ledRow.implicitHeight
@@ -139,7 +139,7 @@ Column {
                     antialiasing: true
                     color: "transparent"
                     border.width: 0.75
-                    border.color: led.on ? led.onColor : theme.textMuted
+                    border.color: led.on ? led.litColor : theme.textMuted
                     Rectangle {
                         visible: led.on
                         width: 1.875
@@ -147,7 +147,7 @@ Column {
                         radius: width / 2
                         anchors.centerIn: parent
                         antialiasing: true
-                        color: led.onColor
+                        color: led.litColor
                     }
                 }
             }
@@ -290,7 +290,7 @@ Column {
             visible: QbzPlayer.npCastActive && !QbzPlayer.npIsRemote
             label: QbzPlayer.npCastProtocol === "dlna" ? "DLNA" : "CAST"
             on: true
-            onColor: "#a855f7"
+            litColor: "#a855f7"
             tooltip: QbzSession.tr("Casting", QbzSession.trRev)
             anchors.verticalCenter: parent.verticalCenter
         }
@@ -303,14 +303,14 @@ Column {
             DotLed {
                 label: QbzPlayer.npOutputBackendLabel
                 on: QbzPlayer.npOutputBackendActive
-                onColor: "#5b8def"
+                litColor: "#5b8def"
                 tooltip: QbzSession.tr("Audio backend", QbzSession.trRev)
                 anchors.verticalCenter: parent.verticalCenter
             }
             DotLed {
                 label: QbzPlayer.npOutputModeLabel
                 on: QbzPlayer.npOutputModeActive
-                onColor: "#22c55e"
+                litColor: "#22c55e"
                 tooltip: QbzSession.tr("Output mode", QbzSession.trRev)
                 anchors.verticalCenter: parent.verticalCenter
             }

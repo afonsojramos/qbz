@@ -58,7 +58,7 @@ impl QualityHint {
         }
     }
 
-    /// `""` | `"mp3"` | `"cd"` | `"hires"` | `"max"`.
+    /// `""` | `"mp3"` | `"cd"` | `"hires"` | `"max"` | `"dsd"`.
     ///
     /// Moved from `local_rows::tier_of` (local_rows.rs:180-196) so a local card
     /// and a Qobuz card can never disagree — which was its whole reason for
@@ -67,6 +67,15 @@ impl QualityHint {
     pub fn tier(&self) -> &'static str {
         if self.format.eq_ignore_ascii_case("mp3") {
             return "mp3";
+        }
+        // 1-bit is DSD and wears its own mark (2026-09-02), whatever the
+        // container word the server used (dsf / dff / dsd).
+        if self.bit_depth == Some(1)
+            || ["dsf", "dff", "dsd"]
+                .iter()
+                .any(|w| self.format.eq_ignore_ascii_case(w))
+        {
+            return "dsd";
         }
         let khz = self.sample_rate_khz.unwrap_or(0.0);
         match self.bit_depth {
@@ -110,9 +119,14 @@ impl SourceBadge {
             Some("jellyfin") => SourceBadge::Jellyfin,
             Some("subsonic") | Some("navidrome") | Some("gonic") | Some("airsonic")
             | Some("astiga") => SourceBadge::Subsonic,
-            Some("qobuz_download") | Some("qobuz_purchase") | Some("offline") => {
-                SourceBadge::Offline
-            }
+            // `offline` is the ENCRYPTED CMAF download only qbz-core's offline
+            // tier can open. A PURCHASE (`qobuz_purchase`) is a plain DRM-free
+            // file the scanner found on disk; badging it `Offline` made the
+            // local source refuse it as "a CMAF bundle" and the album the
+            // user had just downloaded and added answered "File not
+            // available — is the drive mounted?" (smoke 2026-09-02).
+            Some("qobuz_download") | Some("offline") => SourceBadge::Offline,
+            Some("qobuz_purchase") => SourceBadge::Local,
             Some("qobuz") | Some("qobuz_connect_remote") => SourceBadge::Qobuz,
             _ => SourceBadge::Local,
         }
@@ -152,6 +166,8 @@ mod tests {
         assert_eq!(QualityHint::from_hz(None, 0.0, "").tier(), "");
         // kHz input passes through untouched (the QueueTrack convention).
         assert_eq!(QualityHint::from_hz(Some(24), 192.0, "FLAC").tier(), "max");
+        assert_eq!(QualityHint::from_hz(Some(1), 2_822_400.0, "DSF").tier(), "dsd");
+        assert_eq!(QualityHint::from_hz(None, 0.0, "dff").tier(), "dsd");
     }
 
     #[test]
@@ -161,9 +177,10 @@ mod tests {
             SourceBadge::from_word(Some("qobuz_download")),
             SourceBadge::Offline
         );
+        // A purchase is a plain file: LOCAL, never the encrypted-bundle badge.
         assert_eq!(
             SourceBadge::from_word(Some("qobuz_purchase")),
-            SourceBadge::Offline
+            SourceBadge::Local
         );
         assert_eq!(SourceBadge::from_word(Some("user")), SourceBadge::Local);
         assert_eq!(SourceBadge::from_word(None), SourceBadge::Local);

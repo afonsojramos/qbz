@@ -785,7 +785,7 @@ Rectangle {
             var tier = (r.qualityTier || "").toLowerCase()
             var fmt = (r.format || "").toLowerCase()
             if (qAny) {
-                var qok = (selected.hires && (tier === "hires" || tier === "max"))
+                var qok = (selected.hires && (tier === "hires" || tier === "max" || tier === "dsd"))
                     || (selected.cd && tier === "cd")
                     || (selected.lossy && (tier === "mp3" || tier === "lossy"))
                 if (!qok) continue

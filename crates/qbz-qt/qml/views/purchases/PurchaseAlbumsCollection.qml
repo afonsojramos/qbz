@@ -39,6 +39,8 @@ Item {
     readonly property int cardGap: 16
     readonly property int listRowHeight: 60
     readonly property int listGap: 4
+    /// The column-label strip above the rows (PurchaseListHeader), list arm only.
+    readonly property int listHeaderHeight: 28
 
     readonly property int columns: Math.max(
         1, Math.floor((width + root.cardGap) / (root.cardWidth + root.cardGap)))
@@ -49,7 +51,8 @@ Item {
     // Content-sized: the page Flickable reads this through its Column.
     height: root.viewMode === "list"
         ? (root.albums.length > 0
-            ? root.albums.length * root.listRowHeight
+            ? root.listHeaderHeight + root.listGap
+              + root.albums.length * root.listRowHeight
               + (root.albums.length - 1) * root.listGap
             : 0)
         : (root.gridRows > 0
@@ -83,12 +86,19 @@ Item {
         visible: root.viewMode === "list"
         anchors.fill: parent
         spacing: root.listGap
+        PurchaseListHeader {
+            visible: root.viewMode === "list" && root.albums.length > 0
+            width: parent.width
+            height: root.listHeaderHeight
+        }
         Repeater {
             model: root.viewMode === "list" ? root.albums : []
             delegate: PurchaseListRow {
                 required property var modelData
+                required property int index
                 width: parent ? parent.width : 0
                 album: modelData
+                rowIndex: index
                 onClicked: root.openAlbum(modelData.id || "")
             }
         }

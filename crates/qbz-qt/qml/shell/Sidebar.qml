@@ -83,6 +83,30 @@ Rectangle {
     id: root
 
     property bool mini: QbzShell.sidebarState === 1
+
+    // Purchases downloading now — `QbzPurchases.activeDownloadsJson`, parsed
+    // once per publish (guarded: "[]" on the pre-boot frame).
+    readonly property var activeDownloads: {
+        try { return JSON.parse(QbzPurchases.activeDownloadsJson || "[]") } catch (e) { return [] }
+    }
+    /// Mean completion across the active albums, 0..1, for the mini ring.
+    readonly property real activeDownloadsOverall: {
+        var rows = root.activeDownloads
+        if (rows.length === 0) return 0
+        var sum = 0
+        for (var i = 0; i < rows.length; i++) sum += (rows[i].percent || 0)
+        return sum / rows.length / 100
+    }
+    /// The hover bubble's text: one line per album, "Title — 7/14 · 50%".
+    readonly property string activeDownloadsSummary: {
+        var rows = root.activeDownloads
+        var lines = []
+        for (var i = 0; i < rows.length; i++)
+            lines.push((rows[i].title || QbzSession.tr("Purchases", QbzSession.trRev))
+                + " — " + (rows[i].done || 0) + "/" + (rows[i].total || 0)
+                + " · " + (rows[i].percent || 0) + "%")
+        return lines.join("\n")
+    }
     // The shell's ONE hover-tooltip overlay (controls/QbzTooltip.qml), fed in
     // by AppShell. Null when this component is mounted in isolation, in which
     // case the rail simply shows no bubble.
@@ -561,6 +585,137 @@ Rectangle {
                 active: QbzShell.currentView === "purchases"
                     || QbzShell.currentView === "purchase-album"
                 onActivated: QbzShell.navigateTo("purchases")
+            }
+
+            // Purchases DOWNLOADING right now. A download is process-wide
+            // and survives leaving its page (purchases_qt's store); this is
+            // how the user finds it again. Expanded: one row per album with
+            // a thin progress bar. Mini: one ring for the whole set, with
+            // the per-album detail in its hover bubble. Absent while idle.
+            Item {
+                id: dlBlock
+                readonly property var rows: root.activeDownloads
+                visible: root.purchasesVisible && rows.length > 0
+                width: parent.width
+                height: !visible ? 0 : (root.mini ? theme.sidebarMiniRow : dlCol.implicitHeight)
+
+                Column {
+                    id: dlCol
+                    visible: !root.mini
+                    width: parent.width
+                    spacing: 2
+                    Repeater {
+                        model: root.mini ? [] : dlBlock.rows
+                        delegate: Rectangle {
+                            id: dlRow
+                            required property var modelData
+                            width: parent ? parent.width : 0
+                            height: 34
+                            radius: 6
+                            color: dlArea.containsMouse ? theme.surfaceHover : "transparent"
+                            Column {
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 4
+                                Row {
+                                    width: parent.width
+                                    spacing: 6
+                                    QbzIcon {
+                                        name: "cloud-download"
+                                        width: 14
+                                        height: 14
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        tintName: "accent"
+                                    }
+                                    Text {
+                                        width: parent.width - 20 - 34
+                                        text: dlRow.modelData.title || QbzSession.tr("Purchases", QbzSession.trRev)
+                                        color: theme.textSecondary
+                                        font.pixelSize: 12
+                                        elide: Text.ElideRight
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                    Text {
+                                        width: 28
+                                        text: (dlRow.modelData.percent || 0) + "%"
+                                        color: theme.textMuted
+                                        font.pixelSize: 11
+                                        horizontalAlignment: Text.AlignRight
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
+                                Rectangle {
+                                    width: parent.width
+                                    height: 3
+                                    radius: 1.5
+                                    color: theme.borderSubtle
+                                    Rectangle {
+                                        width: parent.width * Math.max(0, Math.min(1, (dlRow.modelData.percent || 0) / 100))
+                                        height: parent.height
+                                        radius: parent.radius
+                                        color: theme.accent
+                                    }
+                                }
+                            }
+                            MouseArea {
+                                id: dlArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    QbzPurchases.openAlbum(dlRow.modelData.id || "")
+                                    QbzShell.navigateTo("purchase-album")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Mini: the ring, with the detail on hover.
+                Item {
+                    visible: root.mini
+                    width: parent.width
+                    height: parent.height
+                    QbzProgressRing {
+                        anchors.centerIn: parent
+                        size: 18
+                        value: root.activeDownloadsOverall
+                    }
+                    MouseArea {
+                        id: ringArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: QbzShell.navigateTo("purchases")
+                    }
+                    ToolTip {
+                        visible: ringArea.containsMouse
+                        delay: 0
+                        timeout: -1
+                        text: root.activeDownloadsSummary
+                        x: parent.width + 8
+                        y: Math.round((parent.height - height) / 2)
+                        contentItem: Text {
+                            text: root.activeDownloadsSummary
+                            color: theme.textPrimary
+                            font.pixelSize: 11
+                            font.weight: theme.weightMedium
+                            leftPadding: 9
+                            rightPadding: 9
+                            topPadding: 6
+                            bottomPadding: 6
+                        }
+                        background: Rectangle {
+                            color: theme.surfaceElevated
+                            radius: 4
+                            border.width: 1
+                            border.color: theme.borderMuted
+                        }
+                    }
+                }
             }
         }
 

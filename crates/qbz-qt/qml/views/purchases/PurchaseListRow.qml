@@ -17,6 +17,7 @@
 
 import QtQuick
 import com.blitzfc.qbz
+import "../../controls"
 import "../../theme"
 
 Rectangle {
@@ -24,6 +25,9 @@ Rectangle {
 
     /// One row of `list_json.albums` (§G.2).
     property var album: ({})
+    /// Row index — the odd-row zebra every other list in the app draws
+    /// (views/AlbumListRow.qml).
+    property int rowIndex: 0
     signal clicked()
 
     QbzTheme { id: theme }
@@ -32,8 +36,21 @@ Rectangle {
 
     function t(s) { return QbzSession.tr(s, QbzSession.trRev) }
 
-    /// Epoch -> the viewer's short date. "" for a row that carries no stamp,
-    /// so the column collapses to blank rather than to 1970.
+    /// Column widths, shared with PurchaseListHeader so the labels sit on
+    /// their columns.
+    readonly property int colQuality: 150
+    readonly property int colReleased: 120
+    readonly property int colPurchased: 130
+
+    /// A date the way a person reads one ("Sep 1, 2026"), never the numeric
+    /// short form ("9/1/26") that the first port used: the two date columns
+    /// sit side by side and a reader has to tell them apart at a glance.
+    function readableDate(d) {
+        return Qt.formatDate(d, "MMM d, yyyy")
+    }
+
+    /// Epoch -> readable date. "" for a row that carries no stamp, so the
+    /// column collapses to blank rather than to 1970.
     function purchaseDate() {
         var ts = root.album.purchasedAt || 0
         if (ts <= 0)
@@ -41,13 +58,27 @@ Rectangle {
         // Defensive: the seam says seconds, but a producer that ever hands
         // milliseconds through would otherwise print a date in the year 55000.
         var ms = ts > 100000000000 ? ts : ts * 1000
-        return new Date(ms).toLocaleDateString(Qt.locale(), Locale.ShortFormat)
+        return root.readableDate(new Date(ms))
+    }
+
+    /// ISO `YYYY-MM-DD` -> readable date; a bare year stays a year; "" stays "".
+    function releaseDate() {
+        var iso = root.album.releaseDate || ""
+        if (iso === "")
+            return root.album.year || ""
+        var parts = iso.split("-")
+        if (parts.length < 3)
+            return parts[0]
+        // Local-time construction: `new Date("YYYY-MM-DD")` parses as UTC and
+        // prints the previous day west of Greenwich.
+        return root.readableDate(new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])))
     }
 
     width: parent ? parent.width : 0
     height: 60
     radius: theme.radiusSm
-    color: (rowArea.containsMouse && root.avail) ? theme.surfaceHover : "transparent"
+    color: (rowArea.containsMouse && root.avail) ? theme.surfaceHover
+         : (root.rowIndex % 2 === 1 ? theme.alphaTier(4) : "transparent")
     opacity: root.avail ? 1.0 : 0.5
 
     MouseArea {
@@ -94,9 +125,10 @@ Rectangle {
 
         // Title over artist — the stretch column.
         Column {
-            width: Math.max(0, parent.width - 48 - 110 - 110
+            width: Math.max(0, parent.width - 48
+                - root.colQuality - root.colReleased - root.colPurchased
                 - (unavailLabel.visible ? unavailLabel.width + 12 : 0)
-                - 3 * 12)
+                - 4 * 12)
             anchors.verticalCenter: parent.verticalCenter
             spacing: 2
             Text {
@@ -116,26 +148,37 @@ Rectangle {
             }
         }
 
-        // Quality column.
-        Text {
-            width: 110
+        // Quality column — the SAME badge the album list rows show
+        // (views/AlbumListRow.qml): tier label over the exact quality line.
+        Item {
+            width: root.colQuality
             height: parent.height
-            text: root.album.qualityTier || ""
+            QualityBadgeFull {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                tier: root.album.qualityTier || ""
+                detail: root.album.qualityDetail || ""
+            }
+        }
+
+        // Release-date column (the catalog's original release).
+        Text {
+            width: root.colReleased
+            height: parent.height
+            text: root.releaseDate()
             color: theme.textSecondary
             font.pixelSize: theme.fontLegal
-            horizontalAlignment: Text.AlignRight
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
         }
 
         // Purchase-date column.
         Text {
-            width: 110
+            width: root.colPurchased
             height: parent.height
             text: root.purchaseDate()
             color: theme.textMuted
             font.pixelSize: theme.fontLegal
-            horizontalAlignment: Text.AlignRight
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
         }

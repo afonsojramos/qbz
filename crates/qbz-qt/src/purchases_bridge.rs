@@ -60,6 +60,11 @@ pub mod qbz_purchases_bridge {
         /// (re-opening the same album, or a filter toggle that changes nothing
         /// visible), the same trick `QbzSession.trRev` plays.
         #[qproperty(i32, purchases_rev)]
+        /// The purchases with a download IN FLIGHT right now, as a JSON array
+        /// of `{ id, title }` — the nav flyout's "Downloads · N" section. A
+        /// download is process-wide and survives leaving its page; this is
+        /// how the user finds it again. `"[]"` while nothing runs.
+        #[qproperty(QString, active_downloads_json)]
         type QbzPurchases = super::QbzPurchasesRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY domain
@@ -124,15 +129,14 @@ pub mod qbz_purchases_bridge {
         #[qinvokable]
         fn set_quality_filter(self: Pin<&mut QbzPurchases>, value: QString);
 
+        /// The genre filter (albums tab). Transient; `""` = all genres.
+        #[qinvokable]
+        fn set_genre_filter(self: Pin<&mut QbzPurchases>, value: QString);
+
         /// Dismiss the one-time region notice. Persisted
         /// (`purchases_region_notice_seen`).
         #[qinvokable]
         fn dismiss_region_notice(self: Pin<&mut QbzPurchases>);
-
-        /// OK on the one-time disclaimer modal. Persisted
-        /// (`purchases_disclaimer_seen`).
-        #[qinvokable]
-        fn dismiss_disclaimer(self: Pin<&mut QbzPurchases>);
 
         /// Open the purchased-album detail. RECORDS the album and starts the
         /// fetch; the QML caller then calls `QbzShell.navigateTo("purchase-album")`
@@ -194,6 +198,7 @@ pub struct QbzPurchasesRust {
     list_json: QString,
     album_json: QString,
     purchases_rev: i32,
+    active_downloads_json: QString,
 }
 
 impl Default for QbzPurchasesRust {
@@ -204,6 +209,8 @@ impl Default for QbzPurchasesRust {
             list_json: QString::from("{}"),
             album_json: QString::from("{}"),
             purchases_rev: 0,
+            // Same rule: the flyout JSON.parses it on the first frame.
+            active_downloads_json: QString::from("[]"),
         }
     }
 }
@@ -275,12 +282,12 @@ impl qbz_purchases_bridge::QbzPurchases {
         crate::purchases_qt::set_quality_filter(value.to_string());
     }
 
-    pub fn dismiss_region_notice(self: Pin<&mut Self>) {
-        crate::purchases_qt::dismiss_region_notice();
+    pub fn set_genre_filter(self: Pin<&mut Self>, value: QString) {
+        crate::purchases_qt::set_genre_filter(value.to_string());
     }
 
-    pub fn dismiss_disclaimer(self: Pin<&mut Self>) {
-        crate::purchases_qt::dismiss_disclaimer();
+    pub fn dismiss_region_notice(self: Pin<&mut Self>) {
+        crate::purchases_qt::dismiss_region_notice();
     }
 
     pub fn open_album(self: Pin<&mut Self>, album_id: QString) {

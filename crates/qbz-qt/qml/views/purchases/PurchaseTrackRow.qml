@@ -34,6 +34,8 @@ Rectangle {
 
     /// One row of `list_json.tracks` (§G.2).
     property var track: ({})
+    /// Row index — the odd-row zebra every other track list draws.
+    property int rowIndex: 0
     signal playRequested()
 
     QbzTheme { id: theme }
@@ -77,7 +79,8 @@ Rectangle {
     // .slint:414 — the active row takes alpha-10; hover only applies to a row
     // the click can actually act on.
     color: root.active ? theme.alphaTier(10)
-         : ((rowArea.containsMouse && root.streamable) ? theme.surfaceHover : "transparent")
+         : ((rowArea.containsMouse && root.streamable) ? theme.surfaceHover
+         : (root.rowIndex % 2 === 1 ? theme.alphaTier(4) : "transparent"))
     // .slint:418 — a downloaded row reads as "already dealt with".
     opacity: root.downloaded ? 0.75 : 1.0
 

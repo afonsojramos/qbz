@@ -198,7 +198,7 @@ QtObject {
     // answer is a SELECTOR, not a constant.
     //
     // THE RULE — theme intent first, floor-guarded:
-    //   1. `accentText`, whenever it clears `onAccentFloor` against the LIVE
+    //   1. `accentText`, whenever it clears `accentFloor` against the LIVE
     //      accent. It is the theme author's own on-accent colour, and — via
     //      `accentGlyphColor` — it is what the sibling LABELS across the app
     //      resolve to on 34 of the 35 rows (FilterChip, CastPicker,
@@ -259,7 +259,7 @@ QtObject {
 
     /// The non-text contrast floor (WCAG 1.4.11). Read the note above before
     /// raising it: 4.5 moves the three DEFAULT themes.
-    readonly property real onAccentFloor: 3.0
+    readonly property real accentFloor: 3.0
 
     /// The QbzIcon tint NAME for a glyph drawn on an accent fill.
     ///
@@ -289,7 +289,7 @@ QtObject {
     readonly property string accentGlyphTint: {
         const la = _relLum(accent) + 0.05
         const lt = _relLum(accentText) + 0.05
-        if ((la > lt ? la / lt : lt / la) >= onAccentFloor)
+        if ((la > lt ? la / lt : lt / la) >= accentFloor)
             return "accentText"
         // Accent-text is not legible on this accent. Pick the extreme that
         // holds on BOTH fills a control paints (rest + hover) — see the
@@ -298,7 +298,7 @@ QtObject {
         // white: (1.0 + 0.05) / (Lfill + 0.05);  black: (Lfill + 0.05) / 0.05
         const white = Math.min(1.05 / la, 1.05 / lh)
         const black = Math.min(la, lh) / 0.05
-        if (Math.max(white, black) >= onAccentFloor)
+        if (Math.max(white, black) >= accentFloor)
             return white >= black ? "white" : "black"
         // LAST RESORT — neither extreme survives BOTH fills. Scoring the two
         // fills jointly takes a `min()`, and a `min()` has no floor of its

@@ -6270,15 +6270,6 @@ msgstr "{} van {}"
 msgid "Last playlist"
 msgstr "Laatste playlist"
 
-msgid "About music purchases"
-msgstr "Over muziekaankopen"
-
-msgid "Music purchases are not available in every country or region where the platform offers streaming. One of those countries, where nothing can be bought and only the streaming subscription is offered, is Mexico."
-msgstr "Muziekaankopen zijn niet beschikbaar in elk land of elke regio waar het platform streaming aanbiedt. Een van die landen, waar niets gekocht kan worden en alleen het streamingabonnement wordt aangeboden, is Mexico."
-
-msgid "As it happens, the developer and maintainer of this software is from Mexico, so this section was built in blind mode — 'I am one with the Force and the Force is with me' — with some feedback from a couple of contributors, but in the end, in blind mode: it ships with no guarantee that it works and no promise to fix whatever is broken."
-msgstr "Toevallig komt de ontwikkelaar en beheerder van deze software uit Mexico, dus deze sectie is blind ontwikkeld — 'I am one with the Force and the Force is with me' — met wat feedback van een paar contributors, maar uiteindelijk blind: hij wordt geleverd zonder garantie dat hij werkt en zonder belofte om te repareren wat kapot is."
-
 msgid "OK"
 msgstr "OK"
 
@@ -6343,3 +6334,15 @@ msgstr "Bij een afspeelconflict"
 
 msgid "Ask each time or automatically choose which queue and device should continue."
 msgstr "Vraag het elke keer of kies automatisch welke wachtrij en welk apparaat doorgaan."
+
+msgid "Purchased"
+msgstr "Gekocht"
+
+msgid "Sort: Release date"
+msgstr "Sorteren: Releasedatum"
+
+msgid "Until the purchased file is downloaded, Play streams the best quality Qobuz offers for this album. Once it is on disk, Play uses your copy."
+msgstr "Zolang het gekochte bestand niet is gedownload, streamt Afspelen de beste kwaliteit die Qobuz voor dit album biedt. Zodra het op schijf staat, gebruikt Afspelen jouw kopie."
+
+msgid "Open in Local Library"
+msgstr "Openen in lokale bibliotheek"

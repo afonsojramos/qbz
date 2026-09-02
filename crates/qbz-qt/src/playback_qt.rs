@@ -1324,6 +1324,31 @@ pub(crate) async fn play_resolved_offline_aware(
     } else {
         start_position_secs
     };
+    // A PURCHASED COPY ON DISK plays instead of the stream (contract
+    // 2026-09-01 §6): same Qobuz id, same queue row, different bytes. The
+    // registry row is probed before it is trusted, and a DSD copy cannot
+    // seek, so a start offset (resume, takeback) keeps the stream for this
+    // one play. Anything the copy cannot do falls through to the tier walk
+    // below exactly as if the download did not exist.
+    if let Some(copy) = crate::purchase_playback_qt::resolve_purchased_copy(track_id).await {
+        if copy.is_dsd() && start_position_secs > 0 {
+            log::info!(
+                "[qbz-qt] purchase: track {track_id} has a DSD copy but a start offset of {start_position_secs}s was asked; DSD cannot seek, streaming this play"
+            );
+        } else {
+            let format_id = copy.format_id;
+            let ticket = copy.ticket(track_id, start_position_secs);
+            if crate::audible_qt::play_ticket(runtime, ticket).await {
+                log::info!(
+                    "[qbz-qt] purchase: playing track {track_id} from the purchased copy (format {format_id})"
+                );
+                return Ok(());
+            }
+            log::warn!(
+                "[qbz-qt] purchase: the purchased copy of track {track_id} (format {format_id}) could not be played; falling back to Qobuz"
+            );
+        }
+    }
     runtime
         .core()
         .play_track_resolved(
@@ -3580,8 +3605,9 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
 /// had forked from in three ways, each of them visible on the NPB AudioStamp:
 ///
 ///  - **DSD.** `bit_depth == Some(1)` marks a DSD stream (1-bit, `sample_rate`
-///    = the DSD bit rate). The reference tiers it "hires" and labels it
-///    through `dsd_multiple_label` ("DSD64"); the forked version tiered it
+///    = the DSD bit rate). It tiers "dsd" (its own mark since 2026-09-02; the
+///    reference said "hires") and labels it through `dsd_multiple_label`
+///    ("DSD64"); the forked version tiered it
 ///    "cd" and printed "1-bit / 2822.4 kHz".
 ///  - **Hz vs kHz.** `quality_state::detail` normalizes either unit (the
 ///    `>= 1000` guard) exactly like the track rows do, so the stamp and the
@@ -3638,7 +3664,9 @@ fn quality_badge_from(
     }
 
     let tier = match bit_depth {
-        Some(1) => "hires",
+        // 1-bit is DSD, and it wears its own mark: the Hi-Res logo on a DSD
+        // master described a 24/352.8 stream Qobuz never serves.
+        Some(1) => "dsd",
         Some(d) if d >= 24 => "hires",
         Some(_) => "cd",
         None if sample_rate.is_some_and(|rate| rate > 0.0) => "cd",
@@ -4258,6 +4286,43 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                                 else {
                                     return;
                                 };
+                                // A purchased copy of the successor on disk is
+                                // queued from the file — DSD through the
+                                // player's DSD append, PCM as bytes — before
+                                // the streaming/tier-walk arms get a look, so
+                                // an album bought as DSD stays DSD across the
+                                // gapless edge instead of flipping to the
+                                // stream on track two.
+                                if let Some(copy) =
+                                    crate::purchase_playback_qt::resolve_purchased_copy(next_id)
+                                        .await
+                                {
+                                    let format_id = copy.format_id;
+                                    match crate::audible_qt::queue_gapless_ticket(
+                                        &runtime,
+                                        track_id,
+                                        next_id,
+                                        copy.ticket(next_id, 0),
+                                    )
+                                    .await
+                                    {
+                                        Ok(true) => {
+                                            log::info!(
+                                                "[qbz-qt] [GAPLESS] queued the purchased copy of {next_id} (format {format_id})"
+                                            );
+                                            return;
+                                        }
+                                        Ok(false) => {
+                                            log::info!(
+                                                "[qbz-qt] [GAPLESS] purchased copy of {next_id} not queued (predecessor moved or a successor is already set)"
+                                            );
+                                            return;
+                                        }
+                                        Err(e) => log::warn!(
+                                            "[qbz-qt] [GAPLESS] purchased copy of {next_id} failed: {e}; falling back to the stream"
+                                        ),
+                                    }
+                                }
                                 let quality = local_playback_quality().0;
                                 let streaming_only =
                                     crate::settings_qt::audio_settings().streaming_only;

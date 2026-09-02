@@ -50,15 +50,19 @@ Item {
     property real maxTextWidth: 0
 
     readonly property string tierLabel: tier === "hires" ? "HI-RES"
+        : (tier === "dsd" ? "DSD"
         : (tier === "mp3" ? "MP3"
-        : (tier === "lossless" ? "LOSSLESS" : "CD"))
+        : (tier === "lossless" ? "LOSSLESS" : "CD")))
 
     readonly property bool isHiRes: tier === "hires"
+    readonly property bool isDsd: tier === "dsd"
+    /// Brand marks (Hi-Res, DSD) are drawn larger than the glyph chips.
+    readonly property bool isBrandMark: isHiRes || isDsd
     readonly property real sf: scaleFactor
     readonly property real padH: bare ? 0 : (compact ? 8 : 10) * sf
     readonly property real gap: bare ? 0 : (compact ? 5 : 6) * sf
-    readonly property real iconSide: isHiRes ? (compact ? 19 : 24) * sf
-                                             : (compact ? 13 : 16) * sf
+    readonly property real iconSide: isBrandMark ? (compact ? 19 : 24) * sf
+                                                 : (compact ? 13 : 16) * sf
     // The row's own width (no paddings) — the icon slot plus the text column.
     readonly property real innerWidth: (showIcon ? iconSide + gap : 0) + textCol.width
 
@@ -102,10 +106,22 @@ Item {
                 fillMode: Image.PreserveAspectFit
                 sourceSize: Qt.size(Math.round(root.iconSide * 2), Math.round(root.iconSide * 2))
             }
+            // The DSD mark is 2:1, monochrome, themed by bake (QualityBadge.qml).
+            Image {
+                visible: root.isDsd
+                anchors.centerIn: parent
+                source: theme.isDark
+                    ? "qrc:/qt/qml/com/blitzfc/qbz/qml/assets/dsd-light.svg"
+                    : "qrc:/qt/qml/com/blitzfc/qbz/qml/assets/dsd-dark.svg"
+                width: root.iconSide
+                height: Math.round(root.iconSide / 2)
+                fillMode: Image.PreserveAspectFit
+                sourceSize: Qt.size(Math.round(root.iconSide * 2), Math.round(root.iconSide))
+            }
             // Un-hydrated lossless reuses the neutral disc mark; the detail
             // line carries "FLAC".
             QbzIcon {
-                visible: !root.isHiRes
+                visible: !root.isBrandMark
                 anchors.centerIn: parent
                 name: root.tier === "mp3" ? "mp3" : "cd"
                 tintName: root.overAmbient ? "white" : "muted"

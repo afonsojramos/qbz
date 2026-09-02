@@ -3,7 +3,7 @@
 //! Ported 1:1 from the Tauri reference at `src-tauri/src/api/client.rs`
 //! (`get_user_purchases_page_typed` 1538, `get_user_purchases_ids_page_typed`
 //! 1570, `get_user_purchases_all` 1612, `get_user_purchases_all_typed` 1683,
-//! `get_track_file_url_by_format` 1768) plus `download_audio` from
+//! `get_track_file_url_by_format` 1768) plus `download_audio_to_path` from
 //! `src-tauri/src/commands_v2/helpers.rs:332`.
 //!
 //! Behavioral divergence from the Tauri reference, intentional and correct:
@@ -13,21 +13,21 @@
 //!   Purchases therefore fail fast offline (`ApiError::OfflineMode`), consistent
 //!   with the rest of `qbz-qobuz`. The Tauri build had no shared offline gate.
 //! - The CDN cross-feature gate (`CDN_STREAMING_ACTIVE`) is `src-tauri`-only; it
-//!   guarded `download_audio` against concurrent streaming-vs-download CDN rate
+//!   guarded `download_audio_to_path` against concurrent streaming-vs-download CDN rate
 //!   limiting. There is no equivalent shared counter in the Slint stack, so the
-//!   ported `download_audio` has NO playback-vs-download collision protection.
+//!   ported `download_audio_to_path` has NO playback-vs-download collision protection.
 //!   This is a documented limitation, NOT a 1:1 download-function gap — a true
 //!   cross-frontend gate is a separate hardening item. Do NOT add a total
 //!   request timeout "to be safe": large hi-res downloads legitimately exceed
 //!   any fixed budget and the connect-timeout already bounds the dial phase.
-//! - `download_audio` omits the reference's `.use_native_tls()` — this crate is
+//! - `download_audio_to_path` omits the reference's `.use_native_tls()` — this crate is
 //!   rustls-only (no `native-tls` feature), matching `cmaf.rs::build_cdn_client`.
 //!   `http1_only()` (the RST_STREAM/EOF fix) is retained.
 
 use reqwest::StatusCode;
 use serde_json::Value;
 
-use super::auth::{get_timestamp, sign_get_file_url};
+use super::auth::{get_timestamp, sign_get_file_url, sign_get_file_url_download};
 use super::client::QobuzClient;
 use super::endpoints::{self, paths};
 use super::error::{ApiError, Result};
@@ -64,6 +64,23 @@ pub fn purchase_page_step(offset: u32, got: u32, total: u32) -> PurchasePageStep
     } else {
         PurchasePageStep::Continue {
             next_offset: offset + got,
+        }
+    }
+}
+
+/// The two operations `track/getFileUrl` is signed for. The word is part of the
+/// signature preimage, so the two never share a signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileUrlIntent {
+    Stream,
+    Download,
+}
+
+impl FileUrlIntent {
+    fn wire(self) -> &'static str {
+        match self {
+            FileUrlIntent::Stream => "stream",
+            FileUrlIntent::Download => "download",
         }
     }
 }
@@ -415,25 +432,49 @@ impl QobuzClient {
         })
     }
 
-    /// Get a signed file URL for a specific `format_id`.
-    ///
-    /// RPC-SIGNED (the ONLY signed purchase call): the signature HARD-CODES
-    /// `intentstream` (`sign_get_file_url`), and the query `intent` is likewise
-    /// `"stream"` — purchases reuse the streaming intent even though the OpenAPI
-    /// lists `"download"`. A raw-`format_id` entry point is required because the
-    /// in-tree `get_stream_url` takes a `Quality` enum that can't express every
-    /// purchase format id (27/7/6/5). Empty `url` → `ApiError::TrackUnavailable`,
-    /// HTTP 400 → `ApiError::InvalidAppSecret`. Ported from
-    /// `src-tauri/src/api/client.rs:1768`.
+    /// Get a signed stream URL for one track in one format, `intent=stream`.
+    /// This is the PLAYBACK grant — see [`Self::get_purchase_file_url`] for a
+    /// purchased file. Kept as the historical name for its one remaining
+    /// caller class.
     pub async fn get_track_file_url_by_format(
         &self,
         track_id: u64,
         format_id: u32,
     ) -> Result<StreamUrl> {
+        self.fetch_file_url_signed(track_id, format_id, FileUrlIntent::Stream)
+            .await
+    }
+
+    /// Get a signed DOWNLOAD URL for one purchased track in one entitled
+    /// format, `intent=download`.
+    ///
+    /// Measured live 2026-09-01 on a DSD128 purchase (format 56): the same
+    /// call with `intent=stream` answers HTTP 400, with `intent=download` it
+    /// answers 200, `mime_type=audio/x-dsf`, and a URL on
+    /// `download-v2.qobuz.com` that honours `Range`. The intent is inside the
+    /// signature preimage, so this is a distinct operation, not a flag. A 400
+    /// here is reported as what it most plausibly is — a format the account is
+    /// not entitled to for this track — never as a bad app secret.
+    pub async fn get_purchase_file_url(&self, track_id: u64, format_id: u32) -> Result<StreamUrl> {
+        self.fetch_file_url_signed(track_id, format_id, FileUrlIntent::Download)
+            .await
+    }
+
+    async fn fetch_file_url_signed(
+        &self,
+        track_id: u64,
+        format_id: u32,
+        intent: FileUrlIntent,
+    ) -> Result<StreamUrl> {
         let url = endpoints::build_url(paths::TRACK_GET_FILE_URL);
         let timestamp = get_timestamp();
         let secret = self.secret().await?;
-        let signature = sign_get_file_url(track_id, format_id, timestamp, &secret);
+        let signature = match intent {
+            FileUrlIntent::Stream => sign_get_file_url(track_id, format_id, timestamp, &secret),
+            FileUrlIntent::Download => {
+                sign_get_file_url_download(track_id, format_id, timestamp, &secret)
+            }
+        };
 
         let response = self
             .http()?
@@ -442,7 +483,7 @@ impl QobuzClient {
             .query(&[
                 ("track_id", track_id.to_string()),
                 ("format_id", format_id.to_string()),
-                ("intent", "stream".to_string()),
+                ("intent", intent.wire().to_string()),
                 ("request_ts", timestamp.to_string()),
                 ("request_sig", signature),
             ])
@@ -488,7 +529,13 @@ impl QobuzClient {
                     restrictions,
                 })
             }
-            StatusCode::BAD_REQUEST => Err(ApiError::InvalidAppSecret),
+            StatusCode::BAD_REQUEST => match intent {
+                FileUrlIntent::Stream => Err(ApiError::InvalidAppSecret),
+                FileUrlIntent::Download => Err(ApiError::ApiResponse(format!(
+                    "HTTP 400 for format {format_id} of track {track_id}: not in this account's \
+                     download entitlement (or the request signature was rejected)"
+                ))),
+            },
             status => Err(ApiError::ApiResponse(format!(
                 "Unexpected status: {}",
                 status
@@ -496,33 +543,28 @@ impl QobuzClient {
         }
     }
 
-    /// Download raw audio bytes from a Qobuz CDN URL.
+    /// Stream a Qobuz CDN body straight to `path`, returning the byte count.
     ///
-    /// Ported from `src-tauri/src/commands_v2/helpers.rs:332`, preserving the
-    /// load-bearing behavior: HTTP/1.1-only (`http1_only` — Qobuz CDN sends
-    /// RST_STREAM on large HTTP/2 downloads, causing "1 byte then EOF"), a 10s
-    /// connect timeout, and crucially NO total request timeout (large hi-res
-    /// downloads must not be capped). The body is streamed in chunks; on a stream
-    /// error the full `.source()` cause chain is folded into the returned message.
+    /// Replaces the `Vec<u8>` round trip of the original port for purchases: a
+    /// DSD128 master is ~650 MB per track, and holding all of it before the
+    /// first write is a memory spike for nothing. The load-bearing transport
+    /// choices carry over unchanged: HTTP/1.1-only (`http1_only` — Qobuz CDN
+    /// sends RST_STREAM on large HTTP/2 downloads, causing "1 byte then EOF"),
+    /// a 10 s connect timeout, and crucially NO total request timeout.
     ///
-    /// TLS divergence from the reference: the Tauri build called
-    /// `.use_native_tls()` because its Cargo opts into both TLS stacks. This crate
-    /// stays on rustls (no `native-tls` feature — same decision documented in
-    /// `cmaf.rs::build_cdn_client`), so we omit `.use_native_tls()`. If Akamai/
-    /// Qobuz's CDN ever surfaces a cert issue, adding the `native-tls` feature to
-    /// `qbz-qobuz` is the escape hatch. This is NOT a download-function regression.
+    /// A body shorter than the announced `Content-Length` is an ERROR, not a
+    /// warning: the caller is about to give this file a name that promises a
+    /// complete master. On any error the file at `path` is left for the caller
+    /// to remove — it owns the `.part` lifecycle.
     ///
-    /// The Tauri build wrapped this in the `CDN_STREAMING_ACTIVE` busy-wait gate
-    /// to avoid concurrent streaming-vs-download CDN throttling. That counter is
-    /// `src-tauri`-only — the Slint stack has no shared equivalent — so there is
-    /// no collision protection here (documented limitation; see the module-level
-    /// note). The error type is `String` to mirror the reference exactly.
-    pub async fn download_audio(url: &str) -> std::result::Result<Vec<u8>, String> {
+    /// TLS: rustls, no `native-tls` (same decision as `cmaf.rs::build_cdn_client`).
+    pub async fn download_audio_to_path(
+        url: &str,
+        path: &std::path::Path,
+    ) -> std::result::Result<u64, String> {
+        use std::io::Write;
         use std::time::Duration;
 
-        // Force HTTP/1.1 — Qobuz CDN sends RST_STREAM on large downloads over
-        // HTTP/2, causing "1 byte then EOF". curl (HTTP/1.1) downloads the same
-        // URLs successfully.
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .http1_only()
@@ -542,89 +584,77 @@ impl QobuzClient {
             return Err(format!("HTTP error: {}", response.status()));
         }
 
-        // Log response headers for CDN diagnostics (helps debug "1 byte EOF").
         {
             let headers = response.headers();
-            let h_ce = headers
-                .get("content-encoding")
-                .map(|v| v.to_str().unwrap_or("?"));
-            let h_te = headers
-                .get("transfer-encoding")
-                .map(|v| v.to_str().unwrap_or("?"));
-            let h_conn = headers.get("connection").map(|v| v.to_str().unwrap_or("?"));
-            let h_server = headers.get("server").map(|v| v.to_str().unwrap_or("?"));
-            let h_ct = headers
-                .get("content-type")
-                .map(|v| v.to_str().unwrap_or("?"));
-            let h_via = headers.get("via").map(|v| v.to_str().unwrap_or("?"));
+            let h = |k: &str| headers.get(k).map(|v| v.to_str().unwrap_or("?"));
             log::info!(
                 "[Purchases] CDN response: status={}, content-encoding={:?}, transfer-encoding={:?}, connection={:?}, server={:?}, content-type={:?}, via={:?}, version={:?}",
                 response.status(),
-                h_ce,
-                h_te,
-                h_conn,
-                h_server,
-                h_ct,
-                h_via,
+                h("content-encoding"),
+                h("transfer-encoding"),
+                h("connection"),
+                h("server"),
+                h("content-type"),
+                h("via"),
                 response.version()
             );
         }
 
-        let content_length = response.content_length();
-        if let Some(len) = content_length {
+        let expected = response.content_length();
+        if let Some(len) = expected {
             log::info!("[Purchases] Downloading audio: {} bytes expected", len);
         }
 
-        // Stream body in chunks to handle partial reads gracefully.
-        let expected_len = content_length.unwrap_or(0) as usize;
-        let mut all_data = Vec::with_capacity(expected_len);
+        let mut file = std::io::BufWriter::new(
+            std::fs::File::create(path)
+                .map_err(|e| format!("Failed to create temporary file: {}", e))?,
+        );
+        let mut written: u64 = 0;
         let mut stream = response.bytes_stream();
 
         use futures_util::StreamExt;
         while let Some(chunk_result) = stream.next().await {
-            match chunk_result {
-                Ok(chunk) => all_data.extend_from_slice(&chunk),
-                Err(e) => {
-                    use std::error::Error as _;
-                    let mut msg = format!("Failed to read audio bytes: {}", e);
-                    let mut source = e.source();
-                    while let Some(cause) = source {
-                        msg.push_str(&format!(" | caused by: {}", cause));
-                        source = cause.source();
-                    }
-                    // If we got some data but not all, log what we received.
-                    if !all_data.is_empty() {
-                        log::error!(
-                            "[Purchases] Download error after {}/{} bytes: {}",
-                            all_data.len(),
-                            expected_len,
-                            msg
-                        );
-                    } else {
-                        log::error!("[Purchases] Download error (0 bytes received): {}", msg);
-                    }
-                    return Err(msg);
+            let chunk = chunk_result.map_err(|e| {
+                use std::error::Error as _;
+                let mut msg = format!("Failed to read audio bytes: {}", e);
+                let mut source = e.source();
+                while let Some(cause) = source {
+                    msg.push_str(&format!(" | caused by: {}", cause));
+                    source = cause.source();
                 }
+                log::error!(
+                    "[Purchases] Download error after {}/{} bytes: {}",
+                    written,
+                    expected.unwrap_or(0),
+                    msg
+                );
+                msg
+            })?;
+            file.write_all(&chunk)
+                .map_err(|e| format!("Failed to write temporary file: {}", e))?;
+            written += chunk.len() as u64;
+        }
+        file.flush()
+            .map_err(|e| format!("Failed to write temporary file: {}", e))?;
+
+        if let Some(len) = expected {
+            if written != len {
+                return Err(format!(
+                    "Download truncated: got {} bytes, expected {}",
+                    written, len
+                ));
             }
         }
 
-        if expected_len > 0 && all_data.len() != expected_len {
-            log::warn!(
-                "[Purchases] Download size mismatch: got {} bytes, expected {}",
-                all_data.len(),
-                expected_len
-            );
-        }
-
-        log::info!("[Purchases] Downloaded {} bytes", all_data.len());
-        Ok(all_data)
+        log::info!("[Purchases] Downloaded {} bytes", written);
+        Ok(written)
     }
 }
 
 #[cfg(test)]
 mod purchase_contract_tests {
     use super::*;
-    use crate::auth::{generate_signature, sign_get_file_url};
+    use crate::auth::{generate_signature, sign_get_file_url, sign_get_file_url_download};
 
     // ── §12-1: the requests must be byte-identical to the reference ──────────
     //
@@ -634,10 +664,11 @@ mod purchase_contract_tests {
     // region — so inspection is not evidence and these tests are the only thing
     // standing between a wrong request and a shipped, invisible failure.
 
-    /// The preimage has NO separators anywhere, and the intent baked into it is
-    /// `stream` — not `download`, which is what the inferred OpenAPI lists.
-    /// Both facts come from the implementation that demonstrably worked, and
-    /// from Qobuz's own desktop client, which signs this call and only this call.
+    /// The preimage has NO separators anywhere. The playback grant signs
+    /// `intentstream`; the purchase grant signs `intentdownload`. Both facts
+    /// were measured on the wire — the second one live on 2026-09-01 against a
+    /// DSD128 entitlement, where `stream` answers 400 and `download` answers the
+    /// file.
     #[test]
     fn file_url_signature_preimage_is_exact() {
         let track_id = 123_456_u64;
@@ -648,8 +679,9 @@ mod purchase_contract_tests {
         // Assembled here by hand, character for character, from the contract:
         //   trackgetFileUrl + format_id{fid} + intentstream + track_id{tid}
         //   + {timestamp} + {secret}
-        let expected_preimage =
-            format!("trackgetFileUrlformat_id{format_id}intentstreamtrack_id{track_id}{timestamp}{secret}");
+        let expected_preimage = format!(
+            "trackgetFileUrlformat_id{format_id}intentstreamtrack_id{track_id}{timestamp}{secret}"
+        );
         let expected = {
             use md5::{Digest, Md5};
             let mut hasher = Md5::new();
@@ -660,28 +692,45 @@ mod purchase_contract_tests {
         assert_eq!(
             sign_get_file_url(track_id, format_id, timestamp, secret),
             expected,
-            "the getFileUrl signature preimage drifted; every purchase download \
-             will fail auth and nobody here can smoke-test it"
+            "the getFileUrl stream signature preimage drifted; playback will fail auth"
         );
     }
 
-    /// Guard the two halves of the preimage that a well-meaning edit would
-    /// "fix": the intent, and the absence of separators.
+    /// The purchase grant: `intentdownload` in the same unseparated shape.
+    /// This is the signature that fetched a real DSF on 2026-09-01.
     #[test]
-    fn file_url_signature_rejects_download_intent_and_separators() {
-        let (tid, fid, ts, secret) = (99_u64, 6_u32, 1_u64, "s");
-        let actual = sign_get_file_url(tid, fid, ts, secret);
+    fn purchase_file_url_signature_preimage_is_exact() {
+        let track_id = 123_456_u64;
+        let format_id = 56_u32;
+        let timestamp = 1_700_000_000_u64;
+        let secret = "0123456789abcdef0123456789abcdef";
+        let expected_preimage = format!(
+            "trackgetFileUrlformat_id{format_id}intentdownloadtrack_id{track_id}{timestamp}{secret}"
+        );
+        let expected = {
+            use md5::{Digest, Md5};
+            let mut hasher = Md5::new();
+            hasher.update(expected_preimage.as_bytes());
+            format!("{:x}", hasher.finalize())
+        };
+        assert_eq!(
+            sign_get_file_url_download(track_id, format_id, timestamp, secret),
+            expected,
+            "the getFileUrl download signature preimage drifted; every purchase download \
+             will answer HTTP 400"
+        );
+        assert_eq!(FileUrlIntent::Download.wire(), "download");
+        assert_eq!(FileUrlIntent::Stream.wire(), "stream");
+    }
 
-        let with_download_intent = generate_signature(
-            "trackgetFileUrl",
-            &format!("format_id{fid}intentdownloadtrack_id{tid}"),
-            ts,
-            secret,
-        );
-        assert_ne!(
-            actual, with_download_intent,
-            "intent must stay `stream`; the OpenAPI's `download` is not what shipped"
-        );
+    /// Guard the halves of the preimage a well-meaning edit would "fix": the
+    /// two intents never collide, and there are no separators.
+    #[test]
+    fn file_url_signatures_keep_intents_apart_and_carry_no_separators() {
+        let (tid, fid, ts, secret) = (99_u64, 6_u32, 1_u64, "s");
+        let stream = sign_get_file_url(tid, fid, ts, secret);
+        let download = sign_get_file_url_download(tid, fid, ts, secret);
+        assert_ne!(stream, download, "intent is inside the preimage");
 
         let with_separators = generate_signature(
             "trackgetFileUrl",
@@ -689,14 +738,20 @@ mod purchase_contract_tests {
             ts,
             secret,
         );
-        assert_ne!(actual, with_separators, "the preimage carries no separators");
+        assert_ne!(
+            stream, with_separators,
+            "the preimage carries no separators"
+        );
     }
 
     /// The endpoint constants themselves — a typo here fails silently into an
     /// empty purchases list, because the list endpoints never check status.
     #[test]
     fn purchase_endpoint_paths_are_the_reference_paths() {
-        assert_eq!(paths::PURCHASE_GET_USER_PURCHASES, "/purchase/getUserPurchases");
+        assert_eq!(
+            paths::PURCHASE_GET_USER_PURCHASES,
+            "/purchase/getUserPurchases"
+        );
         assert_eq!(
             paths::PURCHASE_GET_USER_PURCHASES_IDS,
             "/purchase/getUserPurchasesIds"
@@ -725,7 +780,10 @@ mod purchase_contract_tests {
             PurchasePageStep::Continue { next_offset: 1_000 }
         );
         // Final page: 1000 + 200 >= 1200.
-        assert_eq!(purchase_page_step(1_000, 200, 1_200), PurchasePageStep::Stop);
+        assert_eq!(
+            purchase_page_step(1_000, 200, 1_200),
+            PurchasePageStep::Stop
+        );
     }
 
     /// THE case from §2.3. A zero total stops the walk after one page even

@@ -6264,15 +6264,6 @@ msgstr "{} / {}"
 msgid "Last playlist"
 msgstr "前回のプレイリスト"
 
-msgid "About music purchases"
-msgstr "音楽購入について"
-
-msgid "Music purchases are not available in every country or region where the platform offers streaming. One of those countries, where nothing can be bought and only the streaming subscription is offered, is Mexico."
-msgstr "音楽の購入は、プラットフォームがストリーミングを提供しているすべての国や地域で利用できるわけではありません。何も購入できず、ストリーミングのサブスクリプションのみが提供されている国のひとつがメキシコです。"
-
-msgid "As it happens, the developer and maintainer of this software is from Mexico, so this section was built in blind mode — 'I am one with the Force and the Force is with me' — with some feedback from a couple of contributors, but in the end, in blind mode: it ships with no guarantee that it works and no promise to fix whatever is broken."
-msgstr "実はこのソフトウェアの開発者・メンテナーはメキシコ出身です。そのためこのセクションは手探りで開発されました — 'I am one with the Force and the Force is with me' — 数人のコントリビューターからのフィードバックはありましたが、最終的には手探りのまま。動作の保証はなく、不具合を修正する約束もなしで提供されます。"
-
 msgid "OK"
 msgstr "OK"
 
@@ -6336,3 +6327,15 @@ msgstr "再生が競合した場合"
 
 msgid "Ask each time or automatically choose which queue and device should continue."
 msgstr "毎回確認するか、続行するキューとデバイスを自動的に選択します。"
+
+msgid "Purchased"
+msgstr "購入日"
+
+msgid "Sort: Release date"
+msgstr "並び替え: 発売日"
+
+msgid "Until the purchased file is downloaded, Play streams the best quality Qobuz offers for this album. Once it is on disk, Play uses your copy."
+msgstr "購入したファイルをダウンロードするまでは、このアルバムに Qobuz が提供する最高品質でストリーミング再生します。ディスクに保存されると、再生はあなたのコピーを使います。"
+
+msgid "Open in Local Library"
+msgstr "ローカルライブラリで開く"

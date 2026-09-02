@@ -585,6 +585,7 @@ fn main() {
                 "qml/controls/QbzToggle.qml",
                 "qml/controls/QbzToolButton.qml",
                 "qml/controls/QbzTooltip.qml",
+                "qml/controls/QbzProgressRing.qml",
                 // Applied-filters tooltip: the trigger a filter control mounts
                 // beside itself (it writes the shell channel QbzTooltip reads).
                 "qml/controls/QbzFilterTip.qml",
@@ -890,6 +891,7 @@ fn main() {
                 "qml/views/purchases/PurchaseAlbumsCollection.qml",
                 "qml/views/purchases/PurchaseGridCard.qml",
                 "qml/views/purchases/PurchaseListRow.qml",
+                "qml/views/purchases/PurchaseListHeader.qml",
                 "qml/views/purchases/PurchaseTrackRow.qml",
                 "qml/views/purchases/PurchasesToolbar.qml",
                 // Playlist Manager (route "playlistmanager"): the router target

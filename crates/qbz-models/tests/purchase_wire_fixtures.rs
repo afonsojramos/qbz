@@ -65,8 +65,14 @@ fn a_typed_albums_response_omits_the_tracks_key_entirely() {
     );
 
     let r: PurchaseResponse = serde_json::from_str(&raw).expect("must still deserialize");
-    assert_eq!(r.albums.limit, 500, "the client's requested page size comes back");
-    assert!(r.tracks.items.is_empty(), "the absent sibling defaults, never fails");
+    assert_eq!(
+        r.albums.limit, 500,
+        "the client's requested page size comes back"
+    );
+    assert!(
+        r.tracks.items.is_empty(),
+        "the absent sibling defaults, never fails"
+    );
     assert_eq!(r.tracks.total, 0);
 }
 
@@ -93,7 +99,10 @@ fn a_typed_tracks_response_omits_the_albums_key_entirely() {
 #[test]
 fn the_ids_envelope_has_no_offset_or_limit_and_still_yields_its_total() {
     let raw = fixture("getUserPurchasesIds-noparams.json");
-    assert!(!raw.contains("\"offset\""), "the ids page carries no offset");
+    assert!(
+        !raw.contains("\"offset\""),
+        "the ids page carries no offset"
+    );
     assert!(!raw.contains("\"limit\""), "nor a limit");
 
     let r: PurchaseIdsResponse = serde_json::from_str(&raw).expect("must deserialize");
@@ -114,7 +123,10 @@ fn a_typed_ids_response_omits_its_sibling_which_is_why_two_calls_are_needed() {
 
     let r: PurchaseIdsResponse = serde_json::from_str(&raw).expect("must deserialize");
     assert_eq!(r.albums.total, 0);
-    assert_eq!(r.tracks.total, 0, "absent sibling defaults to 0, never fails");
+    assert_eq!(
+        r.tracks.total, 0,
+        "absent sibling defaults to 0, never fails"
+    );
 }
 
 /// Every capture carries a top-level `user` block that no model declares, and
@@ -128,7 +140,10 @@ fn an_unknown_top_level_key_never_fails_a_response() {
         "getUserPurchases-type-tracks.json",
     ] {
         let raw = fixture(name);
-        assert!(raw.contains("\"user\""), "{name} should carry the user block");
+        assert!(
+            raw.contains("\"user\""),
+            "{name} should carry the user block"
+        );
         serde_json::from_str::<PurchaseResponse>(&raw)
             .unwrap_or_else(|e| panic!("{name} must ignore the unknown `user` key: {e}"));
     }
@@ -139,4 +154,50 @@ fn an_unknown_top_level_key_never_fails_a_response() {
         serde_json::from_str::<PurchaseIdsResponse>(&fixture(name))
             .unwrap_or_else(|e| panic!("{name} must ignore the unknown `user` key: {e}"));
     }
+}
+
+/// FIRST capture from an account that OWNS albums (2026-09-01, USA Sublime
+/// account, read-only, owner-authorised). Every prior fixture had empty items,
+/// so this is the first proof of the POPULATED shape. If the whole page
+/// deserializes to zero items while the raw JSON plainly has three, the bug is
+/// in a per-item field the strict struct rejects — not downstream.
+#[test]
+fn a_populated_albums_page_yields_its_three_items() {
+    let raw = fixture("getUserPurchases-albums-populated.json");
+    let r: PurchaseResponse =
+        serde_json::from_str(&raw).expect("the populated envelope must deserialize");
+    assert_eq!(
+        r.albums.items.len(),
+        3,
+        "expected 3 purchased albums, got {} (total={})",
+        r.albums.items.len(),
+        r.albums.total
+    );
+}
+
+/// The same capture is the first proof of the ENTITLEMENT fields. The DSD64
+/// album streams as 16/44.1 (`hires:false`) yet is purchased as `[55]` with
+/// `hires_purchased:true` — the streaming quality says nothing about what was
+/// bought, so the ids must survive the parse verbatim, in wire order.
+#[test]
+fn a_populated_albums_page_carries_the_downloadable_format_ids() {
+    let raw = fixture("getUserPurchases-albums-populated.json");
+    let r: PurchaseResponse = serde_json::from_str(&raw).expect("deserializes");
+    let by_title: std::collections::HashMap<&str, &qbz_models::PurchaseAlbum> = r
+        .albums
+        .items
+        .iter()
+        .map(|a| (a.title.as_str(), a))
+        .collect();
+
+    let dsd64 = by_title["Rust In Peace"];
+    assert_eq!(dsd64.downloadable_format_ids, vec![55]);
+    assert!(!dsd64.hires, "the streaming catalog is CD quality");
+    assert!(dsd64.hires_purchased, "…but the purchase is hi-res");
+
+    let flac = by_title["ぷりぷり"];
+    assert_eq!(flac.downloadable_format_ids, vec![7, 6, 5]);
+
+    let dsd128 = by_title["Audiophile Analog Collection Vol.3"];
+    assert_eq!(dsd128.downloadable_format_ids, vec![56]);
 }

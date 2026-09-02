@@ -77,18 +77,21 @@ pub async fn get_user_purchases_by_type(
     client.get_user_purchases_all_typed(purchase_type).await
 }
 
-/// Read the per-type purchase TOTAL via a single `getUserPurchasesIds`
-/// page (`limit=1, offset=0, type`). The items are opaque; only `.total` for
-/// the matching type is read. Returns `None` on any error (the controller falls
-/// back to 0 / the response length — `loadPurchasesMetadata`'s `.catch(()=>null)`).
+/// The per-tab counter for one purchase type (`"albums"` / `"tracks"`).
 ///
-/// GOTCHA (per-type totals): this MUST be called once per type. A single
-/// unfiltered `limit=1` ids call carries only the FIRST type's total, so the
-/// controller fires two of these — `get_purchase_total(client, "albums")` and
-/// `get_purchase_total(client, "tracks")` — never one combined call.
+/// From `getUserPurchases?type=…&limit=1`, NOT from `getUserPurchasesIds`:
+/// the ids endpoint's `tracks.total` counts every purchased track INCLUDING
+/// the ones that came with an album (measured 2026-09-01: three album
+/// purchases, zero standalone tracks, `getUserPurchasesIds` said 34 while
+/// `getUserPurchases?type=tracks` said 0). The Tracks tab lists standalone
+/// track purchases only, so its badge must count the same thing. Qobuz keeps
+/// the two kinds apart on the wire and so does this screen.
+///
+/// One typed page never carries the sibling type's total (that key is simply
+/// absent), which is why there are two calls and not one.
 pub async fn get_purchase_total(client: &QobuzClient, purchase_type: &str) -> Option<u32> {
     match client
-        .get_user_purchases_ids_page_typed(Some(purchase_type), 1, 0)
+        .get_user_purchases_page_typed(Some(purchase_type), 1, 0)
         .await
     {
         Ok(resp) => match purchase_type {
@@ -186,6 +189,7 @@ pub fn synth_formats(album: &Album) -> Vec<PurchaseFormatOption> {
             label: "[FLAC][24-bit,192kHz]".to_string(),
             bit_depth: Some(24),
             sampling_rate: Some(192.0),
+            streaming: false,
         });
     }
 
@@ -195,6 +199,7 @@ pub fn synth_formats(album: &Album) -> Vec<PurchaseFormatOption> {
             label: "[FLAC][24-bit,96kHz]".to_string(),
             bit_depth: Some(24),
             sampling_rate: Some(96.0),
+            streaming: false,
         });
     }
 
@@ -203,6 +208,7 @@ pub fn synth_formats(album: &Album) -> Vec<PurchaseFormatOption> {
         label: "[FLAC][16-bit,44.1kHz]".to_string(),
         bit_depth: Some(16),
         sampling_rate: Some(44.1),
+        streaming: false,
     });
 
     formats.push(PurchaseFormatOption {
@@ -210,9 +216,130 @@ pub fn synth_formats(album: &Album) -> Vec<PurchaseFormatOption> {
         label: "[MP3][320kbps]".to_string(),
         bit_depth: None,
         sampling_rate: None,
+        streaming: false,
     });
 
     formats
+}
+
+/// Rank of a purchase `format_id` — HIGHEST quality first. Orders the detail
+/// menu (which default-selects `formats[0]`) and, on the playback side, picks
+/// which downloaded copy of a track plays when several formats are on disk.
+/// Unknown ids rank below every known one so a new Qobuz id is still offered,
+/// never hidden.
+pub fn format_rank(id: u32) -> u32 {
+    match id {
+        56 => 6, // DSD128
+        55 => 5, // DSD64
+        27 => 4, // FLAC 24/192
+        7 => 3,  // FLAC 24/96
+        6 => 2,  // FLAC 16/44.1
+        5 => 1,  // MP3 320
+        _ => 0,
+    }
+}
+
+/// One download-menu option for a `format_id` the entitlement declared.
+///
+/// The 27/7/6/5 labels are the exact strings `synth_formats` has always
+/// produced — they become the on-disk quality folder, so they are frozen. 55
+/// and 56 were first observed on a real account 2026-09-01 (a DSD64 and a
+/// DSD128 purchase) and are labelled by what the CDN serves for them
+/// (`audio/x-dsf`). An id this table does not know is still offered, under a
+/// neutral label: the entitlement is the authority, not this list.
+pub fn format_option(id: u32) -> PurchaseFormatOption {
+    let (label, bit_depth, sampling_rate) = match id {
+        56 => ("[DSF][DSD128]", Some(1), Some(5644.8)),
+        55 => ("[DSF][DSD64]", Some(1), Some(2822.4)),
+        27 => ("[FLAC][24-bit,192kHz]", Some(24), Some(192.0)),
+        7 => ("[FLAC][24-bit,96kHz]", Some(24), Some(96.0)),
+        6 => ("[FLAC][16-bit,44.1kHz]", Some(16), Some(44.1)),
+        5 => ("[MP3][320kbps]", None, None),
+        other => {
+            return PurchaseFormatOption {
+                id: other,
+                label: format!("[Format {other}]"),
+                bit_depth: None,
+                sampling_rate: None,
+                streaming: false,
+            }
+        }
+    };
+    PurchaseFormatOption {
+        id,
+        label: label.to_string(),
+        bit_depth,
+        sampling_rate,
+        streaming: false,
+    }
+}
+
+/// The download menu from the ENTITLEMENT (`downloadable_format_ids`):
+/// deduplicated, highest quality first. Empty in → empty out; the caller
+/// decides whether anything else may stand in.
+pub fn entitlement_formats(ids: &[u32]) -> Vec<PurchaseFormatOption> {
+    let mut seen = HashSet::new();
+    let mut ids: Vec<u32> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
+    // Stable, so two unknown ids keep their wire order relative to each other.
+    ids.sort_by(|a, b| format_rank(*b).cmp(&format_rank(*a)));
+    ids.into_iter().map(format_option).collect()
+}
+
+/// The download menu for a purchased album.
+///
+/// The ENTITLEMENT comes first, highest quality on top: those are the ids the
+/// store grants through `getFileUrl(intent=download)` — measured 2026-09-01
+/// on the live account, it grants exactly them and denies everything else
+/// (a DSD64 purchase: 55 only; a hi-res FLAC purchase: 7, 6, 5 only).
+///
+/// BELOW it, the streaming ladder for whatever the entitlement does not
+/// already cover at a LOWER quality: the same 27/7/6/5 the catalog's own
+/// fields synthesize, fetched through the streaming grant (`intent=stream`)
+/// — the route the Slint and Tauri builds used for every purchase download.
+/// It is kept only downward, so a DSD purchase can still be saved as a CD
+/// FLAC for the car, and never upward, so nothing is offered that the
+/// account did not buy and could not stream in that quality anyway. Each
+/// option carries its route (`streaming`), and the download path signs the
+/// grant accordingly.
+///
+/// A listing without the field (older wire) gets the catalog synthesis alone,
+/// all of it through the purchase grant as before.
+pub fn purchase_formats(album: &Album, entitlement_ids: &[u32]) -> Vec<PurchaseFormatOption> {
+    let mut menu = entitlement_formats(entitlement_ids);
+    if menu.is_empty() {
+        log::info!(
+            "[Purchases] album {}: no downloadable_format_ids on the wire, synthesizing from the catalog",
+            album.id
+        );
+        return synth_formats(album);
+    }
+    let top = menu.iter().map(|f| format_rank(f.id)).max().unwrap_or(0);
+    for mut extra in synth_formats(album) {
+        let owned = menu.iter().any(|f| f.id == extra.id);
+        // The hi-res rungs (27/7) exist on the streaming side only when the
+        // catalog STREAMS hi-res. `album.hires` alone is not that: the live
+        // DSD album is hires:true with a 16/44.1 stream, and offering
+        // "[FLAC][24-bit,192kHz]" there wrote a folder by that name full of
+        // CD-quality files (smoke 2026-09-02).
+        let streams = !matches!(extra.id, 27 | 7) || album.hires_streamable;
+        if !owned && streams && format_rank(extra.id) < top {
+            extra.streaming = true;
+            menu.push(extra);
+        }
+    }
+    menu
+}
+
+/// The entitlement ids of one album in a purchases listing (`[]` when the
+/// album is not listed, or the wire predates the field).
+pub fn entitlement_format_ids(purchases: &PurchaseResponse, album_id: &str) -> Vec<u32> {
+    purchases
+        .albums
+        .items
+        .iter()
+        .find(|item| item.id == album_id)
+        .map(|item| item.downloadable_format_ids.clone())
+        .unwrap_or_default()
 }
 
 /// Annotate a `PurchaseResponse` in-place with frontend-computed download flags
@@ -279,7 +406,8 @@ pub fn apply_download_flags(
     }
 
     for album in &mut response.albums.items {
-        album.downloaded = album_downloaded_from_registry(&album.id, album.tracks_count, album_counts);
+        album.downloaded =
+            album_downloaded_from_registry(&album.id, album.tracks_count, album_counts);
     }
 }
 
@@ -369,6 +497,10 @@ pub fn build_purchase_album(
                     // Server-derived; set below from the registry.
                     downloaded: false,
                     downloaded_format_ids: Vec::new(),
+                    // An album purchase covers every track in the same formats.
+                    downloadable_format_ids: purchase_meta
+                        .map(|item| item.downloadable_format_ids.clone())
+                        .unwrap_or_default(),
                     purchased_at: purchase_meta.and_then(|item| item.purchased_at),
                 })
                 .collect()
@@ -403,6 +535,12 @@ pub fn build_purchase_album(
         maximum_sampling_rate: album.maximum_sampling_rate,
         maximum_bit_depth: album.maximum_bit_depth,
         downloadable: purchase_meta.map(|item| item.downloadable).unwrap_or(true),
+        downloadable_format_ids: purchase_meta
+            .map(|item| item.downloadable_format_ids.clone())
+            .unwrap_or_default(),
+        hires_purchased: purchase_meta
+            .map(|item| item.hires_purchased)
+            .unwrap_or(false),
         downloaded: album_downloaded,
         purchased_at: purchase_meta.and_then(|item| item.purchased_at),
         tracks: Some(SearchResultsPage {
@@ -415,11 +553,14 @@ pub fn build_purchase_album(
 }
 
 /// Pick the on-disk file extension for a purchased track from the RESPONSE
-/// stream's `format_id` / `mime_type` (§7.1.5, ported byte-for-byte from
-/// `v2_purchase_extension` `legacy_compat.rs:2553-2559`):
-///   * `"mp3"` if the served `format_id == 5` OR the served `mime_type`
-///     contains `"mpeg"`;
-///   * `"flac"` otherwise.
+/// stream's `format_id` / `mime_type`. Historically (`v2_purchase_extension`,
+/// `legacy_compat.rs:2553-2559`) the rule was "mp3 if `format_id == 5` or the
+/// MIME says mpeg, else flac". That rule wrote a DSD purchase as `.flac`: the
+/// CDN serves format 55/56 as `audio/x-dsf` (measured 2026-09-01), and a DSF
+/// under a `.flac` name is unplayable by anything, including our own scanner,
+/// which classifies by extension. So the served container decides, across the
+/// whole set Qobuz documents for purchases (DSF, DFF, FLAC, ALAC, WAV, AIFF,
+/// MP3), and the format id only breaks a tie for a missing MIME.
 ///
 /// IMPORTANT (Addendum B.2): the extension keys off the RESPONSE's served
 /// format, NOT the requested one. If Qobuz downgrades (e.g. you asked for 27 but
@@ -427,11 +568,90 @@ pub fn build_purchase_album(
 /// records the REQUESTED `format_id` (see `download_purchase_track`). Do NOT
 /// reconcile the two — the Tauri app does not.
 pub fn purchase_extension(format_id: u32, mime_type: &str) -> &'static str {
-    if format_id == 5 || mime_type.contains("mpeg") {
+    let mime = mime_type.to_ascii_lowercase();
+    if format_id == 5 || mime.contains("mpeg") {
         "mp3"
+    } else if mime.contains("dsf") {
+        "dsf"
+    } else if mime.contains("dff") || mime.contains("dsdiff") {
+        "dff"
+    } else if mime.contains("wav") {
+        "wav"
+    } else if mime.contains("aiff") || mime.contains("x-aif") {
+        "aiff"
+    } else if mime.contains("mp4") || mime.contains("m4a") || mime.contains("alac") {
+        "m4a"
+    } else if mime.is_empty() && matches!(format_id, 55 | 56) {
+        // No MIME at all: the DSD ids are DSF on this CDN.
+        "dsf"
     } else {
         "flac"
     }
+}
+
+/// Does the head of a served file look like the container its extension
+/// claims? A DSF begins `DSD `, a DFF `FRM8`, a FLAC `fLaC` (or an ID3v2
+/// prefix, which lofty and every player accept), an MP3 an ID3v2 tag or a
+/// frame sync, WAV `RIFF`, AIFF `FORM`, and an M4A carries `ftyp` at offset 4.
+/// Anything else is an HTML error page or a truncated body wearing an audio
+/// name — the exact file a registry row must never point at. Unknown
+/// extensions are not judged.
+pub fn served_magic_matches(extension: &str, head: &[u8]) -> bool {
+    let starts = |m: &[u8]| head.len() >= m.len() && &head[..m.len()] == m;
+    match extension {
+        "dsf" => starts(b"DSD "),
+        "dff" => starts(b"FRM8"),
+        "flac" => starts(b"fLaC") || starts(b"ID3"),
+        "mp3" => starts(b"ID3") || (head.len() >= 2 && head[0] == 0xFF && head[1] & 0xE0 == 0xE0),
+        "wav" => starts(b"RIFF"),
+        "aiff" => starts(b"FORM"),
+        "m4a" => head.len() >= 8 && &head[4..8] == b"ftyp",
+        _ => true,
+    }
+}
+
+/// Read the first bytes of a just-written `.part` and refuse a body that is
+/// not the container the extension promises.
+fn verify_served_container(path: &std::path::Path, extension: &str) -> Result<(), String> {
+    use std::io::Read;
+    let mut head = [0u8; 12];
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("Failed to reopen downloaded file: {e}"))?;
+    let n = file
+        .read(&mut head)
+        .map_err(|e| format!("Failed to read downloaded file: {e}"))?;
+    if served_magic_matches(extension, &head[..n]) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Served file is not a {} (first bytes {:02x?})",
+            extension.to_ascii_uppercase(),
+            &head[..n.min(4)]
+        ))
+    }
+}
+
+/// Only containers whose tag write lofty has been driven end to end here
+/// (the download harness writes and re-reads FLAC and MP3). DSF carries an
+/// ID3v2 chunk lofty can address, but nothing in this tree has proven that
+/// write on a real 600 MB master, and a tagging failure that corrupts a DSD
+/// purchase is the one outcome worse than an untagged file.
+fn tags_supported(extension: &str) -> bool {
+    matches!(extension, "flac" | "mp3")
+}
+
+/// The artist FOLDER of a downloaded track: the album artist when the caller
+/// supplied the album context, else the track's own performer, else the
+/// reference's `"Unknown Artist"`. The ARTIST tag is a different question and
+/// keeps the performer (`tag_downloaded_file`): a Various-Artists compilation
+/// is one folder on disk and fourteen performers in its tags.
+pub fn path_artist(album_artist: Option<&str>, performer: Option<&str>) -> String {
+    album_artist
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| performer.map(str::trim).filter(|s| !s.is_empty()))
+        .unwrap_or("Unknown Artist")
+        .to_string()
 }
 
 /// Build the deterministic on-disk target path for a purchased track
@@ -549,7 +769,8 @@ fn write_track_file(
 
     // Addendum B.3: write `.part`, then rename — no overwrite preflight.
     let temp_path = target.with_extension(format!("{}.part", extension));
-    std::fs::write(&temp_path, data).map_err(|e| format!("Failed to write temporary file: {}", e))?;
+    std::fs::write(&temp_path, data)
+        .map_err(|e| format!("Failed to write temporary file: {}", e))?;
     std::fs::rename(&temp_path, &target).map_err(|e| format!("Failed to finalize file: {}", e))?;
 
     Ok(target.to_string_lossy().to_string())
@@ -727,7 +948,12 @@ pub async fn fetch_asset_bytes(url: &str) -> Option<Vec<u8>> {
         }
     };
 
-    let response = match client.get(url).header("User-Agent", "Mozilla/5.0").send().await {
+    let response = match client
+        .get(url)
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await
+    {
         Ok(response) => response,
         Err(e) => {
             log::warn!("[Purchases] asset fetch failed ({url}): {e}");
@@ -736,7 +962,10 @@ pub async fn fetch_asset_bytes(url: &str) -> Option<Vec<u8>> {
     };
 
     if !response.status().is_success() {
-        log::warn!("[Purchases] asset fetch got HTTP {} ({url})", response.status());
+        log::warn!(
+            "[Purchases] asset fetch got HTTP {} ({url})",
+            response.status()
+        );
         return None;
     }
 
@@ -772,7 +1001,7 @@ pub async fn fetch_asset_bytes(url: &str) -> Option<Vec<u8>> {
     Some(bytes.to_vec())
 }
 
-/// Write `cover.jpg` / `back.jpg` beside the album's tracks (§14.2).
+/// Write `cover.jpg` / `back.jpg` / `large_cover.jpg` beside the album's tracks (§14.2).
 ///
 /// `album/get`'s `image` object carries exactly `small`, `thumbnail`, `large`
 /// and `back` — measured 2026-08-15; there is no `mega`, matching the earlier
@@ -784,8 +1013,16 @@ pub fn write_album_cover_files(
     album_dir: &std::path::Path,
     cover_jpeg: Option<&[u8]>,
     back_jpeg: Option<&[u8]>,
+    large_cover_jpeg: Option<&[u8]>,
 ) {
-    for (bytes, name) in [(cover_jpeg, "cover.jpg"), (back_jpeg, "back.jpg")] {
+    // `large_cover.jpg` is the name the Qobuz desktop client writes beside its
+    // own `folder.jpg` (Finder, 2026-09-02): the `_max` variant, the master's
+    // own size. `cover.jpg` stays the 600 px one every scanner picks up.
+    for (bytes, name) in [
+        (cover_jpeg, "cover.jpg"),
+        (back_jpeg, "back.jpg"),
+        (large_cover_jpeg, "large_cover.jpg"),
+    ] {
         let Some(bytes) = bytes.filter(|b| !b.is_empty()) else {
             continue;
         };
@@ -916,21 +1153,30 @@ fn goodie_target_path(album_dir: &std::path::Path, display_name: &str, url: &str
 ///
 /// Ported from `v2_download_purchase_track_impl` (`legacy_compat.rs:2651-2702`)
 /// combined with the registry write of `v2_purchases_download_track`
-/// (`:3013-3022`). Sequence:
+/// (`:3013-3022`), then re-plumbed for the contract of 2026-09-01
+/// (`qt-frontend/2026-09-01-purchases-local-playback/00-CONTRACT.md` §4):
 ///   1. `client.get_track(track_id)` → metadata. Error → `"Failed to fetch track
 ///      {id}: {e}"`.
-///   2. `client.get_track_file_url_by_format(track_id, format_id)` → SIGNED
-///      `StreamUrl` (intent=stream). Error → `"Failed to get download URL for
-///      track {id}: {e}"`. (In the reference the client lock is dropped here; in
-///      this crate the caller holds the `QobuzClient` by `&`, so there is no lock
-///      to drop — the read guard is released by the controller before the
-///      multi-minute CDN fetch. No behavioral divergence in the bytes path.)
-///   3. `QobuzClient::download_audio(&stream.url)` → `Vec<u8>` (HTTP/1.1-only, no
-///      total timeout — see `qbz-qobuz`).
-///   4. Resolve names: artist = `track.performer.name` else `"Unknown Artist"`;
-///      album = `track.album.title` else `"Singles"`.
-///   5. Extension from RESPONSE `stream.format_id`/`mime_type` (B.2); path via
-///      `target_path`; `.part`→rename; registry write with REQUESTED `format_id`.
+///   2. The grant. `streaming == false`: `get_purchase_file_url` — SIGNED
+///      `getFileUrl` with **`intent=download`**, the purchased master; the
+///      store grants it only for entitled ids (a DSD entitlement answers 400
+///      to `intent=stream`). `streaming == true`: `get_track_file_url_by_format`
+///      — the streaming grant, for a below-the-purchase quality the store
+///      does not sell (`purchase_formats`). Error → `"Failed to get download
+///      URL for track {id}: {e}"`.
+///   3. The body is STREAMED straight into the `.part` file
+///      (`QobuzClient::download_audio_to_path`). A DSD128 track is ~650 MB; the
+///      old `Vec<u8>` round trip held every byte in memory before the first
+///      write.
+///   4. Resolve names: the artist FOLDER is the album artist from `ctx`
+///      (`path_artist`), so a compilation lands in ONE folder — the reference
+///      used `track.performer.name` here and split "Audiophile Analog
+///      Collection Vol.3" into fourteen artist folders of one track each
+///      (smoke 2026-09-01); the performer is only the fallback for a call
+///      without a context. Album = `track.album.title` else `"Singles"`.
+///   5. Extension from the RESPONSE `format_id`/`mime_type` (B.2); the served
+///      container's magic is checked before the `.part`→final rename; registry
+///      write with the REQUESTED `format_id`.
 ///
 /// `quality_dir` is the UI-selected format label with `'/'→'-'` already applied
 /// (§7.5); it becomes the album-folder quality suffix AND the registry's quality
@@ -938,38 +1184,43 @@ fn goodie_target_path(album_dir: &std::path::Path, display_name: &str, url: &str
 /// controller uses the FIRST track's returned path to rewrite the album-download
 /// destination to the album folder — Slice 7).
 ///
-/// Addendum B.5: only `stream.url` / `stream.format_id` / `stream.mime_type` are
-/// consumed; `stream.restrictions` is IGNORED (no restriction-based blocking).
+/// Addendum B.5: only `url` / `format_id` / `mime_type` of the grant are
+/// consumed; `restrictions` is IGNORED (no restriction-based blocking). The
+/// grant's signed URL lives in this frame only — it is never logged or stored.
 pub async fn download_purchase_track(
     client: &QobuzClient,
     db: &LibraryDatabase,
     track_id: u64,
     album_id: Option<&str>,
     format_id: u32,
+    streaming: bool,
     destination: &str,
     quality_dir: &str,
     ctx: Option<&PurchaseAlbumContext>,
 ) -> Result<String, String> {
     // UNSIGNED on the purchase path (contract §11-6): the vendor's own desktop
     // client sends `/track/get` without a signature, and so did the reference.
-    // The entitlement proof is the signature on `getFileUrl` below, which is
-    // untouched.
+    // The entitlement proof is the signature on `getFileUrl` below.
     let track = client
         .get_track_for_purchase(track_id)
         .await
         .map_err(|e| format!("Failed to fetch track {}: {}", track_id, e))?;
-    let stream = client
-        .get_track_file_url_by_format(track_id, format_id)
-        .await
-        .map_err(|e| format!("Failed to get download URL for track {}: {}", track_id, e))?;
+    // The route is the option's, not a guess: a purchased id goes through the
+    // purchase grant; a below-the-purchase quality the store does not sell
+    // goes through the streaming grant (`purchase_formats`).
+    let grant = if streaming {
+        client
+            .get_track_file_url_by_format(track_id, format_id)
+            .await
+    } else {
+        client.get_purchase_file_url(track_id, format_id).await
+    }
+    .map_err(|e| format!("Failed to get download URL for track {}: {}", track_id, e))?;
 
-    let data = QobuzClient::download_audio(&stream.url).await?;
-
-    let artist_name = track
-        .performer
-        .as_ref()
-        .map(|artist| artist.name.clone())
-        .unwrap_or_else(|| "Unknown Artist".to_string());
+    let artist_name = path_artist(
+        ctx.map(|c| c.album_artist.as_str()),
+        track.performer.as_ref().map(|artist| artist.name.as_str()),
+    );
     let album_title = track
         .album
         .as_ref()
@@ -981,32 +1232,60 @@ pub async fn download_purchase_track(
     // only ever populated it from the album loop — so a user who downloaded a
     // release one track at a time produced rows the rule can never attribute,
     // and their album stayed un-downloaded forever with no way to notice. The
-    // `/track/get` payload fetched two lines above already carries the id, so
-    // there is no reason for any path to write NULL.
+    // `/track/get` payload fetched above already carries the id, so there is
+    // no reason for any path to write NULL.
     let resolved_album_id = album_id.or_else(|| track.album.as_ref().map(|a| a.id.as_str()));
 
-    let file_path = write_and_register_track(
-        db,
-        track_id,
-        resolved_album_id,
-        format_id,
-        &data,
+    // Addendum B.2: extension derives from the RESPONSE's served format.
+    let extension = purchase_extension(grant.format_id, &grant.mime_type);
+    let target = target_path(
+        destination,
         &artist_name,
         &album_title,
         quality_dir,
         track.track_number,
         &track.title,
-        stream.format_id,
-        &stream.mime_type,
-        destination,
-    )?;
+        extension,
+    );
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create destination folder: {}", e))?;
+    }
+
+    // Addendum B.3: write `.part`, then rename — no overwrite preflight. A
+    // failed or truncated fetch leaves NO `.part` behind; a final file that
+    // already exists is never touched by a failure.
+    let temp_path = target.with_extension(format!("{}.part", extension));
+    let staged = QobuzClient::download_audio_to_path(&grant.url, &temp_path)
+        .await
+        .and_then(|_| verify_served_container(&temp_path, extension));
+    if let Err(e) = staged {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(e);
+    }
+    std::fs::rename(&temp_path, &target).map_err(|e| format!("Failed to finalize file: {}", e))?;
+    let file_path = target.to_string_lossy().to_string();
+
+    // Addendum B.1/B.2: registry write AFTER the file is on disk, with the
+    // REQUESTED format_id. A registry failure returns Err while the file stays
+    // on disk (orphaned) — the reference does the same and does not roll back.
+    db.mark_purchase_downloaded(
+        track_id as i64,
+        resolved_album_id,
+        &file_path,
+        format_id as i64,
+    )
+    .map_err(|e| e.to_string())?;
 
     // §14.1, additive: tag AFTER the file is on disk and registered, so the
     // deliverable is already durable and a tagging failure can only cost tags.
-    // `None` reproduces reference behaviour exactly (no tags written at all),
-    // which is what the legacy Slint call site passes.
+    // `None` reproduces reference behaviour exactly (no tags written at all).
     if let Some(ctx) = ctx {
-        tag_downloaded_file(&file_path, &track, ctx);
+        if tags_supported(extension) {
+            tag_downloaded_file(&file_path, &track, ctx);
+        } else {
+            log::info!("[Purchases] {file_path}: {extension} container left untagged by design");
+        }
     }
 
     Ok(file_path)
@@ -1015,7 +1294,7 @@ pub async fn download_purchase_track(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qbz_models::{Artist, AlbumSummary, PurchaseAlbum, PurchaseTrack, SearchResultsPage};
+    use qbz_models::{AlbumSummary, Artist, PurchaseAlbum, PurchaseTrack, SearchResultsPage};
 
     fn album(title: &str, artist: &str) -> PurchaseAlbum {
         PurchaseAlbum {
@@ -1066,7 +1345,10 @@ mod tests {
     #[test]
     fn filter_matches_album_title_case_insensitive() {
         let resp = response(
-            vec![album("Kind of Blue", "Miles Davis"), album("Thriller", "Michael Jackson")],
+            vec![
+                album("Kind of Blue", "Miles Davis"),
+                album("Thriller", "Michael Jackson"),
+            ],
             vec![],
         );
         let out = filter_purchase_response(resp, "BLUE");
@@ -1139,6 +1421,213 @@ mod tests {
         assert_eq!(out.tracks.total, 0);
     }
 
+    // ── The entitlement menu (contract 2026-09-01 §1.4) ───────────────────
+
+    #[test]
+    fn entitlement_formats_put_the_highest_quality_first() {
+        let ids: Vec<u32> = entitlement_formats(&[5, 55, 6])
+            .iter()
+            .map(|f| f.id)
+            .collect();
+        assert_eq!(ids, vec![55, 6, 5]);
+        let ids: Vec<u32> = entitlement_formats(&[7, 6, 5])
+            .iter()
+            .map(|f| f.id)
+            .collect();
+        assert_eq!(
+            ids,
+            vec![7, 6, 5],
+            "the live hi-res wire order is already right"
+        );
+        let ids: Vec<u32> = entitlement_formats(&[55, 56])
+            .iter()
+            .map(|f| f.id)
+            .collect();
+        assert_eq!(ids, vec![56, 55]);
+    }
+
+    #[test]
+    fn entitlement_formats_dedupe_and_still_offer_an_unknown_id() {
+        let fmts = entitlement_formats(&[7, 7, 99]);
+        assert_eq!(fmts.len(), 2);
+        assert_eq!(fmts[0].id, 7);
+        assert_eq!(
+            fmts[1].id, 99,
+            "an id this build does not know sorts last, never disappears"
+        );
+        assert_eq!(fmts[1].label, "[Format 99]");
+        assert!(fmts[1].bit_depth.is_none() && fmts[1].sampling_rate.is_none());
+    }
+
+    #[test]
+    fn the_dsd_options_are_named_by_what_the_cdn_serves() {
+        let dsd64 = format_option(55);
+        assert_eq!(dsd64.label, "[DSF][DSD64]");
+        assert_eq!(dsd64.bit_depth, Some(1));
+        let dsd128 = format_option(56);
+        assert_eq!(dsd128.label, "[DSF][DSD128]");
+        assert!(dsd128.sampling_rate.unwrap() > dsd64.sampling_rate.unwrap());
+        // The FLAC/MP3 labels are frozen — they are on-disk folder names.
+        assert_eq!(format_option(27).label, "[FLAC][24-bit,192kHz]");
+        assert_eq!(format_option(7).label, "[FLAC][24-bit,96kHz]");
+        assert_eq!(format_option(6).label, "[FLAC][16-bit,44.1kHz]");
+        assert_eq!(format_option(5).label, "[MP3][320kbps]");
+    }
+
+    #[test]
+    fn a_dsd64_purchase_streaming_at_cd_quality_offers_only_its_entitlement() {
+        // Megadeth, Rust In Peace on the live account: hires:false, 16/44.1
+        // catalog, downloadable_format_ids [55]. The synthesis would say "CD
+        // FLAC + MP3"; the entitlement says DSD64 and nothing else.
+        let album = album_with(false, Some(44.1));
+        let menu = purchase_formats(&album, &[55]);
+        let ids: Vec<(u32, bool)> = menu.iter().map(|f| (f.id, f.streaming)).collect();
+        assert_eq!(
+            ids,
+            vec![(55, false), (6, true), (5, true)],
+            "the purchase on top through the purchase grant; the CD/MP3 the \
+             catalog streams below it, through the streaming grant"
+        );
+        assert_eq!(menu[0].label, "[DSF][DSD64]");
+    }
+
+    #[test]
+    fn the_streaming_ladder_only_reaches_below_the_purchase_and_never_duplicates_it() {
+        // A hi-res FLAC purchase already owns 7/6/5: nothing to add, and 27
+        // (above the purchase) is never offered even on a 24/192 catalog.
+        let album = album_with(true, Some(192.0));
+        let menu = purchase_formats(&album, &[7, 6, 5]);
+        let ids: Vec<(u32, bool)> = menu.iter().map(|f| (f.id, f.streaming)).collect();
+        assert_eq!(ids, vec![(7, false), (6, false), (5, false)]);
+        // A DSD128 purchase on a catalog that STREAMS hi-res: 27/7/6/5 all
+        // sit below it.
+        let hires_streams = album_streaming(true, Some(192.0), true);
+        let menu = purchase_formats(&hires_streams, &[56]);
+        let ids: Vec<(u32, bool)> = menu.iter().map(|f| (f.id, f.streaming)).collect();
+        assert_eq!(
+            ids,
+            vec![(56, false), (27, true), (7, true), (6, true), (5, true)]
+        );
+        // The same purchase on a catalog that streams CD only (the live DSD
+        // album: hires:true, hires_streamable:false): no 27/7 — the CDN would
+        // serve 16/44.1 under a "24-bit,192kHz" folder name.
+        let cd_streams = album_streaming(true, Some(352.8), false);
+        let menu = purchase_formats(&cd_streams, &[56]);
+        let ids: Vec<(u32, bool)> = menu.iter().map(|f| (f.id, f.streaming)).collect();
+        assert_eq!(ids, vec![(56, false), (6, true), (5, true)]);
+    }
+
+    #[test]
+    fn an_album_without_entitlement_ids_falls_back_to_the_catalog_synthesis() {
+        let album = album_with(false, Some(44.1));
+        let ids: Vec<u32> = purchase_formats(&album, &[]).iter().map(|f| f.id).collect();
+        assert_eq!(ids, vec![6, 5], "the pre-2026-09-01 ladder still stands in");
+    }
+
+    #[test]
+    fn entitlement_format_ids_are_read_off_the_listed_album() {
+        let purchases = PurchaseResponse {
+            albums: SearchResultsPage {
+                items: vec![PurchaseAlbum {
+                    id: "dsd".to_string(),
+                    downloadable_format_ids: vec![56],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            tracks: SearchResultsPage::default(),
+        };
+        assert_eq!(entitlement_format_ids(&purchases, "dsd"), vec![56]);
+        assert!(entitlement_format_ids(&purchases, "not-listed").is_empty());
+    }
+
+    #[test]
+    fn build_purchase_album_carries_the_entitlement_to_the_album_and_its_tracks() {
+        let album = catalog_album("dsd", true, &[10, 20]);
+        let purchases = PurchaseResponse {
+            albums: SearchResultsPage {
+                items: vec![PurchaseAlbum {
+                    id: "dsd".to_string(),
+                    downloadable_format_ids: vec![55],
+                    hires_purchased: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            tracks: SearchResultsPage::default(),
+        };
+        let built = build_purchase_album(&album, &purchases, &HashSet::new(), &HashMap::new());
+        assert_eq!(built.downloadable_format_ids, vec![55]);
+        assert!(built.hires_purchased);
+        for t in &built.tracks.unwrap().items {
+            assert_eq!(t.downloadable_format_ids, vec![55]);
+        }
+    }
+
+    // ── One folder per album, whoever performs the track ──────────────────
+
+    #[test]
+    fn the_artist_folder_is_the_album_artist_not_the_performer() {
+        assert_eq!(
+            path_artist(Some("Various Artists"), Some("Ben Webster")),
+            "Various Artists"
+        );
+        assert_eq!(path_artist(Some("  "), Some("Ben Webster")), "Ben Webster");
+        assert_eq!(path_artist(None, Some("Ben Webster")), "Ben Webster");
+        assert_eq!(path_artist(None, None), "Unknown Artist");
+    }
+
+    // ── The served container decides the extension ────────────────────────
+
+    #[test]
+    fn purchase_extension_follows_the_served_container() {
+        assert_eq!(purchase_extension(55, "audio/x-dsf"), "dsf");
+        assert_eq!(purchase_extension(56, "audio/x-dsf"), "dsf");
+        assert_eq!(
+            purchase_extension(56, ""),
+            "dsf",
+            "a DSD id with no MIME is still DSF"
+        );
+        assert_eq!(purchase_extension(7, "audio/x-dff"), "dff");
+        assert_eq!(purchase_extension(7, "audio/flac"), "flac");
+        assert_eq!(purchase_extension(7, ""), "flac");
+        assert_eq!(
+            purchase_extension(5, "audio/flac"),
+            "mp3",
+            "id 5 wins as it always did"
+        );
+        assert_eq!(purchase_extension(6, "audio/mpeg"), "mp3");
+        assert_eq!(purchase_extension(7, "audio/wav"), "wav");
+        assert_eq!(purchase_extension(7, "audio/x-aiff"), "aiff");
+        assert_eq!(purchase_extension(7, "audio/mp4"), "m4a");
+    }
+
+    #[test]
+    fn served_magic_is_checked_per_container() {
+        assert!(served_magic_matches("dsf", b"DSD \x1c\x00\x00\x00"));
+        assert!(!served_magic_matches("dsf", b"fLaC\x00\x00"));
+        assert!(served_magic_matches("dff", b"FRM8\x00\x00"));
+        assert!(served_magic_matches("flac", b"fLaC\x00\x00"));
+        assert!(
+            served_magic_matches("flac", b"ID3\x04\x00"),
+            "an ID3v2 prefix on a FLAC is legal"
+        );
+        assert!(served_magic_matches("mp3", b"ID3\x03"));
+        assert!(served_magic_matches("mp3", &[0xFF, 0xFB, 0x90]));
+        assert!(served_magic_matches("wav", b"RIFF\x00\x00\x00\x00WAVE"));
+        assert!(served_magic_matches("aiff", b"FORM\x00\x00"));
+        assert!(served_magic_matches("m4a", b"\x00\x00\x00\x18ftypM4A "));
+        assert!(!served_magic_matches("m4a", b"fLaC\x00\x00\x00\x00"));
+        assert!(
+            !served_magic_matches("flac", b"<!DOCTYPE html>"),
+            "an error page is not a master"
+        );
+        assert!(
+            served_magic_matches("ogg", b"whatever"),
+            "unknown containers are not judged"
+        );
+    }
+
     // ── Slice 4: synth_formats ───────────────────────────────────────────
 
     // `Album` has no `Default`; build the minimal shape from JSON (relying on
@@ -1149,6 +1638,14 @@ mod tests {
             None => format!(r#"{{"hires":{hires}}}"#),
         };
         serde_json::from_str(&json).expect("minimal Album JSON deserializes")
+    }
+
+    /// Like `album_with`, with the catalog's own word on whether hi-res
+    /// STREAMS (`hires_streamable`), which the streaming ladder reads.
+    fn album_streaming(hires: bool, max_sr: Option<f64>, hires_streamable: bool) -> Album {
+        let mut album = album_with(hires, max_sr);
+        album.hires_streamable = hires_streamable;
+        album
     }
 
     #[test]
@@ -1164,9 +1661,18 @@ mod tests {
         assert_eq!(fmts[2].label, "[FLAC][16-bit,44.1kHz]");
         assert_eq!(fmts[3].label, "[MP3][320kbps]");
         // bit_depth / sampling_rate carried verbatim.
-        assert_eq!((fmts[0].bit_depth, fmts[0].sampling_rate), (Some(24), Some(192.0)));
-        assert_eq!((fmts[1].bit_depth, fmts[1].sampling_rate), (Some(24), Some(96.0)));
-        assert_eq!((fmts[2].bit_depth, fmts[2].sampling_rate), (Some(16), Some(44.1)));
+        assert_eq!(
+            (fmts[0].bit_depth, fmts[0].sampling_rate),
+            (Some(24), Some(192.0))
+        );
+        assert_eq!(
+            (fmts[1].bit_depth, fmts[1].sampling_rate),
+            (Some(24), Some(96.0))
+        );
+        assert_eq!(
+            (fmts[2].bit_depth, fmts[2].sampling_rate),
+            (Some(16), Some(44.1))
+        );
         assert_eq!((fmts[3].bit_depth, fmts[3].sampling_rate), (None, None));
         // default-select is index 0 (highest available).
         assert_eq!(fmts[0].id, 27);
@@ -1242,7 +1748,10 @@ mod tests {
 
     #[test]
     fn apply_flags_marks_track_downloaded_and_records_format_ids() {
-        let mut resp = response(vec![], vec![track_for_album(10, "a1"), track_for_album(20, "a1")]);
+        let mut resp = response(
+            vec![],
+            vec![track_for_album(10, "a1"), track_for_album(20, "a1")],
+        );
         let downloaded = dl_ids(&[10]);
         let mut format_map: HashMap<i64, Vec<u32>> = HashMap::new();
         format_map.insert(10, vec![27, 6]);
@@ -1362,8 +1871,7 @@ mod tests {
         meta.purchased_at = Some(1_700_000_000);
         let purchases = response(vec![meta], vec![]);
 
-        let detail =
-            build_purchase_album(&album, &purchases, &dl_ids(&[]), &HashMap::new());
+        let detail = build_purchase_album(&album, &purchases, &dl_ids(&[]), &HashMap::new());
 
         assert_eq!(detail.id, "alb1");
         assert!(detail.downloadable);
@@ -1375,7 +1883,10 @@ mod tests {
         assert_eq!(tracks.total, 3);
         assert_eq!(tracks.limit, 3);
         // per-track purchased_at copies the album-level meta.
-        assert!(tracks.items.iter().all(|t| t.purchased_at == Some(1_700_000_000)));
+        assert!(tracks
+            .items
+            .iter()
+            .all(|t| t.purchased_at == Some(1_700_000_000)));
     }
 
     #[test]
@@ -1383,8 +1894,7 @@ mod tests {
         // No matching purchase meta → downloadable defaults TRUE, purchased_at None.
         let album = catalog_album("missing", false, &[1]);
         let purchases = response(vec![album_id("other")], vec![]);
-        let detail =
-            build_purchase_album(&album, &purchases, &dl_ids(&[]), &HashMap::new());
+        let detail = build_purchase_album(&album, &purchases, &dl_ids(&[]), &HashMap::new());
         // The catalog `downloadable:false` is IGNORED — the value comes from the
         // purchase meta (absent → unwrap_or(true)).
         assert!(detail.downloadable);
@@ -1399,8 +1909,7 @@ mod tests {
         format_map.insert(10, vec![7]);
 
         // Both nested track ids owned → album downloaded; per-track flags set.
-        let detail =
-            build_purchase_album(&album, &purchases, &dl_ids(&[10, 20]), &format_map);
+        let detail = build_purchase_album(&album, &purchases, &dl_ids(&[10, 20]), &format_map);
         assert!(detail.downloaded);
         let tracks = detail.tracks.unwrap();
         assert!(tracks.items[0].downloaded);
@@ -1414,8 +1923,7 @@ mod tests {
         let album = catalog_album("alb1", true, &[10, 20]);
         let purchases = response(vec![album_id("alb1")], vec![]);
         // Only one of two nested tracks owned → album NOT downloaded (all-rule).
-        let detail =
-            build_purchase_album(&album, &purchases, &dl_ids(&[10]), &HashMap::new());
+        let detail = build_purchase_album(&album, &purchases, &dl_ids(&[10]), &HashMap::new());
         assert!(!detail.downloaded);
         let tracks = detail.tracks.unwrap();
         assert!(tracks.items[0].downloaded);
@@ -1427,8 +1935,7 @@ mod tests {
         // No nested tracks → empty-set rule → album downloaded = false.
         let album = catalog_album("alb1", true, &[]);
         let purchases = response(vec![album_id("alb1")], vec![]);
-        let detail =
-            build_purchase_album(&album, &purchases, &dl_ids(&[]), &HashMap::new());
+        let detail = build_purchase_album(&album, &purchases, &dl_ids(&[]), &HashMap::new());
         assert!(!detail.downloaded);
         assert_eq!(detail.tracks.unwrap().items.len(), 0);
     }
@@ -1472,7 +1979,10 @@ mod tests {
         // sanitize: "[FLAC][24-bit,96kHz]" → brackets→`-`, collapsed/trimmed.
         let expected = PathBuf::from("/music")
             .join("Miles Davis")
-            .join(format!("Kind of Blue {}", sanitize_filename("[FLAC][24-bit,96kHz]")))
+            .join(format!(
+                "Kind of Blue {}",
+                sanitize_filename("[FLAC][24-bit,96kHz]")
+            ))
             .join("03 - So What.flac");
         assert_eq!(p, expected);
         // zero-padding is two digits.
@@ -1482,13 +1992,25 @@ mod tests {
     #[test]
     fn target_path_no_quality_dir_uses_bare_album_folder() {
         let p = target_path("/d", "Artist", "Album", "", 1, "Title", "flac");
-        assert_eq!(p, PathBuf::from("/d").join("Artist").join("Album").join("01 - Title.flac"));
+        assert_eq!(
+            p,
+            PathBuf::from("/d")
+                .join("Artist")
+                .join("Album")
+                .join("01 - Title.flac")
+        );
     }
 
     #[test]
     fn target_path_zero_track_number_drops_number_prefix() {
         let p = target_path("/d", "Artist", "Album", "", 0, "Title", "mp3");
-        assert_eq!(p, PathBuf::from("/d").join("Artist").join("Album").join("Title.mp3"));
+        assert_eq!(
+            p,
+            PathBuf::from("/d")
+                .join("Artist")
+                .join("Album")
+                .join("Title.mp3")
+        );
     }
 
     #[test]
@@ -1496,10 +2018,21 @@ mod tests {
         // The "Unknown Artist"/"Singles" fallbacks are applied by the caller;
         // here verify they round-trip through sanitize unchanged (ASCII alnum +
         // spaces survive).
-        let p = target_path("/d", "Unknown Artist", "Singles", "", 0, "Loose Track", "flac");
+        let p = target_path(
+            "/d",
+            "Unknown Artist",
+            "Singles",
+            "",
+            0,
+            "Loose Track",
+            "flac",
+        );
         assert_eq!(
             p,
-            PathBuf::from("/d").join("Unknown Artist").join("Singles").join("Loose Track.flac")
+            PathBuf::from("/d")
+                .join("Unknown Artist")
+                .join("Singles")
+                .join("Loose Track.flac")
         );
     }
 
@@ -1539,12 +2072,18 @@ mod tests {
         let final_path = PathBuf::from(&path);
         assert!(final_path.exists(), "final file must exist");
         assert!(final_path.to_string_lossy().ends_with("05 - So What.flac"));
-        assert!(!final_path.with_extension("flac.part").exists(), "`.part` removed after rename");
+        assert!(
+            !final_path.with_extension("flac.part").exists(),
+            "`.part` removed after rename"
+        );
         assert_eq!(std::fs::read(&final_path).unwrap(), data);
 
         // Registry recorded the REQUESTED format (27), NOT the served 6 (B.2).
         let formats = db.get_downloaded_purchase_formats().unwrap();
-        assert!(formats.contains(&(4242, 27)), "registry keys off REQUESTED format: {formats:?}");
+        assert!(
+            formats.contains(&(4242, 27)),
+            "registry keys off REQUESTED format: {formats:?}"
+        );
         assert!(!formats.iter().any(|&(tid, fid)| tid == 4242 && fid == 6));
     }
 
@@ -1572,9 +2111,15 @@ mod tests {
             dest.to_str().unwrap(),
         )
         .unwrap();
-        assert!(path.ends_with("01 - T.mp3"), "served mp3 → .mp3 extension: {path}");
+        assert!(
+            path.ends_with("01 - T.mp3"),
+            "served mp3 → .mp3 extension: {path}"
+        );
         let formats = db.get_downloaded_purchase_formats().unwrap();
-        assert!(formats.contains(&(1, 7)), "requested format 7 recorded: {formats:?}");
+        assert!(
+            formats.contains(&(1, 7)),
+            "requested format 7 recorded: {formats:?}"
+        );
     }
 
     #[test]
@@ -1586,7 +2131,18 @@ mod tests {
         let dest = tmp.path().join("dl");
 
         let first = write_and_register_track(
-            &db, 9, None, 6, b"old", "A", "Alb", "", 2, "Song", 6, "audio/flac",
+            &db,
+            9,
+            None,
+            6,
+            b"old",
+            "A",
+            "Alb",
+            "",
+            2,
+            "Song",
+            6,
+            "audio/flac",
             dest.to_str().unwrap(),
         )
         .unwrap();
@@ -1594,7 +2150,18 @@ mod tests {
 
         // Second write to the SAME deterministic path with new bytes overwrites.
         let second = write_and_register_track(
-            &db, 9, None, 6, b"new", "A", "Alb", "", 2, "Song", 6, "audio/flac",
+            &db,
+            9,
+            None,
+            6,
+            b"new",
+            "A",
+            "Alb",
+            "",
+            2,
+            "Song",
+            6,
+            "audio/flac",
             dest.to_str().unwrap(),
         )
         .unwrap();
@@ -1628,16 +2195,36 @@ mod tests {
 
         let dest = tmp.path().join("downloads");
         let res = write_and_register_track(
-            &db, 77, None, 6, b"bytes", "A", "Alb", "", 1, "Song", 6, "audio/flac",
+            &db,
+            77,
+            None,
+            6,
+            b"bytes",
+            "A",
+            "Alb",
+            "",
+            1,
+            "Song",
+            6,
+            "audio/flac",
             dest.to_str().unwrap(),
         );
 
         // Registry INSERT failed (no such table) → Err.
-        assert!(res.is_err(), "registry write failure must surface as Err: {res:?}");
+        assert!(
+            res.is_err(),
+            "registry write failure must surface as Err: {res:?}"
+        );
         // ...but the file write happened BEFORE the registry write → orphaned file.
         let orphan = dest.join("A").join("Alb").join("01 - Song.flac");
-        assert!(orphan.exists(), "file left on disk after registry failure (orphaned, B.1)");
-        assert!(!orphan.with_extension("flac.part").exists(), "`.part` already renamed away");
+        assert!(
+            orphan.exists(),
+            "file left on disk after registry failure (orphaned, B.1)"
+        );
+        assert!(
+            !orphan.with_extension("flac.part").exists(),
+            "`.part` already renamed away"
+        );
     }
 }
 
@@ -1681,7 +2268,10 @@ mod path_contract_tests {
     /// it is kept. "Fixing" the brackets would relocate every downloaded album.
     #[test]
     fn sanitize_keeps_ascii_brackets_but_replaces_path_separators() {
-        assert_eq!(sanitize_filename("[FLAC][24-bit,96kHz]"), "[FLAC][24-bit,96kHz]");
+        assert_eq!(
+            sanitize_filename("[FLAC][24-bit,96kHz]"),
+            "[FLAC][24-bit,96kHz]"
+        );
         assert_eq!(sanitize_filename("AC/DC"), "AC-DC");
         assert_eq!(sanitize_filename("a:b*c?d\"e<f>g|h"), "a-b-c-d-e-f-g-h");
     }
@@ -1729,7 +2319,8 @@ mod path_contract_tests {
     /// Copying the formula literally yields `"Album "` and a different directory.
     #[test]
     fn target_path_empty_quality_dir_has_no_trailing_space() {
-        let with_quality = target_path("/d", "A", "Album", "[FLAC][16-bit,44.1kHz]", 1, "T", "flac");
+        let with_quality =
+            target_path("/d", "A", "Album", "[FLAC][16-bit,44.1kHz]", 1, "T", "flac");
         let without = target_path("/d", "A", "Album", "", 1, "T", "flac");
 
         assert_eq!(
@@ -1780,7 +2371,9 @@ mod path_contract_tests {
         );
         assert_eq!(
             p,
-            std::path::PathBuf::from("/music/Café Tacvba/Ré [FLAC][24-bit,96kHz]/07 - El Ciclón.flac")
+            std::path::PathBuf::from(
+                "/music/Café Tacvba/Ré [FLAC][24-bit,96kHz]/07 - El Ciclón.flac"
+            )
         );
     }
 
@@ -1876,11 +2469,22 @@ mod album_downloaded_tests {
     #[test]
     fn track_flags_are_still_format_scoped_and_registry_driven() {
         let mut response = PurchaseResponse {
-            albums: SearchResultsPage { items: vec![], total: 0, offset: 0, limit: 0 },
+            albums: SearchResultsPage {
+                items: vec![],
+                total: 0,
+                offset: 0,
+                limit: 0,
+            },
             tracks: SearchResultsPage {
                 items: vec![
-                    PurchaseTrack { id: 10, ..Default::default() },
-                    PurchaseTrack { id: 11, ..Default::default() },
+                    PurchaseTrack {
+                        id: 10,
+                        ..Default::default()
+                    },
+                    PurchaseTrack {
+                        id: 11,
+                        ..Default::default()
+                    },
                 ],
                 total: 2,
                 offset: 0,
@@ -1928,7 +2532,10 @@ mod scope_expansion_tests {
         };
         assert_eq!(original.best_url(), Some("https://o/a.pdf"));
 
-        let only_url = Goody { url: "https://u/a.pdf".into(), ..goody_blank() };
+        let only_url = Goody {
+            url: "https://u/a.pdf".into(),
+            ..goody_blank()
+        };
         assert_eq!(only_url.best_url(), Some("https://u/a.pdf"));
 
         let only_file_url = Goody {
@@ -1939,7 +2546,10 @@ mod scope_expansion_tests {
 
         // Nothing usable → skip the item, never fail the album.
         assert_eq!(goody_blank().best_url(), None);
-        let whitespace = Goody { url: "   ".into(), ..goody_blank() };
+        let whitespace = Goody {
+            url: "   ".into(),
+            ..goody_blank()
+        };
         assert_eq!(whitespace.best_url(), None);
     }
 
@@ -1947,7 +2557,10 @@ mod scope_expansion_tests {
     fn goody_display_name_is_never_empty() {
         use qbz_models::Goody;
 
-        let named = Goody { name: "Booklet".into(), ..goody_blank() };
+        let named = Goody {
+            name: "Booklet".into(),
+            ..goody_blank()
+        };
         assert_eq!(named.display_name(), "Booklet");
 
         let described = Goody {
@@ -1956,7 +2569,10 @@ mod scope_expansion_tests {
         };
         assert_eq!(described.display_name(), "Liner notes");
 
-        let bare = Goody { id: 42, ..goody_blank() };
+        let bare = Goody {
+            id: 42,
+            ..goody_blank()
+        };
         assert_eq!(bare.display_name(), "Goody 42");
     }
 
