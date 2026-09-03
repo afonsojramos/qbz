@@ -174,14 +174,18 @@ Rectangle {
     property string artistsGroup: "off"  // "off" | "alpha"
     property string sortBy: "date"      // "date" | "title" | "artist"
     property bool sortAsc: false        // date: false = newest first
-    property bool showPurchases: true
-    property bool showFavorites: true
-    property bool showFollowing: true
+    readonly property bool showPurchases: QbzLibrary.sessionShowPurchases
+    readonly property bool showFavorites: QbzLibrary.sessionShowFavorites
+    readonly property bool showFollowing: QbzLibrary.sessionShowFollowing
     property bool showLocal: true
     property string viewMode: "grid"    // All tab: "grid" | "list"
     property string albumsView: "grid"    // "grid" | "list"
     property string playlistsView: "grid" // "grid" | "list"
     property string artistsView: "grid"   // "grid" | "sidepanel"
+
+    function setShowPurchases(on) { QbzLibrary.sessionShowPurchases = on }
+    function setShowFavorites(on) { QbzLibrary.sessionShowFavorites = on }
+    function setShowFollowing(on) { QbzLibrary.sessionShowFollowing = on }
 
     // --- persisted toolbar choices (library_prefs.rs) --------------------
     // Seeded from the bridge document rather than BOUND to it: these are

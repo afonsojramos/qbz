@@ -373,9 +373,9 @@ Item {
                 onEdited: function (v) { root.view.setAllSearch(v) }
             }
             // Source switches (tooltips are the Slint copies).
-            ToolToggle { name: "shopping-bag"; active: root.view.showPurchases; onClicked: root.view.showPurchases = !root.view.showPurchases }
-            ToolToggle { name: "heart"; active: root.view.showFavorites; onClicked: root.view.showFavorites = !root.view.showFavorites }
-            ToolToggle { name: "user-plus"; active: root.view.showFollowing; onClicked: root.view.showFollowing = !root.view.showFollowing }
+            ToolToggle { name: "shopping-bag"; active: root.view.showPurchases; onClicked: root.view.setShowPurchases(!root.view.showPurchases) }
+            ToolToggle { name: "heart"; active: root.view.showFavorites; onClicked: root.view.setShowFavorites(!root.view.showFavorites) }
+            ToolToggle { name: "user-plus"; active: root.view.showFollowing; onClicked: root.view.setShowFollowing(!root.view.showFollowing) }
             // The ONE source switch the reference persists (favorites_prefs.rs
             // `all_show_local`) — the other three are session-local there too.
             ToolToggle {

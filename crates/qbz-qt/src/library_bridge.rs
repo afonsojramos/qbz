@@ -42,6 +42,12 @@ pub mod qbz_library_bridge {
         // favorites_ui.json the shipping Slint build writes). Seeded in
         // `boot`, written back one key at a time through `set_library_pref`.
         #[qproperty(QString, library_prefs_json)]
+        // Process/session-only All-tab filters. They intentionally do not
+        // enter favorites_ui.json, but the singleton outlives LibraryView so
+        // navigation cannot reset them with the component.
+        #[qproperty(bool, session_show_purchases)]
+        #[qproperty(bool, session_show_favorites)]
+        #[qproperty(bool, session_show_following)]
         // Artists SIDEPANEL: the selected artist's release sections
         // (library_sidepanel.rs). Its own document, never folded into
         // `library_json`: a selection must not re-serialize a 10k-row feed.
@@ -155,6 +161,9 @@ pub struct QbzLibraryRust {
     library_json: QString,
     library_counts_json: QString,
     library_prefs_json: QString,
+    session_show_purchases: bool,
+    session_show_favorites: bool,
+    session_show_following: bool,
     sidepanel_json: QString,
 }
 
@@ -168,6 +177,9 @@ impl Default for QbzLibraryRust {
             // Parseable defaults so QML's JSON.parse never throws on frame 1
             // (the real values arrive in `boot`).
             library_prefs_json: QString::from("{}"),
+            session_show_purchases: true,
+            session_show_favorites: true,
+            session_show_following: true,
             sidepanel_json: QString::from("{}"),
         }
     }
