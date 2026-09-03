@@ -58,6 +58,9 @@ pub struct DlnaConnection {
     // it false so the pre-check runs.
     uri_freshly_set: bool,
     is_playing: bool,
+    // Consecutive GetTransportInfo failures while GetPositionInfo still
+    // answers; only the first and every 60th are logged (the poll is 1 Hz).
+    transport_query_failures: std::sync::atomic::AtomicU32,
 }
 
 impl DlnaConnection {
@@ -112,6 +115,7 @@ impl DlnaConnection {
             last_volume_sent: None,
             uri_freshly_set: false,
             is_playing: false,
+            transport_query_failures: std::sync::atomic::AtomicU32::new(0),
         })
     }
 
@@ -548,8 +552,11 @@ impl DlnaConnection {
         .map_err(|_| DlnaError::Playback("GetPositionInfo timed out".to_string()))?
         .map_err(|e| DlnaError::Playback(e.to_string()))?;
 
-        // Get transport state
-        let transport_response = tokio::time::timeout(
+        // Get transport state. A renderer that answers GetPositionInfo but
+        // faults on GetTransportInfo (#733: a KEF LSX that also faults on Stop
+        // and Seek) is alive, so this degrades to `UNKNOWN` instead of failing
+        // the whole read — the caller keeps the position and decides on it.
+        let transport_response = match tokio::time::timeout(
             std::time::Duration::from_secs(5),
             av_service.action(
                 &self.device_url,
@@ -558,8 +565,21 @@ impl DlnaConnection {
             ),
         )
         .await
-        .map_err(|_| DlnaError::Playback("GetTransportInfo timed out".to_string()))?
-        .map_err(|e| DlnaError::Playback(e.to_string()))?;
+        {
+            Ok(Ok(response)) => {
+                self.transport_query_failures
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
+                Some(response)
+            }
+            Ok(Err(e)) => {
+                self.note_transport_query_failure(&e.to_string());
+                None
+            }
+            Err(_) => {
+                self.note_transport_query_failure("timed out");
+                None
+            }
+        };
 
         // Parse RelTime (position) - format: "HH:MM:SS" or "H:MM:SS"
         let rel_time = position_response
@@ -575,17 +595,37 @@ impl DlnaConnection {
             .unwrap_or("0:00:00");
         let duration_secs = parse_time_string(track_duration);
 
-        // Get transport state (PLAYING, PAUSED_PLAYBACK, STOPPED, etc.)
-        let transport_state = transport_response
-            .get("CurrentTransportState")
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "UNKNOWN".to_string());
+        // Get transport state (PLAYING, PAUSED_PLAYBACK, STOPPED, etc.). When
+        // the query itself faulted, fall back to the last transport command
+        // QBZ sent: the position keeps flowing and the end-stall rule in the
+        // poll takes over if it freezes at the end.
+        let transport_state = match transport_response
+            .as_ref()
+            .and_then(|r| r.get("CurrentTransportState"))
+        {
+            Some(state) => state.to_string(),
+            None if transport_response.is_some() => "UNKNOWN".to_string(),
+            None if self.is_playing => "PLAYING".to_string(),
+            None => "PAUSED_PLAYBACK".to_string(),
+        };
 
         Ok(DlnaPositionInfo {
             position_secs,
             duration_secs,
             transport_state,
         })
+    }
+
+    fn note_transport_query_failure(&self, reason: &str) {
+        let n = self
+            .transport_query_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        if n == 1 || n % 60 == 0 {
+            log::warn!(
+                "DLNA: GetTransportInfo failed ({n} in a row, position still answers): {reason}"
+            );
+        }
     }
 }
 

@@ -85,6 +85,33 @@ const CAST_END_GUARD_SECS: f64 = 5.0;
 const CAST_POSITION_SIGNAL_MIN_SECS: f64 = 1.0;
 /// A guard must never wedge the queue: honor a persistent STOPPED anyway.
 const CAST_PREMATURE_STOP_POLLS_MAX: u32 = 4;
+/// Consecutive polls a DLNA renderer may sit inside the end guard with a
+/// frozen RelTime and no STOPPED before the track is treated as ended (#733:
+/// a KEF LSX reached the end of every track and never advanced).
+const CAST_END_STALL_POLLS_MAX: u32 = 5;
+
+/// Per-track state of the end-stall rule (see `end_stall_tick`).
+#[derive(Default, Clone, Copy, Debug)]
+struct DlnaEndStall {
+    last_position: f64,
+    polls: u32,
+}
+
+/// One poll of the DLNA end-stall rule. Counts consecutive polls whose
+/// RelTime did not move while the track is inside the end guard, ignoring a
+/// user pause (`PAUSED_PLAYBACK` is a legitimate non-advancing state). Returns
+/// true once the count reaches `CAST_END_STALL_POLLS_MAX`; any movement,
+/// leaving the guard window, or a pause resets it.
+fn end_stall_tick(stall: &mut DlnaEndStall, state: &str, position: f64, near_end: bool) -> bool {
+    let frozen = (position - stall.last_position).abs() < 0.5;
+    stall.last_position = position;
+    if !near_end || !frozen || state == "PAUSED_PLAYBACK" {
+        stall.polls = 0;
+        return false;
+    }
+    stall.polls = stall.polls.saturating_add(1);
+    stall.polls >= CAST_END_STALL_POLLS_MAX
+}
 /// Consecutive failed position reads before the session is declared lost.
 const LOST_POLL_MAX: u32 = 5;
 /// Minimum spacing between two volume commands sent to a renderer while a
@@ -309,6 +336,8 @@ struct CastInner {
     cast_saw_playing: bool,
     cast_max_position: f64,
     cast_premature_stop_polls: u32,
+    // DLNA end-stall rule state (reset per new track with the guard above).
+    end_stall: DlnaEndStall,
     // Consecutive failed position reads (device-disappeared detection).
     lost_polls: u32,
     // Volume coalescer: the latest requested level and whether the single
@@ -1393,6 +1422,7 @@ impl CastService {
                 inner.cast_saw_playing = false;
                 inner.cast_max_position = 0.0;
                 inner.cast_premature_stop_polls = 0;
+                inner.end_stall = DlnaEndStall::default();
                 inner.lost_polls = 0;
                 log::info!(
                     "[qbz-qt][Cast] connected to {} ({}; cap key: {})",
@@ -2164,6 +2194,7 @@ impl CastService {
                 inner.cast_saw_playing = false;
                 inner.cast_max_position = 0.0;
                 inner.cast_premature_stop_polls = 0;
+                inner.end_stall = DlnaEndStall::default();
                 inner.lost_polls = 0;
                 // The visualizer keeps moving: decode the same bytes silently,
                 // paced to the renderer's reported position (see `cast_viz`).
@@ -2943,7 +2974,18 @@ impl CastService {
                     if !poll_snapshot_matches(&*self.inner.lock().await, poll_snapshot) {
                         return;
                     }
-                    handle.get_position_info().await.ok()
+                    match handle.get_position_info().await {
+                        Ok(info) => Some(info),
+                        // Bounded by LOST_POLL_MAX consecutive failures (the
+                        // session is dropped after that), so this cannot
+                        // flood; before #733 the error was swallowed and an
+                        // INFO log could not tell a mute renderer from one
+                        // that never reports STOPPED.
+                        Err(e) => {
+                            log::warn!("[qbz-qt][Cast] DLNA position read failed: {e}");
+                            None
+                        }
+                    }
                 } else {
                     None
                 };
@@ -3070,9 +3112,26 @@ impl CastService {
                     }
                     let persistent_stop =
                         inner.cast_premature_stop_polls >= CAST_PREMATURE_STOP_POLLS_MAX;
-                    stopped
+                    // End-stall (#733): a renderer that reaches the last
+                    // seconds and then freezes its RelTime without ever
+                    // reporting STOPPED (or while its transport query
+                    // faults -> UNKNOWN) would park the queue forever. Only
+                    // with a real position signal, and never on a pause.
+                    let inside_end_guard = position_reliable
+                        && duration > 0.0
+                        && max_position >= duration - CAST_END_GUARD_SECS;
+                    let stalled_at_end =
+                        end_stall_tick(&mut inner.end_stall, &state, position, inside_end_guard);
+                    if stalled_at_end && inner.cast_saw_playing && !inner.track_end_detected {
+                        log::warn!(
+                            "[qbz-qt][Cast] position frozen at the end for {} polls without \
+                             STOPPED (state={state}, position={position:.1}, \
+                             duration={duration:.1}) — treating as track end",
+                            inner.end_stall.polls
+                        );
+                    }
+                    ((stopped && (near_end || persistent_stop)) || stalled_at_end)
                         && inner.cast_saw_playing
-                        && (near_end || persistent_stop)
                         && !inner.track_end_detected
                 }
             };
@@ -4116,6 +4175,45 @@ fn quality_label_from_track(track: &QueueTrack) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #733: RelTime frozen inside the end guard, no STOPPED ever -> ended
+    /// after CAST_END_STALL_POLLS_MAX polls, whatever the transport says.
+    #[test]
+    fn end_stall_fires_after_frozen_polls_inside_the_guard() {
+        for state in ["PLAYING", "UNKNOWN", "TRANSITIONING"] {
+            let mut stall = DlnaEndStall::default();
+            // Advancing position never counts.
+            assert!(!end_stall_tick(&mut stall, state, 455.0, true));
+            assert!(!end_stall_tick(&mut stall, state, 456.0, true));
+            let mut fired = false;
+            for _ in 0..CAST_END_STALL_POLLS_MAX {
+                fired = end_stall_tick(&mut stall, state, 456.0, true);
+            }
+            assert!(fired, "{state}: expected the stall rule to fire");
+            assert_eq!(stall.polls, CAST_END_STALL_POLLS_MAX);
+        }
+    }
+
+    #[test]
+    fn end_stall_ignores_pause_and_resets_on_movement_or_outside_the_guard() {
+        let mut stall = DlnaEndStall::default();
+        // A user pause at the end is not a stall.
+        for _ in 0..CAST_END_STALL_POLLS_MAX + 1 {
+            assert!(!end_stall_tick(&mut stall, "PAUSED_PLAYBACK", 456.0, true));
+        }
+        assert_eq!(stall.polls, 0);
+        // Frozen mid-track (outside the guard) is a hiccup, not an end.
+        for _ in 0..CAST_END_STALL_POLLS_MAX + 1 {
+            assert!(!end_stall_tick(&mut stall, "PLAYING", 120.0, false));
+        }
+        assert_eq!(stall.polls, 0);
+        // Accumulating, then the position moves: the streak restarts.
+        assert!(!end_stall_tick(&mut stall, "PLAYING", 456.0, true));
+        assert!(!end_stall_tick(&mut stall, "PLAYING", 456.0, true));
+        assert_eq!(stall.polls, 1);
+        assert!(!end_stall_tick(&mut stall, "PLAYING", 457.0, true));
+        assert_eq!(stall.polls, 0);
+    }
 
     #[test]
     fn connection_stamp_expires_with_epoch_protocol_or_disconnect() {
