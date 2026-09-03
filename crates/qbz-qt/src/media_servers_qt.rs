@@ -19,11 +19,13 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{LazyLock, RwLock};
+use std::sync::{LazyLock, Mutex, RwLock};
 
 use qbz_app::settings::media_servers::{MediaServerKind, MediaServerSettings, MediaServerState};
+use qbz_app::user_data::UserDataPaths;
 
 static STATE: LazyLock<MediaServerState> = LazyLock::new(MediaServerState::new);
+static BOUND: Mutex<Option<u64>> = Mutex::new(None);
 
 /// The last read per server, so [`get`] is not a database hit.
 ///
@@ -44,10 +46,36 @@ fn invalidate_cache() {
     }
 }
 
+/// Bind lazily as well as from the auth callback. The derived catalog starts
+/// after the first paint and can race session restoration; reading an unbound
+/// store there used to answer "disabled" for configured servers, while a
+/// stale process-global cache could answer with the previous user's servers.
+fn ensure_bound() {
+    let Some(uid) = UserDataPaths::load_last_user_id() else {
+        return;
+    };
+    let mut bound = BOUND.lock().unwrap_or_else(|error| error.into_inner());
+    if *bound == Some(uid) {
+        return;
+    }
+    invalidate_cache();
+    STATE.reset();
+    let dir = dirs::data_dir()
+        .unwrap_or_default()
+        .join("qbz")
+        .join("users")
+        .join(uid.to_string());
+    STATE.init_at(&dir);
+    *bound = Some(uid);
+    log::info!("[qbz-qt] media server settings bound to user {uid}");
+}
+
 /// Bind the store to the active user. Called from `auth_qt`.
 pub fn init_for_user(base_dir: &std::path::Path) {
     invalidate_cache();
     STATE.init_at(base_dir);
+    *BOUND.lock().unwrap_or_else(|error| error.into_inner()) =
+        UserDataPaths::load_last_user_id();
     // Mint the two stable identifiers ONCE, now, rather than at first use.
     // Both are load-bearing and both are easy to get wrong lazily: a Jellyfin
     // DeviceId minted per connection attempt revokes the previous token, and a
@@ -57,10 +85,12 @@ pub fn init_for_user(base_dir: &std::path::Path) {
 
 pub fn reset() {
     invalidate_cache();
+    *BOUND.lock().unwrap_or_else(|error| error.into_inner()) = None;
     STATE.reset();
 }
 
 pub fn get(kind: MediaServerKind) -> MediaServerSettings {
+    ensure_bound();
     if let Ok(c) = CACHE.read() {
         if let Some(s) = c.get(kind.as_str()) {
             return s.clone();
@@ -467,10 +497,22 @@ fn parse_audio_format(container: &str, codec: Option<&str>) -> qbz_library::Audi
 pub fn album_tracks(prefixed_key: &str) -> Option<Vec<qbz_library::LocalTrack>> {
     let (word, album_id) = prefixed_key.split_once(':')?;
     let source = qbz_media_cache::RemoteSource::from_word(word)?;
-    let handle = match source {
-        qbz_media_cache::RemoteSource::Jellyfin => qbz_source::registry().jellyfin().cache(),
-        qbz_media_cache::RemoteSource::Subsonic => qbz_source::registry().subsonic().cache(),
+    let (kind, handle) = match source {
+        qbz_media_cache::RemoteSource::Jellyfin => (
+            MediaServerKind::Jellyfin,
+            qbz_source::registry().jellyfin().cache(),
+        ),
+        qbz_media_cache::RemoteSource::Subsonic => (
+            MediaServerKind::Subsonic,
+            qbz_source::registry().subsonic().cache(),
+        ),
     };
+    if !get(kind).is_configured(kind) {
+        // It is still a recognised remote key, so return Some(empty) instead
+        // of falling through to the local database — but never open the
+        // disabled source's cache.
+        return Some(Vec::new());
+    }
     let rows = handle
         .with(|c| qbz_media_cache::album_tracks(c, source, album_id).unwrap_or_default())
         .unwrap_or_default();

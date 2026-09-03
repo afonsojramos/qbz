@@ -128,7 +128,7 @@ pub fn existing_favorite_album_ids_blocking(
 
     let mut existing = HashSet::new();
     for (id, _) in candidates.iter().filter(|(_, source)| source == "plex") {
-        if crate::local_plex::is_enabled() && !crate::local_plex::album_tracks(id).is_empty() {
+        if crate::local_plex::is_configured() && !crate::local_plex::album_tracks(id).is_empty() {
             existing.insert(id.clone());
         }
     }
@@ -517,7 +517,7 @@ pub fn load_folders_blocking() -> Result<Vec<AlbumRow>, String> {
 /// portrait chain. Reference: `local_library.rs:3261-3358 merge_artists` and
 /// its caller at :3540-3607.
 pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
-    let plex_on = crate::local_plex::is_enabled();
+    let plex_on = crate::local_plex::is_configured();
     let mode = group_mode();
     let plex_path = crate::local_plex::cache_db_path();
     // The SHARED remote mirror, and which of its sources may show. Both gates
@@ -861,7 +861,7 @@ pub fn load_tracks_page_blocking(
     if tracks_generation() != request.generation {
         return Ok(None);
     }
-    let plex = if crate::local_plex::is_enabled() && request.filter.source_enabled("plex") {
+    let plex = if crate::local_plex::is_configured() && request.filter.source_enabled("plex") {
         crate::local_plex::search_tracks_page(
             &request.query,
             request.offsets.plex,
@@ -1032,7 +1032,7 @@ fn merge_track_pages(pages: Vec<CandidatePage>, sort: &str, limit: usize) -> Mer
 /// The tab badges. Cheap: the Tracks count never materializes the table.
 pub fn load_counts_blocking() -> LocalCounts {
     let local_tracks = with_db(|db| db.count_all_local_tracks()).unwrap_or(0) as i64;
-    let plex_tracks = if crate::local_plex::is_enabled() {
+    let plex_tracks = if crate::local_plex::is_configured() {
         crate::local_plex::cached_track_count()
     } else {
         0

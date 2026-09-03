@@ -1888,9 +1888,10 @@ impl LibraryDatabase {
     /// List the immediate children of a folder in the local-library
     /// filesystem hierarchy.
     ///
-    /// Walks `local_tracks.file_path` and computes one row per direct
-    /// child. Returns folders first (alphabetical, case-insensitive),
-    /// then tracks (alphabetical, case-insensitive).
+    /// Walks the physical file hierarchy and computes one row per direct
+    /// child. SACD virtual tracks are projected beneath their backing image,
+    /// so the image is an expandable synthetic folder. Returns folders first
+    /// (alphabetical, case-insensitive), then tracks likewise.
     ///
     /// Filters `COALESCE(source, 'user') = 'user'` so Qobuz offline
     /// downloads are excluded; Plex rows already live outside
@@ -1907,7 +1908,7 @@ impl LibraryDatabase {
     ) -> Result<Vec<FolderTreeEntry>, LibraryError> {
         let escaped_prefix = escape_like_pattern(parent_path);
 
-        // Network folder filter: exclude tracks whose file_path starts
+        // Network folder filter: exclude tracks whose physical path starts
         // with any registered network-mount folder path. Mirrors the
         // mechanism used by `get_albums_with_full_filter` so tree rail
         // visibility matches flat-mode + recursive playback.
@@ -1915,15 +1916,16 @@ impl LibraryDatabase {
             "AND NOT EXISTS ( \
                 SELECT 1 FROM library_folders nf \
                 WHERE nf.is_network = 1 \
-                AND local_tracks.file_path LIKE nf.path || '%' \
+                AND folder_tracks.physical_path LIKE nf.path || '%' \
             )"
         } else {
             ""
         };
 
-        // SQL strategy (CTE form for readability; SQLite uses
-        // idx_tracks_file_path on the LIKE prefix in the candidates step):
-        //   suffix        = file_path with the parent prefix + '/' stripped
+        // SQL strategy (CTE form for readability):
+        //   browse_path   = file_path for ordinary tracks; for SACD tracks,
+        //                   image_path + a stable synthetic leaf label
+        //   suffix        = browse_path with the parent prefix + '/' stripped
         //   child_segment = leading path component of suffix
         //   kind          = 'folder' if suffix contains a '/', else 'track'
         // Group by (child_segment, kind) so folders aggregate over all
@@ -1931,13 +1933,29 @@ impl LibraryDatabase {
         // MIN(file_path) so we can recover the absolute path for tracks
         // (folders ignore it and reconstruct path from parent + segment).
         let sql = format!(
-            "WITH candidates AS ( \
+            "WITH folder_tracks AS ( \
+                SELECT local_tracks.*, \
+                       COALESCE( \
+                           sacd_images.image_path || '/' || \
+                               printf('%03d - %s', sacd_tracks.track_number, \
+                                      replace(local_tracks.title, '/', '∕')), \
+                           local_tracks.file_path \
+                       ) AS browse_path, \
+                       COALESCE(sacd_images.image_path, local_tracks.file_path) \
+                           AS physical_path \
+                  FROM local_tracks \
+                  LEFT JOIN local_sacd_tracks sacd_tracks \
+                    ON sacd_tracks.local_track_id=local_tracks.id \
+                  LEFT JOIN local_sacd_images sacd_images \
+                    ON sacd_images.fingerprint=sacd_tracks.fingerprint \
+             ), \
+             candidates AS ( \
                 SELECT \
-                    substr(file_path, length(?1) + 2) AS suffix, \
+                    substr(browse_path, length(?1) + 2) AS suffix, \
                     file_path, \
                     artwork_path \
-                FROM local_tracks \
-                WHERE file_path LIKE ?2 || '/%' ESCAPE '\\' \
+                FROM folder_tracks \
+                WHERE browse_path LIKE ?2 || '/%' ESCAPE '\\' \
                   AND COALESCE(source, 'user') = 'user' \
                   {network_filter} \
              ), \
@@ -1971,7 +1989,7 @@ impl LibraryDatabase {
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         // ?1 bound with the unescaped path (used in length() arithmetic
-        // on the row's stored file_path; that storage is unescaped).
+        // on the computed browse_path, which is itself unescaped).
         // ?2 bound with the LIKE-escaped pattern prefix.
         let rows = stmt
             .query_map(params![parent_path, escaped_prefix], |row| {
@@ -2034,9 +2052,10 @@ impl LibraryDatabase {
 
     /// List the direct-child tracks of a folder (NON-recursive).
     ///
-    /// Returns rows from `local_tracks` whose `file_path` is exactly
-    /// `folder_path + "/" + filename` — files in subfolders are
-    /// excluded. Mirrors the source filter from
+    /// Returns rows whose projected browse path is exactly
+    /// `folder_path + "/" + filename` — files in subfolders are excluded.
+    /// For SACD this makes the virtual tracks direct children of the image.
+    /// Mirrors the source filter from
     /// [`Self::list_folder_children`] so Qobuz downloads do not appear.
     /// Ordering matches the canonical album-track ordering used by
     /// [`Self::get_album_tracks`]: disc, then track number, then title.
@@ -2054,16 +2073,32 @@ impl LibraryDatabase {
             "AND NOT EXISTS ( \
                 SELECT 1 FROM library_folders nf \
                 WHERE nf.is_network = 1 \
-                AND local_tracks.file_path LIKE nf.path || '%' \
+                AND folder_tracks.physical_path LIKE nf.path || '%' \
             )"
         } else {
             ""
         };
 
         let sql = format!(
-            "SELECT {cols} FROM local_tracks \
-             WHERE file_path LIKE ?1 || '/%' ESCAPE '\\' \
-               AND substr(file_path, length(?2) + 2) NOT LIKE '%/%' \
+            "WITH folder_tracks AS ( \
+                 SELECT local_tracks.*, \
+                        COALESCE( \
+                            sacd_images.image_path || '/' || \
+                                printf('%03d - %s', sacd_tracks.track_number, \
+                                       replace(local_tracks.title, '/', '∕')), \
+                            local_tracks.file_path \
+                        ) AS browse_path, \
+                        COALESCE(sacd_images.image_path, local_tracks.file_path) \
+                            AS physical_path \
+                   FROM local_tracks \
+                   LEFT JOIN local_sacd_tracks sacd_tracks \
+                     ON sacd_tracks.local_track_id=local_tracks.id \
+                   LEFT JOIN local_sacd_images sacd_images \
+                     ON sacd_images.fingerprint=sacd_tracks.fingerprint \
+             ) \
+             SELECT {cols} FROM folder_tracks \
+             WHERE browse_path LIKE ?1 || '/%' ESCAPE '\\' \
+               AND substr(browse_path, length(?2) + 2) NOT LIKE '%/%' \
                AND COALESCE(source, 'user') = 'user' \
                {network_filter} \
              ORDER BY disc_number ASC NULLS LAST, \
@@ -2079,8 +2114,7 @@ impl LibraryDatabase {
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         // ?1 = LIKE-escaped pattern (matches paths under the folder).
-        // ?2 = unescaped path used for substr arithmetic on stored
-        //      file_path (which is itself unescaped).
+        // ?2 = unescaped path used for substr arithmetic on browse_path.
         let rows = stmt
             .query_map(params![escaped_prefix, folder_path], |row| {
                 Self::row_to_track(row)
@@ -2097,8 +2131,8 @@ impl LibraryDatabase {
     /// List ALL tracks recursively under a folder (every descendant, at
     /// any depth). Mirrors the source filter and LIKE-escape strategy
     /// from [`Self::list_folder_tracks`] but does NOT require the
-    /// `file_path` to live directly inside `folder_path` — every row
-    /// matching `file_path LIKE folder_path || '/%'` is included.
+    /// browse path to live directly inside `folder_path` — every descendant
+    /// row is included.
     ///
     /// Used by the tree-mode multi-select to populate the union of
     /// `selectedTrackIds` when the user ticks a folder-row checkbox.
@@ -2106,9 +2140,8 @@ impl LibraryDatabase {
     /// can build queue items for "Play Next" / "Add to Queue" without
     /// a second round-trip.
     ///
-    /// Ordering: by `file_path` ASC. This produces a stable, on-disk
-    /// reading order for cross-album / cross-disc subtrees, matching
-    /// the way `handlePlayRecursive` sorts before queuing.
+    /// Ordering: by projected browse path ASC. This produces a stable tree
+    /// order for ordinary files and SACD virtual leaves alike.
     pub fn list_folder_tracks_recursive(
         &self,
         folder_path: &str,
@@ -2124,18 +2157,34 @@ impl LibraryDatabase {
             "AND NOT EXISTS ( \
                 SELECT 1 FROM library_folders nf \
                 WHERE nf.is_network = 1 \
-                AND local_tracks.file_path LIKE nf.path || '%' \
+                AND folder_tracks.physical_path LIKE nf.path || '%' \
             )"
         } else {
             ""
         };
 
         let sql = format!(
-            "SELECT {cols} FROM local_tracks \
-             WHERE file_path LIKE ?1 || '/%' ESCAPE '\\' \
+            "WITH folder_tracks AS ( \
+                 SELECT local_tracks.*, \
+                        COALESCE( \
+                            sacd_images.image_path || '/' || \
+                                printf('%03d - %s', sacd_tracks.track_number, \
+                                       replace(local_tracks.title, '/', '∕')), \
+                            local_tracks.file_path \
+                        ) AS browse_path, \
+                        COALESCE(sacd_images.image_path, local_tracks.file_path) \
+                            AS physical_path \
+                   FROM local_tracks \
+                   LEFT JOIN local_sacd_tracks sacd_tracks \
+                     ON sacd_tracks.local_track_id=local_tracks.id \
+                   LEFT JOIN local_sacd_images sacd_images \
+                     ON sacd_images.fingerprint=sacd_tracks.fingerprint \
+             ) \
+             SELECT {cols} FROM folder_tracks \
+             WHERE browse_path LIKE ?1 || '/%' ESCAPE '\\' \
                AND COALESCE(source, 'user') = 'user' \
                {network_filter} \
-             ORDER BY file_path ASC",
+             ORDER BY browse_path ASC",
             cols = Self::TRACK_COLUMNS,
             network_filter = network_filter,
         );
@@ -2156,8 +2205,8 @@ impl LibraryDatabase {
         Ok(tracks)
     }
 
-    /// Lightweight `COUNT(*)` of every user track whose `file_path` lives
-    /// recursively under `folder_path`. Used by the tree-mode rail to
+    /// Lightweight `COUNT(*)` of every user track whose projected browse path
+    /// lives recursively under `folder_path`. Used by the tree-mode rail to
     /// populate the recursive descendant count on top-level scan-root
     /// rows (which are synthesized client-side and don't go through
     /// [`Self::list_folder_children`], so they don't carry their own
@@ -2178,15 +2227,31 @@ impl LibraryDatabase {
             "AND NOT EXISTS ( \
                 SELECT 1 FROM library_folders nf \
                 WHERE nf.is_network = 1 \
-                AND local_tracks.file_path LIKE nf.path || '%' \
+                AND folder_tracks.physical_path LIKE nf.path || '%' \
             )"
         } else {
             ""
         };
 
         let sql = format!(
-            "SELECT COUNT(*) FROM local_tracks \
-             WHERE file_path LIKE ?1 || '/%' ESCAPE '\\' \
+            "WITH folder_tracks AS ( \
+                 SELECT local_tracks.*, \
+                        COALESCE( \
+                            sacd_images.image_path || '/' || \
+                                printf('%03d - %s', sacd_tracks.track_number, \
+                                       replace(local_tracks.title, '/', '∕')), \
+                            local_tracks.file_path \
+                        ) AS browse_path, \
+                        COALESCE(sacd_images.image_path, local_tracks.file_path) \
+                            AS physical_path \
+                   FROM local_tracks \
+                   LEFT JOIN local_sacd_tracks sacd_tracks \
+                     ON sacd_tracks.local_track_id=local_tracks.id \
+                   LEFT JOIN local_sacd_images sacd_images \
+                     ON sacd_images.fingerprint=sacd_tracks.fingerprint \
+             ) \
+             SELECT COUNT(*) FROM folder_tracks \
+             WHERE browse_path LIKE ?1 || '/%' ESCAPE '\\' \
                AND COALESCE(source, 'user') = 'user' \
                {network_filter}",
             network_filter = network_filter,
@@ -7820,6 +7885,81 @@ mod folder_tree_tests {
         // One Qobuz download in the same album — must be filtered out
         // by both list_folder_children and list_folder_tracks.
         insert_qobuz_download_at(db, "/m/A/album1/qcache.flac", "QobuzCache");
+    }
+
+    fn seed_sacd_fixture(db: &LibraryDatabase) {
+        let image = "/m/SACD/Opera.iso";
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO local_sacd_images \
+                     (fingerprint,image_path,image_size_bytes,image_modified_ns,observed_at) \
+                 VALUES ('sacd-folder-test',?1,1,1,1)",
+                rusqlite::params![image],
+            )
+            .unwrap();
+        });
+        for (number, title) in [(1, "Prelude / Dawn"), (2, "Finale")] {
+            let path = format!("sacd:{image}#{number}");
+            insert_at(db, &path, Some(1), Some(number), title);
+            db.with_connection(|conn| {
+                let id: i64 = conn
+                    .query_row(
+                        "SELECT id FROM local_tracks WHERE file_path=?1",
+                        rusqlite::params![path],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                conn.execute(
+                    "INSERT INTO local_sacd_tracks \
+                         (fingerprint,track_number,local_track_id) \
+                     VALUES ('sacd-folder-test',?1,?2)",
+                    rusqlite::params![number, id],
+                )
+                .unwrap();
+            });
+        }
+    }
+
+    #[test]
+    fn sacd_image_is_an_expandable_folder_with_virtual_track_children() {
+        let (_tmp, db) = fresh_db();
+        seed_sacd_fixture(&db);
+
+        let root = db.list_folder_children("/m/SACD", false).unwrap();
+        assert!(matches!(
+            root.as_slice(),
+            [FolderTreeEntry::Folder {
+                path,
+                segment,
+                track_count_under: 2,
+                ..
+            }] if path == "/m/SACD/Opera.iso" && segment == "Opera.iso"
+        ));
+
+        let image = db
+            .list_folder_children("/m/SACD/Opera.iso", false)
+            .unwrap();
+        assert_eq!(image.len(), 2);
+        assert!(matches!(
+            &image[0],
+            FolderTreeEntry::Track { path, segment }
+                if path == "sacd:/m/SACD/Opera.iso#1"
+                    && segment == "001 - Prelude ∕ Dawn"
+        ));
+        assert!(db.list_folder_tracks("/m/SACD", false).unwrap().is_empty());
+        assert_eq!(
+            db.list_folder_tracks("/m/SACD/Opera.iso", false)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            db.list_folder_tracks_recursive("/m/SACD", false)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(db.count_folder_tracks_recursive("/m/SACD", false).unwrap(), 2);
     }
 
     #[test]

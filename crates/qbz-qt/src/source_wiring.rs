@@ -33,7 +33,7 @@
 //!
 //! | socket | source | this frontend's authority |
 //! |---|---|---|
-//! | [`PlexCreds`] | `PlexSource` | `local_plex::is_enabled` / `settings` |
+//! | [`PlexCreds`] | `PlexSource` | `local_plex::is_configured` / `settings` |
 //! | [`EphemeralTracks`] | `LocalSource` | `local_ephemeral`'s session store |
 //! | user dir | every source, via `bind_user` | `auth_qt::bind_per_user_stores` |
 //! | album group mode | `LocalSource` | `local_state::group_mode` (a persisted UI pref) |
@@ -52,16 +52,14 @@ struct PlexCredsGlue;
 
 impl qbz_source::PlexCreds for PlexCredsGlue {
     fn is_enabled(&self) -> bool {
-        crate::local_plex::is_enabled()
+        crate::local_plex::is_configured()
     }
 
     fn server(&self) -> Option<(String, String)> {
-        // Checked exactly as `local_playback`'s old Plex arm checked it: both
-        // halves non-empty, or Plex is not usable right now.
-        let cfg = crate::local_plex::settings();
-        if cfg.base_url.is_empty() || cfg.token.is_empty() {
+        if !crate::local_plex::is_configured() {
             return None;
         }
+        let cfg = crate::local_plex::settings();
         Some((cfg.base_url, cfg.token))
     }
 }

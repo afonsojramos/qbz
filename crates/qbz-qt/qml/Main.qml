@@ -11,6 +11,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Window
 import com.blitzfc.qbz
+import "controls"
 import "miniplayer"
 import "theme"
 
@@ -1086,6 +1087,12 @@ ApplicationWindow {
         source: "controls/TrackMetadataModal.qml"
         z: 4000
     }
+
+    // Local media info is a GLOBAL action target: rows can open it from the
+    // library tabs, an album detail, search, or any other routed page. Keeping
+    // the modal above the screen Loader also means a route change cannot be
+    // required to mount it (or destroy it while it is resolving metadata).
+    LocalMediaInfoModal { }
 
     // Frameless hairline (app.slint's no-frame 1px edge) — paints at the
     // very rim, over everything. SQUARE (the app draws no corner rounding).

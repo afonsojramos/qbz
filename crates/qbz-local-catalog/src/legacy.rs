@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -38,6 +38,9 @@ pub struct LegacyLocations {
     pub local_database: PathBuf,
     pub plex_database: PathBuf,
     pub remote_database: PathBuf,
+    /// Sources authorized for this user right now. Disabled or incomplete
+    /// integrations are neither opened nor retained in the derived catalog.
+    pub enabled_sources: BTreeSet<SourceKind>,
 }
 
 impl LegacyLocations {
@@ -47,6 +50,7 @@ impl LegacyLocations {
             local_database: catalog_dir.join("library.db"),
             plex_database: catalog_dir.join("plex_cache.db"),
             remote_database: catalog_dir.join("remote_cache.db"),
+            enabled_sources: SourceKind::ALL.into_iter().collect(),
             catalog_dir,
         }
     }
@@ -58,9 +62,20 @@ pub fn discover_legacy_sources(data_dir: &Path) -> Result<Vec<LegacySourceSpec>>
 
 pub fn discover_legacy_sources_at(locations: &LegacyLocations) -> Result<Vec<LegacySourceSpec>> {
     let mut specs = Vec::new();
-    discover_local(&locations.local_database, &mut specs)?;
-    discover_plex(&locations.plex_database, &mut specs)?;
-    discover_remote(&locations.remote_database, &mut specs)?;
+    if locations.enabled_sources.contains(&SourceKind::Local)
+        || locations.enabled_sources.contains(&SourceKind::Offline)
+    {
+        discover_local(&locations.local_database, &mut specs)?;
+    }
+    if locations.enabled_sources.contains(&SourceKind::Plex) {
+        discover_plex(&locations.plex_database, &mut specs)?;
+    }
+    if locations.enabled_sources.contains(&SourceKind::Jellyfin)
+        || locations.enabled_sources.contains(&SourceKind::Subsonic)
+    {
+        discover_remote(&locations.remote_database, &mut specs)?;
+        specs.retain(|spec| locations.enabled_sources.contains(&spec.source.source));
+    }
     specs.sort_by(|left, right| left.source.cmp(&right.source));
     specs.dedup_by(|left, right| left.source == right.source);
     Ok(specs)
@@ -228,17 +243,37 @@ pub fn reconcile_legacy_caches_at_with_progress(
             )))
         }
     };
+    let active_sources = active.stats()?.source_counts;
     let specs = discover_legacy_sources_at(locations)?;
     let sidecars = locations.catalog_dir.join("metadata_sidecars.db");
     let mut readers = specs
         .into_iter()
         .map(|spec| LegacyReader::open(spec, &sidecars))
         .collect::<Result<Vec<_>>>()?;
-    let probes = readers
+    let mut probes = readers
         .iter()
         .map(|reader| reader.probe.clone())
         .collect::<Vec<_>>();
-    let changed_keys = readers
+    let disabled_probes = active_sources
+        .into_iter()
+        .filter(|(source, rows)| {
+            *rows > 0 && !locations.enabled_sources.contains(&source.source)
+        })
+        .map(|(source, _)| SourceProbe {
+            source: source.clone(),
+            source_path: match source.source {
+                SourceKind::Local | SourceKind::Offline => locations.local_database.clone(),
+                SourceKind::Plex => locations.plex_database.clone(),
+                SourceKind::Jellyfin | SourceKind::Subsonic => locations.remote_database.clone(),
+            },
+            snapshot_version: "disabled:v1".to_string(),
+            row_count: 0,
+            page_bytes: 0,
+            integrity_ok: true,
+        })
+        .collect::<Vec<_>>();
+    probes.extend(disabled_probes.iter().cloned());
+    let mut changed_keys = readers
         .iter()
         .filter_map(|reader| {
             let checkpoint = active.source_checkpoint(&reader.spec.source).ok().flatten();
@@ -250,6 +285,7 @@ pub fn reconcile_legacy_caches_at_with_progress(
             .then(|| reader.spec.source.clone())
         })
         .collect::<HashSet<_>>();
+    changed_keys.extend(disabled_probes.iter().map(|probe| probe.source.clone()));
     if changed_keys.is_empty() {
         return Ok(ProjectionOutcome::UpToDate {
             generation: active_generation,
@@ -272,6 +308,10 @@ pub fn reconcile_legacy_caches_at_with_progress(
         .sum::<u64>();
     let source_count = changed_probes.len();
     let mut overall_rows_before_source = 0_u64;
+    let changed_reader_count = readers
+        .iter()
+        .filter(|reader| changed_keys.contains(&reader.spec.source))
+        .count();
     for (source_offset, reader) in readers
         .iter_mut()
         .filter(|reader| changed_keys.contains(&reader.spec.source))
@@ -342,6 +382,37 @@ pub fn reconcile_legacy_caches_at_with_progress(
         }
         overall_rows_before_source =
             overall_rows_before_source.saturating_add(reader.probe.row_count);
+    }
+    for (disabled_offset, probe) in disabled_probes.iter().enumerate() {
+        if cancelled.load(Ordering::Acquire) {
+            return Ok(ProjectionOutcome::Paused {
+                generation: session.generation(),
+                source: probe.source.clone(),
+                committed_rows,
+            });
+        }
+        session.begin_source(&probe.source, &probe.snapshot_version)?;
+        let saved = session.apply_batch(&ReconciliationBatch {
+            source: probe.source.clone(),
+            snapshot_version: probe.snapshot_version.clone(),
+            expected_cursor: String::new(),
+            next_cursor: String::new(),
+            tracks: Vec::new(),
+            complete: true,
+        })?;
+        publish(&ProjectionProgress {
+            generation: session.generation(),
+            source: probe.source.clone(),
+            rows_written: 0,
+            source_rows_total: 0,
+            overall_rows_written: overall_rows_before_source,
+            overall_rows_total,
+            source_index: changed_reader_count + disabled_offset + 1,
+            source_count,
+            checkpoint_cursor: saved.checkpoint_cursor,
+            source_complete: true,
+            prune_authorized: true,
+        });
     }
     let stats = session.stats()?;
     let manifest = session.activate(&changed_probes)?;

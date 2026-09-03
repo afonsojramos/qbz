@@ -1467,7 +1467,7 @@ fn enabled_sources(
     catalog: &qbz_local_catalog::Catalog,
 ) -> Result<(Vec<SourceKey>, bool), &'static str> {
     let stats = catalog.stats().map_err(|_| "source-counts")?;
-    let plex = crate::local_plex::is_enabled();
+    let plex = crate::local_plex::is_configured();
     let remote = crate::media_servers_qt::configured_words();
     let total_sources = stats.source_counts.len();
     let enabled = stats
