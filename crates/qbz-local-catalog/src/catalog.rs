@@ -637,7 +637,7 @@ impl Catalog {
                         WHEN MAX(CASE WHEN LOWER(t.format)='mp3' THEN 0 ELSE 1 END)=0
                             THEN 'mp3'
                         WHEN MAX(CASE WHEN LOWER(t.format) IN ('dsd','dsf','dff') THEN 1 ELSE 0 END)=1
-                            THEN 'hires'
+                            THEN 'dsd'
                         WHEN MAX(t.bit_depth)>=24 AND MAX(t.sample_rate_hz)>96000 THEN 'max'
                         WHEN MAX(t.bit_depth)>=24 THEN 'hires'
                         WHEN MAX(t.bit_depth) IS NOT NULL THEN 'cd'
@@ -1750,7 +1750,7 @@ fn filter_parts(
         let tier = format!(
             "CASE \
                 WHEN LOWER({alias}.format)='mp3' THEN 'mp3' \
-                WHEN LOWER({alias}.format) IN ('dsd','dsf','dff') THEN 'hires' \
+                WHEN LOWER({alias}.format) IN ('dsd','dsf','dff') THEN 'dsd' \
                 WHEN {alias}.bit_depth>=24 AND {alias}.sample_rate_hz>96000 THEN 'max' \
                 WHEN {alias}.bit_depth>=24 THEN 'hires' \
                 WHEN {alias}.bit_depth IS NOT NULL THEN 'cd' \
@@ -1760,6 +1760,7 @@ fn filter_parts(
         let mut quality_arms = Vec::new();
         for quality in descriptor.quality_tiers() {
             quality_arms.push(match quality.as_str() {
+                "dsd" => format!("({tier})='dsd'"),
                 "hires" => format!("({tier}) IN ('hires','max')"),
                 "cd" => format!("({tier})='cd'"),
                 "lossy" => format!("({tier}) IN ('mp3','lossy')"),
@@ -2207,6 +2208,7 @@ fn album_filter_parts(
         let mut quality = Vec::new();
         for tier in descriptor.quality_tiers() {
             match tier.as_str() {
+                "dsd" => quality.push("am.quality_tier='dsd'"),
                 "hires" => quality.push("am.quality_tier IN ('hires','max')"),
                 "cd" => quality.push("am.quality_tier='cd'"),
                 "lossy" => quality.push("am.quality_tier IN ('mp3','lossy')"),

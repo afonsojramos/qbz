@@ -146,6 +146,13 @@ Item {
             Row {
                 id: qualityRow
                 spacing: 8
+                // DSD is a tier of its own (the badge already wears one);
+                // Hi-Res is 24-bit PCM only. Proper name, not translated.
+                FilterChip {
+                    label: "DSD"
+                    active: root.view.filter.dsd === true
+                    onToggled: root.view.toggleFilter("dsd")
+                }
                 FilterChip {
                     label: QbzSession.tr("Hi-Res", QbzSession.trRev)
                     active: root.view.filter.hires === true
