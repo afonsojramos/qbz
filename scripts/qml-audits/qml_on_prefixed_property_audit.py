@@ -38,8 +38,8 @@ import pathlib
 import re
 import sys
 
-ROOT = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else
-                    "/home/blitzkriegfc/Personal/qbz/qbz-worktrees/qbz-qt/crates/qbz-qt")
+DEFAULT_ROOT = pathlib.Path(__file__).resolve().parents[2] / "crates/qbz-qt"
+ROOT = pathlib.Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else DEFAULT_ROOT
 QML = ROOT / "qml"
 
 # `property <type> onFoo`, with any of the modifiers QML allows in front and
