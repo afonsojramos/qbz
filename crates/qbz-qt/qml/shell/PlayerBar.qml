@@ -78,10 +78,9 @@ Rectangle {
     readonly property bool waveformVisible: false
 
     // The shell's shared hover-tooltip overlay (controls/QbzTooltip.qml),
-    // fed in through NowPlayingBar.qml's Binding. Consumed by the Qobuz
-    // Connect button's "Qobuz Connect: On/Off" bubble — the ONE tooltip the
-    // reference binds on this bar (PlayerBar.slint:405-407; the small bar's
-    // button has none, contract §8).
+    // fed in through NowPlayingBar.qml's Binding. Consumed by the dynamic
+    // Shuffle/Repeat state bubbles and by the Qobuz Connect button's
+    // "Qobuz Connect: On/Off" bubble.
     property Item tooltip: null
 
     // Volume lock, both halves (contract §11.3 = PlayerBar.slint:152-158's
@@ -462,6 +461,7 @@ Rectangle {
                     classicActions: true
                     favorite: root.npFavorite
                     ephemeral: root.npEphemeral
+                    tooltip: root.tooltip
                     onAddRequested: function (anchorItem) { addMenu.openBelowRight(anchorItem) }
                     onTrackInfoRequested: root.openTrackInfo()
                 }
@@ -483,6 +483,7 @@ Rectangle {
                     anchors.centerIn: parent
                     playCircle: true
                     favorite: root.npFavorite
+                    tooltip: root.tooltip
                     onAddRequested: function (anchorItem) { addMenu.openBelowRight(anchorItem) }
                     onTrackInfoRequested: root.openTrackInfo()
                 }

@@ -2271,3 +2271,30 @@ msgstr "Download finished"
 
 msgid "Not now"
 msgstr "Not now"
+
+msgid "Shuffle: On"
+msgstr "Shuffle: On"
+
+msgid "Shuffle: Off"
+msgstr "Shuffle: Off"
+
+msgid "Repeat: Off"
+msgstr "Repeat: Off"
+
+msgid "Repeat: All"
+msgstr "Repeat: All"
+
+msgid "Repeat: One"
+msgstr "Repeat: One"
+
+msgid "Show album artwork in Queue track list"
+msgstr "Show album artwork in Queue track list"
+
+msgid "Replace queue track numbers with album cover thumbnails. Off by default."
+msgstr "Replace queue track numbers with album cover thumbnails. Off by default."
+
+msgid "Show album artwork in Library track list"
+msgstr "Show album artwork in Library track list"
+
+msgid "Display the album cover thumbnail between the track number and title. Off by default."
+msgstr "Display the album cover thumbnail between the track number and title. Off by default."

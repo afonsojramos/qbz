@@ -6703,3 +6703,30 @@ msgstr "Отменено: {}"
 
 msgid "Download finished"
 msgstr "Загрузка завершена"
+
+msgid "Shuffle: On"
+msgstr "Перемешивание: вкл."
+
+msgid "Shuffle: Off"
+msgstr "Перемешивание: выкл."
+
+msgid "Repeat: Off"
+msgstr "Повтор: выкл."
+
+msgid "Repeat: All"
+msgstr "Повтор: все"
+
+msgid "Repeat: One"
+msgstr "Повтор: один трек"
+
+msgid "Show album artwork in Queue track list"
+msgstr "Показывать обложки альбомов в списке треков очереди"
+
+msgid "Replace queue track numbers with album cover thumbnails. Off by default."
+msgstr "Заменяет номера треков в очереди миниатюрами обложек альбомов. Отключено по умолчанию."
+
+msgid "Show album artwork in Library track list"
+msgstr "Показывать обложки альбомов в списке треков библиотеки"
+
+msgid "Display the album cover thumbnail between the track number and title. Off by default."
+msgstr "Показывает миниатюру обложки между номером и названием трека. Отключено по умолчанию."

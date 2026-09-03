@@ -2089,6 +2089,10 @@ pub struct SettingsDoc {
     pub my_qbz_label: String,
     #[serde(rename = "sidebarPlaylistCollage")]
     pub sidebar_playlist_collage: bool,
+    #[serde(rename = "queueTrackArtwork")]
+    pub queue_track_artwork: bool,
+    #[serde(rename = "libraryTrackArtwork")]
+    pub library_track_artwork: bool,
     #[serde(rename = "localLibraryTrackArtwork")]
     pub local_library_track_artwork: bool,
     #[serde(rename = "playIndicatorAnimation")]
@@ -2608,6 +2612,8 @@ pub async fn publish_snapshot() {
             nav_header_compact: nav_header_compact(),
             my_qbz_label: myqbz_label(),
             sidebar_playlist_collage: pref_bool("sidebar_playlist_collage", true),
+            queue_track_artwork: pref_bool("queue_track_artwork", false),
+            library_track_artwork: pref_bool("library_track_artwork", false),
             local_library_track_artwork: pref_bool("local_library_track_artwork", false),
             play_indicator_animation: pref_bool("play_indicator_animation", false),
             seekbar_waveform: seekbar_waveform(),
@@ -3439,6 +3445,17 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
             // bridge property. Without this push the row persisted a pref
             // nothing read — a Settings toggle that did nothing.
             crate::shell_bridge::ui(move |mut b| b.as_mut().set_sidebar_playlist_collage(value));
+            Ok(Apply::None)
+        }
+        // These two are read live from the republished `settingsJson` by
+        // QueuePanel / LibraryView. Separate keys are intentional: the queue
+        // is tiny, while Library can contain thousands of track rows.
+        "queue-track-artwork" => {
+            save_pref("queue_track_artwork", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "library-track-artwork" => {
+            save_pref("library_track_artwork", serde_json::json!(value));
             Ok(Apply::None)
         }
         "local-library-track-artwork" => {

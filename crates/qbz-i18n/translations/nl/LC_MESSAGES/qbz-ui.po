@@ -6672,3 +6672,30 @@ msgstr "{} geannuleerd"
 
 msgid "Download finished"
 msgstr "Download voltooid"
+
+msgid "Shuffle: On"
+msgstr "Shuffelen: aan"
+
+msgid "Shuffle: Off"
+msgstr "Shuffelen: uit"
+
+msgid "Repeat: Off"
+msgstr "Herhalen: uit"
+
+msgid "Repeat: All"
+msgstr "Herhalen: alles"
+
+msgid "Repeat: One"
+msgstr "Herhalen: één nummer"
+
+msgid "Show album artwork in Queue track list"
+msgstr "Albumhoezen tonen in de nummerlijst van de wachtrij"
+
+msgid "Replace queue track numbers with album cover thumbnails. Off by default."
+msgstr "Vervang nummers in de wachtrij door miniaturen van albumhoezen. Standaard uit."
+
+msgid "Show album artwork in Library track list"
+msgstr "Albumhoezen tonen in de nummerlijst van de bibliotheek"
+
+msgid "Display the album cover thumbnail between the track number and title. Off by default."
+msgstr "Toon de albumhoesminiatuur tussen het nummer en de titel. Standaard uit."

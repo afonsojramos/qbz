@@ -25,6 +25,8 @@ Row {
     property bool favorite: false
     /// The playing track is ephemeral — the heart has nothing to write to.
     property bool ephemeral: false
+    /// AppShell's one shared hover-tooltip overlay.
+    property var tooltip: null
 
     /// Emitted by "+" with the button as anchor, so the flyout is owned
     /// by the bar (one menu, both mount points).
@@ -68,6 +70,11 @@ Row {
         btnEnabled: QbzPlayer.npHasTrack
         anchors.verticalCenter: parent.verticalCenter
         onClicked: QbzPlayer.toggleShuffle()
+        tooltip: tc.tooltip
+        tooltipKey: "npb-shuffle"
+        tooltipText: QbzPlayer.npShuffle
+            ? QbzSession.tr("Shuffle: On", QbzSession.trRev)
+            : QbzSession.tr("Shuffle: Off", QbzSession.trRev)
     }
     // True while the player is resolving/fetching the track that is about to
     // play. Not gated on `npHasTrack`: the first play of a session has no
@@ -165,6 +172,13 @@ Row {
         btnEnabled: QbzPlayer.npHasTrack
         anchors.verticalCenter: parent.verticalCenter
         onClicked: QbzPlayer.cycleRepeat()
+        tooltip: tc.tooltip
+        tooltipKey: "npb-repeat"
+        tooltipText: QbzPlayer.npRepeatMode === 2
+            ? QbzSession.tr("Repeat: One", QbzSession.trRev)
+            : (QbzPlayer.npRepeatMode === 1
+                ? QbzSession.tr("Repeat: All", QbzSession.trRev)
+                : QbzSession.tr("Repeat: Off", QbzSession.trRev))
     }
     // "+" — Tauri's add-to-playlist button, grouped into the shared
     // "Add to…" flyout in 2.0.

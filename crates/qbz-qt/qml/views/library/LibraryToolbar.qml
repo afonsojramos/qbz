@@ -238,8 +238,8 @@ Item {
                 activeId: root.view.activeTab
                 tabs: [
                     { "id": "all", "label": QbzSession.tr("All", QbzSession.trRev), "count": root.view.counts.all || 0 },
-                    { "id": "tracks", "label": QbzSession.tr("Tracks", QbzSession.trRev), "count": root.view.counts.tracks || 0 },
-                    { "id": "albums", "label": QbzSession.tr("Albums", QbzSession.trRev), "count": root.view.counts.albums || 0 },
+                    { "id": "tracks", "label": QbzSession.tr("Tracks", QbzSession.trRev), "count": root.view.tabTotals.tracks || 0 },
+                    { "id": "albums", "label": QbzSession.tr("Albums", QbzSession.trRev), "count": root.view.tabTotals.albums || 0 },
                     { "id": "artists", "label": QbzSession.tr("Artists", QbzSession.trRev), "count": root.view.counts.artists || 0 },
                     { "id": "playlists", "label": QbzSession.tr("Playlists", QbzSession.trRev), "count": root.view.counts.playlists || 0 },
                     { "id": "labels", "label": QbzSession.tr("Labels", QbzSession.trRev), "count": root.view.counts.labels || 0 },
@@ -509,6 +509,24 @@ Item {
             openWidth: 196
             placeholder: QbzSession.tr("Search", QbzSession.trRev)
             onEdited: function (v) { root.view.tabSearch = v }
+        }
+
+        // Tracks / Albums source switches. They deliberately sit between the
+        // fixed 30px search slot and Filter by genre: ExpandableSearch grows
+        // left, so opening it can never cover or push either toggle.
+        ToolToggle {
+            visible: (root.view.activeTab === "tracks" || root.view.activeTab === "albums")
+                && root.view.tabHasItems
+            name: "shopping-bag"
+            active: root.view.showPurchases
+            onClicked: root.view.setShowPurchases(!root.view.showPurchases)
+        }
+        ToolToggle {
+            visible: (root.view.activeTab === "tracks" || root.view.activeTab === "albums")
+                && root.view.tabHasItems
+            name: "heart"
+            active: root.view.showFavorites
+            onClicked: root.view.setShowFavorites(!root.view.showFavorites)
         }
 
         // Filter by genre — the SAME shared popup the All toolbar uses. The

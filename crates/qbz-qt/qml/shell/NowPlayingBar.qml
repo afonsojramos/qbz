@@ -11,9 +11,8 @@ Item {
 
     // The shell's shared hover-tooltip overlay (controls/QbzTooltip.qml),
     // fed in by AppShell (same pattern as Sidebar.tooltip). Forwarded into
-    // the loaded bar below. Only the FULL bar consumes it — the Qobuz
-    // Connect button's "Qobuz Connect: On/Off" bubble (contract §8: the
-    // small bar's button has no tooltip in the reference).
+    // whichever mode is loaded below: all four modes use it for dynamic
+    // Shuffle/Repeat state, and the full bar also uses it for Qobuz Connect.
     property Item tooltip: null
 
     Loader {
@@ -24,15 +23,13 @@ Item {
 
     // Same shape as AppShell's viewLoader "kind" Binding: applies the moment
     // the item exists, re-applies on a mode switch, RestoreNone because the
-    // target is DESTROYED on unload. The `when` source guard keeps it off
-    // NowPlayingBarSmall, which declares no `tooltip` property (a grouped
-    // assignment against a missing property would fail the load).
+    // target is DESTROYED on unload. Both bar implementations declare the
+    // property, so a mode switch keeps the same overlay host.
     Binding {
         target: barLoader.item
         property: "tooltip"
         value: root.tooltip
         when: barLoader.item !== null
-              && barLoader.source.toString().indexOf("PlayerBar.qml") !== -1
         restoreMode: Binding.RestoreNone
     }
 }

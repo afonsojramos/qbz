@@ -47,6 +47,8 @@ Rectangle {
     // Feature parked for a later release. Keep the compact renderer in place
     // but use the classic seekbar consistently with the other NPB modes.
     readonly property bool waveformVisible: false
+    /// AppShell's one shared hover-tooltip overlay.
+    property Item tooltip: null
 
 
     QbzTheme { id: theme }
@@ -412,6 +414,7 @@ Rectangle {
                     playCircle: false
                     favorite: root.npFavorite
                     ephemeral: root.npEphemeral
+                    tooltip: root.tooltip
                     onAddRequested: function (anchorItem) { smallAddMenu.openBelowRight(anchorItem) }
                     onTrackInfoRequested: root.openTrackInfo()
                 }

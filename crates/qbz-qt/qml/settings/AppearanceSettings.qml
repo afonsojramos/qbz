@@ -441,6 +441,22 @@ Column {
         }
     }
     SettingRow {
+        label: QbzSession.tr("Show album artwork in Queue track list", QbzSession.trRev)
+        description: QbzSession.tr("Replace queue track numbers with album cover thumbnails. Off by default.", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.queueTrackArtwork === true
+            onToggled: function (v) { QbzBridge.settingsBool("queue-track-artwork", v) }
+        }
+    }
+    SettingRow {
+        label: QbzSession.tr("Show album artwork in Library track list", QbzSession.trRev)
+        description: QbzSession.tr("Display the album cover thumbnail between the track number and title. Off by default.", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.libraryTrackArtwork === true
+            onToggled: function (v) { QbzBridge.settingsBool("library-track-artwork", v) }
+        }
+    }
+    SettingRow {
         label: QbzSession.tr("Show album artwork in Local Library track list", QbzSession.trRev)
         description: QbzSession.tr("Display the album cover thumbnail next to each track in the Tracks and Folders views. Off by default — large libraries pay a per-row image-decode cost.", QbzSession.trRev)
         QbzToggle {

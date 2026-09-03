@@ -38,6 +38,13 @@ Rectangle {
     readonly property var currentRow: doc.current || null
     readonly property var upcoming: doc.upcoming || []
     readonly property var historyRows: doc.history || []
+    readonly property var settingsDoc: {
+        try { return JSON.parse(QbzBridge.settingsJson) }
+        catch (e) { return ({}) }
+    }
+    // Opt-in: Up Next swaps its numeral for the same thumbnail History uses.
+    readonly property bool queueTrackArtwork:
+        settingsDoc.queueTrackArtwork === true
     readonly property bool queueEmpty: currentRow === null && (doc.upcomingTotal || 0) === 0
     // "Stop after this song": the decimal id of the marked track, "" for none.
     readonly property string stopAfterId: doc.stopAfterId || ""
@@ -218,6 +225,7 @@ Rectangle {
     }
     Component.onCompleted: dispatchCovers()
     onDocChanged: dispatchCovers()
+    onQueueTrackArtworkChanged: dispatchCovers()
     // Collect the covers of the document CURRENTLY on the property and ask the
     // shared pipeline for them.
     //
@@ -243,7 +251,8 @@ Rectangle {
         var urls = []
         if (cur && cur.artUrl) urls.push(cur.artUrl)
         var i
-        for (i = 0; i < up.length; i++) if (up[i].artUrl) urls.push(up[i].artUrl)
+        if (root.queueTrackArtwork)
+            for (i = 0; i < up.length; i++) if (up[i].artUrl) urls.push(up[i].artUrl)
         for (i = 0; i < hist.length; i++) if (hist[i].artUrl) urls.push(hist[i].artUrl)
         if (urls.length > 0) {
             QbzShell.sidebarArtworkWindow(JSON.stringify(urls))
@@ -314,6 +323,8 @@ Rectangle {
         property int rowIndex: 0
         property bool showNumber: true
         property bool inQueue: true
+        readonly property bool artworkLeading:
+            !qrRoot.showNumber || root.queueTrackArtwork
         /// Drag-reorder source? UP NEXT rows only — History has no order to
         /// commit, and it keeps its drag-scroll because of this (see qrArea's
         /// preventStealing).
@@ -366,12 +377,11 @@ Rectangle {
             anchors.bottomMargin: 4
             spacing: 9
 
-            // Leading: track number (UP NEXT) or thumbnail (History). On the
-            // row carrying the "stop after this song" marker the number is
-            // REPLACED by the accent CircleStop — same slot, so the list never
-            // reflows when a marker is placed or cleared.
+            // Leading: track number (default UP NEXT) or thumbnail (History,
+            // plus opt-in UP NEXT). On the row carrying the "stop after this
+            // song" marker, the status still owns this fixed slot.
             Item {
-                visible: showNumber
+                visible: showNumber && !root.queueTrackArtwork
                 width: 22
                 height: parent.height
                 readonly property bool marked: qrRoot.inQueue
@@ -414,7 +424,7 @@ Rectangle {
                 }
             }
             Rectangle {
-                visible: !showNumber
+                visible: qrRoot.artworkLeading
                 width: 34
                 height: 34
                 radius: 4
@@ -437,11 +447,31 @@ Rectangle {
                     phase: root.skelPhase
                     settleMs: root.artSettleMs
                 }
+                // When artwork replaces the numeral, preserve the two states
+                // that used to occupy that slot. The scrim makes either glyph
+                // legible without growing or shifting the 44px row.
+                Rectangle {
+                    readonly property bool marked: qrRoot.inQueue
+                        && root.stopAfterId !== "" && row.id === root.stopAfterId
+                    visible: qrRoot.showNumber
+                        && (marked || qrRoot.pulledDead)
+                    anchors.fill: parent
+                    radius: 4
+                    color: "#a6000000"
+                    QbzIcon {
+                        anchors.centerIn: parent
+                        name: parent.marked ? "circle-stop" : "circle-alert"
+                        width: 14
+                        height: 14
+                        tintName: parent.marked ? "accent" : "favorite"
+                    }
+                }
             }
 
             // Title + artist.
             Column {
-                width: parent.width - (showNumber ? 22 : 34) - durText.width - 32 - 3 * 9
+                width: parent.width - (qrRoot.artworkLeading ? 34 : 22)
+                    - durText.width - 32 - 3 * 9
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 2
                 Row {

@@ -242,9 +242,8 @@ Rectangle {
         // header-tall row; New/Classic/Large keep the full 112px.
         height: QbzShell.npbMode === 2 ? theme.npbSmallHeight : theme.npbLargeHeight
         // The shared hover-tooltip overlay (declared further down — id
-        // references resolve at completion). Only the FULL bar consumes it
-        // (the Qobuz Connect button's "Qobuz Connect: On/Off" bubble); the
-        // small bar's button has no tooltip in the reference.
+        // references resolve at completion). All four modes consume it for
+        // Shuffle/Repeat state; the full bar also uses it for Qobuz Connect.
         tooltip: tooltipOverlay
     }
 

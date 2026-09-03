@@ -3624,7 +3624,7 @@ pub async fn toggle_mute(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 }
 
 pub async fn toggle_shuffle(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
-    let Some(_owner_action) = begin_owner_action() else {
+    let Some(owner_action) = begin_owner_action() else {
         return;
     };
     // QConnect (Slint main.rs:14492-14501 — no cast arm in the reference):
@@ -3642,9 +3642,53 @@ pub async fn toggle_shuffle(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
             }
         }
     }
+    let event_before_reorder = runtime.core().player().get_playback_event();
     let enabled = runtime.core().toggle_shuffle().await;
+    QUEUE_ORDER_GENERATION.fetch_add(1, Ordering::SeqCst);
     crate::now_playing::set_shuffle(enabled);
     publish_queue(runtime).await;
+
+    // A successor may already be appended to the audio engine during the
+    // final gapless window. Reordering only the QueueManager would then let
+    // that stale edge play anyway; the next poll would sync the cursor past
+    // the canonical rows we just preserved. Re-materialize the same current
+    // occurrence only when the armed successor no longer matches the new
+    // first upcoming row. Ordinary toggles do not touch playback.
+    let upcoming_id = runtime
+        .core()
+        .peek_upcoming(1)
+        .await
+        .first()
+        .map(|track| track.id);
+    if gapless_successor_changed(&event_before_reorder, upcoming_id) {
+        let track_id = event_before_reorder.track_id;
+        let position = event_before_reorder.position;
+        let was_playing = event_before_reorder.is_playing;
+        if let Err(error) = runtime.core().player().stop() {
+            log::warn!(
+                "[qbz-qt] shuffle: could not discard stale gapless successor for track {track_id}: {error}"
+            );
+            return;
+        }
+        drop(owner_action);
+        log::info!(
+            "[qbz-qt] shuffle: re-materializing track {track_id} at {position}s after its armed successor changed"
+        );
+        play_queue_track(runtime, track_id, position).await;
+        if !was_playing {
+            if let Err(error) = runtime.core().pause() {
+                log::warn!(
+                    "[qbz-qt] shuffle: could not restore paused state for track {track_id}: {error}"
+                );
+            }
+        }
+    }
+}
+
+fn gapless_successor_changed(event: &PlaybackEvent, upcoming_id: Option<u64>) -> bool {
+    event.track_id != 0
+        && event.gapless_next_track_id != 0
+        && Some(event.gapless_next_track_id) != upcoming_id
 }
 
 pub async fn cycle_repeat(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
@@ -3970,6 +4014,10 @@ pub async fn publish_queue(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 // ---------------------------------------------------------------------------
 
 static POLL_STARTED: AtomicBool = AtomicBool::new(false);
+/// Bumped when the local Shuffle control changes the queue timeline. The poll
+/// owns the gapless task/one-shot guard, so this is its cheap invalidation
+/// channel for an in-flight successor that was derived from the old order.
+static QUEUE_ORDER_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Wall-clock now in ms — the peer-position extrapolation clock (the Slint
 /// `now_ms`, playback.rs:5162).
@@ -4022,6 +4070,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         // does not re-request it on every tick while the download is in flight
         // (playback.rs:5049-5051).
         let mut gapless_requested_for: u64 = 0;
+        let mut seen_queue_order_generation = QUEUE_ORDER_GENERATION.load(Ordering::SeqCst);
         // Own the frontend's gapless fetch so an engine-empty recovery can
         // abort a segment body that is still monopolizing the link. The
         // player's incremental successor feeder has its own cancellation slot;
@@ -4083,6 +4132,20 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 seen_owner_playback_task_generation = task_generation;
                 gapless_requested_for = 0;
                 prefetch_track_edge.observe(0);
+            }
+
+            let queue_order_generation = QUEUE_ORDER_GENERATION.load(Ordering::SeqCst);
+            if queue_order_generation != seen_queue_order_generation {
+                seen_queue_order_generation = queue_order_generation;
+                gapless_requested_for = 0;
+                if let Some(task) = gapless_fetch_task.take() {
+                    if !task.is_finished() {
+                        log::info!(
+                            "[qbz-qt] [GAPLESS] aborting successor fetch after queue order changed"
+                        );
+                        task.abort();
+                    }
+                }
             }
 
             if gapless_fetch_task
@@ -5088,8 +5151,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
 mod tests {
     use super::{
         begin_resolved_play, cancel_owner_playback_tasks, capture_owner_scoped_snapshot,
-        filter_queue_with, gapless_edge_matches, owner_generation_changed, playback_recovery_cause,
-        prefetch_track_ids, purchase_quality_badge, quality_badge_from, reconcile_device_cap,
+        filter_queue_with, gapless_edge_matches, gapless_successor_changed,
+        owner_generation_changed, playback_recovery_cause, prefetch_track_ids,
+        purchase_quality_badge, quality_badge_from, reconcile_device_cap,
         resolved_play_is_current, should_stream_gapless_successor, source_change_targets_current,
         spawn_owner_playback_task, stream_error_text, xorshift_shuffle_seeded,
         OwnerActionObservation, OwnerActionToken, OwnerScopedSnapshot, PlaybackRecoveryCause,
@@ -5441,6 +5505,20 @@ mod tests {
         assert!(!gapless_edge_matches(1, 2, 1, 0, Some(1), Some(2)));
         assert!(!gapless_edge_matches(1, 2, 1, 0, None, Some(3)));
         assert!(!gapless_edge_matches(1, 1, 1, 0, None, Some(1)));
+    }
+
+    #[test]
+    fn shuffle_restarts_only_when_an_armed_successor_became_stale() {
+        let mut event = playback_event(1, true);
+        assert!(!gapless_successor_changed(&event, Some(2)));
+
+        event.gapless_next_track_id = 2;
+        assert!(!gapless_successor_changed(&event, Some(2)));
+        assert!(gapless_successor_changed(&event, Some(3)));
+        assert!(gapless_successor_changed(&event, None));
+
+        event.track_id = 0;
+        assert!(!gapless_successor_changed(&event, Some(3)));
     }
 
     // --- #638 fix 3: the request tier reconciles preference against the

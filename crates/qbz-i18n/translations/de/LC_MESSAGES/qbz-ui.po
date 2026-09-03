@@ -6684,3 +6684,30 @@ msgstr "{} abgebrochen"
 
 msgid "Download finished"
 msgstr "Download abgeschlossen"
+
+msgid "Shuffle: On"
+msgstr "Mischen: Ein"
+
+msgid "Shuffle: Off"
+msgstr "Mischen: Aus"
+
+msgid "Repeat: Off"
+msgstr "Wiederholen: Aus"
+
+msgid "Repeat: All"
+msgstr "Wiederholen: Alle"
+
+msgid "Repeat: One"
+msgstr "Wiederholen: Eins"
+
+msgid "Show album artwork in Queue track list"
+msgstr "Album-Cover in der Titelliste der Warteschlange anzeigen"
+
+msgid "Replace queue track numbers with album cover thumbnails. Off by default."
+msgstr "Ersetzt Titelnummern in der Warteschlange durch Cover-Miniaturen. Standardmäßig deaktiviert."
+
+msgid "Show album artwork in Library track list"
+msgstr "Album-Cover in der Titelliste der Bibliothek anzeigen"
+
+msgid "Display the album cover thumbnail between the track number and title. Off by default."
+msgstr "Zeigt die Cover-Miniatur zwischen Titelnummer und Titel an. Standardmäßig deaktiviert."

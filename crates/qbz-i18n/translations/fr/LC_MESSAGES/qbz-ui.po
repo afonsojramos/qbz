@@ -6682,3 +6682,30 @@ msgstr "{} annulées"
 
 msgid "Download finished"
 msgstr "Téléchargement terminé"
+
+msgid "Shuffle: On"
+msgstr "Lecture aléatoire : activée"
+
+msgid "Shuffle: Off"
+msgstr "Lecture aléatoire : désactivée"
+
+msgid "Repeat: Off"
+msgstr "Répéter : désactivé"
+
+msgid "Repeat: All"
+msgstr "Répéter : tout"
+
+msgid "Repeat: One"
+msgstr "Répéter : un titre"
+
+msgid "Show album artwork in Queue track list"
+msgstr "Afficher les pochettes dans la liste des pistes de la file d’attente"
+
+msgid "Replace queue track numbers with album cover thumbnails. Off by default."
+msgstr "Remplace les numéros de piste de la file d’attente par des miniatures de pochette. Désactivé par défaut."
+
+msgid "Show album artwork in Library track list"
+msgstr "Afficher les pochettes dans la liste des pistes de la Bibliothèque"
+
+msgid "Display the album cover thumbnail between the track number and title. Off by default."
+msgstr "Affiche la miniature de la pochette entre le numéro et le titre de la piste. Désactivé par défaut."

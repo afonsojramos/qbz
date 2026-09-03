@@ -6665,3 +6665,30 @@ msgstr "{} 件キャンセル"
 
 msgid "Download finished"
 msgstr "ダウンロード完了"
+
+msgid "Shuffle: On"
+msgstr "シャッフル：オン"
+
+msgid "Shuffle: Off"
+msgstr "シャッフル：オフ"
+
+msgid "Repeat: Off"
+msgstr "リピート：オフ"
+
+msgid "Repeat: All"
+msgstr "リピート：すべて"
+
+msgid "Repeat: One"
+msgstr "リピート：1曲"
+
+msgid "Show album artwork in Queue track list"
+msgstr "キューのトラックリストにアルバムアートワークを表示"
+
+msgid "Replace queue track numbers with album cover thumbnails. Off by default."
+msgstr "キューのトラック番号をアルバムカバーのサムネイルに置き換えます。デフォルトではオフです。"
+
+msgid "Show album artwork in Library track list"
+msgstr "ライブラリのトラックリストにアルバムアートワークを表示"
+
+msgid "Display the album cover thumbnail between the track number and title. Off by default."
+msgstr "トラック番号とタイトルの間にアルバムカバーのサムネイルを表示します。デフォルトではオフです。"

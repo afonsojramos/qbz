@@ -1334,24 +1334,40 @@ impl QueueManager {
         if state.shuffle == enabled {
             return;
         }
-        state.shuffle = enabled;
 
         if enabled {
+            state.shuffle = true;
             // The manual block is meaningless once the order is reshuffled (#442).
             state.manual_next_count = 0;
             Self::regenerate_shuffle_order_internal(&mut state);
 
-            // Enabling shuffle during active playback must keep current track
-            // as the first item in the shuffled timeline. Otherwise, indices
-            // before current are interpreted as already played.
+            // Shuffle only the part of the linear queue that has not been
+            // traversed yet. The canonical prefix stays behind the cursor, so
+            // enabling shuffle midway through an album cannot replay tracks
+            // the user already passed.
             if let Some(curr_idx) = state.current_index {
-                if let Some(pos) = state.shuffle_order.iter().position(|&idx| idx == curr_idx) {
-                    if pos != 0 {
-                        state.shuffle_order.swap(0, pos);
-                    }
-                    state.shuffle_position = 0;
-                }
+                let mut order = (0..=curr_idx).collect::<Vec<_>>();
+                order.extend(
+                    state
+                        .shuffle_order
+                        .iter()
+                        .copied()
+                        .filter(|&idx| idx > curr_idx),
+                );
+                state.shuffle_order = order;
+                state.shuffle_position = curr_idx;
             }
+        } else {
+            // Turning shuffle off is a playback-order transition, not merely
+            // a flag change. If the shuffled cursor is on canonical track 8,
+            // deriving the ordinary tail from index 8 would silently discard
+            // every unheard track whose canonical index is lower. Flatten the
+            // traversed shuffle prefix + NOW + every still-unheard canonical
+            // occurrence into the physical queue before returning to linear
+            // traversal. History is remapped by occurrence index below and
+            // therefore keeps its chronology and duplicate rows intact.
+            Self::linearize_after_shuffle_internal(&mut state);
+            state.shuffle = false;
         }
     }
 
@@ -1360,13 +1376,19 @@ impl QueueManager {
     /// instead of generating a second independent shuffle.
     pub fn set_shuffle_with_order(&self, enabled: bool, shuffle_order: Option<Vec<usize>>) {
         let mut state = self.state.lock().unwrap();
-        state.shuffle = enabled;
 
         if !enabled {
-            state.shuffle_order.clear();
-            state.shuffle_position = 0;
+            if state.shuffle {
+                Self::linearize_after_shuffle_internal(&mut state);
+            } else {
+                state.shuffle_order.clear();
+                state.shuffle_position = 0;
+            }
+            state.shuffle = false;
             return;
         }
+
+        state.shuffle = true;
 
         if let Some(order) =
             shuffle_order.filter(|order| Self::is_valid_shuffle_order(order, state.tracks.len()))
@@ -1643,6 +1665,74 @@ impl QueueManager {
         } else {
             state.shuffle_position = 0;
         }
+    }
+
+    /// Convert the active shuffled timeline into a linear queue without
+    /// losing unheard rows whose canonical indices precede the current one.
+    ///
+    /// The new physical order is:
+    /// `traversed shuffle prefix · current · unheard rows in canonical order`.
+    /// Every coordinate stored by the manager is then remapped from the old
+    /// occurrence index to the new one. Track ids are deliberately irrelevant:
+    /// two separately queued copies of the same recording must remain two
+    /// separately positioned occurrences.
+    fn linearize_after_shuffle_internal(state: &mut InternalState) {
+        let track_count = state.tracks.len();
+        let Some(current_index) = state.current_index.filter(|&idx| idx < track_count) else {
+            state.shuffle_order.clear();
+            state.shuffle_position = 0;
+            return;
+        };
+        let Some(current_position) = state
+            .shuffle_order
+            .iter()
+            .position(|&idx| idx == current_index)
+        else {
+            // Defensive fallback for a damaged/incomplete order: preserve the
+            // physical queue rather than guessing which rows were traversed.
+            state.shuffle_order.clear();
+            state.shuffle_position = 0;
+            return;
+        };
+
+        let mut seen = vec![false; track_count];
+        let mut linear_order = Vec::with_capacity(track_count);
+        for &index in state.shuffle_order.iter().take(current_position) {
+            if index < track_count && !seen[index] {
+                seen[index] = true;
+                linear_order.push(index);
+            }
+        }
+        if !seen[current_index] {
+            seen[current_index] = true;
+            linear_order.push(current_index);
+        }
+        for (index, was_seen) in seen.iter().enumerate() {
+            if !was_seen {
+                linear_order.push(index);
+            }
+        }
+
+        let mut old_to_new = vec![None; track_count];
+        for (new_index, &old_index) in linear_order.iter().enumerate() {
+            old_to_new[old_index] = Some(new_index);
+        }
+        let mut slots = std::mem::take(&mut state.tracks)
+            .into_iter()
+            .map(Some)
+            .collect::<Vec<_>>();
+        state.tracks = linear_order
+            .iter()
+            .filter_map(|&old_index| slots[old_index].take())
+            .collect();
+        state.current_index = old_to_new[current_index];
+        state.history = state
+            .history
+            .iter()
+            .filter_map(|&old_index| old_to_new.get(old_index).copied().flatten())
+            .collect();
+        state.shuffle_order.clear();
+        state.shuffle_position = 0;
     }
 
     /// Record one canonical queue occurrence as the newest played entry.
@@ -2324,6 +2414,123 @@ mod tests {
         let state = queue.get_state();
         assert_eq!(state.total_tracks, 11);
         assert_eq!(state.upcoming.len(), 10);
+    }
+
+    #[test]
+    fn disabling_shuffle_keeps_every_unheard_track_upcoming() {
+        let queue = QueueManager::new();
+        queue.set_queue_with_order(
+            (1..=9).map(create_test_track).collect(),
+            Some(0),
+            true,
+            Some(vec![0, 7, 3, 1, 5, 8, 2, 6, 4]),
+        );
+
+        assert_eq!(queue.next().expect("shuffled track 8").id, 8);
+        queue.set_shuffle(false);
+
+        let state = queue.get_state_full();
+        assert!(!state.shuffle);
+        assert_eq!(state.total_tracks, 9);
+        assert_eq!(state.current_track.expect("current track").id, 8);
+        assert_eq!(
+            state
+                .history
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(
+            state
+                .upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4, 5, 6, 7, 9]
+        );
+
+        let mut played_after_unshuffle = Vec::new();
+        while let Some(track) = queue.next() {
+            played_after_unshuffle.push(track.id);
+        }
+        assert_eq!(played_after_unshuffle, vec![2, 3, 4, 5, 6, 7, 9]);
+    }
+
+    #[test]
+    fn authoritative_shuffle_disable_keeps_every_unheard_track_upcoming() {
+        let queue = QueueManager::new();
+        queue.set_queue_with_order(
+            (1..=6).map(create_test_track).collect(),
+            Some(0),
+            true,
+            Some(vec![0, 4, 2, 5, 1, 3]),
+        );
+
+        assert_eq!(queue.next().expect("shuffled track 5").id, 5);
+        queue.set_shuffle_with_order(false, None);
+
+        let state = queue.get_state_full();
+        assert!(!state.shuffle);
+        assert_eq!(state.current_track.expect("current track").id, 5);
+        assert_eq!(
+            state
+                .upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4, 6]
+        );
+    }
+
+    #[test]
+    fn disabling_shuffle_remaps_duplicate_occurrences_without_merging_them() {
+        let queue = QueueManager::new();
+        let mut first_copy = create_test_track(7);
+        first_copy.title = "First copy".into();
+        let mut second_copy = create_test_track(7);
+        second_copy.title = "Second copy".into();
+        queue.set_queue_with_order(
+            vec![
+                first_copy,
+                create_test_track(8),
+                second_copy,
+                create_test_track(9),
+            ],
+            Some(0),
+            true,
+            Some(vec![0, 2, 1, 3]),
+        );
+
+        assert_eq!(queue.next().expect("second copy").title, "Second copy");
+        queue.set_shuffle(false);
+
+        let state = queue.get_state_full();
+        assert_eq!(state.total_tracks, 4);
+        assert_eq!(state.history[0].title, "First copy");
+        assert_eq!(state.current_track.expect("current copy").title, "Second copy");
+        assert_eq!(
+            state
+                .upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![8, 9]
+        );
+    }
+
+    #[test]
+    fn enabling_shuffle_mid_queue_does_not_requeue_the_traversed_prefix() {
+        let queue = QueueManager::new();
+        queue.set_queue((1..=7).map(create_test_track).collect(), Some(3));
+
+        queue.set_shuffle(true);
+
+        let state = queue.get_state_full();
+        assert!(state.shuffle);
+        assert_eq!(state.current_track.expect("current track").id, 4);
+        assert_eq!(state.upcoming.len(), 3);
+        assert!(state.upcoming.iter().all(|track| track.id > 4));
     }
 
     #[test]

@@ -6690,3 +6690,30 @@ msgstr "{} canceladas"
 
 msgid "Download finished"
 msgstr "Descarga finalizada"
+
+msgid "Shuffle: On"
+msgstr "Aleatorio: activado"
+
+msgid "Shuffle: Off"
+msgstr "Aleatorio: desactivado"
+
+msgid "Repeat: Off"
+msgstr "Repetir: desactivado"
+
+msgid "Repeat: All"
+msgstr "Repetir: todo"
+
+msgid "Repeat: One"
+msgstr "Repetir: una"
+
+msgid "Show album artwork in Queue track list"
+msgstr "Mostrar carátulas de álbum en la lista de pistas de la cola"
+
+msgid "Replace queue track numbers with album cover thumbnails. Off by default."
+msgstr "Reemplaza los números de pista de la cola con miniaturas de las carátulas. Desactivado por defecto."
+
+msgid "Show album artwork in Library track list"
+msgstr "Mostrar carátulas de álbum en la lista de pistas de la Biblioteca"
+
+msgid "Display the album cover thumbnail between the track number and title. Off by default."
+msgstr "Muestra la miniatura de la carátula entre el número y el título de la pista. Desactivado por defecto."

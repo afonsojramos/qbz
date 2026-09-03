@@ -77,6 +77,16 @@ Rectangle {
 
     property string activeTab: "all"
 
+    readonly property var settingsDoc: {
+        try { return JSON.parse(QbzBridge.settingsJson) }
+        catch (e) { return ({}) }
+    }
+    // Independent opt-in from Queue and Local Library. TrackRow already owns
+    // the required number → artwork → title geometry, so this only arms it.
+    readonly property bool libraryTrackArtwork:
+        settingsDoc.libraryTrackArtwork === true
+    onLibraryTrackArtworkChanged: Qt.callLater(root.listWindowReport)
+
     readonly property var counts: JSON.parse(QbzLibrary.libraryCountsJson)
     // Full merged feed (parsed once per publish — timed for the report).
     readonly property var feed: parseFeed(QbzLibrary.libraryJson)
@@ -85,6 +95,12 @@ Rectangle {
         var f = JSON.parse(json)
         var totals = { "tracks": 0, "albums": 0, "artists": 0,
                        "playlists": 0, "labels": 0 }
+        // Tracks / Albums now expose both favourite and purchased sources.
+        // A purchased entity can also be favourited and therefore appear in
+        // the merged feed twice; count the entity, not its source rows.
+        var tabSeen = ({})
+        var tabPurchased = ({})
+        var tabFavorites = ({})
         // Normalize the strings once per Rust publish. Library > All can hold
         // the complete local library, so repeating toLowerCase() in every
         // search pass and every sort comparison turns one key press into a
@@ -96,10 +112,16 @@ Rectangle {
             it._artistLc = String(it.artist || "").toLowerCase()
             it._albumLc = String(it.album || "").toLowerCase()
             it._genreLc = String(it.genre || "").toLowerCase()
-            if (it.kind === "track") {
-                if (it.group === "favorites") totals.tracks++
-            } else if (it.kind === "album") {
-                if (it.group === "favorites") totals.albums++
+            if (it.kind === "track" || it.kind === "album") {
+                if (it.group === "favorites" || it.group === "purchases") {
+                    var tabKey = it.kind + ":" + it.id
+                    if (it.group === "purchases") tabPurchased[tabKey] = true
+                    else tabFavorites[tabKey] = true
+                    if (!tabSeen[tabKey]) {
+                        tabSeen[tabKey] = true
+                        totals[it.kind + "s"]++
+                    }
+                }
             } else if (it.kind === "artist") totals.artists++
             else if (it.kind === "playlist") totals.playlists++
             else if (it.kind === "label") totals.labels++
@@ -108,6 +130,8 @@ Rectangle {
         // same feed. Carry the result on the Array itself (outside `length`),
         // so all consumers keep the exact same row array and model identity.
         f._tabTotals = totals
+        f._tabPurchased = tabPurchased
+        f._tabFavorites = tabFavorites
         // Was a bare console.log, i.e. printed on every publish for every user
         // forever. It belongs to the same investigation as the derive timing
         // right below it, so it now rides the same category and is silent
@@ -174,10 +198,17 @@ Rectangle {
     property string artistsGroup: "off"  // "off" | "alpha"
     property string sortBy: "date"      // "date" | "title" | "artist"
     property bool sortAsc: false        // date: false = newest first
+    // Shared source state for All / Tracks / Albums. The bridge singleton
+    // survives navigation, so the two new per-tab toggles inherit the same
+    // session persistence (and default ON) as their All-tab counterparts.
     readonly property bool showPurchases: QbzLibrary.sessionShowPurchases
     readonly property bool showFavorites: QbzLibrary.sessionShowFavorites
     readonly property bool showFollowing: QbzLibrary.sessionShowFollowing
     property bool showLocal: true
+    // Only bumped when a live heart change can alter membership in the
+    // current Tracks / Albums source filter. Kept separate from `feed` so the
+    // normal card-heart path still avoids rebuilding a large scrolled model.
+    property int favoriteFilterRev: 0
     property string viewMode: "grid"    // All tab: "grid" | "list"
     property string albumsView: "grid"    // "grid" | "list"
     property string playlistsView: "grid" // "grid" | "list"
@@ -283,10 +314,15 @@ Rectangle {
             hidden.push(QbzSession.tr("Favorites", tr))
         if (!root.showPurchases)
             hidden.push(QbzSession.tr("Purchases", tr))
-        if (!root.showFollowing)
-            hidden.push(QbzSession.tr("Following", tr))
-        if (!root.showLocal)
-            hidden.push(QbzSession.tr("Local", tr))
+        // Following / Local are All-only sources. Do not claim they filter
+        // the Albums or Tracks toolbar just because their shared session
+        // switches happen to be off on All.
+        if (root.activeTab === "all") {
+            if (!root.showFollowing)
+                hidden.push(QbzSession.tr("Following", tr))
+            if (!root.showLocal)
+                hidden.push(QbzSession.tr("Local", tr))
+        }
         var out = []
         if (hidden.length > 0)
             out.push({ group: QbzSession.tr("Hidden", tr), values: hidden })
@@ -396,6 +432,9 @@ Rectangle {
     // rides the shared route-timing category — it is silent unless
     // QT_LOGGING_RULES="qbz.nav.timing.info=true".
     readonly property var visibleRows: {
+        // Explicit dependency for the narrow live-membership invalidation
+        // above; the value itself is not part of the derive.
+        var _favoriteFilterRev = root.favoriteFilterRev
         var _t = Date.now()
         var _rows = visibleItems()
         var _line = "[libtiming] derive tab=" + activeTab + " feed=" + feed.length
@@ -511,14 +550,44 @@ Rectangle {
                 || it._titleLc.indexOf(tabNeedle) >= 0
                 || it._artistLc.indexOf(tabNeedle) >= 0
         }
-        var tabGenres = (activeTab === "tracks" || activeTab === "albums")
-            ? root.genreNames : []
+        var sourceTab = activeTab === "tracks" || activeTab === "albums"
+        var sourceKind = activeTab === "tracks" ? "track" : "album"
+        var tabGenres = sourceTab ? root.genreNames : []
+        // Mobile-Qobuz semantics (owner video, 2026-09-03): neither switch is
+        // the unconstrained union, either switch alone selects that source,
+        // and both switches select their INTERSECTION. Membership comes from
+        // the actual source rows, not the asynchronously-warmed isFavorite
+        // cache on a purchase row. Rendering still prefers the purchase row
+        // so a qualifying favourite retains its purchase-quality metadata.
+        var purchased = feed._tabPurchased || ({})
+        var favorites = feed._tabFavorites || ({})
+        var tabSeen = ({})
         for (i = 0; i < feed.length; i++) {
             var x = feed[i]
             var keep = false
-            if (activeTab === "tracks") keep = x.kind === "track" && x.group === "favorites"
-            else if (activeTab === "albums") keep = x.kind === "album" && x.group === "favorites"
-            else if (activeTab === "artists") keep = x.kind === "artist"
+            if (sourceTab && x.kind === sourceKind) {
+                var sourceKey = sourceKind + ":" + x.id
+                var isPurchased = purchased[sourceKey] === true
+                var isFavorite = favorites[sourceKey] === true
+                var included
+                if (showPurchases && showFavorites) {
+                    included = isPurchased && isFavorite
+                } else if (showPurchases) {
+                    included = isPurchased
+                } else if (showFavorites) {
+                    included = isFavorite
+                } else {
+                    included = isPurchased || isFavorite
+                }
+                // One representative row per included entity. A purchase row
+                // wins even in Favorites-only so its quality badge survives.
+                keep = included && ((isPurchased && x.group === "purchases")
+                    || (!isPurchased && x.group === "favorites"))
+                if (keep) {
+                    if (tabSeen[sourceKey]) keep = false
+                    else tabSeen[sourceKey] = true
+                }
+            } else if (activeTab === "artists") keep = x.kind === "artist"
             else if (activeTab === "labels") keep = x.kind === "label"
             else if (activeTab === "playlists") keep = x.kind === "playlist"
                 && (playlistsSubTab === "following" ? x.group === "following" : x.group === "favorites")
@@ -822,21 +891,39 @@ Rectangle {
         //   scroll offset to 0 and rebuilds every delegate.
         //
         // Scrolled to row 40 in a 3,000-row feed, one heart click sent the
-        // user back to row 0. Nothing on screen needed the re-derive: the
-        // grid cards each listen to this same signal for their own key
+        // user back to row 0. Ordinarily nothing on screen needs the
+        // re-derive: the grid cards each listen to this same signal for their
+        // own key
         // (cards/AlbumCard.qml, TrackCard.qml, PlaylistCard.qml,
         // ArtistCard.qml) and the list rows do the same
         // (library/FeedListRow.qml).
         // The in-place mutation is for the delegates built LATER — when the
         // user scrolls, re-filters or switches tab — and it reaches them
-        // because `visibleRows` pushes the very same row objects.
+        // because `visibleRows` pushes the very same row objects. The narrow
+        // exception is a Tracks / Albums combination whose membership
+        // depends on the heart; `favoriteFilterRev` re-derives only then.
         //
         // Same reasoning as onPinChanged below; the two are now symmetric.
         function onLibraryFavoriteChanged(key, value) {
             var f = root.feed
             for (var i = 0; i < f.length; i++) {
-                if (f[i].artKey === key) { f[i].isFavorite = value; break }
+                // A purchased favourite has one row per source; patch both.
+                if (f[i].artKey === key) f[i].isFavorite = value
             }
+            // Keep the entity-level source set live even when a newly-added
+            // favourite has no `favorites` row until the next API refresh.
+            if (f._tabFavorites) {
+                if (value) f._tabFavorites[key] = true
+                else delete f._tabFavorites[key]
+            }
+            var sourceTab = root.activeTab === "tracks"
+                || root.activeTab === "albums"
+            // Favourite membership affects the model in every combination
+            // except Purchases-only. Re-derive only in those cases; elsewhere
+            // the mounted delegates consume this same signal directly and
+            // retain the existing no-scroll-reset path.
+            if (sourceTab && (root.showFavorites || !root.showPurchases))
+                root.favoriteFilterRev++
         }
         // Pin state settled in the store. The row is patched IN PLACE and the
         // feed is deliberately NOT re-signalled: `feedChanged()` re-derives
@@ -1252,8 +1339,19 @@ Rectangle {
                     Component {
                         id: trackRowComp
                         TrackRow {
-                            item: modelData
+                            item: {
+                                var art = root.libraryTrackArtwork
+                                    ? (root.artMap[modelData.artKey] || "") : ""
+                                return art === "" ? modelData
+                                    : Object.assign({}, modelData, { "artPath": art })
+                            }
                             number: modelData._no || (index + 1)
+                            showArtwork: root.libraryTrackArtwork
+                            artPending: root.libraryTrackArtwork
+                                && (modelData.imageUrl || "") !== ""
+                                && (root.artMap[modelData.artKey] || "") === ""
+                            skelPhase: root.skelPhase
+                            artSettleMs: 2500
                             selectMode: root.tracksMultiSelect
                             checked: root.tracksSelected[modelData.id] === true
                             onToggleSelect: function (mods) { root.toggleTrackSelected(modelData.id, mods) }
@@ -1503,6 +1601,12 @@ Rectangle {
     }
     function listWindowReport() {
         if (!list.visible) return
+        // With the Library track-art opt-in disabled this list renders no
+        // images; release its window instead of decoding invisible covers.
+        if (root.activeTab === "tracks" && !root.libraryTrackArtwork) {
+            root.reportWindow([], 0, -1)
+            return
+        }
         // Variable-height group headers and the All tab's 2px zebra gutter
         // make arithmetic row pitches approximate. Ask the native ListView
         // for the real visible indices and keep a four-row artwork runway.
