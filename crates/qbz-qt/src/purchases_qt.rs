@@ -1511,12 +1511,15 @@ async fn refresh_entitlement_index() -> Option<svc::PurchaseEntitlementIndex> {
                 freshness: EntitlementFreshness::Fresh,
                 index: Some(index.clone()),
             };
+            bump_entitlement_rev();
             Some(index)
         }
         Err(error) => {
             log::warn!("[qbz-qt] purchase entitlement refresh failed: {error}");
             let mut cache = ENTITLEMENTS.lock().unwrap_or_else(|e| e.into_inner());
             cache.freshness = EntitlementFreshness::Stale;
+            drop(cache);
+            bump_entitlement_rev();
             None
         }
     }
@@ -1526,6 +1529,61 @@ fn invalidate_entitlement_index() {
     ENTITLEMENT_PROFILE_GENERATION.fetch_add(1, Ordering::SeqCst);
     ENTITLEMENT_REQUEST_GENERATION.fetch_add(1, Ordering::SeqCst);
     *ENTITLEMENTS.lock().unwrap_or_else(|e| e.into_inner()) = EntitlementCache::default();
+    bump_entitlement_rev();
+}
+
+fn bump_entitlement_rev() {
+    crate::purchases_bridge::ui(|mut bridge| {
+        let next = bridge.as_ref().entitlement_rev().wrapping_add(1);
+        bridge.as_mut().set_entitlement_rev(next);
+    });
+}
+
+pub(crate) fn is_album_purchased(album_id: &str, _revision: i32) -> bool {
+    let album_id = album_id.trim();
+    if album_id.is_empty() {
+        return false;
+    }
+    ENTITLEMENTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .index
+        .as_ref()
+        .is_some_and(|index| {
+            matches!(
+                index.entitlement_for(album_id),
+                svc::PurchaseEntitlement::FullAlbum { .. }
+            )
+        })
+}
+
+pub(crate) fn album_purchased_quality(album_id: &str, _revision: i32) -> String {
+    let album_id = album_id.trim();
+    if album_id.is_empty() {
+        return String::new();
+    }
+    let cache = ENTITLEMENTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let Some(index) = cache.index.as_ref() else {
+        return String::new();
+    };
+    let svc::PurchaseEntitlement::FullAlbum {
+        downloadable_format_ids,
+        ..
+    } = index.entitlement_for(album_id)
+    else {
+        return String::new();
+    };
+    highest_entitled_quality(&downloadable_format_ids)
+}
+
+fn highest_entitled_quality(format_ids: &[u32]) -> String {
+    [56_i64, 55, 27, 7, 6, 5]
+        .into_iter()
+        .find(|format_id| format_ids.contains(&(*format_id as u32)))
+        .map(local_variant_label)
+        .unwrap_or_default()
 }
 
 /// Bind the shared index to the newly active profile and warm it without
@@ -2442,6 +2500,8 @@ pub fn set_album_playback_mode(
                     0
                 },
             );
+            let runtime = crate::app();
+            crate::playback_qt::rematerialize_current_album_source(&runtime, &patch_album_id).await;
         }
     });
 }
@@ -4270,6 +4330,16 @@ mod tests {
         assert_eq!(row.id, "5000000000");
         let json = serde_json::to_value(&row).expect("serializes");
         assert!(json["id"].is_string());
+    }
+
+    #[test]
+    fn album_card_quality_uses_the_highest_exact_entitlement() {
+        assert_eq!(
+            highest_entitled_quality(&[5, 7, 6]),
+            "24-bit / 96 kHz · FLAC"
+        );
+        assert_eq!(highest_entitled_quality(&[55, 56]), "DSD128 · DSF");
+        assert_eq!(highest_entitled_quality(&[]), "");
     }
 }
 

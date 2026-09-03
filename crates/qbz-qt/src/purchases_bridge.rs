@@ -60,6 +60,10 @@ pub mod qbz_purchases_bridge {
         /// (re-opening the same album, or a filter toggle that changes nothing
         /// visible), the same trick `QbzSession.trRev` plays.
         #[qproperty(i32, purchases_rev)]
+        /// Revision for the process-wide entitlement index. AlbumCard passes
+        /// this into its read-only lookup invokables so every mounted card
+        /// re-evaluates when the account index is refreshed or invalidated.
+        #[qproperty(i32, entitlement_rev)]
         /// The purchases with a download IN FLIGHT right now, as a JSON array
         /// of `{ id, title }` — the nav flyout's "Downloads · N" section. A
         /// download is process-wide and survives leaving its page; this is
@@ -160,6 +164,20 @@ pub mod qbz_purchases_bridge {
             track_ids_json: QString,
         );
 
+        /// Read-only AlbumCard entitlement lookup. `revision` is a QML binding
+        /// dependency; the controller reads the process-wide index.
+        #[qinvokable]
+        fn is_album_purchased(self: &QbzPurchases, album_id: QString, revision: i32) -> bool;
+
+        /// Highest exact format owned for the AlbumCard tooltip, or empty when
+        /// the entitlement carries no format list.
+        #[qinvokable]
+        fn album_purchased_quality(
+            self: &QbzPurchases,
+            album_id: QString,
+            revision: i32,
+        ) -> QString;
+
         /// Change the selected download format. RE-SCOPES every downloaded
         /// mark on the detail screen, the progress block AND the
         /// Add-to-Library affordance (§6) — the single most surprising
@@ -226,6 +244,7 @@ pub struct QbzPurchasesRust {
     list_json: QString,
     album_json: QString,
     purchases_rev: i32,
+    entitlement_rev: i32,
     active_downloads_json: QString,
 }
 
@@ -237,6 +256,7 @@ impl Default for QbzPurchasesRust {
             list_json: QString::from("{}"),
             album_json: QString::from("{}"),
             purchases_rev: 0,
+            entitlement_rev: 0,
             // Same rule: the flyout JSON.parses it on the first frame.
             active_downloads_json: QString::from("[]"),
         }
@@ -339,6 +359,16 @@ impl qbz_purchases_bridge::QbzPurchases {
             format_id,
             track_ids_json.to_string(),
         );
+    }
+
+    pub fn is_album_purchased(&self, album_id: QString, revision: i32) -> bool {
+        crate::purchases_qt::is_album_purchased(&album_id.to_string(), revision)
+    }
+
+    pub fn album_purchased_quality(&self, album_id: QString, revision: i32) -> QString {
+        QString::from(
+            crate::purchases_qt::album_purchased_quality(&album_id.to_string(), revision).as_str(),
+        )
     }
 
     pub fn set_format(self: Pin<&mut Self>, format_id: i32) {

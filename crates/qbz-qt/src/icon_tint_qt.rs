@@ -178,6 +178,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("clock", include_str!("../qml/assets/icons/primary/clock.svg")),
     ("cloud-download", include_str!("../qml/assets/icons/primary/cloud-download.svg")),
     ("cloud-off", include_str!("../qml/assets/icons/primary/cloud-off.svg")),
+    ("cloud-sync", include_str!("../qml/assets/icons/primary/cloud-sync.svg")),
     ("cloud-upload", include_str!("../qml/assets/icons/primary/cloud-upload.svg")),
     ("compass", include_str!("../qml/assets/icons/primary/compass.svg")),
     ("copy", include_str!("../qml/assets/icons/primary/copy.svg")),
@@ -295,6 +296,7 @@ const MASTERS: &[(&str, &str)] = &[
     // "Tidal's SVG is black — tint white so it reads on dark surfaces"); going
     // through the tint table instead of a fixed white rendition is what makes it
     // legible on the 11 light themes as well.
+    ("ticket-check", include_str!("../qml/assets/icons/primary/ticket-check.svg")),
     ("tidal-tidal", include_str!("../qml/assets/icons/primary/tidal-tidal.svg")),
     ("translate", include_str!("../qml/assets/icons/primary/translate.svg")),
     ("trash-2", include_str!("../qml/assets/icons/primary/trash-2.svg")),

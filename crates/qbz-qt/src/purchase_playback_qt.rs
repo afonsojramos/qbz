@@ -77,6 +77,28 @@ fn pinned_copies() -> &'static Mutex<HashMap<String, PinnedCopy>> {
     PINNED.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Exact purchased format that supplied the bytes currently associated with
+/// a catalog track id. The queue deliberately keeps Qobuz metadata, so this
+/// small side table is the only honest source for the NPB quality stamp after
+/// late materialization (including a successor prepared gaplessly).
+fn materialized_formats() -> &'static Mutex<HashMap<u64, u32>> {
+    static FORMATS: OnceLock<Mutex<HashMap<u64, u32>>> = OnceLock::new();
+    FORMATS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn materialized_format(track_id: u64) -> Option<u32> {
+    materialized_formats()
+        .lock()
+        .ok()
+        .and_then(|formats| formats.get(&track_id).copied())
+}
+
+pub(crate) fn clear_materialized_track(track_id: u64) {
+    if let Ok(mut formats) = materialized_formats().lock() {
+        formats.remove(&track_id);
+    }
+}
+
 fn is_dsd_path(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -161,7 +183,11 @@ pub(crate) async fn resolve_preferred_copies(
 
 /// Keep current and gapless materialization on one physical copy whenever it
 /// remains healthy. Called only after the player accepted the ticket.
-pub(crate) fn remember_materialized_copy(resolution: &PurchaseResolution, copy: &PurchasedCopy) {
+pub(crate) fn remember_materialized_copy(
+    track_id: u64,
+    resolution: &PurchaseResolution,
+    copy: &PurchasedCopy,
+) {
     if let Ok(mut pins) = pinned_copies().lock() {
         pins.insert(
             resolution.album_id.clone(),
@@ -171,6 +197,9 @@ pub(crate) fn remember_materialized_copy(resolution: &PurchaseResolution, copy: 
                 copy_id: copy.copy_id.clone(),
             },
         );
+    }
+    if let Ok(mut formats) = materialized_formats().lock() {
+        formats.insert(track_id, copy.format_id);
     }
 }
 

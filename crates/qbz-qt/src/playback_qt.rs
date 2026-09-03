@@ -1356,6 +1356,14 @@ pub(crate) async fn play_resolved_offline_aware(
     } else {
         start_position_secs
     };
+    if !resolved_play_is_current(play_generation) {
+        return Ok(());
+    }
+    // The queue row retains its Qobuz identity, so explicitly forget the
+    // previous byte source before resolving this start. A purchase success
+    // records its exact format below; Qobuz mode and every fallback leave the
+    // row clear and therefore restore the catalog badge in the NPB.
+    crate::purchase_playback_qt::clear_materialized_track(track_id);
     if let Some(track) = logical_track.as_ref() {
         match try_play_preferred_purchase(runtime, track, start_position_secs, play_generation)
             .await
@@ -1479,7 +1487,7 @@ async fn try_play_preferred_purchase(
             return PreferredPurchaseStart::Superseded;
         }
 
-        crate::purchase_playback_qt::remember_materialized_copy(&resolution, copy);
+        crate::purchase_playback_qt::remember_materialized_copy(track.id, &resolution, copy);
         log::info!(
             "[qbz-qt] purchase: playing track {} from copy {} (format {})",
             track.id,
@@ -1663,6 +1671,11 @@ pub(crate) async fn route_play_remote(
     track_id: u64,
     entry: &'static str,
 ) -> bool {
+    // This play decision supersedes any local purchase bytes previously
+    // associated with the catalog id. A local purchase resolution records the
+    // format again after the player accepts it; Cast/QConnect/local-source
+    // routes leave it clear so the NPB never inherits a stale purchase badge.
+    crate::purchase_playback_qt::clear_materialized_track(track_id);
     let Some(_owner_action) = begin_owner_action() else {
         log::debug!("[play] entry={entry} track={track_id} -> refused by delegated authority");
         crate::now_playing::clear_loading();
@@ -1691,6 +1704,7 @@ pub(crate) async fn route_play_remote_track(
     track: &QueueTrack,
     entry: &'static str,
 ) -> bool {
+    crate::purchase_playback_qt::clear_materialized_track(track.id);
     let Some(_owner_action) = begin_owner_action() else {
         log::debug!(
             "[play] entry={entry} track={} -> refused by delegated authority",
@@ -3302,6 +3316,58 @@ async fn play_queue_track(
     publish_queue(runtime).await;
 }
 
+/// Re-resolve an already audible album track after AlbumView changes its
+/// persisted playback source. The queue/cursor stay intact; only the bytes are
+/// replaced. The player's current position is a cheap atomic snapshot, so the
+/// ordinary resolved funnel can resume there instead of making the user wait
+/// for the next track (or restarting unnecessarily).
+pub(crate) async fn rematerialize_current_album_source(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    album_id: &str,
+) {
+    let Some(owner_action) = begin_owner_action() else {
+        return;
+    };
+    if crate::cast_qt::is_casting().await {
+        return;
+    }
+    let Some(track) = runtime.core().current_track().await else {
+        return;
+    };
+    let event = runtime.core().player().get_playback_event();
+    if !source_change_targets_current(album_id, &track, &event) {
+        return;
+    }
+    let position = event.position;
+    if let Err(error) = runtime.core().player().stop() {
+        log::warn!(
+            "[qbz-qt] purchase: could not stop track {} for source change: {error}",
+            track.id
+        );
+        return;
+    }
+    drop(owner_action);
+    log::info!(
+        "[qbz-qt] purchase: rematerializing track {} at {}s after source change",
+        track.id,
+        position
+    );
+    play_queue_track(runtime, track.id, position).await;
+}
+
+fn source_change_targets_current(
+    album_id: &str,
+    track: &QueueTrack,
+    event: &PlaybackEvent,
+) -> bool {
+    event.is_playing
+        && event.track_id == track.id
+        && track
+            .album_id
+            .as_deref()
+            .is_some_and(|current_album| current_album == album_id)
+}
+
 /// True when a stringified play error means the track cannot play now or ever
 /// at any quality, as opposed to a transient network/server failure (those are
 /// already retried with backoff inside the client and must NOT cost the user a
@@ -3694,7 +3760,13 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
     if let Some(t) = crate::tray_qt::handle() {
         t.set_track(title.clone(), track.artist.clone(), track.album.clone());
     }
-    let (tier, label) = quality_badge(&track).await;
+    let purchase_format = (!track.is_local)
+        .then(|| crate::purchase_playback_qt::materialized_format(track.id))
+        .flatten();
+    let (tier, label) = match purchase_format.and_then(purchase_quality_badge) {
+        Some((tier, label, _, _)) => (tier.to_string(), label.to_string()),
+        None => quality_badge(&track).await,
+    };
     let album_id = track.album_id.clone().unwrap_or_default();
     // Album with its release variant appended ("Octavarium (2009 Remaster)"),
     // 1:1 with the Slint `album_display` (playback.rs:1941-1949).
@@ -3766,8 +3838,12 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
     // Catalog max + whether the streaming-quality pref governs this request:
     // the downgrade arrow compares DELIVERED against this (quality_state.rs).
     // Local and Plex sources are not governed — nothing downgrades them.
-    let governed = !track.is_local;
-    crate::now_playing::set_catalog_quality(track.bit_depth, track.sample_rate, governed);
+    let (source_depth, source_rate) = purchase_format
+        .and_then(purchase_quality_badge)
+        .map(|(_, _, depth, rate)| (depth, rate))
+        .unwrap_or((track.bit_depth, track.sample_rate));
+    let governed = !track.is_local && purchase_format.is_none();
+    crate::now_playing::set_catalog_quality(source_depth, source_rate, governed);
     // Artwork through the same cache pipeline as Home (attach + background
     // download + republish — single url here).
     crate::artwork_qt::attach_now_playing(&track, &title, &album_display);
@@ -3867,6 +3943,20 @@ fn quality_badge_from(
         crate::quality_state::detail(bit_depth, sample_rate)
     };
     (tier, label)
+}
+
+fn purchase_quality_badge(
+    format_id: u32,
+) -> Option<(&'static str, &'static str, Option<u32>, Option<f64>)> {
+    match format_id {
+        56 => Some(("dsd", "DSD128", Some(1), Some(5_644_800.0))),
+        55 => Some(("dsd", "DSD64", Some(1), Some(2_822_400.0))),
+        27 => Some(("hires", "24-bit / 192 kHz", Some(24), Some(192.0))),
+        7 => Some(("hires", "24-bit / 96 kHz", Some(24), Some(96.0))),
+        6 => Some(("cd", "16-bit / 44.1 kHz", Some(16), Some(44.1))),
+        5 => Some(("mp3", "320 kbps · MP3", None, None)),
+        _ => None,
+    }
 }
 
 /// Publish the queue panel document (queue_qt.rs — the full QueueState
@@ -4572,6 +4662,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                                         {
                                             Ok(true) => {
                                                 crate::purchase_playback_qt::remember_materialized_copy(
+                                                    next_id,
                                                     &resolution,
                                                     copy,
                                                 );
@@ -4599,6 +4690,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                                         resolution.format_id
                                     );
                                 }
+                                crate::purchase_playback_qt::clear_materialized_track(next_id);
                                 let quality = local_playback_quality().0;
                                 let streaming_only =
                                     crate::settings_qt::audio_settings().streaming_only;
@@ -4997,10 +5089,11 @@ mod tests {
     use super::{
         begin_resolved_play, cancel_owner_playback_tasks, capture_owner_scoped_snapshot,
         filter_queue_with, gapless_edge_matches, owner_generation_changed, playback_recovery_cause,
-        prefetch_track_ids, quality_badge_from, reconcile_device_cap, resolved_play_is_current,
-        should_stream_gapless_successor, spawn_owner_playback_task, stream_error_text,
-        xorshift_shuffle_seeded, OwnerActionObservation, OwnerActionToken, OwnerScopedSnapshot,
-        PlaybackRecoveryCause, PrefetchCandidate, PrefetchTrackEdge,
+        prefetch_track_ids, purchase_quality_badge, quality_badge_from, reconcile_device_cap,
+        resolved_play_is_current, should_stream_gapless_successor, source_change_targets_current,
+        spawn_owner_playback_task, stream_error_text, xorshift_shuffle_seeded,
+        OwnerActionObservation, OwnerActionToken, OwnerScopedSnapshot, PlaybackRecoveryCause,
+        PrefetchCandidate, PrefetchTrackEdge,
     };
     use qbz_models::{Quality, QualityLimit, QueueTrack};
     use qbz_player::PlaybackEvent;
@@ -5235,6 +5328,41 @@ mod tests {
             }),
         );
         assert_eq!(badge, ("hires".to_string(), "24-bit / 96 kHz".to_string()));
+    }
+
+    #[test]
+    fn purchase_format_is_the_npb_badge_source() {
+        assert_eq!(
+            purchase_quality_badge(56),
+            Some(("dsd", "DSD128", Some(1), Some(5_644_800.0)))
+        );
+        assert_eq!(
+            purchase_quality_badge(7),
+            Some(("hires", "24-bit / 96 kHz", Some(24), Some(96.0)))
+        );
+        assert_eq!(
+            purchase_quality_badge(5),
+            Some(("mp3", "320 kbps · MP3", None, None))
+        );
+        assert_eq!(purchase_quality_badge(999), None);
+    }
+
+    #[test]
+    fn source_change_only_targets_the_audible_track_in_that_album() {
+        let mut track = queue_track();
+        track.id = 41;
+        track.album_id = Some("album-a".to_string());
+        let mut event = playback_event(41, true);
+        event.position = 73;
+
+        assert!(source_change_targets_current("album-a", &track, &event));
+        assert!(!source_change_targets_current("album-b", &track, &event));
+
+        event.track_id = 42;
+        assert!(!source_change_targets_current("album-a", &track, &event));
+        event.track_id = 41;
+        event.is_playing = false;
+        assert!(!source_change_targets_current("album-a", &track, &event));
     }
 
     // --- #688: immediate two-successor L1/L2 warming ---------------------

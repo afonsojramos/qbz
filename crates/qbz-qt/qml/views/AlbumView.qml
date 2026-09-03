@@ -157,6 +157,71 @@ Rectangle {
         }
         return 0
     }
+
+    readonly property bool purchaseStatusVisible: {
+        var state = root.purchase.entitlementState || ""
+        if (state === "owned-album" || state === "owned-tracks")
+            return true
+        if (state !== "stale")
+            return false
+        var known = root.purchase.lastKnownEntitlementState || ""
+        return known === "owned-album" || known === "owned-tracks"
+    }
+    readonly property string purchaseStatusText: {
+        var known = root.purchase.entitlementState === "stale"
+            ? root.purchase.lastKnownEntitlementState
+            : root.purchase.entitlementState
+        if (known === "owned-tracks") {
+            var n = Number(root.purchase.purchasedTrackCount || 0)
+            return n === 1
+                ? QbzSession.tr("1 track purchased", QbzSession.trRev)
+                : QbzSession.tr("{} tracks purchased", QbzSession.trRev)
+                    .replace("{}", String(n))
+        }
+        return QbzSession.tr("Purchased", QbzSession.trRev)
+    }
+
+    function selectedPlaybackVariant() {
+        if ((root.purchase.playbackMode || "qobuz") !== "purchase")
+            return null
+        var selected = Number(root.purchase.selectedFormatId || 0)
+        for (var i = 0; i < root.localPurchaseVariants.length; i++) {
+            if (Number(root.localPurchaseVariants[i].formatId) === selected)
+                return root.localPurchaseVariants[i]
+        }
+        return null
+    }
+
+    function playbackQualityTier() {
+        var variant = root.selectedPlaybackVariant()
+        if (!variant)
+            return albumHeader.qualityTier || ""
+        var formatId = Number(variant.formatId || 0)
+        if (formatId === 56 || formatId === 55) return "dsd"
+        if (formatId === 27 || formatId === 7) return "hires"
+        if (formatId === 6) return "cd"
+        if (formatId === 5) return "mp3"
+        return albumHeader.qualityTier || ""
+    }
+
+    function playbackQualityDetail() {
+        var variant = root.selectedPlaybackVariant()
+        return variant ? (variant.label || "") : (albumHeader.qualityDetail || "")
+    }
+
+    function selectPlaybackSource(option) {
+        if (!option || option.enabled !== true)
+            return
+        var currentMode = root.purchase.playbackMode || "qobuz"
+        var currentFormat = Number(root.purchase.selectedFormatId || 0)
+        if (option.mode === currentMode
+                && (option.mode !== "purchase"
+                    || Number(option.formatId) === currentFormat))
+            return
+        QbzPurchases.setAlbumPlaybackMode(
+            albumHeader.id, option.mode,
+            Number(option.formatId), root.albumTrackIdsJson())
+    }
     // One global opt-in for every album page. `settingsJson` is the live
     // channel (including clicks made in another open AlbumView); the album
     // document carries the persisted cold-start fallback until that snapshot
@@ -645,6 +710,34 @@ Rectangle {
         wrapMode: compact ? Text.WordWrap : Text.NoWrap
     }
 
+    // Purchase entitlement mark used inside the album metadata flow. Keeping
+    // the separator in the component makes the mark a peer of release date,
+    // label, genre, track count and duration instead of a detached badge row.
+    component PurchaseMetaMark: Row {
+        property string label: ""
+        property color foreground: "#e0b341"
+        spacing: 6
+        Text {
+            text: "   •   "
+            color: parent.foreground
+            font.pixelSize: theme.fontBody
+        }
+        QbzIcon {
+            name: "circle-check-big"
+            width: 15
+            height: 15
+            anchors.verticalCenter: parent.verticalCenter
+            tintName: "amber"
+        }
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: parent.label
+            color: parent.foreground
+            font.pixelSize: theme.fontLegal
+            font.weight: Font.DemiBold
+        }
+    }
+
     // Placeholder for a bottom rail that has not resolved yet: the SAME 28px
     // header band, 232px pitch and 246px card band SectionRail uses, so the
     // page does not jump when the real cards replace it. Built out of the
@@ -1011,8 +1104,9 @@ Rectangle {
                     }
                     Item { width: 1; height: root.compactHeaderPref ? 2 : 10 }
                     // Meta line (label as a clickable link when navigable).
-                    Row {
+                    Flow {
                         spacing: 0
+                        width: parent.width
                         visible: !root.compactHeaderPref
                                  && (albumHeader.labelId || "") !== ""
                                  && (albumHeader.label || "") !== ""
@@ -1040,57 +1134,42 @@ Rectangle {
                             color: root.hdrBody
                             font.pixelSize: theme.fontBody
                         }
+                        PurchaseMetaMark {
+                            visible: root.purchaseStatusVisible
+                            label: root.purchaseStatusText
+                            foreground: "#e0b341"
+                        }
                     }
-                    Text {
+                    Flow {
                         visible: !root.compactHeaderPref
                                  && ((albumHeader.labelId || "") === ""
                                      || (albumHeader.label || "") === "")
                         width: parent.width
-                        text: albumHeader.infoLine || ""
-                        color: root.hdrBody
-                        font.pixelSize: theme.fontBody
-                        elide: Text.ElideRight
+                        spacing: 0
+                        Text {
+                            text: albumHeader.infoLine || ""
+                            color: root.hdrBody
+                            font.pixelSize: theme.fontBody
+                        }
+                        PurchaseMetaMark {
+                            visible: root.purchaseStatusVisible
+                            label: root.purchaseStatusText
+                            foreground: "#e0b341"
+                        }
                     }
-                    Text {
+                    Flow {
                         visible: root.compactHeaderPref
                         width: parent.width
-                        text: albumHeader.compactInfoLine || ""
-                        color: root.hdrBody
-                        font.pixelSize: theme.fontBody
-                        elide: Text.ElideRight
-                    }
-
-                    Row {
-                        visible: root.purchase.entitlementState === "owned-album"
-                                 || root.purchase.entitlementState === "owned-tracks"
-                                 || (root.purchase.entitlementState === "stale"
-                                     && (root.purchase.lastKnownEntitlementState === "owned-album"
-                                         || root.purchase.lastKnownEntitlementState === "owned-tracks"))
-                        spacing: 6
-                        QbzIcon {
-                            name: "circle-check-big"
-                            width: 15
-                            height: 15
-                            anchors.verticalCenter: parent.verticalCenter
-                            tintName: "amber"
-                        }
+                        spacing: 0
                         Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: {
-                                var known = root.purchase.entitlementState === "stale"
-                                    ? root.purchase.lastKnownEntitlementState
-                                    : root.purchase.entitlementState
-                                if (known === "owned-tracks") {
-                                    var n = Number(root.purchase.purchasedTrackCount || 0)
-                                    return n === 1
-                                        ? QbzSession.tr("1 track purchased", QbzSession.trRev)
-                                        : QbzSession.tr("{} tracks purchased", QbzSession.trRev).replace("{}", String(n))
-                                }
-                                return QbzSession.tr("Purchased", QbzSession.trRev)
-                            }
-                            color: "#e0b341"
-                            font.pixelSize: theme.fontLegal
-                            font.weight: Font.DemiBold
+                            text: albumHeader.compactInfoLine || ""
+                            color: root.hdrBody
+                            font.pixelSize: theme.fontBody
+                        }
+                        PurchaseMetaMark {
+                            visible: root.purchaseStatusVisible
+                            label: root.purchaseStatusText
+                            foreground: "#e0b341"
                         }
                     }
 
@@ -1163,6 +1242,21 @@ Rectangle {
                             onClicked: QbzPlayer.playAlbumShuffled(albumHeader.id)
                         }
                         QbzCircleAction {
+                            id: playbackSourceButton
+                            visible: root.showPlaybackSource
+                            name: "cloud-sync"
+                            diameterOverride: root.compactHeaderPref ? 28 : 0
+                            overlay: root.hdrOverlay
+                            active: (root.purchase.playbackMode || "qobuz") === "purchase"
+                                || playbackSourceMenu.opened
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: playbackSourceMenu.openBelowLeft(playbackSourceButton)
+                            HoverHandler { id: playbackSourceHover }
+                            ToolTip.visible: playbackSourceHover.hovered
+                            ToolTip.text: QbzSession.tr("Play with", QbzSession.trRev)
+                            ToolTip.delay: 350
+                        }
+                        QbzCircleAction {
                             readonly property bool favorite: root.toggleState("album", albumHeader.isFavorite)
                             name: favorite ? "heart-filled" : "heart"
                             diameterOverride: root.compactHeaderPref ? 28 : 0
@@ -1227,33 +1321,6 @@ Rectangle {
                         }
                     }
 
-                    Column {
-                        visible: root.showPlaybackSource
-                        spacing: 5
-                        width: 300
-                        property var sourceOptions: root.playbackSourceOptions()
-                        Text {
-                            text: QbzSession.tr("Play with", QbzSession.trRev)
-                            color: root.hdrBody
-                            font.pixelSize: theme.fontLegal
-                        }
-                        QbzSelect {
-                            width: parent.width
-                            menuWidth: parent.width
-                            options: parent.sourceOptions
-                            currentIndex: root.playbackSourceIndex(parent.sourceOptions)
-                            onSelected: function (i) {
-                                if (i < 0 || i >= parent.sourceOptions.length)
-                                    return
-                                var option = parent.sourceOptions[i]
-                                if (option.enabled !== true)
-                                    return
-                                QbzPurchases.setAlbumPlaybackMode(
-                                    albumHeader.id, option.mode,
-                                    Number(option.formatId), root.albumTrackIdsJson())
-                            }
-                        }
-                    }
                 }
             }
 
@@ -1383,8 +1450,8 @@ Rectangle {
                         QualityBadgeFull {
                             id: qualityRow
                             anchors.verticalCenter: parent.verticalCenter
-                            tier: albumHeader.qualityTier || ""
-                            detail: albumHeader.qualityDetail || ""
+                            tier: root.playbackQualityTier()
+                            detail: root.playbackQualityDetail()
                         }
                         // Clamped, and the badge slot only counts when the
                         // badge is actually there (QualityBadgeFull hides
@@ -2006,6 +2073,60 @@ Rectangle {
     // TrackInfoModal pattern (one AlbumView instance exists at a time; the
     // Popup reparents to the window overlay).
     AlbumInfoModal { id: albumInfo }
+
+    // Album-level source picker. It keeps the shared context-menu chrome and
+    // replaces the full-width QbzSelect that used to occupy a second row in
+    // the header. The current source is marked in-place; unavailable persisted
+    // variants remain visible but cannot be selected again.
+    QbzContextMenu {
+        id: playbackSourceMenu
+        menuWidth: 310
+        Repeater {
+            model: root.playbackSourceOptions()
+            delegate: Rectangle {
+                required property var modelData
+                required property int index
+                readonly property bool selected:
+                    index === root.playbackSourceIndex(root.playbackSourceOptions())
+                width: parent ? parent.width : 0
+                height: 38
+                radius: 5
+                opacity: modelData.enabled === true ? 1.0 : 0.45
+                color: sourceOptionArea.containsMouse && modelData.enabled === true
+                    ? theme.surfaceHover : "transparent"
+                QbzIcon {
+                    visible: parent.selected
+                    name: "check"
+                    width: 14
+                    height: 14
+                    x: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    tintName: "accent"
+                }
+                Text {
+                    x: 30
+                    width: parent.width - 38
+                    height: parent.height
+                    text: modelData.label || ""
+                    color: theme.textSecondary
+                    font.pixelSize: 13
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+                MouseArea {
+                    id: sourceOptionArea
+                    anchors.fill: parent
+                    enabled: modelData.enabled === true
+                    hoverEnabled: true
+                    cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: {
+                        playbackSourceMenu.close()
+                        root.selectPlaybackSource(modelData)
+                    }
+                }
+            }
+        }
+    }
 
     // Album ⋯ menu (AlbumContextMenu subset — playback_qt::enqueue_album owns
     // all three insertion modes since the QoL round gave it a real "later"

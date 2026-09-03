@@ -145,6 +145,17 @@ Rectangle {
     // album page agree. Do NOT let a host paint its own heart on top of the
     // card — see the `selectMode` note below for the same mistake's other half.
     property bool catalogAffordances: !root.localMode
+    // Full-album ownership comes from the account-wide entitlement index, not
+    // from whichever producer happened to instantiate this shared card. The
+    // revision argument turns the otherwise read-only invokable into a live
+    // QML binding after refresh/account switch.
+    readonly property int purchaseEntitlementRev: QbzPurchases.entitlementRev
+    readonly property bool purchasedAlbum: root.catalogAffordances
+        && root.albumId !== ""
+        && QbzPurchases.isAlbumPurchased(root.albumId, root.purchaseEntitlementRev)
+    readonly property string purchasedQuality: root.purchasedAlbum
+        ? QbzPurchases.albumPurchasedQuality(root.albumId, root.purchaseEntitlementRev)
+        : ""
     /// Local-mode mounts whose `albumId` is a Local Library group key opt in
     /// to the album-level "Add to playlist" row (LocalAlbumCollection sets
     /// it). My QBZ's heterogeneous cells stay out: their local ids are
@@ -260,6 +271,7 @@ Rectangle {
 
     readonly property bool overlayOn: artArea.containsMouse
         || quickViewArea.containsMouse || pinArea.containsMouse
+        || purchaseArea.containsMouse
         || favBtn.hovered || playBtn.hovered || moreBtn.hovered
 
     function toggleFavorite() {
@@ -475,7 +487,7 @@ Rectangle {
                     // Bounded because the tile's clip is gone. When the joined
                     // top-right group is present, stop 8px before it instead
                     // of letting a long genre run under both buttons.
-                    width: root.quickViewAffordance && !root.selectMode
+                    width: (root.quickViewAffordance || root.purchasedAlbum) && !root.selectMode
                         && !root.pulledDead ? 118 : 176
                     elide: Text.ElideRight
                     height: 20
@@ -487,7 +499,7 @@ Rectangle {
                 Text {
                     visible: root.year !== ""
                     text: root.year
-                    width: root.quickViewAffordance && !root.selectMode
+                    width: (root.quickViewAffordance || root.purchasedAlbum) && !root.selectMode
                         && !root.pulledDead ? 118 : 176
                     elide: Text.ElideRight
                     height: 17
@@ -561,29 +573,42 @@ Rectangle {
                 }
             }
 
-            // Quick View + optional pin — one joined group in the old pin
+            // Quick View + optional pin + purchased ticket — one joined group in the old pin
             // badge's top-right slot. Local album grids opt into BOTH without
             // opting into unrelated catalog heart/block actions; a host that
             // cannot pin may still expose Quick View alone. Always mounted
             // (opacity), so either half's hover joins overlayOn and reveals it.
             Rectangle {
                 id: cardTopGroup
+                readonly property bool expanded: root.overlayOn
+                readonly property bool actionsAvailable: !root.pulledDead
+                readonly property int expandedSegments:
+                    (root.quickViewAffordance && cardTopGroup.actionsAvailable ? 1 : 0)
+                    + (root.pinAffordance && cardTopGroup.actionsAvailable ? 1 : 0)
+                    + (root.purchasedAlbum ? 1 : 0)
                 // Hidden in select mode too: the checkbox owns this corner.
                 // The Quick View controller uses the id router to load
                 // local/server keys from their physical source instead of the
                 // Qobuz endpoint.
-                visible: root.quickViewAffordance && !root.selectMode && !root.pulledDead
+                visible: !root.selectMode
+                    && (root.purchasedAlbum
+                        || (cardTopGroup.actionsAvailable
+                            && (root.quickViewAffordance || root.pinAffordance)))
                 x: parent.width - width - 8
                 y: 8
-                width: root.pinAffordance ? 54 : 27
+                width: root.purchasedAlbum && !cardTopGroup.expanded
+                    ? 27 : cardTopGroup.expandedSegments * 27
                 height: 26
                 radius: 13
-                color: (quickViewArea.containsMouse || pinArea.containsMouse)
+                color: (quickViewArea.containsMouse || pinArea.containsMouse
+                        || purchaseArea.containsMouse)
                     ? "#cc000000" : "#99000000"
-                opacity: root.overlayOn ? 1.0 : 0.0
+                opacity: root.purchasedAlbum || root.overlayOn ? 1.0 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 150 } }
 
                 QbzIcon {
+                    visible: cardTopGroup.expanded && cardTopGroup.actionsAvailable
+                        && root.quickViewAffordance
                     name: "picture-in-picture-2"
                     width: 14
                     height: 14
@@ -592,7 +617,9 @@ Rectangle {
                     tintName: quickViewArea.containsMouse ? "accent" : "white"
                 }
                 Rectangle {
-                    visible: root.pinAffordance
+                    visible: cardTopGroup.expanded && cardTopGroup.actionsAvailable
+                        && root.pinAffordance
+                        && root.quickViewAffordance
                     x: 27
                     y: 5
                     width: 1
@@ -600,11 +627,13 @@ Rectangle {
                     color: "#45ffffff"
                 }
                 QbzIcon {
-                    visible: root.pinAffordance
+                    visible: cardTopGroup.expanded && cardTopGroup.actionsAvailable
+                        && root.pinAffordance
                     name: root.isPinned ? "pin-filled" : "pin"
                     width: 14
                     height: 14
-                    x: 27 + Math.round((27 - width) / 2)
+                    x: (root.quickViewAffordance && cardTopGroup.actionsAvailable ? 27 : 0)
+                        + Math.round((27 - width) / 2)
                     anchors.verticalCenter: parent.verticalCenter
                     // On a #99000000/#cc000000 scrim — dark under every theme.
                     tintName: root.isPinned ? "accent" : "white"
@@ -615,6 +644,8 @@ Rectangle {
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
                     width: 27
+                    visible: cardTopGroup.expanded && cardTopGroup.actionsAvailable
+                        && root.quickViewAffordance
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: QbzAlbum.openQuickView(root.albumId)
@@ -624,8 +655,9 @@ Rectangle {
                 }
                 MouseArea {
                     id: pinArea
-                    visible: root.pinAffordance
-                    anchors.right: parent.right
+                    visible: cardTopGroup.expanded && cardTopGroup.actionsAvailable
+                        && root.pinAffordance
+                    x: root.quickViewAffordance && cardTopGroup.actionsAvailable ? 27 : 0
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
                     width: 27
@@ -635,6 +667,47 @@ Rectangle {
                     ToolTip.visible: containsMouse
                     ToolTip.text: QbzSession.tr(root.isPinned ? "Unpin" : "Pin",
                                                 QbzSession.trRev)
+                    ToolTip.delay: 350
+                }
+                Rectangle {
+                    visible: cardTopGroup.expanded && root.purchasedAlbum
+                        && cardTopGroup.actionsAvailable
+                        && (root.quickViewAffordance || root.pinAffordance)
+                    x: (root.quickViewAffordance && cardTopGroup.actionsAvailable ? 27 : 0)
+                        + (root.pinAffordance && cardTopGroup.actionsAvailable ? 27 : 0)
+                    y: 5
+                    width: 1
+                    height: 16
+                    color: "#45ffffff"
+                }
+                QbzIcon {
+                    visible: root.purchasedAlbum
+                    name: "ticket-check"
+                    width: 14
+                    height: 14
+                    x: cardTopGroup.expanded
+                        ? (root.quickViewAffordance && cardTopGroup.actionsAvailable ? 27 : 0)
+                          + (root.pinAffordance && cardTopGroup.actionsAvailable ? 27 : 0)
+                          + Math.round((27 - width) / 2)
+                        : Math.round((27 - width) / 2)
+                    anchors.verticalCenter: parent.verticalCenter
+                    tintName: "warning"
+                }
+                MouseArea {
+                    id: purchaseArea
+                    visible: root.purchasedAlbum
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 27
+                    hoverEnabled: true
+                    cursorShape: Qt.ArrowCursor
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    onClicked: function (mouse) { mouse.accepted = true }
+                    ToolTip.visible: containsMouse
+                    ToolTip.text: QbzSession.tr("Purchased", QbzSession.trRev)
+                        + (root.purchasedQuality !== ""
+                           ? " · " + root.purchasedQuality : "")
                     ToolTip.delay: 350
                 }
             }
