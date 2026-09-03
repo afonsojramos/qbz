@@ -1508,6 +1508,31 @@ fn scan_root(
     }
     on_event(ScanEvent::Cleanup);
     metrics.pruned = finish_root(db, folder, &state)?;
+
+    // SACD images live outside the cue/audio phases: the walk keys on the
+    // extension, the `SACDMTOC` sniff keeps DVD/data ISOs silent, and the
+    // generation-based import owns the `sacd:` rows (sacd_scan.rs). A parser
+    // or import rejection is a scan error like any unreadable file.
+    let sacd = crate::sacd_scan::scan_root_for_sacd(
+        db,
+        Path::new(&folder.path),
+        &crate::sacd_scan::SacdLabels::default(),
+        cancel,
+    );
+    if sacd.candidates > 0 {
+        log::info!(
+            "[local-scan] root_id={} sacd candidates={} imported={} unchanged={} ignored={} failed={}",
+            folder.id,
+            sacd.candidates,
+            sacd.imported,
+            sacd.unchanged,
+            sacd.ignored,
+            sacd.failed.len(),
+        );
+    }
+    for (file_path, error) in sacd.failed {
+        errors.push(ScanError { file_path, error });
+    }
     log::info!(
         "[local-scan] root_id={} generation={} network={} discovered={} extracted={} reused={} pruned={} prune_authorized=true elapsed={:?}",
         folder.id,

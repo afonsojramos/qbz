@@ -124,6 +124,29 @@ fn time_at(b: &[u8], at: usize) -> f64 {
     b[at] as f64 * 60.0 + b[at + 1] as f64 + b[at + 2] as f64 / 75.0
 }
 
+/// Signature sniff for a folder scan: an ISO 9660 image (PVD `CD001` at LSN
+/// 16) whose Master TOC sector carries `SACDMTOC` at LSN 510, or at one of
+/// its byte-identical backups (520, 530). At most four 2 KB reads at fixed
+/// offsets, no directory parsing — a DVD, a data ISO or a stray file wearing
+/// the extension fails here and costs the scan nothing else.
+pub fn is_sacd_image(path: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut sector = [0u8; SECTOR as usize];
+    let mut read_at = |lsn: u64, sector: &mut [u8]| -> bool {
+        file.seek(SeekFrom::Start(lsn * SECTOR)).is_ok() && file.read_exact(sector).is_ok()
+    };
+    if !read_at(16, &mut sector) || &sector[1..6] != b"CD001" {
+        return false;
+    }
+    [510u64, 520, 530]
+        .into_iter()
+        .any(|lsn| read_at(lsn, &mut sector) && &sector[0..8] == b"SACDMTOC")
+}
+
 /// Read the stereo area's table of contents out of a disc image.
 pub fn read_area(path: &Path) -> Result<SacdArea, SacdError> {
     let mut iso = IsoImage::open(path)?;
@@ -552,5 +575,40 @@ mod tests {
         assert_eq!(DSD64_STEREO_FRAME, 2 * 2_822_400 / 75 / 8);
         // The measured audio-payload totals divide by it exactly.
         assert_eq!(350_495u64 * DSD64_STEREO_FRAME as u64 % DSD64_STEREO_FRAME as u64, 0);
+    }
+
+    /// The scan sniff: PVD + Master TOC signature, nothing else. Built from
+    /// bare sectors so no real image is needed.
+    #[test]
+    fn sniff_accepts_only_an_iso_with_a_master_toc() {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let dir = std::env::temp_dir().join(format!("qbz-sacd-sniff-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, toc_lsn: Option<u64>, pvd: bool| {
+            let path = dir.join(name);
+            let mut file = std::fs::File::create(&path).unwrap();
+            if pvd {
+                let mut sector = [0u8; 2048];
+                sector[0] = 1;
+                sector[1..6].copy_from_slice(b"CD001");
+                file.seek(SeekFrom::Start(16 * 2048)).unwrap();
+                file.write_all(&sector).unwrap();
+            }
+            if let Some(lsn) = toc_lsn {
+                file.seek(SeekFrom::Start(lsn * 2048)).unwrap();
+                file.write_all(b"SACDMTOC").unwrap();
+            }
+            file.seek(SeekFrom::Start(531 * 2048)).unwrap();
+            file.write_all(&[0u8; 2048]).unwrap();
+            path
+        };
+
+        assert!(super::is_sacd_image(&write("sacd.iso", Some(510), true)));
+        assert!(super::is_sacd_image(&write("backup.iso", Some(530), true)));
+        assert!(!super::is_sacd_image(&write("dvd.iso", None, true)));
+        assert!(!super::is_sacd_image(&write("nopvd.iso", Some(510), false)));
+        assert!(!super::is_sacd_image(&dir.join("missing.iso")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

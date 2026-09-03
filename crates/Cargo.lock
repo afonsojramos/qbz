@@ -4279,6 +4279,7 @@ dependencies = [
  "lofty",
  "log",
  "notify",
+ "qbz-disc",
  "qbz-dsd",
  "rusqlite",
  "serde",

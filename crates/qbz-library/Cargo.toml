@@ -27,6 +27,9 @@ dirs = "6"
 # Audio metadata
 lofty.workspace = true
 qbz-dsd = { path = "../qbz-dsd" }
+# SACD images found by the folder scan: signature sniff + Scarlet Book TOC
+# parse + the disc memory (sacd_scan.rs). qbz-disc depends on nothing here.
+qbz-disc = { path = "../qbz-disc" }
 
 # Image processing (thumbnails)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

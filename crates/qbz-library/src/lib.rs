@@ -42,6 +42,7 @@ pub mod qobuz_playlist_snapshot;
 pub mod reachability;
 mod remote_tag_sidecar;
 mod sacd;
+pub mod sacd_scan;
 mod scan;
 mod scanner;
 mod tag_sidecar;
@@ -61,6 +62,7 @@ pub use models::*;
 pub use mount_info::{is_network_path, network_fs_label};
 pub use reachability::{probe, probe_default, Reach, DEFAULT_PROBE};
 pub use sacd::{SacdImageImport, SacdImportResult};
+pub use sacd_scan::{build_image_rows, SacdImageRows, SacdLabels, SacdScanSummary};
 pub use scan::{scan_with_progress, ScanEvent};
 pub use scanner::{
     LibraryScanner, ScanEntry, ScanFileKind, ScanResult, ScanStream, ScanWalkError, SymlinkPolicy,
