@@ -301,6 +301,26 @@ static OWNER_PLAYBACK_TASK_GENERATION: AtomicU64 = AtomicU64::new(0);
 static OWNER_PLAYBACK_TASKS: OnceLock<Mutex<Vec<(u64, tokio::task::AbortHandle)>>> =
     OnceLock::new();
 
+/// Frontend generation for the policy work that happens before the player's
+/// own `begin_play`: preference lookup and bounded filesystem probes. The
+/// player protects its fetch/decode stages, but it cannot fence work that has
+/// not called it yet. A newer resolved start invalidates an older lookup
+/// before that lookup is allowed to materialize a ticket or enter fallback.
+static RESOLVED_PLAY_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn begin_resolved_play() -> u64 {
+    RESOLVED_PLAY_GENERATION
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |generation| {
+            generation.checked_add(1)
+        })
+        .expect("resolved playback generation exhausted")
+        + 1
+}
+
+fn resolved_play_is_current(generation: u64) -> bool {
+    RESOLVED_PLAY_GENERATION.load(Ordering::SeqCst) == generation
+}
+
 fn owner_playback_tasks() -> &'static Mutex<Vec<(u64, tokio::task::AbortHandle)>> {
     OWNER_PLAYBACK_TASKS.get_or_init(|| Mutex::new(Vec::new()))
 }
@@ -1265,6 +1285,7 @@ pub(crate) async fn play_resolved_offline_aware(
         );
         return Ok(());
     };
+    let play_generation = begin_resolved_play();
     // TRIPWIRE for the funnel: this is the LOCAL Qobuz/offline step and must
     // never run while a renderer owns playback. A hit here means an entry
     // point skipped `route_play_remote` — it is a bug, and this line is how
@@ -1305,6 +1326,9 @@ pub(crate) async fn play_resolved_offline_aware(
         let is_offline = raw.badge == qbz_source::SourceBadge::Offline;
         if let (false, Ok(item)) = (is_offline, qbz_source::registry().claim(&raw)) {
             if item.source() != qbz_source::SourceId::QOBUZ {
+                if !resolved_play_is_current(play_generation) {
+                    return Ok(());
+                }
                 return match crate::audible_qt::play_queue_track(runtime, qt).await {
                     Ok(true) => Ok(()),
                     // Its own source owned it and could not play it. Phrased so
@@ -1321,6 +1345,9 @@ pub(crate) async fn play_resolved_offline_aware(
     let quality = local_playback_quality().0;
     let off = crate::offline_qt::get().await;
     let sink = off.as_ref().map(|_| crate::offline_cache_qt::row_sink());
+    if !resolved_play_is_current(play_generation) {
+        return Ok(());
+    }
     // Session resume: if this is the track restored at launch, start it at the
     // saved position (consumed once). Only when the caller did not ask for a
     // position itself — an explicit seek-then-play must win over the restore.
@@ -1330,9 +1357,15 @@ pub(crate) async fn play_resolved_offline_aware(
         start_position_secs
     };
     if let Some(track) = logical_track.as_ref() {
-        if try_play_preferred_purchase(runtime, track, start_position_secs).await {
-            return Ok(());
+        match try_play_preferred_purchase(runtime, track, start_position_secs, play_generation)
+            .await
+        {
+            PreferredPurchaseStart::Played | PreferredPurchaseStart::Superseded => return Ok(()),
+            PreferredPurchaseStart::Fallback => {}
         }
+    }
+    if !resolved_play_is_current(play_generation) {
+        return Ok(());
     }
     runtime
         .core()
@@ -1350,22 +1383,69 @@ pub(crate) async fn play_resolved_offline_aware(
 /// Every candidate was already proven complete and healthy by the blocking
 /// resolver. A decoder/open failure advances to another complete physical
 /// copy of the same format before returning control to the Qobuz tier walk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreferredPurchaseStart {
+    Played,
+    Fallback,
+    Superseded,
+}
+
 async fn try_play_preferred_purchase(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     track: &QueueTrack,
     start_position_secs: u64,
-) -> bool {
+    play_generation: u64,
+) -> PreferredPurchaseStart {
     let Some(resolution) =
         crate::purchase_playback_qt::resolve_preferred_copies(track.id, track.album_id.as_deref())
             .await
     else {
-        return false;
+        return if resolved_play_is_current(play_generation) {
+            PreferredPurchaseStart::Fallback
+        } else {
+            PreferredPurchaseStart::Superseded
+        };
     };
 
     for copy in &resolution.copies {
-        if !crate::audible_qt::play_ticket(runtime, copy.ticket(track.id, start_position_secs))
-            .await
-        {
+        if !resolved_play_is_current(play_generation) {
+            log::debug!(
+                "[qbz-qt] purchase: discarded stale resolution for track {}",
+                track.id
+            );
+            return PreferredPurchaseStart::Superseded;
+        }
+        let accepted = if copy.is_dsd() {
+            crate::audible_qt::play_ticket(runtime, copy.ticket(track.id, 0)).await
+        } else {
+            // The generic File ticket performs its read and then immediately
+            // calls `play_data`. Keep those phases apart here so a newer play
+            // can supersede a slow NAS read before the old bytes touch the
+            // player. Whole-file PCM is already the established File-ticket
+            // policy; DSD remains streaming-by-path above.
+            let path = copy.path.clone();
+            let bytes = tokio::task::spawn_blocking(move || std::fs::read(path))
+                .await
+                .ok()
+                .and_then(Result::ok);
+            if !resolved_play_is_current(play_generation) {
+                return PreferredPurchaseStart::Superseded;
+            }
+            match bytes {
+                Some(bytes) => {
+                    crate::audible_qt::play_ticket(
+                        runtime,
+                        qbz_source::PlaybackTicket::Bytes {
+                            bytes,
+                            play_id: track.id,
+                        },
+                    )
+                    .await
+                }
+                None => false,
+            }
+        };
+        if !accepted {
             log::warn!(
                 "[qbz-qt] purchase: copy {} of track {} (format {}) was refused; trying the next exact copy",
                 copy.copy_id,
@@ -1376,20 +1456,27 @@ async fn try_play_preferred_purchase(
         }
 
         // DSD tickets are file-only, but the current direct DSD engines accept
-        // the ordinary player seek. Apply a cold-resume/takeback offset after
-        // the play command exactly as the PCM file seam does. This keeps DSD
-        // local and uses no stream-offset fallback.
-        if copy.is_dsd() && start_position_secs > 0 {
+        // the ordinary player seek. Apply every cold-resume/takeback offset
+        // after the play command, generation-guarded. This keeps DSD local and
+        // avoids the generic File ticket's unguarded post-read delay for PCM.
+        if start_position_secs > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            if !resolved_play_is_current(play_generation) {
+                return PreferredPurchaseStart::Superseded;
+            }
             if let Err(error) = runtime.core().player().seek(start_position_secs) {
                 log::warn!(
-                    "[qbz-qt] purchase: direct DSD seek for track {} to {}s failed: {error}; using Qobuz",
+                    "[qbz-qt] purchase: local seek for track {} to {}s failed: {error}; using Qobuz",
                     track.id,
                     start_position_secs
                 );
                 let _ = runtime.core().player().stop();
                 continue;
             }
+        }
+
+        if !resolved_play_is_current(play_generation) {
+            return PreferredPurchaseStart::Superseded;
         }
 
         crate::purchase_playback_qt::remember_materialized_copy(&resolution, copy);
@@ -1399,7 +1486,7 @@ async fn try_play_preferred_purchase(
             copy.copy_id,
             copy.format_id
         );
-        return true;
+        return PreferredPurchaseStart::Played;
     }
 
     log::warn!(
@@ -1407,7 +1494,41 @@ async fn try_play_preferred_purchase(
         track.id,
         resolution.format_id
     );
-    false
+    if resolved_play_is_current(play_generation) {
+        PreferredPurchaseStart::Fallback
+    } else {
+        PreferredPurchaseStart::Superseded
+    }
+}
+
+/// Prepare a purchase successor without allowing a slow file read or DSD→PCM
+/// conversion to append after its queue edge has changed. Native/DoP DSD
+/// retains the existing path ticket because that append is immediate; every
+/// byte materialization returns here first and is revalidated by the caller.
+async fn prepare_purchase_gapless_ticket(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    copy: &crate::purchase_playback_qt::PurchasedCopy,
+    track_id: u64,
+) -> Result<qbz_source::PlaybackTicket, String> {
+    if copy.is_dsd() && runtime.core().player().is_dsd_direct_active() {
+        return Ok(copy.ticket(track_id, 0));
+    }
+
+    let path = copy.path.clone();
+    let is_dsd = copy.is_dsd();
+    let bytes = tokio::task::spawn_blocking(move || {
+        if is_dsd {
+            qbz_player::Player::prepare_dsd_gapless_wav(&path)
+        } else {
+            std::fs::read(path).map_err(|error| error.to_string())
+        }
+    })
+    .await
+    .map_err(|error| format!("purchase gapless preparation task failed: {error}"))??;
+    Ok(qbz_source::PlaybackTicket::Bytes {
+        bytes,
+        play_id: track_id,
+    })
 }
 
 /// Restore the signed-in owner's exact current track after delegated playback.
@@ -1436,6 +1557,7 @@ pub(crate) async fn restore_owner_playback(
     // authority snapshot exists. Consume and discard it even when the exact
     // handoff position is zero.
     let _ = qbz_app::session_persist::take_resume_for(track_id);
+    let play_generation = begin_resolved_play();
 
     let raw = qbz_source::RawRef::from_queue_track(&track);
     let is_offline = raw.badge == qbz_source::SourceBadge::Offline;
@@ -1476,22 +1598,29 @@ pub(crate) async fn restore_owner_playback(
             Err(error) => return Err(format!("owner source restore failed: {error}")),
         }
     } else {
-        if !try_play_preferred_purchase(runtime, &track, position_secs).await {
-            let quality = local_playback_quality().0;
-            let offline = crate::offline_qt::get().await;
-            let sink = offline
-                .as_ref()
-                .map(|_| crate::offline_cache_qt::row_sink());
-            runtime
-                .core()
-                .play_track_resolved(
-                    track_id,
-                    quality,
-                    offline.as_deref(),
-                    sink.as_ref(),
-                    position_secs,
-                )
-                .await?;
+        match try_play_preferred_purchase(runtime, &track, position_secs, play_generation).await {
+            PreferredPurchaseStart::Played => {}
+            PreferredPurchaseStart::Superseded => return Ok(()),
+            PreferredPurchaseStart::Fallback => {
+                if !resolved_play_is_current(play_generation) {
+                    return Ok(());
+                }
+                let quality = local_playback_quality().0;
+                let offline = crate::offline_qt::get().await;
+                let sink = offline
+                    .as_ref()
+                    .map(|_| crate::offline_cache_qt::row_sink());
+                runtime
+                    .core()
+                    .play_track_resolved(
+                        track_id,
+                        quality,
+                        offline.as_deref(),
+                        sink.as_ref(),
+                        position_secs,
+                    )
+                    .await?;
+            }
         }
     }
 
@@ -2930,6 +3059,7 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
             return;
         };
         log::info!("[qbz-qt] toggle-play: cancelling the in-flight cold start of track {pending}");
+        let _ = begin_resolved_play();
         PENDING_PLAY_ID.store(0, Ordering::Relaxed);
         crate::now_playing::clear_loading();
         if let Err(e) = runtime.core().stop() {
@@ -3118,6 +3248,10 @@ async fn play_queue_track(
     track_id: u64,
     start_position_secs: u64,
 ) {
+    // Supersede preference/filesystem work that has not reached the player
+    // yet. Qobuz starts below bump once more when it enters the resolved
+    // funnel; local/remote source starts still need this first fence.
+    let _ = begin_resolved_play();
     // A connected renderer (cast, then QConnect peer) owns playback: route
     // the new track to it and never start the local backend, or both play.
     // Same seam as every other entry point — see `route_play_remote`.
@@ -4406,11 +4540,33 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                                     .await
                                 {
                                     for copy in &resolution.copies {
+                                        let ticket = match prepare_purchase_gapless_ticket(
+                                            &runtime, copy, next_id,
+                                        )
+                                        .await
+                                        {
+                                            Ok(ticket) => ticket,
+                                            Err(error) => {
+                                                log::warn!(
+                                                    "[qbz-qt] [GAPLESS] purchase copy {} of {next_id} could not be prepared: {error}; trying the next exact copy",
+                                                    copy.copy_id
+                                                );
+                                                continue;
+                                            }
+                                        };
+                                        if !gapless_edge_is_current(&runtime, track_id, next_id)
+                                            .await
+                                        {
+                                            log::info!(
+                                                "[qbz-qt] [GAPLESS] discarded stale purchase resolution for track {next_id}"
+                                            );
+                                            return;
+                                        }
                                         match crate::audible_qt::queue_gapless_ticket(
                                             &runtime,
                                             track_id,
                                             next_id,
-                                            copy.ticket(next_id, 0),
+                                            ticket,
                                         )
                                         .await
                                         {
@@ -4839,9 +4995,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        cancel_owner_playback_tasks, capture_owner_scoped_snapshot, filter_queue_with,
-        gapless_edge_matches, owner_generation_changed, playback_recovery_cause,
-        prefetch_track_ids, quality_badge_from, reconcile_device_cap,
+        begin_resolved_play, cancel_owner_playback_tasks, capture_owner_scoped_snapshot,
+        filter_queue_with, gapless_edge_matches, owner_generation_changed, playback_recovery_cause,
+        prefetch_track_ids, quality_badge_from, reconcile_device_cap, resolved_play_is_current,
         should_stream_gapless_successor, spawn_owner_playback_task, stream_error_text,
         xorshift_shuffle_seeded, OwnerActionObservation, OwnerActionToken, OwnerScopedSnapshot,
         PlaybackRecoveryCause, PrefetchCandidate, PrefetchTrackEdge,
@@ -4860,6 +5016,15 @@ mod tests {
 
     fn local(id: u64) -> PrefetchCandidate {
         PrefetchCandidate { id, is_local: true }
+    }
+
+    #[test]
+    fn a_new_resolved_start_supersedes_older_policy_work() {
+        let old = begin_resolved_play();
+        assert!(resolved_play_is_current(old));
+        let new = begin_resolved_play();
+        assert!(!resolved_play_is_current(old));
+        assert!(resolved_play_is_current(new));
     }
 
     fn playback_event(track_id: u64, is_playing: bool) -> PlaybackEvent {
