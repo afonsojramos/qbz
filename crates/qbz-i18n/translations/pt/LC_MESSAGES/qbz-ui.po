@@ -3664,6 +3664,9 @@ msgstr "Isto termina a sessão no Plex e limpa as bibliotecas e faixas em cache 
 msgid "This track is no longer available"
 msgstr "Esta faixa já não está disponível"
 
+msgid "This track is not yet available"
+msgstr "Esta faixa ainda não está disponível"
+
 msgid "Track count differs from the result; titles applied by position"
 msgstr "O número de faixas difere do resultado; os títulos foram aplicados por posição"
 

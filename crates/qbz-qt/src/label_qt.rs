@@ -1286,6 +1286,12 @@ fn parse_top_track(index: usize, raw: &Value) -> TrackRow {
                 .and_then(|v| v.as_bool())
         })
         .unwrap_or(true);
+    // Same rule as `qbz_models::Track::is_upcoming`, read off the raw keys.
+    let upcoming = not_streamable
+        && qbz_models::types::upcoming_now(
+            raw.get("streamable_at").and_then(|v| v.as_i64()),
+            raw.get("release_date_stream").and_then(|v| v.as_str()),
+        );
     TrackRow {
         is_favorite: id
             .parse::<u64>()
@@ -1321,6 +1327,7 @@ fn parse_top_track(index: usize, raw: &Value) -> TrackRow {
         work_composer_id: String::new(),
         artwork_url,
         not_streamable,
+        upcoming,
     }
 }
 

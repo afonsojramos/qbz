@@ -999,7 +999,7 @@ fn descriptor(search: String, sort: &str, group: &str, filter_json: &str) -> Que
         .filter(|key| on(key))
         .map(str::to_string)
         .collect();
-    let qualities = ["hires", "cd", "lossy"]
+    let qualities = ["dsd", "hires", "cd", "lossy"]
         .into_iter()
         .filter(|key| on(key))
         .map(str::to_string)

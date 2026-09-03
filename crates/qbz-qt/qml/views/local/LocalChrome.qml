@@ -56,7 +56,12 @@ Item {
                 id: gearBtn
                 name: "settings-2"
                 anchors.verticalCenter: parent.verticalCenter
-                onClicked: QbzShell.navigateTo("settings")
+                // Land on Settings > Local Library (section 4 in
+                // settings/SettingsView.qml), not on the Audio root.
+                onClicked: {
+                    QbzBridge.settingsSetSection(4)
+                    QbzShell.navigateTo("settings")
+                }
                 HoverHandler {
                     onHoveredChanged: tips.hover(hovered, gearBtn, "local-gear",
                         QbzSession.tr("Manage the folders your library is built from",

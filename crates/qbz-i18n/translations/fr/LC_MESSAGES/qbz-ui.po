@@ -3664,6 +3664,9 @@ msgstr "Cette opération vous déconnecte de Plex et efface les bibliothèques e
 msgid "This track is no longer available"
 msgstr "Ce titre n'est plus disponible"
 
+msgid "This track is not yet available"
+msgstr "Ce titre n'est pas encore disponible"
+
 msgid "Track count differs from the result; titles applied by position"
 msgstr "Le nombre de titres diffère du résultat ; les titres ont été appliqués par position"
 

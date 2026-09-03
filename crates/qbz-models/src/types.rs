@@ -571,6 +571,17 @@ pub struct Track {
     /// for the same reasons; the two shapes are now consistent.
     #[serde(default)]
     pub streamable: Option<bool>,
+    /// Unix seconds at which streaming rights START for this track
+    /// (`/album/get` sends it on every item: a PAST value on live tracks,
+    /// `null` on a pulled one, a FUTURE value on a pre-release). Read through
+    /// [`Track::is_upcoming`], which is what tells "not yet" from "no longer".
+    #[serde(default)]
+    pub streamable_at: Option<i64>,
+    /// Per-track streaming release date (ISO `YYYY-MM-DD`), the same shape as
+    /// [`Album::release_date_stream`]. Fallback for [`Track::is_upcoming`]
+    /// when `streamable_at` is absent.
+    #[serde(default)]
+    pub release_date_stream: Option<String>,
     #[serde(default)]
     pub parental_warning: bool,
     /// Playlist-specific: ID within the playlist (for removal)
@@ -608,6 +619,44 @@ impl Track {
     pub fn is_streamable(&self) -> bool {
         self.streamable.unwrap_or(true)
     }
+
+    /// Whether this track is a PRE-RELEASE: not streamable today because its
+    /// streaming rights have not started yet, as opposed to a track Qobuz
+    /// pulled. Only meaningful alongside `!is_streamable()`; a streamable
+    /// track is never "upcoming". See [`upcoming_from`] for the rule.
+    pub fn is_upcoming(&self) -> bool {
+        !self.is_streamable()
+            && upcoming_from(
+                self.streamable_at,
+                self.release_date_stream.as_deref(),
+                chrono::Utc::now(),
+            )
+    }
+}
+
+/// The ONE rule that tells "not yet available" from "no longer available":
+/// a FUTURE `streamable_at` (Unix seconds) wins; without it, a FUTURE
+/// `release_date_stream` (`YYYY-MM-DD`, compared by calendar day in UTC).
+/// Anything absent, malformed, or in the past reads as NOT upcoming, so a
+/// terse endpoint keeps the existing "no longer available" wording rather
+/// than promising a release that never comes.
+pub fn upcoming_now(streamable_at: Option<i64>, release_date_stream: Option<&str>) -> bool {
+    upcoming_from(streamable_at, release_date_stream, chrono::Utc::now())
+}
+
+/// [`upcoming_now`] against an explicit clock (tests).
+pub fn upcoming_from(
+    streamable_at: Option<i64>,
+    release_date_stream: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if let Some(at) = streamable_at {
+        return at > now.timestamp();
+    }
+    release_date_stream
+        .and_then(|s| chrono::NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok())
+        .map(|date| date > now.date_naive())
+        .unwrap_or(false)
 }
 
 /// Album summary (embedded in track responses)
@@ -2251,5 +2300,46 @@ mod purchase_deserializer_tests {
         assert_eq!(goodies.len(), 1);
         assert_eq!(goodies[0].best_url(), Some("https://o/b.pdf"));
         assert_eq!(goodies[0].display_name(), "Booklet");
+    }
+}
+
+#[cfg(test)]
+mod upcoming_tests {
+    use super::{upcoming_from, Track};
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn future_streamable_at_wins_over_the_date() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 2, 12, 0, 0).unwrap();
+        assert!(upcoming_from(Some(now.timestamp() + 60), None, now));
+        assert!(upcoming_from(Some(now.timestamp() + 60), Some("2000-01-01"), now));
+        assert!(!upcoming_from(Some(now.timestamp() - 60), Some("2099-01-01"), now));
+        // The captured dead track: `streamable_at: null`, past release date.
+        assert!(!upcoming_from(None, Some("2013-06-21"), now));
+    }
+
+    #[test]
+    fn release_date_is_the_fallback_and_absence_is_not_upcoming() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 2, 12, 0, 0).unwrap();
+        assert!(upcoming_from(None, Some("2026-10-16"), now));
+        assert!(!upcoming_from(None, Some("2026-09-02"), now), "today is not upcoming");
+        assert!(!upcoming_from(None, Some("not a date"), now));
+        assert!(!upcoming_from(None, None, now));
+    }
+
+    #[test]
+    fn a_streamable_track_is_never_upcoming() {
+        let track = Track {
+            streamable: Some(true),
+            release_date_stream: Some("2099-01-01".into()),
+            ..Default::default()
+        };
+        assert!(!track.is_upcoming());
+        let track = Track {
+            streamable: Some(false),
+            release_date_stream: Some("2099-01-01".into()),
+            ..Default::default()
+        };
+        assert!(track.is_upcoming());
     }
 }

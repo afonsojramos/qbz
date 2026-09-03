@@ -617,7 +617,7 @@ fn album_fts_filters_and_descriptor_bound_cursors_are_exact() {
         catalog.count_albums(&broad).unwrap()
     );
 
-    let filter_cases: [(QueryDescriptor, fn(&AlbumRecord) -> bool); 4] = [
+    let filter_cases: [(QueryDescriptor, fn(&AlbumRecord) -> bool); 5] = [
         (
             QueryDescriptor::albums().with_source_buckets(vec!["plex".to_string()]),
             |row: &AlbumRecord| row.source == SourceKind::Plex,
@@ -635,6 +635,12 @@ fn album_fts_filters_and_descriptor_bound_cursors_are_exact() {
         (
             QueryDescriptor::albums().with_quality_tiers(vec!["hires".to_string()]),
             |row: &AlbumRecord| matches!(row.quality_tier.as_str(), "hires" | "max"),
+        ),
+        // DSD is a tier of its own: an album holding a DSD copy is 'dsd',
+        // never folded into hires.
+        (
+            QueryDescriptor::albums().with_quality_tiers(vec!["dsd".to_string()]),
+            |row: &AlbumRecord| row.quality_tier == "dsd",
         ),
     ];
     for (descriptor, predicate) in filter_cases {
@@ -1211,6 +1217,17 @@ fn track_source_bucket_quality_and_other_format_filters_match_the_ui_funnel() {
         catalog.count_tracks(&other).unwrap(),
         other_rows.len() as u64
     );
+
+    // The DSD quality chip is the fixture's dsf rows exactly, and Hi-Res no
+    // longer folds them in.
+    let dsd = QueryDescriptor::tracks().with_quality_tiers(vec!["dsd".to_string()]);
+    let dsd_rows = collect_all(&catalog, &dsd);
+    assert_eq!(dsd_rows.len(), other_rows.len());
+    assert!(dsd_rows.iter().all(|row| row.format == "dsf"));
+    let hires = QueryDescriptor::tracks().with_quality_tiers(vec!["hires".to_string()]);
+    assert!(collect_all(&catalog, &hires)
+        .iter()
+        .all(|row| row.format != "dsf"));
 }
 
 #[test]

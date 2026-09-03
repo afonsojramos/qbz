@@ -3529,6 +3529,9 @@ msgstr "Это удалит кэшированные библиотеки и т�
 msgid "This track is no longer available"
 msgstr "Этот трек больше недоступен"
 
+msgid "This track is not yet available"
+msgstr "Этот трек пока недоступен"
+
 msgid "Track count differs from the result; titles applied by position"
 msgstr "Количество треков отличается от результата; названия применены по позиции"
 

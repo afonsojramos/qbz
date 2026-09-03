@@ -5,7 +5,10 @@ use crate::{CatalogError, Result};
 // Version 5 changes the derived artist-identity projection. Existing v4
 // catalogs are rebuilt side-by-side from their authoritative caches; no user
 // library database is migrated in place.
-pub const SCHEMA_VERSION: u32 = 5;
+// Version 6 gives DSD its own materialized album `quality_tier` ('dsd', no
+// longer folded into 'hires') so the Local Library DSD chip can read it; the
+// same side-by-side rebuild from the caches re-derives every album row.
+pub const SCHEMA_VERSION: u32 = 6;
 pub const APPLICATION_ID: i64 = 0x5142_5A43; // "QBZC"
 
 pub(crate) fn configure(conn: &Connection) -> Result<()> {

@@ -3664,6 +3664,9 @@ msgstr "Dies meldet Sie von Plex ab und löscht die lokal zwischengespeicherten 
 msgid "This track is no longer available"
 msgstr "Dieser Titel ist nicht mehr verfügbar"
 
+msgid "This track is not yet available"
+msgstr "Dieser Titel ist noch nicht verfügbar"
+
 msgid "Track count differs from the result; titles applied by position"
 msgstr "Die Titelanzahl weicht vom Ergebnis ab; Titel wurden nach Position zugewiesen"
 

@@ -80,7 +80,24 @@ Item {
         text: root.tooltipText
         delay: 0
         timeout: -1
+        // Geometry pinned to the text itself. The Popup's implicit sizing is
+        // what drew the NPB bubble wider than its lines and shifted the text
+        // (never reproduced in isolation — tracked as inherited debt), so
+        // nothing is left for the style to add: zero paddings, insets and
+        // margins, and width/height bound straight to the content's
+        // implicit size. The Text carries the 9/5/10 bubble paddings.
         padding: 0
+        leftPadding: 0
+        rightPadding: 0
+        topPadding: 0
+        bottomPadding: 0
+        leftInset: 0
+        rightInset: 0
+        topInset: 0
+        bottomInset: 0
+        margins: 0
+        width: contentItem ? contentItem.implicitWidth : 0
+        height: contentItem ? contentItem.implicitHeight : 0
         x: Math.round((root.width - width) / 2)
         y: -height - 4
         contentItem: Text {

@@ -407,8 +407,8 @@ Rectangle {
             { group: QbzSession.tr("Favorites", tr),
               values: pick(["favorite"], [QbzSession.tr("Favorites only", tr)]) },
             { group: QbzSession.tr("Quality", tr),
-              values: pick(["hires", "cd", "lossy"],
-                           [QbzSession.tr("Hi-Res", tr), QbzSession.tr("CD", tr),
+              values: pick(["dsd", "hires", "cd", "lossy"],
+                           ["DSD", QbzSession.tr("Hi-Res", tr), QbzSession.tr("CD", tr),
                             QbzSession.tr("Lossy", tr)]) },
             { group: QbzSession.tr("Format", tr),
               values: pick(["flac", "alac", "ape", "wav", "mp3", "aac", "other"],
@@ -785,7 +785,8 @@ Rectangle {
             var tier = (r.qualityTier || "").toLowerCase()
             var fmt = (r.format || "").toLowerCase()
             if (qAny) {
-                var qok = (selected.hires && (tier === "hires" || tier === "max" || tier === "dsd"))
+                var qok = (selected.dsd && tier === "dsd")
+                    || (selected.hires && (tier === "hires" || tier === "max"))
                     || (selected.cd && tier === "cd")
                     || (selected.lossy && (tier === "mp3" || tier === "lossy"))
                 if (!qok) continue
@@ -897,7 +898,8 @@ Rectangle {
             var qualityOk = false
             for (i = 0; i < (artist.qualityTiers || []).length; i++) {
                 value = (artist.qualityTiers[i] || "").toLowerCase()
-                if ((selected.hires && (value === "hires" || value === "max"))
+                if ((selected.dsd && value === "dsd")
+                    || (selected.hires && (value === "hires" || value === "max"))
                     || (selected.cd && value === "cd")
                     || (selected.lossy && (value === "mp3" || value === "lossy"))) {
                     qualityOk = true; break

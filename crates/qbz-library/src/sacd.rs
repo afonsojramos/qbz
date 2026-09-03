@@ -41,6 +41,28 @@ pub struct SacdImportResult {
 impl LibraryDatabase {
     /// Atomically adopt a fully parsed SACD image into the local library.
     ///
+    /// Whether an image at this path was already imported with exactly this
+    /// size and mtime — the folder scan's zero-I/O skip for a known disc.
+    pub fn sacd_image_unchanged(
+        &self,
+        image_path: &str,
+        size_bytes: u64,
+        modified_ns: i64,
+    ) -> Result<bool, LibraryError> {
+        self.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT 1 FROM local_sacd_images
+                      WHERE image_path=?1 AND image_size_bytes=?2 AND image_modified_ns=?3",
+                    params![image_path, to_i64(size_bytes), modified_ns],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map(|row| row.is_some())
+                .map_err(database_error)
+        })
+    }
+
     /// The geometry fingerprint, not the file path, owns the row ids. Moving
     /// an image and opening it again therefore preserves playlists/history
     /// references. A successful shorter generation prunes obsolete virtual

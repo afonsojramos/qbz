@@ -777,11 +777,13 @@ Rectangle {
                         // the same on its unavailable rows.
                         ToolTip.visible: containsMouse
                         ToolTip.delay: 300
-                        // REUSED msgid — already translated in all 7
-                        // translated locales (es:3658); it is the same
-                        // sentence the reactive skip path toasts.
-                        ToolTip.text: QbzSession.tr(
-                            "This track is no longer available", QbzSession.trRev)
+                        // A pre-release (`qobuzUpcoming`: streaming rights
+                        // start in the future) is "not yet"; anything else
+                        // unavailable keeps the REUSED msgid the reactive
+                        // skip path toasts.
+                        ToolTip.text: root.item.qobuzUpcoming === true
+                            ? QbzSession.tr("This track is not yet available", QbzSession.trRev)
+                            : QbzSession.tr("This track is no longer available", QbzSession.trRev)
                     }
                 }
             }

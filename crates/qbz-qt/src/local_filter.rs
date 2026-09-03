@@ -22,7 +22,7 @@ impl MediaFilter {
                 .map(str::to_string)
                 .collect(),
             other_formats: on("other"),
-            qualities: ["hires", "cd", "lossy"]
+            qualities: ["dsd", "hires", "cd", "lossy"]
                 .into_iter()
                 .filter(|key| on(key))
                 .map(str::to_string)
@@ -71,8 +71,11 @@ impl MediaFilter {
         if !self.qualities.is_empty() {
             let tier =
                 crate::local_rows::tier_of(&track.format, track.bit_depth, track.sample_rate);
+            // DSD is its own chip (the badge already wears its own tier);
+            // Hi-Res is 24-bit PCM only.
             let quality = match tier {
-                "hires" | "max" | "dsd" => "hires",
+                "dsd" => "dsd",
+                "hires" | "max" => "hires",
                 "cd" => "cd",
                 _ => "lossy",
             };
@@ -163,6 +166,32 @@ mod tests {
         assert!(sources.contains(&"navidrome"));
         assert!(!sources.contains(&"local"));
         assert!(!sources.contains(&"plex"));
+    }
+
+    #[test]
+    fn dsd_chip_is_its_own_tier_and_hires_stays_pcm() {
+        let dsd = LocalTrack {
+            source: Some("user".into()),
+            format: AudioFormat::Dsd,
+            bit_depth: Some(1),
+            sample_rate: 2_822_400.0,
+            ..Default::default()
+        };
+        let hires = LocalTrack {
+            source: Some("user".into()),
+            format: AudioFormat::Flac,
+            bit_depth: Some(24),
+            sample_rate: 96_000.0,
+            ..Default::default()
+        };
+        let only_dsd = MediaFilter::from_json(r#"{"dsd":true}"#);
+        assert_eq!(only_dsd.qualities, ["dsd"]);
+        assert!(only_dsd.track_enabled(&dsd));
+        assert!(!only_dsd.track_enabled(&hires));
+
+        let only_hires = MediaFilter::from_json(r#"{"hires":true}"#);
+        assert!(only_hires.track_enabled(&hires));
+        assert!(!only_hires.track_enabled(&dsd), "DSD no longer hides under Hi-Res");
     }
 
     #[test]

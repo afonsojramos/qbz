@@ -223,6 +223,14 @@ pub struct TrackRow {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub not_streamable: bool,
+    /// Refines `qobuzUnavailable`: a pre-release rather than a pulled track
+    /// (`qbz_models::Track::is_upcoming`).
+    #[serde(
+        default,
+        rename = "qobuzUpcoming",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub upcoming: bool,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -417,6 +425,7 @@ fn map_track(track: &Track) -> TrackRow {
         art_url: artwork_url,
         // §5.1 via §3.1's single interpreter of absence.
         not_streamable: !track.is_streamable(),
+        upcoming: track.is_upcoming(),
         ..Default::default()
     }
 }

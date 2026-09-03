@@ -518,6 +518,13 @@ pub fn is_remote() -> bool {
     with_model(|m| m.is_remote).0
 }
 
+/// Whether playback currently lives on another device (QConnect renderer or
+/// a Chromecast/DLNA session). The local engine reports `is_playing=false`
+/// in both cases, so an "idle" decision must ask this too.
+pub(crate) fn remote_or_cast_active() -> bool {
+    with_model(|m| m.is_remote || m.cast_active).0
+}
+
 /// Read-only: the current output volume 0..1. The keyboard volume steps read
 /// it to compute the next value (the bars read the published property).
 pub(crate) fn volume() -> f32 {

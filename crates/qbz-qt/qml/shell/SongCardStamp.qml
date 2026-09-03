@@ -174,7 +174,19 @@ Column {
             text: led.tooltip
             delay: 0
             timeout: -1
+            // Geometry pinned to the text (see controls/QualityInline.qml).
             padding: 0
+            leftPadding: 0
+            rightPadding: 0
+            topPadding: 0
+            bottomPadding: 0
+            leftInset: 0
+            rightInset: 0
+            topInset: 0
+            bottomInset: 0
+            margins: 0
+            width: contentItem ? contentItem.implicitWidth : 0
+            height: contentItem ? contentItem.implicitHeight : 0
             x: Math.round((led.width - width) / 2)
             y: -height - 4
             contentItem: Text {
@@ -237,7 +249,19 @@ Column {
             text: root.qualityStampTooltip
             delay: 0
             timeout: -1
+            // Geometry pinned to the text (see controls/QualityInline.qml).
             padding: 0
+            leftPadding: 0
+            rightPadding: 0
+            topPadding: 0
+            bottomPadding: 0
+            leftInset: 0
+            rightInset: 0
+            topInset: 0
+            bottomInset: 0
+            margins: 0
+            width: contentItem ? contentItem.implicitWidth : 0
+            height: contentItem ? contentItem.implicitHeight : 0
             x: Math.round((root.width - width) / 2)
             y: -height - 4
             contentItem: Text {
