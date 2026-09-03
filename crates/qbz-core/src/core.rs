@@ -3744,6 +3744,8 @@ mod tests {
             // `None` = the fixture makes no availability claim, which is the
             // honest value: nothing in `track_with`'s callers reads it.
             streamable: None,
+            streamable_at: None,
+            release_date_stream: None,
             parental_warning: false,
             playlist_track_id: None,
             performers: None,

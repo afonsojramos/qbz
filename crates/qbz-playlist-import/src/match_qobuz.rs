@@ -411,6 +411,8 @@ mod tests {
             maximum_sampling_rate: None,
             maximum_bit_depth: None,
             streamable: Some(true),
+            streamable_at: None,
+            release_date_stream: None,
             parental_warning: false,
             playlist_track_id: None,
             performers: None,
