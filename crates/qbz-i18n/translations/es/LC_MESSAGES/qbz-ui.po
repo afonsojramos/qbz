@@ -6639,3 +6639,54 @@ msgstr "1 pista comprada"
 
 msgid "{} tracks purchased"
 msgstr "{} pistas compradas"
+
+msgid "This copy cannot be continued right now."
+msgstr "No se puede continuar esta copia en este momento."
+
+msgid "Library folder refreshed."
+msgstr "Carpeta de la biblioteca actualizada."
+
+msgid "Download another copy"
+msgstr "Descargar otra copia"
+
+msgid "Complete"
+msgstr "Completa"
+
+msgid "Partial"
+msgstr "Parcial"
+
+msgid "Missing files"
+msgstr "Archivos faltantes"
+
+msgid "Changed files"
+msgstr "Archivos modificados"
+
+msgid "Unreadable files"
+msgstr "Archivos ilegibles"
+
+msgid "Local purchase copies"
+msgstr "Copias locales de la compra"
+
+msgid "{} of {} tracks"
+msgstr "{} de {} pistas"
+
+msgid "Continue copy"
+msgstr "Continuar copia"
+
+msgid "Add to Local Library"
+msgstr "Agregar a la biblioteca local"
+
+msgid "In Local Library"
+msgstr "En la biblioteca local"
+
+msgid "{} of {} tracks available in this folder."
+msgstr "{} de {} pistas disponibles en esta carpeta."
+
+msgid "{} failed"
+msgstr "{} con error"
+
+msgid "{} cancelled"
+msgstr "{} canceladas"
+
+msgid "Download finished"
+msgstr "Descarga finalizada"

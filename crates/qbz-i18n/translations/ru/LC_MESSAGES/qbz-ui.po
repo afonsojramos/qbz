@@ -6652,3 +6652,54 @@ msgstr "Куплен 1 трек"
 
 msgid "{} tracks purchased"
 msgstr "Куплено треков: {}"
+
+msgid "This copy cannot be continued right now."
+msgstr "Сейчас эту копию нельзя продолжить."
+
+msgid "Library folder refreshed."
+msgstr "Папка медиатеки обновлена."
+
+msgid "Download another copy"
+msgstr "Скачать ещё одну копию"
+
+msgid "Complete"
+msgstr "Полная"
+
+msgid "Partial"
+msgstr "Частичная"
+
+msgid "Missing files"
+msgstr "Отсутствующие файлы"
+
+msgid "Changed files"
+msgstr "Изменённые файлы"
+
+msgid "Unreadable files"
+msgstr "Нечитаемые файлы"
+
+msgid "Local purchase copies"
+msgstr "Локальные копии покупки"
+
+msgid "{} of {} tracks"
+msgstr "{} из {} треков"
+
+msgid "Continue copy"
+msgstr "Продолжить копию"
+
+msgid "Add to Local Library"
+msgstr "Добавить в локальную медиатеку"
+
+msgid "In Local Library"
+msgstr "В локальной медиатеке"
+
+msgid "{} of {} tracks available in this folder."
+msgstr "В этой папке доступно {} из {} треков."
+
+msgid "{} failed"
+msgstr "Ошибок: {}"
+
+msgid "{} cancelled"
+msgstr "Отменено: {}"
+
+msgid "Download finished"
+msgstr "Загрузка завершена"

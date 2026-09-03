@@ -833,25 +833,37 @@ pub fn target_path(
 /// artist/album path builder again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PurchaseDownloadDestination {
-    NewRoot(String),
+    NewRoot {
+        root: String,
+        resolved_album_folder: String,
+    },
     ExistingAlbumFolder(String),
 }
 
 impl PurchaseDownloadDestination {
     pub fn album_folder(&self, artist_name: &str, album_title: &str, quality_dir: &str) -> PathBuf {
         match self {
-            Self::NewRoot(root) => target_path(
+            Self::NewRoot {
                 root,
-                artist_name,
-                album_title,
-                quality_dir,
-                1,
-                "placeholder",
-                "tmp",
-            )
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(root)),
+                resolved_album_folder,
+            } => {
+                if resolved_album_folder.is_empty() {
+                    target_path(
+                        root,
+                        artist_name,
+                        album_title,
+                        quality_dir,
+                        1,
+                        "placeholder",
+                        "tmp",
+                    )
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from(root))
+                } else {
+                    PathBuf::from(resolved_album_folder)
+                }
+            }
             Self::ExistingAlbumFolder(folder) => PathBuf::from(folder),
         }
     }
@@ -1529,7 +1541,10 @@ pub async fn download_purchase_track(
     quality_dir: &str,
     ctx: Option<&PurchaseAlbumContext>,
 ) -> Result<String, String> {
-    let destination = PurchaseDownloadDestination::NewRoot(destination.to_string());
+    let destination = PurchaseDownloadDestination::NewRoot {
+        root: destination.to_string(),
+        resolved_album_folder: String::new(),
+    };
     let receipt = download_purchase_track_file_only(
         client,
         track_id,

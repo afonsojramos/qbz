@@ -2217,3 +2217,57 @@ msgstr "1 track purchased"
 
 msgid "{} tracks purchased"
 msgstr "{} tracks purchased"
+
+msgid "This copy cannot be continued right now."
+msgstr "This copy cannot be continued right now."
+
+msgid "Library folder refreshed."
+msgstr "Library folder refreshed."
+
+msgid "Download another copy"
+msgstr "Download another copy"
+
+msgid "Complete"
+msgstr "Complete"
+
+msgid "Partial"
+msgstr "Partial"
+
+msgid "Missing files"
+msgstr "Missing files"
+
+msgid "Changed files"
+msgstr "Changed files"
+
+msgid "Unreadable files"
+msgstr "Unreadable files"
+
+msgid "Local purchase copies"
+msgstr "Local purchase copies"
+
+msgid "{} of {} tracks"
+msgstr "{} of {} tracks"
+
+msgid "Continue copy"
+msgstr "Continue copy"
+
+msgid "Add to Local Library"
+msgstr "Add to Local Library"
+
+msgid "In Local Library"
+msgstr "In Local Library"
+
+msgid "{} of {} tracks available in this folder."
+msgstr "{} of {} tracks available in this folder."
+
+msgid "{} failed"
+msgstr "{} failed"
+
+msgid "{} cancelled"
+msgstr "{} cancelled"
+
+msgid "Download finished"
+msgstr "Download finished"
+
+msgid "Not now"
+msgstr "Not now"

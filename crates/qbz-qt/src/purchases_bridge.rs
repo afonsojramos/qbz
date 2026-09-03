@@ -176,6 +176,10 @@ pub mod qbz_purchases_bridge {
         #[qinvokable]
         fn download_album(self: Pin<&mut QbzPurchases>);
 
+        /// Resume one exact persistent partial copy in its existing leaf.
+        #[qinvokable]
+        fn continue_copy(self: Pin<&mut QbzPurchases>, copy_id: QString);
+
         /// One track. `track_id` is a **QString**, never an int: QML `int` is
         /// 32-bit and Qobuz track ids overflow it (§G.0).
         #[qinvokable]
@@ -202,6 +206,14 @@ pub mod qbz_purchases_bridge {
         /// state, toast, start a background scan.
         #[qinvokable]
         fn add_to_library(self: Pin<&mut QbzPurchases>);
+
+        /// Register/refresh one exact copy through Local Library's typed API.
+        #[qinvokable]
+        fn add_copy_to_library(self: Pin<&mut QbzPurchases>, copy_id: QString);
+
+        /// Acknowledge the one-shot post-batch modal without mutating the copy.
+        #[qinvokable]
+        fn dismiss_batch_result(self: Pin<&mut QbzPurchases>, copy_id: QString);
     }
 
     impl cxx_qt::Threading for QbzPurchases {}
@@ -341,6 +353,10 @@ impl qbz_purchases_bridge::QbzPurchases {
         crate::purchases_qt::download_album();
     }
 
+    pub fn continue_copy(self: Pin<&mut Self>, copy_id: QString) {
+        crate::purchases_qt::continue_copy(copy_id.to_string());
+    }
+
     pub fn download_track(self: Pin<&mut Self>, track_id: QString) {
         crate::purchases_qt::download_track(track_id.to_string());
     }
@@ -359,5 +375,13 @@ impl qbz_purchases_bridge::QbzPurchases {
 
     pub fn add_to_library(self: Pin<&mut Self>) {
         crate::purchases_qt::add_to_library();
+    }
+
+    pub fn add_copy_to_library(self: Pin<&mut Self>, copy_id: QString) {
+        crate::purchases_qt::add_copy_to_library(copy_id.to_string());
+    }
+
+    pub fn dismiss_batch_result(self: Pin<&mut Self>, copy_id: QString) {
+        crate::purchases_qt::dismiss_batch_result(copy_id.to_string());
     }
 }

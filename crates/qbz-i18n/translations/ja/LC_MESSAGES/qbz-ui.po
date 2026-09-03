@@ -6614,3 +6614,54 @@ msgstr "購入済み1曲"
 
 msgid "{} tracks purchased"
 msgstr "購入済み{}曲"
+
+msgid "This copy cannot be continued right now."
+msgstr "現在このコピーを続行できません。"
+
+msgid "Library folder refreshed."
+msgstr "ライブラリフォルダーを更新しました。"
+
+msgid "Download another copy"
+msgstr "別のコピーをダウンロード"
+
+msgid "Complete"
+msgstr "完了"
+
+msgid "Partial"
+msgstr "一部"
+
+msgid "Missing files"
+msgstr "不足しているファイル"
+
+msgid "Changed files"
+msgstr "変更されたファイル"
+
+msgid "Unreadable files"
+msgstr "読み取れないファイル"
+
+msgid "Local purchase copies"
+msgstr "購入済みローカルコピー"
+
+msgid "{} of {} tracks"
+msgstr "{} / {} 曲"
+
+msgid "Continue copy"
+msgstr "コピーを続行"
+
+msgid "Add to Local Library"
+msgstr "ローカルライブラリに追加"
+
+msgid "In Local Library"
+msgstr "ローカルライブラリ内"
+
+msgid "{} of {} tracks available in this folder."
+msgstr "このフォルダーで {} / {} 曲を利用できます。"
+
+msgid "{} failed"
+msgstr "{} 件失敗"
+
+msgid "{} cancelled"
+msgstr "{} 件キャンセル"
+
+msgid "Download finished"
+msgstr "ダウンロード完了"

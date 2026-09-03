@@ -6621,3 +6621,54 @@ msgstr "1 nummer gekocht"
 
 msgid "{} tracks purchased"
 msgstr "{} nummers gekocht"
+
+msgid "This copy cannot be continued right now."
+msgstr "Deze kopie kan momenteel niet worden voortgezet."
+
+msgid "Library folder refreshed."
+msgstr "Bibliotheekmap vernieuwd."
+
+msgid "Download another copy"
+msgstr "Nog een kopie downloaden"
+
+msgid "Complete"
+msgstr "Volledig"
+
+msgid "Partial"
+msgstr "Gedeeltelijk"
+
+msgid "Missing files"
+msgstr "Ontbrekende bestanden"
+
+msgid "Changed files"
+msgstr "Gewijzigde bestanden"
+
+msgid "Unreadable files"
+msgstr "Onleesbare bestanden"
+
+msgid "Local purchase copies"
+msgstr "Lokale aankoopkopieën"
+
+msgid "{} of {} tracks"
+msgstr "{} van {} nummers"
+
+msgid "Continue copy"
+msgstr "Kopie voortzetten"
+
+msgid "Add to Local Library"
+msgstr "Toevoegen aan lokale bibliotheek"
+
+msgid "In Local Library"
+msgstr "In lokale bibliotheek"
+
+msgid "{} of {} tracks available in this folder."
+msgstr "{} van {} nummers beschikbaar in deze map."
+
+msgid "{} failed"
+msgstr "{} mislukt"
+
+msgid "{} cancelled"
+msgstr "{} geannuleerd"
+
+msgid "Download finished"
+msgstr "Download voltooid"

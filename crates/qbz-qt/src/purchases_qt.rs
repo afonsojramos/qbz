@@ -63,7 +63,10 @@ use std::sync::{Mutex, OnceLock};
 
 use cxx_qt_lib::QString;
 use qbz_library::LibraryDatabase;
-use qbz_library::{PurchaseCopyHealth, PurchasePlaybackMode};
+use qbz_library::{
+    PurchaseCopyHealth, PurchaseDownloadCopyTrack, PurchasePlaybackMode, PurchaseTrackHealth,
+    Reach, RegisterFolderOutcome,
+};
 use qbz_models::{
     Album, PurchaseAlbum, PurchaseFormatOption, PurchaseResponse, PurchaseTrack, SearchResultsPage,
 };
@@ -338,6 +341,12 @@ struct AlbumDoc {
     goodies_progress: GoodiesProgressDoc,
     #[serde(rename = "addToLibraryVisible")]
     add_to_library_visible: bool,
+    /// Persistent physical copies, never merged across folders.
+    copies: Vec<AlbumPurchaseCopyDoc>,
+    /// One terminal result per batch. QML acknowledges it after showing the
+    /// opt-in Local Library modal.
+    #[serde(rename = "batchResult", skip_serializing_if = "Option::is_none")]
+    batch_result: Option<BatchResultDoc>,
     /// The download folder of this album that the Local Library has indexed
     /// (`""` = none yet). It is the id the local album page opens, so the
     /// detail can link straight to the copy on disk.
@@ -420,6 +429,8 @@ struct AlbumDownload {
     goodies_active: bool,
     goodies_done: u32,
     goodies_total: u32,
+    batch_result: Option<BatchResultDoc>,
+    batch_total: u32,
 }
 
 #[derive(Debug, Default)]
@@ -442,7 +453,7 @@ impl DownloadStore {
     /// `startAlbumDownload` seed (`:140-148`): clear the abort flag, then
     /// REPLACE the album state. Album downloads seed FRESH; only single-track
     /// merges.
-    fn seed_album(&mut self, album_id: &str, format_id: u32) {
+    fn seed_album(&mut self, album_id: &str, format_id: u32, batch_total: u32) {
         self.abort.remove(album_id);
         let goodies = self
             .albums
@@ -462,6 +473,8 @@ impl DownloadStore {
                 goodies_active: goodies.0,
                 goodies_done: goodies.1,
                 goodies_total: goodies.2,
+                batch_result: None,
+                batch_total,
             },
         );
     }
@@ -498,7 +511,7 @@ impl DownloadStore {
                     id.clone(),
                     self.titles.get(id).cloned().unwrap_or_default(),
                     done,
-                    a.statuses.len() as u32,
+                    a.batch_total.max(a.statuses.len() as u32),
                 )
             })
             .collect();
@@ -507,6 +520,7 @@ impl DownloadStore {
     }
 
     /// Resolve the album folder from the FIRST successful track (`:160-165`).
+    #[cfg(test)]
     fn resolve_album_folder(&mut self, album_id: &str, folder: &str) {
         self.entry(album_id).resolved_album_folder = Some(folder.to_string());
     }
@@ -550,6 +564,8 @@ impl DownloadStore {
         let state = self.entry(album_id);
         state.statuses.insert(track_id, DlStatus::Downloading);
         state.format_id = Some(format_id);
+        state.batch_result = None;
+        state.batch_total = 1;
     }
 
     fn set_abort(&mut self, album_id: &str) {
@@ -562,6 +578,7 @@ impl DownloadStore {
 
     /// `clearAlbumDownloadState` (`:124-128`): drop the abort flag AND remove
     /// the album entry, so the progress and Add-to-Library blocks vanish.
+    #[cfg(test)]
     fn clear(&mut self, album_id: &str) {
         self.abort.remove(album_id);
         self.albums.remove(album_id);
@@ -746,6 +763,7 @@ fn quality_dir(label: &str) -> String {
 
 /// `albumFolderFromFilePath(filePath)` (`purchaseDownloadStore.ts:160-165`):
 /// everything before the last separator, or the whole path when there is none.
+#[cfg(test)]
 fn album_folder_from_file_path(file_path: &str) -> String {
     if let Some(idx) = file_path.rfind('/') {
         return file_path[..idx].to_string();
@@ -880,6 +898,7 @@ struct DetailState {
     /// Set only by AlbumView's fail-closed gate. It is a fresh exact purchase
     /// row captured immediately before this detail opened.
     verified_entitlement: Option<PurchaseAlbum>,
+    copies: Vec<AlbumPurchaseCopyDoc>,
 }
 
 static LIST: Mutex<Option<ListState>> = Mutex::new(None);
@@ -914,6 +933,7 @@ static ENTITLEMENTS: Mutex<EntitlementCache> = Mutex::new(EntitlementCache {
 });
 static ENTITLEMENT_PROFILE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static ENTITLEMENT_REQUEST_GENERATION: AtomicU64 = AtomicU64::new(0);
+static BATCH_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// PROCESS-monotonic, deliberately not per-state. `leave()` destroys the whole
 /// `ListState`, so a counter living inside it restarts at zero on the next
@@ -1268,6 +1288,8 @@ fn build_album_doc(s: &DetailState) -> AlbumDoc {
             progress: ProgressDoc::default(),
             goodies_progress: GoodiesProgressDoc::default(),
             add_to_library_visible: false,
+            copies: Vec::new(),
+            batch_result: None,
             local_album_id: String::new(),
         };
     };
@@ -1414,7 +1436,10 @@ fn build_album_doc(s: &DetailState) -> AlbumDoc {
         progress: ProgressDoc {
             active: downloading_all,
             completed,
-            total: tracks.len() as u32,
+            total: dl_ref
+                .map(|download| download.batch_total)
+                .filter(|total| *total > 0)
+                .unwrap_or(tracks.len() as u32),
             all_complete,
             // `wasCancelled = !isDownloadingAll && !allComplete && some cancelled`.
             cancelled: !downloading_all && !all_complete && any_cancelled,
@@ -1431,6 +1456,8 @@ fn build_album_doc(s: &DetailState) -> AlbumDoc {
             && dl_ref
                 .and_then(|d| d.resolved_album_folder.as_ref())
                 .is_some(),
+        copies: s.copies.clone(),
+        batch_result: dl_ref.and_then(|download| download.batch_result.clone()),
         local_album_id: s.local_album_id.clone(),
     }
 }
@@ -1511,7 +1538,7 @@ pub fn activate_profile() {
     });
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct AlbumPurchaseCopyDoc {
     #[serde(rename = "copyId")]
     copy_id: String,
@@ -1528,6 +1555,19 @@ struct AlbumPurchaseCopyDoc {
     total_tracks: u32,
     #[serde(rename = "inLocalLibrary")]
     in_local_library: bool,
+    continuable: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+struct BatchResultDoc {
+    serial: u64,
+    #[serde(rename = "copyId")]
+    copy_id: String,
+    folder: String,
+    available: u32,
+    total: u32,
+    failed: u32,
+    cancelled: u32,
 }
 
 #[derive(Serialize)]
@@ -1627,6 +1667,61 @@ fn local_album_purchase_state(
     })
 }
 
+fn purchase_copy_doc(
+    snapshot: &qbz_library::PurchaseCopySnapshot,
+    folders: &[qbz_library::LibraryFolder],
+) -> AlbumPurchaseCopyDoc {
+    let folder_label = Path::new(&snapshot.copy.resolved_album_folder)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_string();
+    AlbumPurchaseCopyDoc {
+        copy_id: snapshot.copy.copy_id.clone(),
+        format_id: snapshot.copy.format_id,
+        folder_label,
+        state: copy_health_word(snapshot.health).to_string(),
+        downloaded_tracks: snapshot.downloaded_tracks,
+        healthy_tracks: snapshot.healthy_tracks,
+        total_tracks: snapshot.total_tracks,
+        in_local_library: folder_is_in_local_library(&snapshot.copy.resolved_album_folder, folders),
+        continuable: matches!(
+            snapshot.health,
+            PurchaseCopyHealth::Partial
+                | PurchaseCopyHealth::Missing
+                | PurchaseCopyHealth::Changed
+                | PurchaseCopyHealth::Unreadable
+        ),
+    }
+}
+
+async fn refresh_detail_copy_inventory(album_id: String, expected_track_ids: Vec<i64>) {
+    let lookup_album_id = album_id.clone();
+    let local = tokio::task::spawn_blocking(move || {
+        local_album_purchase_state(&lookup_album_id, &expected_track_ids)
+    })
+    .await
+    .ok();
+    let Some(local) = local else {
+        return;
+    };
+    let docs: Vec<_> = local
+        .copies
+        .iter()
+        .map(|copy| purchase_copy_doc(copy, &local.folders))
+        .collect();
+    let applied = with_detail(|state| {
+        if state.album_id != album_id {
+            return false;
+        }
+        state.copies = docs;
+        true
+    });
+    if applied {
+        publish_album();
+    }
+}
+
 /// Build AlbumView's progressive Purchases subdocument. With `refresh`, the
 /// remote index is refreshed first; without it, the last profile snapshot is
 /// used so local copies can paint immediately.
@@ -1701,7 +1796,7 @@ pub async fn album_purchase_state(
 
     let mut variants: BTreeMap<i64, AlbumLocalVariantDoc> = BTreeMap::new();
     let mut copies = Vec::new();
-    for snapshot in local.copies {
+    for snapshot in &local.copies {
         let variant =
             variants
                 .entry(snapshot.copy.format_id)
@@ -1718,24 +1813,7 @@ pub async fn album_purchase_state(
             variant.healthy_complete_copies += 1;
             variant.selectable = true;
         }
-        let folder_label = Path::new(&snapshot.copy.resolved_album_folder)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_string();
-        copies.push(AlbumPurchaseCopyDoc {
-            copy_id: snapshot.copy.copy_id,
-            format_id: snapshot.copy.format_id,
-            folder_label,
-            state: copy_health_word(snapshot.health).to_string(),
-            downloaded_tracks: snapshot.downloaded_tracks,
-            healthy_tracks: snapshot.healthy_tracks,
-            total_tracks: snapshot.total_tracks,
-            in_local_library: folder_is_in_local_library(
-                &snapshot.copy.resolved_album_folder,
-                &local.folders,
-            ),
-        });
+        copies.push(purchase_copy_doc(snapshot, &local.folders));
     }
 
     serde_json::to_value(AlbumPurchaseDoc {
@@ -2256,6 +2334,7 @@ fn begin_open_album(album_id: String, verified_entitlement: Option<PurchaseAlbum
         // FOLDER would hand the next download a leaf to nest inside.
         s.destination = String::new();
         s.verified_entitlement = verified_entitlement;
+        s.copies.clear();
         s.generation
     });
     publish_album();
@@ -2435,10 +2514,7 @@ async fn load_album(generation: u64, album_id: String) {
 
     let album =
         svc::build_purchase_album(&catalog, &purchases, &reg.downloaded_ids, &reg.format_map);
-    let formats = svc::purchase_formats(
-        &catalog,
-        &svc::entitlement_format_ids(&purchases, &album_id),
-    );
+    let formats = svc::entitlement_formats(&svc::entitlement_format_ids(&purchases, &album_id));
     let cover_url = catalog.image.best().cloned().unwrap_or_default();
 
     let applied = with_detail(|s| {
@@ -2465,6 +2541,16 @@ async fn load_album(generation: u64, album_id: String) {
         return;
     }
     publish_album();
+
+    let expected_track_ids = with_detail(|state| {
+        state
+            .album
+            .as_ref()
+            .and_then(|album| album.tracks.as_ref())
+            .map(|page| page.items.iter().map(|track| track.id as i64).collect())
+            .unwrap_or_default()
+    });
+    refresh_detail_copy_inventory(album_id.clone(), expected_track_ids).await;
 
     if !cover_url.is_empty() && crate::artwork_qt::cached_path(&cover_url).is_empty() {
         crate::artwork_qt::download_missing(vec![cover_url.clone()]).await;
@@ -2540,6 +2626,154 @@ async fn pick_folder() -> Option<String> {
     Some(folder.path().to_string_lossy().to_string())
 }
 
+async fn revalidate_download(plan: &DownloadPlan) -> bool {
+    let valid = refresh_entitlement_index().await.is_some_and(|index| {
+        index
+            .downloadable_album(&plan.album_id)
+            .is_some_and(|album| album.downloadable_format_ids.contains(&plan.format_id))
+    });
+    if !valid {
+        crate::toast_qt::error(qbz_i18n::t("This purchase is not available for download."));
+    }
+    valid
+}
+
+fn suffixed_copy_folder(base: &Path, number: u32) -> PathBuf {
+    let parent = base.parent().unwrap_or_else(|| Path::new(""));
+    let stem = base
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Purchase");
+    parent.join(format!("{stem} ({number})"))
+}
+
+fn reserve_new_copy(
+    album_id: &str,
+    format_id: u32,
+    desired_folder: &Path,
+) -> Option<qbz_library::PurchaseDownloadCopy> {
+    let db = open_owned_library_db()?;
+    let registered: HashSet<PathBuf> = db
+        .get_purchase_copies_for_album(album_id)
+        .ok()?
+        .into_iter()
+        .map(|copy| PathBuf::from(copy.resolved_album_folder))
+        .collect();
+    for number in 1..=100 {
+        let candidate = if number == 1 {
+            desired_folder.to_path_buf()
+        } else {
+            suffixed_copy_folder(desired_folder, number)
+        };
+        if registered.contains(&candidate) {
+            continue;
+        }
+        match qbz_library::probe_default(&candidate) {
+            Reach::Missing => {
+                return db
+                    .create_purchase_copy(album_id, i64::from(format_id), &candidate)
+                    .ok();
+            }
+            Reach::Present => continue,
+            Reach::Unreachable => return None,
+        }
+    }
+    None
+}
+
+/// A normal album, track, retry or multiselect action always creates another
+/// copy and therefore always invokes the picker. Existing partial copies are
+/// reachable only through `continue_copy`.
+async fn prepare_new_copy(
+    mut plan: DownloadPlan,
+    batch_track_ids: Vec<u64>,
+) -> Option<DownloadPlan> {
+    if !revalidate_download(&plan).await {
+        return None;
+    }
+    let root = pick_folder().await?;
+    let desired = album_dir_for(&root, &plan.artist, &plan.album_title, &plan.quality_dir);
+    let album_id = plan.album_id.clone();
+    let format_id = plan.format_id;
+    let copy =
+        tokio::task::spawn_blocking(move || reserve_new_copy(&album_id, format_id, &desired))
+            .await
+            .ok()
+            .flatten();
+    let Some(copy) = copy else {
+        crate::toast_qt::error(qbz_i18n::t("Failed to start download. Please try again."));
+        return None;
+    };
+    with_detail(|state| {
+        if state.album_id == plan.album_id {
+            state.destination = root.clone();
+        }
+    });
+    plan.destination = Some(svc::PurchaseDownloadDestination::NewRoot {
+        root,
+        resolved_album_folder: copy.resolved_album_folder.clone(),
+    });
+    plan.copy_id = copy.copy_id;
+    plan.batch_track_ids = batch_track_ids;
+    publish_album();
+    Some(plan)
+}
+
+async fn prepare_existing_copy(mut plan: DownloadPlan, copy_id: String) -> Option<DownloadPlan> {
+    if !revalidate_download(&plan).await {
+        return None;
+    }
+    let album_id = plan.album_id.clone();
+    let expected: Vec<i64> = plan.track_ids.iter().map(|id| *id as i64).collect();
+    let selected_format = i64::from(plan.format_id);
+    let selected = tokio::task::spawn_blocking(move || {
+        let db = open_owned_library_db()?;
+        let copy = db.get_purchase_copy(&copy_id).ok()??;
+        if copy.album_id != album_id || copy.format_id != selected_format {
+            return None;
+        }
+        if qbz_library::probe_default(Path::new(&copy.resolved_album_folder)) != Reach::Present {
+            return None;
+        }
+        let snapshot = db
+            .inspect_purchase_copies(&album_id, &expected)
+            .ok()?
+            .into_iter()
+            .find(|snapshot| snapshot.copy.copy_id == copy.copy_id)?;
+        if matches!(
+            snapshot.health,
+            PurchaseCopyHealth::CompleteHealthy | PurchaseCopyHealth::Unreachable
+        ) {
+            return None;
+        }
+        let healthy: HashSet<i64> = snapshot
+            .tracks
+            .iter()
+            .filter(|(_, health)| *health == PurchaseTrackHealth::Healthy)
+            .map(|(track, _)| track.track_id)
+            .collect();
+        let remaining: Vec<u64> = expected
+            .iter()
+            .filter(|track_id| !healthy.contains(track_id))
+            .map(|track_id| *track_id as u64)
+            .collect();
+        (!remaining.is_empty()).then_some((copy, remaining))
+    })
+    .await
+    .ok()
+    .flatten();
+    let Some((copy, remaining)) = selected else {
+        crate::toast_qt::error(qbz_i18n::t("This copy cannot be continued right now."));
+        return None;
+    };
+    plan.destination = Some(svc::PurchaseDownloadDestination::ExistingAlbumFolder(
+        copy.resolved_album_folder,
+    ));
+    plan.copy_id = copy.copy_id;
+    plan.batch_track_ids = remaining;
+    Some(plan)
+}
+
 // ---------------------------------------------------------------------------
 //  Downloads
 // ---------------------------------------------------------------------------
@@ -2555,9 +2789,21 @@ struct DownloadPlan {
     /// The selected option's route (`PurchaseFormatOption::streaming`).
     streaming: bool,
     quality_dir: String,
-    destination: String,
+    destination: Option<svc::PurchaseDownloadDestination>,
+    copy_id: String,
+    /// Full album denominator, distinct from the tracks requested by this
+    /// batch (a single-track download or continuation is normally smaller).
     track_ids: Vec<u64>,
+    batch_track_ids: Vec<u64>,
     catalog: Album,
+}
+
+impl DownloadPlan {
+    fn album_folder(&self) -> Option<PathBuf> {
+        self.destination.as_ref().map(|destination| {
+            destination.album_folder(&self.artist, &self.album_title, &self.quality_dir)
+        })
+    }
 }
 
 /// `None` when the screen cannot start a download at all (no album, no format).
@@ -2576,15 +2822,14 @@ fn build_plan() -> Option<DownloadPlan> {
             format_id: format.id,
             streaming: format.streaming,
             quality_dir: quality_dir(&format.label),
-            // The user-picked ROOT. Reading the store's resolved album folder
-            // here nested the tree one level deeper on every later download of
-            // the same album.
-            destination: s.destination.clone(),
+            destination: None,
+            copy_id: String::new(),
             track_ids: album
                 .tracks
                 .as_ref()
                 .map(|p| p.items.iter().map(|t| t.id).collect())
                 .unwrap_or_default(),
+            batch_track_ids: Vec::new(),
             catalog: catalog.clone(),
         })
     })
@@ -2601,7 +2846,27 @@ pub fn download_album() {
         return;
     }
     crate::spawn(async move {
-        let Some(plan) = ensure_destination(plan).await else {
+        let batch = plan.track_ids.clone();
+        let Some(plan) = prepare_new_copy(plan, batch).await else {
+            return;
+        };
+        run_album_download(plan).await;
+    });
+}
+
+/// Continue one identified partial copy in its existing album leaf. The
+/// picker is deliberately absent; if that leaf is unreachable the operation
+/// stops and the user may still create another copy normally.
+pub fn continue_copy(copy_id: String) {
+    let copy_id = copy_id.trim().to_string();
+    let Some(plan) = build_plan() else {
+        return;
+    };
+    if copy_id.is_empty() || plan.track_ids.is_empty() {
+        return;
+    }
+    crate::spawn(async move {
+        let Some(plan) = prepare_existing_copy(plan, copy_id).await else {
             return;
         };
         run_album_download(plan).await;
@@ -2627,7 +2892,7 @@ pub fn download_track(track_id: String) {
         return;
     }
     crate::spawn(async move {
-        let Some(plan) = ensure_destination(plan).await else {
+        let Some(plan) = prepare_new_copy(plan, vec![track_id]).await else {
             return;
         };
         with_store(|st| {
@@ -2644,30 +2909,21 @@ pub fn download_track(track_id: String) {
         let ctx = build_context(&plan.catalog).await;
 
         let one = plan.clone();
-        let done = tokio::task::spawn_blocking(move || {
-            run_sequential(&one, &[track_id], client, ctx, false)
-        })
-        .await;
-        if let Err(e) = done {
-            log::error!("[qbz-qt] purchases: track-download thread join failed: {e}");
-            with_store(|st| st.mark(&plan.album_id, track_id, DlStatus::Failed));
+        let done =
+            tokio::task::spawn_blocking(move || run_sequential(&one, client, ctx, false)).await;
+        match done {
+            Ok(Some(result)) => {
+                with_store(|store| store.entry(&plan.album_id).batch_result = Some(result));
+                publish_album();
+            }
+            Err(error) => {
+                log::error!("[qbz-qt] purchases: track-download thread join failed: {error}");
+                with_store(|st| st.mark(&plan.album_id, track_id, DlStatus::Failed));
+            }
+            Ok(None) => {}
         }
         refresh_after_download().await;
     });
-}
-
-/// Prompt for a destination when there is none. The reference's
-/// `promptForFolder` runs inside the download action, which is why this is here
-/// and not a precondition the QML host has to enforce.
-async fn ensure_destination(mut plan: DownloadPlan) -> Option<DownloadPlan> {
-    if !plan.destination.trim().is_empty() {
-        return Some(plan);
-    }
-    let folder = pick_folder().await?;
-    with_detail(|s| s.destination = folder.clone());
-    plan.destination = folder;
-    publish_album();
-    Some(plan)
 }
 
 /// The album-level context every track is tagged from (§14): built ONCE before
@@ -2688,7 +2944,11 @@ async fn build_context(catalog: &Album) -> svc::PurchaseAlbumContext {
 async fn run_album_download(plan: DownloadPlan) {
     with_store(|st| {
         st.remember_title(&plan.album_id, &plan.album_title);
-        st.seed_album(&plan.album_id, plan.format_id)
+        st.seed_album(
+            &plan.album_id,
+            plan.format_id,
+            plan.batch_track_ids.len() as u32,
+        )
     });
     publish_album();
 
@@ -2696,10 +2956,10 @@ async fn run_album_download(plan: DownloadPlan) {
         // No client: mark every track failed rather than leaving the UI on a
         // seeded "downloading" that never resolves.
         with_store(|st| {
-            for id in &plan.track_ids {
+            for id in &plan.batch_track_ids {
                 st.mark(&plan.album_id, *id, DlStatus::Failed);
             }
-            st.finalize(&plan.album_id, &plan.track_ids);
+            st.finalize(&plan.album_id, &plan.batch_track_ids);
         });
         publish_album();
         return;
@@ -2730,33 +2990,18 @@ async fn run_album_download(plan: DownloadPlan) {
     };
 
     let loop_plan = plan.clone();
-    let ids = plan.track_ids.clone();
     let done =
-        tokio::task::spawn_blocking(move || run_sequential(&loop_plan, &ids, client, ctx, true))
-            .await;
-    if let Err(e) = done {
-        log::error!("[qbz-qt] purchases: album-download thread join failed: {e}");
-        with_store(|st| st.finalize(&plan.album_id, &plan.track_ids));
+        tokio::task::spawn_blocking(move || run_sequential(&loop_plan, client, ctx, true)).await;
+    if let Err(error) = &done {
+        log::error!("[qbz-qt] purchases: album-download thread join failed: {error}");
+        with_store(|st| st.finalize(&plan.album_id, &plan.batch_track_ids));
     }
 
     // §14.2, best-effort and after the audio: `cover.jpg` / `back.jpg` beside
     // the tracks. The folder is the one the FIRST successful track produced —
     // the store's rewritten destination — falling back to the deterministic
     // derivation when nothing landed.
-    let folder = with_store(|st| {
-        st.get(&plan.album_id)
-            .and_then(|d| d.resolved_album_folder.clone())
-    })
-    .filter(|d| d != &plan.destination)
-    .map(PathBuf::from)
-    .unwrap_or_else(|| {
-        album_dir_for(
-            &plan.destination,
-            &plan.artist,
-            &plan.album_title,
-            &plan.quality_dir,
-        )
-    });
+    let folder = plan.album_folder().unwrap_or_default();
     if cover.is_some() || back.is_some() || large.is_some() {
         let write_folder = folder.clone();
         let _ = tokio::task::spawn_blocking(move || {
@@ -2780,8 +3025,20 @@ async fn run_album_download(plan: DownloadPlan) {
         run_goodies_download(&plan, &goodies, &folder, false).await;
     }
 
+    if let Ok(Some(result)) = done {
+        with_store(|store| store.entry(&plan.album_id).batch_result = Some(result));
+        publish_album();
+    }
+
     refresh_after_download().await;
-    toast_album_outcome(&plan);
+    if with_store(|store| {
+        store
+            .get(&plan.album_id)
+            .and_then(|state| state.batch_result.as_ref())
+            .is_none()
+    }) {
+        toast_album_outcome(&plan);
+    }
 }
 
 /// The catalog's goodies that carry a url — the only ones worth a request.
@@ -2846,11 +3103,11 @@ async fn run_goodies_download(
 /// flag exactly as the reference does.
 fn run_sequential(
     plan: &DownloadPlan,
-    track_ids: &[u64],
     client: QobuzClient,
     ctx: svc::PurchaseAlbumContext,
     cancellable: bool,
-) {
+) -> Option<BatchResultDoc> {
+    let track_ids = &plan.batch_track_ids;
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -2867,7 +3124,7 @@ fn run_sequential(
                 }
             });
             publish_album();
-            return;
+            return None;
         }
     };
 
@@ -2885,54 +3142,87 @@ fn run_sequential(
                 }
             });
             publish_album();
-            return;
+            return None;
+        };
+        let Some(destination) = plan.destination.as_ref() else {
+            return None;
         };
 
-        let mut first_success = false;
+        let mut succeeded = 0u32;
+        let mut failed = 0u32;
+        let mut cancelled = 0u32;
         for track_id in track_ids.iter().copied() {
             // (1) Cooperative abort check, BETWEEN tracks only — the in-flight
             // track always finishes.
             if cancellable && with_store(|st| st.is_aborted(&plan.album_id)) {
                 with_store(|st| st.apply_cancellation(&plan.album_id, track_ids));
+                cancelled = track_ids
+                    .iter()
+                    .filter(|id| {
+                        with_store(|store| {
+                            store
+                                .get(&plan.album_id)
+                                .and_then(|state| state.statuses.get(id))
+                                == Some(&DlStatus::Cancelled)
+                        })
+                    })
+                    .count() as u32;
                 publish_album();
-                return;
+                break;
             }
             with_store(|st| st.mark(&plan.album_id, track_id, DlStatus::Downloading));
             publish_album();
 
-            // (2) The bundled primitive: `/track/get` (unsigned) → SIGNED
-            // `getFileUrl` → CDN → `.part`→rename → registry write with the
-            // REQUESTED format id → tags. `Some(album_id)` is what makes the
-            // album's downloaded state answerable at all (§11-1), and the
-            // registry error PROPAGATES — a registry failure marks the track
-            // `failed`, matching BOTH reference paths (§8-D1).
-            match svc::download_purchase_track(
+            // The file becomes part of exactly one copy. The compatibility
+            // registry is intentionally untouched here; it is promoted in one
+            // transaction only after this copy is complete and healthy.
+            match svc::download_purchase_track_file_only(
                 &client,
-                &db,
                 track_id,
-                Some(plan.album_id.as_str()),
                 plan.format_id,
                 plan.streaming,
-                &plan.destination,
+                destination,
                 &plan.quality_dir,
                 Some(&ctx),
             )
             .await
             {
-                Ok(file_path) => {
-                    // (3) The destination is rewritten from the FIRST successful
-                    // file path (§6) — this is what makes Add-to-Library add the
-                    // album subfolder rather than the download root.
-                    if cancellable && !first_success {
-                        first_success = true;
-                        let folder = album_folder_from_file_path(&file_path);
-                        with_store(|st| st.resolve_album_folder(&plan.album_id, &folder));
+                Ok(receipt) => {
+                    let row = PurchaseDownloadCopyTrack {
+                        copy_id: plan.copy_id.clone(),
+                        track_id: track_id as i64,
+                        file_path: receipt.file_path,
+                        mime_type: Some(receipt.mime_type),
+                        container: Some(receipt.container),
+                        sample_rate_hz: receipt.sample_rate_hz,
+                        bit_depth: receipt.bit_depth,
+                        channels: receipt.channels,
+                        file_size: receipt.file_size,
+                        modified_ns: receipt.modified_ns,
+                        last_verified_at: Some(receipt.last_verified_at),
+                    };
+                    match db.upsert_purchase_copy_track(&row) {
+                        Ok(()) => {
+                            succeeded += 1;
+                            with_store(|store| {
+                                store.mark(&plan.album_id, track_id, DlStatus::Complete)
+                            });
+                        }
+                        Err(error) => {
+                            failed += 1;
+                            log::warn!(
+                                "[qbz-qt] purchases: copy registry failed for track {track_id}: {error}"
+                            );
+                            with_store(|store| {
+                                store.mark(&plan.album_id, track_id, DlStatus::Failed)
+                            });
+                        }
                     }
-                    with_store(|st| st.mark(&plan.album_id, track_id, DlStatus::Complete));
                 }
                 Err(e) => {
                     // (4) A FAILED TRACK DOES NOT ABORT THE ALBUM (§4.2b): mark
                     // it failed, keep going. Only `allComplete` stays false.
+                    failed += 1;
                     log::warn!("[qbz-qt] purchases: track {track_id} download failed: {e}");
                     with_store(|st| st.mark(&plan.album_id, track_id, DlStatus::Failed));
                 }
@@ -2944,7 +3234,41 @@ fn run_sequential(
             with_store(|st| st.finalize(&plan.album_id, track_ids));
         }
         publish_album();
-    });
+
+        let expected: Vec<i64> = plan.track_ids.iter().map(|id| *id as i64).collect();
+        let snapshot = db
+            .inspect_purchase_copies(&plan.album_id, &expected)
+            .ok()
+            .and_then(|copies| {
+                copies
+                    .into_iter()
+                    .find(|copy| copy.copy.copy_id == plan.copy_id)
+            });
+        if snapshot
+            .as_ref()
+            .is_some_and(|copy| copy.health == PurchaseCopyHealth::CompleteHealthy)
+        {
+            if let Err(error) = db.promote_complete_purchase_copy(&plan.copy_id, &expected) {
+                log::warn!("[qbz-qt] purchases: complete-copy promotion failed: {error}");
+            }
+        }
+        (succeeded > 0).then(|| BatchResultDoc {
+            serial: BATCH_GENERATION.fetch_add(1, Ordering::SeqCst).wrapping_add(1),
+            copy_id: plan.copy_id.clone(),
+            folder: plan
+                .album_folder()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            available: snapshot
+                .as_ref()
+                .map(|copy| copy.healthy_tracks)
+                .unwrap_or(succeeded),
+            total: plan.track_ids.len() as u32,
+            failed,
+            cancelled,
+        })
+    })
 }
 
 /// Toast the album outcome. The reference gives no causal message on a format /
@@ -3063,6 +3387,21 @@ async fn refresh_after_download() {
     if refreshed {
         publish_album();
     }
+    let inventory = with_detail(|state| {
+        state.album.as_ref().map(|album| {
+            (
+                album.id.clone(),
+                album
+                    .tracks
+                    .as_ref()
+                    .map(|page| page.items.iter().map(|track| track.id as i64).collect())
+                    .unwrap_or_default(),
+            )
+        })
+    });
+    if let Some((album_id, expected)) = inventory {
+        refresh_detail_copy_inventory(album_id, expected).await;
+    }
 }
 
 /// Cooperative cancel: the in-flight track finishes, everything that has not
@@ -3093,101 +3432,135 @@ pub fn download_goodies() {
     }
 
     crate::spawn(async move {
-        let Some(plan) = ensure_destination(plan).await else {
+        if !revalidate_download(&plan).await {
+            return;
+        }
+        let album_id = plan.album_id.clone();
+        let format_id = i64::from(plan.format_id);
+        let folder = tokio::task::spawn_blocking(move || {
+            let db = open_owned_library_db()?;
+            db.get_purchase_copies_for_album(&album_id)
+                .ok()?
+                .into_iter()
+                .find(|copy| {
+                    copy.format_id == format_id
+                        && qbz_library::probe_default(Path::new(&copy.resolved_album_folder))
+                            == Reach::Present
+                })
+                .map(|copy| copy.resolved_album_folder)
+        })
+        .await
+        .ok()
+        .flatten();
+        let Some(folder) = folder else {
+            crate::toast_qt::error(qbz_i18n::t("This copy cannot be continued right now."));
             return;
         };
-        // The album folder the tracks went into, or the one they WOULD go into
-        // — a booklet is worth downloading before any audio is.
-        let folder = with_store(|st| {
-            st.get(&plan.album_id)
-                .and_then(|d| d.resolved_album_folder.clone())
-        })
-        .filter(|d| d != &plan.destination)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            album_dir_for(
-                &plan.destination,
-                &plan.artist,
-                &plan.album_title,
-                &plan.quality_dir,
-            )
-        });
-        run_goodies_download(&plan, &goodies, &folder, true).await;
+        run_goodies_download(&plan, &goodies, Path::new(&folder), true).await;
     });
 }
 
-/// "Add to Library" — a SEQUENCE, not a banner (§6):
-///   1. add the RESOLVED album subfolder as a library folder (with the same
-///      network detection Settings > Local Library uses);
-///   2. clear the download state, so the progress and Add-to-Library blocks
-///      vanish;
-///   3. success/error toast;
-///   4. start a background scan.
-///
-/// The destination is the folder the FIRST successful file path produced, which
-/// is why step 1 adds the album subfolder rather than the download root — and
-/// why the scanned files pick up the `source = 'qobuz_purchase'` stamp
-/// (`database.rs:1105-1120`) and the gold badge in the Local Library.
-pub fn add_to_library() {
-    let (album_id, destination) = with_detail(|s| {
-        let dest = with_store(|st| {
-            st.get(&s.album_id)
-                .and_then(|d| d.resolved_album_folder.clone())
-        })
-        .unwrap_or_else(|| s.destination.clone());
-        (s.album_id.clone(), dest)
+pub fn dismiss_batch_result(copy_id: String) {
+    let album_id = with_detail(|state| state.album_id.clone());
+    with_store(|store| {
+        if store
+            .get(&album_id)
+            .and_then(|state| state.batch_result.as_ref())
+            .is_some_and(|result| result.copy_id == copy_id)
+        {
+            store.entry(&album_id).batch_result = None;
+        }
     });
-    if album_id.is_empty() || destination.trim().is_empty() {
+    publish_album();
+}
+
+/// Delegate one exact copy folder to Local Library's typed authority. Exact
+/// duplicates refresh, ancestors cover, disabled roots stay disabled, and the
+/// queued scan machinery prevents a concurrent scan from dropping this one.
+pub fn add_copy_to_library(copy_id: String) {
+    let copy_id = copy_id.trim().to_string();
+    let album_id = with_detail(|state| state.album_id.clone());
+    if copy_id.is_empty() || album_id.is_empty() {
         crate::toast_qt::error(qbz_i18n::t("Couldn't add to library"));
         return;
     }
 
     crate::spawn(async move {
-        // The folder table + the network probe + the insert all live in the
-        // Settings > Local Library controller; reusing it keeps ONE add-folder
-        // path rather than a second copy that drifts.
-        crate::settings_qt::library::add_folder(destination.clone()).await;
-
-        // `add_folder` reports its own status line and does not return the id,
-        // so success is confirmed by the folder actually being in the table —
-        // a silent no-op (unreadable db, path gone) must not clear the download
-        // state and tell the user it worked.
-        // Carry the folder's ID out, not just a yes/no. The row is right here
-        // and throwing it away costs a full-library rescan below.
-        let added_id = tokio::task::spawn_blocking(move || {
-            // `add_folder` canonicalizes before inserting, so the comparison
-            // has to canonicalize the same way or a symlinked download folder
-            // never matches and a real success reports as a failure.
-            let canonical = std::fs::canonicalize(&destination)
-                .map(|c| c.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| destination.clone());
-            crate::library_db_qt::with_db(false, |db| Ok(db.get_folders_with_metadata()?))
-                .and_then(|folders| folders.iter().find(|f| f.path == canonical).map(|f| f.id))
+        let lookup_copy_id = copy_id.clone();
+        let expected_album_id = album_id.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let Some(db) = open_owned_library_db() else {
+                return RegisterFolderOutcome::Failed;
+            };
+            let Some(copy) = db.get_purchase_copy(&lookup_copy_id).ok().flatten() else {
+                return RegisterFolderOutcome::Failed;
+            };
+            if copy.album_id != expected_album_id {
+                return RegisterFolderOutcome::Failed;
+            }
+            db.register_or_refresh_folder(Path::new(&copy.resolved_album_folder))
         })
         .await
-        .ok()
-        .flatten();
-
-        let Some(folder_id) = added_id else {
-            crate::toast_qt::error(qbz_i18n::t("Couldn't add to library"));
-            return;
-        };
-
-        with_store(|st| st.clear(&album_id));
-        publish_album();
-        crate::toast_qt::success(qbz_i18n::t("Added to library"));
-        // Scan ONLY the folder just added. `settings_qt::library::scan` takes
-        // `Option<i64>` and documents exactly this — "every enabled folder
-        // (`None`) or exactly one (`Some(id)`)". Passing `None` here would
-        // re-walk the user's entire library, which on a large one is minutes of
-        // disk for a single new album.
-        crate::settings_qt::library::scan(Some(folder_id));
+        .unwrap_or(RegisterFolderOutcome::Failed);
+        if let Some(folder_id) = outcome.scan_folder_id() {
+            dismiss_batch_result(copy_id.clone());
+            match outcome {
+                RegisterFolderOutcome::Added { .. } => {
+                    crate::toast_qt::success(qbz_i18n::t("Added to library"));
+                }
+                RegisterFolderOutcome::Refreshed { .. } | RegisterFolderOutcome::Covered { .. } => {
+                    crate::toast_qt::success(qbz_i18n::t("Library folder refreshed."));
+                }
+                _ => {}
+            }
+            crate::settings_qt::library::scan(Some(folder_id));
+        } else {
+            match outcome {
+                RegisterFolderOutcome::RegisteredDisabled { .. } => {
+                    crate::toast_qt::error(qbz_i18n::t("That library folder is disabled."));
+                }
+                RegisterFolderOutcome::Conflict => crate::toast_qt::error(qbz_i18n::t(
+                    "That folder overlaps an existing library folder.",
+                )),
+                _ => crate::toast_qt::error(qbz_i18n::t("Couldn't add to library")),
+            }
+        }
         // The scan runs on its own; the link appears once its rows exist.
         // One look after a generous delay is enough for an album-sized
         // folder, and re-entering the page resolves it again anyway.
         tokio::time::sleep(std::time::Duration::from_secs(4)).await;
         refresh_local_album_link().await;
+        let inventory = with_detail(|state| {
+            state.album.as_ref().map(|album| {
+                (
+                    album.id.clone(),
+                    album
+                        .tracks
+                        .as_ref()
+                        .map(|page| page.items.iter().map(|track| track.id as i64).collect())
+                        .unwrap_or_default(),
+                )
+            })
+        });
+        if let Some((album_id, expected)) = inventory {
+            refresh_detail_copy_inventory(album_id, expected).await;
+        }
     });
+}
+
+/// Compatibility name retained for the existing bridge/QML while the detail
+/// migrates to exact-copy actions.
+pub fn add_to_library() {
+    let copy_id = with_detail(|state| {
+        with_store(|store| {
+            store
+                .get(&state.album_id)
+                .and_then(|download| download.batch_result.as_ref())
+                .map(|result| result.copy_id.clone())
+                .unwrap_or_default()
+        })
+    });
+    add_copy_to_library(copy_id);
 }
 
 /// Live language switch. Both documents carry exactly one Rust-translated
@@ -3384,7 +3757,7 @@ mod tests {
         // §6, reproduced deliberately: `startTrackDownload` overwrites the
         // album's formatId even though it sets nothing else.
         let mut store = DownloadStore::default();
-        store.seed_album("A", 27);
+        store.seed_album("A", 27, 1);
         store.mark("A", 1, DlStatus::Complete);
         store.finalize("A", &[1]);
         assert!(all_complete_for_format(store.get("A"), Some(27)));
@@ -3402,7 +3775,7 @@ mod tests {
     fn a_failed_track_does_not_abort_the_album() {
         // §4.2b: only `allComplete` stays false.
         let mut store = DownloadStore::default();
-        store.seed_album("A", 7);
+        store.seed_album("A", 7, 3);
         store.mark("A", 1, DlStatus::Complete);
         store.mark("A", 2, DlStatus::Failed);
         store.mark("A", 3, DlStatus::Complete);
@@ -3416,7 +3789,7 @@ mod tests {
     #[test]
     fn cancellation_only_touches_tracks_that_never_started() {
         let mut store = DownloadStore::default();
-        store.seed_album("A", 7);
+        store.seed_album("A", 7, 4);
         store.mark("A", 1, DlStatus::Complete);
         store.mark("A", 2, DlStatus::Failed);
         store.set_abort("A");
@@ -3435,7 +3808,7 @@ mod tests {
     fn a_single_track_download_preserves_its_siblings() {
         // The merge path spreads the existing state; only the one track moves.
         let mut store = DownloadStore::default();
-        store.seed_album("A", 7);
+        store.seed_album("A", 7, 2);
         store.mark("A", 1, DlStatus::Complete);
         store.mark("A", 2, DlStatus::Complete);
         store.finalize("A", &[1, 2]);
@@ -3461,7 +3834,7 @@ mod tests {
             state.goodies_done = 1;
             state.goodies_total = 3;
         }
-        store.seed_album("A", 7);
+        store.seed_album("A", 7, 3);
         let state = store.get("A").unwrap();
         assert!(state.goodies_active);
         assert_eq!(state.goodies_done, 1);
@@ -3472,7 +3845,7 @@ mod tests {
     #[test]
     fn clearing_the_state_hides_the_progress_and_add_to_library_blocks() {
         let mut store = DownloadStore::default();
-        store.seed_album("A", 7);
+        store.seed_album("A", 7, 1);
         store.mark("A", 1, DlStatus::Complete);
         store.finalize("A", &[1]);
         store.clear("A");
@@ -3893,7 +4266,7 @@ mod destination_separation_tests {
     #[test]
     fn seeding_never_pre_fills_the_resolved_album_folder() {
         let mut store = DownloadStore::default();
-        store.seed_album("A", 27);
+        store.seed_album("A", 27, 1);
         assert_eq!(
             store.get("A").unwrap().resolved_album_folder,
             None,
@@ -3904,7 +4277,7 @@ mod destination_separation_tests {
     #[test]
     fn the_resolved_album_folder_comes_only_from_a_finished_track() {
         let mut store = DownloadStore::default();
-        store.seed_album("A", 27);
+        store.seed_album("A", 27, 1);
         store.resolve_album_folder("A", "/music/Artist/Album [FLAC][24-bit,96kHz]");
         assert_eq!(
             store.get("A").unwrap().resolved_album_folder.as_deref(),
@@ -3917,11 +4290,11 @@ mod destination_separation_tests {
     #[test]
     fn a_second_download_does_not_nest_inside_the_first() {
         let mut store = DownloadStore::default();
-        store.seed_album("A", 27);
+        store.seed_album("A", 27, 1);
         store.resolve_album_folder("A", "/music/Artist/Album [FLAC][24-bit,192kHz]");
 
         // Same album, different format — the case that nested.
-        store.seed_album("A", 7);
+        store.seed_album("A", 7, 1);
         let root = "/music";
         let target = album_dir_for(root, "Artist", "Album", "[FLAC][24-bit,96kHz]");
 

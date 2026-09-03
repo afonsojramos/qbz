@@ -6633,3 +6633,54 @@ msgstr "1 Titel gekauft"
 
 msgid "{} tracks purchased"
 msgstr "{} Titel gekauft"
+
+msgid "This copy cannot be continued right now."
+msgstr "Diese Kopie kann derzeit nicht fortgesetzt werden."
+
+msgid "Library folder refreshed."
+msgstr "Bibliotheksordner aktualisiert."
+
+msgid "Download another copy"
+msgstr "Weitere Kopie herunterladen"
+
+msgid "Complete"
+msgstr "Vollständig"
+
+msgid "Partial"
+msgstr "Teilweise"
+
+msgid "Missing files"
+msgstr "Fehlende Dateien"
+
+msgid "Changed files"
+msgstr "Geänderte Dateien"
+
+msgid "Unreadable files"
+msgstr "Nicht lesbare Dateien"
+
+msgid "Local purchase copies"
+msgstr "Lokale Kaufkopien"
+
+msgid "{} of {} tracks"
+msgstr "{} von {} Titeln"
+
+msgid "Continue copy"
+msgstr "Kopie fortsetzen"
+
+msgid "Add to Local Library"
+msgstr "Zur lokalen Bibliothek hinzufügen"
+
+msgid "In Local Library"
+msgstr "In lokaler Bibliothek"
+
+msgid "{} of {} tracks available in this folder."
+msgstr "{} von {} Titeln sind in diesem Ordner verfügbar."
+
+msgid "{} failed"
+msgstr "{} fehlgeschlagen"
+
+msgid "{} cancelled"
+msgstr "{} abgebrochen"
+
+msgid "Download finished"
+msgstr "Download abgeschlossen"

@@ -1946,7 +1946,7 @@ Rectangle {
         // ownership never reaches this branch; Rust computes the gate.
         if (root.purchase.canDownloadPurchase === true)
             rows.push({ "label": QbzSession.tr("Download purchase", QbzSession.trRev),
-                        "icon": "download", "action": "download-purchase" })
+                        "icon": "cloud-download", "action": "download-purchase" })
         return rows
     }
 

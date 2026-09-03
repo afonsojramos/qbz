@@ -89,7 +89,49 @@ Rectangle {
     readonly property var goodies: doc.goodies || []
     readonly property var discs: doc.discs || []
     readonly property var progress: doc.progress || ({})
+    readonly property var copies: doc.copies || []
+    readonly property var batchResult: doc.batchResult || ({})
     readonly property bool downloadable: doc.downloadable !== false
+    property int shownBatchSerial: 0
+
+    function copyStateLabel(state) {
+        if (state === "complete") return root.t("Complete")
+        if (state === "partial") return root.t("Partial")
+        if (state === "missing") return root.t("Missing files")
+        if (state === "changed") return root.t("Changed files")
+        if (state === "unreachable") return root.t("Unavailable")
+        if (state === "unreadable") return root.t("Unreadable files")
+        return state || ""
+    }
+    function copyFormatLabel(formatId) {
+        for (var i = 0; i < root.formats.length; i++)
+            if (Number(root.formats[i].id) === Number(formatId))
+                return root.formats[i].label || ("#" + String(formatId))
+        return "#" + String(formatId)
+    }
+    function batchResultBody() {
+        var result = root.batchResult
+        var text = root.t("{} of {} tracks available in this folder.")
+            .replace("{}", result.available || 0)
+            .replace("{}", result.total || 0)
+        if (Number(result.failed || 0) > 0)
+            text += "\n" + root.t("{} failed").replace("{}", result.failed)
+        if (Number(result.cancelled || 0) > 0)
+            text += "\n" + root.t("{} cancelled").replace("{}", result.cancelled)
+        return text
+    }
+
+    Connections {
+        target: QbzPurchases
+        function onPurchasesRevChanged() {
+            var result = root.doc.batchResult || ({})
+            var serial = Number(result.serial || 0)
+            if (serial > 0 && serial !== root.shownBatchSerial) {
+                root.shownBatchSerial = serial
+                batchModal.open()
+            }
+        }
+    }
 
     // Disc headers render only on a multi-disc album (recon §B.2.2-7:
     // `isMultiDisc = discGroups.size > 1`).
@@ -488,16 +530,9 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: QbzPlayer.playAlbum(root.doc.id || "")
                         }
-                        // Download all. Disabled — never hidden — while a
-                        // download is running or when the synthesis produced
-                        // no format, so the control stays where the user left
-                        // it (§4.3: the four formats come from album metadata,
-                        // and an album can legitimately offer none).
-                        QbzCircleAction {
-                            primary: true
-                            compactPrimary: true
-                            diameterOverride: 38
-                            name: "cloud-download"
+                        IconTextButton {
+                            label: root.t("Download another copy")
+                            iconName: "cloud-download"
                             btnEnabled: !(root.progress.active === true)
                                         && root.formats.length > 0
                             anchors.verticalCenter: parent.verticalCenter
@@ -530,13 +565,6 @@ Rectangle {
                             text: root.t("No downloadable formats available")
                             color: theme.textMuted
                             font.pixelSize: theme.fontLegal
-                        }
-                        IconTextButton {
-                            anchors.verticalCenter: parent.verticalCenter
-                            label: root.t("Choose folder")
-                            iconName: "folder-open"
-                            btnEnabled: !(root.progress.active === true)
-                            onClicked: QbzPurchases.chooseDestination()
                         }
                         // The album is ALREADY in the Local Library: jump to
                         // it. `localAlbumId` is the download folder the
@@ -763,47 +791,89 @@ Rectangle {
                 }
             }
 
-            // --- Add to Library (§15.2-3) ----------------------------------
-            // A SEQUENCE, not a banner: the click is one call, and the
-            // controller adds the resolved album subfolder as a library
-            // folder, clears the download state, raises the toast and starts
-            // the background scan. Its own visibility is re-scoped by the
-            // format dropdown, which is why the flag is read off the document
-            // rather than derived from `allComplete` here.
-            Item { visible: addRow.visible; width: 1; height: 16 }
+            // Persistent copies stay separate by copy id/folder. Coverage on
+            // this surface never sums files from two destinations.
+            Item { visible: copiesBox.visible; width: 1; height: 16 }
             Rectangle {
-                id: addRow
-                visible: root.ready && root.doc.addToLibraryVisible === true
+                id: copiesBox
+                visible: root.ready && root.copies.length > 0
                 width: parent.width - 64
-                height: visible ? 56 : 0
+                height: visible ? copiesColumn.implicitHeight + 28 : 0
                 radius: theme.radiusSm
                 color: theme.surfaceCard
                 border.width: 1
-                border.color: theme.success
+                border.color: theme.borderSubtle
 
-                Row {
-                    anchors.fill: parent
-                    anchors.leftMargin: 14
-                    anchors.rightMargin: 14
-                    spacing: 12
-
-                    QbzPrimaryButton {
-                        id: addBtn
-                        anchors.verticalCenter: parent.verticalCenter
-                        label: root.t("Add to Library")
-                        btnHeight: 32
-                        labelSize: theme.fontLegal
-                        onClicked: QbzPurchases.addToLibrary()
-                    }
+                Column {
+                    id: copiesColumn
+                    x: 14
+                    y: 14
+                    width: parent.width - 28
+                    spacing: 10
                     Text {
-                        anchors.verticalCenter: parent.verticalCenter
-                        // Clamped: the button auto-sizes to its label, and a
-                        // long translation must not drive this negative.
-                        width: Math.max(0, parent.width - 12 - addBtn.width)
-                        text: root.t("Add these downloaded tracks to your local library.")
-                        color: theme.textMuted
-                        font.pixelSize: theme.fontLegal
-                        elide: Text.ElideRight
+                        text: root.t("Local purchase copies")
+                        color: theme.textPrimary
+                        font.pixelSize: theme.fontBody
+                        font.weight: theme.weightSemibold
+                    }
+                    Repeater {
+                        model: root.copies
+                        delegate: Item {
+                            required property var modelData
+                            width: copiesColumn.width
+                            height: 38
+                            Column {
+                                anchors.left: parent.left
+                                anchors.right: actionRow.left
+                                anchors.rightMargin: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 2
+                                Text {
+                                    width: parent.width
+                                    text: (modelData.folderLabel || "") + "  ·  "
+                                          + root.copyFormatLabel(modelData.formatId)
+                                    color: theme.textPrimary
+                                    font.pixelSize: theme.fontLegal
+                                    elide: Text.ElideMiddle
+                                }
+                                Text {
+                                    text: root.copyStateLabel(modelData.state) + "  ·  "
+                                          + root.t("{} of {} tracks")
+                                              .replace("{}", modelData.healthyTracks || 0)
+                                              .replace("{}", modelData.totalTracks || 0)
+                                    color: theme.textMuted
+                                    font.pixelSize: theme.fontLegal
+                                }
+                            }
+                            Row {
+                                id: actionRow
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 8
+                                IconTextButton {
+                                    visible: modelData.continuable === true
+                                             && Number(modelData.formatId) === Number(root.doc.selectedFormatId)
+                                    label: root.t("Continue copy")
+                                    iconName: "cloud-download"
+                                    btnEnabled: root.progress.active !== true
+                                    onClicked: QbzPurchases.continueCopy(modelData.copyId || "")
+                                }
+                                IconTextButton {
+                                    visible: modelData.inLocalLibrary !== true
+                                             && Number(modelData.downloadedTracks || 0) > 0
+                                    label: root.t("Add to Local Library")
+                                    iconName: "hard-drive"
+                                    onClicked: QbzPurchases.addCopyToLibrary(modelData.copyId || "")
+                                }
+                                Text {
+                                    visible: modelData.inLocalLibrary === true
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: root.t("In Local Library")
+                                    color: theme.success
+                                    font.pixelSize: theme.fontLegal
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1101,5 +1171,21 @@ Rectangle {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         target: pageFlick
+    }
+
+    QbzConfirmModal {
+        id: batchModal
+        anchors.fill: parent
+        title: root.t("Download finished")
+        body: root.batchResultBody()
+        confirmLabel: root.t("Add to Local Library")
+        cancelLabel: root.t("Not now")
+        danger: false
+        onConfirmed: {
+            var copyId = root.batchResult.copyId || ""
+            QbzPurchases.dismissBatchResult(copyId)
+            QbzPurchases.addCopyToLibrary(copyId)
+        }
+        onCancelled: QbzPurchases.dismissBatchResult(root.batchResult.copyId || "")
     }
 }
