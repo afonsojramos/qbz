@@ -28,7 +28,8 @@
 //! — this crate only exposes the single-track primitive.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use qbz_library::{write_purchase_tags, LibraryDatabase, PurchaseTagWrite};
 use qbz_models::{
@@ -827,6 +828,88 @@ pub fn target_path(
         .join(file_name)
 }
 
+/// A new copy is rooted at a folder selected by the user; a continued copy is
+/// already bound to its final album leaf and must never pass through the
+/// artist/album path builder again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PurchaseDownloadDestination {
+    NewRoot(String),
+    ExistingAlbumFolder(String),
+}
+
+impl PurchaseDownloadDestination {
+    pub fn album_folder(&self, artist_name: &str, album_title: &str, quality_dir: &str) -> PathBuf {
+        match self {
+            Self::NewRoot(root) => target_path(
+                root,
+                artist_name,
+                album_title,
+                quality_dir,
+                1,
+                "placeholder",
+                "tmp",
+            )
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(root)),
+            Self::ExistingAlbumFolder(folder) => PathBuf::from(folder),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PurchaseDownloadReceipt {
+    pub file_path: String,
+    pub album_id: Option<String>,
+    pub mime_type: String,
+    pub container: String,
+    pub sample_rate_hz: Option<u32>,
+    pub bit_depth: Option<u32>,
+    pub channels: Option<u16>,
+    pub file_size: u64,
+    pub modified_ns: Option<u128>,
+    pub last_verified_at: i64,
+}
+
+fn purchase_track_file_name(
+    media_number: u32,
+    track_number: u32,
+    track_title: &str,
+    extension: &str,
+) -> String {
+    let title = sanitize_filename(track_title);
+    if media_number > 1 && track_number > 0 {
+        format!(
+            "{:02}-{:02} - {}.{}",
+            media_number, track_number, title, extension
+        )
+    } else if track_number > 0 {
+        format!("{:02} - {}.{}", track_number, title, extension)
+    } else {
+        format!("{}.{}", title, extension)
+    }
+}
+
+fn purchase_track_target(
+    destination: &PurchaseDownloadDestination,
+    artist_name: &str,
+    album_title: &str,
+    quality_dir: &str,
+    media_number: u32,
+    track_number: u32,
+    track_title: &str,
+    extension: &str,
+) -> PathBuf {
+    destination
+        .album_folder(artist_name, album_title, quality_dir)
+        .join(purchase_track_file_name(
+            media_number,
+            track_number,
+            track_title,
+            extension,
+        ))
+}
+
 /// I/O tail of the single-track download: given the already-fetched audio
 /// `data` and the resolved track/stream metadata, derive the extension from the
 /// RESPONSE format, build the target path, `create_dir_all`, write the `.part`
@@ -1310,17 +1393,15 @@ fn goodie_target_path(album_dir: &std::path::Path, display_name: &str, url: &str
 /// Addendum B.5: only `url` / `format_id` / `mime_type` of the grant are
 /// consumed; `restrictions` is IGNORED (no restriction-based blocking). The
 /// grant's signed URL lives in this frame only — it is never logged or stored.
-pub async fn download_purchase_track(
+pub async fn download_purchase_track_file_only(
     client: &QobuzClient,
-    db: &LibraryDatabase,
     track_id: u64,
-    album_id: Option<&str>,
     format_id: u32,
     streaming: bool,
-    destination: &str,
+    destination: &PurchaseDownloadDestination,
     quality_dir: &str,
     ctx: Option<&PurchaseAlbumContext>,
-) -> Result<String, String> {
+) -> Result<PurchaseDownloadReceipt, String> {
     // UNSIGNED on the purchase path (contract §11-6): the vendor's own desktop
     // client sends `/track/get` without a signature, and so did the reference.
     // The entitlement proof is the signature on `getFileUrl` below.
@@ -1357,15 +1438,16 @@ pub async fn download_purchase_track(
     // and their album stayed un-downloaded forever with no way to notice. The
     // `/track/get` payload fetched above already carries the id, so there is
     // no reason for any path to write NULL.
-    let resolved_album_id = album_id.or_else(|| track.album.as_ref().map(|a| a.id.as_str()));
+    let resolved_album_id = track.album.as_ref().map(|album| album.id.clone());
 
     // Addendum B.2: extension derives from the RESPONSE's served format.
     let extension = purchase_extension(grant.format_id, &grant.mime_type);
-    let target = target_path(
+    let target = purchase_track_target(
         destination,
         &artist_name,
         &album_title,
         quality_dir,
+        track.media_number.unwrap_or(1),
         track.track_number,
         &track.title,
         extension,
@@ -1389,17 +1471,6 @@ pub async fn download_purchase_track(
     std::fs::rename(&temp_path, &target).map_err(|e| format!("Failed to finalize file: {}", e))?;
     let file_path = target.to_string_lossy().to_string();
 
-    // Addendum B.1/B.2: registry write AFTER the file is on disk, with the
-    // REQUESTED format_id. A registry failure returns Err while the file stays
-    // on disk (orphaned) — the reference does the same and does not roll back.
-    db.mark_purchase_downloaded(
-        track_id as i64,
-        resolved_album_id,
-        &file_path,
-        format_id as i64,
-    )
-    .map_err(|e| e.to_string())?;
-
     // §14.1, additive: tag AFTER the file is on disk and registered, so the
     // deliverable is already durable and a tagging failure can only cost tags.
     // `None` reproduces reference behaviour exactly (no tags written at all).
@@ -1411,7 +1482,72 @@ pub async fn download_purchase_track(
         }
     }
 
-    Ok(file_path)
+    let metadata = std::fs::metadata(&target)
+        .map_err(|error| format!("Failed to inspect downloaded file: {error}"))?;
+    let modified_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos());
+    let sample_rate_hz = (grant.sampling_rate > 0.0).then(|| {
+        (grant.sampling_rate * 1000.0)
+            .round()
+            .clamp(0.0, u32::MAX as f64) as u32
+    });
+    let last_verified_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .min(i64::MAX as u64) as i64;
+
+    Ok(PurchaseDownloadReceipt {
+        file_path,
+        album_id: resolved_album_id,
+        mime_type: grant.mime_type,
+        container: extension.to_string(),
+        sample_rate_hz,
+        bit_depth: grant.bit_depth,
+        channels: None,
+        file_size: metadata.len(),
+        modified_ns,
+        last_verified_at,
+    })
+}
+
+/// Compatibility wrapper for historical callers. New copy-aware album flows
+/// use [`download_purchase_track_file_only`] and promote the legacy registry
+/// only after one concrete copy covers the full album.
+#[allow(clippy::too_many_arguments)]
+pub async fn download_purchase_track(
+    client: &QobuzClient,
+    db: &LibraryDatabase,
+    track_id: u64,
+    album_id: Option<&str>,
+    format_id: u32,
+    streaming: bool,
+    destination: &str,
+    quality_dir: &str,
+    ctx: Option<&PurchaseAlbumContext>,
+) -> Result<String, String> {
+    let destination = PurchaseDownloadDestination::NewRoot(destination.to_string());
+    let receipt = download_purchase_track_file_only(
+        client,
+        track_id,
+        format_id,
+        streaming,
+        &destination,
+        quality_dir,
+        ctx,
+    )
+    .await?;
+    db.mark_purchase_downloaded(
+        track_id as i64,
+        album_id.or(receipt.album_id.as_deref()),
+        &receipt.file_path,
+        format_id as i64,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(receipt.file_path)
 }
 
 #[cfg(test)]
@@ -2356,6 +2492,38 @@ mod tests {
 mod path_contract_tests {
     use super::*;
     use crate::metadata::sanitize_filename;
+
+    #[test]
+    fn continuing_a_copy_writes_directly_into_its_existing_leaf() {
+        let destination = PurchaseDownloadDestination::ExistingAlbumFolder(
+            "/backup/Album [DSF][DSD64]".to_string(),
+        );
+        let target = purchase_track_target(
+            &destination,
+            "Ignored Artist",
+            "Ignored Album",
+            "[DSF][DSD64]",
+            1,
+            3,
+            "Song",
+            "dsf",
+        );
+        assert_eq!(
+            target,
+            PathBuf::from("/backup/Album [DSF][DSD64]/03 - Song.dsf")
+        );
+    }
+
+    #[test]
+    fn later_discs_cannot_collide_with_disc_one() {
+        let destination = PurchaseDownloadDestination::ExistingAlbumFolder("/music/Album".into());
+        let first =
+            purchase_track_target(&destination, "Artist", "Album", "", 1, 1, "Opening", "flac");
+        let second =
+            purchase_track_target(&destination, "Artist", "Album", "", 2, 1, "Opening", "flac");
+        assert_ne!(first, second);
+        assert_eq!(second.file_name().unwrap(), "02-01 - Opening.flac");
+    }
 
     /// §4.5. `char::is_alphanumeric` is Unicode-aware, so accented Latin, Greek,
     /// Cyrillic and CJK all SURVIVE sanitization — only non-ASCII
