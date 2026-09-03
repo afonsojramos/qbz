@@ -218,6 +218,10 @@ mod io_error_tests {
         fn info(&self) -> &DsdStreamInfo {
             &self.info
         }
+        fn seek_to_bit(&mut self, _bit_per_channel: u64) -> Result<(), DsdError> {
+            self.left = 1;
+            Ok(())
+        }
         fn read_planar(
             &mut self,
             out: &mut [Vec<u8>],

@@ -16,9 +16,10 @@
 //! pruned by the next Purchases visit (`get_downloaded_purchase_track_ids`).
 //!
 //! DSD is DSD: a `.dsf`/`.dff` copy rides the additive `DsdFile` ticket the
-//! Local Library already uses, and because that path cannot seek, a play that
-//! asks for a start offset (session resume, a takeback at position > 0)
-//! streams instead (§7.4). Nothing here touches the protected audio path —
+//! Local Library already uses. That ticket does not carry an initial offset,
+//! so a play that asks for one (session resume, a takeback at position > 0)
+//! streams instead (§7.4); interactive direct-DSD seek remains available.
+//! Nothing here touches the protected audio path —
 //! the ticket is performed by `audible_qt::play_ticket`, the one matcher every
 //! source goes through.
 
