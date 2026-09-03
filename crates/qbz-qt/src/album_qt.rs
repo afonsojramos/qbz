@@ -111,6 +111,12 @@ pub struct TrackRow {
     /// neighbours `isFavorite` and `cacheStatus`.
     #[serde(rename = "qobuzUnavailable")]
     pub not_streamable: bool,
+    /// Refines `qobuzUnavailable`: the track is not streamable because its
+    /// release is still ahead (`streamable_at` / `release_date_stream` in the
+    /// future — `qbz_models::upcoming_from`), so the glyph says "not yet"
+    /// instead of "no longer". Never true on a streamable row.
+    #[serde(rename = "qobuzUpcoming")]
+    pub upcoming: bool,
 }
 
 /// `Deserialize` rides along with `Serialize` so a card can be read BACK out of
@@ -554,6 +560,7 @@ fn map_track(track: &Track) -> TrackRow {
         // THIS endpoint the answer is real rather than inferred — which is what
         // makes the owner's known-bad album a usable smoke.
         not_streamable: !track.is_streamable(),
+        upcoming: track.is_upcoming(),
     }
 }
 

@@ -590,6 +590,10 @@ fn map_track(index: usize, track: PageArtistTrack) -> TrackRow {
         work_composer_id: String::new(),
         artwork_url,
         not_streamable,
+        // /artist/page track items carry neither `streamable_at` nor a
+        // release date (only the nested `rights`), so an unavailable row here
+        // keeps the generic "no longer available" wording.
+        upcoming: false,
     }
 }
 

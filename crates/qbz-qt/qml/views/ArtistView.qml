@@ -1158,10 +1158,12 @@ Rectangle {
                             hoverEnabled: true
                             ToolTip.visible: containsMouse
                             ToolTip.delay: 300
-                            // REUSED msgid (es:3658) — the same sentence the
-                            // reactive skip path toasts.
-                            ToolTip.text: QbzSession.tr(
-                                "This track is no longer available", QbzSession.trRev)
+                            // Same split as rows/TrackRow.qml: a pre-release
+                            // says "not yet", a pulled track keeps the REUSED
+                            // msgid the reactive skip path toasts.
+                            ToolTip.text: row.qobuzUpcoming === true
+                                ? QbzSession.tr("This track is not yet available", QbzSession.trRev)
+                                : QbzSession.tr("This track is no longer available", QbzSession.trRev)
                         }
                     }
                 }

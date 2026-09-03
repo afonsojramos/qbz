@@ -3670,6 +3670,9 @@ msgstr "Esto cierra la sesión de Plex y borra las bibliotecas y pistas almacena
 msgid "This track is no longer available"
 msgstr "Esta pista ya no está disponible"
 
+msgid "This track is not yet available"
+msgstr "Esta pista todavía no está disponible"
+
 msgid "Track count differs from the result; titles applied by position"
 msgstr "El número de pistas difiere del resultado; los títulos se aplicaron por posición"
 

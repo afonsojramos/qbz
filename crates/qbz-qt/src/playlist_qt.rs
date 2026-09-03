@@ -144,6 +144,14 @@ pub struct PlaylistTrackRow {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub not_streamable: bool,
+    /// Refines `qobuzUnavailable`: a pre-release (release still ahead) rather
+    /// than a pulled track — `qbz_models::Track::is_upcoming`.
+    #[serde(
+        default,
+        rename = "qobuzUpcoming",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub upcoming: bool,
     /// The recording identifier, carried so the replacement search's ISRC
     /// short-circuit can fire (`qbz-playlist-import/src/match_qobuz.rs:156-159`
     /// scores an ISRC hit 1.0). That is the owner's "a veces cambia el ID del
@@ -794,6 +802,7 @@ pub(crate) fn map_track(track: &Track) -> PlaylistTrackRow {
         // owner says pulled tracks show up on MOST, which is why this row model
         // is the first one plumbed.
         not_streamable: !track.is_streamable(),
+        upcoming: track.is_upcoming(),
         // Carried for §6's ISRC short-circuit; see the field's doc comment.
         isrc: track.isrc.clone().unwrap_or_default(),
         // F5: a pulled track we already downloaded is NOT dead. The same O(1)

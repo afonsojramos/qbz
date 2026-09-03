@@ -3508,6 +3508,9 @@ msgstr "これはキャッシュされたPlexのライブラリとトラック�
 msgid "This track is no longer available"
 msgstr "このトラックは利用できなくなりました"
 
+msgid "This track is not yet available"
+msgstr "このトラックはまだ利用できません"
+
 msgid "Track count differs from the result; titles applied by position"
 msgstr "トラック数が結果と異なります。タイトルは位置順に適用されました"
 
