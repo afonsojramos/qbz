@@ -56,9 +56,10 @@ pub enum Reach {
     /// The filesystem answered and the file is not there. This is a REAL
     /// answer — the caller may delete/clean on it.
     Missing,
-    /// The filesystem did not answer inside the deadline. NOT the same as
-    /// missing: the file may be perfectly fine on a share we cannot see from
-    /// this network, so the caller should skip it, never clean it.
+    /// The filesystem did not answer inside the deadline, or answered with an
+    /// I/O error. NOT the same as missing: the file may be perfectly fine on a
+    /// share we cannot see from this network, so the caller should skip it,
+    /// never clean it.
     Unreachable,
 }
 
@@ -134,13 +135,21 @@ pub fn probe(path: &Path, deadline: Duration) -> Reach {
             // `try_exists` rather than `exists`: it distinguishes "answered,
             // not there" from "could not answer", which is exactly the
             // distinction the caller needs to decide clean-vs-skip.
-            let _ = tx.send(probe_path.try_exists().unwrap_or(false));
+            let _ = tx.send(probe_path.try_exists());
         })
         .ok();
 
     match rx.recv_timeout(deadline) {
-        Ok(true) => Reach::Present,
-        Ok(false) => Reach::Missing,
+        Ok(Ok(true)) => Reach::Present,
+        Ok(Ok(false)) => Reach::Missing,
+        Ok(Err(error)) => {
+            log::warn!(
+                "[reach] mount probe returned an I/O error — treating it as unreachable: {}",
+                error
+            );
+            mark_unreachable(path);
+            Reach::Unreachable
+        }
         Err(_) => {
             log::warn!(
                 "[reach] mount probe did not answer in {:?} — treating it as unreachable for {:?}",
@@ -200,5 +209,18 @@ mod tests {
             mount_key(Path::new("/mnt/nas/a.flac")),
             mount_key(Path::new("/mnt/other/a.flac"))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_io_error_is_unreachable_not_missing() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let loop_path = root.path().join("loop");
+        symlink(&loop_path, &loop_path).unwrap();
+
+        assert_eq!(probe_default(&loop_path), Reach::Unreachable);
+        reset_cooldowns();
     }
 }

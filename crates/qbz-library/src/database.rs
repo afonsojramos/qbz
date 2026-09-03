@@ -4,7 +4,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::time::Duration;
 
-use crate::{AudioFormat, FolderTreeEntry, LibraryError, LocalAlbum, LocalArtist, LocalTrack};
+use crate::{
+    reachability::{probe_default, Reach},
+    AudioFormat, FolderTreeEntry, LibraryError, LocalAlbum, LocalArtist, LocalTrack,
+};
 
 #[derive(Debug, Clone)]
 pub struct AlbumTrackUpdate {
@@ -6985,7 +6988,7 @@ impl LibraryDatabase {
         let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
 
         for (album_id, track_id, file_path) in rows {
-            if !std::path::Path::new(&file_path).exists() {
+            if probe_default(std::path::Path::new(&file_path)) != Reach::Present {
                 continue;
             }
             if seen.insert((album_id.clone(), track_id)) {
@@ -6997,7 +7000,9 @@ impl LibraryDatabase {
     }
 
     /// Get all downloaded track IDs for fast lookup (any format).
-    /// Automatically removes stale entries where the file no longer exists on disk.
+    /// Automatically removes stale entries only when the filesystem positively
+    /// answers that the file is missing. Timeouts and I/O errors are treated as
+    /// unreachable and never prune durable ownership/download state.
     pub fn get_downloaded_purchase_track_ids(&self) -> Result<Vec<i64>, LibraryError> {
         let mut stmt = self
             .conn
@@ -7016,10 +7021,10 @@ impl LibraryDatabase {
         let mut valid_ids: Vec<i64> = Vec::new();
 
         for (track_id, format_id, file_path) in &rows {
-            if std::path::Path::new(file_path).exists() {
-                valid_ids.push(*track_id);
-            } else {
-                stale.push((*track_id, *format_id));
+            match probe_default(std::path::Path::new(file_path)) {
+                Reach::Present => valid_ids.push(*track_id),
+                Reach::Missing => stale.push((*track_id, *format_id)),
+                Reach::Unreachable => {}
             }
         }
 
@@ -8984,5 +8989,31 @@ mod artist_image_cache_tests {
             .unwrap()
             .image_url
             .is_none());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod purchase_registry_reachability_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn an_io_error_never_prunes_a_purchase_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
+        let loop_path = tmp.path().join("loop");
+        symlink(&loop_path, &loop_path).unwrap();
+        db.mark_purchase_downloaded(42, Some("album"), loop_path.to_str().unwrap(), 6)
+            .unwrap();
+
+        assert!(db.get_downloaded_purchase_track_ids().unwrap().is_empty());
+        let remaining: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM downloaded_purchases", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(remaining, 1, "I/O errors are unreachable, never missing");
+        crate::reachability::reset_cooldowns();
     }
 }
