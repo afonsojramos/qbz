@@ -278,6 +278,11 @@ fn reconcile_device_cap(
 /// ~10 s gapless stage later consumes the first successor from cache (or its
 /// normal fallback) and hands it to `play_next`.
 const PREFETCH_LOOKAHEAD: usize = 2;
+/// Seconds with nothing audible (local, remote or cast) before the poll loop
+/// moves the L1 audio cache to disk. Five minutes: long enough that a pause
+/// to answer the door keeps its warm cache, short enough that an app parked
+/// after a session does not hold a listening session's worth of bytes.
+const IDLE_L1_TRIM_SECS: u64 = 300;
 
 /// Shared upper bound across overlapping track edges. A new current track can
 /// surface while the second successor of the previous edge is still warming;
@@ -3731,6 +3736,15 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         // still owes owner-only edges/integrations from its fresh snapshot.
         let mut last_owner_token: Option<OwnerActionToken> = None;
         let mut was_playing = false;
+        // Idle L1 trim: the in-memory audio cache (400 MB budget) keeps every
+        // track played until another evicts it, so an app left idle after a
+        // listening session sat ~200-400 MB above its baseline (measured
+        // 2026-09-02). After IDLE_L1_TRIM_SECS with nothing audible — local,
+        // remote or cast — the L1 entries move to the L2 disk cache, which
+        // still serves a replay without a download. Trimmed once per idle
+        // stretch; any audible tick re-arms it.
+        let mut last_audible = std::time::Instant::now();
+        let mut l1_trimmed = false;
         let mut seen_position: u64 = 0;
         // Divider for the ~5s position flush (see the save_position call).
         let mut save_pos_tick: u64 = 0;
@@ -4083,6 +4097,16 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             let position = event.position;
             let duration = event.duration;
             let is_playing = event.is_playing;
+            if is_playing || crate::now_playing::remote_or_cast_active() {
+                last_audible = std::time::Instant::now();
+                l1_trimmed = false;
+            } else if !l1_trimmed && last_audible.elapsed().as_secs() >= IDLE_L1_TRIM_SECS {
+                l1_trimmed = true;
+                log::info!(
+                    "[qbz-qt] idle for {IDLE_L1_TRIM_SECS}s — evicting the L1 audio cache to disk"
+                );
+                runtime.core().player().evict_l1_audio_cache();
+            }
             let cache = event.buffer_progress.unwrap_or(0.0);
             let hardware_volume = (event.hardware_volume_active, event.volume.to_bits());
             if last_hardware_volume != Some(hardware_volume) {

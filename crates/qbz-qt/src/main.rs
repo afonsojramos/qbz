@@ -3507,6 +3507,29 @@ fn apply_scroll_physics() {
     }
 }
 
+/// Cap glibc's malloc arenas before the first thread exists. Every thread
+/// that first touches malloc gets its own 64 MB arena, and with ~50 threads
+/// (tokio workers, Qt, PipeWire, zbus) the process held 82 of them: measured
+/// 2026-09-02 on the owner's box, 257 MB of resident anonymous arena
+/// mappings idle, against 71 MB with `MALLOC_ARENA_MAX=2` (RSS 728 -> 530
+/// MB). Two arenas keep the audio thread and the rest from contending on one
+/// lock; playback allocations are not on the hot path anyway. An explicit
+/// `MALLOC_ARENA_MAX` in the environment wins — glibc already read it.
+fn cap_malloc_arenas() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        const MALLOC_ARENA_MAX: &str = "MALLOC_ARENA_MAX";
+        if std::env::var_os(MALLOC_ARENA_MAX).is_some() {
+            log::info!("[qbz-qt] explicit {MALLOC_ARENA_MAX} preserved");
+            return;
+        }
+        // SAFETY: mallopt only tunes allocator parameters; called on the main
+        // thread before any other thread or allocator-dependent subsystem.
+        let applied = unsafe { libc::mallopt(libc::M_ARENA_MAX, 2) } == 1;
+        log::info!("[qbz-qt] malloc arenas capped at 2 (applied={applied})");
+    }
+}
+
 /// Apply Settings > Appearance > Interface size through Qt's native high-DPI
 /// path. This must run before `QGuiApplication::new()`: Qt then lays out the
 /// scene in device-independent pixels and rasterizes text/vector content at
@@ -3591,6 +3614,7 @@ pub(crate) fn arm_hard_exit_watchdog(source: &'static str) {
 
 fn main() {
     qbz_log::install("info");
+    cap_malloc_arenas();
     // Before even the disposable GPU-preflight QGuiApplication. A child
     // spawned later inherits the resolved factor and takes the same path.
     apply_interface_scale_preference();
@@ -3672,7 +3696,17 @@ fn main() {
     // reqwest call, same as the Slint and daemon binaries.
     qbz_app::ensure_crypto_provider();
 
-    let tokio_runtime = Runtime::new().expect("failed to build the tokio runtime");
+    // Eight workers instead of one per core: the async lane carries API
+    // calls, catalog queries and UI fan-out, none of it CPU-bound, while audio
+    // runs on its own threads. Fewer workers = fewer idle wakeups and fewer
+    // malloc arenas (see `cap_malloc_arenas`). The blocking pool keeps its
+    // own default sizing.
+    let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(8)
+        .thread_name("tokio-rt-worker")
+        .enable_all()
+        .build()
+        .expect("failed to build the tokio runtime");
     let _ = TOKIO.set(tokio_runtime);
 
     // `with_visualizer` == `new` plus a VisualizerTap wired into the player.
