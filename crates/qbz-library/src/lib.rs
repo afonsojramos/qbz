@@ -37,6 +37,7 @@ pub mod local_playlists;
 mod metadata;
 mod models;
 mod mount_info;
+mod purchase_copies;
 pub mod playlist_membership;
 pub mod qobuz_playlist_snapshot;
 pub mod reachability;
@@ -60,7 +61,13 @@ pub use errors::LibraryError;
 pub use metadata::MetadataExtractor;
 pub use models::*;
 pub use mount_info::{is_network_path, network_fs_label};
-pub use reachability::{probe, probe_default, Reach, DEFAULT_PROBE};
+pub use purchase_copies::{
+    PurchaseAlbumPlaybackPreference, PurchaseCopyHealth, PurchaseCopySnapshot,
+    PurchaseDownloadCopy, PurchaseDownloadCopyTrack, PurchasePlaybackMode, PurchaseTrackHealth,
+};
+pub use reachability::{
+    probe, probe_default, probe_file, probe_file_default, FileProbe, Reach, DEFAULT_PROBE,
+};
 pub use sacd::{SacdImageImport, SacdImportResult};
 pub use sacd_scan::{build_image_rows, SacdImageRows, SacdLabels, SacdScanSummary};
 pub use scan::{scan_with_progress, ScanEvent};

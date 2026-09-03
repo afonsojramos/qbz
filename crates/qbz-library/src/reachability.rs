@@ -35,6 +35,8 @@
 //! into the outage it was meant to prevent.
 
 use std::collections::HashMap;
+use std::fs::Metadata;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -60,6 +62,15 @@ pub enum Reach {
     /// I/O error. NOT the same as missing: the file may be perfectly fine on a
     /// share we cannot see from this network, so the caller should skip it,
     /// never clean it.
+    Unreachable,
+}
+
+/// A bounded metadata probe for callers that need to validate a regular file
+/// without doing a second, potentially blocking filesystem syscall.
+#[derive(Debug)]
+pub enum FileProbe {
+    Present(Metadata),
+    Missing,
     Unreachable,
 }
 
@@ -167,6 +178,51 @@ pub fn probe_default(path: &Path) -> Reach {
     probe(path, DEFAULT_PROBE)
 }
 
+/// Read metadata for `path`, bounded by `deadline`.
+///
+/// Only `NotFound` is classified as [`FileProbe::Missing`]. Permission errors,
+/// I/O failures, symlink loops, and timeouts preserve durable registry state by
+/// returning [`FileProbe::Unreachable`].
+pub fn probe_file(path: &Path, deadline: Duration) -> FileProbe {
+    if is_cooling_down(path) {
+        return FileProbe::Unreachable;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let probe_path = path.to_path_buf();
+    std::thread::Builder::new()
+        .name("qbz-file-probe".to_string())
+        .spawn(move || {
+            let _ = tx.send(std::fs::metadata(probe_path));
+        })
+        .ok();
+
+    match rx.recv_timeout(deadline) {
+        Ok(Ok(metadata)) => FileProbe::Present(metadata),
+        Ok(Err(error)) if error.kind() == ErrorKind::NotFound => FileProbe::Missing,
+        Ok(Err(error)) => {
+            log::warn!(
+                "[reach] file metadata returned an I/O error — treating it as unreachable: {}",
+                error
+            );
+            mark_unreachable(path);
+            FileProbe::Unreachable
+        }
+        Err(_) => {
+            log::warn!(
+                "[reach] file metadata did not answer in {:?} — treating it as unreachable for {:?}",
+                deadline,
+                COOLDOWN
+            );
+            mark_unreachable(path);
+            FileProbe::Unreachable
+        }
+    }
+}
+
+pub fn probe_file_default(path: &Path) -> FileProbe {
+    probe_file(path, DEFAULT_PROBE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,7 +249,9 @@ mod tests {
         mark_unreachable(&p);
         assert!(is_cooling_down(&p));
         // A sibling under the SAME mount is covered by the one probe.
-        assert!(is_cooling_down(Path::new("/mnt/qbz-test-dead/other/x.flac")));
+        assert!(is_cooling_down(Path::new(
+            "/mnt/qbz-test-dead/other/x.flac"
+        )));
         assert_eq!(probe_default(&p), Reach::Unreachable);
         reset_cooldowns();
         assert!(!is_cooling_down(&p));
@@ -222,5 +280,23 @@ mod tests {
 
         assert_eq!(probe_default(&loop_path), Reach::Unreachable);
         reset_cooldowns();
+    }
+
+    #[test]
+    fn file_probe_returns_metadata_and_only_not_found_is_missing() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("track.flac");
+        std::fs::write(&file, b"audio").unwrap();
+        match probe_file_default(&file) {
+            FileProbe::Present(metadata) => {
+                assert!(metadata.is_file());
+                assert_eq!(metadata.len(), 5);
+            }
+            other => panic!("unexpected probe: {other:?}"),
+        }
+        assert!(matches!(
+            probe_file_default(&root.path().join("absent")),
+            FileProbe::Missing
+        ));
     }
 }

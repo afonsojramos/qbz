@@ -379,6 +379,8 @@ impl LibraryDatabase {
             )
             .map_err(|e| LibraryError::Database(format!("Failed to create schema: {}", e)))?;
 
+        crate::purchase_copies::init_schema(&self.conn)?;
+
         Ok(())
     }
 
@@ -973,6 +975,8 @@ impl LibraryDatabase {
                     ))
                 })?;
         }
+
+        crate::purchase_copies::migrate_legacy_registry(&self.conn)?;
 
         Ok(())
     }
