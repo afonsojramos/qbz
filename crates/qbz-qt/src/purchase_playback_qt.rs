@@ -1,36 +1,34 @@
-//! The purchased copy of a Qobuz track, when it is on disk.
+//! Late materialization of a Qobuz queue row from a purchased album copy.
 //!
 //! Contract `qt-frontend/2026-09-01-purchases-local-playback/00-CONTRACT.md`
-//! §6, first slice: a Qobuz row keeps its catalog identity (`play_id` is the
-//! Qobuz track id, so now-playing, history, scrobbling and QConnect see the
-//! same track they always did) and only the BYTES change — the registered
-//! download plays instead of the stream. The preference is implicit for now:
-//! a purchased file on disk wins; there is no per-album "Play with" select
-//! yet (§5.1), and no per-track override (§5.2).
+//! §6: the queue keeps its catalog identity (`play_id` is always the Qobuz
+//! track id) and only the bytes change. The per-profile album preference is
+//! authoritative: Qobuz mode never enters this path; purchase mode considers
+//! only complete, healthy copies of the exact selected format.
 //!
-//! The registry row is a claim, not a fact: the user may have moved or
-//! deleted the folder, or the disk may be a share that is off today. Every
-//! candidate goes through the same bounded reachability probe the local
-//! audible step uses, off the UI thread, so a dead mount costs the probe
-//! budget and not a wedge. A row that fails the probe is skipped here and
-//! pruned by the next Purchases visit (`get_downloaded_purchase_track_ids`).
+//! Completeness is checked against the persisted manifest of one `copy_id` at
+//! a time. The library accessor performs bounded health probes off the UI
+//! thread and returns every viable physical copy in recency order. A copy
+//! already used for this album/preference is kept first across the audible and
+//! gapless decisions; if it becomes unhealthy, another exact-format complete
+//! copy may take over before the ordinary Qobuz tier walk.
 //!
 //! DSD is DSD: a `.dsf`/`.dff` copy rides the additive `DsdFile` ticket the
-//! Local Library already uses. That ticket does not carry an initial offset,
-//! so a play that asks for one (session resume, a takeback at position > 0)
-//! streams instead (§7.4); interactive direct-DSD seek remains available.
-//! Nothing here touches the protected audio path —
-//! the ticket is performed by `audible_qt::play_ticket`, the one matcher every
-//! source goes through.
+//! Local Library already uses. Its start offset is applied through the
+//! player's existing direct-DSD seek after the ticket starts; nothing here
+//! changes the protected audio path.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
-use qbz_library::Reach;
+use qbz_library::PurchasePlaybackMode;
 use qbz_source::PlaybackTicket;
 
 /// A registered download of a Qobuz track whose file answered the probe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PurchasedCopy {
+    pub copy_id: String,
     pub path: PathBuf,
     pub format_id: u32,
 }
@@ -59,6 +57,26 @@ impl PurchasedCopy {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PurchaseResolution {
+    pub album_id: String,
+    pub format_id: u32,
+    preference_updated_at: i64,
+    pub copies: Vec<PurchasedCopy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PinnedCopy {
+    format_id: u32,
+    preference_updated_at: i64,
+    copy_id: String,
+}
+
+fn pinned_copies() -> &'static Mutex<HashMap<String, PinnedCopy>> {
+    static PINNED: OnceLock<Mutex<HashMap<String, PinnedCopy>>> = OnceLock::new();
+    PINNED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn is_dsd_path(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -66,56 +84,94 @@ fn is_dsd_path(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Order the registry rows of one track: best format first, and within a
-/// format the newest download first (the order the accessor hands them in).
-/// Pure, so it is testable without a database.
-pub(crate) fn rank_candidates(rows: Vec<(i64, String)>) -> Vec<(u32, PathBuf)> {
-    let mut out: Vec<(u32, PathBuf)> = rows
-        .into_iter()
-        .map(|(format_id, path)| (format_id.max(0) as u32, PathBuf::from(path)))
-        .collect();
-    out.sort_by(|a, b| {
-        qbz_offline_cache::purchases_service::format_rank(b.0)
-            .cmp(&qbz_offline_cache::purchases_service::format_rank(a.0))
-    });
-    out
+fn prefer_pinned_copy(copies: &mut [PurchasedCopy], pinned_copy_id: Option<&str>) {
+    let Some(copy_id) = pinned_copy_id else {
+        return;
+    };
+    if let Some(index) = copies.iter().position(|copy| copy.copy_id == copy_id) {
+        copies.swap(0, index);
+    }
 }
 
-/// The best purchased copy of `track_id` that is on disk RIGHT NOW, or `None`
-/// when the account never downloaded it, every registered file is gone, or
-/// the disk holding it is unreachable. Never blocks the caller's thread.
-pub(crate) async fn resolve_purchased_copy(track_id: u64) -> Option<PurchasedCopy> {
-    let rows = tokio::task::spawn_blocking(move || {
+/// Resolve all viable copies for this exact logical album/track preference.
+/// Returning `None` in Qobuz mode is intentional and prevents purchase probes
+/// from delaying the normal cache/offline/network tier walk.
+pub(crate) async fn resolve_preferred_copies(
+    track_id: u64,
+    album_id: Option<&str>,
+) -> Option<PurchaseResolution> {
+    let album_id = album_id?.trim().to_string();
+    if album_id.is_empty() {
+        return None;
+    }
+    let db_track_id = i64::try_from(track_id).ok()?;
+    let query_album_id = album_id.clone();
+    let (format_id, preference_updated_at, rows) = tokio::task::spawn_blocking(move || {
         crate::library_db_qt::with_db(false, |db| {
-            db.get_downloaded_purchase_files(track_id as i64)
+            let preference = db.purchase_playback_preference(&query_album_id)?;
+            if preference.mode != PurchasePlaybackMode::Purchase {
+                return Ok(None);
+            }
+            let Some(format_id) = preference.format_id.filter(|format_id| *format_id > 0) else {
+                return Ok(None);
+            };
+            let rows = db.complete_healthy_purchase_track_candidates(
+                &query_album_id,
+                format_id,
+                db_track_id,
+            )?;
+            Ok(Some((format_id as u32, preference.updated_at, rows)))
         })
+        .flatten()
     })
     .await
     .ok()
     .flatten()?;
-    if rows.is_empty() {
+
+    let mut copies: Vec<PurchasedCopy> = rows
+        .into_iter()
+        .map(|(copy, track)| PurchasedCopy {
+            copy_id: copy.copy_id,
+            path: PathBuf::from(track.file_path),
+            format_id,
+        })
+        .collect();
+    if copies.is_empty() {
+        log::info!(
+            "[qbz-qt] purchase: no complete healthy copy for album {album_id}, track {track_id}, format {format_id}; using Qobuz"
+        );
         return None;
     }
-    let candidates = rank_candidates(rows);
-    tokio::task::spawn_blocking(move || {
-        for (format_id, path) in candidates {
-            match qbz_library::probe_default(&path) {
-                Reach::Present => return Some(PurchasedCopy { path, format_id }),
-                Reach::Missing => log::info!(
-                    "[qbz-qt] purchase: registry row for track {track_id} (format {format_id}) points at a missing file: {}",
-                    path.display()
-                ),
-                Reach::Unreachable => log::warn!(
-                    "[qbz-qt] purchase: the disk holding track {track_id} (format {format_id}) is unreachable: {}",
-                    path.display()
-                ),
-            }
-        }
-        None
+
+    let pinned = pinned_copies().lock().ok().and_then(|pins| {
+        pins.get(&album_id)
+            .filter(|pin| {
+                pin.format_id == format_id && pin.preference_updated_at == preference_updated_at
+            })
+            .map(|pin| pin.copy_id.clone())
+    });
+    prefer_pinned_copy(&mut copies, pinned.as_deref());
+    Some(PurchaseResolution {
+        album_id,
+        format_id,
+        preference_updated_at,
+        copies,
     })
-    .await
-    .ok()
-    .flatten()
+}
+
+/// Keep current and gapless materialization on one physical copy whenever it
+/// remains healthy. Called only after the player accepted the ticket.
+pub(crate) fn remember_materialized_copy(resolution: &PurchaseResolution, copy: &PurchasedCopy) {
+    if let Ok(mut pins) = pinned_copies().lock() {
+        pins.insert(
+            resolution.album_id.clone(),
+            PinnedCopy {
+                format_id: resolution.format_id,
+                preference_updated_at: resolution.preference_updated_at,
+                copy_id: copy.copy_id.clone(),
+            },
+        );
+    }
 }
 
 #[cfg(test)]
@@ -125,6 +181,7 @@ mod tests {
     #[test]
     fn a_dsd_copy_rides_the_dsd_ticket_under_the_catalog_id() {
         let copy = PurchasedCopy {
+            copy_id: "copy-a".to_string(),
             path: PathBuf::from("/m/Various Artists/A [DSF][DSD128]/01 - x.dsf"),
             format_id: 56,
         };
@@ -144,6 +201,7 @@ mod tests {
     #[test]
     fn a_flac_copy_rides_the_file_ticket_and_carries_the_start_offset() {
         let copy = PurchasedCopy {
+            copy_id: "copy-a".to_string(),
             path: PathBuf::from("/m/A/B [FLAC][24-bit,96kHz]/01 - x.FLAC"),
             format_id: 7,
         };
@@ -164,25 +222,21 @@ mod tests {
     }
 
     #[test]
-    fn candidates_are_ranked_best_format_first_and_newest_within_a_format() {
-        let ranked = rank_candidates(vec![
-            (6, "/cd-new.flac".to_string()),
-            (55, "/dsd64.dsf".to_string()),
-            (6, "/cd-old.flac".to_string()),
-            (5, "/mp3.mp3".to_string()),
-        ]);
-        let order: Vec<(u32, String)> = ranked
-            .into_iter()
-            .map(|(f, p)| (f, p.to_string_lossy().into_owned()))
-            .collect();
-        assert_eq!(
-            order,
-            vec![
-                (55, "/dsd64.dsf".to_string()),
-                (6, "/cd-new.flac".to_string()),
-                (6, "/cd-old.flac".to_string()),
-                (5, "/mp3.mp3".to_string()),
-            ]
-        );
+    fn the_pinned_copy_is_tried_before_newer_siblings() {
+        let mut copies = vec![
+            PurchasedCopy {
+                copy_id: "new".to_string(),
+                path: PathBuf::from("/new/01.dsf"),
+                format_id: 55,
+            },
+            PurchasedCopy {
+                copy_id: "playing".to_string(),
+                path: PathBuf::from("/playing/01.dsf"),
+                format_id: 55,
+            },
+        ];
+        prefer_pinned_copy(&mut copies, Some("playing"));
+        let order: Vec<String> = copies.into_iter().map(|copy| copy.copy_id).collect();
+        assert_eq!(order, vec!["playing", "new"]);
     }
 }

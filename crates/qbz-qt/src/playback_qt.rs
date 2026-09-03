@@ -1290,12 +1290,12 @@ pub(crate) async fn play_resolved_offline_aware(
     // its anchor, so the core is already sitting on this track; if it is NOT,
     // this function does exactly what it did before rather than guessing which
     // row was meant.
-    if let Some(qt) = runtime
+    let logical_track = runtime
         .core()
         .current_track()
         .await
-        .filter(|t| t.id == track_id)
-    {
+        .filter(|t| t.id == track_id);
+    if let Some(qt) = logical_track.as_ref() {
         let raw = qbz_source::RawRef::from_queue_track(&qt);
         // OFFLINE rows stay on THIS path on purpose — see
         // `local_playback::play_current_if_local` for the log line that proves
@@ -1305,7 +1305,7 @@ pub(crate) async fn play_resolved_offline_aware(
         let is_offline = raw.badge == qbz_source::SourceBadge::Offline;
         if let (false, Ok(item)) = (is_offline, qbz_source::registry().claim(&raw)) {
             if item.source() != qbz_source::SourceId::QOBUZ {
-                return match crate::audible_qt::play_queue_track(runtime, &qt).await {
+                return match crate::audible_qt::play_queue_track(runtime, qt).await {
                     Ok(true) => Ok(()),
                     // Its own source owned it and could not play it. Phrased so
                     // `is_terminal_unavailable` routes it into the SAME bounded
@@ -1329,28 +1329,9 @@ pub(crate) async fn play_resolved_offline_aware(
     } else {
         start_position_secs
     };
-    // A PURCHASED COPY ON DISK plays instead of the stream (contract
-    // 2026-09-01 §6): same Qobuz id, same queue row, different bytes. The
-    // registry row is probed before it is trusted. The DSD ticket does not
-    // carry an initial offset yet, so resume/takeback keeps the stream for
-    // this one play; interactive seek works once direct DSD is playing.
-    if let Some(copy) = crate::purchase_playback_qt::resolve_purchased_copy(track_id).await {
-        if copy.is_dsd() && start_position_secs > 0 {
-            log::info!(
-                "[qbz-qt] purchase: track {track_id} has a DSD copy but its ticket cannot carry the requested initial offset of {start_position_secs}s; streaming this play"
-            );
-        } else {
-            let format_id = copy.format_id;
-            let ticket = copy.ticket(track_id, start_position_secs);
-            if crate::audible_qt::play_ticket(runtime, ticket).await {
-                log::info!(
-                    "[qbz-qt] purchase: playing track {track_id} from the purchased copy (format {format_id})"
-                );
-                return Ok(());
-            }
-            log::warn!(
-                "[qbz-qt] purchase: the purchased copy of track {track_id} (format {format_id}) could not be played; falling back to Qobuz"
-            );
+    if let Some(track) = logical_track.as_ref() {
+        if try_play_preferred_purchase(runtime, track, start_position_secs).await {
+            return Ok(());
         }
     }
     runtime
@@ -1363,6 +1344,70 @@ pub(crate) async fn play_resolved_offline_aware(
             start_position_secs,
         )
         .await
+}
+
+/// Materialize one Qobuz queue row from the user's exact album preference.
+/// Every candidate was already proven complete and healthy by the blocking
+/// resolver. A decoder/open failure advances to another complete physical
+/// copy of the same format before returning control to the Qobuz tier walk.
+async fn try_play_preferred_purchase(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track: &QueueTrack,
+    start_position_secs: u64,
+) -> bool {
+    let Some(resolution) =
+        crate::purchase_playback_qt::resolve_preferred_copies(track.id, track.album_id.as_deref())
+            .await
+    else {
+        return false;
+    };
+
+    for copy in &resolution.copies {
+        if !crate::audible_qt::play_ticket(runtime, copy.ticket(track.id, start_position_secs))
+            .await
+        {
+            log::warn!(
+                "[qbz-qt] purchase: copy {} of track {} (format {}) was refused; trying the next exact copy",
+                copy.copy_id,
+                track.id,
+                copy.format_id
+            );
+            continue;
+        }
+
+        // DSD tickets are file-only, but the current direct DSD engines accept
+        // the ordinary player seek. Apply a cold-resume/takeback offset after
+        // the play command exactly as the PCM file seam does. This keeps DSD
+        // local and uses no stream-offset fallback.
+        if copy.is_dsd() && start_position_secs > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            if let Err(error) = runtime.core().player().seek(start_position_secs) {
+                log::warn!(
+                    "[qbz-qt] purchase: direct DSD seek for track {} to {}s failed: {error}; using Qobuz",
+                    track.id,
+                    start_position_secs
+                );
+                let _ = runtime.core().player().stop();
+                continue;
+            }
+        }
+
+        crate::purchase_playback_qt::remember_materialized_copy(&resolution, copy);
+        log::info!(
+            "[qbz-qt] purchase: playing track {} from copy {} (format {})",
+            track.id,
+            copy.copy_id,
+            copy.format_id
+        );
+        return true;
+    }
+
+    log::warn!(
+        "[qbz-qt] purchase: all complete copies of track {} (format {}) failed; falling back to Qobuz",
+        track.id,
+        resolution.format_id
+    );
+    false
 }
 
 /// Restore the signed-in owner's exact current track after delegated playback.
@@ -1431,21 +1476,23 @@ pub(crate) async fn restore_owner_playback(
             Err(error) => return Err(format!("owner source restore failed: {error}")),
         }
     } else {
-        let quality = local_playback_quality().0;
-        let offline = crate::offline_qt::get().await;
-        let sink = offline
-            .as_ref()
-            .map(|_| crate::offline_cache_qt::row_sink());
-        runtime
-            .core()
-            .play_track_resolved(
-                track_id,
-                quality,
-                offline.as_deref(),
-                sink.as_ref(),
-                position_secs,
-            )
-            .await?;
+        if !try_play_preferred_purchase(runtime, &track, position_secs).await {
+            let quality = local_playback_quality().0;
+            let offline = crate::offline_qt::get().await;
+            let sink = offline
+                .as_ref()
+                .map(|_| crate::offline_cache_qt::row_sink());
+            runtime
+                .core()
+                .play_track_resolved(
+                    track_id,
+                    quality,
+                    offline.as_deref(),
+                    sink.as_ref(),
+                    position_secs,
+                )
+                .await?;
+        }
     }
 
     if !was_playing {
@@ -4337,6 +4384,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                             gapless_requested_for = track_id;
                             let runtime = runtime.clone();
                             let next_id = next.id;
+                            let next_album_id = next.album_id.clone();
                             let task = spawn_owner_playback_task(async move {
                                 let Some(_owner_action) =
                                     begin_owner_action_exact(owner_token).await
@@ -4350,35 +4398,50 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                                 // an album bought as DSD stays DSD across the
                                 // gapless edge instead of flipping to the
                                 // stream on track two.
-                                if let Some(copy) =
-                                    crate::purchase_playback_qt::resolve_purchased_copy(next_id)
-                                        .await
-                                {
-                                    let format_id = copy.format_id;
-                                    match crate::audible_qt::queue_gapless_ticket(
-                                        &runtime,
-                                        track_id,
+                                if let Some(resolution) =
+                                    crate::purchase_playback_qt::resolve_preferred_copies(
                                         next_id,
-                                        copy.ticket(next_id, 0),
+                                        next_album_id.as_deref(),
                                     )
                                     .await
-                                    {
-                                        Ok(true) => {
-                                            log::info!(
-                                                "[qbz-qt] [GAPLESS] queued the purchased copy of {next_id} (format {format_id})"
-                                            );
-                                            return;
+                                {
+                                    for copy in &resolution.copies {
+                                        match crate::audible_qt::queue_gapless_ticket(
+                                            &runtime,
+                                            track_id,
+                                            next_id,
+                                            copy.ticket(next_id, 0),
+                                        )
+                                        .await
+                                        {
+                                            Ok(true) => {
+                                                crate::purchase_playback_qt::remember_materialized_copy(
+                                                    &resolution,
+                                                    copy,
+                                                );
+                                                log::info!(
+                                                    "[qbz-qt] [GAPLESS] queued track {next_id} from purchase copy {} (format {})",
+                                                    copy.copy_id,
+                                                    copy.format_id
+                                                );
+                                                return;
+                                            }
+                                            Ok(false) => {
+                                                log::info!(
+                                                    "[qbz-qt] [GAPLESS] purchase copy of {next_id} not queued (predecessor moved or a successor is already set)"
+                                                );
+                                                return;
+                                            }
+                                            Err(error) => log::warn!(
+                                                "[qbz-qt] [GAPLESS] purchase copy {} of {next_id} failed: {error}; trying the next exact copy",
+                                                copy.copy_id
+                                            ),
                                         }
-                                        Ok(false) => {
-                                            log::info!(
-                                                "[qbz-qt] [GAPLESS] purchased copy of {next_id} not queued (predecessor moved or a successor is already set)"
-                                            );
-                                            return;
-                                        }
-                                        Err(e) => log::warn!(
-                                            "[qbz-qt] [GAPLESS] purchased copy of {next_id} failed: {e}; falling back to the stream"
-                                        ),
                                     }
+                                    log::warn!(
+                                        "[qbz-qt] [GAPLESS] all complete purchase copies of {next_id} (format {}) failed; falling back to Qobuz",
+                                        resolution.format_id
+                                    );
                                 }
                                 let quality = local_playback_quality().0;
                                 let streaming_only =
