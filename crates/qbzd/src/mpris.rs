@@ -220,9 +220,6 @@ fn handle_media_event(
                 return;
             };
             let player = core.player();
-            if player.is_dsd_direct_active() {
-                return;
-            }
             let ev = player.get_playback_event();
             let target = (ev.position as i64 + micros / 1_000_000).max(0) as u64;
             let clamped = if ev.duration > 0 {
@@ -237,9 +234,6 @@ fn handle_media_event(
                 return;
             };
             let player = core.player();
-            if player.is_dsd_direct_active() {
-                return;
-            }
             let ev = player.get_playback_event();
             let target = (micros.max(0) as u64) / 1_000_000;
             let clamped = if ev.duration > 0 {

@@ -218,6 +218,7 @@ Item {
                     onToggled: root.view.toggleFilter("offline")
                 }
                 FilterChip {
+                    visible: QbzLocal.plexAvailable
                     label: "Plex"
                     active: root.view.filter.plex === true
                     onToggled: root.view.toggleFilter("plex")

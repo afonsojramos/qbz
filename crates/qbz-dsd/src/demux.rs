@@ -73,6 +73,11 @@ impl DsdStreamInfo {
 
 pub trait DsdDemuxer: Send {
     fn info(&self) -> &DsdStreamInfo;
+    /// Reposition to a DSD bit offset per channel. Container alignment may
+    /// round the request down by less than one byte/frame; UI seeks are whole
+    /// seconds and therefore land exactly on byte boundaries at every
+    /// supported DSD rate.
+    fn seek_to_bit(&mut self, bit_per_channel: u64) -> Result<(), DsdError>;
     /// Append up to `max_bytes_per_ch` DSD bytes per channel to `out[ch]`
     /// (planar). Returns the byte count appended to EACH channel (always
     /// equal across channels); 0 means end of stream.
@@ -184,8 +189,12 @@ struct DsfReader {
     file: File,
     info: DsdStreamInfo,
     block_size: usize,
+    data_start: u64,
+    total_bytes_per_ch: u64,
     /// Valid (non-padding) DSD bytes remaining per channel.
     remaining_per_ch: u64,
+    /// Bytes to discard from each channel's first physical block after seek.
+    first_block_skip: usize,
 }
 
 impl DsfReader {
@@ -261,10 +270,14 @@ impl DsfReader {
             DsdTags::default()
         };
 
+        let total_bytes_per_ch = sample_count.div_ceil(8);
         Ok(Self {
             file,
             block_size: block_size as usize,
-            remaining_per_ch: sample_count.div_ceil(8),
+            data_start,
+            total_bytes_per_ch,
+            remaining_per_ch: total_bytes_per_ch,
+            first_block_skip: 0,
             info: DsdStreamInfo {
                 dsd_rate: sampling_frequency,
                 channels: channel_num as u16,
@@ -281,6 +294,18 @@ impl DsdDemuxer for DsfReader {
         &self.info
     }
 
+    fn seek_to_bit(&mut self, bit_per_channel: u64) -> Result<(), DsdError> {
+        let target_byte = (bit_per_channel / 8).min(self.total_bytes_per_ch);
+        let block = target_byte / self.block_size as u64;
+        self.first_block_skip = (target_byte % self.block_size as u64) as usize;
+        let physical = self.data_start.saturating_add(
+            block.saturating_mul(self.block_size as u64 * self.info.channels as u64),
+        );
+        self.file.seek(SeekFrom::Start(physical))?;
+        self.remaining_per_ch = self.total_bytes_per_ch - target_byte;
+        Ok(())
+    }
+
     fn read_planar(
         &mut self,
         out: &mut [Vec<u8>],
@@ -294,10 +319,13 @@ impl DsdDemuxer for DsfReader {
         let mut block = vec![0u8; self.block_size];
         while appended < max_bytes_per_ch && self.remaining_per_ch > 0 {
             // One block group: block_size bytes for each channel in order.
-            let valid = (self.remaining_per_ch as usize).min(self.block_size);
+            let available = self.block_size - self.first_block_skip;
+            let valid = (self.remaining_per_ch as usize).min(available);
             for ch in 0..self.info.channels as usize {
                 match self.file.read_exact(&mut block) {
-                    Ok(()) => out[ch].extend_from_slice(&block[..valid]),
+                    Ok(()) => out[ch].extend_from_slice(
+                        &block[self.first_block_skip..self.first_block_skip + valid],
+                    ),
                     Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                         // Truncated file: stop at what we got.
                         self.remaining_per_ch = 0;
@@ -306,6 +334,7 @@ impl DsdDemuxer for DsfReader {
                     Err(e) => return Err(e.into()),
                 }
             }
+            self.first_block_skip = 0;
             self.remaining_per_ch -= valid as u64;
             appended += valid;
         }
@@ -320,6 +349,8 @@ impl DsdDemuxer for DsfReader {
 struct DffReader {
     file: File,
     info: DsdStreamInfo,
+    data_offset: u64,
+    data_size: u64,
     /// Bytes (all channels interleaved) remaining in the DSD data chunk.
     remaining_total: u64,
 }
@@ -425,6 +456,8 @@ impl DffReader {
 
         Ok(Self {
             file,
+            data_offset,
+            data_size,
             remaining_total: data_size,
             info: DsdStreamInfo {
                 dsd_rate,
@@ -440,6 +473,17 @@ impl DffReader {
 impl DsdDemuxer for DffReader {
     fn info(&self) -> &DsdStreamInfo {
         &self.info
+    }
+
+    fn seek_to_bit(&mut self, bit_per_channel: u64) -> Result<(), DsdError> {
+        let channels = self.info.channels as u64;
+        let total_per_channel = self.data_size / channels;
+        let target_per_channel = (bit_per_channel / 8).min(total_per_channel);
+        let target_total = target_per_channel.saturating_mul(channels);
+        self.file
+            .seek(SeekFrom::Start(self.data_offset + target_total))?;
+        self.remaining_total = self.data_size - target_total;
+        Ok(())
     }
 
     fn read_planar(

@@ -2396,8 +2396,8 @@ const ALBUM_COLUMNS: &str = "
                          WHEN 'local' THEN 0 WHEN 'offline' THEN 1
                          WHEN 'plex' THEN 2 WHEN 'jellyfin' THEN 3 ELSE 4 END
                          AS source_order
-                FROM source_copies sc_sources
-                JOIN tracks t_sources
+                FROM source_copies sc_sources INDEXED BY idx_source_copies_edition
+                CROSS JOIN tracks t_sources INDEXED BY idx_tracks_source_copy
                   ON t_sources.source_copy_id=sc_sources.source_copy_id
                WHERE sc_sources.edition_id=am.edition_id
                  AND t_sources.available=1

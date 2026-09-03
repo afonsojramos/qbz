@@ -420,7 +420,7 @@ pub(crate) async fn load_cortinilla_local(
     // Plex is part of the user's Local Library — the Artists/Tracks tabs union
     // it — so the cortinilla must include it too. The DB search only hits
     // `local_tracks`; the Plex cache is a separate bounded set merged here.
-    let plex_enabled = crate::local_plex::is_enabled();
+    let plex_enabled = crate::local_plex::is_configured();
     let q_log = q.clone();
     let t = std::time::Instant::now();
     let rows: Vec<qbz_library::LocalTrack> = tokio::task::spawn_blocking(move || {

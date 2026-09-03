@@ -569,7 +569,7 @@ pub fn has_library() -> bool {
         .unwrap_or(false);
     library_sources_available(
         has_folders,
-        crate::local_plex::is_enabled(),
+        crate::local_plex::is_configured(),
         crate::local_plex::cached_track_count(),
         crate::media_servers_qt::cached_track_count(),
     )

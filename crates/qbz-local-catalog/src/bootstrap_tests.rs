@@ -632,6 +632,7 @@ fn split_profile_and_global_cache_locations_build_one_user_catalog() {
         local_database: user.join("library.db"),
         plex_database: root.join("plex_cache.db"),
         remote_database: user.join("remote_cache.db"),
+        enabled_sources: SourceKind::ALL.into_iter().collect(),
     };
 
     let outcome =
@@ -649,6 +650,70 @@ fn split_profile_and_global_cache_locations_build_one_user_catalog() {
     };
     assert_eq!(catalog.stats().unwrap().track_count, 505);
     assert!(!root.join("local_catalog-v1-manifest.json").exists());
+}
+
+#[test]
+fn disabled_source_is_not_opened_and_is_pruned_from_an_existing_catalog() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("qbz");
+    let user = root.join("users/42");
+    fs::create_dir_all(&user).unwrap();
+    create_local_fixture(&user.join("library.db"));
+    create_plex_fixture(&root.join("plex_cache.db"));
+    create_remote_fixture(&user.join("remote_cache.db"));
+    let mut locations = LegacyLocations {
+        catalog_dir: user.clone(),
+        local_database: user.join("library.db"),
+        plex_database: root.join("plex_cache.db"),
+        remote_database: user.join("remote_cache.db"),
+        enabled_sources: SourceKind::ALL.into_iter().collect(),
+    };
+    bootstrap_legacy_caches_at_with_progress(&locations, &AtomicBool::new(false), |_| {})
+        .unwrap();
+
+    locations.enabled_sources.remove(&SourceKind::Plex);
+    let discovered = crate::discover_legacy_sources_at(&locations).unwrap();
+    assert!(discovered
+        .iter()
+        .all(|source| source.source.source != SourceKind::Plex));
+    assert!(matches!(
+        crate::reconcile_legacy_caches_at_with_progress(
+            &locations,
+            &AtomicBool::new(false),
+            |_| {}
+        )
+        .unwrap(),
+        ProjectionOutcome::Activated {
+            track_count: 4,
+            changed_sources: 1,
+            ..
+        }
+    ));
+    let ActiveCatalog::Ready { catalog, .. } = BootstrapLayout::new(&user).open_active() else {
+        panic!("profile catalog did not activate")
+    };
+    assert!(catalog
+        .stats()
+        .unwrap()
+        .source_counts
+        .iter()
+        .all(|(source, _)| source.source != SourceKind::Plex));
+    drop(catalog);
+
+    locations.enabled_sources.insert(SourceKind::Plex);
+    assert!(matches!(
+        crate::reconcile_legacy_caches_at_with_progress(
+            &locations,
+            &AtomicBool::new(false),
+            |_| {}
+        )
+        .unwrap(),
+        ProjectionOutcome::Activated {
+            track_count: 505,
+            changed_sources: 1,
+            ..
+        }
+    ));
 }
 
 fn create_local_fixture(path: &std::path::Path) {

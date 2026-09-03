@@ -129,21 +129,37 @@ enum AudioCommand {
     /// Play a local DSD file via DoP (DSD over PCM) on ALSA direct (DSD plan
     /// Phase 2). The audio thread opens the demuxer + an S32 stream at the
     /// DoP carrier rate and feeds pre-packed words through the DoP engine.
-    PlayDsdDop { path: std::path::PathBuf, track_id: u64 },
+    PlayDsdDop {
+        path: std::path::PathBuf,
+        track_id: u64,
+    },
     /// Play a local DSD file NATIVELY (ALSA DSD_U32, DSD plan Phase 3) —
     /// requires the kernel to grant the device a DSD format (quirk table).
-    PlayDsdNative { path: std::path::PathBuf, track_id: u64 },
+    PlayDsdNative {
+        path: std::path::PathBuf,
+        track_id: u64,
+    },
     /// Queue the next DSD track on the ACTIVE DoP engine (gapless DSD).
     /// Ignored (with gapless_ready reset) when the engine isn't DoP or the
     /// carrier rate differs — the normal track-end advance then handles it.
-    PlayNextDsdDop { path: std::path::PathBuf, track_id: u64 },
+    PlayNextDsdDop {
+        path: std::path::PathBuf,
+        track_id: u64,
+    },
 }
 
 /// Pending gapless track data (queued for seamless transition)
 enum GaplessMedia {
     Buffered(Vec<u8>),
     Streaming(Arc<BufferedMediaSource>),
-    Direct,
+    Direct(DirectDsdMedia),
+}
+
+#[derive(Clone)]
+struct DirectDsdMedia {
+    path: std::path::PathBuf,
+    /// 1 = DoP, 2 = native DSD_U32_BE, 3 = native DSD_U32_LE.
+    mode: u8,
 }
 
 struct GaplessPending {
@@ -2219,6 +2235,9 @@ impl Player {
             let mut current_audio_data: Option<Vec<u8>> = None;
             // Store streaming source for resume (when download completes, we can get the data)
             let mut current_streaming_source: Option<Arc<BufferedMediaSource>> = None;
+            // Direct DSD bypasses rodio and therefore has no cached PCM/audio
+            // source to rebuild on seek. Keep the container identity instead.
+            let mut current_direct_dsd: Option<DirectDsdMedia> = None;
             // Track consecutive sink creation failures to detect broken streams
             let mut consecutive_sink_failures: u32 = 0;
             const MAX_SINK_FAILURES: u32 = 3;
@@ -2248,6 +2267,7 @@ impl Player {
                  current_engine: &mut Option<PlaybackEngine>,
                  current_audio_data: &mut Option<Vec<u8>>,
                  current_streaming_source: &mut Option<Arc<BufferedMediaSource>>,
+                 current_direct_dsd: &mut Option<DirectDsdMedia>,
                  stream_opt: &mut Option<StreamType>,
                  current_device_name: &mut Option<String>,
                  consecutive_sink_failures: &mut u32,
@@ -2282,11 +2302,15 @@ impl Player {
                             );
                             *pause_suspend_deadline = None;
                             thread_state.set_dsd_mode(0);
+                            *current_direct_dsd = None;
                             // Clear any pending gapless state (new Play supersedes queued gapless)
                             // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
                             // survived the PlayStreaming fix, and guessing at the remaining
                             // path has failed twice. Every set/clear now says who did it.
-                            log::info!("[gapless-trace] clear (Play) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
+                            log::info!(
+                                "[gapless-trace] clear (Play) pending was {:?}",
+                                gapless_pending.as_ref().map(|p| p.track_id)
+                            );
                             *gapless_pending = None;
                             *gapless_request_armed = false;
                             thread_state.set_gapless_ready(false);
@@ -2820,6 +2844,7 @@ impl Player {
                             start_position_secs
                         );
                             *pause_suspend_deadline = None;
+                            *current_direct_dsd = None;
                             // Clear any pending gapless state — a new
                             // PlayStreaming supersedes queued gapless, exactly
                             // as `AudioCommand::Play` does above.
@@ -3438,10 +3463,14 @@ impl Player {
                                     path.display()
                                 );
                                 *pause_suspend_deadline = None;
+                                *current_direct_dsd = None;
                                 // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
                                 // survived the PlayStreaming fix, and guessing at the remaining
                                 // path has failed twice. Every set/clear now says who did it.
-                                log::info!("[gapless-trace] clear (PlayDsdDop) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
+                                log::info!(
+                                    "[gapless-trace] clear (PlayDsdDop) pending was {:?}",
+                                    gapless_pending.as_ref().map(|p| p.track_id)
+                                );
                                 *gapless_pending = None;
                                 *gapless_request_armed = false;
                                 thread_state.set_gapless_ready(false);
@@ -3526,6 +3555,10 @@ impl Player {
                                 thread_state.set_stream_quality(dsd_rate, 1);
                                 thread_state.duration.store(duration, Ordering::SeqCst);
                                 thread_state.set_dsd_mode(1);
+                                *current_direct_dsd = Some(DirectDsdMedia {
+                                    path: path.clone(),
+                                    mode: 1,
+                                });
                                 thread_state.is_playing.store(true, Ordering::SeqCst);
                                 thread_state.position.store(0, Ordering::SeqCst);
                                 thread_state
@@ -3550,10 +3583,14 @@ impl Player {
                                     path.display()
                                 );
                                 *pause_suspend_deadline = None;
+                                *current_direct_dsd = None;
                                 // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
                                 // survived the PlayStreaming fix, and guessing at the remaining
                                 // path has failed twice. Every set/clear now says who did it.
-                                log::info!("[gapless-trace] clear (PlayDsdNative) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
+                                log::info!(
+                                    "[gapless-trace] clear (PlayDsdNative) pending was {:?}",
+                                    gapless_pending.as_ref().map(|p| p.track_id)
+                                );
                                 *gapless_pending = None;
                                 *gapless_request_armed = false;
                                 thread_state.set_gapless_ready(false);
@@ -3648,7 +3685,12 @@ impl Player {
                                 thread_state.set_stream_error(false);
                                 thread_state.set_stream_quality(info.dsd_rate, 1);
                                 thread_state.duration.store(duration, Ordering::SeqCst);
-                                thread_state.set_dsd_mode(if little_endian { 3 } else { 2 });
+                                let direct_mode = if little_endian { 3 } else { 2 };
+                                thread_state.set_dsd_mode(direct_mode);
+                                *current_direct_dsd = Some(DirectDsdMedia {
+                                    path: path.clone(),
+                                    mode: direct_mode,
+                                });
                                 thread_state.is_playing.store(true, Ordering::SeqCst);
                                 thread_state.position.store(0, Ordering::SeqCst);
                                 thread_state
@@ -3750,7 +3792,10 @@ impl Player {
                                             track_id,
                                             play_generation: thread_state.current_play_generation(),
                                             duration_secs: duration,
-                                            media: GaplessMedia::Direct,
+                                            media: GaplessMedia::Direct(DirectDsdMedia {
+                                                path: path.clone(),
+                                                mode,
+                                            }),
                                             sample_rate: rate,
                                             channels: 2,
                                             bit_depth: 1,
@@ -3954,12 +3999,16 @@ impl Player {
                             thread_state.set_hardware_volume_active(false);
                             *current_audio_data = None;
                             *current_streaming_source = None;
+                            *current_direct_dsd = None;
                             *current_normalization_gain = None;
                             *current_gain_atomic = None;
                             // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
                             // survived the PlayStreaming fix, and guessing at the remaining
                             // path has failed twice. Every set/clear now says who did it.
-                            log::info!("[gapless-trace] clear (Stop) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
+                            log::info!(
+                                "[gapless-trace] clear (Stop) pending was {:?}",
+                                gapless_pending.as_ref().map(|p| p.track_id)
+                            );
                             *gapless_pending = None;
                             *gapless_request_armed = false;
                             thread_state.set_gapless_ready(false);
@@ -4011,22 +4060,122 @@ impl Player {
                             log::debug!("Audio thread: volume set to {}", volume);
                         }
                         AudioCommand::Seek(position_secs) => {
-                            if current_engine.as_ref().map(|e| e.is_dop()).unwrap_or(false) {
-                                // v1 limitation: no seek inside a DoP stream
-                                // (demuxer-level seek + marker re-phase later).
-                                log::info!("Seek ignored during DoP playback ({}s)", position_secs);
-                                return;
-                            }
                             *pause_suspend_deadline = None;
-                            // Cancel any pending gapless — seek creates a new engine
+                            // Seeking invalidates a queued successor in every
+                            // engine, including direct DSD where the live
+                            // source is replaced in place.
                             // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
                             // survived the PlayStreaming fix, and guessing at the remaining
                             // path has failed twice. Every set/clear now says who did it.
-                            log::info!("[gapless-trace] clear (Seek) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
+                            log::info!(
+                                "[gapless-trace] clear (Seek) pending was {:?}",
+                                gapless_pending.as_ref().map(|p| p.track_id)
+                            );
                             *gapless_pending = None;
                             *gapless_request_armed = false;
                             thread_state.set_gapless_ready(false);
                             thread_state.set_gapless_next_track_id(0);
+
+                            #[cfg(target_os = "linux")]
+                            if current_engine.as_ref().map(|e| e.is_dop()).unwrap_or(false) {
+                                let Some(media) = current_direct_dsd.as_ref().cloned() else {
+                                    log::error!(
+                                        "Direct DSD seek aborted: current container is unknown"
+                                    );
+                                    thread_state.set_stream_error(true);
+                                    return;
+                                };
+                                let target_secs = position_secs.min(thread_state.duration());
+                                let mut demux = match qbz_dsd::open_dsd(&media.path) {
+                                    Ok(d) => d,
+                                    Err(e) => {
+                                        log::error!("Direct DSD seek: cannot reopen source: {e}");
+                                        thread_state.set_stream_error(true);
+                                        return;
+                                    }
+                                };
+                                let dsd_rate = demux.info().dsd_rate;
+                                if let Err(e) =
+                                    demux.seek_to_bit(target_secs.saturating_mul(dsd_rate as u64))
+                                {
+                                    log::error!("Direct DSD seek: demux seek failed: {e}");
+                                    thread_state.set_stream_error(true);
+                                    return;
+                                }
+                                let built: Result<
+                                    (Box<dyn Iterator<Item = i32> + Send>, u32),
+                                    String,
+                                > = match media.mode {
+                                    1 => qbz_dsd::DopStream::new(demux)
+                                        .map_err(|e| e.to_string())
+                                        .map(|source| {
+                                            let rate = source.carrier_rate();
+                                            (
+                                                Box::new(DsdErrorReport::new(
+                                                    source,
+                                                    thread_state.clone(),
+                                                ))
+                                                    as Box<dyn Iterator<Item = i32> + Send>,
+                                                rate,
+                                            )
+                                        }),
+                                    2 | 3 => qbz_dsd::NativeDsdStream::new(demux, media.mode == 3)
+                                        .map_err(|e| e.to_string())
+                                        .map(|source| {
+                                            let rate = source.rate();
+                                            (
+                                                Box::new(DsdErrorReport::new(
+                                                    source,
+                                                    thread_state.clone(),
+                                                ))
+                                                    as Box<dyn Iterator<Item = i32> + Send>,
+                                                rate,
+                                            )
+                                        }),
+                                    _ => Err(format!("unknown direct DSD mode {}", media.mode)),
+                                };
+                                let (source, output_rate) = match built {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        log::error!("Direct DSD seek: source build failed: {e}");
+                                        thread_state.set_stream_error(true);
+                                        return;
+                                    }
+                                };
+                                if *current_track_sample_rate != Some(output_rate) {
+                                    log::error!(
+                                        "Direct DSD seek: active rate {:?} differs from source rate {}",
+                                        *current_track_sample_rate,
+                                        output_rate
+                                    );
+                                    thread_state.set_stream_error(true);
+                                    return;
+                                }
+                                let Some(engine) = current_engine.as_mut() else {
+                                    return;
+                                };
+                                if let Err(e) = engine.replace_dop(
+                                    source,
+                                    target_secs.saturating_mul(output_rate as u64),
+                                ) {
+                                    log::error!("Direct DSD seek: replace failed: {e}");
+                                    thread_state.set_stream_error(true);
+                                    return;
+                                }
+
+                                let was_playing = thread_state.is_playing.load(Ordering::SeqCst);
+                                thread_state.position.store(target_secs, Ordering::SeqCst);
+                                if was_playing {
+                                    thread_state.start_playback_timer(target_secs);
+                                }
+                                thread_state.set_stream_error(false);
+                                log::info!(
+                                    "Audio thread: direct DSD seeked to {}s (was_playing: {})",
+                                    target_secs,
+                                    was_playing
+                                );
+                                return;
+                            }
 
                             // Three cases reach this handler:
                             //   * full-file playback (current_audio_data set)
@@ -4666,6 +4815,7 @@ impl Player {
                             &mut current_engine,
                             &mut current_audio_data,
                             &mut current_streaming_source,
+                            &mut current_direct_dsd,
                             &mut stream_opt,
                             &mut current_device_name,
                             &mut consecutive_sink_failures,
@@ -4834,12 +4984,14 @@ impl Player {
                                             GaplessMedia::Streaming(source) => {
                                                 current_audio_data = None;
                                                 current_streaming_source = Some(source.clone());
-                                                thread_state
-                                                    .promote_gapless_stream_feeder(pending.track_id);
+                                                thread_state.promote_gapless_stream_feeder(
+                                                    pending.track_id,
+                                                );
                                             }
-                                            GaplessMedia::Direct => {
+                                            GaplessMedia::Direct(media) => {
                                                 current_audio_data = None;
                                                 current_streaming_source = None;
+                                                current_direct_dsd = Some(media.clone());
                                             }
                                         }
                                         thread_state.adopt_buffered_track(
@@ -4900,9 +5052,10 @@ impl Player {
                                                         pending.track_id,
                                                     );
                                                 }
-                                                GaplessMedia::Direct => {
+                                                GaplessMedia::Direct(media) => {
                                                     current_audio_data = None;
                                                     current_streaming_source = None;
+                                                    current_direct_dsd = Some(media.clone());
                                                 }
                                             }
                                             thread_state.adopt_buffered_track(
@@ -5055,6 +5208,7 @@ impl Player {
                                     &mut current_engine,
                                     &mut current_audio_data,
                                     &mut current_streaming_source,
+                                    &mut current_direct_dsd,
                                     &mut stream_opt,
                                     &mut current_device_name,
                                     &mut consecutive_sink_failures,
@@ -5083,6 +5237,7 @@ impl Player {
                             &mut current_engine,
                             &mut current_audio_data,
                             &mut current_streaming_source,
+                            &mut current_direct_dsd,
                             &mut stream_opt,
                             &mut current_device_name,
                             &mut consecutive_sink_failures,

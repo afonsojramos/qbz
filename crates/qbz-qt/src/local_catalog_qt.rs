@@ -5,12 +5,13 @@
 //! after boot has had time to paint, coalesces progress into logs, and signals
 //! bounded cancellation when the Qt event loop exits.
 
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use qbz_local_catalog::{
     ActiveCatalog, BootstrapLayout, BootstrapOutcome, BootstrapProgress, CatalogError,
-    ProjectionOutcome, ProjectionProgress,
+    ProjectionOutcome, ProjectionProgress, SourceKind,
 };
 
 #[derive(serde::Serialize)]
@@ -92,11 +93,27 @@ pub(crate) fn locations() -> Option<qbz_local_catalog::LegacyLocations> {
     let root = dirs::data_dir()?.join("qbz");
     let user_id = qbz_app::user_data::UserDataPaths::load_last_user_id().unwrap_or(0);
     let user_dir = root.join("users").join(user_id.to_string());
+    let mut enabled_sources = BTreeSet::from([SourceKind::Local, SourceKind::Offline]);
+    if crate::local_plex::is_configured() {
+        enabled_sources.insert(SourceKind::Plex);
+    }
+    for source in crate::media_servers_qt::configured_words() {
+        match source {
+            "jellyfin" => {
+                enabled_sources.insert(SourceKind::Jellyfin);
+            }
+            "subsonic" => {
+                enabled_sources.insert(SourceKind::Subsonic);
+            }
+            _ => {}
+        }
+    }
     Some(qbz_local_catalog::LegacyLocations {
         catalog_dir: user_dir.clone(),
         local_database: user_dir.join("library.db"),
         plex_database: root.join("plex_cache.db"),
         remote_database: user_dir.join("remote_cache.db"),
+        enabled_sources,
     })
 }
 
@@ -150,10 +167,14 @@ pub(crate) fn start() {
             {
                 let mut last_projection = std::time::Instant::now();
                 let mut last_projection_source = None;
+                let visible_sources = locations.enabled_sources.clone();
                 Some(qbz_local_catalog::reconcile_legacy_caches_at_with_progress(
                     &locations,
                     &CANCELLED,
                     |progress| {
+                        if !visible_sources.contains(&progress.source.source) {
+                            return;
+                        }
                         publish_projection_progress(progress);
                         let source_changed =
                             last_projection_source.as_ref() != Some(&progress.source);
@@ -210,7 +231,7 @@ pub(crate) fn start() {
                     crate::local_bridge_ops::load_tracks(true);
                 }
                 if ready && crate::local_albums_model_qt::requested() {
-                    crate::local_albums_model_qt::retry_last();
+                    crate::local_albums_model_qt::retry_last(true);
                 }
                 if ready && crate::local_artists_model_qt::requested() {
                     crate::local_artists_model_qt::retry_last();
@@ -273,10 +294,14 @@ pub(crate) fn request_catch_up() {
             }
             let mut last_publish = std::time::Instant::now();
             let mut last_source = None;
+            let visible_sources = locations.enabled_sources.clone();
             qbz_local_catalog::reconcile_legacy_caches_at_with_progress(
                 &locations,
                 &CANCELLED,
                 |progress| {
+                    if !visible_sources.contains(&progress.source.source) {
+                        return;
+                    }
                     publish_projection_progress(progress);
                     let source_changed = last_source.as_ref() != Some(&progress.source);
                     if source_changed
@@ -336,7 +361,7 @@ pub(crate) fn request_catch_up() {
                     crate::local_bridge_ops::load_tracks(true);
                 }
                 if ready && crate::local_albums_model_qt::requested() {
-                    crate::local_albums_model_qt::retry_last();
+                    crate::local_albums_model_qt::retry_last(true);
                 }
                 if ready && crate::local_artists_model_qt::requested() {
                     crate::local_artists_model_qt::retry_last();

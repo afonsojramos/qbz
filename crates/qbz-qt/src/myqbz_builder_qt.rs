@@ -820,7 +820,7 @@ pub fn open(artist_id: String) {
 
                 // 2b. Plex cold-start retry: if Plex is enabled and we got
                 //     nothing from the Plex source, wait 2s and refetch once.
-                if crate::local_plex::is_enabled() && !local.iter().any(|c| c.source == "plex") {
+                if crate::local_plex::is_configured() && !local.iter().any(|c| c.source == "plex") {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     let name_retry = artist_name.clone();
                     let retried =

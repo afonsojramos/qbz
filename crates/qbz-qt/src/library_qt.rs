@@ -1053,7 +1053,7 @@ fn all_local_feed_blocking() -> Vec<FeedItem> {
 
     let t0 = Instant::now();
     let mut out: Vec<FeedItem> = Vec::new();
-    let plex_on = crate::local_plex::is_enabled();
+    let plex_on = crate::local_plex::is_configured();
     let plex_path = crate::local_plex::cache_db_path();
     // The SHARED remote mirror, and which of its sources may show. Both gates
     // matter: the path short-circuits the ATTACH for a user with no media

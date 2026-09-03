@@ -31,7 +31,7 @@ static SESSION_FAILED: AtomicBool = AtomicBool::new(false);
 static SESSION: Mutex<Option<NativeSession>> = Mutex::new(None);
 static LAST_QUERY: Mutex<Option<LastQuery>> = Mutex::new(None);
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 struct LastQuery {
     search: String,
     sort: String,
@@ -72,6 +72,7 @@ struct CachedPage {
 struct NativeSession {
     generation: u64,
     catalog_generation: u64,
+    query: LastQuery,
     descriptor: QueryDescriptor,
     columns: usize,
     album_total: u64,
@@ -216,6 +217,7 @@ impl PageLru {
 struct OpenedQuery {
     generation: u64,
     catalog_generation: u64,
+    query: LastQuery,
     descriptor: QueryDescriptor,
     columns: usize,
     album_total: u64,
@@ -260,9 +262,6 @@ pub(crate) fn reset(
     filter_json: String,
     columns: i32,
 ) -> bool {
-    if !requested() {
-        return false;
-    }
     let query = LastQuery {
         search,
         sort,
@@ -271,6 +270,13 @@ pub(crate) fn reset(
         columns,
     };
     *LAST_QUERY.lock().unwrap_or_else(|error| error.into_inner()) = Some(query.clone());
+    reset_inner(query, false)
+}
+
+fn reset_inner(query: LastQuery, force: bool) -> bool {
+    if !requested() {
+        return false;
+    }
     // The derived identity currently matches the owner's default folder
     // grouping. Keep the metadata-mode reader as this surface's fallback
     // until that alternate projection can preserve its duplicate semantics.
@@ -279,11 +285,35 @@ pub(crate) fn reset(
         crate::local_bridge_ops::load_albums_legacy();
         return false;
     }
+    if !force {
+        let reused = SESSION
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .is_some_and(|session| session.query == query);
+        if reused {
+            ui(|mut bridge| {
+                bridge.as_mut().set_local_albums_native_active(true);
+                bridge.as_mut().set_local_albums_loading(false);
+                bridge.as_mut().set_local_albums_error(QString::default());
+                bridge
+                    .as_mut()
+                    .set_local_albums_native_error(QString::default());
+            });
+            log::info!("[local-catalog] phase=albums-reuse reason=matching-descriptor");
+            return true;
+        }
+    }
     let generation = next_generation();
     let columns = usize::try_from(query.columns.max(1))
         .unwrap_or(1)
         .clamp(1, MAX_COLUMNS);
-    let descriptor = descriptor(query.search, &query.sort, &query.group, &query.filter_json);
+    let descriptor = descriptor(
+        query.search.clone(),
+        &query.sort,
+        &query.group,
+        &query.filter_json,
+    );
     *SESSION.lock().unwrap_or_else(|error| error.into_inner()) = None;
     set_loading();
     if !descriptor.search().is_empty() && descriptor.search().chars().count() < 3 {
@@ -292,7 +322,10 @@ pub(crate) fn reset(
     }
     crate::spawn(async move {
         let result =
-            tokio::task::spawn_blocking(move || open_query(generation, descriptor, columns)).await;
+            tokio::task::spawn_blocking(move || {
+                open_query(generation, query, descriptor, columns)
+            })
+            .await;
         match result {
             Ok(Ok(opened)) => activate_query(opened),
             Ok(Err(reason)) => fallback(generation, reason),
@@ -304,20 +337,12 @@ pub(crate) fn reset(
 
 /// Retry the last QML descriptor after background bootstrap/catch-up makes a
 /// catalog generation available.
-pub(crate) fn retry_last() -> bool {
+pub(crate) fn retry_last(force: bool) -> bool {
     let query = LAST_QUERY
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clone();
-    query.is_some_and(|query| {
-        reset(
-            query.search,
-            query.sort,
-            query.group,
-            query.filter_json,
-            query.columns,
-        )
-    })
+    query.is_some_and(|query| reset_inner(query, force))
 }
 
 pub(crate) fn request_page(page: i32, generation: i32) {
@@ -456,6 +481,7 @@ pub(crate) fn bulk_action(action: String) {
 
 fn open_query(
     generation: u64,
+    query: LastQuery,
     mut descriptor: QueryDescriptor,
     columns: usize,
 ) -> Result<OpenedQuery, &'static str> {
@@ -465,6 +491,7 @@ fn open_query(
         return Ok(OpenedQuery {
             generation,
             catalog_generation,
+            query,
             descriptor,
             columns,
             album_total: 0,
@@ -499,6 +526,7 @@ fn open_query(
     Ok(OpenedQuery {
         generation,
         catalog_generation,
+        query,
         descriptor,
         columns,
         album_total,
@@ -530,6 +558,7 @@ fn activate_query(opened: OpenedQuery) {
     *SESSION.lock().unwrap_or_else(|error| error.into_inner()) = Some(NativeSession {
         generation: opened.generation,
         catalog_generation: opened.catalog_generation,
+        query: opened.query,
         descriptor: opened.descriptor.clone(),
         columns: opened.columns,
         album_total: opened.album_total,
@@ -1129,7 +1158,7 @@ fn album_group_label(record: &AlbumRecord, group: TrackGroup) -> String {
 
 fn enabled_sources(catalog: &qbz_local_catalog::Catalog) -> Result<Vec<SourceKey>, &'static str> {
     let stats = catalog.stats().map_err(|_| "source-counts")?;
-    let plex = crate::local_plex::is_enabled();
+    let plex = crate::local_plex::is_configured();
     let remote = crate::media_servers_qt::configured_words();
     Ok(stats
         .source_counts

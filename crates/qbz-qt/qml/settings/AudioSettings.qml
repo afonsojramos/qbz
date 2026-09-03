@@ -226,7 +226,7 @@ Column {
         // still plays there -- converted to PCM, which is the default.
         visible: root.doc.backendIsAlsa === true
         label: QbzSession.tr("DSD playback", QbzSession.trRev)
-        description: QbzSession.tr("How DSD tracks reach the DAC. WARNING: choose DoP or Native only if your DAC supports it — on any other DAC they play as loud noise. Volume is fixed and seeking is disabled in DoP/Native mode. Native additionally needs kernel support for the DAC.", QbzSession.trRev)
+        description: QbzSession.tr("How DSD tracks reach the DAC. WARNING: choose DoP or Native only if your DAC supports it — on any other DAC they play as loud noise. Volume is fixed in DoP/Native mode. Native additionally needs kernel support for the DAC.", QbzSession.trRev)
         QbzSelect {
             menuWidth: 280
             options: root.doc.dsdModes || []

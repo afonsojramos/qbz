@@ -10,12 +10,9 @@
 // in their own Errors columns (§3.3.11-12), so they act on whatever is
 // already loaded regardless of auth state.
 //
-// DSD-direct guard: `Player::is_dsd_direct_active()` (qbz-player/src/player/
-// mod.rs:4893, "True while a DoP stream is active (volume fixed, seek
-// unsupported)") is the player's own guard — previously unconsumed anywhere
-// in the workspace. `seek`/`volume` (incl. the `mute` body form) check it
-// FIRST and refuse 409 rather than silently no-op (the brief's explicit
-// requirement — a silent no-op reads as broken, 02 §1.4).
+// DSD-direct guard: volume (including the `mute` body form) remains fixed for
+// bit-perfect output. Seek is supported by replacing the demuxed DSD source
+// while the direct stream remains open, so it is intentionally not guarded.
 //
 // Mute is daemon-owned state in `DaemonShared.{muted, premute_volume}` (T2
 // seam), NOT the desktop's process statics (`crates/qbz/src/playback.rs:
@@ -193,14 +190,6 @@ pub fn seek(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
         Err(response) => return response,
     };
     let player = state.runtime.core().player();
-    if player.is_dsd_direct_active() {
-        return err_json(
-            409,
-            "seek_unsupported_dsd",
-            "seek is unsupported in DSD-direct mode (bit-perfect passthrough)",
-            "set DSD mode to \"convert\": qbzd setup (Audio screen)",
-        );
-    }
     let ev = player.get_playback_event();
     let target: u64 = if let Some(pos) = body.get("position").and_then(|v| v.as_u64()) {
         pos

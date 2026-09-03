@@ -364,6 +364,16 @@ pub fn toggle_track_select_blocking(path: &str) {
     if sel(|s| s.remove(path)).is_some() {
         return;
     }
+    // SACD leaves deliberately carry their authoritative virtual
+    // `sacd:<image>#N` path, whose filesystem parent is not the synthetic ISO
+    // folder shown in the tree. Resolve the exact key first; ordinary files
+    // take this same cheap indexed path and no longer need a parent listing.
+    if let Some(track) = with_db(|db| db.get_track_by_path(path)).flatten() {
+        sel(|s| {
+            s.insert(path.to_string(), track);
+        });
+        return;
+    }
     let parent = std::path::Path::new(path)
         .parent()
         .map(|p| p.to_string_lossy().into_owned())

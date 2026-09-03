@@ -403,6 +403,7 @@ pub enum FrameSync {
 
 pub struct SacdTrackReader {
     iso: IsoImage,
+    start_lsn: u64,
     next_lsn: u64,
     end_lsn: u64,
     /// Set once the first frame boundary has been found; until then audio
@@ -417,14 +418,12 @@ impl SacdTrackReader {
         Self::open_with(path, track, FrameSync::ToFirstFrame)
     }
 
-    pub fn open_with(
-        path: &Path,
-        track: &SacdTrack,
-        sync: FrameSync,
-    ) -> Result<Self, SacdError> {
+    pub fn open_with(path: &Path, track: &SacdTrack, sync: FrameSync) -> Result<Self, SacdError> {
+        let start_lsn = track.start_lsn as u64;
         Ok(Self {
             iso: IsoImage::open(path)?,
-            next_lsn: track.start_lsn as u64,
+            start_lsn,
+            next_lsn: start_lsn,
             // `length_lsn` is how many sectors to read, including the shared
             // boundary sector — the disc's own accounting, not ours.
             end_lsn: track.start_lsn as u64 + track.length_lsn as u64,
@@ -434,6 +433,21 @@ impl SacdTrackReader {
 
     pub fn finished(&self) -> bool {
         self.next_lsn >= self.end_lsn
+    }
+
+    /// Reposition proportionally inside the track and re-acquire the next
+    /// declared DSD frame boundary. Mapping against the TOC's sector span is
+    /// important: 75 Hz is the DSD audio-frame cadence, not the ISO sector
+    /// cadence (several sectors contribute to each audio frame).
+    pub fn seek_to_fraction(&mut self, offset_units: u64, total_units: u64) {
+        let span = self.end_lsn - self.start_lsn;
+        let sector_offset = if total_units == 0 {
+            0
+        } else {
+            ((span as u128 * offset_units.min(total_units) as u128) / total_units as u128) as u64
+        };
+        self.next_lsn = self.start_lsn + sector_offset;
+        self.synced = false;
     }
 
     /// Append the next chunk of AUDIO payload to `out`, skipping every

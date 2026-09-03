@@ -31,6 +31,9 @@ type BoxedSampleIter = Box<dyn Iterator<Item = f32> + Send>;
 #[cfg(target_os = "linux")]
 type BoxedDopIter = Box<dyn Iterator<Item = i32> + Send>;
 
+#[cfg(target_os = "linux")]
+type DopReplacement = (BoxedDopIter, u64);
+
 /// Thread-safe source queue for gapless playback.
 /// The writer thread consumes sources; append() pushes new ones.
 pub(crate) struct SourceQueue<S> {
@@ -73,6 +76,14 @@ impl<S> SourceQueue<S> {
 
     fn is_empty(&self) -> bool {
         self.queue.lock().unwrap().is_empty()
+    }
+
+    fn clear(&self) {
+        self.queue.lock().unwrap().clear();
+    }
+
+    fn wake(&self) {
+        self.notify.notify_one();
     }
 }
 
@@ -129,6 +140,9 @@ pub enum PlaybackEngine {
         should_stop: Arc<AtomicBool>,
         position_frames: Arc<AtomicU64>,
         source_queue: Arc<SourceQueue<BoxedDopIter>>,
+        /// A seek replaces the live source without closing ALSA. The writer
+        /// inserts DSD silence before consuming it so the DAC stays locked.
+        replacement: Arc<Mutex<Option<DopReplacement>>>,
         writer_thread: Option<thread::JoinHandle<()>>,
         source_transition: Arc<AtomicBool>,
     },
@@ -291,6 +305,7 @@ impl PlaybackEngine {
         let should_stop = Arc::new(AtomicBool::new(false));
         let position_frames = Arc::new(AtomicU64::new(0));
         let source_queue: Arc<SourceQueue<BoxedDopIter>> = Arc::new(SourceQueue::new());
+        let replacement: Arc<Mutex<Option<DopReplacement>>> = Arc::new(Mutex::new(None));
         let source_transition = Arc::new(AtomicBool::new(false));
         let handle = {
             let stream_c = stream.clone();
@@ -298,11 +313,20 @@ impl PlaybackEngine {
             let stop_c = should_stop.clone();
             let pos_c = position_frames.clone();
             let queue_c = source_queue.clone();
+            let replacement_c = replacement.clone();
             let transition_c = source_transition.clone();
             let channels = stream.channels();
             thread::spawn(move || {
                 dop_writer_thread(
-                    stream_c, playing_c, stop_c, pos_c, queue_c, transition_c, channels, native,
+                    stream_c,
+                    playing_c,
+                    stop_c,
+                    pos_c,
+                    queue_c,
+                    replacement_c,
+                    transition_c,
+                    channels,
+                    native,
                 );
             })
         };
@@ -312,6 +336,7 @@ impl PlaybackEngine {
             should_stop,
             position_frames,
             source_queue,
+            replacement,
             writer_thread: Some(handle),
             source_transition,
         }
@@ -343,6 +368,36 @@ impl PlaybackEngine {
                 Ok(())
             }
             _ => Err("append_dop on a non-DoP engine".to_string()),
+        }
+    }
+
+    /// Replace the currently playing direct-DSD source for seek while keeping
+    /// the exclusive ALSA stream open. Queued gapless successors are dropped;
+    /// the audio thread will request them again near the new end position.
+    #[cfg(target_os = "linux")]
+    pub fn replace_dop(
+        &mut self,
+        source: BoxedDopIter,
+        position_frames_base: u64,
+    ) -> Result<(), String> {
+        match self {
+            Self::AlsaDop {
+                should_stop,
+                source_queue,
+                replacement,
+                source_transition,
+                ..
+            } => {
+                if should_stop.load(Ordering::SeqCst) {
+                    return Err("direct DSD writer is stopped".to_string());
+                }
+                source_queue.clear();
+                source_transition.store(false, Ordering::SeqCst);
+                *replacement.lock().unwrap() = Some((source, position_frames_base));
+                source_queue.wake();
+                Ok(())
+            }
+            _ => Err("replace_dop on a non-DoP engine".to_string()),
         }
     }
 
@@ -1068,6 +1123,7 @@ fn dop_writer_thread(
     should_stop: Arc<AtomicBool>,
     position_frames: Arc<AtomicU64>,
     source_queue: Arc<SourceQueue<BoxedDopIter>>,
+    replacement: Arc<Mutex<Option<DopReplacement>>>,
     source_transition: Arc<AtomicBool>,
     channels: u16,
     native: bool,
@@ -1102,6 +1158,19 @@ fn dop_writer_thread(
             write_silence(&mut silence_packer, &mut silence_buf, carrier * 150 / 1000);
             log::info!("[DoP Engine] Stop signal, writer thread exiting");
             break 'thread;
+        }
+
+        if let Some((source, position_base)) = replacement.lock().unwrap().take() {
+            // Do not drop/reopen ALSA here: that makes the DAC leave DSD mode
+            // and is the source of the loud click users hear on a naive seek.
+            // A short valid-silence bridge gives both DoP and native receivers
+            // a clean boundary while preserving exclusive ownership.
+            write_silence(&mut silence_packer, &mut silence_buf, carrier * 150 / 1000);
+            current = Some(source);
+            had_source = true;
+            position_frames.store(position_base, Ordering::SeqCst);
+            source_transition.store(false, Ordering::SeqCst);
+            log::info!("[DoP Engine] Source replaced in-place for seek");
         }
 
         if current.is_none() {

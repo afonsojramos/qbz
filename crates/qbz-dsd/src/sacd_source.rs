@@ -174,6 +174,14 @@ impl DsdDemuxer for SacdDemuxer {
         &self.info
     }
 
+    fn seek_to_bit(&mut self, bit_per_channel: u64) -> Result<(), DsdError> {
+        let target = bit_per_channel.min(self.info.sample_count);
+        self.reader.seek_to_fraction(target, self.info.sample_count);
+        self.pending.clear();
+        self.done = self.reader.finished();
+        Ok(())
+    }
+
     fn read_planar(
         &mut self,
         out: &mut [Vec<u8>],

@@ -1633,5 +1633,4 @@ Rectangle {
         view: root
     }
 
-    LocalMediaInfoModal { }
 }

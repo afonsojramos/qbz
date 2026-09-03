@@ -114,6 +114,7 @@ pub(crate) fn publish_plex_state() {
 /// disconnect, the master toggle and the user bind — because a chip that
 /// outlives its server filters a bucket that no longer exists.
 pub(crate) fn publish_media_gates() {
+    let plex = crate::local_plex::is_configured();
     let words = crate::media_servers_qt::configured_words();
     let jf = words.contains(&"jellyfin");
     let sub = words.contains(&"subsonic");
@@ -122,7 +123,7 @@ pub(crate) fn publish_media_gates() {
     // the popup is about to hide. That combination is invisible — the grid
     // comes back empty and the funnel badge counts a filter the user cannot
     // see, let alone clear.
-    let filter = pruned_albums_filter(jf, sub);
+    let filter = pruned_albums_filter(plex, jf, sub);
     ui(move |mut b| {
         b.as_mut().set_media_has_jellyfin(jf);
         b.as_mut().set_media_has_subsonic(sub);
@@ -147,16 +148,17 @@ pub(crate) fn save_albums_filter(json: &str) {
 
 /// The stored funnel with any source key its server cannot serve removed.
 ///
-/// Only the MEDIA-SERVER keys are pruned. `local` / `offline` / `plex` are
-/// always meaningful words (an empty result there is an honest answer about
-/// the library), but a `jellyfin` tick with no Jellyfin configured can only
-/// ever match zero rows, and the chip that would let the user untick it is
-/// hidden by the same gate.
-fn pruned_albums_filter(has_jellyfin: bool, has_subsonic: bool) -> String {
+/// A source key is pruned whenever its integration is not both enabled and
+/// configured. Otherwise the hidden chip can leave the grid permanently
+/// empty with no control available to clear it.
+fn pruned_albums_filter(has_plex: bool, has_jellyfin: bool, has_subsonic: bool) -> String {
     let Some(serde_json::Value::Object(mut map)) = crate::settings_qt::read_pref(ALBUMS_FILTER_KEY)
     else {
         return String::new();
     };
+    if !has_plex {
+        map.remove("plex");
+    }
     if !has_jellyfin {
         map.remove("jellyfin");
     }
@@ -174,6 +176,10 @@ fn pruned_albums_filter(has_jellyfin: bool, has_subsonic: bool) -> String {
 
 pub(crate) fn reload_browse() {
     publish_media_gates();
+    // The derived catalog is source-scoped too. Coalescing makes this cheap
+    // for callers that already requested a catch-up, while toggle/disconnect
+    // paths need it to prune a newly unauthorized source immediately.
+    crate::local_catalog_qt::request_catch_up();
     // This is the shared mutation chokepoint for folders and remote sources.
     // Republish the gate as well as the documents it controls (#723).
     publish_availability();
@@ -281,7 +287,6 @@ fn log_surface_route(surface: &str, path: &str, reason: &str) {
 
 pub(crate) fn load_albums() {
     ui(|mut b| {
-        b.as_mut().set_local_albums_loading(true);
         b.as_mut().set_local_albums_error(QString::from(""));
     });
     if crate::local_albums_model_qt::requested()
@@ -291,7 +296,9 @@ pub(crate) fn load_albums() {
         // Once QML has supplied its width-dependent descriptor this is also
         // the retry path used by tab remounts and album-mode changes. On the
         // first mount LocalAlbumCollection supplies it immediately.
-        crate::local_albums_model_qt::retry_last();
+        if !crate::local_albums_model_qt::retry_last(false) {
+            ui(|mut b| b.as_mut().set_local_albums_loading(true));
+        }
         return;
     }
     let reason = if crate::local_albums_model_qt::requested() {

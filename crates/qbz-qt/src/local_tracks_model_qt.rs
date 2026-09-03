@@ -388,21 +388,104 @@ pub(crate) fn enqueue(index: i64, mode: String) {
 }
 
 pub(crate) fn row_action(index: i64, action: String) {
-    let Some((generation, record)) = resident_record(index) else {
-        return;
-    };
-    if action == "track-info" {
+    let track_info = action == "track-info";
+    if track_info {
         crate::local_media_info_qt::begin();
     }
+    let Some(lookup) = action_record_lookup(index) else {
+        if track_info {
+            crate::local_media_info_qt::open_empty("track");
+        }
+        return;
+    };
     crate::spawn(async move {
-        let rows = tokio::task::spawn_blocking(move || resolve_records_blocking(&[record]))
+        let generation = lookup.generation;
+        let record = tokio::task::spawn_blocking(move || load_action_record(lookup))
             .await
+            .ok()
+            .flatten();
+        let rows = record
+            .map(|record| resolve_records_blocking(&[record]))
             .unwrap_or_default();
-        if rows.is_empty() || QUERY_GENERATION.load(Ordering::Acquire) != generation {
+        // Physical media info belongs to the row the user clicked, not to the
+        // lifetime of the surrounding page. A tab/navigation reset may race
+        // this off-thread lookup; discarding it used to leave the modal's
+        // `loading` flag open until Local Library was mounted again.
+        if !track_info && QUERY_GENERATION.load(Ordering::Acquire) != generation {
             return;
         }
         crate::local_bulk::apply(rows, &action).await;
     });
+}
+
+struct ActionRecordLookup {
+    generation: u64,
+    catalog_generation: u64,
+    descriptor: QueryDescriptor,
+    page: usize,
+    offset: usize,
+    anchor_row: usize,
+    anchor_cursor: Option<TrackCursor>,
+    resident: Option<TrackRecord>,
+}
+
+fn action_record_lookup(index: i64) -> Option<ActionRecordLookup> {
+    let index = usize::try_from(index).ok()?;
+    let mut session = SESSION.lock().unwrap_or_else(|error| error.into_inner());
+    let current = session.as_mut()?;
+    if index as u64 >= current.total {
+        return None;
+    }
+    let page = index / PAGE_ROWS;
+    let offset = index % PAGE_ROWS;
+    let resident = current
+        .cache
+        .get(page)
+        .and_then(|cached| cached.records.get(offset))
+        .cloned();
+    let target_row = page.saturating_mul(PAGE_ROWS);
+    let (anchor_row, anchor_cursor) = nearest_anchor(&current.anchors, target_row);
+    Some(ActionRecordLookup {
+        generation: current.generation,
+        catalog_generation: current.catalog_generation,
+        descriptor: current.descriptor.clone(),
+        page,
+        offset,
+        anchor_row,
+        anchor_cursor: anchor_cursor.cloned(),
+        resident,
+    })
+}
+
+fn load_action_record(lookup: ActionRecordLookup) -> Option<TrackRecord> {
+    if let Some(record) = lookup.resident {
+        return Some(record);
+    }
+    let (catalog, active_generation) = open_active().ok()?;
+    if active_generation != lookup.catalog_generation {
+        return None;
+    }
+    let target_row = lookup.page.saturating_mul(PAGE_ROWS);
+    let mut row = lookup.anchor_row;
+    let mut cursor = lookup.anchor_cursor;
+    while row < target_row {
+        let page = catalog
+            .query_tracks(&lookup.descriptor, cursor.as_ref(), PAGE_ROWS)
+            .ok()?;
+        let count = page.rows.len();
+        let next = page.next_cursor?;
+        row = row.saturating_add(count);
+        cursor = Some(next);
+    }
+    if row != target_row {
+        return None;
+    }
+    catalog
+        .query_tracks(&lookup.descriptor, cursor.as_ref(), PAGE_ROWS)
+        .ok()?
+        .rows
+        .get(lookup.offset)
+        .cloned()
 }
 
 /// Resolve the descriptor/range selection only when an explicit action needs
@@ -1123,7 +1206,7 @@ fn open_active() -> Result<(qbz_local_catalog::Catalog, u64), &'static str> {
 
 fn enabled_sources(catalog: &qbz_local_catalog::Catalog) -> Result<Vec<SourceKey>, &'static str> {
     let stats = catalog.stats().map_err(|_| "source-counts")?;
-    let plex = crate::local_plex::is_enabled();
+    let plex = crate::local_plex::is_configured();
     let remote = crate::media_servers_qt::configured_words();
     Ok(stats
         .source_counts

@@ -8,10 +8,10 @@
 //!  1. a process-global `PlexSettingsState` bound to the ACTIVE user
 //!     (`<data_dir>/qbz/users/<uid>/plex_settings.db` — the same file the
 //!     Slint frontend writes, so a user authenticates Plex once);
-//!  2. the gates the Local Library reads — `is_enabled` (master toggle),
+//!  2. the gates the Local Library reads — `is_enabled` (settings UI only),
 //!     `is_configured` (`canUsePlexRequests`: enabled + LAN address +
-//!     resolved base url + token) and `cache_db_path` (the `ATTACH` path
-//!     that turns the album query into a local+Plex UNION);
+//!     resolved base url + token) and `cache_db_path` (the configured-only
+//!     `ATTACH` path that turns the album query into a local+Plex UNION);
 //!  3. Plex-cache reads mapped into the `qbz_library::LocalTrack` shape so
 //!     Plex rows flow through the SAME mapping/playback pipeline as local
 //!     files (`map_cached_to_local_track`, 1:1 with the Slint);
@@ -97,6 +97,10 @@ fn ensure_bound() {
     if *bound == Some(uid) {
         return;
     }
+    // `CACHE` is process-global too. A user switch observed through the lazy
+    // path must discard the previous profile before any gate can answer from
+    // it; otherwise the old user's enabled Plex leaks into the new session.
+    invalidate_cache();
     let dir = crate::sidebar_qt::user_dir().unwrap_or_else(|| {
         dirs::data_dir()
             .unwrap_or_default()
@@ -137,12 +141,14 @@ pub fn reset() {
 
 /// Current persisted settings (defaults when there is no session).
 pub fn settings() -> PlexSettings {
+    // Bind before consulting the memo: `last_user_id` can change between two
+    // calls even when the explicit auth callback has not run yet.
+    ensure_bound();
     if let Ok(c) = CACHE.read() {
         if let Some(s) = c.as_ref() {
             return s.clone();
         }
     }
-    ensure_bound();
     let fresh = STATE.get_settings().unwrap_or_default();
     if let Ok(mut c) = CACHE.write() {
         *c = Some(fresh.clone());
@@ -261,9 +267,9 @@ pub fn resolve_base_url(server_url: &str) -> String {
 // Gates
 // ---------------------------------------------------------------------------
 
-/// Master toggle only — what the browse UNION is keyed on (the Slint's
-/// `plex_cache_db_path` gate: cached content stays browsable even if the
-/// server is currently unreachable).
+/// Master toggle only. Browse and source access use [`is_configured`] so an
+/// incomplete or disabled integration never opens the installation-wide
+/// cache; this accessor remains the authority for the settings UI itself.
 pub fn is_enabled() -> bool {
     settings().enabled
 }
@@ -279,11 +285,11 @@ pub fn is_configured() -> bool {
         && !cfg.token.trim().is_empty()
 }
 
-/// `<data_dir>/qbz/plex_cache.db`, gated on the master toggle. `None` means
-/// the album union degrades to local-only — identical behaviour to before
-/// Plex existed.
+/// `<data_dir>/qbz/plex_cache.db`, gated on a complete, enabled setup. `None`
+/// means browse code does not even open the installation-wide cache; a stale
+/// cache from another account must not make Plex part of this user's library.
 pub fn cache_db_path() -> Option<PathBuf> {
-    if !is_enabled() {
+    if !is_configured() {
         return None;
     }
     let path = dirs::data_dir()?.join("qbz").join("plex_cache.db");
@@ -303,10 +309,10 @@ pub fn is_thumb_path(path: &str) -> bool {
 /// usable). `qbz_models::plex_thumb_url` is the shared builder, so the Qt
 /// and Slint frontends hit the SAME cache keys.
 pub fn thumb_url(path: &str, size: Option<u32>) -> String {
-    let cfg = settings();
-    if cfg.base_url.is_empty() || cfg.token.is_empty() {
+    if !is_configured() {
         return String::new();
     }
+    let cfg = settings();
     qbz_models::plex_thumb_url(&cfg.base_url, &cfg.token, path, size)
 }
 
@@ -379,6 +385,9 @@ pub fn map_cached_to_local_track(t: qbz_plex::PlexCachedTrack) -> LocalTrack {
 /// The full Plex track set matching `query`, in the `LocalTrack` shape.
 /// Tracks uses [`search_tracks_page`] so its candidate set stays bounded.
 pub fn search_tracks(query: &str) -> Vec<LocalTrack> {
+    if !is_configured() {
+        return Vec::new();
+    }
     qbz_plex::plex_cache_search_tracks(query.trim().to_string(), None)
         .unwrap_or_default()
         .into_iter()
@@ -395,6 +404,9 @@ pub fn search_tracks_page(
     other_formats: bool,
     quality_tiers: &[String],
 ) -> Vec<LocalTrack> {
+    if !is_configured() {
+        return Vec::new();
+    }
     qbz_plex::plex_cache_search_tracks_page_filtered(
         query.trim().to_string(),
         offset,
@@ -413,6 +425,9 @@ pub fn search_tracks_page(
 /// One Plex album's tracks, by the legacy content hash (`plex:<hash>`) or the
 /// source-native edition key (`plex:album:<parentRatingKey>`).
 pub fn album_tracks(album_key: &str) -> Vec<LocalTrack> {
+    if !is_configured() {
+        return Vec::new();
+    }
     qbz_plex::plex_cache_get_album_tracks(album_key.to_string())
         .unwrap_or_default()
         .into_iter()
@@ -428,15 +443,24 @@ pub fn album_key_for(artist: &str, album: &str) -> String {
 }
 
 pub fn cached_artists() -> Vec<qbz_plex::PlexCachedArtist> {
+    if !is_configured() {
+        return Vec::new();
+    }
     qbz_plex::plex_cache_get_artists().unwrap_or_default()
 }
 
 pub fn cached_track_count() -> i64 {
+    if !is_configured() {
+        return 0;
+    }
     qbz_plex::plex_cache_count_tracks().unwrap_or(0) as i64
 }
 
 /// Cached library sections + which of them are selected (Settings panel).
 pub fn cached_sections() -> (Vec<qbz_plex::PlexMusicSection>, Vec<String>) {
+    if !is_configured() {
+        return (Vec::new(), Vec::new());
+    }
     (
         qbz_plex::plex_cache_get_sections().unwrap_or_default(),
         settings().selected_section_keys,

@@ -1331,14 +1331,13 @@ pub(crate) async fn play_resolved_offline_aware(
     };
     // A PURCHASED COPY ON DISK plays instead of the stream (contract
     // 2026-09-01 §6): same Qobuz id, same queue row, different bytes. The
-    // registry row is probed before it is trusted, and a DSD copy cannot
-    // seek, so a start offset (resume, takeback) keeps the stream for this
-    // one play. Anything the copy cannot do falls through to the tier walk
-    // below exactly as if the download did not exist.
+    // registry row is probed before it is trusted. The DSD ticket does not
+    // carry an initial offset yet, so resume/takeback keeps the stream for
+    // this one play; interactive seek works once direct DSD is playing.
     if let Some(copy) = crate::purchase_playback_qt::resolve_purchased_copy(track_id).await {
         if copy.is_dsd() && start_position_secs > 0 {
             log::info!(
-                "[qbz-qt] purchase: track {track_id} has a DSD copy but a start offset of {start_position_secs}s was asked; DSD cannot seek, streaming this play"
+                "[qbz-qt] purchase: track {track_id} has a DSD copy but its ticket cannot carry the requested initial offset of {start_position_secs}s; streaming this play"
             );
         } else {
             let format_id = copy.format_id;
