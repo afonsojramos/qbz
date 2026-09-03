@@ -50,6 +50,7 @@ static/*upscayl*
 /.tmp/
 /tmp/
 /tools/
+/scratchpad/
 
 # Documentation (kept external)
 qbz-nix-docs/
