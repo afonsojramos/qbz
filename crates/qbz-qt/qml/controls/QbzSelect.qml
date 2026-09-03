@@ -63,11 +63,12 @@ Rectangle {
                 popup.close()
             else
                 selectRoot.openPopup()
-        } else if (event.key === Qt.Key_Up && selectRoot.currentIndex > 0) {
-            selectRoot.selected(selectRoot.currentIndex - 1)
-        } else if (event.key === Qt.Key_Down
-                   && selectRoot.currentIndex + 1 < selectRoot.options.length) {
-            selectRoot.selected(selectRoot.currentIndex + 1)
+        } else if (event.key === Qt.Key_Up) {
+            var previous = selectRoot.adjacentEnabled(selectRoot.currentIndex, -1)
+            if (previous >= 0) selectRoot.selected(previous)
+        } else if (event.key === Qt.Key_Down) {
+            var next = selectRoot.adjacentEnabled(selectRoot.currentIndex, 1)
+            if (next >= 0) selectRoot.selected(next)
         } else {
             return
         }
@@ -111,6 +112,16 @@ Rectangle {
         const o = options[i]
         return (o && o.detail !== undefined) ? o.detail : ""
     }
+    function optEnabled(i) {
+        const o = options[i]
+        return !(o && o.enabled !== undefined) || o.enabled === true
+    }
+    function adjacentEnabled(start, delta) {
+        for (var i = start + delta; i >= 0 && i < options.length; i += delta) {
+            if (optEnabled(i)) return i
+        }
+        return -1
+    }
     function openPopup() {
         if (!selectRoot.enabled || selectRoot.options.length === 0)
             return
@@ -122,6 +133,7 @@ Rectangle {
     }
     function optionMatches(i) {
         return i >= 0 && i < options.length
+            && optEnabled(i)
             && (filter === ""
                 || optLabel(i).toLowerCase().indexOf(filter.toLowerCase()) >= 0)
     }
@@ -371,8 +383,10 @@ Rectangle {
                                     width: parent.width
                                     height: selectRoot.optDetail(optRow.index) !== "" ? 26 : parent.height
                                     text: optRow.label
-                                    color: optRow.index === selectRoot.currentIndex
-                                        ? theme.accent : theme.textSecondary
+                                    color: !selectRoot.optEnabled(optRow.index)
+                                        ? theme.textMuted
+                                        : (optRow.index === selectRoot.currentIndex
+                                            ? theme.accent : theme.textSecondary)
                                     font.pixelSize: selectRoot.sm ? 12 : theme.fontBody
                                     verticalAlignment: Text.AlignVCenter
                                     elide: Text.ElideRight
@@ -416,7 +430,8 @@ Rectangle {
                             id: optArea
                             anchors.fill: parent
                             hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
+                            enabled: selectRoot.optEnabled(optRow.index)
+                            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                             onClicked: {
                                 popup.close()
                                 selectRoot.selected(optRow.index)

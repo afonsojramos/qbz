@@ -239,6 +239,10 @@ pub struct AlbumHeader {
 pub struct AlbumViewData {
     pub header: AlbumHeader,
     pub tracks: Vec<TrackRow>,
+    /// Purchases is deliberately progressive. The primary album response
+    /// starts at `unknown`; the shared per-profile entitlement index and local
+    /// copy inventory patch it without delaying cover, metadata, or tracklist.
+    pub purchase: serde_json::Value,
     /// Cold-start fallback for the live `settingsJson` preference consumed by
     /// AlbumView.qml. The view switches to the settings document as soon as it
     /// is published, so toggling one open album updates every other instance.
@@ -1253,7 +1257,13 @@ pub async fn load_album_view(
     // the band simply does not paint — no colour pop.
     data.header_gradient = crate::settings_qt::pref_bool("album_header_gradient", true);
     data.compact_header = crate::settings_qt::pref_bool("compact_album_header", false);
+    data.purchase = empty_purchase_doc();
     let header_art = data.header.artwork_url.clone();
+    let purchase_track_ids: Vec<i64> = data
+        .tracks
+        .iter()
+        .filter_map(|track| track.id.parse::<i64>().ok())
+        .collect();
 
     let json = serde_json::to_string(&data).map_err(|e| e.to_string())?;
     log::info!(
@@ -1274,6 +1284,7 @@ pub async fn load_album_view(
     }
 
     spawn_header_color(generation, header_art);
+    spawn_purchase_state(generation, album_id.to_string(), purchase_track_ids);
     spawn_deferred_rows(
         runtime.clone(),
         generation,
@@ -1284,6 +1295,21 @@ pub async fn load_album_view(
     );
 
     Ok(json)
+}
+
+fn empty_purchase_doc() -> serde_json::Value {
+    json!({
+        "entitlementState": "unknown",
+        "lastKnownEntitlementState": "unknown",
+        "downloadable": false,
+        "canDownloadPurchase": false,
+        "downloadableFormatIds": [],
+        "purchasedTrackCount": 0,
+        "copies": [],
+        "localVariants": [],
+        "playbackMode": "qobuz",
+        "selectedFormatId": 0
+    })
 }
 
 // ==================== Deferred carousels (progressive publish) =============
@@ -1327,6 +1353,45 @@ fn publish_patch(generation: u64, f: impl FnOnce(&mut serde_json::Value)) {
     };
     crate::album_bridge::ui(move |mut b| {
         b.as_mut().set_album_json(QString::from(json.as_str()));
+    });
+}
+
+/// Reflect a successfully persisted AlbumView playback preference in the
+/// currently stashed document. The album-id check plus the page generation
+/// prevents a late database write from repainting a different album.
+pub fn patch_purchase_playback_preference(album_id: &str, mode: &str, format_id: i64) {
+    let generation = {
+        let Ok(guard) = ALBUM_DOC.lock() else {
+            return;
+        };
+        let Some((generation, doc)) = guard.as_ref() else {
+            return;
+        };
+        if doc["header"]["id"].as_str() != Some(album_id) {
+            return;
+        }
+        *generation
+    };
+    let mode = mode.to_string();
+    publish_patch(generation, move |doc| {
+        doc["purchase"]["playbackMode"] = json!(mode);
+        doc["purchase"]["selectedFormatId"] = json!(format_id);
+    });
+}
+
+fn spawn_purchase_state(generation: u64, album_id: String, track_ids: Vec<i64>) {
+    crate::spawn(async move {
+        // Local inventory + any warm profile snapshot first. This never waits
+        // for a purchase endpoint and is useful offline.
+        let cached =
+            crate::purchases_qt::album_purchase_state(album_id.clone(), track_ids.clone(), false)
+                .await;
+        publish_patch(generation, move |doc| doc["purchase"] = cached);
+
+        // Then refresh ownership online. Errors republish `stale` and never
+        // expose the download action; local variants remain available.
+        let refreshed = crate::purchases_qt::album_purchase_state(album_id, track_ids, true).await;
+        publish_patch(generation, move |doc| doc["purchase"] = refreshed);
     });
 }
 

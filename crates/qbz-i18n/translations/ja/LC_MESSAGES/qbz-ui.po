@@ -6590,3 +6590,27 @@ msgstr "そのライブラリフォルダーは無効です。"
 
 msgid "That folder overlaps an existing library folder."
 msgstr "そのフォルダーは既存のライブラリフォルダーと重複しています。"
+
+msgid "This purchase is not available for download."
+msgstr "この購入作品はダウンロードできません。"
+
+msgid "Could not save playback preference."
+msgstr "再生設定を保存できませんでした。"
+
+msgid "Qobuz · stream/offline copy"
+msgstr "Qobuz · ストリーミング/オフラインコピー"
+
+msgid "Local purchase"
+msgstr "ローカル購入作品"
+
+msgid "Play with"
+msgstr "再生元"
+
+msgid "Download purchase"
+msgstr "購入作品をダウンロード"
+
+msgid "1 track purchased"
+msgstr "購入済み1曲"
+
+msgid "{} tracks purchased"
+msgstr "購入済み{}曲"

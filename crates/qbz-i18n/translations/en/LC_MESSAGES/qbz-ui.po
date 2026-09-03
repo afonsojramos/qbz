@@ -2193,3 +2193,27 @@ msgstr "That library folder is disabled."
 
 msgid "That folder overlaps an existing library folder."
 msgstr "That folder overlaps an existing library folder."
+
+msgid "This purchase is not available for download."
+msgstr "This purchase is not available for download."
+
+msgid "Could not save playback preference."
+msgstr "Could not save playback preference."
+
+msgid "Qobuz · stream/offline copy"
+msgstr "Qobuz · stream/offline copy"
+
+msgid "Local purchase"
+msgstr "Local purchase"
+
+msgid "Play with"
+msgstr "Play with"
+
+msgid "Download purchase"
+msgstr "Download purchase"
+
+msgid "1 track purchased"
+msgstr "1 track purchased"
+
+msgid "{} tracks purchased"
+msgstr "{} tracks purchased"

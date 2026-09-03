@@ -107,6 +107,56 @@ Rectangle {
 
     readonly property var albumHeader: album.header || ({})
     readonly property var tracks: album.tracks || []
+    readonly property var purchase: album.purchase || ({})
+    readonly property var localPurchaseVariants: purchase.localVariants || []
+    readonly property bool showPlaybackSource: {
+        for (var i = 0; i < localPurchaseVariants.length; i++) {
+            if (localPurchaseVariants[i].selectable === true)
+                return true
+        }
+        return false
+    }
+
+    function albumTrackIdsJson() {
+        var ids = []
+        for (var i = 0; i < root.tracks.length; i++) {
+            var id = String(root.tracks[i].id || "")
+            if (/^\d+$/.test(id)) ids.push(id)
+        }
+        return JSON.stringify(ids)
+    }
+
+    function playbackSourceOptions() {
+        var out = [{
+            "label": QbzSession.tr("Qobuz · stream/offline copy", QbzSession.trRev),
+            "mode": "qobuz", "formatId": 0, "enabled": true
+        }]
+        var selected = Number(root.purchase.selectedFormatId || 0)
+        for (var i = 0; i < root.localPurchaseVariants.length; i++) {
+            var variant = root.localPurchaseVariants[i]
+            if (variant.selectable !== true && Number(variant.formatId) !== selected)
+                continue
+            var label = QbzSession.tr("Local purchase", QbzSession.trRev)
+                + " · " + (variant.label || String(variant.formatId))
+            if (variant.selectable !== true)
+                label += " · " + QbzSession.tr("Unavailable", QbzSession.trRev)
+            out.push({ "label": label, "mode": "purchase",
+                       "formatId": Number(variant.formatId),
+                       "enabled": variant.selectable === true })
+        }
+        return out
+    }
+
+    function playbackSourceIndex(options) {
+        if ((root.purchase.playbackMode || "qobuz") !== "purchase")
+            return 0
+        var selected = Number(root.purchase.selectedFormatId || 0)
+        for (var i = 1; i < options.length; i++) {
+            if (Number(options[i].formatId) === selected)
+                return i
+        }
+        return 0
+    }
     // One global opt-in for every album page. `settingsJson` is the live
     // channel (including clicks made in another open AlbumView); the album
     // document carries the persisted cold-start fallback until that snapshot
@@ -1010,6 +1060,40 @@ Rectangle {
                         elide: Text.ElideRight
                     }
 
+                    Row {
+                        visible: root.purchase.entitlementState === "owned-album"
+                                 || root.purchase.entitlementState === "owned-tracks"
+                                 || (root.purchase.entitlementState === "stale"
+                                     && (root.purchase.lastKnownEntitlementState === "owned-album"
+                                         || root.purchase.lastKnownEntitlementState === "owned-tracks"))
+                        spacing: 6
+                        QbzIcon {
+                            name: "circle-check-big"
+                            width: 15
+                            height: 15
+                            anchors.verticalCenter: parent.verticalCenter
+                            tintName: "amber"
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: {
+                                var known = root.purchase.entitlementState === "stale"
+                                    ? root.purchase.lastKnownEntitlementState
+                                    : root.purchase.entitlementState
+                                if (known === "owned-tracks") {
+                                    var n = Number(root.purchase.purchasedTrackCount || 0)
+                                    return n === 1
+                                        ? QbzSession.tr("1 track purchased", QbzSession.trRev)
+                                        : QbzSession.tr("{} tracks purchased", QbzSession.trRev).replace("{}", String(n))
+                                }
+                                return QbzSession.tr("Purchased", QbzSession.trRev)
+                            }
+                            color: "#e0b341"
+                            font.pixelSize: theme.fontLegal
+                            font.weight: Font.DemiBold
+                        }
+                    }
+
                     // Editorial description + Read more.
                     Item {
                         visible: !root.compactHeaderPref
@@ -1140,6 +1224,34 @@ Rectangle {
                             overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: function (mouse) { albumMenu.openAtCursor(albumMenuBtn, mouse.x, mouse.y) }
+                        }
+                    }
+
+                    Column {
+                        visible: root.showPlaybackSource
+                        spacing: 5
+                        width: 300
+                        property var sourceOptions: root.playbackSourceOptions()
+                        Text {
+                            text: QbzSession.tr("Play with", QbzSession.trRev)
+                            color: root.hdrBody
+                            font.pixelSize: theme.fontLegal
+                        }
+                        QbzSelect {
+                            width: parent.width
+                            menuWidth: parent.width
+                            options: parent.sourceOptions
+                            currentIndex: root.playbackSourceIndex(parent.sourceOptions)
+                            onSelected: function (i) {
+                                if (i < 0 || i >= parent.sourceOptions.length)
+                                    return
+                                var option = parent.sourceOptions[i]
+                                if (option.enabled !== true)
+                                    return
+                                QbzPurchases.setAlbumPlaybackMode(
+                                    albumHeader.id, option.mode,
+                                    Number(option.formatId), root.albumTrackIdsJson())
+                            }
                         }
                     }
                 }
@@ -1816,6 +1928,28 @@ Rectangle {
         return rows
     }
 
+    function buildAlbumMenuModel() {
+        var rows = [
+            { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
+            { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
+            { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
+            { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+            { "label": root.toggleState("album", albumHeader.isFavorite) ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": root.toggleState("album", albumHeader.isFavorite) ? "heart-filled" : "heart", "action": "favorite" },
+            { "label": root.toggleState("pin", albumHeader.isPinned) ? QbzSession.tr("Unpin", QbzSession.trRev) : QbzSession.tr("Pin", QbzSession.trRev), "icon": root.toggleState("pin", albumHeader.isPinned) ? "pin-filled" : "pin", "action": "pin" },
+            { "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "action": "playlist" },
+            { "label": QbzSession.tr("Add to mixtape", QbzSession.trRev), "icon": "cassette-tape", "action": "mixtape" },
+            { "label": QbzSession.tr("Share Qobuz link", QbzSession.trRev), "icon": "link", "action": "share-qobuz" },
+            { "label": QbzSession.tr("Share Album.link", QbzSession.trRev), "icon": "link", "action": "share-albumlink" },
+            { "label": root.fullyCachedLive ? QbzSession.tr("Refresh offline copy", QbzSession.trRev) : QbzSession.tr("Make available offline", QbzSession.trRev), "icon": root.fullyCachedLive ? "refresh-cw" : "cloud-download", "action": root.fullyCachedLive ? "recache-album" : "cache-album" }
+        ]
+        // Separate DRM-free purchase action. Unknown/stale/error/track-only
+        // ownership never reaches this branch; Rust computes the gate.
+        if (root.purchase.canDownloadPurchase === true)
+            rows.push({ "label": QbzSession.tr("Download purchase", QbzSession.trRev),
+                        "icon": "download", "action": "download-purchase" })
+        return rows
+    }
+
     // Cover right-click menu (AlbumPageView.slint:300-370) + "View cover",
     // the lightbox entry that is NEW in this port.
     QbzContextMenu {
@@ -1881,21 +2015,7 @@ Rectangle {
         id: albumMenu
         menuWidth: 196
             Repeater {
-                model: [
-                    { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                    { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-                    { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
-                    { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-                    { "label": root.toggleState("album", albumHeader.isFavorite) ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": root.toggleState("album", albumHeader.isFavorite) ? "heart-filled" : "heart", "action": "favorite" },
-                    { "label": root.toggleState("pin", albumHeader.isPinned) ? QbzSession.tr("Unpin", QbzSession.trRev) : QbzSession.tr("Pin", QbzSession.trRev), "icon": root.toggleState("pin", albumHeader.isPinned) ? "pin-filled" : "pin", "action": "pin" },
-                    { "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "action": "playlist" },
-                    { "label": QbzSession.tr("Add to mixtape", QbzSession.trRev), "icon": "cassette-tape", "action": "mixtape" },
-                    { "label": QbzSession.tr("Share Qobuz link", QbzSession.trRev), "icon": "link", "action": "share-qobuz" },
-                    { "label": QbzSession.tr("Share Album.link", QbzSession.trRev), "icon": "link", "action": "share-albumlink" },
-                    // AlbumContextMenu.slint:137-152 — the offline row swaps
-                    // on the all-cached aggregate (live from row flips).
-                    { "label": root.fullyCachedLive ? QbzSession.tr("Refresh offline copy", QbzSession.trRev) : QbzSession.tr("Make available offline", QbzSession.trRev), "icon": root.fullyCachedLive ? "refresh-cw" : "cloud-download", "action": root.fullyCachedLive ? "recache-album" : "cache-album" },
-                ]
+                model: root.buildAlbumMenuModel()
                 delegate: Rectangle {
                     required property var modelData
                     width: parent ? parent.width : 0
@@ -1954,6 +2074,8 @@ Rectangle {
                                 QbzAlbum.albumCacheOffline(albumHeader.id)
                             } else if (a === "recache-album") {
                                 QbzAlbum.albumRefreshOffline(albumHeader.id)
+                            } else if (a === "download-purchase") {
+                                QbzPurchases.openEntitledAlbum(albumHeader.id)
                             }
                         }
                     }

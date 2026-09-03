@@ -6607,3 +6607,27 @@ msgstr "Essa pasta da biblioteca está desativada."
 
 msgid "That folder overlaps an existing library folder."
 msgstr "Essa pasta se sobrepõe a uma pasta existente da biblioteca."
+
+msgid "This purchase is not available for download."
+msgstr "Esta compra não está disponível para download."
+
+msgid "Could not save playback preference."
+msgstr "Não foi possível salvar a preferência de reprodução."
+
+msgid "Qobuz · stream/offline copy"
+msgstr "Qobuz · streaming/cópia offline"
+
+msgid "Local purchase"
+msgstr "Compra local"
+
+msgid "Play with"
+msgstr "Reproduzir com"
+
+msgid "Download purchase"
+msgstr "Baixar compra"
+
+msgid "1 track purchased"
+msgstr "1 faixa comprada"
+
+msgid "{} tracks purchased"
+msgstr "{} faixas compradas"

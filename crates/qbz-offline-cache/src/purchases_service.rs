@@ -35,6 +35,7 @@ use qbz_models::{
     Album, PurchaseAlbum, PurchaseFormatOption, PurchaseResponse, PurchaseTrack, SearchResultsPage,
     Track,
 };
+use qbz_qobuz::purchases::{purchase_page_step, PurchasePageStep};
 use qbz_qobuz::QobuzClient;
 use qbz_qobuz::Result as QobuzResult;
 
@@ -62,6 +63,128 @@ pub async fn get_user_purchases_page(
 /// preserved inside the client; this glue does not collapse it.
 pub async fn get_user_purchases_all(client: &QobuzClient) -> QobuzResult<PurchaseResponse> {
     client.get_user_purchases_all().await
+}
+
+/// Fetch the complete account entitlement with hard HTTP status checks. This
+/// is deliberately separate from the historical list loader: AlbumView and
+/// every new-download gate must distinguish an error from a fresh empty list.
+pub async fn get_entitlement_purchases_all(client: &QobuzClient) -> QobuzResult<PurchaseResponse> {
+    let page_limit = 500;
+    let mut albums = Vec::new();
+    let mut tracks = Vec::new();
+
+    for kind in ["albums", "tracks"] {
+        let mut offset = 0;
+        let mut total = 0;
+        loop {
+            let page = client
+                .get_user_purchases_page_typed_checked(Some(kind), page_limit, offset)
+                .await?;
+            let (got, items_total) = if kind == "albums" {
+                let got = page.albums.items.len() as u32;
+                albums.extend(page.albums.items);
+                (got, page.albums.total)
+            } else {
+                let got = page.tracks.items.len() as u32;
+                tracks.extend(page.tracks.items);
+                (got, page.tracks.total)
+            };
+            if offset == 0 {
+                total = items_total;
+            }
+            match purchase_page_step(offset, got, total) {
+                PurchasePageStep::Stop => break,
+                PurchasePageStep::Continue { next_offset } => offset = next_offset,
+            }
+        }
+    }
+
+    Ok(PurchaseResponse {
+        albums: SearchResultsPage {
+            total: albums.len() as u32,
+            offset: 0,
+            limit: page_limit,
+            items: albums,
+        },
+        tracks: SearchResultsPage {
+            total: tracks.len() as u32,
+            offset: 0,
+            limit: page_limit,
+            items: tracks,
+        },
+    })
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PurchaseEntitlementIndex {
+    albums: HashMap<String, PurchaseAlbum>,
+    track_ids_by_album: HashMap<String, HashSet<u64>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PurchaseEntitlement {
+    NotOwned,
+    FullAlbum {
+        downloadable: bool,
+        downloadable_format_ids: Vec<u32>,
+    },
+    Tracks {
+        track_ids: HashSet<u64>,
+    },
+}
+
+impl PurchaseEntitlementIndex {
+    pub fn from_response(response: &PurchaseResponse) -> Self {
+        let albums = response
+            .albums
+            .items
+            .iter()
+            .cloned()
+            .map(|album| (album.id.clone(), album))
+            .collect();
+        let mut track_ids_by_album: HashMap<String, HashSet<u64>> = HashMap::new();
+        for track in &response.tracks.items {
+            let Some(album_id) = track
+                .album
+                .as_ref()
+                .map(|album| album.id.trim())
+                .filter(|album_id| !album_id.is_empty())
+            else {
+                continue;
+            };
+            track_ids_by_album
+                .entry(album_id.to_string())
+                .or_default()
+                .insert(track.id);
+        }
+        Self {
+            albums,
+            track_ids_by_album,
+        }
+    }
+
+    pub fn entitlement_for(&self, album_id: &str) -> PurchaseEntitlement {
+        if let Some(album) = self.albums.get(album_id) {
+            return PurchaseEntitlement::FullAlbum {
+                downloadable: album.downloadable,
+                downloadable_format_ids: album.downloadable_format_ids.clone(),
+            };
+        }
+        match self.track_ids_by_album.get(album_id) {
+            Some(track_ids) if !track_ids.is_empty() => PurchaseEntitlement::Tracks {
+                track_ids: track_ids.clone(),
+            },
+            _ => PurchaseEntitlement::NotOwned,
+        }
+    }
+
+    /// Exact album row used by the defensive download gate. The format list
+    /// must be explicit: catalog synthesis is not entitlement evidence.
+    pub fn downloadable_album(&self, album_id: &str) -> Option<&PurchaseAlbum> {
+        self.albums
+            .get(album_id)
+            .filter(|album| album.downloadable && !album.downloadable_format_ids.is_empty())
+    }
 }
 
 /// Fetch ALL purchases for a SINGLE type by paginating (`"albums"` /
@@ -2585,6 +2708,91 @@ mod scope_expansion_tests {
             file_url: None,
             file_format_id: None,
             description: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod entitlement_index_tests {
+    use super::*;
+    use qbz_models::AlbumSummary;
+
+    fn response(albums: Vec<PurchaseAlbum>, tracks: Vec<PurchaseTrack>) -> PurchaseResponse {
+        PurchaseResponse {
+            albums: SearchResultsPage {
+                total: albums.len() as u32,
+                items: albums,
+                ..Default::default()
+            },
+            tracks: SearchResultsPage {
+                total: tracks.len() as u32,
+                items: tracks,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn exact_full_album_ownership_never_matches_a_similar_id() {
+        let index = PurchaseEntitlementIndex::from_response(&response(
+            vec![PurchaseAlbum {
+                id: "album-10".into(),
+                downloadable: true,
+                downloadable_format_ids: vec![55],
+                ..Default::default()
+            }],
+            vec![],
+        ));
+        assert!(matches!(
+            index.entitlement_for("album-10"),
+            PurchaseEntitlement::FullAlbum { .. }
+        ));
+        assert_eq!(
+            index.entitlement_for("album-1"),
+            PurchaseEntitlement::NotOwned
+        );
+    }
+
+    #[test]
+    fn track_ownership_is_not_promoted_to_album_ownership() {
+        let index = PurchaseEntitlementIndex::from_response(&response(
+            vec![],
+            vec![PurchaseTrack {
+                id: 7,
+                album: Some(AlbumSummary {
+                    id: "album".into(),
+                    title: String::new(),
+                    image: Default::default(),
+                    label: None,
+                    genre: None,
+                }),
+                ..Default::default()
+            }],
+        ));
+        assert!(matches!(
+            index.entitlement_for("album"),
+            PurchaseEntitlement::Tracks { track_ids } if track_ids == HashSet::from([7])
+        ));
+        assert!(index.downloadable_album("album").is_none());
+    }
+
+    #[test]
+    fn new_download_requires_availability_and_explicit_formats() {
+        for (downloadable, formats, expected) in [
+            (true, vec![55], true),
+            (false, vec![55], false),
+            (true, vec![], false),
+        ] {
+            let index = PurchaseEntitlementIndex::from_response(&response(
+                vec![PurchaseAlbum {
+                    id: "album".into(),
+                    downloadable,
+                    downloadable_format_ids: formats,
+                    ..Default::default()
+                }],
+                vec![],
+            ));
+            assert_eq!(index.downloadable_album("album").is_some(), expected);
         }
     }
 }

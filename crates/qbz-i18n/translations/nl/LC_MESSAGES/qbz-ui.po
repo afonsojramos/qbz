@@ -6597,3 +6597,27 @@ msgstr "Deze bibliotheekmap is uitgeschakeld."
 
 msgid "That folder overlaps an existing library folder."
 msgstr "Deze map overlapt met een bestaande bibliotheekmap."
+
+msgid "This purchase is not available for download."
+msgstr "Deze aankoop is niet beschikbaar om te downloaden."
+
+msgid "Could not save playback preference."
+msgstr "De afspeelvoorkeur kon niet worden opgeslagen."
+
+msgid "Qobuz · stream/offline copy"
+msgstr "Qobuz · stream/offlinekopie"
+
+msgid "Local purchase"
+msgstr "Lokale aankoop"
+
+msgid "Play with"
+msgstr "Afspelen met"
+
+msgid "Download purchase"
+msgstr "Aankoop downloaden"
+
+msgid "1 track purchased"
+msgstr "1 nummer gekocht"
+
+msgid "{} tracks purchased"
+msgstr "{} nummers gekocht"

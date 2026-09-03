@@ -6609,3 +6609,27 @@ msgstr "Dieser Bibliotheksordner ist deaktiviert."
 
 msgid "That folder overlaps an existing library folder."
 msgstr "Dieser Ordner überschneidet sich mit einem vorhandenen Bibliotheksordner."
+
+msgid "This purchase is not available for download."
+msgstr "Dieser Kauf steht nicht zum Download zur Verfügung."
+
+msgid "Could not save playback preference."
+msgstr "Die Wiedergabeeinstellung konnte nicht gespeichert werden."
+
+msgid "Qobuz · stream/offline copy"
+msgstr "Qobuz · Stream/Offline-Kopie"
+
+msgid "Local purchase"
+msgstr "Lokaler Kauf"
+
+msgid "Play with"
+msgstr "Wiedergeben mit"
+
+msgid "Download purchase"
+msgstr "Kauf herunterladen"
+
+msgid "1 track purchased"
+msgstr "1 Titel gekauft"
+
+msgid "{} tracks purchased"
+msgstr "{} Titel gekauft"

@@ -56,13 +56,14 @@
 //! tokio runtime, which owns its own `LibraryDatabase`. That also gives the
 //! required strictly-sequential execution for free.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use cxx_qt_lib::QString;
 use qbz_library::LibraryDatabase;
+use qbz_library::{PurchaseCopyHealth, PurchasePlaybackMode};
 use qbz_models::{
     Album, PurchaseAlbum, PurchaseFormatOption, PurchaseResponse, PurchaseTrack, SearchResultsPage,
 };
@@ -876,11 +877,43 @@ struct DetailState {
     /// See `AlbumDoc::local_album_id`. Resolved on load and after every
     /// download / add-to-library, never guessed.
     local_album_id: String,
+    /// Set only by AlbumView's fail-closed gate. It is a fresh exact purchase
+    /// row captured immediately before this detail opened.
+    verified_entitlement: Option<PurchaseAlbum>,
 }
 
 static LIST: Mutex<Option<ListState>> = Mutex::new(None);
 static DETAIL: Mutex<Option<DetailState>> = Mutex::new(None);
 static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntitlementFreshness {
+    Unknown,
+    Fresh,
+    Stale,
+}
+
+#[derive(Clone)]
+struct EntitlementCache {
+    freshness: EntitlementFreshness,
+    index: Option<svc::PurchaseEntitlementIndex>,
+}
+
+impl Default for EntitlementCache {
+    fn default() -> Self {
+        Self {
+            freshness: EntitlementFreshness::Unknown,
+            index: None,
+        }
+    }
+}
+
+static ENTITLEMENTS: Mutex<EntitlementCache> = Mutex::new(EntitlementCache {
+    freshness: EntitlementFreshness::Unknown,
+    index: None,
+});
+static ENTITLEMENT_PROFILE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static ENTITLEMENT_REQUEST_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// PROCESS-monotonic, deliberately not per-state. `leave()` destroys the whole
 /// `ListState`, so a counter living inside it restarts at zero on the next
@@ -1415,6 +1448,315 @@ async fn snapshot_client() -> Option<QobuzClient> {
     guard.as_ref().cloned()
 }
 
+#[derive(Clone, Copy)]
+struct EntitlementGate {
+    profile: u64,
+    request: u64,
+}
+
+fn next_entitlement_gate() -> EntitlementGate {
+    EntitlementGate {
+        profile: ENTITLEMENT_PROFILE_GENERATION.load(Ordering::SeqCst),
+        request: ENTITLEMENT_REQUEST_GENERATION
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1),
+    }
+}
+
+fn entitlement_gate_is_current(gate: EntitlementGate) -> bool {
+    ENTITLEMENT_PROFILE_GENERATION.load(Ordering::SeqCst) == gate.profile
+        && ENTITLEMENT_REQUEST_GENERATION.load(Ordering::SeqCst) == gate.request
+}
+
+async fn refresh_entitlement_index() -> Option<svc::PurchaseEntitlementIndex> {
+    let gate = next_entitlement_gate();
+    let response = match snapshot_client().await {
+        Some(client) => svc::get_entitlement_purchases_all(&client).await,
+        None => return None,
+    };
+    if !entitlement_gate_is_current(gate) {
+        return None;
+    }
+    match response {
+        Ok(response) => {
+            let index = svc::PurchaseEntitlementIndex::from_response(&response);
+            *ENTITLEMENTS.lock().unwrap_or_else(|e| e.into_inner()) = EntitlementCache {
+                freshness: EntitlementFreshness::Fresh,
+                index: Some(index.clone()),
+            };
+            Some(index)
+        }
+        Err(error) => {
+            log::warn!("[qbz-qt] purchase entitlement refresh failed: {error}");
+            let mut cache = ENTITLEMENTS.lock().unwrap_or_else(|e| e.into_inner());
+            cache.freshness = EntitlementFreshness::Stale;
+            None
+        }
+    }
+}
+
+fn invalidate_entitlement_index() {
+    ENTITLEMENT_PROFILE_GENERATION.fetch_add(1, Ordering::SeqCst);
+    ENTITLEMENT_REQUEST_GENERATION.fetch_add(1, Ordering::SeqCst);
+    *ENTITLEMENTS.lock().unwrap_or_else(|e| e.into_inner()) = EntitlementCache::default();
+}
+
+/// Bind the shared index to the newly active profile and warm it without
+/// delaying session entry. The generations reject every late response from a
+/// prior account.
+pub fn activate_profile() {
+    invalidate_entitlement_index();
+    crate::spawn(async {
+        let _ = refresh_entitlement_index().await;
+    });
+}
+
+#[derive(Serialize)]
+struct AlbumPurchaseCopyDoc {
+    #[serde(rename = "copyId")]
+    copy_id: String,
+    #[serde(rename = "formatId")]
+    format_id: i64,
+    #[serde(rename = "folderLabel")]
+    folder_label: String,
+    state: String,
+    #[serde(rename = "downloadedTracks")]
+    downloaded_tracks: u32,
+    #[serde(rename = "healthyTracks")]
+    healthy_tracks: u32,
+    #[serde(rename = "totalTracks")]
+    total_tracks: u32,
+    #[serde(rename = "inLocalLibrary")]
+    in_local_library: bool,
+}
+
+#[derive(Serialize)]
+struct AlbumLocalVariantDoc {
+    #[serde(rename = "formatId")]
+    format_id: i64,
+    label: String,
+    #[serde(rename = "healthyCompleteCopies")]
+    healthy_complete_copies: u32,
+    #[serde(rename = "healthyTracks")]
+    healthy_tracks: u32,
+    #[serde(rename = "totalTracks")]
+    total_tracks: u32,
+    selectable: bool,
+}
+
+#[derive(Serialize)]
+struct AlbumPurchaseDoc {
+    #[serde(rename = "entitlementState")]
+    entitlement_state: String,
+    #[serde(rename = "lastKnownEntitlementState")]
+    last_known_entitlement_state: String,
+    downloadable: bool,
+    #[serde(rename = "canDownloadPurchase")]
+    can_download_purchase: bool,
+    #[serde(rename = "downloadableFormatIds")]
+    downloadable_format_ids: Vec<u32>,
+    #[serde(rename = "purchasedTrackCount")]
+    purchased_track_count: u32,
+    copies: Vec<AlbumPurchaseCopyDoc>,
+    #[serde(rename = "localVariants")]
+    local_variants: Vec<AlbumLocalVariantDoc>,
+    #[serde(rename = "playbackMode")]
+    playback_mode: String,
+    #[serde(rename = "selectedFormatId")]
+    selected_format_id: i64,
+}
+
+struct LocalAlbumPurchaseState {
+    copies: Vec<qbz_library::PurchaseCopySnapshot>,
+    preference: qbz_library::PurchaseAlbumPlaybackPreference,
+    folders: Vec<qbz_library::LibraryFolder>,
+}
+
+fn local_variant_label(format_id: i64) -> String {
+    match format_id {
+        56 => "DSD128 · DSF".to_string(),
+        55 => "DSD64 · DSF".to_string(),
+        27 => "24-bit / 192 kHz · FLAC".to_string(),
+        7 => "24-bit / 96 kHz · FLAC".to_string(),
+        6 => "16-bit / 44.1 kHz · FLAC".to_string(),
+        5 => "320 kbps · MP3".to_string(),
+        other => format!("#{other}"),
+    }
+}
+
+fn copy_health_word(health: PurchaseCopyHealth) -> &'static str {
+    match health {
+        PurchaseCopyHealth::CompleteHealthy => "complete",
+        PurchaseCopyHealth::Partial => "partial",
+        PurchaseCopyHealth::Missing => "missing",
+        PurchaseCopyHealth::Changed => "changed",
+        PurchaseCopyHealth::Unreachable => "unreachable",
+        PurchaseCopyHealth::Unreadable => "unreadable",
+    }
+}
+
+fn folder_is_in_local_library(folder: &str, roots: &[qbz_library::LibraryFolder]) -> bool {
+    let candidate = Path::new(folder)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(folder));
+    roots
+        .iter()
+        .any(|root| root.enabled && candidate.starts_with(Path::new(&root.path)))
+}
+
+fn local_album_purchase_state(
+    album_id: &str,
+    expected_track_ids: &[i64],
+) -> LocalAlbumPurchaseState {
+    crate::library_db_qt::with_db(false, |db| {
+        Ok(LocalAlbumPurchaseState {
+            copies: db.inspect_purchase_copies(album_id, expected_track_ids)?,
+            preference: db.purchase_playback_preference(album_id)?,
+            folders: db.get_folders_with_metadata()?,
+        })
+    })
+    .unwrap_or_else(|| LocalAlbumPurchaseState {
+        copies: Vec::new(),
+        preference: qbz_library::PurchaseAlbumPlaybackPreference {
+            album_id: album_id.to_string(),
+            mode: PurchasePlaybackMode::Qobuz,
+            format_id: None,
+            updated_at: 0,
+        },
+        folders: Vec::new(),
+    })
+}
+
+/// Build AlbumView's progressive Purchases subdocument. With `refresh`, the
+/// remote index is refreshed first; without it, the last profile snapshot is
+/// used so local copies can paint immediately.
+pub async fn album_purchase_state(
+    album_id: String,
+    expected_track_ids: Vec<i64>,
+    refresh: bool,
+) -> serde_json::Value {
+    if refresh {
+        let _ = refresh_entitlement_index().await;
+    }
+    let local_album_id = album_id.clone();
+    let local_ids = expected_track_ids.clone();
+    let local = tokio::task::spawn_blocking(move || {
+        local_album_purchase_state(&local_album_id, &local_ids)
+    })
+    .await
+    .unwrap_or_else(|_| LocalAlbumPurchaseState {
+        copies: Vec::new(),
+        preference: qbz_library::PurchaseAlbumPlaybackPreference {
+            album_id: album_id.clone(),
+            mode: PurchasePlaybackMode::Qobuz,
+            format_id: None,
+            updated_at: 0,
+        },
+        folders: Vec::new(),
+    });
+
+    let entitlement_cache = ENTITLEMENTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let entitlement = entitlement_cache
+        .index
+        .as_ref()
+        .map(|index| index.entitlement_for(&album_id));
+    let (known_state, downloadable, downloadable_format_ids, purchased_track_count) =
+        match entitlement {
+            Some(svc::PurchaseEntitlement::FullAlbum {
+                downloadable,
+                downloadable_format_ids,
+            }) => (
+                "owned-album",
+                downloadable,
+                downloadable_format_ids,
+                expected_track_ids.len() as u32,
+            ),
+            Some(svc::PurchaseEntitlement::Tracks { track_ids }) => {
+                let expected: HashSet<u64> = expected_track_ids
+                    .iter()
+                    .filter_map(|id| u64::try_from(*id).ok())
+                    .collect();
+                let count = track_ids.intersection(&expected).count() as u32;
+                if count > 0 {
+                    ("owned-tracks", false, Vec::new(), count)
+                } else {
+                    ("not-owned", false, Vec::new(), 0)
+                }
+            }
+            Some(svc::PurchaseEntitlement::NotOwned) => ("not-owned", false, Vec::new(), 0),
+            None => ("unknown", false, Vec::new(), 0),
+        };
+    let entitlement_state = match entitlement_cache.freshness {
+        EntitlementFreshness::Fresh => known_state,
+        EntitlementFreshness::Stale => "stale",
+        EntitlementFreshness::Unknown => "unknown",
+    };
+    let can_download_purchase = entitlement_cache.freshness == EntitlementFreshness::Fresh
+        && known_state == "owned-album"
+        && downloadable
+        && !downloadable_format_ids.is_empty();
+
+    let mut variants: BTreeMap<i64, AlbumLocalVariantDoc> = BTreeMap::new();
+    let mut copies = Vec::new();
+    for snapshot in local.copies {
+        let variant =
+            variants
+                .entry(snapshot.copy.format_id)
+                .or_insert_with(|| AlbumLocalVariantDoc {
+                    format_id: snapshot.copy.format_id,
+                    label: local_variant_label(snapshot.copy.format_id),
+                    healthy_complete_copies: 0,
+                    healthy_tracks: 0,
+                    total_tracks: snapshot.total_tracks,
+                    selectable: false,
+                });
+        variant.healthy_tracks = variant.healthy_tracks.max(snapshot.healthy_tracks);
+        if snapshot.health == PurchaseCopyHealth::CompleteHealthy {
+            variant.healthy_complete_copies += 1;
+            variant.selectable = true;
+        }
+        let folder_label = Path::new(&snapshot.copy.resolved_album_folder)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_string();
+        copies.push(AlbumPurchaseCopyDoc {
+            copy_id: snapshot.copy.copy_id,
+            format_id: snapshot.copy.format_id,
+            folder_label,
+            state: copy_health_word(snapshot.health).to_string(),
+            downloaded_tracks: snapshot.downloaded_tracks,
+            healthy_tracks: snapshot.healthy_tracks,
+            total_tracks: snapshot.total_tracks,
+            in_local_library: folder_is_in_local_library(
+                &snapshot.copy.resolved_album_folder,
+                &local.folders,
+            ),
+        });
+    }
+
+    serde_json::to_value(AlbumPurchaseDoc {
+        entitlement_state: entitlement_state.to_string(),
+        last_known_entitlement_state: known_state.to_string(),
+        downloadable,
+        can_download_purchase,
+        downloadable_format_ids,
+        purchased_track_count,
+        copies,
+        local_variants: variants.into_values().collect(),
+        playback_mode: match local.preference.mode {
+            PurchasePlaybackMode::Qobuz => "qobuz",
+            PurchasePlaybackMode::Purchase => "purchase",
+        }
+        .to_string(),
+        selected_format_id: local.preference.format_id.unwrap_or(0),
+    })
+    .unwrap_or_else(|_| serde_json::json!({}))
+}
+
 /// Read the three registry accessors in ONE blocking hop.
 async fn read_registry() -> Registry {
     let rows = tokio::task::spawn_blocking(|| {
@@ -1887,6 +2229,10 @@ pub fn dismiss_region_notice() {
 /// call `nav_qt::record` itself, or `QbzShell.navigateTo` would push a second
 /// entry for the same route.
 pub fn open_album(album_id: String) {
+    begin_open_album(album_id, None);
+}
+
+fn begin_open_album(album_id: String, verified_entitlement: Option<PurchaseAlbum>) {
     let album_id = album_id.trim().to_string();
     if album_id.is_empty() {
         return;
@@ -1909,11 +2255,108 @@ pub fn open_album(album_id: String) {
         // asks again — and seeding it from a previous download's RESOLVED ALBUM
         // FOLDER would hand the next download a leaf to nest inside.
         s.destination = String::new();
+        s.verified_entitlement = verified_entitlement;
         s.generation
     });
     publish_album();
 
     crate::spawn(async move { load_album(generation, album_id).await });
+}
+
+/// AlbumView's defensive door. A fresh, checked, fully paginated account
+/// entitlement must contain this exact downloadable album and explicit format
+/// IDs before the purchase detail is opened.
+pub fn open_entitled_album(album_id: String) {
+    let album_id = album_id.trim().to_string();
+    if album_id.is_empty() {
+        return;
+    }
+    crate::spawn(async move {
+        let verified = refresh_entitlement_index()
+            .await
+            .and_then(|index| index.downloadable_album(&album_id).cloned());
+        let Some(verified) = verified else {
+            crate::toast_qt::error(qbz_i18n::t("This purchase is not available for download."));
+            return;
+        };
+        begin_open_album(album_id, Some(verified));
+        crate::navigate_to("purchase-album");
+    });
+}
+
+/// Persist AlbumView's playback source immediately. A purchase variant is
+/// accepted only when one exact-format copy is complete and healthy against
+/// the album's exact track IDs.
+pub fn set_album_playback_mode(
+    album_id: String,
+    mode: String,
+    format_id: i32,
+    track_ids_json: String,
+) {
+    let album_id = album_id.trim().to_string();
+    if album_id.is_empty() {
+        return;
+    }
+    let expected: Vec<i64> = serde_json::from_str::<Vec<String>>(&track_ids_json)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|id| id.parse::<i64>().ok())
+        .collect();
+    let requested_purchase = mode == "purchase";
+    let patch_album_id = album_id.clone();
+    crate::spawn(async move {
+        let stored = tokio::task::spawn_blocking(move || {
+            crate::library_db_qt::with_db(true, |db| {
+                if requested_purchase {
+                    if format_id <= 0 || expected.is_empty() {
+                        return Ok(false);
+                    }
+                    let valid = db
+                        .inspect_purchase_copies(&album_id, &expected)?
+                        .iter()
+                        .any(|copy| {
+                            copy.copy.format_id == i64::from(format_id)
+                                && copy.health == PurchaseCopyHealth::CompleteHealthy
+                        });
+                    if !valid {
+                        return Ok(false);
+                    }
+                    db.set_purchase_playback_preference(
+                        &album_id,
+                        PurchasePlaybackMode::Purchase,
+                        Some(i64::from(format_id)),
+                    )?;
+                } else {
+                    db.set_purchase_playback_preference(
+                        &album_id,
+                        PurchasePlaybackMode::Qobuz,
+                        None,
+                    )?;
+                }
+                Ok(true)
+            })
+            .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false);
+        if !stored {
+            crate::toast_qt::error(qbz_i18n::t("Could not save playback preference."));
+        } else {
+            crate::album_qt::patch_purchase_playback_preference(
+                &patch_album_id,
+                if requested_purchase {
+                    "purchase"
+                } else {
+                    "qobuz"
+                },
+                if requested_purchase {
+                    i64::from(format_id)
+                } else {
+                    0
+                },
+            );
+        }
+    });
 }
 
 /// Opening the detail is a request GRAPH in the reference: `/album/get`, then
@@ -1953,19 +2396,39 @@ async fn load_album(generation: u64, album_id: String) {
         }
     };
 
-    // The purchases listing supplies `downloadable` and `purchased_at`, which
-    // the catalog album does not carry. A failure here is NOT fatal:
-    // `build_purchase_album` defaults `downloadable` to TRUE when the album is
-    // absent from the listing, which is the reference's own fallback.
-    let purchases = svc::get_user_purchases_all(&client)
-        .await
-        .unwrap_or_else(|e| {
-            log::warn!("[qbz-qt] purchases: listing for album {album_id} unavailable: {e}");
-            PurchaseResponse {
-                albums: SearchResultsPage::default(),
-                tracks: SearchResultsPage::default(),
-            }
-        });
+    // AlbumView enters with a freshly revalidated exact row. Keep that proof
+    // attached to this detail rather than immediately replacing it with the
+    // historical fail-open list path. Direct entries from Purchases retain the
+    // existing fallback for compatibility.
+    let verified = with_detail(|s| {
+        (s.generation == generation)
+            .then(|| s.verified_entitlement.clone())
+            .flatten()
+    });
+    let purchases = if let Some(album) = verified {
+        PurchaseResponse {
+            albums: SearchResultsPage {
+                total: 1,
+                offset: 0,
+                limit: 1,
+                items: vec![album],
+            },
+            tracks: SearchResultsPage::default(),
+        }
+    } else {
+        // The Purchases list/detail's historical entry remains tolerant: its
+        // own listing supplied the user's intent, and this fallback predates
+        // AlbumView. It is never used by `open_entitled_album`.
+        svc::get_user_purchases_all(&client)
+            .await
+            .unwrap_or_else(|e| {
+                log::warn!("[qbz-qt] purchases: listing for album {album_id} unavailable: {e}");
+                PurchaseResponse {
+                    albums: SearchResultsPage::default(),
+                    tracks: SearchResultsPage::default(),
+                }
+            })
+    };
 
     let reg = ensure_registry().await;
     let local_album_id = resolve_local_album(album_id.clone()).await;
@@ -2763,6 +3226,7 @@ pub fn republish() {
 /// including in-flight download statuses. Unwired for the same reason
 /// `republish` is.
 pub fn reset() {
+    invalidate_entitlement_index();
     *LIST.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *DETAIL.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *REGISTRY.lock().unwrap_or_else(|e| e.into_inner()) = None;

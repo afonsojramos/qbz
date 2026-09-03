@@ -6628,3 +6628,27 @@ msgstr "Эта папка медиатеки отключена."
 
 msgid "That folder overlaps an existing library folder."
 msgstr "Эта папка пересекается с существующей папкой медиатеки."
+
+msgid "This purchase is not available for download."
+msgstr "Эта покупка недоступна для скачивания."
+
+msgid "Could not save playback preference."
+msgstr "Не удалось сохранить настройку воспроизведения."
+
+msgid "Qobuz · stream/offline copy"
+msgstr "Qobuz · поток/офлайн-копия"
+
+msgid "Local purchase"
+msgstr "Локальная покупка"
+
+msgid "Play with"
+msgstr "Воспроизводить через"
+
+msgid "Download purchase"
+msgstr "Скачать покупку"
+
+msgid "1 track purchased"
+msgstr "Куплен 1 трек"
+
+msgid "{} tracks purchased"
+msgstr "Куплено треков: {}"

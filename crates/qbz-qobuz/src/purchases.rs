@@ -205,6 +205,46 @@ impl QobuzClient {
         Ok(serde_json::from_value(response)?)
     }
 
+    /// Fail-closed variant used for entitlement decisions. Unlike the legacy
+    /// Purchases list loader, an HTTP error is never allowed to deserialize as
+    /// an empty page and masquerade as a fresh "not owned" answer.
+    pub async fn get_user_purchases_page_typed_checked(
+        &self,
+        purchase_type: Option<&str>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<PurchaseResponse> {
+        let url = endpoints::build_url(paths::PURCHASE_GET_USER_PURCHASES);
+        let mut query: Vec<(&str, String)> =
+            vec![("limit", limit.to_string()), ("offset", offset.to_string())];
+        if let Some(kind) = purchase_type {
+            query.push(("type", kind.to_string()));
+        }
+
+        let http_response = self
+            .http()?
+            .get(&url)
+            .headers(self.authenticated_headers().await?)
+            .query(&query)
+            .send()
+            .await?;
+        let status = http_response.status();
+        log::debug!(
+            "[Purchases] checked entitlement page(type={:?}, limit={}, offset={}) status={}",
+            purchase_type,
+            limit,
+            offset,
+            status
+        );
+        if !status.is_success() {
+            return Err(ApiError::ApiResponse(format!(
+                "checked purchase entitlement request failed with status {status}"
+            )));
+        }
+        let response: Value = http_response.json().await?;
+        Ok(serde_json::from_value(response)?)
+    }
+
     /// Get one purchases-ids page from Qobuz, optionally constrained by purchase
     /// type. The items are OPAQUE — the UI reads only `.total` per type.
     ///

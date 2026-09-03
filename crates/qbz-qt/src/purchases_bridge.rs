@@ -144,6 +144,22 @@ pub mod qbz_purchases_bridge {
         #[qinvokable]
         fn open_album(self: Pin<&mut QbzPurchases>, album_id: QString);
 
+        /// AlbumView-only door: revalidates exact full-album ownership,
+        /// availability and explicit entitled formats before navigating.
+        #[qinvokable]
+        fn open_entitled_album(self: Pin<&mut QbzPurchases>, album_id: QString);
+
+        /// Persist AlbumView's `qobuz` or exact `purchase(format_id)` source.
+        /// Track ids remain QStrings inside the JSON array (QML ints are 32-bit).
+        #[qinvokable]
+        fn set_album_playback_mode(
+            self: Pin<&mut QbzPurchases>,
+            album_id: QString,
+            mode: QString,
+            format_id: i32,
+            track_ids_json: QString,
+        );
+
         /// Change the selected download format. RE-SCOPES every downloaded
         /// mark on the detail screen, the progress block AND the
         /// Add-to-Library affordance (§6) — the single most surprising
@@ -292,6 +308,25 @@ impl qbz_purchases_bridge::QbzPurchases {
 
     pub fn open_album(self: Pin<&mut Self>, album_id: QString) {
         crate::purchases_qt::open_album(album_id.to_string());
+    }
+
+    pub fn open_entitled_album(self: Pin<&mut Self>, album_id: QString) {
+        crate::purchases_qt::open_entitled_album(album_id.to_string());
+    }
+
+    pub fn set_album_playback_mode(
+        self: Pin<&mut Self>,
+        album_id: QString,
+        mode: QString,
+        format_id: i32,
+        track_ids_json: QString,
+    ) {
+        crate::purchases_qt::set_album_playback_mode(
+            album_id.to_string(),
+            mode.to_string(),
+            format_id,
+            track_ids_json.to_string(),
+        );
     }
 
     pub fn set_format(self: Pin<&mut Self>, format_id: i32) {

@@ -6607,3 +6607,27 @@ msgstr "Ce dossier de bibliothèque est désactivé."
 
 msgid "That folder overlaps an existing library folder."
 msgstr "Ce dossier chevauche un dossier de bibliothèque existant."
+
+msgid "This purchase is not available for download."
+msgstr "Cet achat n’est pas disponible au téléchargement."
+
+msgid "Could not save playback preference."
+msgstr "Impossible d’enregistrer la préférence de lecture."
+
+msgid "Qobuz · stream/offline copy"
+msgstr "Qobuz · streaming/copie hors ligne"
+
+msgid "Local purchase"
+msgstr "Achat local"
+
+msgid "Play with"
+msgstr "Lire avec"
+
+msgid "Download purchase"
+msgstr "Télécharger l’achat"
+
+msgid "1 track purchased"
+msgstr "1 piste achetée"
+
+msgid "{} tracks purchased"
+msgstr "{} pistes achetées"

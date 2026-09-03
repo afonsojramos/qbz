@@ -242,6 +242,9 @@ async fn bind_per_user_stores(dir: &std::path::Path, user_id: u64) {
     // Offline DOWNLOAD cache (index.db + library.db + cached-id seed) —
     // awaited so the ready-set is seeded before any view can build rows.
     crate::offline_qt::activate(user_id).await;
+    // Purchases ownership is account-scoped. Reset before warming so a late
+    // response from the previous account cannot grant AlbumView an action.
+    crate::purchases_qt::activate_profile();
     // The catalog sidecar is profile-scoped. Coalescing here covers first
     // login and account switches even when the one-shot boot worker began on
     // the previous/guest profile.
