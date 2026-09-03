@@ -121,6 +121,13 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<(), LibraryError> {
         CREATE INDEX IF NOT EXISTS idx_purchase_copy_tracks_track
             ON purchase_download_copy_tracks(track_id, copy_id);
 
+        CREATE TABLE IF NOT EXISTS purchase_download_copy_expected_tracks (
+            copy_id TEXT NOT NULL,
+            track_id INTEGER NOT NULL,
+            PRIMARY KEY(copy_id, track_id),
+            FOREIGN KEY(copy_id) REFERENCES purchase_download_copies(copy_id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS purchase_album_playback_preferences (
             album_id TEXT PRIMARY KEY,
             mode TEXT NOT NULL CHECK(mode IN ('qobuz','purchase')),
@@ -236,6 +243,68 @@ impl LibraryDatabase {
         };
         self.with_connection(|conn| insert_copy(conn, &copy))?;
         Ok(copy)
+    }
+
+    /// Create a copy and its immutable album coverage manifest in one
+    /// transaction. The manifest is the denominator used by playback after a
+    /// restart; without it, a directory containing one healthy track could be
+    /// mistaken for a complete album.
+    pub fn create_purchase_copy_with_expected_tracks(
+        &self,
+        album_id: &str,
+        format_id: i64,
+        resolved_album_folder: &Path,
+        expected_track_ids: &[i64],
+    ) -> Result<PurchaseDownloadCopy, LibraryError> {
+        let expected = normalize_expected_track_ids(expected_track_ids)?;
+        let copy = PurchaseDownloadCopy {
+            copy_id: Uuid::new_v4().to_string(),
+            album_id: album_id.to_string(),
+            format_id,
+            resolved_album_folder: resolved_album_folder.to_string_lossy().into_owned(),
+            created_at: unix_now(),
+            updated_at: unix_now(),
+        };
+        self.with_connection(|conn| {
+            let tx = conn.unchecked_transaction().map_err(db_error)?;
+            insert_copy(&tx, &copy)?;
+            insert_expected_tracks(&tx, &copy.copy_id, &expected)?;
+            tx.commit().map_err(db_error)
+        })?;
+        Ok(copy)
+    }
+
+    /// Attach the exact album coverage used to validate a migrated copy.
+    /// Existing rows are replaced atomically so a crash cannot leave a
+    /// half-written denominator.
+    pub fn set_purchase_copy_expected_tracks(
+        &self,
+        copy_id: &str,
+        expected_track_ids: &[i64],
+    ) -> Result<(), LibraryError> {
+        let expected = normalize_expected_track_ids(expected_track_ids)?;
+        self.with_connection(|conn| {
+            if select_copy(conn, copy_id)?.is_none() {
+                return Err(LibraryError::Database(format!(
+                    "purchase copy {copy_id} does not exist"
+                )));
+            }
+            let tx = conn.unchecked_transaction().map_err(db_error)?;
+            tx.execute(
+                "DELETE FROM purchase_download_copy_expected_tracks WHERE copy_id = ?1",
+                [copy_id],
+            )
+            .map_err(db_error)?;
+            insert_expected_tracks(&tx, copy_id, &expected)?;
+            tx.commit().map_err(db_error)
+        })
+    }
+
+    pub fn get_purchase_copy_expected_track_ids(
+        &self,
+        copy_id: &str,
+    ) -> Result<Vec<i64>, LibraryError> {
+        self.with_connection(|conn| select_expected_tracks(conn, copy_id))
     }
 
     pub fn upsert_purchase_copy_track(
@@ -494,6 +563,52 @@ impl LibraryDatabase {
         }
         Ok(result)
     }
+
+    /// Exact-format candidates that are complete and healthy against their
+    /// own persisted album manifest. Results retain copy recency order and
+    /// never combine coverage between copy IDs. This performs bounded file
+    /// probes and must run away from the UI thread.
+    pub fn complete_healthy_purchase_track_candidates(
+        &self,
+        album_id: &str,
+        format_id: i64,
+        track_id: i64,
+    ) -> Result<Vec<(PurchaseDownloadCopy, PurchaseDownloadCopyTrack)>, LibraryError> {
+        let mut candidates = Vec::new();
+        for copy in self
+            .get_purchase_copies_for_album(album_id)?
+            .into_iter()
+            .filter(|copy| copy.format_id == format_id)
+        {
+            let expected: HashSet<i64> = self
+                .get_purchase_copy_expected_track_ids(&copy.copy_id)?
+                .into_iter()
+                .collect();
+            if expected.is_empty() || !expected.contains(&track_id) {
+                continue;
+            }
+            let rows = self.get_purchase_copy_tracks(&copy.copy_id)?;
+            let mut target = None;
+            let mut healthy = HashSet::new();
+            for row in rows
+                .into_iter()
+                .filter(|row| expected.contains(&row.track_id))
+            {
+                if track_health(&row) == PurchaseTrackHealth::Healthy {
+                    healthy.insert(row.track_id);
+                    if row.track_id == track_id {
+                        target = Some(row);
+                    }
+                }
+            }
+            if expected.iter().all(|id| healthy.contains(id)) {
+                if let Some(target) = target {
+                    candidates.push((copy, target));
+                }
+            }
+        }
+        Ok(candidates)
+    }
 }
 
 fn insert_copy(conn: &Connection, copy: &PurchaseDownloadCopy) -> Result<(), LibraryError> {
@@ -569,6 +684,53 @@ fn select_copy_tracks(
                 last_verified_at: row.get(10)?,
             })
         })
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    Ok(rows)
+}
+
+fn normalize_expected_track_ids(expected_track_ids: &[i64]) -> Result<Vec<i64>, LibraryError> {
+    let expected: HashSet<i64> = expected_track_ids
+        .iter()
+        .copied()
+        .filter(|track_id| *track_id > 0)
+        .collect();
+    if expected.is_empty() {
+        return Err(LibraryError::Database(
+            "purchase copy requires at least one expected track".to_string(),
+        ));
+    }
+    let mut expected: Vec<i64> = expected.into_iter().collect();
+    expected.sort_unstable();
+    Ok(expected)
+}
+
+fn insert_expected_tracks(
+    conn: &Connection,
+    copy_id: &str,
+    expected_track_ids: &[i64],
+) -> Result<(), LibraryError> {
+    for track_id in expected_track_ids {
+        conn.execute(
+            "INSERT INTO purchase_download_copy_expected_tracks (copy_id, track_id)
+             VALUES (?1, ?2)",
+            params![copy_id, track_id],
+        )
+        .map_err(db_error)?;
+    }
+    Ok(())
+}
+
+fn select_expected_tracks(conn: &Connection, copy_id: &str) -> Result<Vec<i64>, LibraryError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT track_id FROM purchase_download_copy_expected_tracks
+             WHERE copy_id = ?1 ORDER BY track_id",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([copy_id], |row| row.get(0))
         .map_err(db_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(db_error)?;
@@ -706,6 +868,54 @@ mod tests {
         let stored = db.purchase_playback_preference("album").unwrap();
         assert_eq!(stored.mode, PurchasePlaybackMode::Purchase);
         assert_eq!(stored.format_id, Some(55));
+    }
+
+    #[test]
+    fn playback_candidates_require_the_persisted_complete_manifest() {
+        let root = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&root.path().join("library.db")).unwrap();
+
+        let complete = db
+            .create_purchase_copy_with_expected_tracks("album", 55, root.path(), &[1, 2])
+            .unwrap();
+        for id in [1, 2] {
+            let path = root.path().join(format!("complete-{id}.dsf"));
+            std::fs::write(&path, b"dsd").unwrap();
+            db.upsert_purchase_copy_track(&track(&complete.copy_id, id, &path))
+                .unwrap();
+        }
+
+        let partial = db
+            .create_purchase_copy_with_expected_tracks("album", 55, root.path(), &[1, 2])
+            .unwrap();
+        let partial_path = root.path().join("partial-1.dsf");
+        std::fs::write(&partial_path, b"dsd").unwrap();
+        db.upsert_purchase_copy_track(&track(&partial.copy_id, 1, &partial_path))
+            .unwrap();
+
+        let legacy = db.create_purchase_copy("album", 55, root.path()).unwrap();
+        for id in [1, 2] {
+            let path = root.path().join(format!("legacy-{id}.dsf"));
+            std::fs::write(&path, b"dsd").unwrap();
+            db.upsert_purchase_copy_track(&track(&legacy.copy_id, id, &path))
+                .unwrap();
+        }
+
+        let candidates = db
+            .complete_healthy_purchase_track_candidates("album", 55, 1)
+            .unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].0.copy_id, complete.copy_id);
+        assert!(db
+            .complete_healthy_purchase_track_candidates("album", 56, 1)
+            .unwrap()
+            .is_empty());
+
+        std::fs::remove_file(root.path().join("complete-2.dsf")).unwrap();
+        assert!(db
+            .complete_healthy_purchase_track_candidates("album", 55, 1)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

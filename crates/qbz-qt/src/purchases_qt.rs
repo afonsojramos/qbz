@@ -2390,15 +2390,23 @@ pub fn set_album_playback_mode(
                     if format_id <= 0 || expected.is_empty() {
                         return Ok(false);
                     }
-                    let valid = db
+                    let valid_copy_ids: Vec<String> = db
                         .inspect_purchase_copies(&album_id, &expected)?
-                        .iter()
-                        .any(|copy| {
+                        .into_iter()
+                        .filter(|copy| {
                             copy.copy.format_id == i64::from(format_id)
                                 && copy.health == PurchaseCopyHealth::CompleteHealthy
-                        });
-                    if !valid {
+                        })
+                        .map(|copy| copy.copy.copy_id)
+                        .collect();
+                    if valid_copy_ids.is_empty() {
                         return Ok(false);
+                    }
+                    // Persist the exact denominator proven by AlbumView. This
+                    // also upgrades healthy legacy copies so the late
+                    // resolver can re-check completeness after a restart.
+                    for copy_id in valid_copy_ids {
+                        db.set_purchase_copy_expected_tracks(&copy_id, &expected)?;
                     }
                     db.set_purchase_playback_preference(
                         &album_id,
@@ -2651,6 +2659,7 @@ fn reserve_new_copy(
     album_id: &str,
     format_id: u32,
     desired_folder: &Path,
+    expected_track_ids: &[i64],
 ) -> Option<qbz_library::PurchaseDownloadCopy> {
     let db = open_owned_library_db()?;
     let registered: HashSet<PathBuf> = db
@@ -2671,7 +2680,12 @@ fn reserve_new_copy(
         match qbz_library::probe_default(&candidate) {
             Reach::Missing => {
                 return db
-                    .create_purchase_copy(album_id, i64::from(format_id), &candidate)
+                    .create_purchase_copy_with_expected_tracks(
+                        album_id,
+                        i64::from(format_id),
+                        &candidate,
+                        expected_track_ids,
+                    )
                     .ok();
             }
             Reach::Present => continue,
@@ -2695,11 +2709,13 @@ async fn prepare_new_copy(
     let desired = album_dir_for(&root, &plan.artist, &plan.album_title, &plan.quality_dir);
     let album_id = plan.album_id.clone();
     let format_id = plan.format_id;
-    let copy =
-        tokio::task::spawn_blocking(move || reserve_new_copy(&album_id, format_id, &desired))
-            .await
-            .ok()
-            .flatten();
+    let expected: Vec<i64> = plan.track_ids.iter().map(|id| *id as i64).collect();
+    let copy = tokio::task::spawn_blocking(move || {
+        reserve_new_copy(&album_id, format_id, &desired, &expected)
+    })
+    .await
+    .ok()
+    .flatten();
     let Some(copy) = copy else {
         crate::toast_qt::error(qbz_i18n::t("Failed to start download. Please try again."));
         return None;
@@ -2730,6 +2746,15 @@ async fn prepare_existing_copy(mut plan: DownloadPlan, copy_id: String) -> Optio
         let db = open_owned_library_db()?;
         let copy = db.get_purchase_copy(&copy_id).ok()??;
         if copy.album_id != album_id || copy.format_id != selected_format {
+            return None;
+        }
+        // A pre-inventory/legacy partial has no durable denominator. The
+        // AlbumView tracklist supplies the exact album manifest before this
+        // continuation adds more rows.
+        if db
+            .set_purchase_copy_expected_tracks(&copy.copy_id, &expected)
+            .is_err()
+        {
             return None;
         }
         if qbz_library::probe_default(Path::new(&copy.resolved_album_folder)) != Reach::Present {
