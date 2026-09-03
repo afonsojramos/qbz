@@ -6584,3 +6584,9 @@ msgstr "コピーする項目"
 
 msgid "Migration is additive: it does not remove favorites or playlists from either account."
 msgstr "移行は追加のみです。どちらのアカウントからもお気に入りやプレイリストは削除されません。"
+
+msgid "That library folder is disabled."
+msgstr "そのライブラリフォルダーは無効です。"
+
+msgid "That folder overlaps an existing library folder."
+msgstr "そのフォルダーは既存のライブラリフォルダーと重複しています。"

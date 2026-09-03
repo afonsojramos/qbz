@@ -6601,3 +6601,9 @@ msgstr "O QUE COPIAR"
 
 msgid "Migration is additive: it does not remove favorites or playlists from either account."
 msgstr "A migração é aditiva: ela não remove favoritos nem playlists de nenhuma conta."
+
+msgid "That library folder is disabled."
+msgstr "Essa pasta da biblioteca está desativada."
+
+msgid "That folder overlaps an existing library folder."
+msgstr "Essa pasta se sobrepõe a uma pasta existente da biblioteca."

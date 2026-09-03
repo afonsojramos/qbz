@@ -33,6 +33,7 @@ mod cue_parser;
 mod database;
 pub mod ephemeral;
 mod errors;
+mod folder_registration;
 pub mod local_playlists;
 mod metadata;
 mod models;
@@ -58,6 +59,7 @@ pub use database::{
     PlaylistFolder, PlaylistSettings, PlaylistStats, TrackMetadataUpdateFull,
 };
 pub use errors::LibraryError;
+pub use folder_registration::RegisterFolderOutcome;
 pub use metadata::MetadataExtractor;
 pub use models::*;
 pub use mount_info::{is_network_path, network_fs_label};

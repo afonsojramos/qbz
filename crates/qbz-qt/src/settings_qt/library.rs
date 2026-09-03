@@ -228,6 +228,50 @@ static CLEANUP_STATUS: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(Str
 static CLEARING: AtomicBool = AtomicBool::new(false);
 static STATUS: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
 
+#[derive(Default)]
+struct PendingScans {
+    all: bool,
+    folder_ids: std::collections::BTreeSet<i64>,
+}
+
+enum PendingScan {
+    All,
+    Folder(i64),
+}
+
+impl PendingScans {
+    fn push(&mut self, folder_id: Option<i64>) {
+        match folder_id {
+            None => {
+                self.all = true;
+                self.folder_ids.clear();
+            }
+            Some(id) if !self.all => {
+                self.folder_ids.insert(id);
+            }
+            Some(_) => {}
+        }
+    }
+
+    fn pop(&mut self) -> Option<PendingScan> {
+        if self.all {
+            self.all = false;
+            self.folder_ids.clear();
+            Some(PendingScan::All)
+        } else {
+            self.folder_ids.pop_first().map(PendingScan::Folder)
+        }
+    }
+
+    fn clear(&mut self) {
+        self.all = false;
+        self.folder_ids.clear();
+    }
+}
+
+static PENDING_SCANS: LazyLock<Mutex<PendingScans>> =
+    LazyLock::new(|| Mutex::new(PendingScans::default()));
+
 /// Last known accessibility per NETWORK folder id, filled by
 /// [`spawn_accessibility_probes`].
 ///
@@ -610,35 +654,31 @@ pub async fn pick_and_add_folder() {
     add_folder(dir.path().to_string_lossy().to_string()).await;
 }
 
-/// "Add folder": validate the path, detect network-ness, insert.
+/// "Add folder": canonicalize once and let Local Library decide whether to
+/// add, refresh, reuse an ancestor, or reject an overlap.
 pub async fn add_folder(path: String) {
     let path = path.trim().to_string();
     if path.is_empty() {
         return;
     }
     let _ = tokio::task::spawn_blocking(move || {
-        let p = std::path::Path::new(&path);
-        if !p.is_dir() {
-            set_status(qbz_i18n::t("That folder does not exist."));
-            return;
-        }
-        let canonical = std::fs::canonicalize(p)
-            .map(|c| c.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| path.clone());
-        let is_network = qbz_library::is_network_path(std::path::Path::new(&canonical));
-        let fs_label = if is_network {
-            qbz_library::network_fs_label(std::path::Path::new(&canonical))
-        } else {
-            None
-        };
         let Some(db) = open_db() else {
             set_status(qbz_i18n::t("Could not open the library database."));
             return;
         };
-        match db.add_folder_with_network_info(&canonical, is_network, fs_label.as_deref()) {
-            Ok(_) => set_status(String::new()),
-            Err(e) => {
-                log::error!("[qbz-qt] add folder failed: {e}");
+        match db.register_or_refresh_folder(std::path::Path::new(&path)) {
+            qbz_library::RegisterFolderOutcome::Added { .. }
+            | qbz_library::RegisterFolderOutcome::Refreshed { .. }
+            | qbz_library::RegisterFolderOutcome::Covered { .. } => set_status(String::new()),
+            qbz_library::RegisterFolderOutcome::RegisteredDisabled { .. } => {
+                set_status(qbz_i18n::t("That library folder is disabled."));
+            }
+            qbz_library::RegisterFolderOutcome::Conflict => {
+                set_status(qbz_i18n::t(
+                    "That folder overlaps an existing library folder.",
+                ));
+            }
+            qbz_library::RegisterFolderOutcome::Failed => {
                 set_status(qbz_i18n::t("Could not add that folder."));
             }
         }
@@ -716,14 +756,19 @@ pub async fn toggle_folder_enabled(id: i64) {
 // Scan
 // ---------------------------------------------------------------------------
 
-/// Scan every enabled folder (`None`) or exactly one (`Some(id)`).
+/// Scan every enabled folder (`None`) or exactly one (`Some(id)`). A request
+/// arriving during an active scan is coalesced and run afterwards.
 ///
 /// Progress rides the statics; a short ticker republishes the settings document
 /// while the scan runs (the document is the only transport this port has, and
 /// republishing per FILE would rebuild the whole snapshot thousands of times).
 pub fn scan(folder_id: Option<i64>) -> bool {
     if SCANNING.swap(true, Ordering::SeqCst) {
-        return false;
+        PENDING_SCANS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(folder_id);
+        return true;
     }
     CANCEL.store(false, Ordering::SeqCst);
     PROCESSED.store(0, Ordering::SeqCst);
@@ -884,6 +929,20 @@ pub fn scan(folder_id: Option<i64>) -> bool {
         crate::local_catalog_qt::request_catch_up();
         refresh_browse();
         super::publish_snapshot().await;
+
+        let pending = PENDING_SCANS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop();
+        match pending {
+            Some(PendingScan::All) => {
+                scan(None);
+            }
+            Some(PendingScan::Folder(id)) => {
+                scan(Some(id));
+            }
+            None => {}
+        }
     });
     true
 }
@@ -891,6 +950,36 @@ pub fn scan(folder_id: Option<i64>) -> bool {
 /// "Stop" — checked at every file boundary by the shared engine.
 pub fn stop_scan() {
     CANCEL.store(true, Ordering::SeqCst);
+    PENDING_SCANS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+}
+
+#[cfg(test)]
+mod pending_scan_tests {
+    use super::{PendingScan, PendingScans};
+
+    #[test]
+    fn directed_scans_are_deduplicated_and_kept() {
+        let mut queue = PendingScans::default();
+        queue.push(Some(9));
+        queue.push(Some(9));
+        queue.push(Some(4));
+        assert!(matches!(queue.pop(), Some(PendingScan::Folder(4))));
+        assert!(matches!(queue.pop(), Some(PendingScan::Folder(9))));
+        assert!(queue.pop().is_none());
+    }
+
+    #[test]
+    fn full_scan_coalesces_every_directed_refresh() {
+        let mut queue = PendingScans::default();
+        queue.push(Some(1));
+        queue.push(None);
+        queue.push(Some(2));
+        assert!(matches!(queue.pop(), Some(PendingScan::All)));
+        assert!(queue.pop().is_none());
+    }
 }
 
 // ---------------------------------------------------------------------------

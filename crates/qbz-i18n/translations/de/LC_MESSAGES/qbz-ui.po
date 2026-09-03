@@ -6603,3 +6603,9 @@ msgstr "ZU KOPIERENDE DATEN"
 
 msgid "Migration is additive: it does not remove favorites or playlists from either account."
 msgstr "Die Migration ist additiv: Sie entfernt keine Favoriten oder Playlists aus einem der Konten."
+
+msgid "That library folder is disabled."
+msgstr "Dieser Bibliotheksordner ist deaktiviert."
+
+msgid "That folder overlaps an existing library folder."
+msgstr "Dieser Ordner überschneidet sich mit einem vorhandenen Bibliotheksordner."

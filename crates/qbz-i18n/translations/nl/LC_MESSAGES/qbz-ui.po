@@ -6591,3 +6591,9 @@ msgstr "WAT KOPIËREN"
 
 msgid "Migration is additive: it does not remove favorites or playlists from either account."
 msgstr "De migratie is aanvullend: favorieten en afspeellijsten worden uit geen van beide accounts verwijderd."
+
+msgid "That library folder is disabled."
+msgstr "Deze bibliotheekmap is uitgeschakeld."
+
+msgid "That folder overlaps an existing library folder."
+msgstr "Deze map overlapt met een bestaande bibliotheekmap."

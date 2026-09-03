@@ -6622,3 +6622,9 @@ msgstr "ЧТО КОПИРОВАТЬ"
 
 msgid "Migration is additive: it does not remove favorites or playlists from either account."
 msgstr "Перенос только добавляет данные: избранное и плейлисты не удаляются ни из одного аккаунта."
+
+msgid "That library folder is disabled."
+msgstr "Эта папка медиатеки отключена."
+
+msgid "That folder overlaps an existing library folder."
+msgstr "Эта папка пересекается с существующей папкой медиатеки."

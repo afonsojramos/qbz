@@ -2187,3 +2187,9 @@ msgstr "WHAT TO COPY"
 
 msgid "Migration is additive: it does not remove favorites or playlists from either account."
 msgstr "Migration is additive: it does not remove favorites or playlists from either account."
+
+msgid "That library folder is disabled."
+msgstr "That library folder is disabled."
+
+msgid "That folder overlaps an existing library folder."
+msgstr "That folder overlaps an existing library folder."
