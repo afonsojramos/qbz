@@ -393,8 +393,17 @@ fn decode_with_fallback(data: &[u8]) -> Result<Box<dyn Source<Item = f32> + Send
         });
     }
 
+    // Hand rodio the buffer length. `Decoder::new` leaves `byte_len` unset
+    // and the source non-seekable, and symphonia's MP3 demuxer only estimates
+    // the duration of a file without a Xing/Info/VBRI header when both are
+    // known — otherwise `total_duration()` is None and the local play path
+    // ends up with duration 0 (position clamped to 0 forever, #734).
+    let byte_len = data.len() as u64;
     let primary = panic::catch_unwind(AssertUnwindSafe(|| {
-        Decoder::new(BufReader::new(Cursor::new(data.to_vec())))
+        Decoder::builder()
+            .with_data(BufReader::new(Cursor::new(data.to_vec())))
+            .with_byte_len(byte_len)
+            .build()
     }));
 
     match primary {
@@ -1810,8 +1819,14 @@ impl SharedState {
         let position_at_start = self.position_at_start.load(Ordering::SeqCst);
         let duration = self.duration.load(Ordering::SeqCst);
 
-        // Clamp to duration
-        (position_at_start + elapsed_secs).min(duration)
+        // Clamp to duration — unless it is unknown (0): a decoder that could
+        // not derive one must not pin the clock to 0 while audio plays.
+        let position = position_at_start + elapsed_secs;
+        if duration == 0 {
+            position
+        } else {
+            position.min(duration)
+        }
     }
 
     /// Millisecond-precision companion to [`Self::current_position`] — the
@@ -1847,8 +1862,13 @@ impl SharedState {
             .saturating_mul(1000);
         let duration_ms = self.duration.load(Ordering::SeqCst).saturating_mul(1000);
 
-        // Clamp to duration (same rule as current_position)
-        position_at_start_ms.saturating_add(elapsed_ms).min(duration_ms)
+        // Clamp to duration (same rule as current_position: unknown = no clamp)
+        let position_ms = position_at_start_ms.saturating_add(elapsed_ms);
+        if duration_ms == 0 {
+            position_ms
+        } else {
+            position_ms.min(duration_ms)
+        }
     }
 
     /// Mark playback as started/resumed at current position
@@ -6974,6 +6994,45 @@ mod tests {
     struct FakeDsdSource {
         words: std::vec::IntoIter<i32>,
         error: Option<String>,
+    }
+
+    /// #734: a CBR MP3 without a Xing/Info/VBRI frame (2 s, 32 kbps mono,
+    /// `lame -t`). Symphonia can only estimate its duration from the byte
+    /// length, which `Decoder::new` never passes along.
+    #[test]
+    fn local_decoder_derives_duration_without_xing_header() {
+        let bytes = include_bytes!("../../testdata/cbr_no_xing.mp3");
+        let source = super::decode_with_fallback(bytes).expect("fixture decodes");
+        let duration = source
+            .total_duration()
+            .expect("duration estimated from the byte length");
+        assert!(
+            (1..=3).contains(&duration.as_secs()),
+            "expected ~2 s, got {duration:?}"
+        );
+    }
+
+    /// #734: an unknown (0) duration must not pin the playback clock to 0.
+    #[test]
+    fn unknown_duration_does_not_pin_position_to_zero() {
+        let state = SharedState::new();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        state.is_playing.store(true, Ordering::SeqCst);
+        state.position_at_start.store(0, Ordering::SeqCst);
+        state
+            .playback_start_millis
+            .store(now_ms.saturating_sub(3_000), Ordering::SeqCst);
+
+        state.duration.store(0, Ordering::SeqCst);
+        assert!(state.current_position() >= 2, "unclamped clock advances");
+        assert!(state.current_position_ms() >= 2_000);
+
+        state.duration.store(1, Ordering::SeqCst);
+        assert_eq!(state.current_position(), 1, "known duration still clamps");
+        assert_eq!(state.current_position_ms(), 1_000);
     }
 
     #[cfg(target_os = "linux")]
