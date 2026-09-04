@@ -6692,3 +6692,21 @@ msgstr "ライブラリのトラックリストにアルバムアートワーク
 
 msgid "Display the album cover thumbnail between the track number and title. Off by default."
 msgstr "トラック番号とタイトルの間にアルバムカバーのサムネイルを表示します。デフォルトではオフです。"
+
+msgid "Play random"
+msgstr "ランダム再生"
+
+msgid "Play selected"
+msgstr "選択項目を再生"
+
+msgid "Cancel selection"
+msgstr "選択を解除"
+
+msgid "QOBUZ LINKS"
+msgstr "QOBUZ リンク"
+
+msgid "Open Qobuz links in QBZ"
+msgstr "Qobuz のリンクを QBZ で開く"
+
+msgid "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
+msgstr "ブラウザーからの qobuzapp:// リンクを QBZ で処理します。オフの場合は公式の Qobuz アプリが処理します。QBZ 独自の qbz:// リンクは常にここで開きます。"
