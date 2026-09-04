@@ -198,6 +198,8 @@ Rectangle {
     // there is no host-painted tick left in the tree, and a new one is a
     // regression, not a shortcut.
     property bool selectMode: false
+    /// Park the select indicator bottom-right of the art instead of top-right.
+    property bool selectMarkBottom: false
     property bool selected: false
     signal selectToggled()
 
@@ -551,7 +553,10 @@ Rectangle {
             Rectangle {
                 visible: root.selectMode
                 x: parent.width - width - 8
-                y: 8
+                // Top-right by default (the Library bulk mode); the artist
+                // page's album-section "Play selected" parks it bottom-right
+                // inside the art (`selectMarkBottom`).
+                y: root.selectMarkBottom ? parent.height - height - 8 : 8
                 width: 24
                 height: 24
                 radius: 12

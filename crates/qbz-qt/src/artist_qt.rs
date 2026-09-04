@@ -368,6 +368,13 @@ pub struct ArtistViewData {
     /// repaint the tab through `publish_patch`, the page's one transport.
     #[serde(rename = "libraryItems")]
     pub library_items: Vec<FeedItem>,
+    /// Sort of the "In library" Albums section — the same five keys the
+    /// release buckets use, persisted by `artist_prefs` under the pseudo
+    /// release type `library` (`QbzArtist.setSectionSort("library", …)`).
+    /// The rows are sorted in QML (they live there already); only the seed
+    /// travels here.
+    #[serde(rename = "librarySort")]
+    pub library_sort: String,
     #[serde(rename = "topTracks")]
     pub top_tracks: Vec<TrackRow>,
     #[serde(rename = "appearsOn")]
@@ -880,6 +887,7 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
         is_blacklisted: crate::artist_blacklist::is_blacklisted(page.id),
         library_count,
         library_items,
+        library_sort: crate::artist_prefs::get_sort("library"),
         top_tracks,
         appears_on,
         last_release,

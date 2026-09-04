@@ -200,6 +200,11 @@ pub mod qbz_player {
         /// AlbumView header Shuffle.
         #[qinvokable]
         fn play_album_shuffled(self: Pin<&mut QbzPlayer>, album_id: QString);
+        /// Artist page album-section split button — a JSON array of album
+        /// ids in the section's sort order, queued as one list.
+        /// `#[auto_cxx_name]` makes the QML name `QbzPlayer.playAlbums`.
+        #[qinvokable]
+        fn play_albums(self: Pin<&mut QbzPlayer>, ids_json: QString);
         /// AlbumView row play: the album starting AT this track.
         #[qinvokable]
         fn play_album_from(self: Pin<&mut QbzPlayer>, album_id: QString, track_id: QString);
@@ -475,6 +480,10 @@ impl qbz_player::QbzPlayer {
 
     pub fn play_album(self: Pin<&mut Self>, album_id: QString) {
         crate::play_album(album_id.to_string());
+    }
+
+    pub fn play_albums(self: Pin<&mut Self>, ids_json: QString) {
+        crate::play_albums(ids_json.to_string());
     }
 
     pub fn play_album_shuffled(self: Pin<&mut Self>, album_id: QString) {

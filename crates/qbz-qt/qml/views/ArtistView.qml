@@ -327,6 +327,92 @@ Rectangle {
         for (var i = 0; i < root.libTracks.length; i++) ids.push(String(root.libTracks[i].id))
         return ids
     }
+    /// The library Albums section's sort — the release buckets' five keys,
+    /// seeded from the document (`artist.librarySort`, artist_prefs "library")
+    /// and persisted through the same invokable the buckets use. Sorted here,
+    /// not in Rust: the rows already live in QML (`sortReleaseCards` reads
+    /// `title` / `year`, which a FeedItem carries).
+    property string libSort: "default"
+    readonly property var libAlbumsSorted: root.sortReleaseCards(root.libAlbums, root.libSort)
+    function setLibSort(key) {
+        root.libSort = key
+        QbzArtist.setSectionSort("library", key)
+    }
+
+    // ---- Album-section play (the split button) -------------------------------
+    // Every album section — each catalog bucket and the library Albums grid —
+    // carries a QbzSplitButton right of its sort: the body plays the whole
+    // section in its SORT order as one queue (`QbzPlayer.playAlbums`), the
+    // chevron offers Play random (ONE album of the section, replacing the
+    // queue) and Play selected, which arms a per-section select mode: the
+    // cards grow a check bottom-right inside the art, the button reads
+    // "Play selected (n)" and plays the checked albums in sort order, and the
+    // menu swaps that row for Cancel selection. One section is armed at a
+    // time (`albumSelectKey` is the bucket's releaseType or "library").
+    // No queue options (next / later / queue) on purpose.
+    property string albumSelectKey: ""
+    property var albumSelected: ({})
+    readonly property int albumSelectedCount: Object.keys(root.albumSelected).length
+    function albumSelectToggle(id) {
+        var m = Object.assign({}, root.albumSelected)
+        if (m[id]) delete m[id]
+        else m[id] = true
+        root.albumSelected = m
+    }
+    function albumSelectClear() {
+        root.albumSelectKey = ""
+        root.albumSelected = ({})
+    }
+    function albumSectionLabel(key) {
+        return root.albumSelectKey === key
+            ? QbzSession.tr("Play selected", QbzSession.trRev) + " (" + root.albumSelectedCount + ")"
+            : QbzSession.tr("Play all", QbzSession.trRev)
+    }
+    function albumSectionMenu(key) {
+        var m = [
+            { "label": QbzSession.tr("Play all", QbzSession.trRev), "icon": "play-fill", "action": "play-all" },
+            { "label": QbzSession.tr("Play random", QbzSession.trRev), "icon": "shuffle", "action": "play-random" }
+        ]
+        if (root.albumSelectKey === key)
+            m.push({ "label": QbzSession.tr("Cancel selection", QbzSession.trRev), "icon": "x", "action": "cancel-selection" })
+        else
+            m.push({ "label": QbzSession.tr("Play selected", QbzSession.trRev), "icon": "square-check-big", "action": "play-selected" })
+        return m
+    }
+    function albumSectionIds(cards) {
+        var ids = []
+        for (var i = 0; i < cards.length; i++) ids.push(String(cards[i].id))
+        return ids
+    }
+    /// `cards` is the section's list in its CURRENT sort order.
+    function albumSectionAction(key, cards, action) {
+        var ids = root.albumSectionIds(cards)
+        if (action === "play-all") {
+            root.albumSelectClear()
+            if (ids.length > 0) QbzPlayer.playAlbums(JSON.stringify(ids))
+        } else if (action === "play-random") {
+            root.albumSelectClear()
+            if (ids.length > 0) QbzPlayer.playAlbum(ids[Math.floor(Math.random() * ids.length)])
+        } else if (action === "play-selected") {
+            root.albumSelectKey = key
+            root.albumSelected = ({})
+        } else if (action === "cancel-selection") {
+            root.albumSelectClear()
+        }
+    }
+    /// The button body: Play all, or — armed — the checked albums in sort
+    /// order, then disarm.
+    function albumSectionPrimary(key, cards) {
+        if (root.albumSelectKey !== key) {
+            root.albumSectionAction(key, cards, "play-all")
+            return
+        }
+        var ids = []
+        for (var i = 0; i < cards.length; i++)
+            if (root.albumSelected[cards[i].id] === true) ids.push(String(cards[i].id))
+        root.albumSelectClear()
+        if (ids.length > 0) QbzPlayer.playAlbums(JSON.stringify(ids))
+    }
 
     // ---- Header atmosphere (ArtistPageView.slint:120-147) ----------------
     // Same three-line rule as AlbumView (the .slint says "same rule as
@@ -882,6 +968,7 @@ Rectangle {
         // switch. The strip re-anchors on the first section the new mode
         // draws (catalog keeps its Popular Tracks default).
         setMultiSelect(false)
+        albumSelectClear()
         // The first SECTION, not "About" (back-to-top) when a section exists.
         var first = ""
         for (var i = 0; i < root.jumpTabs.length; i++) {
@@ -979,6 +1066,8 @@ Rectangle {
         libTracksExpanded = false
         libShowPurchases = false
         libShowFavorites = false
+        libSort = artist.librarySort || "default"
+        albumSelectClear()
         // Slint opens a fresh artist on Network, or on Magazine when
         // MusicBrainz is off (an empty Network tab is worse than none).
         netTab = (artist.network && artist.network.mbAvailable) ? "network" : "magazine"
@@ -1950,7 +2039,7 @@ Rectangle {
             width: parent.width
             spacing: 12
             Text {
-                width: parent.width - seeAll.width - sortBtn.width - 24
+                width: parent.width - seeAll.width - sortBtn.width - playBtn.width - 36
                 anchors.verticalCenter: parent.verticalCenter
                 text: section.title
                 color: theme.textPrimary
@@ -2062,6 +2151,21 @@ Rectangle {
                         : i === 3 ? "title-asc" : i === 4 ? "title-desc" : "default")
                 }
             }
+            // Play all / Play random / Play selected over THIS bucket, in
+            // its sort order (`section.cards` is already sorted — Rust sorts
+            // the bucket and the overlay merge re-sorts).
+            QbzSplitButton {
+                id: playBtn
+                anchors.verticalCenter: parent.verticalCenter
+                label: root.albumSectionLabel(relSection.section.releaseType || "")
+                menuItems: root.albumSectionMenu(relSection.section.releaseType || "")
+                onClicked: root.albumSectionPrimary(relSection.section.releaseType || "",
+                                                    relSection.section.cards || [])
+                onPicked: function (a) {
+                    root.albumSectionAction(relSection.section.releaseType || "",
+                                            relSection.section.cards || [], a)
+                }
+            }
         }
 
         Grid {
@@ -2100,6 +2204,11 @@ Rectangle {
                     // artist_qt::map_release stamps this the same way it
                     // stamps the pin; false inverted the first click.
                     isFavorite: modelData.isFavorite === true
+                    // "Play selected" over this bucket (the split button).
+                    selectMode: root.albumSelectKey === (relSection.section.releaseType || "")
+                    selected: root.albumSelected[modelData.id] === true
+                    selectMarkBottom: true
+                    onSelectToggled: root.albumSelectToggle(modelData.id)
 
                     // ---- smooth append (owner, 2026-08-02) ---------------
                     // "que la aparicion de lo que se cargue, sea smooth" —
@@ -3053,13 +3162,51 @@ Rectangle {
 
                 // --- Albums ---------------------------------------------
                 Item { visible: root.libAlbums.length > 0 && root.libTracks.length > 0; width: 1; height: 24 }
-                Text {
+                // Header: title, the release buckets' sort select, and the
+                // split play button — the catalog section header's cluster
+                // minus "See discography" (there is nothing to page here).
+                Row {
                     property string anchorId: "albums"
                     visible: root.libAlbums.length > 0
-                    text: QbzSession.tr("Albums", QbzSession.trRev)
-                    color: theme.textPrimary
-                    font.pixelSize: theme.fontHeading
-                    font.weight: theme.weightSemibold
+                    width: parent.width
+                    spacing: 12
+                    Text {
+                        width: parent.width - libSortBtn.width - libPlayBtn.width - 24
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: QbzSession.tr("Albums", QbzSession.trRev)
+                        color: theme.textPrimary
+                        font.pixelSize: theme.fontHeading
+                        font.weight: theme.weightSemibold
+                        elide: Text.ElideRight
+                    }
+                    QbzSelect {
+                        id: libSortBtn
+                        anchors.verticalCenter: parent.verticalCenter
+                        sm: true
+                        menuWidth: 150
+                        options: [QbzSession.tr("Default", QbzSession.trRev),
+                                  QbzSession.tr("Newest", QbzSession.trRev),
+                                  QbzSession.tr("Oldest", QbzSession.trRev),
+                                  QbzSession.tr("A–Z", QbzSession.trRev),
+                                  QbzSession.tr("Z–A", QbzSession.trRev)]
+                        currentIndex: {
+                            var s = root.libSort || "default"
+                            return s === "newest" ? 1 : s === "oldest" ? 2
+                                 : s === "title-asc" ? 3 : s === "title-desc" ? 4 : 0
+                        }
+                        onSelected: function (i) {
+                            root.setLibSort(i === 1 ? "newest" : i === 2 ? "oldest"
+                                : i === 3 ? "title-asc" : i === 4 ? "title-desc" : "default")
+                        }
+                    }
+                    QbzSplitButton {
+                        id: libPlayBtn
+                        anchors.verticalCenter: parent.verticalCenter
+                        label: root.albumSectionLabel("library")
+                        menuItems: root.albumSectionMenu("library")
+                        onClicked: root.albumSectionPrimary("library", root.libAlbumsSorted)
+                        onPicked: function (a) { root.albumSectionAction("library", root.libAlbumsSorted, a) }
+                    }
                 }
                 Item { visible: root.libAlbums.length > 0; width: 1; height: 10 }
                 Grid {
@@ -3069,8 +3216,14 @@ Rectangle {
                     columnSpacing: 24
                     rowSpacing: 24
                     Repeater {
-                        model: root.libAlbums
+                        model: root.libAlbumsSorted
                         delegate: AlbumCard {
+                            // "Play selected" over this section (the split
+                            // button), check bottom-right inside the art.
+                            selectMode: root.albumSelectKey === "library"
+                            selected: root.albumSelected[modelData.id] === true
+                            selectMarkBottom: true
+                            onSelectToggled: root.albumSelectToggle(modelData.id)
                             albumId: modelData.id
                             title: modelData.title
                             artist: modelData.artist

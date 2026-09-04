@@ -2237,6 +2237,43 @@ pub async fn play_album(
     play_album_from(runtime, album_id, 0).await
 }
 
+/// An album SECTION's "Play all" / "Play selected" (artist page split
+/// button): every album's tracks, in the order given, as ONE queue that
+/// replaces the current one — track 1 of the first album starts. Each album
+/// resolves through `fetch_album_queue` like a single-album play, so a
+/// purchase preference or a withdrawn row is treated identically; an album
+/// that fails to resolve is logged and skipped rather than sinking the whole
+/// section. Local / Plex group keys are not a catalog section and are
+/// skipped.
+pub async fn play_albums(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    album_ids: &[String],
+) -> Result<(), String> {
+    let mut queue: Vec<QueueTrack> = Vec::new();
+    for album_id in album_ids {
+        if is_local_album(album_id) {
+            log::info!("[qbz-qt] play_albums: skipping local group key {album_id}");
+            continue;
+        }
+        match fetch_album_queue(runtime, album_id).await {
+            Ok(mut tracks) => queue.append(&mut tracks),
+            Err(e) => log::warn!("[qbz-qt] play_albums: {album_id} skipped: {e}"),
+        }
+    }
+    if queue.is_empty() {
+        return Err(format!(
+            "none of the {} album(s) resolved to playable tracks",
+            album_ids.len()
+        ));
+    }
+    log::info!(
+        "[qbz-qt] play_albums: queueing {} track(s) from {} album(s)",
+        queue.len(),
+        album_ids.len()
+    );
+    play_track_list(runtime, queue, 0, false).await
+}
+
 /// Play an album starting at track `start_index` (AlbumView row play —
 /// Slint's play_album_from semantics: the queue keeps the whole album,
 /// the cursor starts at the clicked track).
