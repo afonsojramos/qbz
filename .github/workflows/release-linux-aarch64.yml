@@ -10,7 +10,9 @@
 #     distros without a usable Qt (Ubuntu 24.04 = Qt 6.4) keep working.
 #
 # CONTRACT (do not break): the release must keep publishing
-#   qbz_${VERSION}_arm64.tar.gz   (dir qbz_${VERSION}_arm64/{qbz, qbz.desktop, icons/hicolor/...})
+#   qbz_${VERSION}_arm64.tar.gz   (dir qbz_${VERSION}_arm64/{qbz, qbzd, LICENSE, qbz.desktop,
+#                                  com.blitzfc.qbz.metainfo.xml, qbzd.service,
+#                                  completions/, icons/hicolor/...})
 #   QBZ_${VERSION}_arm64.deb / QBZ-${VERSION}-1.aarch64.rpm / QBZ_${VERSION}_arm64.AppImage
 #   qbzd_${VERSION}_arm64.deb / qbzd-${VERSION}-1.aarch64.rpm / qbzd-${VERSION}-linux-arm64.tar.gz
 # — release-aur.yml, release-gentoo.yml, qbz-apt, qbz-rpm, the updater
@@ -220,6 +222,9 @@ jobs:
           QBZ_ARCH: ${{ env.DEB_ARCH }}
         run: |
           mkdir -p dist
+          ./qbzd completions bash > qbzd.bash
+          ./qbzd completions zsh > qbzd.zsh
+          ./qbzd completions fish > qbzd.fish
           nfpm package -f packaging/nfpm/nfpm.yaml -p deb \
             -t "dist/QBZ_${VERSION}_${DEB_ARCH}.deb"
           nfpm package -f packaging/nfpm/nfpm.yaml -p rpm \
@@ -273,7 +278,7 @@ jobs:
           # CONTRACT: release-aur.yml, the Gentoo binary ebuild, qbz-apt and
           # the website hard-code this name and internal layout.
           TARBALL_DIR="qbz_${VERSION}_${DEB_ARCH}"
-          mkdir -p "tarball-staging/${TARBALL_DIR}/icons/hicolor"/{32x32,48x48,64x64,128x128,256x256}/apps
+          mkdir -p "tarball-staging/${TARBALL_DIR}/icons/hicolor"/{32x32,48x48,64x64,128x128,256x256,512x512}/apps
           cp qbz "tarball-staging/${TARBALL_DIR}/qbz"
           chmod +x "tarball-staging/${TARBALL_DIR}/qbz"
           cp packaging/icons/32x32.png   "tarball-staging/${TARBALL_DIR}/icons/hicolor/32x32/apps/qbz.png"
@@ -281,14 +286,17 @@ jobs:
           cp packaging/icons/64x64.png   "tarball-staging/${TARBALL_DIR}/icons/hicolor/64x64/apps/qbz.png"
           cp packaging/icons/128x128.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/128x128/apps/qbz.png"
           cp packaging/icons/256x256.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/256x256/apps/qbz.png"
+          cp packaging/icons/512x512.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/512x512/apps/qbz.png"
           cp packaging/linux/qbz.desktop "tarball-staging/${TARBALL_DIR}/qbz.desktop"
+          cp packaging/flatpak/com.blitzfc.qbz.metainfo.xml "tarball-staging/${TARBALL_DIR}/com.blitzfc.qbz.metainfo.xml"
+          cp LICENSE "tarball-staging/${TARBALL_DIR}/LICENSE"
           cp qbzd "tarball-staging/${TARBALL_DIR}/qbzd"
           chmod +x "tarball-staging/${TARBALL_DIR}/qbzd"
           cp crates/qbzd/service/qbzd.service "tarball-staging/${TARBALL_DIR}/qbzd.service"
           mkdir -p "tarball-staging/${TARBALL_DIR}/completions"
-          ./qbzd completions bash > "tarball-staging/${TARBALL_DIR}/completions/qbzd.bash"
-          ./qbzd completions zsh  > "tarball-staging/${TARBALL_DIR}/completions/qbzd.zsh"
-          ./qbzd completions fish > "tarball-staging/${TARBALL_DIR}/completions/qbzd.fish"
+          cp qbzd.bash "tarball-staging/${TARBALL_DIR}/completions/qbzd.bash"
+          cp qbzd.zsh  "tarball-staging/${TARBALL_DIR}/completions/qbzd.zsh"
+          cp qbzd.fish "tarball-staging/${TARBALL_DIR}/completions/qbzd.fish"
           tar -czvf "dist/qbz_${VERSION}_${DEB_ARCH}.tar.gz" -C tarball-staging "${TARBALL_DIR}"
           ls -la dist
 
@@ -299,10 +307,11 @@ jobs:
           cp qbzd "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
           chmod +x "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
           cp crates/qbzd/service/qbzd.service "qbzd-tarball-staging/${QBZD_DIR}/qbzd.service"
-          ./qbzd completions bash > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.bash"
-          ./qbzd completions zsh  > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.zsh"
-          ./qbzd completions fish > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.fish"
+          cp qbzd.bash "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.bash"
+          cp qbzd.zsh  "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.zsh"
+          cp qbzd.fish "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.fish"
           cp packaging/linux/qbzd-standalone-README.md "qbzd-tarball-staging/${QBZD_DIR}/README.md"
+          cp LICENSE "qbzd-tarball-staging/${QBZD_DIR}/LICENSE"
           tar -czvf "dist/qbzd-${VERSION}-linux-${DEB_ARCH}.tar.gz" -C qbzd-tarball-staging "${QBZD_DIR}"
           ls -la dist
 

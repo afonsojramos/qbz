@@ -19,6 +19,7 @@
 #   ./scripts/qbzd-acceptance.sh
 #   QBZD_BIN=/path/to/qbzd ./scripts/qbzd-acceptance.sh
 #   QBZD_TEST_PORT=28182 ./scripts/qbzd-acceptance.sh
+#   QBZD_KEEP_SCRATCH=1 ./scripts/qbzd-acceptance.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -76,10 +77,16 @@ kill_and_confirm() {
 }
 
 cleanup() {
+  local exit_status=$?
   if [ -n "$DAEMON_PID" ] && kill -0 "$DAEMON_PID" 2>/dev/null; then
     kill_and_confirm "$DAEMON_PID" || true
   fi
-  rm -rf "$SCRATCH"
+  if [ "$exit_status" -ne 0 ] || [ "${QBZD_KEEP_SCRATCH:-0}" = "1" ]; then
+    echo "qbzd acceptance scratch preserved at: $SCRATCH" >&2
+  else
+    rm -rf "$SCRATCH"
+  fi
+  return "$exit_status"
 }
 trap cleanup EXIT
 

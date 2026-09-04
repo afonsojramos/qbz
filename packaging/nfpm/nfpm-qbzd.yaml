@@ -36,6 +36,16 @@ contents:
       mode: 0755
   - src: crates/qbzd/service/qbzd.service
     dst: /usr/lib/systemd/user/qbzd.service
+  - src: ./qbzd.bash
+    dst: /usr/share/bash-completion/completions/qbzd
+  - src: ./qbzd.zsh
+    dst: /usr/share/zsh/site-functions/_qbzd
+  - src: ./qbzd.fish
+    dst: /usr/share/fish/vendor_completions.d/qbzd.fish
+  - src: packaging/linux/qbzd-standalone-README.md
+    dst: /usr/share/doc/qbzd/README.md
+  - src: LICENSE
+    dst: /usr/share/licenses/qbzd/LICENSE
 
 overrides:
   deb:
@@ -45,14 +55,16 @@ overrides:
     recommends:
       # pw-metadata/pw-dump for bit-perfect sample-rate queries and DAC
       # detection (same audio stack as the desktop app).
-      - pipewire
-      - pulseaudio
+      - pipewire-bin
+      - pulseaudio-utils
+      - xdg-utils
   rpm:
     depends:
       - libasound.so.2()(64bit)
     recommends:
-      - pipewire
-      - pulseaudio
+      - pipewire-utils
+      - pulseaudio-utils
+      - xdg-utils
 
 rpm:
   group: Applications/Multimedia
