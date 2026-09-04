@@ -46,6 +46,7 @@ use serde_json::json;
 
 use crate::album_qt::{truncate_words, AlbumCardData, TrackRow};
 use crate::home_qt;
+use crate::library_qt::FeedItem;
 
 pub const RELEASE_PAGE_SIZE: u32 = 20;
 
@@ -358,6 +359,15 @@ pub struct ArtistViewData {
     pub is_blacklisted: bool,
     #[serde(rename = "libraryCount")]
     pub library_count: i64,
+    /// The user's OWN rows for this artist — favourites ∪ purchases, one row
+    /// per entity (`library_qt::artist_library_items`, contract §3). Published
+    /// INSIDE this document rather than read off `QbzLibrary.libraryJson` by
+    /// the view: the view used to `JSON.parse` the whole ~10k-row feed per
+    /// binding evaluation, and this is also what lets a heart change
+    /// (`apply_favorite_change`) and a late feed load (`refresh_library_items`)
+    /// repaint the tab through `publish_patch`, the page's one transport.
+    #[serde(rename = "libraryItems")]
+    pub library_items: Vec<FeedItem>,
     #[serde(rename = "topTracks")]
     pub top_tracks: Vec<TrackRow>,
     #[serde(rename = "appearsOn")]
@@ -835,20 +845,19 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
         });
     }
 
-    // The library COUNT is feed-only by nature (it counts owned items), but the
-    // follow state must not be: the feed is empty until the Library view is
-    // opened, so this drew an un-followed heart on artists the user follows —
-    // and `toggle_favorite` then read the same false and re-added the follow.
-    // `library_qt::is_favorite` checks the favourite-id cache first.
-    let library_count = crate::library_qt::with_library(|d| {
-        d.feed
-            .iter()
-            .filter(|i| {
-                (i.kind == "album" || i.kind == "track") && i.artist_id == page.id.to_string()
-            })
-            .count() as i64
-    })
-    .unwrap_or(0);
+    // The library rows are feed-only by nature (they ARE the owned items), but
+    // the follow state must not be: the feed is empty until the Library view
+    // is opened, so this drew an un-followed heart on artists the user follows
+    // — and `toggle_favorite` then read the same false and re-added the
+    // follow. `library_qt::is_favorite` checks the favourite-id cache first.
+    //
+    // The feed's coldness is handled one level up: `main::open_artist` warms
+    // it in the background and `refresh_library_items` repaints this pair
+    // when it lands, so a fresh session (or a fresh account) no longer opens
+    // every artist with an invisible "In library" toggle.
+    let library_items = crate::library_qt::artist_library_items(&page.id.to_string());
+    let library_count = library_items.len() as i64;
+    log_library_membership(&page.id.to_string(), &library_items);
     let is_following = crate::library_qt::is_favorite("artist", &page.id.to_string());
 
     ArtistViewData {
@@ -870,6 +879,7 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
         is_pinned: crate::sidebar_qt::is_pinned("artist", &page.id.to_string()),
         is_blacklisted: crate::artist_blacklist::is_blacklisted(page.id),
         library_count,
+        library_items,
         top_tracks,
         appears_on,
         last_release,
@@ -1095,6 +1105,93 @@ pub(crate) fn stash_is_for(artist_id: &str) -> bool {
             .unwrap_or(false),
         Err(_) => false,
     }
+}
+
+/// `(generation, artist id)` of the page on screen, or `None` when no artist
+/// document is stashed.
+fn stashed_page() -> Option<(u64, String)> {
+    let guard = ARTIST_DOC.lock().ok()?;
+    let (generation, doc) = guard.as_ref()?;
+    let id = doc.get("id").and_then(|v| v.as_str())?.to_string();
+    Some((*generation, id))
+}
+
+// ==================== "In library" tab: live membership ====================
+//
+// The tab's rows travel inside the artist document (`ArtistViewData::
+// library_items`). Two things move them after the page is built, and both
+// come through `publish_patch` so the generation guard applies:
+//
+//   * the Library feed landing AFTER the page opened (`main::open_artist`
+//     warms it; `main::reload_library` calls `refresh_library_items` when it
+//     is published), and
+//   * a heart settling on an album / track (`main::emit_library_favorite` ->
+//     `apply_favorite_change`), after `library_qt::reconcile_qobuz_favorite`
+//     has inserted or removed the feed row.
+//
+// Both recompute the WHOLE list off the feed rather than patching one row:
+// the rule (contract §3 — purchases ∪ favourites, one row per entity, the
+// purchase row representative) is easier to keep in one place than to
+// replay incrementally, and the scan is a single pass over the feed.
+
+/// Recompute the open page's library rows from the cached feed and republish
+/// `libraryItems` + `libraryCount`. No-op without an artist on screen or
+/// before the Library has ever loaded (the count then stays at what the page
+/// was built with — 0 on a cold session — until the feed lands and this runs
+/// again).
+pub(crate) fn refresh_library_items() {
+    let Some((generation, artist_id)) = stashed_page() else {
+        return;
+    };
+    if crate::library_qt::with_library(|_| ()).is_none() {
+        return;
+    }
+    let items = crate::library_qt::artist_library_items(&artist_id);
+    log_library_membership(&artist_id, &items);
+    let count = items.len() as i64;
+    let items_json = match serde_json::to_value(&items) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("[qbz-qt] artist library rows serialize failed: {e}");
+            return;
+        }
+    };
+    publish_patch(generation, move |doc| {
+        if let Some(obj) = doc.as_object_mut() {
+            obj.insert("libraryItems".into(), items_json);
+            obj.insert("libraryCount".into(), json!(count));
+        }
+    });
+}
+
+/// A heart settled on an album or track: the tab's membership may have
+/// changed (a new favourite joins, a cleared one leaves unless it is also a
+/// purchase). `main::emit_library_favorite` is the one door, the same fan-out
+/// `home_qt` / `search_qt` / `recommendations_qt` hang off; the artist page was
+/// listed there as "NOT yet covered".
+pub(crate) fn apply_favorite_change(kind: &str, _id: &str, _value: bool) {
+    if kind == "track" || kind == "album" {
+        refresh_library_items();
+    }
+}
+
+/// Contract §5 discriminator, kept as `debug` once the round closed: how the
+/// open artist's owned rows split by kind and by which id matched. Read it
+/// with `RUST_LOG=qbz_qt=debug` when an artist's tab looks short.
+fn log_library_membership(artist_id: &str, items: &[FeedItem]) {
+    if !log::log_enabled!(log::Level::Debug) {
+        return;
+    }
+    let tracks = items.iter().filter(|i| i.kind == "track").count();
+    let albums = items.len() - tracks;
+    let by_album_artist = items
+        .iter()
+        .filter(|i| i.kind == "track" && i.artist_id != artist_id)
+        .count();
+    log::debug!(
+        "[qbz-qt] artist {artist_id} in-library: {tracks} track(s) ({by_album_artist} via album \
+         artist), {albums} album(s)"
+    );
 }
 
 /// Artist page per-section sort — the port of `crates/qbz/src/artist.rs:1178-1210`
@@ -1829,4 +1926,21 @@ async fn load_mb_discovery(
         })
         .collect();
     Ok((response.primary_tag, rows))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// THE #737 CONTRACT: `top_queue` answers for the POPULAR list only. An
+    /// id it does not hold does not fail — it starts that list at row 0. So
+    /// no caller may hand it an id from any other list (the "In library" tab
+    /// routes through `library_qt::play_from_visible` instead).
+    #[test]
+    fn top_queue_starts_at_zero_for_a_foreign_id() {
+        TOP_QUEUE.lock().unwrap().clear();
+        let (queue, start) = top_queue(Some(424242));
+        assert!(queue.is_empty());
+        assert_eq!(start, 0);
+    }
 }

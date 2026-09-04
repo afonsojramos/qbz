@@ -1594,6 +1594,7 @@ mod tests {
                 image: Default::default(),
                 label: None,
                 genre: None,
+                artist: None,
             }),
             ..Default::default()
         }
@@ -2011,6 +2012,7 @@ mod tests {
                 image: Default::default(),
                 label: None,
                 genre: None,
+                artist: None,
             }),
             ..Default::default()
         }
@@ -2948,6 +2950,7 @@ mod entitlement_index_tests {
                     image: Default::default(),
                     label: None,
                     genre: None,
+                    artist: None,
                 }),
                 ..Default::default()
             }],

@@ -1427,6 +1427,13 @@ pub(crate) fn open_artist(artist_id: String) {
     }
     nav_qt::record("artist");
     *LAST_DETAIL.lock().unwrap() = ("artist".to_string(), artist_id.clone());
+    // Warm the Library feed in the background: the page's "In library" tab is
+    // built off it, and on a cold session (or right after an account switch —
+    // `reset_session_latches`) it was empty until the user happened to visit
+    // Library, so the toggle never mounted. Idempotent through
+    // `LIBRARY_LOADED`; with the feed warm this is a no-op, and when it lands
+    // `reload_library` repaints the open page's rows.
+    load_library_once();
     let runtime = app();
     artist_bridge::ui(move |mut b| {
         // Same as open_album: stale artist until the fetch lands otherwise.
@@ -2956,6 +2963,16 @@ pub(crate) fn toggle_ambient_background() {
     shell_bridge::ui(move |mut b| b.as_mut().set_ambient_mode(mode));
 }
 
+/// ArtistView's "In library" toggle: ask for the feed (a fetch only if it has
+/// never loaded this session — `load_library_once`), and repaint the open
+/// page's rows from the cache when it is already warm. The owner's rule for
+/// the toggle: re-arm the warm, but SERVE FROM CACHE — clicking the tab must
+/// never refetch a 10k-row feed.
+pub(crate) fn warm_library() {
+    load_library_once();
+    artist_qt::refresh_library_items();
+}
+
 fn load_library_once() {
     if *LIBRARY_LOADED.lock().unwrap() {
         return;
@@ -3009,6 +3026,9 @@ pub(crate) fn reload_library() {
                     b.as_mut().set_library_loading(false);
                 });
                 log_rss("library published");
+                // The artist page open right now (if any) was built while the
+                // feed was cold — hand it its "In library" rows.
+                artist_qt::refresh_library_items();
             }
             Err(e) => {
                 log::warn!("[qbz-qt] library load failed: {e}");
@@ -3140,13 +3160,34 @@ pub(crate) fn library_toggle_favorite(kind: String, id: String) {
     let runtime = app();
     spawn(async move {
         if let Some(value) = library_qt::toggle_favorite(&runtime, &kind, &id).await {
-            let membership_changed = !value && library_qt::remove_local_favorite_row(&kind, &id);
-            emit_library_favorite(&kind, &id, value);
-            if membership_changed {
-                publish_library_document();
-            }
+            settle_favorite(&runtime, &kind, &id, value).await;
         }
     });
+}
+
+/// A heart's write LANDED with `value`: reconcile the cached feed (a fresh
+/// Qobuz favourite joins it, a cleared one leaves; local hearts have their
+/// own row pair), fan the settled value out through `emit_library_favorite`,
+/// and republish the Library document only when a row came or went.
+///
+/// Reconcile BEFORE emit, deliberately: the fan-out reaches
+/// `artist_qt::apply_favorite_change`, which recomputes the open artist's
+/// "In library" rows off the feed — it has to see the inserted / removed row
+/// or the tab keeps its stale count (the #737 round's "the badge never
+/// moves"). Every settle point that owns a Qobuz heart goes through here
+/// (`library_toggle_favorite`, the queue panel heart in `queue_qt`).
+pub(crate) async fn settle_favorite(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    kind: &str,
+    id: &str,
+    value: bool,
+) {
+    let mut membership_changed = !value && library_qt::remove_local_favorite_row(kind, id);
+    membership_changed |= library_qt::reconcile_qobuz_favorite(runtime, kind, id, value).await;
+    emit_library_favorite(kind, id, value);
+    if membership_changed {
+        publish_library_document();
+    }
 }
 
 /// THE settle point for a heart, wherever the click came from: emit the
@@ -3183,6 +3224,7 @@ pub(crate) fn emit_library_favorite(kind: &str, id: &str, value: bool) {
     home_qt::apply_favorite_change(kind, id, value);
     recommendations_qt::apply_favorite_change(kind, id, value);
     search_qt::apply_favorite_change(kind, id, value);
+    artist_qt::apply_favorite_change(kind, id, value);
 }
 
 /// Dev navigation driver — `QBZ_QT_NAV_BENCH=home,library,home,settings`.

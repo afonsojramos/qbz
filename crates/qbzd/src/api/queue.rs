@@ -773,6 +773,7 @@ mod tests {
             },
             label: None,
             genre: None,
+            artist: None,
         });
 
         let qt = track_to_queue_track(&track);
