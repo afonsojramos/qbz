@@ -33,6 +33,13 @@ description: |
 vendor: QBZ
 homepage: https://github.com/vicrodh/qbz
 license: MIT
+# The desktop package already carries /usr/bin/qbzd and its optional user
+# unit. Advertise that capability and make the daemon-only package an
+# alternative, not a co-installable duplicate of the same files.
+provides:
+  - qbzd
+conflicts:
+  - qbzd
 
 contents:
   # LITERAL paths (nfpm does NOT expand env vars in contents[].src): the

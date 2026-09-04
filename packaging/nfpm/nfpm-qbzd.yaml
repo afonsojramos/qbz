@@ -21,11 +21,15 @@ maintainer: Victor Rodriguez <vicrodh@users.noreply.github.com>
 description: |
   QBZ headless daemon — Qobuz player for servers, Raspberry Pi and
   other appliances. TUI setup wizard, QConnect renderer/receiver, local
-  library, offline cache. Ships a systemd USER unit (opt-in, disabled by
-  default; requires `loginctl enable-linger` for boot persistence).
+  library, offline cache. Includes an optional systemd user unit and can
+  generate service definitions for systemd, OpenRC, or runit.
 vendor: QBZ
 homepage: https://github.com/vicrodh/qbz
 license: MIT
+# qbz already contains this daemon and unit, so installing both packages
+# would otherwise create file conflicts at transaction time.
+conflicts:
+  - qbz
 
 contents:
   # LITERAL path (nfpm prints env vars verbatim in contents[].src — the
