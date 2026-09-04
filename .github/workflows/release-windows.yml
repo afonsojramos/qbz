@@ -106,13 +106,13 @@ jobs:
           foreach ($f in "qbz.exe", "platforms\qwindows.dll", "qml\QtQuick\Controls\Basic\qmldir", "imageformats\qsvg.dll", "LICENSE.txt") {
             if (-not (Test-Path "$root\$f")) { throw "installed layout is missing $f" }
           }
-          foreach ($protocol in "qbz", "qobuzapp") {
+          foreach ($protocol in "qbz") {
             if (-not (Test-Path "HKCU:\Software\Classes\$protocol")) { throw "$protocol protocol key missing" }
           }
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\QBZ.lnk")) { throw "Start-menu shortcut missing" }
           $uninstall = Start-Process msiexec.exe -ArgumentList "/x `"$msi`" /qn /norestart" -Wait -PassThru
           if ($uninstall.ExitCode -ne 0) { throw "synthetic MSI uninstall failed: $($uninstall.ExitCode)" }
-          foreach ($protocol in "qbz", "qobuzapp") {
+          foreach ($protocol in "qbz") {
             if (Test-Path "HKCU:\Software\Classes\$protocol") { throw "$protocol protocol key survived uninstall" }
           }
 
@@ -416,7 +416,7 @@ jobs:
           foreach ($f in "qbz.exe","platforms\qwindows.dll","qml\QtQuick\Controls\Basic","imageformats\qsvg.dll","LICENSE.txt") {
             if (-not (Test-Path "$root\$f")) { Write-Host "::error::installed layout is missing $f"; exit 1 }
           }
-          foreach ($protocol in "qbz", "qobuzapp") {
+          foreach ($protocol in "qbz") {
             if (-not (Test-Path "HKCU:\Software\Classes\$protocol")) { Write-Host "::error::$protocol protocol key missing"; exit 1 }
           }
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\QBZ.lnk")) { Write-Host "::error::Start-menu shortcut missing"; exit 1 }
@@ -427,7 +427,7 @@ jobs:
           $u = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn /l*v uninstall.log" -Wait -PassThru
           if ($u.ExitCode -ne 0) { Get-Content uninstall.log -Tail 60; Write-Host "::error::msiexec /x exit $($u.ExitCode)"; exit 1 }
           if (Test-Path "$root\qbz.exe") { Write-Host "::error::uninstall left $root\qbz.exe"; exit 1 }
-          foreach ($protocol in "qbz", "qobuzapp") {
+          foreach ($protocol in "qbz") {
             if (Test-Path "HKCU:\Software\Classes\$protocol") { Write-Host "::error::uninstall left the $protocol protocol key"; exit 1 }
           }
           Write-Host "MSI install/launch/uninstall OK"

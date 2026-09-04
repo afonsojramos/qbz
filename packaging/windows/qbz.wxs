@@ -31,8 +31,10 @@
     * AppUserModelID com.blitzfc.qbz on the Start-menu shortcut: required by
       WinRT toasts (W21) and used by SMTC for the app identity (W11).
       Needs InstallerVersion >= 500 (MsiShortcutProperty is MSI 5.0+).
-    * URL protocols qbz:// and qobuzapp:// (the CFBundleURLSchemes analogue);
-      inert until single-instance + deep links land (W23/W24), harmless before
+    * URL protocol qbz:// (the CFBundleURLSchemes analogue): inert until
+      single-instance + deep links land (W23/W24), harmless before.
+      qobuzapp:// is a runtime opt-in (Settings > Integrations,
+      src/link_handler_qt.rs), never an installer claim.
     * LGPL notices: the workflow copies LICENSE + licenses\*.txt into
       dist\qbz\ BEFORE this runs, so the harvest picks them up. No authoring
       here. See research/04 §8.
@@ -144,7 +146,7 @@
                      Type="integer" Value="1" KeyPath="yes" />
     </Component>
 
-    <!-- qbz:// and qobuzapp:// — analogue of CFBundleURLSchemes in Info.plist -->
+    <!-- qbz:// — analogue of CFBundleURLSchemes in Info.plist -->
     <Component Id="UrlProtocols" Directory="INSTALLFOLDER">
       <RegistryKey Root="HKCU" Key="Software\Classes\qbz">
         <RegistryValue Type="string" Value="URL:QBZ Protocol" />
@@ -152,12 +154,10 @@
         <RegistryValue Key="DefaultIcon" Type="string" Value="&quot;[INSTALLFOLDER]qbz.exe&quot;,0" />
         <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]qbz.exe&quot; &quot;%1&quot;" />
       </RegistryKey>
-      <RegistryKey Root="HKCU" Key="Software\Classes\qobuzapp">
-        <RegistryValue Type="string" Value="URL:Qobuz App Protocol" />
-        <RegistryValue Name="URL Protocol" Type="string" Value="" />
-        <RegistryValue Key="DefaultIcon" Type="string" Value="&quot;[INSTALLFOLDER]qbz.exe&quot;,0" />
-        <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]qbz.exe&quot; &quot;%1&quot;" />
-      </RegistryKey>
+      <!-- qobuzapp:// (the official client's scheme) is NOT registered by the
+           installer: it is a user choice — Settings > Integrations > "Open
+           Qobuz links in QBZ" (src/link_handler_qt.rs) writes and removes the
+           same shape of key at runtime. -->
       <RegistryValue Root="HKCU" Key="Software\blitzfc\QBZ" Name="Protocols"
                      Type="integer" Value="1" KeyPath="yes" />
     </Component>

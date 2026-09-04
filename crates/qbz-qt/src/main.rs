@@ -365,6 +365,7 @@ mod suggestions_qt;
 // no #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
 mod hotkeys_qt;
 mod integrations_qt;
+mod link_handler_qt;
 mod settings_qt;
 mod sidebar_qt;
 mod sleep_timer_qt;
@@ -830,6 +831,9 @@ fn on_session_entered() {
     // ListenBrainz opt-ins and starts the scrobble-queue flush watcher.
     // Strictly opt-in — every one of them is inert until the user connects it.
     integrations_qt::start(&app());
+    // Drop a `qobuzapp://` claim the user never made (2.0.x MSI); never
+    // claims on its own — see link_handler_qt.
+    link_handler_qt::reconcile_at_startup();
     // System tray (Linux only, ksni — owner ruling K2), the port of
     // `init_shell_for_user`'s `tray::init` call (`crates/qbz/src/main.rs:257-263`).
     // Suppressed under gamescope by the same predicate the reference uses
@@ -1713,6 +1717,21 @@ pub(crate) fn queue_panel_opened() {
 }
 
 /// AlbumView header Shuffle.
+/// Artist page album-section split button: "Play all" / "Play selected"
+/// over a JSON array of album ids, in the section's sort order.
+pub(crate) fn play_albums(ids_json: String) {
+    let ids: Vec<String> = serde_json::from_str(&ids_json).unwrap_or_default();
+    if ids.is_empty() {
+        return;
+    }
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playback_qt::play_albums(&runtime, &ids).await {
+            log::error!("[qbz-qt] play_albums failed: {e}");
+        }
+    });
+}
+
 pub(crate) fn play_album_shuffled(album_id: String) {
     let runtime = app();
     spawn(async move {
