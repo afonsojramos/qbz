@@ -161,16 +161,19 @@ Rectangle {
         }
     }
 
-    // Trailing slot (see `trailing`): sized by its children, parked left of
-    // the search slot. Hidden items still count toward `childrenRect`, so a
-    // host that toggles its controls should toggle their `visible` AND leave
-    // the slot empty-width by giving them `width: visible ? n : 0`.
+    // Trailing slot (see `trailing`): sized by its children, parked at the
+    // FAR right — past the magnifier, not before it: the search field grows
+    // LEFT over the tabs when it opens, so anything left of the magnifier is
+    // covered while the user types, and a control that resets the page's
+    // state must stay reachable exactly then. Hidden items still count toward
+    // `childrenRect`, so a host that toggles its controls should toggle their
+    // `visible` AND leave the slot empty-width (`width: visible ? n : 0`).
     Item {
         id: trailingSlot
         width: childrenRect.width
         height: parent.height
-        anchors.right: searchSlot.visible ? searchSlot.left : parent.right
-        anchors.rightMargin: searchSlot.visible ? 18 : root.padH
+        anchors.right: parent.right
+        anchors.rightMargin: root.padH
     }
 
     // Search slot — keeps the CLOSED footprint; the field itself grows left
@@ -180,8 +183,8 @@ Rectangle {
         visible: root.showSearch
         width: searchBox.width
         height: searchBox.height
-        anchors.right: parent.right
-        anchors.rightMargin: root.padH
+        anchors.right: trailingSlot.width > 0 ? trailingSlot.left : parent.right
+        anchors.rightMargin: trailingSlot.width > 0 ? 18 : root.padH
         anchors.verticalCenter: parent.verticalCenter
 
         QbzLineEdit {

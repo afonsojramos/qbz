@@ -735,6 +735,12 @@ Rectangle {
         // stayed up before and "Popular Tracks" scrolled to a section that
         // was not there (owner capture, 2026-09-04).
         if (root.artistTab === "library") {
+            // "About" is the strip's back-to-top, and in library mode it is
+            // also what keeps the strip MOUNTED when the filter yields nothing
+            // (purchases ∧ favourites on an artist whose purchases are not
+            // hearted): the bar carries the two switches, so an empty tab set
+            // would have hidden the only way to reset them.
+            tabs.push({ "id": "about", "label": QbzSession.tr("About", QbzSession.trRev) })
             if (root.libTracks.length > 0) tabs.push({ "id": "tracks", "label": QbzSession.tr("Tracks", QbzSession.trRev) })
             if (root.libAlbums.length > 0) tabs.push({ "id": "albums", "label": QbzSession.tr("Albums", QbzSession.trRev) })
             return tabs
@@ -876,7 +882,12 @@ Rectangle {
         // switch. The strip re-anchors on the first section the new mode
         // draws (catalog keeps its Popular Tracks default).
         setMultiSelect(false)
-        var first = root.jumpTabs.length > 0 ? root.jumpTabs[0].id : ""
+        // The first SECTION, not "About" (back-to-top) when a section exists.
+        var first = ""
+        for (var i = 0; i < root.jumpTabs.length; i++) {
+            first = root.jumpTabs[i].id
+            if (first !== "about") break
+        }
         root.activeJumpTab = artistTab === "catalog" ? "popular-tracks" : first
         if (artistTab === "library") {
             // Re-arm the warm, served from cache (main.rs warm_library).
@@ -1120,6 +1131,9 @@ Rectangle {
                 return
             }
         }
+        // "About" is back-to-top: the library column carries no such anchor
+        // (the bio lives in the header), so it lands on the page top.
+        if (id === "about") flick.contentY = 0
     }
 
 
