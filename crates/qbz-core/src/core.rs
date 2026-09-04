@@ -3877,6 +3877,7 @@ mod tests {
             image: Default::default(),
             label: None,
             genre: None,
+            artist: None,
         });
         t
     }

@@ -2298,3 +2298,21 @@ msgstr "Show album artwork in Library track list"
 
 msgid "Display the album cover thumbnail between the track number and title. Off by default."
 msgstr "Display the album cover thumbnail between the track number and title. Off by default."
+
+msgid "Play random"
+msgstr "Play random"
+
+msgid "Play selected"
+msgstr "Play selected"
+
+msgid "Cancel selection"
+msgstr "Cancel selection"
+
+msgid "QOBUZ LINKS"
+msgstr "QOBUZ LINKS"
+
+msgid "Open Qobuz links in QBZ"
+msgstr "Open Qobuz links in QBZ"
+
+msgid "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
+msgstr "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."

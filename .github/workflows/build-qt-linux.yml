@@ -228,7 +228,7 @@ jobs:
           scripts/packaging/desktop_entry_check.sh --appdir AppDir
           # Nothing in the app uses Qt SQL / network-information plugins.
           rm -rf AppDir/usr/plugins/sqldrivers AppDir/usr/plugins/networkinformation
-          echo "platforms: $(ls AppDir/usr/plugins/platforms | tr '\n' ' ')"
+          echo "platforms: $(find AppDir/usr/plugins/platforms -maxdepth 1 -type f -printf '%f ')"
           test -f AppDir/usr/plugins/platforms/libqwayland-generic.so
           test -f AppDir/usr/plugins/platforms/libqoffscreen.so
           test -f AppDir/usr/qml/QtQuick/Effects/libeffectsplugin.so

@@ -346,4 +346,19 @@ Column {
         label: QbzSession.tr("Flatpak socket access", QbzSession.trRev)
         description: QbzSession.tr("Flatpak install and the presence isn't showing? Grant access to Discord's IPC socket, then restart QBZ:\nflatpak override --user --filesystem=xdg-run/discord-ipc-0 com.blitzfc.qbz", QbzSession.trRev)
     }
+
+    // ========================= QOBUZ LINKS ===============================
+    // The OS-level claim on the official client's `qobuzapp://` scheme, as a
+    // choice (link_handler_qt.rs): on Windows the official client is where
+    // most users still are, so it is opt-IN there; elsewhere it defaults on.
+    // `qbz://` (our own scheme) is always registered and is not this switch.
+    GroupHeader { text: QbzSession.tr("QOBUZ LINKS", QbzSession.trRev) }
+    SettingRow {
+        label: QbzSession.tr("Open Qobuz links in QBZ", QbzSession.trRev)
+        description: QbzSession.tr("Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here.", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.qobuzLinksEnabled === true
+            onToggled: function (v) { QbzBridge.settingsBool("qobuz-links", v) }
+        }
+    }
 }

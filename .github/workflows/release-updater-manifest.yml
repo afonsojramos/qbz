@@ -18,11 +18,19 @@ jobs:
     # Only run on successful tag-triggered builds (not manual dispatches)
     if: >
       github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
       startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Checkout triggering release commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
       - name: Resolve version from tag
         id: version
         # `head_branch` on a `workflow_run` event is attacker-controllable
@@ -31,14 +39,29 @@ jobs:
         # the shape before letting it flow into shell or $GITHUB_OUTPUT.
         env:
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          if ! printf '%s' "$HEAD_BRANCH" | grep -Eq '^v[0-9][0-9A-Za-z._-]{0,63}$'; then
+          if ! printf '%s' "$HEAD_BRANCH" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
             echo "::error::Rejected head_branch for manifest job: $HEAD_BRANCH"
             exit 1
           fi
           TAG="$HEAD_BRANCH"
           VERSION="${TAG#v}"
+          git fetch origin main --tags
+          if ! git show-ref --verify --quiet "refs/tags/${TAG}"; then
+            echo "::error::Release tag ${TAG} does not exist"
+            exit 1
+          fi
+          TAG_SHA="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          if [[ "$TAG_SHA" != "$HEAD_SHA" ]]; then
+            echo "::error::workflow_run SHA does not match ${TAG}"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$TAG_SHA" origin/main; then
+            echo "::error::${TAG} is not on main"
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 

@@ -578,6 +578,7 @@ fn main() {
                 "qml/controls/ScopePanel.qml",
                 "qml/controls/QbzSegToggle.qml",
                 "qml/controls/QbzSelect.qml",
+                "qml/controls/QbzSplitButton.qml",
                 "qml/controls/QbzSlider.qml",
                 "qml/controls/QbzTabBar.qml",
                 "qml/controls/QbzTextArea.qml",

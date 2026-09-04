@@ -1562,7 +1562,7 @@ pub async fn toggle_favorite(runtime: &Arc<AppRuntime<LoggingAdapter>>, kind: &s
     // (Home / Search / Recommendations re-published the pre-toggle heart on
     // their next republish). The panel itself still repaints from `publish`.
     if let Some(value) = crate::library_qt::toggle_favorite(runtime, kind, id).await {
-        crate::emit_library_favorite(kind, id, value);
+        crate::settle_favorite(runtime, kind, id, value).await;
     }
     publish(runtime).await;
 }

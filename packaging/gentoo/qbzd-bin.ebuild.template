@@ -3,7 +3,7 @@
 
 EAPI=8
 
-inherit xdg-utils
+inherit optfeature
 
 DESCRIPTION="QBZ headless Qobuz daemon for servers and appliances (prebuilt binary)"
 HOMEPAGE="https://qbz.lol https://github.com/vicrodh/qbz"
@@ -17,30 +17,20 @@ SRC_URI="
 LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64 ~arm64"
-# mirror: GitHub-only distfiles — without this Portage 404s through every
-# official Gentoo mirror before reaching SRC_URI. strip: prebuilt binary,
-# already stripped at build time; keep Portage's stripper off it.
+IUSE="jack pipewire pulseaudio"
 RESTRICT="mirror strip"
 
-# qbzd is slint-free: the measured link set is libasound only (+ libc/libm/
-# libgcc from the toolchain). pipewire is the runtime device-enumeration
-# helper (bit-perfect sample-rate queries, DAC detection).
+# Measured NEEDED set: libasound only, plus toolchain libraries. The helper
+# processes used for richer routing remain optional.
 RDEPEND="
 	media-libs/alsa-lib
-	media-video/pipewire
+	jack? ( virtual/jack )
+	pipewire? ( media-video/pipewire )
+	pulseaudio? ( media-libs/libpulse )
 "
 
-BDEPEND=""
-
-# Binary package, no compilation needed
 QA_PREBUILT="usr/bin/qbzd"
-
 S="${WORKDIR}"
-
-src_unpack() {
-	default
-	# Tarball extracts to qbzd-${PV}-linux-{amd64|aarch64}/ directory
-}
 
 src_install() {
 	local dir
@@ -51,23 +41,31 @@ src_install() {
 	fi
 
 	dobin "${dir}/qbzd"
-
 	insinto /usr/lib/systemd/user
 	doins "${dir}/qbzd.service"
-
 	insinto /usr/share/bash-completion/completions
 	newins "${dir}/completions/qbzd.bash" qbzd
 	insinto /usr/share/zsh/site-functions
 	newins "${dir}/completions/qbzd.zsh" _qbzd
 	insinto /usr/share/fish/vendor_completions.d
-	newins "${dir}/completions/qbzd.fish" qbzd
-
-	dodoc "${dir}/README.md"
+	newins "${dir}/completions/qbzd.fish" qbzd.fish
+	dodoc "${dir}/README.md" "${dir}/LICENSE"
 }
 
 pkg_postinst() {
 	elog "Run 'qbzd' once for the setup wizard (or 'qbzd tui')."
-	elog "Optional user service (starts at login):"
-	elog "  systemctl --user enable --now qbzd.service"
-	elog "  loginctl enable-linger \${USER}   # keep it running after logout"
+	if [[ -d /run/systemd/system ]]; then
+		elog "Optional systemd user service: systemctl --user enable --now qbzd.service"
+		elog "Use loginctl enable-linger USER to keep it running after logout."
+	elif [[ -e /run/openrc ]] || [[ -x /sbin/openrc ]]; then
+		elog "Generate an OpenRC service for the playback user with:"
+		elog "  qbzd service openrc --user USER --bin /usr/bin/qbzd"
+	elif [[ -e /run/runit ]] || [[ -d /etc/sv ]]; then
+		elog "Generate a runit service for the playback user with:"
+		elog "  qbzd service runit --user USER --bin /usr/bin/qbzd"
+	else
+		elog "Generate a definition for the active init with:"
+		elog "  qbzd service --user USER --bin /usr/bin/qbzd"
+	fi
+	optfeature "opening login links in a local browser" x11-misc/xdg-utils
 }

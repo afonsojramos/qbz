@@ -6709,3 +6709,21 @@ msgstr "Mostrar capas de álbum na lista de faixas da Biblioteca"
 
 msgid "Display the album cover thumbnail between the track number and title. Off by default."
 msgstr "Exibe a miniatura da capa entre o número e o título da faixa. Desligado por padrão."
+
+msgid "Play random"
+msgstr "Reproduzir aleatório"
+
+msgid "Play selected"
+msgstr "Reproduzir seleção"
+
+msgid "Cancel selection"
+msgstr "Cancelar seleção"
+
+msgid "QOBUZ LINKS"
+msgstr "LINKS DO QOBUZ"
+
+msgid "Open Qobuz links in QBZ"
+msgstr "Abrir links do Qobuz no QBZ"
+
+msgid "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
+msgstr "Torna o QBZ o manipulador dos links qobuzapp:// vindos do navegador. Desligado, o app oficial do Qobuz fica com eles; os links qbz:// do QBZ sempre abrem aqui."

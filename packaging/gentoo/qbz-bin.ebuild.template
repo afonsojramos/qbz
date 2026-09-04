@@ -3,7 +3,7 @@
 
 EAPI=8
 
-inherit xdg-utils
+inherit xdg
 
 DESCRIPTION="Native hi-fi Qobuz desktop player for Linux (prebuilt binary)"
 HOMEPAGE="https://qbz.lol https://github.com/vicrodh/qbz"
@@ -17,52 +17,39 @@ SRC_URI="
 LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64 ~arm64"
-# mirror: GitHub-only distfiles — without this Portage 404s through every
-# official Gentoo mirror before reaching SRC_URI. strip: prebuilt binary,
-# already stripped at build time; keep Portage's stripper off it.
+IUSE="jack pipewire pulseaudio"
 RESTRICT="mirror strip"
 
-# v2.1+ Qt binary: no webkit/gtk/appindicator. qtsvg provides the imageformats
-# plugin used by the shipped SVG icon set.
-# Per-arch floors mirror what CI links against (build-qt-linux.yml): amd64
-# builds on Qt 6.8.3 / ubuntu-22.04 (glibc 2.35); arm64 builds on Qt 6.9.3 /
-# ubuntu-24.04-arm (glibc 2.39) because aqt's arm64 6.8 host tools segfault.
+# Qt carries its own X11/Wayland, font and graphics dependencies. Keep only
+# direct QBZ requirements here; helper binaries are optional USE paths. The
+# per-arch Qt/glibc floors match the release builders.
 RDEPEND="
 	amd64? (
-		>=dev-qt/qtbase-6.8:6[dbus,gui,network,opengl,wayland,X]
-		>=dev-qt/qtdeclarative-6.8:6
+		>=dev-qt/qtbase-6.8:6[gui,network,opengl]
+		>=dev-qt/qtdeclarative-6.8:6[network,opengl]
 		>=dev-qt/qtsvg-6.8:6
+		>=dev-qt/qtwayland-6.8:6
 		>=sys-libs/glibc-2.35
 	)
 	arm64? (
-		>=dev-qt/qtbase-6.9:6[dbus,gui,network,opengl,wayland,X]
-		>=dev-qt/qtdeclarative-6.9:6
+		>=dev-qt/qtbase-6.9:6[gui,network,opengl]
+		>=dev-qt/qtdeclarative-6.9:6[network,opengl]
 		>=dev-qt/qtsvg-6.9:6
+		>=dev-qt/qtwayland-6.9:6
 		>=sys-libs/glibc-2.39
 	)
 	media-libs/alsa-lib
-	media-libs/fontconfig
-	media-libs/freetype
-	media-libs/libpng
-	app-arch/bzip2
-	dev-libs/expat
-	sys-libs/zlib
-	x11-libs/libxkbcommon
-	dev-libs/wayland
-	media-libs/libglvnd
-	sys-apps/dbus
+	x11-misc/xdg-utils
+	jack? ( virtual/jack )
+	pipewire? ( media-video/pipewire )
+	pulseaudio? ( media-libs/libpulse )
 "
 
-BDEPEND=""
-
-# Binary package, no compilation needed
 QA_PREBUILT="usr/bin/qbz"
-
 S="${WORKDIR}"
 
 src_unpack() {
 	default
-	# Tarball extracts to qbz_${PV}_${arch}/ directory
 	if use amd64; then
 		S="${WORKDIR}/qbz_${MY_PV}_amd64"
 	elif use arm64; then
@@ -73,19 +60,18 @@ src_unpack() {
 src_install() {
 	dobin qbz
 
-	# MPRIS publishes DesktopEntry=com.blitzfc.qbz: the installed basename
-	# MUST match or the GNOME/Plasma media widget loses its icon
-	# (scripts/packaging/desktop_entry_check.sh documents the invariant).
 	insinto /usr/share/applications
 	newins qbz.desktop com.blitzfc.qbz.desktop
 
 	local size
-	for size in 32 48 64 128 256; do
-		if [[ -f "icons/hicolor/${size}x${size}/apps/qbz.png" ]]; then
-			insinto "/usr/share/icons/hicolor/${size}x${size}/apps"
-			doins "icons/hicolor/${size}x${size}/apps/qbz.png"
-		fi
+	for size in 32 48 64 128 256 512; do
+		insinto "/usr/share/icons/hicolor/${size}x${size}/apps"
+		doins "icons/hicolor/${size}x${size}/apps/qbz.png"
 	done
+
+	insinto /usr/share/metainfo
+	doins com.blitzfc.qbz.metainfo.xml
+	dodoc LICENSE
 }
 
 pkg_postinst() {

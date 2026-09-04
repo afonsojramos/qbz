@@ -64,6 +64,14 @@ pub struct FeedItem {
     pub album: String,
     #[serde(rename = "albumId")]
     pub album_id: String,
+    /// Track rows only: the id of the ALBUM's main artist, beside the
+    /// performer id in `artist_id`. A favourited track is a member of an
+    /// artist's "In library" tab through EITHER — `artist_id` alone is the
+    /// track's performer, which on features, interpreters and re-credited
+    /// remasters is not the artist whose page is open (issue #737 round,
+    /// contract §5). Skipped when empty so album/artist rows pay nothing.
+    #[serde(default, rename = "albumArtistId", skip_serializing_if = "String::is_empty")]
+    pub album_artist_id: String,
     #[serde(rename = "imageUrl")]
     pub image_url: String,
     /// Stable artwork key (`{kind}:{id}`) — library_all.rs `feed_key`.
@@ -459,6 +467,12 @@ fn map_track(track: Track) -> FeedItem {
         .and_then(|a| a.genre.as_ref())
         .map(|g| g.name.clone())
         .unwrap_or_default();
+    let album_artist_id = track
+        .album
+        .as_ref()
+        .and_then(|a| a.artist.as_ref())
+        .map(|x| x.id.to_string())
+        .unwrap_or_default();
     let (artist, artist_id) = track
         .performer
         .map(|p| (p.name, p.id.to_string()))
@@ -474,6 +488,7 @@ fn map_track(track: Track) -> FeedItem {
         artist_id,
         album,
         album_id,
+        album_artist_id,
         genre,
         duration: mmss(track.duration),
         quality_tier: home_qt::quality_tier_from_depth(track.maximum_bit_depth).to_string(),
@@ -1330,7 +1345,7 @@ async fn fetch_purchases(
         .into_iter()
         .map(|t| {
             // Track row art: full variant (best()) — the thumbnail down-tier was reverted after the 2026-08-15 owner smoke (contract 04 §3).
-            let (img, alb, aid) = t
+            let (img, alb, aid, album_artist_id) = t
                 .album
                 .as_ref()
                 .map(|a| {
@@ -1338,6 +1353,7 @@ async fn fetch_purchases(
                         a.image.best().cloned().unwrap_or_default(),
                         a.title.clone(),
                         a.id.clone(),
+                        a.artist.as_ref().map(|x| x.id.to_string()).unwrap_or_default(),
                     )
                 })
                 .unwrap_or_default();
@@ -1354,6 +1370,7 @@ async fn fetch_purchases(
                 artist_id: t.performer.id.to_string(),
                 album: alb,
                 album_id: aid,
+                album_artist_id,
                 image_url: img,
                 quality_tier: tier.into(),
                 // See `FeedItem::bit_depth` — a purchased TRACK row is a queue
@@ -1696,6 +1713,186 @@ pub(crate) fn set_feed_favorite(kind: &str, id: &str, value: bool) {
             item.is_favorite = value;
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Artist page "In library" membership (#737 round, contract §3)
+// ---------------------------------------------------------------------------
+//
+// The artist page lists what the user OWNS of one artist: favourites ∪
+// purchases, with `Library > Albums` / `Library > Tracks` semantics — NOT the
+// `All` feed's. Local / Plex rows never enter (owner ruling 2026-09-04).
+//
+// One representative row per `{kind}:{id}` — the purchase row wins so its
+// quality badge survives — and `is_favorite` on that row answers "is it ALSO
+// hearted", which is what the tab's purchases/favourites switches evaluate
+// (LibraryView.qml:566-590: neither = union, one = that source, both =
+// intersection). `group` on the representative row therefore means
+// "is purchased" and `is_favorite` means "is hearted"; a row can carry both.
+//
+// A track belongs to an artist through its performer OR its album's main
+// artist (`FeedItem::album_artist_id`): the feed's `artist_id` is the
+// performer, and the owner's own screenshot (Megadeth, two hearted Popular
+// Tracks, badge 3) showed hearted tracks dropping out under the
+// performer-only rule.
+
+fn feed_row_is_artist(item: &FeedItem, artist_id: &str) -> bool {
+    item.artist_id == artist_id || item.album_artist_id == artist_id
+}
+
+/// Every album / track of `artist_id` the user owns, deduplicated per entity,
+/// in feed order (newest first — `load_library` merges that way).
+pub(crate) fn artist_library_items(artist_id: &str) -> Vec<FeedItem> {
+    if artist_id.is_empty() {
+        return Vec::new();
+    }
+    with_library(|d| artist_library_items_from(&d.feed, artist_id)).unwrap_or_default()
+}
+
+/// The pure rule behind [`artist_library_items`], over any feed slice.
+fn artist_library_items_from(feed: &[FeedItem], artist_id: &str) -> Vec<FeedItem> {
+    let mut order: Vec<String> = Vec::new();
+    let mut by_key: HashMap<String, FeedItem> = HashMap::new();
+    for item in feed.iter().filter(|i| {
+        (i.kind == "track" || i.kind == "album")
+            && (i.group == "favorites" || i.group == "purchases")
+            && feed_row_is_artist(i, artist_id)
+    }) {
+        let key = feed_key(&item.kind, &item.id);
+        let hearted = item.group == "favorites" || item.is_favorite;
+        match by_key.get_mut(&key) {
+            None => {
+                let mut row = item.clone();
+                row.is_favorite = hearted;
+                by_key.insert(key.clone(), row);
+                order.push(key);
+            }
+            Some(row) => {
+                row.is_favorite |= hearted;
+                // The purchase row is the representative (quality badge,
+                // entitlement); keep the heart it just collected.
+                if item.group == "purchases" && row.group != "purchases" {
+                    let keep_heart = row.is_favorite;
+                    *row = item.clone();
+                    row.is_favorite = keep_heart;
+                }
+            }
+        }
+    }
+    order
+        .into_iter()
+        .filter_map(|k| by_key.remove(&k))
+        .collect()
+}
+
+/// Reconcile the cached feed with a Qobuz heart that just SETTLED, so a
+/// favourite created after `load_library` ran appears in the document and a
+/// cleared one leaves it. Returns whether membership changed (the caller then
+/// republishes the Library document — the same rule `remove_local_favorite_row`
+/// / `insert_local_favorite_row` follow for local hearts).
+///
+/// Why this exists: `set_feed_favorite` only flips `is_favorite` on rows that
+/// are ALREADY in the feed. A track hearted from the artist page had no row,
+/// so the artist page's "In library" count never moved until the next
+/// session — the reference had the same hole and called it "acceptable v1"
+/// (`library_by_artist.rs`); this round closes it.
+///
+/// - `value == true` and no row: ONE `/track/get` or `/album/get`, mapped by
+///   the same producer the full load uses, inserted at the top (newest first).
+///   A failed fetch is logged and skipped — the heart itself already landed.
+/// - `value == false`: the `favorites` rows leave. A `purchases` row for the
+///   same entity STAYS (it is still library) with its heart cleared, which
+///   `set_feed_favorite` already did for every row.
+///
+/// Only Qobuz kinds ride this path; local hearts have their own pair.
+pub(crate) async fn reconcile_qobuz_favorite(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    kind: &str,
+    id: &str,
+    value: bool,
+) -> bool {
+    if kind != "track" && kind != "album" {
+        return false;
+    }
+    if is_local_feed_id(kind, id) {
+        return false;
+    }
+    // No library snapshot yet: nothing to reconcile, the next load sees the
+    // server state.
+    if with_library(|_| ()).is_none() {
+        return false;
+    }
+    if !value {
+        return with_library_mut(|d| {
+            let before = d.feed.len();
+            d.feed
+                .retain(|i| !(i.group == "favorites" && i.kind == kind && i.id == id));
+            let removed = before - d.feed.len();
+            if removed > 0 {
+                d.counts.all = (d.counts.all - removed as i64).max(0);
+                match kind {
+                    "track" => d.counts.tracks = (d.counts.tracks - 1).max(0),
+                    "album" => d.counts.albums = (d.counts.albums - 1).max(0),
+                    _ => {}
+                }
+            }
+            removed > 0
+        })
+        .unwrap_or(false);
+    }
+    let already = with_library(|d| {
+        d.feed
+            .iter()
+            .any(|i| i.group == "favorites" && i.kind == kind && i.id == id)
+    })
+    .unwrap_or(false);
+    if already {
+        return false;
+    }
+    let row = match fetch_favorite_row(runtime, kind, id).await {
+        Some(row) => row,
+        None => {
+            log::warn!("[qbz-qt] library feed: could not fetch {kind}:{id} after favourite");
+            return false;
+        }
+    };
+    with_library_mut(|d| {
+        d.feed.insert(0, row);
+        d.counts.all += 1;
+        match kind {
+            "track" => d.counts.tracks += 1,
+            "album" => d.counts.albums += 1,
+            _ => {}
+        }
+    });
+    true
+}
+
+/// The catalog row for a freshly hearted entity, mapped by the SAME producer
+/// the full load uses (`map_track` / `map_album`), so a row inserted live and
+/// one fetched at load are indistinguishable downstream.
+async fn fetch_favorite_row(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    kind: &str,
+    id: &str,
+) -> Option<FeedItem> {
+    match kind {
+        "track" => {
+            let tid = id.parse::<u64>().ok()?;
+            let track = runtime.core().get_track(tid).await.ok()?;
+            let mut row = map_track(track);
+            row.is_favorite = true;
+            Some(row)
+        }
+        "album" => {
+            let album = runtime.core().get_album(id).await.ok()?;
+            let ready = ready_offline_album_track_counts().await;
+            let mut row = map_album(album, ready.get(id).copied().unwrap_or(0));
+            row.is_favorite = true;
+            Some(row)
+        }
+        _ => None,
+    }
 }
 
 /// Reconcile a local-favorite membership change with the cached mixed feed.
@@ -2430,5 +2627,68 @@ mod tests {
         teardown();
         let _ = std::fs::remove_dir_all(&guest);
         let _ = std::fs::remove_dir_all(&account);
+    }
+
+    // --- Artist page "In library" membership (#737 round, contract §3) ------
+
+    fn owned(kind: &str, id: &str, group: &str, artist_id: &str, album_artist_id: &str) -> FeedItem {
+        FeedItem {
+            kind: kind.into(),
+            group: group.into(),
+            source: "qobuz".into(),
+            id: id.into(),
+            title: id.into(),
+            artist_id: artist_id.into(),
+            album_artist_id: album_artist_id.into(),
+            is_favorite: group == "favorites",
+            ..Default::default()
+        }
+    }
+
+    /// A hearted track joins through EITHER id: the performer (feed
+    /// `artist_id`) or the album's main artist — the owner's Megadeth rows
+    /// whose performer was not the page's artist.
+    #[test]
+    fn artist_library_matches_performer_or_album_artist() {
+        let feed = vec![
+            owned("track", "1", "favorites", "42", ""),
+            owned("track", "2", "favorites", "7", "42"),
+            owned("track", "3", "favorites", "7", "7"),
+            owned("album", "a", "favorites", "42", ""),
+        ];
+        let ids: Vec<String> = artist_library_items_from(&feed, "42")
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        assert_eq!(ids, vec!["1", "2", "a"]);
+    }
+
+    /// Local / Plex rows and the `following` group never enter — the tab is
+    /// `Library > Albums / Tracks`, not `Library > All`.
+    #[test]
+    fn artist_library_excludes_local_and_following() {
+        let mut local = owned("track", "9", "local", "42", "");
+        local.source = "local".into();
+        let feed = vec![local, owned("artist", "42", "following", "42", "")];
+        assert!(artist_library_items_from(&feed, "42").is_empty());
+    }
+
+    /// A purchased album that is also hearted collapses to ONE row — the
+    /// purchase row (its quality badge survives) — carrying the heart; a
+    /// purchase that is not hearted carries none.
+    #[test]
+    fn artist_library_dedups_on_the_purchase_row() {
+        let feed = vec![
+            owned("album", "a", "favorites", "42", ""),
+            owned("album", "a", "purchases", "42", ""),
+            owned("album", "b", "purchases", "42", ""),
+        ];
+        let rows = artist_library_items_from(&feed, "42");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "a");
+        assert_eq!(rows[0].group, "purchases");
+        assert!(rows[0].is_favorite);
+        assert_eq!(rows[1].id, "b");
+        assert!(!rows[1].is_favorite);
     }
 }

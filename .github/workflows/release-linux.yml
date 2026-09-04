@@ -10,14 +10,17 @@
 #     distros without a usable Qt (Ubuntu 24.04 = Qt 6.4) keep working.
 #
 # CONTRACT (do not break): the release must keep publishing
-#   qbz_${VERSION}_amd64.tar.gz   (dir qbz_${VERSION}_amd64/{qbz, qbz.desktop, icons/hicolor/...})
+#   qbz_${VERSION}_amd64.tar.gz   (dir qbz_${VERSION}_amd64/{qbz, qbzd, LICENSE, qbz.desktop,
+#                                  com.blitzfc.qbz.metainfo.xml, qbzd.service,
+#                                  completions/, icons/hicolor/...})
 #   QBZ_${VERSION}_amd64.deb / QBZ-${VERSION}-1.x86_64.rpm / QBZ_${VERSION}_amd64.AppImage
 #   qbzd_${VERSION}_amd64.deb / qbzd-${VERSION}-1.x86_64.rpm / qbzd-${VERSION}-linux-amd64.tar.gz
+#   qbz-${VERSION}-cargo-vendor.tar.xz (architecture-neutral, x86_64 workflow only)
 # — release-aur.yml, release-gentoo.yml, qbz-apt, qbz-rpm, the updater
 # manifest and the website consume these names.
 #
-# release-linux-aarch64.yml is this file with the four ARCH_* values changed.
-# Keep them structurally identical.
+# release-linux-aarch64.yml is this file with the four ARCH_* values changed,
+# except that x86_64 publishes the architecture-neutral Cargo vendor asset.
 #
 # Triggers: version tags (cut from main — enforced by the ancestry guard)
 # + manual dispatch (guard skipped, for testing on any branch).
@@ -180,6 +183,9 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
+      - name: Install Rust toolchain for source-package vendor archive
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Download bare binary
         uses: actions/download-artifact@v8
         with:
@@ -220,6 +226,9 @@ jobs:
           QBZ_ARCH: ${{ env.DEB_ARCH }}
         run: |
           mkdir -p dist
+          ./qbzd completions bash > qbzd.bash
+          ./qbzd completions zsh > qbzd.zsh
+          ./qbzd completions fish > qbzd.fish
           nfpm package -f packaging/nfpm/nfpm.yaml -p deb \
             -t "dist/QBZ_${VERSION}_${DEB_ARCH}.deb"
           nfpm package -f packaging/nfpm/nfpm.yaml -p rpm \
@@ -273,7 +282,7 @@ jobs:
           # CONTRACT: release-aur.yml, the Gentoo binary ebuild, qbz-apt and
           # the website hard-code this name and internal layout.
           TARBALL_DIR="qbz_${VERSION}_${DEB_ARCH}"
-          mkdir -p "tarball-staging/${TARBALL_DIR}/icons/hicolor"/{32x32,48x48,64x64,128x128,256x256}/apps
+          mkdir -p "tarball-staging/${TARBALL_DIR}/icons/hicolor"/{32x32,48x48,64x64,128x128,256x256,512x512}/apps
           cp qbz "tarball-staging/${TARBALL_DIR}/qbz"
           chmod +x "tarball-staging/${TARBALL_DIR}/qbz"
           cp packaging/icons/32x32.png   "tarball-staging/${TARBALL_DIR}/icons/hicolor/32x32/apps/qbz.png"
@@ -281,14 +290,17 @@ jobs:
           cp packaging/icons/64x64.png   "tarball-staging/${TARBALL_DIR}/icons/hicolor/64x64/apps/qbz.png"
           cp packaging/icons/128x128.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/128x128/apps/qbz.png"
           cp packaging/icons/256x256.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/256x256/apps/qbz.png"
+          cp packaging/icons/512x512.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/512x512/apps/qbz.png"
           cp packaging/linux/qbz.desktop "tarball-staging/${TARBALL_DIR}/qbz.desktop"
+          cp packaging/flatpak/com.blitzfc.qbz.metainfo.xml "tarball-staging/${TARBALL_DIR}/com.blitzfc.qbz.metainfo.xml"
+          cp LICENSE "tarball-staging/${TARBALL_DIR}/LICENSE"
           cp qbzd "tarball-staging/${TARBALL_DIR}/qbzd"
           chmod +x "tarball-staging/${TARBALL_DIR}/qbzd"
           cp crates/qbzd/service/qbzd.service "tarball-staging/${TARBALL_DIR}/qbzd.service"
           mkdir -p "tarball-staging/${TARBALL_DIR}/completions"
-          ./qbzd completions bash > "tarball-staging/${TARBALL_DIR}/completions/qbzd.bash"
-          ./qbzd completions zsh  > "tarball-staging/${TARBALL_DIR}/completions/qbzd.zsh"
-          ./qbzd completions fish > "tarball-staging/${TARBALL_DIR}/completions/qbzd.fish"
+          cp qbzd.bash "tarball-staging/${TARBALL_DIR}/completions/qbzd.bash"
+          cp qbzd.zsh  "tarball-staging/${TARBALL_DIR}/completions/qbzd.zsh"
+          cp qbzd.fish "tarball-staging/${TARBALL_DIR}/completions/qbzd.fish"
           tar -czvf "dist/qbz_${VERSION}_${DEB_ARCH}.tar.gz" -C tarball-staging "${TARBALL_DIR}"
           ls -la dist
 
@@ -299,12 +311,19 @@ jobs:
           cp qbzd "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
           chmod +x "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
           cp crates/qbzd/service/qbzd.service "qbzd-tarball-staging/${QBZD_DIR}/qbzd.service"
-          ./qbzd completions bash > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.bash"
-          ./qbzd completions zsh  > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.zsh"
-          ./qbzd completions fish > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.fish"
+          cp qbzd.bash "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.bash"
+          cp qbzd.zsh  "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.zsh"
+          cp qbzd.fish "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.fish"
           cp packaging/linux/qbzd-standalone-README.md "qbzd-tarball-staging/${QBZD_DIR}/README.md"
+          cp LICENSE "qbzd-tarball-staging/${QBZD_DIR}/LICENSE"
           tar -czvf "dist/qbzd-${VERSION}-linux-${DEB_ARCH}.tar.gz" -C qbzd-tarball-staging "${QBZD_DIR}"
           ls -la dist
+
+      # One architecture-neutral, locked dependency archive serves the qbz
+      # and qbzd source packages in AUR and Gentoo. It is generated only here,
+      # never duplicated by the arm64 release workflow.
+      - name: Build Cargo vendor archive for source packages
+        run: scripts/packaging/cargo_vendor_release.sh "$VERSION" dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -330,11 +349,10 @@ jobs:
           event-type: new-release
           client-payload: '{"tag": "${{ github.ref_name }}"}'
 
-      # Our own RPM repo (qbz-rpm — mirrors qbz-apt's flow with createrepo).
-      # continue-on-error until the token scope covers the new repo.
+      # Our own signed RPM repo. This is intentionally required: a bad token
+      # must not leave the stable RPM channel stale without failing release CI.
       - name: Trigger RPM repo update
         if: startsWith(github.ref, 'refs/tags/')
-        continue-on-error: true
         uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ secrets.APT_REPO_TOKEN }}

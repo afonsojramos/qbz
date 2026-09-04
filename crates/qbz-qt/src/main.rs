@@ -365,6 +365,7 @@ mod suggestions_qt;
 // no #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
 mod hotkeys_qt;
 mod integrations_qt;
+mod link_handler_qt;
 mod settings_qt;
 mod sidebar_qt;
 mod sleep_timer_qt;
@@ -830,6 +831,9 @@ fn on_session_entered() {
     // ListenBrainz opt-ins and starts the scrobble-queue flush watcher.
     // Strictly opt-in — every one of them is inert until the user connects it.
     integrations_qt::start(&app());
+    // Drop a `qobuzapp://` claim the user never made (2.0.x MSI); never
+    // claims on its own — see link_handler_qt.
+    link_handler_qt::reconcile_at_startup();
     // System tray (Linux only, ksni — owner ruling K2), the port of
     // `init_shell_for_user`'s `tray::init` call (`crates/qbz/src/main.rs:257-263`).
     // Suppressed under gamescope by the same predicate the reference uses
@@ -1427,6 +1431,13 @@ pub(crate) fn open_artist(artist_id: String) {
     }
     nav_qt::record("artist");
     *LAST_DETAIL.lock().unwrap() = ("artist".to_string(), artist_id.clone());
+    // Warm the Library feed in the background: the page's "In library" tab is
+    // built off it, and on a cold session (or right after an account switch —
+    // `reset_session_latches`) it was empty until the user happened to visit
+    // Library, so the toggle never mounted. Idempotent through
+    // `LIBRARY_LOADED`; with the feed warm this is a no-op, and when it lands
+    // `reload_library` repaints the open page's rows.
+    load_library_once();
     let runtime = app();
     artist_bridge::ui(move |mut b| {
         // Same as open_album: stale artist until the fetch lands otherwise.
@@ -1706,6 +1717,21 @@ pub(crate) fn queue_panel_opened() {
 }
 
 /// AlbumView header Shuffle.
+/// Artist page album-section split button: "Play all" / "Play selected"
+/// over a JSON array of album ids, in the section's sort order.
+pub(crate) fn play_albums(ids_json: String) {
+    let ids: Vec<String> = serde_json::from_str(&ids_json).unwrap_or_default();
+    if ids.is_empty() {
+        return;
+    }
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playback_qt::play_albums(&runtime, &ids).await {
+            log::error!("[qbz-qt] play_albums failed: {e}");
+        }
+    });
+}
+
 pub(crate) fn play_album_shuffled(album_id: String) {
     let runtime = app();
     spawn(async move {
@@ -2956,6 +2982,16 @@ pub(crate) fn toggle_ambient_background() {
     shell_bridge::ui(move |mut b| b.as_mut().set_ambient_mode(mode));
 }
 
+/// ArtistView's "In library" toggle: ask for the feed (a fetch only if it has
+/// never loaded this session — `load_library_once`), and repaint the open
+/// page's rows from the cache when it is already warm. The owner's rule for
+/// the toggle: re-arm the warm, but SERVE FROM CACHE — clicking the tab must
+/// never refetch a 10k-row feed.
+pub(crate) fn warm_library() {
+    load_library_once();
+    artist_qt::refresh_library_items();
+}
+
 fn load_library_once() {
     if *LIBRARY_LOADED.lock().unwrap() {
         return;
@@ -3009,6 +3045,9 @@ pub(crate) fn reload_library() {
                     b.as_mut().set_library_loading(false);
                 });
                 log_rss("library published");
+                // The artist page open right now (if any) was built while the
+                // feed was cold — hand it its "In library" rows.
+                artist_qt::refresh_library_items();
             }
             Err(e) => {
                 log::warn!("[qbz-qt] library load failed: {e}");
@@ -3140,13 +3179,34 @@ pub(crate) fn library_toggle_favorite(kind: String, id: String) {
     let runtime = app();
     spawn(async move {
         if let Some(value) = library_qt::toggle_favorite(&runtime, &kind, &id).await {
-            let membership_changed = !value && library_qt::remove_local_favorite_row(&kind, &id);
-            emit_library_favorite(&kind, &id, value);
-            if membership_changed {
-                publish_library_document();
-            }
+            settle_favorite(&runtime, &kind, &id, value).await;
         }
     });
+}
+
+/// A heart's write LANDED with `value`: reconcile the cached feed (a fresh
+/// Qobuz favourite joins it, a cleared one leaves; local hearts have their
+/// own row pair), fan the settled value out through `emit_library_favorite`,
+/// and republish the Library document only when a row came or went.
+///
+/// Reconcile BEFORE emit, deliberately: the fan-out reaches
+/// `artist_qt::apply_favorite_change`, which recomputes the open artist's
+/// "In library" rows off the feed — it has to see the inserted / removed row
+/// or the tab keeps its stale count (the #737 round's "the badge never
+/// moves"). Every settle point that owns a Qobuz heart goes through here
+/// (`library_toggle_favorite`, the queue panel heart in `queue_qt`).
+pub(crate) async fn settle_favorite(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    kind: &str,
+    id: &str,
+    value: bool,
+) {
+    let mut membership_changed = !value && library_qt::remove_local_favorite_row(kind, id);
+    membership_changed |= library_qt::reconcile_qobuz_favorite(runtime, kind, id, value).await;
+    emit_library_favorite(kind, id, value);
+    if membership_changed {
+        publish_library_document();
+    }
 }
 
 /// THE settle point for a heart, wherever the click came from: emit the
@@ -3183,6 +3243,7 @@ pub(crate) fn emit_library_favorite(kind: &str, id: &str, value: bool) {
     home_qt::apply_favorite_change(kind, id, value);
     recommendations_qt::apply_favorite_change(kind, id, value);
     search_qt::apply_favorite_change(kind, id, value);
+    artist_qt::apply_favorite_change(kind, id, value);
 }
 
 /// Dev navigation driver — `QBZ_QT_NAV_BENCH=home,library,home,settings`.

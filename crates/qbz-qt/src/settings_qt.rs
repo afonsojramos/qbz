@@ -2243,6 +2243,9 @@ pub struct SettingsDoc {
     pub integrations_status_kind: i32,
     #[serde(rename = "discordEnabled")]
     pub discord_enabled: bool,
+    /// Settings > Integrations > "Open Qobuz links in QBZ" (link_handler_qt).
+    #[serde(rename = "qobuzLinksEnabled")]
+    pub qobuz_links_enabled: bool,
     // --- Per-section sub-documents (settings_qt/*.rs) ---------------------
     /// Settings > Local Library (folders, scan, maintenance, Plex fields).
     pub library: library::Snapshot,
@@ -2719,6 +2722,7 @@ pub async fn publish_snapshot() {
             integrations_status_text: integ_ui.status_text.clone(),
             integrations_status_kind: integ_ui.status_kind,
             discord_enabled: crate::integrations_qt::discord_enabled(),
+            qobuz_links_enabled: crate::link_handler_qt::is_enabled(),
             library: library::snapshot(),
             offline: offline::snapshot(),
             dev: devtools::snapshot(),
@@ -3614,6 +3618,8 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
             crate::integrations_qt::set_listenbrainz_enabled(value).map(|_| Apply::None)
         }
         "discord-rpc" => crate::integrations_qt::set_discord_enabled(value).map(|_| Apply::None),
+        // The OS-level `qobuzapp://` handler claim (link_handler_qt).
+        "qobuz-links" => crate::link_handler_qt::set_enabled(value).map(|_| Apply::None),
         // --- Offline -------------------------------------------------------
         // Induced offline. The engine takes the #279 stream-first snapshot,
         // so the audio settings can change under us -> Reload the player.

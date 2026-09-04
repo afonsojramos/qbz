@@ -97,6 +97,13 @@ pub mod qbz_artist_bridge {
         #[qinvokable]
         fn image_save_as(self: Pin<&mut QbzArtist>, name: QString, artwork_url: QString);
 
+        /// ArtistView "In library" toggle: warm the Library feed if this
+        /// session never loaded it, else repaint the tab's rows from the
+        /// cache (`main::warm_library`). `#[auto_cxx_name]` makes the QML
+        /// name `QbzArtist.warmLibrary`.
+        #[qinvokable]
+        fn warm_library(self: Pin<&mut QbzArtist>);
+
         /// ArtistView per-section "Load more" — the next releases page.
         #[qinvokable]
         fn load_release_section(
@@ -220,6 +227,10 @@ impl qbz_artist_bridge::QbzArtist {
 
     pub fn open_artist(self: Pin<&mut Self>, artist_id: QString) {
         crate::open_artist(artist_id.to_string());
+    }
+
+    pub fn warm_library(self: Pin<&mut Self>) {
+        crate::warm_library();
     }
 
     pub fn load_release_section(
