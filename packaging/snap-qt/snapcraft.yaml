@@ -94,12 +94,14 @@ parts:
       qml: opt/qbz/qml
       qbz.desktop: usr/share/applications/qbz.desktop
       qbz.png: usr/share/icons/hicolor/256x256/apps/qbz.png
-    # Runtime the AppDir does NOT carry (linuxdeploy's blacklist).
+    # Runtime the AppDir does NOT carry. The AppDir contains Qt/QML, D-Bus and
+    # the non-system xcb/Wayland helpers selected by linuxdeploy; the GNOME
+    # extension supplies the host graphics, display and font stack. Keep this
+    # list to the audio helpers QBZ opens by name.
     stage-packages:
       # Audio (the bit-perfect path)
       - libasound2t64
       - libasound2-plugins
-      - libpipewire-0.3-0
       # The backend invokes these at runtime: pw-dump discovers the host sinks
       # (including Bluetooth) and pw-metadata/pactl select and inspect them.
       # Without the binaries the strict Snap sees only the generic CPAL bridge
@@ -107,31 +109,3 @@ parts:
       - pipewire-bin
       - pulseaudio-utils
       - libjack-jackd2-0
-      # TLS / HTTP
-      - libssl3t64
-      # Qt's xcb + wayland platform plugins
-      - libxkbcommon0
-      - libxkbcommon-x11-0
-      - libxcb1
-      - libxcb-cursor0
-      - libxcb-icccm4
-      - libxcb-image0
-      - libxcb-keysyms1
-      - libxcb-render-util0
-      - libxcb-shape0
-      - libxcb-xkb1
-      - libxcb-randr0
-      - libxcb-sync1
-      - libxcb-xfixes0
-      - libxcb-glx0
-      - libx11-6
-      - libwayland-client0
-      - libwayland-cursor0
-      - libwayland-egl1
-      - libegl1
-      - libgl1
-      # Fonts
-      - libfontconfig1
-      - libfreetype6
-      # Tray + portals + media controls over D-Bus
-      - libdbus-1-3
