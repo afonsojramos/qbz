@@ -67,6 +67,14 @@ Rectangle {
     /// Host hook: clear the filter when the field closes itself (Esc / X).
     property alias searchOpen: searchBox.open
 
+    /// Host-owned controls that float between the tab strip and the
+    /// magnifier — the artist page mounts its "In library" purchases /
+    /// favourites switches here while that tab is active (#737 round). The
+    /// slot sizes to its children; empty, it costs nothing and the strip
+    /// keeps its full width. Same footprint rule as the search slot: the
+    /// tabs are clipped, never reflowed, when something lives here.
+    property alias trailing: trailingSlot.data
+
     height: 44
     color: root.barBg
     topLeftRadius: root.topRadius
@@ -99,6 +107,7 @@ Rectangle {
         y: 0
         width: Math.max(0, root.width - root.padH
                            - (searchSlot.visible ? searchSlot.width + 18 : 0)
+                           - (trailingSlot.width > 0 ? trailingSlot.width + 18 : 0)
                            - x)
         height: parent.height
         clip: true
@@ -152,6 +161,21 @@ Rectangle {
         }
     }
 
+    // Trailing slot (see `trailing`): sized by its children, parked at the
+    // FAR right — past the magnifier, not before it: the search field grows
+    // LEFT over the tabs when it opens, so anything left of the magnifier is
+    // covered while the user types, and a control that resets the page's
+    // state must stay reachable exactly then. Hidden items still count toward
+    // `childrenRect`, so a host that toggles its controls should toggle their
+    // `visible` AND leave the slot empty-width (`width: visible ? n : 0`).
+    Item {
+        id: trailingSlot
+        width: childrenRect.width
+        height: parent.height
+        anchors.right: parent.right
+        anchors.rightMargin: root.padH
+    }
+
     // Search slot — keeps the CLOSED footprint; the field itself grows left
     // over the tabs, so nothing in the bar reflows when it opens.
     Item {
@@ -159,8 +183,8 @@ Rectangle {
         visible: root.showSearch
         width: searchBox.width
         height: searchBox.height
-        anchors.right: parent.right
-        anchors.rightMargin: root.padH
+        anchors.right: trailingSlot.width > 0 ? trailingSlot.left : parent.right
+        anchors.rightMargin: trailingSlot.width > 0 ? 18 : root.padH
         anchors.verticalCenter: parent.verticalCenter
 
         QbzLineEdit {

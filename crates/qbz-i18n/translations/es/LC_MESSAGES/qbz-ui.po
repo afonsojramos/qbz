@@ -6717,3 +6717,21 @@ msgstr "Mostrar carátulas de álbum en la lista de pistas de la Biblioteca"
 
 msgid "Display the album cover thumbnail between the track number and title. Off by default."
 msgstr "Muestra la miniatura de la carátula entre el número y el título de la pista. Desactivado por defecto."
+
+msgid "Play random"
+msgstr "Reproducir al azar"
+
+msgid "Play selected"
+msgstr "Reproducir selección"
+
+msgid "Cancel selection"
+msgstr "Cancelar selección"
+
+msgid "QOBUZ LINKS"
+msgstr "ENLACES DE QOBUZ"
+
+msgid "Open Qobuz links in QBZ"
+msgstr "Abrir enlaces de Qobuz en QBZ"
+
+msgid "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
+msgstr "Hace que QBZ maneje los enlaces qobuzapp:// que salen de tu navegador. Apagado, la app oficial de Qobuz se queda con ellos; los enlaces qbz:// de QBZ siempre abren aquí."

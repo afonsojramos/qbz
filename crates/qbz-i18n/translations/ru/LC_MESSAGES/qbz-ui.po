@@ -6730,3 +6730,21 @@ msgstr "Показывать обложки альбомов в списке т�
 
 msgid "Display the album cover thumbnail between the track number and title. Off by default."
 msgstr "Показывает миниатюру обложки между номером и названием трека. Отключено по умолчанию."
+
+msgid "Play random"
+msgstr "Воспроизвести случайный"
+
+msgid "Play selected"
+msgstr "Воспроизвести выбранное"
+
+msgid "Cancel selection"
+msgstr "Отменить выбор"
+
+msgid "QOBUZ LINKS"
+msgstr "ССЫЛКИ QOBUZ"
+
+msgid "Open Qobuz links in QBZ"
+msgstr "Открывать ссылки Qobuz в QBZ"
+
+msgid "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
+msgstr "Делает QBZ обработчиком ссылок qobuzapp:// из браузера. Если выключено, их оставляет официальное приложение Qobuz; собственные ссылки qbz:// всегда открываются здесь."

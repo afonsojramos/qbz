@@ -428,6 +428,7 @@ mod tests {
             image: ImageSet::default(),
             label: None,
             genre: None,
+            artist: None,
         }
     }
 

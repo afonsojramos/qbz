@@ -672,6 +672,13 @@ pub struct AlbumSummary {
     pub label: Option<Label>,
     /// Genre (when returned, e.g. on favorites track album objects).
     pub genre: Option<Genre>,
+    /// The album's MAIN artist, when the track's embedded album carries it
+    /// (search results and favourites do — captured
+    /// `qobuz-api/search-results-response.json`). Distinct from the track's
+    /// `performer`, which is who is credited on THAT track; the artist page's
+    /// "In library" tab admits a track through either.
+    #[serde(default)]
+    pub artist: Option<Artist>,
 }
 
 /// Album model

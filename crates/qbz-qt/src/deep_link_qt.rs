@@ -16,8 +16,8 @@ pub(crate) fn is_qobuz_link(arg: &str) -> bool {
         || arg.starts_with("http://open.qobuz.com/")
 }
 
-/// `qbz://` is OUR scheme, registered by the Windows MSI beside
-/// `qobuzapp://`. It is rewritten rather than taught downstream: the resolver
+/// `qbz://` is OUR scheme, registered by the Windows MSI unconditionally
+/// (`qobuzapp://` is a runtime opt-in there — link_handler_qt). It is rewritten rather than taught downstream: the resolver
 /// (`qbz-music-link`) knows `qobuzapp://` and the Qobuz web shapes and nothing
 /// else, so an accepted `qbz://` would travel the whole way and then be
 /// classified "unsupported or invalid music link" -- which is exactly what a

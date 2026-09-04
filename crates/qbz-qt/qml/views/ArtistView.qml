@@ -283,6 +283,137 @@ Rectangle {
     property string activeJumpTab: "popular-tracks"
     property string artistTab: "catalog"
 
+    // ---- "In library" tab (#737 round, contract §3/§4) ---------------------
+    // The rows ride INSIDE the artist document (`artist.libraryItems`,
+    // artist_qt.rs) — favourites ∪ purchases of this artist, one row per
+    // entity, the purchase row representative and `isFavorite` meaning "also
+    // hearted". The two switches below are the `Library > Albums / Tracks`
+    // source switches with THEIR semantics (LibraryView.qml:566-590: neither
+    // = union, one = that source, both = intersection) but LOCAL state: the
+    // Library view's own switches must not reach into this page.
+    property bool libShowPurchases: false
+    property bool libShowFavorites: false
+    /// Preview 10 (Popular Tracks previews 5), "Load more" opens the whole
+    /// list at once — no paging, the rows are already in hand.
+    readonly property int libPreview: 10
+    property bool libTracksExpanded: false
+    readonly property var libItems: {
+        var src = artist.libraryItems || []
+        var out = []
+        for (var i = 0; i < src.length; i++) {
+            var it = src[i]
+            var purchased = it.group === "purchases"
+            var hearted = it.isFavorite === true
+            var included
+            if (root.libShowPurchases && root.libShowFavorites) included = purchased && hearted
+            else if (root.libShowPurchases) included = purchased
+            else if (root.libShowFavorites) included = hearted
+            else included = true
+            if (included) out.push(it)
+        }
+        return out
+    }
+    readonly property var libTracks: libItems.filter(function (x) { return x.kind === "track" })
+    readonly property var libAlbums: libItems.filter(function (x) { return x.kind === "album" })
+    /// The queue a row click / "Play all" builds from: the WHOLE filtered
+    /// list in render order, not only the revealed preview — a click on row
+    /// 3 must be followed by rows 4..n exactly like Popular Tracks queues its
+    /// full list. Handed to `QbzLibrary.libraryPlayVisible` / `libraryPlayAll`
+    /// (library_qt::play_from_visible), the source-aware seam LibraryView
+    /// uses — never `QbzPlayer.playArtistTrack`, whose queue is the POPULAR
+    /// list and which starts it at row 0 for any id it does not hold (#737).
+    function libTrackIds() {
+        var ids = []
+        for (var i = 0; i < root.libTracks.length; i++) ids.push(String(root.libTracks[i].id))
+        return ids
+    }
+    /// The library Albums section's sort — the release buckets' five keys,
+    /// seeded from the document (`artist.librarySort`, artist_prefs "library")
+    /// and persisted through the same invokable the buckets use. Sorted here,
+    /// not in Rust: the rows already live in QML (`sortReleaseCards` reads
+    /// `title` / `year`, which a FeedItem carries).
+    property string libSort: "default"
+    readonly property var libAlbumsSorted: root.sortReleaseCards(root.libAlbums, root.libSort)
+    function setLibSort(key) {
+        root.libSort = key
+        QbzArtist.setSectionSort("library", key)
+    }
+
+    // ---- Album-section play (the split button) -------------------------------
+    // Every album section — each catalog bucket and the library Albums grid —
+    // carries a QbzSplitButton right of its sort: the body plays the whole
+    // section in its SORT order as one queue (`QbzPlayer.playAlbums`), the
+    // chevron offers Play random (ONE album of the section, replacing the
+    // queue) and Play selected, which arms a per-section select mode: the
+    // cards grow a check bottom-right inside the art, the button reads
+    // "Play selected (n)" and plays the checked albums in sort order, and the
+    // menu swaps that row for Cancel selection. One section is armed at a
+    // time (`albumSelectKey` is the bucket's releaseType or "library").
+    // No queue options (next / later / queue) on purpose.
+    property string albumSelectKey: ""
+    property var albumSelected: ({})
+    readonly property int albumSelectedCount: Object.keys(root.albumSelected).length
+    function albumSelectToggle(id) {
+        var m = Object.assign({}, root.albumSelected)
+        if (m[id]) delete m[id]
+        else m[id] = true
+        root.albumSelected = m
+    }
+    function albumSelectClear() {
+        root.albumSelectKey = ""
+        root.albumSelected = ({})
+    }
+    function albumSectionLabel(key) {
+        return root.albumSelectKey === key
+            ? QbzSession.tr("Play selected", QbzSession.trRev) + " (" + root.albumSelectedCount + ")"
+            : QbzSession.tr("Play all", QbzSession.trRev)
+    }
+    function albumSectionMenu(key) {
+        var m = [
+            { "label": QbzSession.tr("Play all", QbzSession.trRev), "icon": "play-fill", "action": "play-all" },
+            { "label": QbzSession.tr("Play random", QbzSession.trRev), "icon": "shuffle", "action": "play-random" }
+        ]
+        if (root.albumSelectKey === key)
+            m.push({ "label": QbzSession.tr("Cancel selection", QbzSession.trRev), "icon": "x", "action": "cancel-selection" })
+        else
+            m.push({ "label": QbzSession.tr("Play selected", QbzSession.trRev), "icon": "square-check-big", "action": "play-selected" })
+        return m
+    }
+    function albumSectionIds(cards) {
+        var ids = []
+        for (var i = 0; i < cards.length; i++) ids.push(String(cards[i].id))
+        return ids
+    }
+    /// `cards` is the section's list in its CURRENT sort order.
+    function albumSectionAction(key, cards, action) {
+        var ids = root.albumSectionIds(cards)
+        if (action === "play-all") {
+            root.albumSelectClear()
+            if (ids.length > 0) QbzPlayer.playAlbums(JSON.stringify(ids))
+        } else if (action === "play-random") {
+            root.albumSelectClear()
+            if (ids.length > 0) QbzPlayer.playAlbum(ids[Math.floor(Math.random() * ids.length)])
+        } else if (action === "play-selected") {
+            root.albumSelectKey = key
+            root.albumSelected = ({})
+        } else if (action === "cancel-selection") {
+            root.albumSelectClear()
+        }
+    }
+    /// The button body: Play all, or — armed — the checked albums in sort
+    /// order, then disarm.
+    function albumSectionPrimary(key, cards) {
+        if (root.albumSelectKey !== key) {
+            root.albumSectionAction(key, cards, "play-all")
+            return
+        }
+        var ids = []
+        for (var i = 0; i < cards.length; i++)
+            if (root.albumSelected[cards[i].id] === true) ids.push(String(cards[i].id))
+        root.albumSelectClear()
+        if (ids.length > 0) QbzPlayer.playAlbums(JSON.stringify(ids))
+    }
+
     // ---- Header atmosphere (ArtistPageView.slint:120-147) ----------------
     // Same three-line rule as AlbumView (the .slint says "same rule as
     // AlbumPageView" at :120). The pref is read LIVE off the settings
@@ -684,6 +815,22 @@ Rectangle {
     // does not touch them, so the strip must not reshuffle per keystroke.
     readonly property var jumpTabs: {
         var tabs = []
+        // The strip is a SCROLL navigator over one vertical page, so it can
+        // only list what that page currently draws. In library mode that is
+        // the Tracks and Albums sections that have rows — the catalog set
+        // stayed up before and "Popular Tracks" scrolled to a section that
+        // was not there (owner capture, 2026-09-04).
+        if (root.artistTab === "library") {
+            // "About" is the strip's back-to-top, and in library mode it is
+            // also what keeps the strip MOUNTED when the filter yields nothing
+            // (purchases ∧ favourites on an artist whose purchases are not
+            // hearted): the bar carries the two switches, so an empty tab set
+            // would have hidden the only way to reset them.
+            tabs.push({ "id": "about", "label": QbzSession.tr("About", QbzSession.trRev) })
+            if (root.libTracks.length > 0) tabs.push({ "id": "tracks", "label": QbzSession.tr("Tracks", QbzSession.trRev) })
+            if (root.libAlbums.length > 0) tabs.push({ "id": "albums", "label": QbzSession.tr("Albums", QbzSession.trRev) })
+            return tabs
+        }
         var rawTop = artist.topTracks || []
         var rawSections = artist.releaseSections || []
         var rawAppears = artist.appearsOn || []
@@ -740,7 +887,7 @@ Rectangle {
             var aid = (artist && artist.id) ? artist.id : ""
             if (aid !== "" && key === "artist:" + aid)
                 root.setToggleState("artist", value)
-            else if (key.indexOf("track:") === 0)
+            else if (key.indexOf("track:") === 0 || key.indexOf("album:") === 0)
                 root.setToggleState(key, value)
         }
         // Header pin, same seam: the overflow-menu row flips `artistPin`
@@ -807,11 +954,34 @@ Rectangle {
         syncArtistState()
         invalidatePortraitOverride()
         dispatchCovers()
+        // The last owned row just left (a republish after an un-heart): the
+        // toggle unmounts, so the page must not stay on an empty tab with no
+        // way back.
+        if (artistTab === "library" && (artist.libraryCount || 0) === 0)
+            artistTab = "catalog"
     }
     // Cover dispatch keys off the raw document (artist.artUrl etc.), so
     // re-fire when the parsed value actually changes (same stale race).
     // (the raw document drives the dispatch; onArtistChanged above covers it)
-    onArtistTabChanged: if (artistTab === "library") dispatchLibCovers()
+    onArtistTabChanged: {
+        // A selection is a list of THIS mode's rows; it cannot survive the
+        // switch. The strip re-anchors on the first section the new mode
+        // draws (catalog keeps its Popular Tracks default).
+        setMultiSelect(false)
+        albumSelectClear()
+        // The first SECTION, not "About" (back-to-top) when a section exists.
+        var first = ""
+        for (var i = 0; i < root.jumpTabs.length; i++) {
+            first = root.jumpTabs[i].id
+            if (first !== "about") break
+        }
+        root.activeJumpTab = artistTab === "catalog" ? "popular-tracks" : first
+        if (artistTab === "library") {
+            // Re-arm the warm, served from cache (main.rs warm_library).
+            QbzArtist.warmLibrary()
+            dispatchLibCovers()
+        }
+    }
 
     // The document is republished several times per page (stories, then each
     // MusicBrainz section). Reset per-artist view state ONLY when the id
@@ -835,14 +1005,23 @@ Rectangle {
     /// range can run from the last top track into "Appears on" exactly as it
     /// looks on screen — `selectedIdsInOrder` already walks them that way.
     SelectionModel { id: sel }
+    /// The track lists a selection can span, in draw order, for the ACTIVE
+    /// mode: the catalog's Popular Tracks + Appears On, or the library tab's
+    /// Tracks. `onArtistTabChanged` clears the selection on a switch, so a
+    /// range never mixes the two.
+    function selectableLists() {
+        return root.artistTab === "library" ? [root.libTracks]
+                                            : [root.topTracks, root.appearsOn]
+    }
     function toggleSelected(id, mods) {
-        root.selected = sel.next(root.selected, id,
-                                 root.topTracks.concat(root.appearsOn),
+        var lists = selectableLists()
+        var all = lists.length > 1 ? lists[0].concat(lists[1]) : lists[0]
+        root.selected = sel.next(root.selected, id, all,
                                  mods === undefined ? Qt.NoModifier : mods)
     }
     function selectedIdsInOrder() {
         var out = []
-        var lists = [root.topTracks, root.appearsOn]
+        var lists = selectableLists()
         for (var l = 0; l < lists.length; l++) {
             var rows = lists[l]
             for (var i = 0; i < rows.length; i++)
@@ -853,7 +1032,7 @@ Rectangle {
     function bulkAction(action) {
         if (action === "select-all") {
             var m = {}
-            var lists = [root.topTracks, root.appearsOn]
+            var lists = selectableLists()
             for (var l = 0; l < lists.length; l++)
                 for (var i = 0; i < lists[l].length; i++) m[lists[l][i].id] = true
             root.selected = m
@@ -881,6 +1060,14 @@ Rectangle {
             return
         loadedArtistId = id
         setMultiSelect(false)
+        // A fresh artist opens on its catalog with the library tab's
+        // preview and switches at rest.
+        artistTab = "catalog"
+        libTracksExpanded = false
+        libShowPurchases = false
+        libShowFavorites = false
+        libSort = artist.librarySort || "default"
+        albumSelectClear()
         // Slint opens a fresh artist on Network, or on Magazine when
         // MusicBrainz is off (an empty Network tab is worse than none).
         netTab = (artist.network && artist.network.mbAvailable) ? "network" : "magazine"
@@ -909,7 +1096,7 @@ Rectangle {
     }
 
     function dispatchLibCovers() {
-        var items = libraryTab.libItems || []
+        var items = root.libItems || []
         var urls = []
         for (var i = 0; i < items.length; i++) if (items[i].imageUrl) urls.push(items[i].imageUrl)
         dispatchArtwork(urls)
@@ -1021,13 +1208,21 @@ Rectangle {
 
     function scrollToSection(id) {
         root.activeJumpTab = id
-        for (var i = 0; i < sectionAnchors.children.length; i++) {
-            var c = sectionAnchors.children[i]
+        // Anchors resolve against the column of the ACTIVE mode: the catalog
+        // and library columns are siblings in the page, and a library tab
+        // resolved against the hidden catalog column would scroll to that
+        // column's coordinates.
+        var host = root.artistTab === "library" ? libraryTab : sectionAnchors
+        for (var i = 0; i < host.children.length; i++) {
+            var c = host.children[i]
             if (c.anchorId === id) {
-                flick.contentY = sectionAnchors.y + c.y - 48
+                flick.contentY = host.y + c.y - 48
                 return
             }
         }
+        // "About" is back-to-top: the library column carries no such anchor
+        // (the bio lives in the header), so it lands on the page top.
+        if (id === "about") flick.contentY = 0
     }
 
 
@@ -1047,6 +1242,17 @@ Rectangle {
         property var row: ({})
         property int rowIndex: 0
         property bool showAlbum: true
+        /// Where a play on this row goes — `function (id)`. Unset, the row
+        /// plays through `QbzPlayer.playArtistTrack`, whose queue is the
+        /// POPULAR list (artist_qt TOP_QUEUE). The "In library" tab passes
+        /// its own handler because a library row is NOT in that queue and
+        /// `top_queue` starts the popular list at row 0 for any id it does
+        /// not hold — issue #737. The row never asks which tab it is in.
+        property var playHandler: null
+        function play() {
+            if (popRow.playHandler) popRow.playHandler(String(popRow.row.id))
+            else QbzPlayer.playArtistTrack(popRow.row.id)
+        }
         // Multi-select (the view's bulk bar): in select mode the whole row
         // body is the toggle and the leading cell swaps to a round checkbox
         // (TrackRow.slint:173-177, 392-417).
@@ -1248,7 +1454,7 @@ Rectangle {
                     anchors.fill: parent
                     enabled: !popRow.selectMode && !popRow.pulledDead
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzPlayer.playArtistTrack(row.id)
+                    onClicked: popRow.play()
                 }
             }
             // Title + artist.
@@ -1539,7 +1745,7 @@ Rectangle {
             }
             onPicked: function (a) {
                 var id = popRow.row.id
-                if (a === "play") QbzPlayer.playArtistTrack(id)
+                if (a === "play") popRow.play()
                 else if (a === "next") QbzPlayer.enqueueTrack(id, "next")
                 else if (a === "later") QbzPlayer.enqueueTrack(id, "later")
                 else if (a === "queue") QbzPlayer.enqueueTrack(id, "queue")
@@ -1579,7 +1785,7 @@ Rectangle {
             // toast, no error. The right-press area below is untouched, so the
             // menu still opens.
             onDoubleClicked: if (!popRow.selectMode && !popRow.pulledDead)
-                QbzPlayer.playArtistTrack(row.id)
+                popRow.play()
             onClicked: {
                 if (popRow.selectMode) popRow.toggleSelect(mouse.modifiers)
                 else mouse.accepted = false
@@ -1833,7 +2039,7 @@ Rectangle {
             width: parent.width
             spacing: 12
             Text {
-                width: parent.width - seeAll.width - sortBtn.width - 24
+                width: parent.width - seeAll.width - sortBtn.width - playBtn.width - 36
                 anchors.verticalCenter: parent.verticalCenter
                 text: section.title
                 color: theme.textPrimary
@@ -1945,6 +2151,21 @@ Rectangle {
                         : i === 3 ? "title-asc" : i === 4 ? "title-desc" : "default")
                 }
             }
+            // Play all / Play random / Play selected over THIS bucket, in
+            // its sort order (`section.cards` is already sorted — Rust sorts
+            // the bucket and the overlay merge re-sorts).
+            QbzSplitButton {
+                id: playBtn
+                anchors.verticalCenter: parent.verticalCenter
+                label: root.albumSectionLabel(relSection.section.releaseType || "")
+                menuItems: root.albumSectionMenu(relSection.section.releaseType || "")
+                onClicked: root.albumSectionPrimary(relSection.section.releaseType || "",
+                                                    relSection.section.cards || [])
+                onPicked: function (a) {
+                    root.albumSectionAction(relSection.section.releaseType || "",
+                                            relSection.section.cards || [], a)
+                }
+            }
         }
 
         Grid {
@@ -1983,6 +2204,11 @@ Rectangle {
                     // artist_qt::map_release stamps this the same way it
                     // stamps the pin; false inverted the first click.
                     isFavorite: modelData.isFavorite === true
+                    // "Play selected" over this bucket (the split button).
+                    selectMode: root.albumSelectKey === (relSection.section.releaseType || "")
+                    selected: root.albumSelected[modelData.id] === true
+                    selectMarkBottom: true
+                    onSelectToggled: root.albumSelectToggle(modelData.id)
 
                     // ---- smooth append (owner, 2026-08-02) ---------------
                     // "que la aparicion de lo que se cargue, sea smooth" —
@@ -2563,7 +2789,10 @@ Rectangle {
                         id: topMenuBtn
                         name: "ellipsis"
                         anchors.verticalCenter: parent.verticalCenter
-                        onClicked: function (mouse) { topMenu.openAtCursor(topMenuBtn, mouse.x, mouse.y) }
+                        onClicked: function (mouse) {
+                            topMenu.forLibrary = false
+                            topMenu.openAtCursor(topMenuBtn, mouse.x, mouse.y)
+                        }
                     }
                 }
                 Item { visible: topTracks.length > 0; width: 1; height: 10 }
@@ -2810,67 +3039,191 @@ Rectangle {
             }
 
             // ================= In library tab =============================
+            // The user's OWN rows for this artist (`root.libItems`, off the
+            // artist document). Two first-class sections — Tracks modelled on
+            // Popular Tracks (header action cluster, 10-row preview, Load
+            // more) and the Albums grid — each carrying an `anchorId` so the
+            // JUMP TO strip resolves against THIS column in library mode.
             Column {
                 id: libraryTab
                 visible: root.artistTab === "library" && !QbzArtist.artistLoading
                 width: page.bodyWidth
                 spacing: 0
-                readonly property var libItems: {
-                    var out = []
-                    var feed = libraryFeed()
-                    for (var i = 0; i < feed.length; i++) {
-                        if (feed[i].artistId === artist.id && (feed[i].kind === "track" || feed[i].kind === "album"))
-                            out.push(feed[i])
-                    }
-                    return out
-                }
-                readonly property var libAlbums: libItems.filter(function (x) { return x.kind === "album" })
-                readonly property var libTracks: libItems.filter(function (x) { return x.kind === "track" })
 
-                Text {
-                    visible: libraryTab.libTracks.length > 0
-                    text: QbzSession.tr("Tracks", QbzSession.trRev)
-                    color: theme.textPrimary
-                    font.pixelSize: theme.fontHeading
-                    font.weight: theme.weightSemibold
+                // Same bulk bar as the catalog column: `bulkAction` routes on
+                // the active mode's lists (`selectableLists`).
+                QbzMultiSelectBar {
+                    visible: root.multiSelect
+                    width: parent.width
+                    selectedCount: root.selectedCount
+                    actions: [
+                        { "id": "select-all", "label": QbzSession.tr("Select all", QbzSession.trRev), "icon": "square-check-big", "danger": false, "needsSelection": false },
+                        { "id": "play-next", "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "danger": false, "needsSelection": true },
+                        { "id": "play-later", "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "danger": false, "needsSelection": true },
+                        { "id": "queue", "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "danger": false, "needsSelection": true },
+                        { "id": "add-to-playlist", "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "danger": false, "needsSelection": true },
+                        { "id": "add-to-mixtape", "label": QbzSession.tr("Add to Mixtape/Collection", QbzSession.trRev), "icon": "cassette-tape", "danger": false, "needsSelection": true },
+                        { "id": "make-offline", "label": QbzSession.tr("Make available offline", QbzSession.trRev), "icon": "cloud-download", "danger": false, "needsSelection": true },
+                        { "id": "clear", "label": QbzSession.tr("Clear", QbzSession.trRev), "icon": "x", "danger": false, "needsSelection": true }
+                    ]
+                    onAction: function (id) { root.bulkAction(id) }
                 }
-                Item { visible: libraryTab.libTracks.length > 0; width: 1; height: 10 }
+
+                // --- Tracks ---------------------------------------------
+                // Header + action cluster: the Popular Tracks row above,
+                // with the actions re-pointed at the library list — Play all
+                // / Shuffle all through `libraryPlayAll`, the ⋯ menu shared
+                // with Popular Tracks (`topMenu.forLibrary`).
+                Row {
+                    property string anchorId: "tracks"
+                    visible: root.libTracks.length > 0
+                    width: parent.width
+                    spacing: 12
+                    Text {
+                        width: parent.width - 44 - 32 - 32 - 3 * 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: QbzSession.tr("Tracks", QbzSession.trRev)
+                        color: theme.textPrimary
+                        font.pixelSize: theme.fontHeading
+                        font.weight: theme.weightSemibold
+                    }
+                    QbzCircleAction {
+                        primary: true
+                        name: "play-fill"
+                        anchors.verticalCenter: parent.verticalCenter
+                        onClicked: QbzLibrary.libraryPlayAll(JSON.stringify(root.libTrackIds()), false)
+                    }
+                    QbzCircleAction {
+                        name: "square-check-big"
+                        active: root.multiSelect
+                        btnEnabled: root.libTracks.length > 0
+                        anchors.verticalCenter: parent.verticalCenter
+                        onClicked: root.setMultiSelect(!root.multiSelect)
+                    }
+                    QbzCircleAction {
+                        id: libMenuBtn
+                        name: "ellipsis"
+                        anchors.verticalCenter: parent.verticalCenter
+                        onClicked: function (mouse) {
+                            topMenu.forLibrary = true
+                            topMenu.openAtCursor(libMenuBtn, mouse.x, mouse.y)
+                        }
+                    }
+                }
+                Item { visible: root.libTracks.length > 0; width: 1; height: 10 }
                 Repeater {
-                    model: libraryTab.libTracks
+                    // Numeric model: only the revealed rows are BUILT
+                    // (declaring is building — the Popular Tracks expander's
+                    // rule, feedback_qml_hidden_is_not_unbuilt).
+                    model: root.libTracksExpanded ? root.libTracks.length
+                        : Math.min(root.libTracks.length, root.libPreview)
                     delegate: PopularTrackRow {
+                        readonly property var item: root.libTracks[index] || ({})
+                        property bool revealed: false
+                        // A cleared heart takes the row out — visually now,
+                        // for real when the document republishes (the heart
+                        // settles, `artist_qt::apply_favorite_change`
+                        // recomputes the rows). A PURCHASE that loses its
+                        // heart stays: it is still library (contract §3).
+                        readonly property bool leaving:
+                            !root.toggleState("track:" + item.id, item.isFavorite === true)
+                            && item.group !== "purchases"
+                        height: 50
+                        opacity: (revealed && !leaving) ? 1.0 : 0.0
+                        Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+                        Component.onCompleted: revealed = true
                         row: ({
-                            "id": modelData.id, "number": index + 1, "title": modelData.title,
-                            "artist": modelData.artist, "artistId": modelData.artistId,
-                            "album": modelData.album, "albumId": modelData.albumId,
-                            "duration": modelData.duration, "qualityTier": modelData.qualityTier,
-                            "explicit": modelData.explicit, "artUrl": modelData.imageUrl,
-                            "isFavorite": modelData.isFavorite,
+                            "id": item.id, "number": index + 1, "title": item.title,
+                            "artist": item.artist, "artistId": item.artistId,
+                            "album": item.album, "albumId": item.albumId,
+                            "duration": item.duration, "qualityTier": item.qualityTier,
+                            "explicit": item.explicit, "artUrl": item.imageUrl,
+                            "isFavorite": item.isFavorite === true,
+                            "qobuzUnavailable": item.qobuzUnavailable === true,
+                            "cacheStatus": item.cacheStatus || 0,
                         })
                         rowIndex: index
                         showAlbum: true
                         selectMode: root.multiSelect
                         checked: root.selected[row.id] === true
+                        playHandler: function (id) {
+                            QbzLibrary.libraryPlayVisible(JSON.stringify(root.libTrackIds()), id)
+                        }
                         onToggleSelect: function (mods) { root.toggleSelected(row.id, mods) }
                     }
                 }
-                Item { visible: libraryTab.libAlbums.length > 0; width: 1; height: 24 }
-                Text {
-                    visible: libraryTab.libAlbums.length > 0
-                    text: QbzSession.tr("Albums", QbzSession.trRev)
-                    color: theme.textPrimary
-                    font.pixelSize: theme.fontHeading
-                    font.weight: theme.weightSemibold
+                Item { visible: root.libTracks.length > root.libPreview; width: 1; height: 4 }
+                QbzLoadMore {
+                    visible: root.libTracks.length > root.libPreview
+                    width: parent.width
+                    label: root.libTracksExpanded ? QbzSession.tr("View less", QbzSession.trRev) : QbzSession.tr("Load more", QbzSession.trRev)
+                    onClicked: root.libTracksExpanded = !root.libTracksExpanded
                 }
-                Item { visible: libraryTab.libAlbums.length > 0; width: 1; height: 10 }
+
+                // --- Albums ---------------------------------------------
+                Item { visible: root.libAlbums.length > 0 && root.libTracks.length > 0; width: 1; height: 24 }
+                // Header: title, the release buckets' sort select, and the
+                // split play button — the catalog section header's cluster
+                // minus "See discography" (there is nothing to page here).
+                Row {
+                    property string anchorId: "albums"
+                    visible: root.libAlbums.length > 0
+                    width: parent.width
+                    spacing: 12
+                    Text {
+                        width: parent.width - libSortBtn.width - libPlayBtn.width - 24
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: QbzSession.tr("Albums", QbzSession.trRev)
+                        color: theme.textPrimary
+                        font.pixelSize: theme.fontHeading
+                        font.weight: theme.weightSemibold
+                        elide: Text.ElideRight
+                    }
+                    QbzSelect {
+                        id: libSortBtn
+                        anchors.verticalCenter: parent.verticalCenter
+                        sm: true
+                        menuWidth: 150
+                        options: [QbzSession.tr("Default", QbzSession.trRev),
+                                  QbzSession.tr("Newest", QbzSession.trRev),
+                                  QbzSession.tr("Oldest", QbzSession.trRev),
+                                  QbzSession.tr("A–Z", QbzSession.trRev),
+                                  QbzSession.tr("Z–A", QbzSession.trRev)]
+                        currentIndex: {
+                            var s = root.libSort || "default"
+                            return s === "newest" ? 1 : s === "oldest" ? 2
+                                 : s === "title-asc" ? 3 : s === "title-desc" ? 4 : 0
+                        }
+                        onSelected: function (i) {
+                            root.setLibSort(i === 1 ? "newest" : i === 2 ? "oldest"
+                                : i === 3 ? "title-asc" : i === 4 ? "title-desc" : "default")
+                        }
+                    }
+                    QbzSplitButton {
+                        id: libPlayBtn
+                        anchors.verticalCenter: parent.verticalCenter
+                        label: root.albumSectionLabel("library")
+                        menuItems: root.albumSectionMenu("library")
+                        onClicked: root.albumSectionPrimary("library", root.libAlbumsSorted)
+                        onPicked: function (a) { root.albumSectionAction("library", root.libAlbumsSorted, a) }
+                    }
+                }
+                Item { visible: root.libAlbums.length > 0; width: 1; height: 10 }
                 Grid {
-                    visible: libraryTab.libAlbums.length > 0
+                    visible: root.libAlbums.length > 0
                     width: parent.width
                     columns: Math.max(1, Math.floor((width + 24) / 224))
                     columnSpacing: 24
                     rowSpacing: 24
                     Repeater {
-                        model: libraryTab.libAlbums
+                        model: root.libAlbumsSorted
                         delegate: AlbumCard {
+                            // "Play selected" over this section (the split
+                            // button), check bottom-right inside the art.
+                            selectMode: root.albumSelectKey === "library"
+                            selected: root.albumSelected[modelData.id] === true
+                            selectMarkBottom: true
+                            onSelectToggled: root.albumSelectToggle(modelData.id)
                             albumId: modelData.id
                             title: modelData.title
                             artist: modelData.artist
@@ -2886,7 +3239,19 @@ Rectangle {
                             // row (library_qt `map_album`).
                             isPinned: modelData.isPinned === true
                             artworkUrl: modelData.imageUrl || ""
-                            isFavorite: modelData.isFavorite
+                            // The heart goes through the page's optimistic
+                            // store so the card can fade out on the click,
+                            // ahead of the settle that removes the row.
+                            hostFavorite: true
+                            isFavorite: root.toggleState("album:" + modelData.id, modelData.isFavorite === true)
+                            onFavoriteRequested: {
+                                var next = !root.toggleState("album:" + modelData.id, modelData.isFavorite === true)
+                                root.setToggleState("album:" + modelData.id, next)
+                                QbzLibrary.libraryToggleFavorite("album", modelData.id)
+                            }
+                            readonly property bool leaving: !isFavorite && modelData.group !== "purchases"
+                            opacity: leaving ? 0.0 : 1.0
+                            Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
                         }
                     }
                 }
@@ -2911,11 +3276,6 @@ Rectangle {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         target: flick
-    }
-
-    // Library feed access (the phase-5 document, parsed in LibraryView).
-    function libraryFeed() {
-        return JSON.parse(QbzLibrary.libraryJson)
     }
 
     // --- Network sidebar (300px, surface-card + 1px left border) ---------
@@ -2974,6 +3334,31 @@ Rectangle {
         tabs: root.jumpTabs
         activeTabId: root.activeJumpTab
         visible: root.jumpTabs.length > 0
+        // "In library" source switches — `Library > Albums / Tracks`'s
+        // purchases / favourites toggles (LibraryToolbar.qml:376-377), on the
+        // shared QbzToggleButton, floating in the strip ONLY while the library
+        // tab is active. State is the page's own (`libShowPurchases` /
+        // `libShowFavorites`), never `QbzLibrary.sessionShow*`.
+        trailing: Row {
+            visible: root.artistTab === "library"
+            width: visible ? implicitWidth : 0
+            height: 44
+            spacing: 8
+            QbzToggleButton {
+                sm: true
+                name: "shopping-bag"
+                active: root.libShowPurchases
+                anchors.verticalCenter: parent.verticalCenter
+                onClicked: root.libShowPurchases = !root.libShowPurchases
+            }
+            QbzToggleButton {
+                sm: true
+                name: "heart"
+                active: root.libShowFavorites
+                anchors.verticalCenter: parent.verticalCenter
+                onClicked: root.libShowFavorites = !root.libShowFavorites
+            }
+        }
         onTabClicked: function (id) { root.scrollToSection(id) }
         onSearchEdited: function (text) { root.searchQuery = text }
     }
@@ -3606,6 +3991,10 @@ Rectangle {
     QbzContextMenu {
         id: topMenu
         menuWidth: 224
+        /// Opened from the library tab's Tracks header: the five rows act on
+        /// `root.libTrackIds()` through the library seams instead of the
+        /// TOP_QUEUE ones. Set by whichever ⋯ button opens the menu.
+        property bool forLibrary: false
             Repeater {
                 model: [
                     { "label": QbzSession.tr("Play all next", QbzSession.trRev), "icon": "list-start", "action": "next-all" },
@@ -3643,6 +4032,21 @@ Rectangle {
                         onClicked: {
                             topMenu.close()
                             var a = modelData.action
+                            // Library arm: the same five rows over the
+                            // library tab's list — shuffle through the
+                            // library play-all seam, the three enqueues
+                            // through the bulk funnel with the whole list,
+                            // and the picker over that list (the
+                            // `playlist-all` branch below reads the mode).
+                            if (topMenu.forLibrary && a !== "playlist-all") {
+                                var lib = root.libTrackIds()
+                                if (lib.length === 0) return
+                                if (a === "shuffle-all") QbzLibrary.libraryPlayAll(JSON.stringify(lib), true)
+                                else if (a === "next-all") QbzPlayer.bulkTracksAction(JSON.stringify(lib), "play-next", "artist", String(artist.id || ""))
+                                else if (a === "later-all") QbzPlayer.bulkTracksAction(JSON.stringify(lib), "play-later", "artist", String(artist.id || ""))
+                                else if (a === "queue-all") QbzPlayer.bulkTracksAction(JSON.stringify(lib), "queue", "artist", String(artist.id || ""))
+                                return
+                            }
                             if (a === "shuffle-all") QbzPlayer.playArtistTop(true)
                             // "Play all next" INSERTS at the cursor; it does
                             // not replay the artist. It used to call
@@ -3666,7 +4070,8 @@ Rectangle {
                                 // a Qobuz catalog track (`/artist/page`
                                 // top_tracks), so the catalog arm is correct.
                                 var ids = []
-                                for (var i = 0; i < root.topTracks.length; i++)
+                                if (topMenu.forLibrary) ids = root.libTrackIds()
+                                else for (var i = 0; i < root.topTracks.length; i++)
                                     ids.push(String(root.topTracks[i].id))
                                 if (ids.length > 0)
                                     QbzPlaylistPicker.openForTracks(JSON.stringify(ids))

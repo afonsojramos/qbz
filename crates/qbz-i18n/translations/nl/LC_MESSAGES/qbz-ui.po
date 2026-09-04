@@ -6699,3 +6699,21 @@ msgstr "Albumhoezen tonen in de nummerlijst van de bibliotheek"
 
 msgid "Display the album cover thumbnail between the track number and title. Off by default."
 msgstr "Toon de albumhoesminiatuur tussen het nummer en de titel. Standaard uit."
+
+msgid "Play random"
+msgstr "Willekeurig afspelen"
+
+msgid "Play selected"
+msgstr "Selectie afspelen"
+
+msgid "Cancel selection"
+msgstr "Selectie annuleren"
+
+msgid "QOBUZ LINKS"
+msgstr "QOBUZ-LINKS"
+
+msgid "Open Qobuz links in QBZ"
+msgstr "Qobuz-links openen in QBZ"
+
+msgid "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
+msgstr "Maakt QBZ de handler voor qobuzapp://-links uit je browser. Uit: de officiële Qobuz-app houdt ze; QBZ's eigen qbz://-links openen altijd hier."
