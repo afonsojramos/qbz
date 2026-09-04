@@ -67,6 +67,14 @@ Rectangle {
     /// Host hook: clear the filter when the field closes itself (Esc / X).
     property alias searchOpen: searchBox.open
 
+    /// Host-owned controls that float between the tab strip and the
+    /// magnifier — the artist page mounts its "In library" purchases /
+    /// favourites switches here while that tab is active (#737 round). The
+    /// slot sizes to its children; empty, it costs nothing and the strip
+    /// keeps its full width. Same footprint rule as the search slot: the
+    /// tabs are clipped, never reflowed, when something lives here.
+    property alias trailing: trailingSlot.data
+
     height: 44
     color: root.barBg
     topLeftRadius: root.topRadius
@@ -99,6 +107,7 @@ Rectangle {
         y: 0
         width: Math.max(0, root.width - root.padH
                            - (searchSlot.visible ? searchSlot.width + 18 : 0)
+                           - (trailingSlot.width > 0 ? trailingSlot.width + 18 : 0)
                            - x)
         height: parent.height
         clip: true
@@ -150,6 +159,18 @@ Rectangle {
                 }
             }
         }
+    }
+
+    // Trailing slot (see `trailing`): sized by its children, parked left of
+    // the search slot. Hidden items still count toward `childrenRect`, so a
+    // host that toggles its controls should toggle their `visible` AND leave
+    // the slot empty-width by giving them `width: visible ? n : 0`.
+    Item {
+        id: trailingSlot
+        width: childrenRect.width
+        height: parent.height
+        anchors.right: searchSlot.visible ? searchSlot.left : parent.right
+        anchors.rightMargin: searchSlot.visible ? 18 : root.padH
     }
 
     // Search slot — keeps the CLOSED footprint; the field itself grows left
