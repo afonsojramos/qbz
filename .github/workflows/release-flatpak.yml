@@ -143,7 +143,7 @@ jobs:
           cp packaging/flatpak/com.blitzfc.qbz.desktop "$P/qbz.desktop"
           cp packaging/flatpak/com.blitzfc.qbz.metainfo.xml "$P/"
           cp LICENSE "$P/LICENSE"
-          mkdir -p "$P/icons"; cp packaging/icons/{32x32,128x128,256x256}.png "$P/icons/"
+          mkdir -p "$P/icons"; cp packaging/icons/{32x32,48x48,64x64,128x128,256x256,512x512}.png "$P/icons/"
           ls -la "$P"
 
       - name: Install flatpak tooling
