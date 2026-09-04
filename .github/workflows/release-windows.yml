@@ -171,9 +171,11 @@ jobs:
           fi
           # MSI ProductVersion must be numeric x.y.z; the full string goes to ARPCOMMENTS.
           MSI_VERSION="$(echo "$VERSION" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "msi_version=$MSI_VERSION" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$VERSION"
+            echo "msi_version=$MSI_VERSION"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify tag is on main
         if: startsWith(github.ref, 'refs/tags/')
