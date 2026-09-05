@@ -448,6 +448,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     showArt: !root.largeActive
                     showBadges: !root.largeActive
+                    tooltip: root.tooltip
                     onTrackInfoRequested: root.openTrackInfo()
                 }
                 // Classic: transport cluster hugging the left edge (plain
@@ -512,6 +513,7 @@ Rectangle {
                     AudioStamp {
                         visible: root.largeActive && QbzPlayer.npHasTrack
                         maxWidth: 140
+                        tooltipHost: root.tooltip
                         anchors.verticalCenter: parent.verticalCenter
                     }
                     Item { visible: root.largeActive; width: 12; height: 1 }
@@ -687,6 +689,7 @@ Rectangle {
                 x: controlsLayout.classicTransportRight
                     + (availableWidth - width) / 2
                 anchors.verticalCenter: parent.verticalCenter
+                tooltip: root.tooltip
                 onTrackInfoRequested: root.openTrackInfo()
             }
         }

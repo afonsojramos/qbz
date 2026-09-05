@@ -6574,6 +6574,9 @@ msgstr "Stap {} van {}"
 msgid "Elapsed: {}"
 msgstr "Verstreken: {}"
 
+msgid "Remaining: {}"
+msgstr "Resterend: {}"
+
 msgid "Review the saved source profiles, choose what to copy, and confirm the signed-in destination account."
 msgstr "Controleer de opgeslagen bronprofielen, kies wat u wilt kopiëren en bevestig het aangemelde doelaccount."
 

@@ -33,6 +33,10 @@ Column {
 
     spacing: 4
     width: 128
+    // AppShell's single topmost QbzTooltip. Desktop NPB modes pass it through
+    // SongCard so long device labels are measured by the shared bubble and
+    // cannot be clipped by the player bar.
+    property Item tooltipHost: null
 
     // SongCard.slint's show-delivered / quality-cause-line /
     // quality-stamp-tooltip, verbatim.
@@ -165,12 +169,17 @@ Column {
             id: ledHover
             anchors.fill: parent
             hoverEnabled: true
+            onContainsMouseChanged: {
+                if (root.tooltipHost && led.tooltip !== "")
+                    root.tooltipHost.hover(containsMouse, led,
+                                           "npb-led-" + led.label, led.tooltip)
+            }
         }
         // Bubble geometry: see Tip below — same numbers, read off
         // shell/TooltipOverlay.slint.
         ToolTip {
             id: ledTip
-            visible: ledHover.containsMouse && led.tooltip !== ""
+            visible: !root.tooltipHost && ledHover.containsMouse && led.tooltip !== ""
             text: led.tooltip
             delay: 0
             timeout: -1
@@ -328,7 +337,7 @@ Column {
                 label: QbzPlayer.npOutputBackendLabel
                 on: QbzPlayer.npOutputBackendActive
                 litColor: "#5b8def"
-                tooltip: QbzSession.tr("Audio backend", QbzSession.trRev)
+                tooltip: QbzPlayer.npOutputBackendTooltip
                 anchors.verticalCenter: parent.verticalCenter
             }
             DotLed {

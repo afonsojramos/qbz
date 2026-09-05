@@ -38,6 +38,9 @@ Item {
 
     /// One row of `list_json.albums` (§G.2).
     property var album: ({})
+    /// Viewport artwork resolver override. Empty falls back to the path that
+    /// was already cached when Rust built the document.
+    property string artSource: ""
     signal clicked()
 
     QbzTheme { id: theme }
@@ -48,7 +51,8 @@ Item {
     /// publishes the `file://` path, `""` until it lands. A cell handed only the
     /// url draws nothing at all (purchases_qt.rs::AlbumRow::art_path, and the
     /// same trap documented in artist_releases_qt.rs and musician_qt.rs).
-    readonly property string artUrl: root.album.artPath || ""
+    readonly property string artUrl: root.artSource !== ""
+        ? root.artSource : (root.album.artPath || "")
 
     function t(s) { return QbzSession.tr(s, QbzSession.trRev) }
 

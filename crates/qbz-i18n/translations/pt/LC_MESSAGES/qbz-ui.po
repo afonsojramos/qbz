@@ -6584,6 +6584,9 @@ msgstr "Etapa {} de {}"
 msgid "Elapsed: {}"
 msgstr "Tempo decorrido: {}"
 
+msgid "Remaining: {}"
+msgstr "Restante: {}"
+
 msgid "Review the saved source profiles, choose what to copy, and confirm the signed-in destination account."
 msgstr "Revise os perfis de origem salvos, escolha o que copiar e confirme a conta de destino conectada."
 

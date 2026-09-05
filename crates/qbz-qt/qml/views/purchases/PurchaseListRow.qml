@@ -25,6 +25,7 @@ Rectangle {
 
     /// One row of `list_json.albums` (§G.2).
     property var album: ({})
+    property string artSource: ""
     /// Row index — the odd-row zebra every other list in the app draws
     /// (views/AlbumListRow.qml).
     property int rowIndex: 0
@@ -109,7 +110,8 @@ Rectangle {
                     id: art
                     anchors.fill: parent
                     // `artPath`, never `artworkUrl` — see PurchaseGridCard.
-                    source: root.album.artPath || ""
+                    source: root.artSource !== "" ? root.artSource
+                                                  : (root.album.artPath || "")
                     radius: theme.radiusSm
                 }
                 QbzIcon {

@@ -2417,12 +2417,6 @@ pub async fn publish_snapshot() {
     qbz_app::session_persist::set_gates(prefs.persist_session, prefs.resume_playback_position);
     let streaming_key = streaming_quality();
 
-    // The now-playing stamp's two output LEDs are a pure function of the
-    // audio settings (settings.rs `output_labels`, mirrored onto
-    // NowPlayingState by `apply_snapshot`). Every settings change already
-    // funnels through here, so they refresh with the settings and never poll.
-    crate::output_labels::publish(&audio_settings);
-
     // #638 fix 3 — read the cap cache, never probe here. `publish_snapshot`
     // runs on every settings mutation and on every Settings open; the probe is
     // a `pw-dump` subprocess and belongs only on the six explicit triggers
@@ -2446,6 +2440,15 @@ pub async fn publish_snapshot() {
             None => 0,
             Some(id) => ids.iter().position(|d| d == id).unwrap_or(0),
         };
+        let device_label = devices
+            .get(device_index)
+            .map(|device| device.label.clone())
+            .unwrap_or_else(|| qbz_i18n::t("System default"));
+
+        // Settings owns hardware enumeration, so this is the one edge that
+        // can publish the NPB tooltip with a human-readable device name.
+        // Track/stream edges reuse the cached label and never probe hardware.
+        crate::output_labels::publish_with_device_label(&audio_settings, device_label);
 
         let alsa_plugin = audio_settings.alsa_plugin.unwrap_or(AlsaPlugin::Hw);
         let alsa_plugin_index = ALSA_PLUGIN_VALUES

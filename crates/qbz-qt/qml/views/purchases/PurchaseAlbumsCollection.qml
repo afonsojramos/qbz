@@ -11,12 +11,11 @@
 // 60px on a 4px gap. The root is content-sized in both arms so the page's one
 // Flickable owns the scroll — there is no nested scroller here.
 //
-// NO WINDOWING. views/AlbumCollection.qml samples a visible band every 80ms and
-// mounts only the cards inside it; that machinery is coupled to ITS delegate
-// (cards/AlbumCard.qml) and its host contract, and §15.1 forbids building
-// virtualisation of our own. Every purchased album therefore mounts, exactly as
-// it does in Tauri and in the .slint. Recorded as a known cost, not an
-// oversight: a very large purchase library will pay for it on entry.
+// WINDOWING: the outer PurchasesView Flickable owns scrolling, so a nested
+// GridView/ListView would consider its whole content visible and instantiate
+// everything. Keep the full cheap footprint here, but mount only a two-viewport
+// runway around the visible band. The same band drives artwork requests, so an
+// account with thousands of purchases pays only for the cells near the screen.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -30,6 +29,8 @@ Item {
     property var albums: []
     /// "grid" | "list".
     property string viewMode: "grid"
+    /// Outer scrolling host. Null keeps the bounded/eager fallback.
+    property Flickable flick: null
     signal openAlbum(string albumId)
 
     QbzTheme { id: theme }
@@ -47,6 +48,119 @@ Item {
     readonly property int gridRows:
         Math.ceil(root.albums.length / Math.max(1, root.columns))
 
+    // --- bounded visible band ---------------------------------------------
+    property int bandFirst: 0
+    property int bandLast: -1
+    readonly property bool windowed: root.flick !== null
+
+    function metrics() {
+        var listMode = root.viewMode === "list"
+        var pitch = listMode ? root.listRowHeight + root.listGap
+                             : root.cardHeight + root.cardGap
+        var p = root.mapToItem(root.flick.contentItem, 0, 0)
+        return ({ "pitch": pitch,
+                  "top": p.y + (listMode ? root.listHeaderHeight + root.listGap : 0),
+                  "cols": listMode ? 1 : root.columns })
+    }
+
+    function sampleBand() {
+        if (!root.windowed || !root.visible || root.flick.height <= 0)
+            return
+        var m = root.metrics()
+        var localTop = root.flick.contentY - m.top
+        var h = root.flick.height
+        var totalRows = Math.ceil(root.albums.length / m.cols)
+        var runwayTop = localTop - 2 * h
+        var runwayBottom = localTop + 3 * h
+        if (totalRows <= 0 || runwayBottom <= 0
+                || runwayTop >= totalRows * m.pitch) {
+            root.bandFirst = 0
+            root.bandLast = -1
+            return
+        }
+        root.bandFirst = Math.max(0, Math.floor(runwayTop / m.pitch))
+        root.bandLast = Math.min(totalRows - 1,
+            Math.max(root.bandFirst, Math.ceil(runwayBottom / m.pitch) - 1))
+        root.reportArtWindow()
+    }
+
+    function ensureBandCoverage() {
+        if (!root.windowed || !root.visible || root.flick.height <= 0)
+            return
+        var m = root.metrics()
+        var localTop = root.flick.contentY - m.top
+        var h = Math.max(1, root.flick.height)
+        var totalRows = Math.ceil(root.albums.length / m.cols)
+        if (totalRows <= 0 || localTop + 3 * h <= 0
+                || localTop - 2 * h >= totalRows * m.pitch)
+            return
+        var first = Math.max(0, Math.floor(localTop / m.pitch))
+        var last = Math.max(0, Math.ceil((localTop + h) / m.pitch))
+        var runway = Math.max(1, Math.ceil(h / m.pitch))
+        if (first < root.bandFirst || last > root.bandLast
+                || (first > runway && first - root.bandFirst < runway)
+                || (last < totalRows - runway && root.bandLast - last < runway))
+            root.sampleBand()
+    }
+
+    Connections {
+        target: root.flick
+        ignoreUnknownSignals: true
+        function onContentYChanged() { root.ensureBandCoverage() }
+        function onHeightChanged() { root.sampleBand() }
+    }
+    Component.onCompleted: root.sampleBand()
+    onAlbumsChanged: root.sampleBand()
+    onViewModeChanged: root.sampleBand()
+    onVisibleChanged: root.sampleBand()
+    onWidthChanged: root.sampleBand()
+    onYChanged: root.sampleBand()
+
+    // --- viewport artwork --------------------------------------------------
+    property var artMap: ({})
+    readonly property var artAsked: ({ "seen": ({}) })
+
+    function artOf(album) {
+        if (!album)
+            return ""
+        var url = album.artworkUrl || ""
+        return (url !== "" && root.artMap[url])
+            ? root.artMap[url] : (album.artPath || "")
+    }
+
+    function reportArtWindow() {
+        if (!root.windowed || root.albums.length === 0
+                || root.bandLast < root.bandFirst)
+            return
+        var cols = root.viewMode === "list" ? 1 : root.columns
+        var lo = Math.max(0, root.bandFirst * cols)
+        var hi = Math.min(root.albums.length - 1, (root.bandLast + 1) * cols - 1)
+        var pending = []
+        var seen = root.artAsked.seen
+        for (var i = lo; i <= hi; i++) {
+            var album = root.albums[i] || ({})
+            var url = album.artworkUrl || ""
+            if (url === "" || (album.artPath || "") !== ""
+                    || root.artMap[url] || seen[url] === true)
+                continue
+            seen[url] = true
+            pending.push(url)
+        }
+        if (pending.length > 0)
+            QbzShell.sidebarArtworkWindow(JSON.stringify(pending))
+    }
+
+    Connections {
+        target: QbzLibrary
+        function onLibraryArtworkReady(key, path) {
+            if (root.artAsked.seen[key] !== true || root.artMap[key] === path)
+                return
+            var next = Object.assign({}, root.artMap)
+            next[key] = path
+            root.artMap = next
+        }
+    }
+
     width: parent ? parent.width : 0
     // Content-sized: the page Flickable reads this through its Column.
     height: root.viewMode === "list"
@@ -61,45 +175,66 @@ Item {
 
     // --- Grid -------------------------------------------------------------
     Item {
+        id: grid
         visible: root.viewMode !== "list"
         anchors.fill: parent
+        readonly property int mountedFrom: root.windowed
+            ? Math.min(root.albums.length, root.bandFirst * root.columns) : 0
+        readonly property int mountedTo: root.windowed
+            ? Math.min(root.albums.length,
+                       Math.max(mountedFrom, (root.bandLast + 1) * root.columns))
+            : root.albums.length
         Repeater {
             // The model is gated on the arm so the hidden arm builds no
             // delegates at all (the AlbumCollection convention) — a hidden
             // Repeater still instantiates everything otherwise.
-            model: root.viewMode !== "list" ? root.albums : []
+            model: root.viewMode !== "list"
+                ? Math.max(0, grid.mountedTo - grid.mountedFrom) : 0
             delegate: PurchaseGridCard {
-                required property var modelData
                 required property int index
-                x: (index % root.columns) * (root.cardWidth + root.cardGap)
-                y: Math.floor(index / root.columns) * (root.cardHeight + root.cardGap)
+                readonly property int globalIndex: grid.mountedFrom + index
+                readonly property var cardData: root.albums[globalIndex] || ({})
+                x: (globalIndex % root.columns) * (root.cardWidth + root.cardGap)
+                y: Math.floor(globalIndex / root.columns) * (root.cardHeight + root.cardGap)
                 width: root.cardWidth
                 height: root.cardHeight
-                album: modelData
-                onClicked: root.openAlbum(modelData.id || "")
+                album: cardData
+                artSource: root.artOf(cardData)
+                onClicked: root.openAlbum(cardData.id || "")
             }
         }
     }
 
     // --- List -------------------------------------------------------------
-    Column {
+    Item {
+        id: list
         visible: root.viewMode === "list"
         anchors.fill: parent
-        spacing: root.listGap
         PurchaseListHeader {
             visible: root.viewMode === "list" && root.albums.length > 0
             width: parent.width
             height: root.listHeaderHeight
         }
         Repeater {
-            model: root.viewMode === "list" ? root.albums : []
+            id: listRepeater
+            readonly property int mountedFrom: root.windowed
+                ? Math.min(root.albums.length, root.bandFirst) : 0
+            readonly property int mountedTo: root.windowed
+                ? Math.min(root.albums.length, Math.max(mountedFrom, root.bandLast + 1))
+                : root.albums.length
+            model: root.viewMode === "list"
+                ? Math.max(0, mountedTo - mountedFrom) : 0
             delegate: PurchaseListRow {
-                required property var modelData
                 required property int index
-                width: parent ? parent.width : 0
-                album: modelData
-                rowIndex: index
-                onClicked: root.openAlbum(modelData.id || "")
+                readonly property int globalIndex: listRepeater.mountedFrom + index
+                readonly property var rowData: root.albums[globalIndex] || ({})
+                width: list.width
+                y: root.listHeaderHeight + root.listGap
+                    + globalIndex * (root.listRowHeight + root.listGap)
+                album: rowData
+                artSource: root.artOf(rowData)
+                rowIndex: globalIndex
+                onClicked: root.openAlbum(rowData.id || "")
             }
         }
     }

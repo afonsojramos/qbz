@@ -1230,30 +1230,6 @@ fn cached_art(url: &str) -> String {
     }
 }
 
-/// Every cover url on the list that is NOT on disk yet — the second-pass
-/// download set (`musician_qt::attach_art` / `artist_releases_qt::fetch`).
-fn missing_list_art(s: &ListState) -> Vec<String> {
-    let mut missing: Vec<String> = Vec::new();
-    for url in s
-        .albums_raw
-        .iter()
-        .map(|a| a.image.best().cloned().unwrap_or_default())
-        .chain(s.tracks_raw.iter().map(|t| {
-            t.album
-                .as_ref()
-                .and_then(|al| al.image.best().cloned())
-                .unwrap_or_default()
-        }))
-    {
-        if !url.is_empty() && crate::artwork_qt::cached_path(&url).is_empty() {
-            missing.push(url);
-        }
-    }
-    missing.sort();
-    missing.dedup();
-    missing
-}
-
 fn build_album_doc(s: &DetailState) -> AlbumDoc {
     let selected = s.selected_format_id;
     let dl = with_store(|st| st.get(&s.album_id).cloned());
@@ -2015,26 +1991,6 @@ fn annotate(
     (response.albums.items, response.tracks.items)
 }
 
-/// Fill any cover that landed on disk since the last publish, then republish.
-/// Two passes, the `artist_releases_qt::fetch` shape: publish what is cached,
-/// download what is not, republish.
-async fn fill_missing_art(generation: u64) {
-    let missing = with_list(|s| {
-        if s.generation != generation {
-            return Vec::new();
-        }
-        missing_list_art(s)
-    });
-    if missing.is_empty() {
-        return;
-    }
-    crate::artwork_qt::download_missing(missing).await;
-    let still_current = with_list(|s| s.generation == generation);
-    if still_current {
-        publish_list();
-    }
-}
-
 // ---------------------------------------------------------------------------
 //  List — the invokables
 // ---------------------------------------------------------------------------
@@ -2051,6 +2007,14 @@ pub fn open_list() {
         s.quality_filter = crate::settings_qt::pref_str(PREF_QUALITY_FILTER, "all");
         s.region_notice_visible = !crate::settings_qt::pref_bool(PREF_REGION_NOTICE_SEEN, false);
         s.error.clear();
+        // Metadata is awaited before the tab fetch so annotations see the
+        // registry. Mark the tab busy before this first publish; otherwise the
+        // interim empty document briefly claims the account has no purchases.
+        s.loading = if s.tab == "tracks" {
+            !s.tracks_loaded
+        } else {
+            !s.albums_loaded
+        };
         // THE GUARD (§5). `false -> true` is claimed here, under the lock, so
         // two entries in the same frame cannot both fire the metadata load.
         let claim = !s.metadata_loaded;
@@ -2204,7 +2168,6 @@ fn load_tab(generation: u64, tab: String, force: bool) {
                 });
                 if applied {
                     publish_list();
-                    fill_missing_art(generation).await;
                 }
             }
             Err(e) => {
@@ -2308,7 +2271,6 @@ pub fn search(query: String) {
                 });
                 if applied {
                     publish_list();
-                    fill_missing_art(generation).await;
                 }
             }
             Err(e) => {

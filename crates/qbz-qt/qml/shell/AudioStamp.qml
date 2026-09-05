@@ -38,6 +38,9 @@ Item {
 
     /// Width clamp (Slint: the VerticalLayout's max-width at the call site).
     property int maxWidth: 150
+    /// AppShell's shared topmost tooltip. The Small/Large desktop bars pass it
+    /// through so the bubble is outside every clipped player-bar subtree.
+    property Item tooltipHost: null
 
     // Manual tier label: hires→HI-RES, mp3→MP3, lossless→LOSSLESS, else→CD.
     readonly property string tierLabel: QbzPlayer.npQualityTier === "hires" ? "HI-RES"
@@ -132,20 +135,41 @@ Item {
             spacing: 5
 
             Text {
+                id: backendLed
                 text: QbzPlayer.npOutputBackendLabel
                 font.pixelSize: 7
                 font.weight: Font.Bold
                 color: QbzPlayer.npOutputBackendActive ? "#5b8def" : theme.textMuted
                 elide: Text.ElideRight
                 anchors.verticalCenter: parent.verticalCenter
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onContainsMouseChanged: {
+                        if (root.tooltipHost)
+                            root.tooltipHost.hover(containsMouse, backendLed,
+                                "npb-backend", QbzPlayer.npOutputBackendTooltip)
+                    }
+                }
             }
             Text {
+                id: modeLed
                 text: QbzPlayer.npOutputModeLabel
                 font.pixelSize: 7
                 font.weight: Font.Bold
                 color: QbzPlayer.npOutputModeActive ? "#3fae6a" : theme.textMuted
                 elide: Text.ElideRight
                 anchors.verticalCenter: parent.verticalCenter
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onContainsMouseChanged: {
+                        if (root.tooltipHost)
+                            root.tooltipHost.hover(containsMouse, modeLed,
+                                "npb-output-mode",
+                                QbzSession.tr("Output mode", QbzSession.trRev))
+                    }
+                }
             }
         }
 

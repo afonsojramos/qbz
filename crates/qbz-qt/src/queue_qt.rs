@@ -42,6 +42,10 @@ pub struct QueueRow {
     #[serde(rename = "albumId")]
     pub album_id: String,
     pub duration: String,
+    /// Numeric twin used by Listen list for aggregate timing. Keeping the
+    /// display string avoids moving per-row formatting into QML.
+    #[serde(rename = "durationSecs")]
+    pub duration_secs: u64,
     #[serde(rename = "qualityTier")]
     pub quality_tier: String,
     #[serde(rename = "qualityDetail")]
@@ -246,6 +250,7 @@ fn row_from(track: &QueueTrack, favorites: &HashSet<u64>) -> QueueRow {
         album: track.album.clone(),
         album_id: track.album_id.clone().unwrap_or_default(),
         duration: fmt_duration(track.duration_secs),
+        duration_secs: track.duration_secs,
         quality_tier: tier,
         quality_detail: crate::home_qt::quality_detail_from_parts(
             track.bit_depth,

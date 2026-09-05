@@ -90,25 +90,29 @@ Rectangle {
     // The per-type result tabs live inside the page Flickable, so a GridView
     // sized to its whole content is not virtualized: from that GridView's
     // perspective every row is in its viewport. Sample one shared vertical
-    // band and feed only that slice to the manual grids/tape below. Event-
-    // driven and one-shot: no timer wakes while Search is idle.
+    // band and feed only that slice to the manual grids/tape below. Scroll
+    // events run a constant-time coverage guard synchronously; the old 40ms
+    // delayed sampler could leave the viewport outside the mounted slice for
+    // visible blank frames after Load more changed the page footprint.
     property real bodyBandTop: 0
-    property real bodyBandBottom: 1000000
+    property real bodyBandBottom: 0
     function sampleBodyBand() {
         if (!bodyFlick || bodyFlick.height <= 0)
             return
-        root.bodyBandTop = Math.max(0, bodyFlick.contentY - bodyFlick.height)
-        root.bodyBandBottom = bodyFlick.contentY + 2 * bodyFlick.height
+        root.bodyBandTop = Math.max(0, bodyFlick.contentY - 2 * bodyFlick.height)
+        root.bodyBandBottom = bodyFlick.contentY + 3 * bodyFlick.height
     }
-    function scheduleBodyBand() {
-        if (root.visible && !searchBandSampler.running)
-            searchBandSampler.start()
-    }
-    Timer {
-        id: searchBandSampler
-        interval: 40
-        repeat: false
-        onTriggered: root.sampleBodyBand()
+    function ensureBodyBandCoverage() {
+        if (!root.visible || !bodyFlick || bodyFlick.height <= 0)
+            return
+        var top = bodyFlick.contentY
+        var bottom = top + bodyFlick.height
+        var runway = bodyFlick.height
+        if (top < root.bodyBandTop || bottom > root.bodyBandBottom
+                || (top > runway && top - root.bodyBandTop < runway)
+                || (bottom < bodyFlick.contentHeight - runway
+                    && root.bodyBandBottom - bottom < runway))
+            root.sampleBodyBand()
     }
 
     // ======================= skeleton plumbing ===========================
@@ -206,7 +210,7 @@ Rectangle {
     onFilterIndexChanged: root.clearFade()
     onTabChanged: {
         root.clearFade()
-        root.scheduleBodyBand()
+        root.sampleBodyBand()
     }
 
     function armLoadMore(t) {
@@ -254,6 +258,7 @@ Rectangle {
     // takes NO `root.` reference — every call site passes `phase:` itself.
     component CardArtSkeleton: QbzSkeleton {
         property var card: ({})
+        property string resolvedSource: card.artPath || ""
         variant: "art"
         width: 200
         height: 200
@@ -263,7 +268,7 @@ Rectangle {
         // that decode finishes. Gating on `artPath !== ""` (what this used to
         // do) drops the placeholder while the card's canvas is still blank.
         pending: (card.artUrl || "") !== ""
-        coverSource: card.artPath || ""
+        coverSource: resolvedSource
         // A cover whose download fails republishes the document with an
         // empty artPath — without this the tile would shimmer forever.
         settleMs: 6000
@@ -283,10 +288,59 @@ Rectangle {
         property int cardW: 200
         property int cardH: 246
         property real bandTop: 0
-        property real bandBottom: 1000000
+        property real bandBottom: 0
         property bool phase: false
         property int fadeTab: -1
         property int fadeFrom: -1
+        property string collectionKey: ""
+
+        // Artwork follows the same bounded runway as delegates. Page-2 rows
+        // are not bulk-republished after their downloads; each URL lands in
+        // this local map through the shared one-key-at-a-time artwork signal.
+        property var artMap: ({})
+        property var artAsked: ({})
+        function artOf(card) {
+            if (!card)
+                return ""
+            var url = card.artUrl || ""
+            return (url !== "" && resultGrid.artMap[url])
+                ? resultGrid.artMap[url] : (card.artPath || "")
+        }
+        function reportArtWindow() {
+            if (!resultGrid.visible)
+                return
+            var pending = []
+            for (var i = resultGrid.mountedFrom; i < resultGrid.mountedTo; i++) {
+                var card = resultGrid.rows[i] || ({})
+                var url = card.artUrl || ""
+                if (url === "" || (card.artPath || "") !== ""
+                        || resultGrid.artMap[url] || resultGrid.artAsked[url] === true)
+                    continue
+                resultGrid.artAsked[url] = true
+                pending.push(url)
+            }
+            if (pending.length > 0)
+                QbzShell.sidebarArtworkWindow(JSON.stringify(pending))
+        }
+        onCollectionKeyChanged: {
+            resultGrid.artMap = ({})
+            resultGrid.artAsked = ({})
+            resultGrid.reportArtWindow()
+        }
+        onRowsChanged: resultGrid.reportArtWindow()
+        onMountedFromChanged: resultGrid.reportArtWindow()
+        onMountedToChanged: resultGrid.reportArtWindow()
+        onVisibleChanged: resultGrid.reportArtWindow()
+        Connections {
+            target: QbzLibrary
+            function onLibraryArtworkReady(key, path) {
+                if (resultGrid.artAsked[key] !== true || resultGrid.artMap[key] === path)
+                    return
+                var next = Object.assign({}, resultGrid.artMap)
+                next[key] = path
+                resultGrid.artMap = next
+            }
+        }
 
         // The final card has no trailing gutter: six 200px cards on a 224px
         // pitch consume 6*200 + 5*24, not 6*224.
@@ -317,7 +371,7 @@ Rectangle {
                 y: Math.floor(globalIndex / resultGrid.columns) * resultGrid.cellH
                 width: resultGrid.cardW
                 height: resultGrid.cardH
-                opacity: 0
+                opacity: resultCell.fadeIn ? 0 : 1
                 Behavior on opacity {
                     enabled: resultCell.fadeIn
                     NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
@@ -352,7 +406,7 @@ Rectangle {
                         year: resultCell.cardData.year
                         qualityTier: resultCell.cardData.qualityTier
                         qualityDetail: resultCell.cardData.qualityDetail || ""
-                        artSource: resultCell.cardData.artPath || ""
+                        artSource: resultGrid.artOf(resultCell.cardData)
                         isFavorite: resultCell.cardData.isFavorite === true
                         isPinned: resultCell.cardData.isPinned === true
                         artworkUrl: resultCell.cardData.artUrl || ""
@@ -362,7 +416,7 @@ Rectangle {
                     id: artistResult
                     ArtistCard {
                         item: resultCell.cardData
-                        artSource: resultCell.cardData.artPath || ""
+                        artSource: resultGrid.artOf(resultCell.cardData)
                         isPinned: resultCell.cardData.isPinned === true
                         artworkUrl: resultCell.cardData.artUrl || ""
                     }
@@ -371,7 +425,7 @@ Rectangle {
                     id: playlistResult
                     PlaylistCard {
                         item: resultCell.cardData
-                        artSource: resultCell.cardData.artPath || ""
+                        artSource: resultGrid.artOf(resultCell.cardData)
                         isPinned: resultCell.cardData.isPinned === true
                     }
                 }
@@ -386,6 +440,7 @@ Rectangle {
                 CardArtSkeleton {
                     visible: resultGrid.kind !== "artist"
                     card: resultCell.cardData
+                    resolvedSource: resultGrid.artOf(resultCell.cardData)
                     phase: resultGrid.phase
                     cellIndex: resultCell.globalIndex
                 }
@@ -399,7 +454,7 @@ Rectangle {
         property bool fadeIn: false
 
         number: resultIndex + 1
-        opacity: 0
+        opacity: searchTrackRow.fadeIn ? 0 : 1
         Behavior on opacity {
             enabled: searchTrackRow.fadeIn
             NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
@@ -695,8 +750,8 @@ Rectangle {
                 contentHeight: bodyCol.height + 32
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
-                onContentYChanged: root.scheduleBodyBand()
-                onHeightChanged: root.scheduleBodyBand()
+                onContentYChanged: root.ensureBodyBandCoverage()
+                onHeightChanged: root.sampleBodyBand()
                 Component.onCompleted: root.sampleBodyBand()
 
                 Column {
@@ -912,6 +967,7 @@ Rectangle {
                         phase: root.skelPhase
                         fadeTab: root.fadeTab
                         fadeFrom: root.fadeFrom
+                        collectionKey: root.query + ":albums"
                     }
                     // The page that "Load more" asked for, in the shape it
                     // will arrive in: one row of 224x270 cells on one
@@ -1056,6 +1112,7 @@ Rectangle {
                         phase: root.skelPhase
                         fadeTab: root.fadeTab
                         fadeFrom: root.fadeFrom
+                        collectionKey: root.query + ":artists"
                     }
                     // Artists: this grid's own 216x262 pitch, NOT the 224x270
                     // the album/playlist grids use — the cells here are the
@@ -1134,6 +1191,7 @@ Rectangle {
                         phase: root.skelPhase
                         fadeTab: root.fadeTab
                         fadeFrom: root.fadeFrom
+                        collectionKey: root.query + ":playlists"
                     }
                     // Playlists share the album grid's 224x270 pitch.
                     QbzLoadMore {

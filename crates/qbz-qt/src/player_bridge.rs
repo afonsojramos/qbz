@@ -99,6 +99,10 @@ pub mod qbz_player {
         // PIPEWIRE|ALSA|JACK|PULS|SYST|AUTO — *_active lights the LED.
         #[qproperty(QString, np_output_backend_label)]
         #[qproperty(bool, np_output_backend_active)]
+        // Human-readable backend + selected output name for the LED tooltip,
+        // e.g. "ALSA — FiiO K9 Pro". Settings owns device enumeration; the
+        // player bridge only mirrors the resolved route for all four NPBs.
+        #[qproperty(QString, np_output_backend_tooltip)]
         // DACPASS|BITPERF|EXCL|DIRECT|LOCKED|ROUTED|SHARED|DEFAULT.
         #[qproperty(QString, np_output_mode_label)]
         #[qproperty(bool, np_output_mode_active)]
@@ -322,6 +326,7 @@ pub struct QbzPlayerRust {
     np_eff_bits: i32,
     np_output_backend_label: QString,
     np_output_backend_active: bool,
+    np_output_backend_tooltip: QString,
     np_output_mode_label: QString,
     np_output_mode_active: bool,
     np_volume_locked: bool,
@@ -380,6 +385,7 @@ impl Default for QbzPlayerRust {
             // "SYST / DEFAULT" pair until the first settings snapshot.
             np_output_backend_label: QString::from("SYST"),
             np_output_backend_active: false,
+            np_output_backend_tooltip: QString::from("System default"),
             np_output_mode_label: QString::from("DEFAULT"),
             np_output_mode_active: false,
             // Optimistic default: the slider stays live until the first

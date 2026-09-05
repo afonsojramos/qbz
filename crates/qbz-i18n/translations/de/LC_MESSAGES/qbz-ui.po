@@ -6586,6 +6586,9 @@ msgstr "Schritt {} von {}"
 msgid "Elapsed: {}"
 msgstr "Vergangene Zeit: {}"
 
+msgid "Remaining: {}"
+msgstr "Verbleibend: {}"
+
 msgid "Review the saved source profiles, choose what to copy, and confirm the signed-in destination account."
 msgstr "Prüfen Sie die gespeicherten Quellprofile, wählen Sie die zu kopierenden Daten und bestätigen Sie das angemeldete Zielkonto."
 

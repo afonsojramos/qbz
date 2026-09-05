@@ -24,6 +24,19 @@
 use cxx_qt_lib::QString;
 use qbz_audio::backend::{AlsaPlugin, AudioBackendType};
 use qbz_audio::settings::AudioSettings;
+use std::sync::{LazyLock, Mutex};
+
+/// Last human-readable device label resolved by Settings' device enumeration.
+/// Track/stream edges republish the LED state without enumerating hardware;
+/// the settings edge refreshes this cache when the route changes.
+#[derive(Clone)]
+struct DeviceLabel {
+    backend: Option<AudioBackendType>,
+    device_id: Option<String>,
+    label: String,
+}
+
+static DEVICE_LABEL: LazyLock<Mutex<Option<DeviceLabel>>> = LazyLock::new(|| Mutex::new(None));
 
 /// The four LED values. `*_active` = the LED is lit (a deliberate,
 /// bit-perfect-capable route) rather than merely named.
@@ -133,17 +146,55 @@ pub fn volume_locked(audio: &AudioSettings) -> bool {
 /// player bridge (Qt-thread hop). Called from `settings_qt::publish_snapshot`
 /// AND from the track/stream edges, so the labels follow the settings without
 /// a poll of their own.
-pub fn publish(audio: &AudioSettings) {
+fn cached_device_label(audio: &AudioSettings) -> String {
+    DEVICE_LABEL
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .filter(|cached| {
+            cached.backend == audio.backend_type && cached.device_id == audio.output_device
+        })
+        .map(|cached| cached.label)
+        .unwrap_or_else(|| {
+            audio
+                .output_device
+                .clone()
+                .unwrap_or_else(|| qbz_i18n::t("System default"))
+        })
+}
+
+fn publish_resolved(audio: &AudioSettings, device_label: String) {
     let l = output_labels(audio);
     let locked = volume_locked(audio);
+    let backend_tooltip = format!("{} — {device_label}", l.backend);
     crate::player_bridge::ui(move |mut b| {
         b.as_mut()
             .set_np_output_backend_label(QString::from(l.backend));
         b.as_mut().set_np_output_mode_label(QString::from(l.mode));
         b.as_mut().set_np_output_backend_active(l.backend_active);
         b.as_mut().set_np_output_mode_active(l.mode_active);
+        b.as_mut()
+            .set_np_output_backend_tooltip(QString::from(backend_tooltip.as_str()));
         b.as_mut().set_np_volume_locked(locked);
     });
+}
+
+pub fn publish(audio: &AudioSettings) {
+    publish_resolved(audio, cached_device_label(audio));
+}
+
+/// Settings has just enumerated the active backend and therefore owns the
+/// authoritative display label. Cache it for later track/stream-edge
+/// republishes and update the bridge in the same operation.
+pub fn publish_with_device_label(audio: &AudioSettings, label: String) {
+    if let Ok(mut cached) = DEVICE_LABEL.lock() {
+        *cached = Some(DeviceLabel {
+            backend: audio.backend_type,
+            device_id: audio.output_device.clone(),
+            label: label.clone(),
+        });
+    }
+    publish_resolved(audio, label);
 }
 
 /// Re-derive from the LIVE audio settings and publish. This is the TRACK /
