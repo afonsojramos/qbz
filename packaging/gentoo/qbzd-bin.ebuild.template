@@ -50,6 +50,8 @@ src_install() {
 	insinto /usr/share/fish/vendor_completions.d
 	newins "${dir}/completions/qbzd.fish" qbzd.fish
 	dodoc "${dir}/README.md" "${dir}/LICENSE"
+	insinto /usr/share/licenses/${PN}/third-party
+	doins "${dir}"/licenses/*
 }
 
 pkg_postinst() {

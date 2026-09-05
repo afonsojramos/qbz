@@ -1515,18 +1515,22 @@ fn scan_root(
     // or import rejection is a scan error like any unreadable file.
     let sacd = crate::sacd_scan::scan_root_for_sacd(
         db,
+        folder.id,
+        state.generation.min(i64::MAX as u64) as i64,
         Path::new(&folder.path),
         &crate::sacd_scan::SacdLabels::default(),
         cancel,
     );
-    if sacd.candidates > 0 {
+    if sacd.candidates > 0 || sacd.removed > 0 || !sacd.failed.is_empty() {
         log::info!(
-            "[local-scan] root_id={} sacd candidates={} imported={} unchanged={} ignored={} failed={}",
+            "[local-scan] root_id={} sacd candidates={} imported={} unchanged={} ignored={} removed={} prune_authorized={} failed={}",
             folder.id,
             sacd.candidates,
             sacd.imported,
             sacd.unchanged,
             sacd.ignored,
+            sacd.removed,
+            sacd.prune_authorized,
             sacd.failed.len(),
         );
     }

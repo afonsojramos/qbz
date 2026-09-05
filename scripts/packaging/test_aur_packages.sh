@@ -58,6 +58,7 @@ install -m644 packaging/linux/qbz.desktop "$qbz_dir/qbz.desktop"
 install -m644 packaging/flatpak/com.blitzfc.qbz.metainfo.xml \
     "$qbz_dir/com.blitzfc.qbz.metainfo.xml"
 install -m644 LICENSE "$qbz_dir/LICENSE"
+cp -r licenses "$qbz_dir/licenses"
 for size in 32 48 64 128 256 512; do
     install -m644 "packaging/icons/${size}x${size}.png" \
         "$qbz_dir/icons/hicolor/${size}x${size}/apps/qbz.png"
@@ -71,6 +72,7 @@ install -m755 "$qbzd_test_bin" "$qbzd_dir/qbzd"
 install -m644 crates/qbzd/service/qbzd.service "$qbzd_dir/qbzd.service"
 install -m644 packaging/linux/qbzd-standalone-README.md "$qbzd_dir/README.md"
 install -m644 LICENSE "$qbzd_dir/LICENSE"
+cp -r licenses "$qbzd_dir/licenses"
 "$qbzd_test_bin" completions bash > "$qbzd_dir/completions/qbzd.bash"
 "$qbzd_test_bin" completions zsh > "$qbzd_dir/completions/qbzd.zsh"
 "$qbzd_test_bin" completions fish > "$qbzd_dir/completions/qbzd.fish"
@@ -111,6 +113,7 @@ for package in "${selected_packages[@]}"; do
             case "$PACKAGE" in
                 qbz|qbz-bin)
                     grep -aFq "QBZ/${VERSION}" /usr/bin/qbz
+                    test -f /usr/share/licenses/${PACKAGE}/third-party/Apache-2.0-dst-decoder.txt
                     set +e
                     QT_QPA_PLATFORM=offscreen timeout 20 qbz >/tmp/qbz-smoke.log 2>&1
                     status=$?
@@ -123,6 +126,7 @@ for package in "${selected_packages[@]}"; do
                     ;;
                 qbzd|qbzd-bin)
                     qbzd version | grep -F "qbzd ${VERSION} "
+                    test -f /usr/share/licenses/${PACKAGE}/third-party/Apache-2.0-dst-decoder.txt
                     qbzd completions bash >/dev/null
                     test -f /usr/lib/systemd/user/qbzd.service
                     qbzd service systemd --user builder --bin /usr/bin/qbzd \

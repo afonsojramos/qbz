@@ -30,15 +30,17 @@ use cxx_qt_lib::QString;
 use qbz_app::settings::local_favorites::LocalFavItem;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
-use qbz_library::{AudioFormat, LocalTrack};
+#[cfg(test)]
+use qbz_library::AudioFormat;
+use qbz_library::LocalTrack;
 use qbz_models::QueueTrack;
 use serde::Serialize;
 
 use crate::local_bridge::ui;
 use crate::local_playback::{fill_missing_covers, local_queue_track};
 use crate::local_rows::{
-    album_favorite_source, album_key, badge_source, badge_source_raw, map_track, tier_of, to_json,
-    total_duration, AlbumRow, TrackRow,
+    album_favorite_source, album_key, badge_source, badge_source_raw, map_track,
+    media_quality_rank, tier_of, to_json, total_duration, AlbumMediaVariant, AlbumRow, TrackRow,
 };
 use crate::local_state::{state, with_art};
 
@@ -147,30 +149,9 @@ pub struct GenreAlbumDetailDoc {
 // Version splitting (local_library.rs `open_local_album` 1:1)
 // ---------------------------------------------------------------------------
 
-/// Quality rank for ordering versions (hi-res first).
+/// Shared quality rank for ordering versions (highest-quality first).
 fn version_rank(t: &LocalTrack) -> (u8, u32, u64) {
-    let lossless = matches!(
-        t.format,
-        AudioFormat::Flac
-            | AudioFormat::Alac
-            | AudioFormat::Wav
-            | AudioFormat::Aiff
-            | AudioFormat::Ape
-            | AudioFormat::Dsd
-    );
-    let sample_rate = t.sample_rate.max(0.0) as u64;
-    let depth = t.bit_depth.unwrap_or(0);
-    let tier = if t.format == AudioFormat::Dsd || (lossless && (depth > 16 || sample_rate > 48_000))
-    {
-        3
-    } else if lossless {
-        2
-    } else if t.format != AudioFormat::Unknown {
-        1
-    } else {
-        0
-    };
-    (tier, depth, sample_rate)
+    media_quality_rank(&t.format, t.bit_depth, t.sample_rate)
 }
 
 /// Group the album's tracks by SOURCE DIRECTORY, sort each copy by
@@ -218,8 +199,7 @@ fn version_info(tracks: &[LocalTrack]) -> AlbumVersion {
                 track.disc_number.hash(&mut identity);
                 track.track_number.hash(&mut identity);
             }
-            let detail =
-                crate::home_qt::quality_detail_from_parts(t.bit_depth, Some(t.sample_rate));
+            let detail = crate::local_rows::detail_of(&t.format, t.bit_depth, t.sample_rate);
             let fmt = t.format.to_string();
             let raw_source = badge_source_raw(t.source.as_deref());
             AlbumVersion {
@@ -492,8 +472,14 @@ fn album_header(id: &str, tracks: &[LocalTrack]) -> AlbumRow {
     }
     let best = tracks
         .iter()
-        .max_by_key(|t| t.bit_depth.unwrap_or(0))
+        .max_by_key(|track| version_rank(track))
         .unwrap_or(first);
+    let best_source_raw = badge_source_raw(best.source.as_deref());
+    let best_source = if best_source_raw.is_empty() {
+        badge_source(best.source.as_deref())
+    } else {
+        best_source_raw
+    };
     let card = state(|s| {
         s.albums
             .iter()
@@ -542,6 +528,11 @@ fn album_header(id: &str, tracks: &[LocalTrack]) -> AlbumRow {
             best.sample_rate,
         ),
         format: best.format.to_string(),
+        media_variants: vec![AlbumMediaVariant {
+            quality_tier: tier_of(&best.format, best.bit_depth, best.sample_rate).into(),
+            format: best.format.to_string(),
+            source: best_source,
+        }],
         genres: {
             let mut values = tracks
                 .iter()
@@ -1054,6 +1045,22 @@ mod version_tests {
         assert_eq!(info.track_count, 12);
         assert_eq!(info.source, "subsonic");
         assert!(info.quality.contains("FLAC"));
+    }
+
+    #[test]
+    fn dsd_version_is_preselected_ahead_of_pcm_hires() {
+        let mut tracks = copy("pcm-24-96", "user", "Rust in Peace", 9, 24);
+        let mut dsd = copy("purchased-dsd", "qobuz_purchase", "Rust in Peace", 9, 1);
+        for track in &mut dsd {
+            track.file_path = track.file_path.replace(".flac", ".iso");
+            track.format = AudioFormat::Dsd;
+            track.sample_rate = 2_822_400.0;
+        }
+        tracks.extend(dsd);
+
+        let versions = split_versions(tracks);
+        assert_eq!(versions[0].0, "purchased-dsd");
+        assert_eq!(version_info(&versions[0].1).quality, "DSD64 · DSD");
     }
 
     #[test]

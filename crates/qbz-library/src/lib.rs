@@ -71,7 +71,9 @@ pub use reachability::{
     probe, probe_default, probe_file, probe_file_default, FileProbe, Reach, DEFAULT_PROBE,
 };
 pub use sacd::{SacdImageImport, SacdImportResult};
-pub use sacd_scan::{build_image_rows, SacdImageRows, SacdLabels, SacdScanSummary};
+pub use sacd_scan::{
+    build_image_rows, SacdImageRows, SacdLabels, SacdScanSummary, SACD_PARSER_REVISION,
+};
 pub use scan::{scan_with_progress, ScanEvent};
 pub use scanner::{
     LibraryScanner, ScanEntry, ScanFileKind, ScanResult, ScanStream, ScanWalkError, SymlinkPolicy,

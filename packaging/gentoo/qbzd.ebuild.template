@@ -63,6 +63,8 @@ src_install() {
 	insinto /usr/share/fish/vendor_completions.d
 	newins "${T}/qbzd.fish" qbzd.fish
 	dodoc packaging/linux/qbzd-standalone-README.md LICENSE
+	insinto /usr/share/licenses/${PN}/third-party
+	doins licenses/*
 }
 
 pkg_postinst() {

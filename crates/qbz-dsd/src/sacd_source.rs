@@ -5,7 +5,8 @@
 //! The dependency runs qbz-dsd -> qbz-disc and never the other way: qbz-disc
 //! owns bytes and geometry, this file owns the audio contract.
 
-use qbz_disc::sacd::{SacdTrack, SacdTrackReader};
+use dst_decoder::decoder::DstDecoder;
+use qbz_disc::sacd::{SacdFrameKind, SacdFrameReader, SacdTrack, SacdTrackReader};
 
 use crate::demux::{DsdDemuxer, DsdError, DsdStreamInfo, DsdTags};
 
@@ -15,9 +16,35 @@ const DSD64: u32 = 2_822_400;
 const FRAME: usize = 9408;
 /// Bytes ONE channel contributes to a frame.
 const FRAME_PER_CH: usize = FRAME / 2;
-/// Sectors pulled from the image per refill. 200 sectors is ~0.57 s of audio
-/// and keeps the read amortised without holding much.
+/// Sectors pulled from the image per legacy diagnostic refill.
 const REFILL_SECTORS: usize = 200;
+
+fn decode_dst_frame(
+    decoder: &mut DstDecoder,
+    scratch: &mut [u8],
+    payload: &[u8],
+    pending: &mut Vec<u8>,
+    track: u8,
+    frame_number: u32,
+    start_lsn: u64,
+) -> Result<(), DsdError> {
+    scratch.fill(0);
+    let written = decoder.decode_frame(payload, scratch).map_err(|error| {
+        DsdError::Corrupt(format!(
+            "SACD track {track} DST frame {frame_number} at LSN {start_lsn}: {error}"
+        ))
+    })?;
+    if written != FRAME {
+        return Err(DsdError::Corrupt(format!(
+            "SACD track {track} DST frame {frame_number} at LSN {start_lsn} decoded {written} bytes, expected {FRAME}"
+        )));
+    }
+    // Upstream writes 0x55 into `scratch` on Err. Publication is deliberately
+    // after both Ok and the exact-size check, so synthetic silence cannot
+    // escape into PCM, DoP or native output.
+    pending.extend_from_slice(&scratch[..written]);
+    Ok(())
+}
 
 /// How the two channels sit inside one frame.
 ///
@@ -71,13 +98,24 @@ pub enum ChannelLayout {
 }
 
 pub struct SacdDemuxer {
-    reader: SacdTrackReader,
+    reader: SacdReader,
     info: DsdStreamInfo,
     layout: ChannelLayout,
     /// Audio payload read but not yet split into channels. Only whole frames
     /// are consumed, so a partial frame waits here for the next refill.
     pending: Vec<u8>,
+    dst_decoder: Option<DstDecoder>,
+    decode_scratch: Vec<u8>,
+    track_number: u8,
+    frame_number: u32,
     done: bool,
+}
+
+enum SacdReader {
+    /// Playback: exact TRL2-bounded frames for both flat DSD and DST.
+    Framed(SacdFrameReader),
+    /// Kept only for the `sync=false` diagnostic that reproduces the old bug.
+    Legacy(SacdTrackReader),
 }
 
 impl Default for ChannelLayout {
@@ -89,10 +127,7 @@ impl Default for ChannelLayout {
 
 impl SacdDemuxer {
     /// Open with the measured layout.
-    pub fn open_default(
-        image: &std::path::Path,
-        track: &SacdTrack,
-    ) -> Result<Self, DsdError> {
+    pub fn open_default(image: &std::path::Path, track: &SacdTrack) -> Result<Self, DsdError> {
         Self::open(image, track, ChannelLayout::default())
     }
 
@@ -113,16 +148,29 @@ impl SacdDemuxer {
         layout: ChannelLayout,
         sync: bool,
     ) -> Result<Self, DsdError> {
-        let reader = SacdTrackReader::open_with(
-            image,
-            track,
-            if sync {
-                qbz_disc::sacd::FrameSync::ToFirstFrame
-            } else {
-                qbz_disc::sacd::FrameSync::FromPayloadStart
-            },
-        )
-        .map_err(|e| DsdError::Corrupt(e.to_string()))?;
+        let reader = if sync {
+            SacdReader::Framed(
+                SacdFrameReader::open(image, track)
+                    .map_err(|error| DsdError::Corrupt(error.to_string()))?,
+            )
+        } else {
+            SacdReader::Legacy(
+                SacdTrackReader::open_with(
+                    image,
+                    track,
+                    qbz_disc::sacd::FrameSync::FromPayloadStart,
+                )
+                .map_err(|error| DsdError::Corrupt(error.to_string()))?,
+            )
+        };
+        let dst_decoder = if track.encoding == qbz_disc::sacd::SacdEncoding::Dst {
+            Some(
+                DstDecoder::new(2, DSD64 as usize)
+                    .map_err(|error| DsdError::Corrupt(error.to_string()))?,
+            )
+        } else {
+            None
+        };
         Ok(Self {
             reader,
             info: DsdStreamInfo {
@@ -131,7 +179,7 @@ impl SacdDemuxer {
                 // Bits per channel. The area TOC gives a duration, and DSD64
                 // is exactly 2 822 400 bits/s, so this is the count rather
                 // than an estimate.
-                sample_count: (track.duration_secs * DSD64 as f64) as u64,
+                sample_count: u64::from(track.duration_frames) * u64::from(DSD64 / 75),
                 // SACD is MSB-first, like DFF and unlike DSF's usual LSB-first.
                 // Getting this backwards does not fail — it plays, as noise.
                 lsb_first: false,
@@ -143,6 +191,10 @@ impl SacdDemuxer {
             },
             layout,
             pending: Vec::new(),
+            dst_decoder,
+            decode_scratch: vec![0u8; FRAME],
+            track_number: track.number,
+            frame_number: 0,
             done: false,
         })
     }
@@ -151,19 +203,54 @@ impl SacdDemuxer {
         if self.done {
             return Ok(());
         }
-        let mut chunk = Vec::new();
-        match self.reader.next_chunk(&mut chunk, REFILL_SECTORS) {
-            // ZERO IS NOT THE END. While the reader is still hunting for the
-            // first frame boundary it drops every audio byte it sees, so an
-            // empty chunk is an ordinary early read. Only the reader knows
-            // whether the track is over, and it is asked.
-            Ok(_) => {
+        match &mut self.reader {
+            SacdReader::Legacy(reader) => {
+                let mut chunk = Vec::new();
+                reader
+                    .next_chunk(&mut chunk, REFILL_SECTORS)
+                    .map_err(|error| DsdError::Corrupt(error.to_string()))?;
                 self.pending.extend_from_slice(&chunk);
-                if self.reader.finished() {
-                    self.done = true;
-                }
+                self.done = reader.finished();
             }
-            Err(e) => return Err(DsdError::Corrupt(e.to_string())),
+            SacdReader::Framed(reader) => match reader
+                .next_frame()
+                .map_err(|error| DsdError::Corrupt(error.to_string()))?
+            {
+                Some(frame) => {
+                    match frame.kind {
+                        SacdFrameKind::Dsd => {
+                            if frame.payload.len() != FRAME {
+                                return Err(DsdError::Corrupt(format!(
+                                    "SACD track {} frame {} at LSN {} produced {} DSD bytes, expected {FRAME}",
+                                    self.track_number,
+                                    self.frame_number,
+                                    frame.start_lsn,
+                                    frame.payload.len(),
+                                )));
+                            }
+                            self.pending.extend_from_slice(&frame.payload);
+                        }
+                        SacdFrameKind::Dst => {
+                            let decoder = self.dst_decoder.as_mut().ok_or_else(|| {
+                                DsdError::Corrupt(
+                                    "DST frame reached a stream without a decoder".to_string(),
+                                )
+                            })?;
+                            decode_dst_frame(
+                                decoder,
+                                &mut self.decode_scratch,
+                                &frame.payload,
+                                &mut self.pending,
+                                self.track_number,
+                                self.frame_number,
+                                frame.start_lsn,
+                            )?;
+                        }
+                    }
+                    self.frame_number = self.frame_number.saturating_add(1);
+                }
+                None => self.done = true,
+            },
         }
         Ok(())
     }
@@ -176,9 +263,24 @@ impl DsdDemuxer for SacdDemuxer {
 
     fn seek_to_bit(&mut self, bit_per_channel: u64) -> Result<(), DsdError> {
         let target = bit_per_channel.min(self.info.sample_count);
-        self.reader.seek_to_fraction(target, self.info.sample_count);
+        match &mut self.reader {
+            SacdReader::Framed(reader) => reader
+                .seek_to_fraction(target, self.info.sample_count)
+                .map_err(|error| DsdError::Corrupt(error.to_string()))?,
+            SacdReader::Legacy(reader) => reader.seek_to_fraction(target, self.info.sample_count),
+        }
+        if self.dst_decoder.is_some() {
+            self.dst_decoder = Some(
+                DstDecoder::new(2, DSD64 as usize)
+                    .map_err(|error| DsdError::Corrupt(error.to_string()))?,
+            );
+        }
         self.pending.clear();
-        self.done = self.reader.finished();
+        self.frame_number = ((u128::from(target) * 75) / u128::from(DSD64)) as u32;
+        self.done = match &self.reader {
+            SacdReader::Framed(reader) => reader.finished(),
+            SacdReader::Legacy(reader) => reader.finished(),
+        };
         Ok(())
     }
 
@@ -280,5 +382,22 @@ mod tests {
         assert!(l.iter().all(|b| *b == 0x11), "channel 0 is the even bytes");
         assert!(r.iter().all(|b| *b == 0x22), "channel 1 is the odd bytes");
         assert_eq!(l.len() + r.len(), FRAME, "no byte is dropped or doubled");
+    }
+
+    #[test]
+    fn a_corrupt_dst_frame_publishes_none_of_upstreams_synthetic_silence() {
+        let mut decoder = DstDecoder::new(2, DSD64 as usize).unwrap();
+        let mut scratch = vec![0u8; FRAME];
+        let mut pending = vec![0x12, 0x34];
+        let before = pending.clone();
+
+        let result = decode_dst_frame(&mut decoder, &mut scratch, &[], &mut pending, 1, 7, 1234);
+
+        assert!(result.is_err());
+        assert_eq!(pending, before, "no decoded bytes may be appended on Err");
+        assert!(
+            scratch.iter().all(|byte| *byte == 0x55),
+            "the test must exercise upstream's error-fill behavior"
+        );
     }
 }

@@ -118,6 +118,7 @@ Item {
         var tr = QbzSession.trRev
         var filters = [
             { key: "favorite", label: QbzSession.tr("Favorites only", tr) },
+            { key: "dsd", label: "DSD" },
             { key: "hires", label: QbzSession.tr("Hi-Res", tr) },
             { key: "cd", label: QbzSession.tr("CD", tr) },
             { key: "lossy", label: QbzSession.tr("Lossy", tr) },

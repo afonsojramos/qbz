@@ -1494,6 +1494,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
+name = "dst-decoder"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d22ef63dfde0eac89eca20926f8bb64eec4bf12016647274a51d3bb11f6147c"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4200,6 +4209,7 @@ version = "2.1.0"
 dependencies = [
  "base64 0.23.1",
  "dirs 6.0.0",
+ "encoding_rs",
  "libc",
  "log",
  "plist",
@@ -4217,6 +4227,7 @@ dependencies = [
 name = "qbz-dsd"
 version = "2.1.0"
 dependencies = [
+ "dst-decoder",
  "id3",
  "log",
  "qbz-disc",

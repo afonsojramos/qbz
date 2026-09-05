@@ -72,6 +72,8 @@ src_install() {
 	insinto /usr/share/metainfo
 	doins com.blitzfc.qbz.metainfo.xml
 	dodoc LICENSE
+	insinto /usr/share/licenses/${PN}/third-party
+	doins licenses/*
 }
 
 pkg_postinst() {

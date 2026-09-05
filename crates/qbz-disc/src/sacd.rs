@@ -8,13 +8,18 @@
 //! skip would have leaked packet descriptors into the DSD stream: audible
 //! noise on a path whose entire promise is bit-perfection.
 //!
-//! WHAT IS SUPPORTED: an uncompressed (non-DST) stereo area in an image with
-//! an ISO 9660 layer. Everything else is DETECTED and reported — never
-//! silently approximated.
+//! WHAT IS SUPPORTED: DSD64 stereo areas, either flat or DST-compressed, in
+//! raw Scarlet Book dumps and ISO/UDF hybrid images. Every pointer and audio
+//! extent is bounded by the image; nothing is inferred from an ISO 9660 layer.
 
-use std::path::Path;
+use std::fs::{File, Metadata};
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 
-use crate::iso9660::{IsoError, IsoImage, SECTOR};
+use crate::iso9660::{IsoError, SECTOR};
+
+const MASTER_TOC_COPIES: [u64; 3] = [510, 520, 530];
+const MAX_AREA_TOC_SECTORS: u16 = 96;
 
 /// Sectors per second of SACD playing time. The area TOC states it as a
 /// max_byte_rate of 716 800 B/s, and 716800 / 2048 = 350. It is the SACD's
@@ -36,20 +41,54 @@ pub const DATA_TYPE_AUDIO: u16 = 2;
 pub enum SacdError {
     #[error(transparent)]
     Iso(#[from] IsoError),
-    #[error("this image has no stereo audio area (no /2C_AUDIO/2C_AREA1.TOC)")]
+    #[error("this image has no Scarlet Book stereo audio area")]
     NoStereoArea,
+    #[error("this image has no Scarlet Book Master TOC")]
+    MissingMasterToc,
     #[error("the area TOC is not a Scarlet Book stereo TOC (expected TWOCHTOC)")]
     NotAnArea,
     #[error("{0} is missing from the area TOC")]
     MissingBlock(&'static str),
-    #[error("this area is DST-compressed, which is not supported")]
+    #[error("the legacy flat-DSD reader cannot expose compressed DST frames")]
     Dst,
     #[error("unsupported channel count: {0}")]
     Channels(u8),
+    #[error("unsupported SACD frame format: {0}")]
+    FrameFormat(u8),
+    #[error("unsupported SACD sample-frequency code: {0}")]
+    SampleFrequency(u8),
     #[error("the area declares {0} tracks, which cannot be right")]
     TrackCount(u8),
+    #[error("the Scarlet Book TOC is malformed: {0}")]
+    MalformedToc(&'static str),
+    #[error("the valid Master TOC copies disagree about the disc geometry")]
+    ConflictingMasterTocs,
+    #[error("the valid copies of an area TOC disagree about its geometry")]
+    ConflictingAreaTocs,
     #[error("sector {lsn} is malformed: {why}")]
     BadSector { lsn: u64, why: &'static str },
+    #[error("track {track} frame at sector {lsn} is malformed: {why}")]
+    BadAudioFrame {
+        track: u8,
+        lsn: u64,
+        why: &'static str,
+    },
+    #[error("track {track} has no frame start within 32 sectors from {lsn}")]
+    MissingFrameStart { track: u8, lsn: u64 },
+    #[error("{0} is not a regular file")]
+    NotRegularFile(PathBuf),
+    #[error("SACD image length {0} is not a whole number of 2048-byte sectors")]
+    InvalidImageLength(u64),
+    #[error("SACD image changed while it was being read: {0}")]
+    ImageChangedDuringRead(PathBuf),
+}
+
+/// How audio frames in the selected stereo area are represented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SacdEncoding {
+    Dst,
+    Dsd3In14,
+    Dsd3In16,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,6 +103,10 @@ pub struct SacdTrack {
     pub length_lsn: u32,
     pub start_secs: f64,
     pub duration_secs: f64,
+    /// Exact 75 Hz Scarlet Book timecode, without a float round-trip.
+    pub start_frame: u32,
+    pub duration_frames: u32,
+    pub encoding: SacdEncoding,
     pub title: Option<String>,
 }
 
@@ -72,6 +115,7 @@ pub struct SacdArea {
     pub track_start_lsn: u32,
     pub track_end_lsn: u32,
     pub channels: u8,
+    pub encoding: SacdEncoding,
     pub total_playtime_secs: f64,
     pub tracks: Vec<SacdTrack>,
     /// Album text out of the Master TOC, when it carries any.
@@ -118,99 +162,551 @@ fn be32(b: &[u8], at: usize) -> u32 {
     u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
 }
 
-/// A time triple: minutes, seconds, frames at 75 fps. The area TOC uses it for
-/// both the total playtime and every per-track time.
-fn time_at(b: &[u8], at: usize) -> f64 {
-    b[at] as f64 * 60.0 + b[at + 1] as f64 + b[at + 2] as f64 / 75.0
+fn be16(b: &[u8], at: usize) -> u16 {
+    u16::from_be_bytes([b[at], b[at + 1]])
 }
 
-/// Signature sniff for a folder scan: an ISO 9660 image (PVD `CD001` at LSN
-/// 16) whose Master TOC sector carries `SACDMTOC` at LSN 510, or at one of
-/// its byte-identical backups (520, 530). At most four 2 KB reads at fixed
-/// offsets, no directory parsing — a DVD, a data ISO or a stray file wearing
-/// the extension fails here and costs the scan nothing else.
-pub fn is_sacd_image(path: &Path) -> bool {
-    use std::io::{Read, Seek, SeekFrom};
+fn time_frames_at(b: &[u8], at: usize) -> u32 {
+    (b[at] as u32 * 60 + b[at + 1] as u32) * 75 + b[at + 2] as u32
+}
 
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut sector = [0u8; SECTOR as usize];
-    let mut read_at = |lsn: u64, sector: &mut [u8]| -> bool {
-        file.seek(SeekFrom::Start(lsn * SECTOR)).is_ok() && file.read_exact(sector).is_ok()
-    };
-    if !read_at(16, &mut sector) || &sector[1..6] != b"CD001" {
-        return false;
+/// A bounded reader over the 2048-byte logical sectors shared by authored
+/// SACD/ISO hybrids and raw Scarlet Book dumps. No filesystem layer is
+/// required: the Master TOC and every audio extent already use absolute LSNs.
+struct SectorImage {
+    file: File,
+    path: PathBuf,
+    bytes: u64,
+    stamp: ImageStamp,
+    sectors_since_check: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ImageStamp {
+    bytes: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    change_seconds: i64,
+    #[cfg(unix)]
+    change_nanoseconds: i64,
+}
+
+impl ImageStamp {
+    fn from_metadata(metadata: &Metadata) -> Self {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+
+        Self {
+            bytes: metadata.len(),
+            modified: metadata.modified().ok(),
+            #[cfg(unix)]
+            device: metadata.dev(),
+            #[cfg(unix)]
+            inode: metadata.ino(),
+            #[cfg(unix)]
+            change_seconds: metadata.ctime(),
+            #[cfg(unix)]
+            change_nanoseconds: metadata.ctime_nsec(),
+        }
     }
-    [510u64, 520, 530]
+}
+
+impl SectorImage {
+    fn open(path: &Path) -> Result<Self, SacdError> {
+        let file = File::open(path)
+            .map_err(|error| SacdError::Iso(IsoError::Open(path.to_path_buf(), error)))?;
+        let metadata = file
+            .metadata()
+            .map_err(|source| SacdError::Iso(IsoError::Read { lsn: 0, source }))?;
+        if !metadata.is_file() {
+            return Err(SacdError::NotRegularFile(path.to_path_buf()));
+        }
+        let bytes = metadata.len();
+        Ok(Self {
+            file,
+            path: path.to_path_buf(),
+            bytes,
+            stamp: ImageStamp::from_metadata(&metadata),
+            sectors_since_check: 0,
+        })
+    }
+
+    fn sectors(&self) -> u64 {
+        self.bytes / SECTOR
+    }
+
+    fn has_complete_sector(&self, lsn: u64) -> bool {
+        lsn < self.sectors()
+    }
+
+    fn has_sectors(&self, lsn: u64, count: u64) -> bool {
+        lsn.checked_add(count)
+            .is_some_and(|end| end <= self.sectors())
+    }
+
+    fn read_sectors(&mut self, lsn: u64, count: usize) -> Result<Vec<u8>, SacdError> {
+        let count_u64 =
+            u64::try_from(count).map_err(|_| SacdError::MalformedToc("sector count overflows"))?;
+        let end_lsn = lsn
+            .checked_add(count_u64)
+            .ok_or(SacdError::MalformedToc("sector range overflows"))?;
+        if end_lsn > self.sectors() {
+            return Err(SacdError::Iso(IsoError::Read {
+                lsn,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    format!("read past end of {}", self.path.display()),
+                ),
+            }));
+        }
+        let bytes = count
+            .checked_mul(SECTOR as usize)
+            .ok_or(SacdError::MalformedToc("byte count overflows"))?;
+        let mut out = vec![0u8; bytes];
+        self.file
+            .seek(SeekFrom::Start(lsn * SECTOR))
+            .and_then(|_| self.file.read_exact(&mut out))
+            .map_err(|source| SacdError::Iso(IsoError::Read { lsn, source }))?;
+        self.sectors_since_check = self.sectors_since_check.saturating_add(count_u64);
+        // A one-second cadence avoids a metadata syscall for every 1/75 s
+        // audio frame while still detecting in-place writes and path swaps
+        // during long playback. TOC callers also verify explicitly at end.
+        if self.sectors_since_check >= u64::from(SECTORS_PER_SEC) {
+            self.verify_unchanged()?;
+            self.sectors_since_check = 0;
+        }
+        Ok(out)
+    }
+
+    fn verify_unchanged(&self) -> Result<(), SacdError> {
+        let open_stamp = self
+            .file
+            .metadata()
+            .ok()
+            .map(|metadata| ImageStamp::from_metadata(&metadata));
+        let path_stamp = std::fs::metadata(&self.path)
+            .ok()
+            .map(|metadata| ImageStamp::from_metadata(&metadata));
+        if open_stamp.as_ref() != Some(&self.stamp) || path_stamp.as_ref() != Some(&self.stamp) {
+            return Err(SacdError::ImageChangedDuringRead(self.path.clone()));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AreaSlot {
+    primary: u32,
+    backup: u32,
+    size: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MasterToc {
+    lsn: u64,
+    version: (u8, u8),
+    areas: [AreaSlot; 2],
+    text_area_count: u8,
+    text_charset: u8,
+}
+
+fn parse_master_toc(sector: &[u8], lsn: u64, image_sectors: u64) -> Result<MasterToc, SacdError> {
+    if sector.len() < SECTOR as usize || &sector[..8] != b"SACDMTOC" {
+        return Err(SacdError::MalformedToc("missing SACDMTOC signature"));
+    }
+    let version = (sector[8], sector[9]);
+    if version.0 != 1 || version.1 > 20 {
+        return Err(SacdError::MalformedToc("unsupported Master TOC version"));
+    }
+    let areas = [
+        AreaSlot {
+            primary: be32(sector, 0x40),
+            backup: be32(sector, 0x44),
+            size: be16(sector, 0x54),
+        },
+        AreaSlot {
+            primary: be32(sector, 0x48),
+            backup: be32(sector, 0x4c),
+            size: be16(sector, 0x56),
+        },
+    ];
+    for slot in areas {
+        if slot.primary == 0 && slot.backup == 0 && slot.size == 0 {
+            continue;
+        }
+        if slot.size == 0 || slot.size > MAX_AREA_TOC_SECTORS {
+            return Err(SacdError::MalformedToc("invalid area TOC size"));
+        }
+        if slot.primary == 0 && slot.backup == 0 {
+            return Err(SacdError::MalformedToc("area TOC has no readable copy"));
+        }
+        for start in [slot.primary, slot.backup]
+            .into_iter()
+            .filter(|start| *start != 0)
+        {
+            if u64::from(start)
+                .checked_add(u64::from(slot.size))
+                .is_none_or(|end| end > image_sectors)
+            {
+                return Err(SacdError::MalformedToc("area TOC points outside the image"));
+            }
+        }
+    }
+    if areas.iter().all(|slot| slot.size == 0) {
+        return Err(SacdError::NoStereoArea);
+    }
+    Ok(MasterToc {
+        lsn,
+        version,
+        areas,
+        text_area_count: sector[0x80],
+        // First of the eight locale entries at 0x88: language[2], charset,
+        // reserved. QBZ deliberately selects the first text area, as the
+        // reference reader does.
+        text_charset: sector[0x8a],
+    })
+}
+
+fn select_master_toc(image: &mut SectorImage) -> Result<Option<MasterToc>, SacdError> {
+    let mut valid = Vec::new();
+    let mut signed_error = None;
+    for lsn in MASTER_TOC_COPIES {
+        if !image.has_complete_sector(lsn) {
+            continue;
+        }
+        let first = image.read_sectors(lsn, 1)?;
+        if &first[..8] != b"SACDMTOC" {
+            continue;
+        }
+        if !image.has_sectors(lsn, 10) {
+            signed_error.get_or_insert(SacdError::MalformedToc("Master TOC copy is truncated"));
+            continue;
+        }
+        let sector = image.read_sectors(lsn, 10)?;
+        match parse_master_toc(&sector, lsn, image.sectors()) {
+            Ok(master) => valid.push(master),
+            Err(error) => {
+                signed_error.get_or_insert(error);
+            }
+        };
+    }
+    let Some(selected) = valid.first().copied() else {
+        return match signed_error {
+            Some(error) => Err(error),
+            None => Ok(None),
+        };
+    };
+    if valid
+        .iter()
+        .skip(1)
+        .any(|copy| copy.version != selected.version || copy.areas != selected.areas)
+    {
+        return Err(SacdError::ConflictingMasterTocs);
+    }
+    Ok(Some(selected))
+}
+
+/// Result of the cheap scan-time signature and Master TOC validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SacdSniff {
+    NotSacd,
+    Sacd,
+}
+
+/// Signature sniff for a folder scan. Scarlet Book identity is the validated
+/// Master TOC, not the optional ISO 9660 compatibility layer.
+pub fn sniff_sacd_image(path: &Path) -> Result<SacdSniff, SacdError> {
+    let mut image = SectorImage::open(path)?;
+    if !MASTER_TOC_COPIES
         .into_iter()
-        .any(|lsn| read_at(lsn, &mut sector) && &sector[0..8] == b"SACDMTOC")
+        .any(|lsn| image.has_complete_sector(lsn))
+    {
+        return Ok(SacdSniff::NotSacd);
+    }
+    if image.bytes % SECTOR != 0 {
+        // Preserve the useful distinction between an arbitrary odd-sized file
+        // and a signed SACD image with a truncated tail. Do this before the
+        // full Master parse so another malformed field cannot hide truncation.
+        for lsn in MASTER_TOC_COPIES {
+            if image.has_complete_sector(lsn) {
+                let first = image.read_sectors(lsn, 1)?;
+                if &first[..8] == b"SACDMTOC" {
+                    image.verify_unchanged()?;
+                    return Err(SacdError::InvalidImageLength(image.bytes));
+                }
+            }
+        }
+        image.verify_unchanged()?;
+        return Ok(SacdSniff::NotSacd);
+    }
+    let result = match select_master_toc(&mut image)? {
+        Some(_) => SacdSniff::Sacd,
+        None => SacdSniff::NotSacd,
+    };
+    image.verify_unchanged()?;
+    Ok(result)
+}
+
+/// Compatibility convenience for callers that only need a boolean.
+pub fn is_sacd_image(path: &Path) -> bool {
+    matches!(sniff_sacd_image(path), Ok(SacdSniff::Sacd))
 }
 
 /// Read the stereo area's table of contents out of a disc image.
 pub fn read_area(path: &Path) -> Result<SacdArea, SacdError> {
-    let mut iso = IsoImage::open(path)?;
-    let toc_entry = iso
-        .find("/2C_AUDIO/2C_AREA1.TOC")?
-        .ok_or(SacdError::NoStereoArea)?;
-    // 9 sectors; read them all, the blocks live at fixed sector offsets.
-    let toc = iso.read_sectors(toc_entry.lsn as u64, 9)?;
-
-    if &toc[0..8] != b"TWOCHTOC" {
-        return Err(SacdError::NotAnArea);
+    let mut image = SectorImage::open(path)?;
+    if image.bytes % SECTOR != 0 {
+        return Err(SacdError::InvalidImageLength(image.bytes));
     }
+    let master = select_master_toc(&mut image)?.ok_or(SacdError::MissingMasterToc)?;
+
+    let mut stereo = None;
+    let mut first_area_error = None;
+    for slot in master.areas.into_iter().filter(|slot| slot.size != 0) {
+        match read_area_slot(&mut image, slot) {
+            Ok(toc) if &toc[..8] == b"TWOCHTOC" => {
+                if stereo.replace(toc).is_some() {
+                    return Err(SacdError::MalformedToc(
+                        "disc declares more than one stereo area",
+                    ));
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                first_area_error.get_or_insert(error);
+            }
+        }
+    }
+    let toc = match stereo {
+        Some(toc) => toc,
+        None => return Err(first_area_error.unwrap_or(SacdError::NoStereoArea)),
+    };
+    let area = parse_stereo_area(&mut image, master, &toc)?;
+    image.verify_unchanged()?;
+    Ok(area)
+}
+
+fn read_area_slot(image: &mut SectorImage, slot: AreaSlot) -> Result<Vec<u8>, SacdError> {
+    let mut first_error = None;
+    let mut valid: Vec<(u32, Vec<u8>, Vec<u8>)> = Vec::new();
+    for start in [slot.primary, slot.backup]
+        .into_iter()
+        .filter(|start| *start != 0)
+    {
+        let attempt = image.read_sectors(u64::from(start), usize::from(slot.size));
+        match attempt {
+            Ok(mut toc)
+                if toc.len() >= SECTOR as usize
+                    && (&toc[..8] == b"TWOCHTOC" || &toc[..8] == b"MULCHTOC") =>
+            {
+                let internal_size = be16(&toc, 10);
+                if internal_size == 0 || internal_size > slot.size {
+                    first_error.get_or_insert(SacdError::MalformedToc(
+                        "area TOC internal size exceeds its Master TOC extent",
+                    ));
+                    continue;
+                }
+                toc.truncate(usize::from(internal_size) * SECTOR as usize);
+                match area_geometry_key(&toc, image.sectors()) {
+                    Ok(key) => valid.push((start, toc, key)),
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                }
+            }
+            Ok(_) => {
+                first_error.get_or_insert(SacdError::NotAnArea);
+            }
+            Err(error) => {
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    let Some((_, selected, selected_key)) = valid.first() else {
+        return Err(first_error.unwrap_or(SacdError::NotAnArea));
+    };
+    if valid.iter().skip(1).any(|(_, _, key)| key != selected_key) {
+        return Err(SacdError::ConflictingAreaTocs);
+    }
+    Ok(selected.clone())
+}
+
+fn area_geometry_key(toc: &[u8], image_sectors: u64) -> Result<Vec<u8>, SacdError> {
+    let version = (toc[8], toc[9]);
+    if version.0 != 1 || version.1 > 20 {
+        return Err(SacdError::MalformedToc("unsupported area TOC version"));
+    }
+    if toc[0x14] != 4 {
+        return Err(SacdError::SampleFrequency(toc[0x14]));
+    }
+    if !matches!(toc[0x15] & 0x0f, 0 | 2 | 3) {
+        return Err(SacdError::FrameFormat(toc[0x15] & 0x0f));
+    }
+    if toc[0x45] == 0 {
+        return Err(SacdError::TrackCount(0));
+    }
+    let start = be32(toc, 0x48);
+    let end = be32(toc, 0x4c);
+    if start > end || u64::from(end) >= image_sectors {
+        return Err(SacdError::MalformedToc(
+            "audio area points outside the image",
+        ));
+    }
+    let trl1 = find_toc_block(toc, b"SACDTRL1", None).ok_or(SacdError::MissingBlock("SACDTRL1"))?;
+    let trl2 = find_toc_block(toc, b"SACDTRL2", None).ok_or(SacdError::MissingBlock("SACDTRL2"))?;
+    let count = usize::from(toc[0x45]);
+    const ARR2: usize = 8 + 255 * 4;
+    let mut key = Vec::with_capacity(64 + count * 16);
+    key.extend_from_slice(&toc[..12]);
+    key.extend_from_slice(&toc[0x10..0x16]);
+    key.extend_from_slice(&toc[0x20..0x22]);
+    key.extend_from_slice(&toc[0x40..0x46]);
+    key.extend_from_slice(&toc[0x48..0x51]);
+    key.extend_from_slice(&toc[0x80..0x86]);
+    key.extend_from_slice(&trl1[8..8 + count * 4]);
+    key.extend_from_slice(&trl1[ARR2..ARR2 + count * 4]);
+    key.extend_from_slice(&trl2[8..8 + count * 4]);
+    key.extend_from_slice(&trl2[ARR2..ARR2 + count * 4]);
+    let mut previous = None;
+    for i in 0..count {
+        let track_start = be32(trl1, 8 + i * 4);
+        let length = be32(trl1, ARR2 + i * 4);
+        let track_end = u64::from(track_start)
+            .checked_add(u64::from(length))
+            .ok_or(SacdError::MalformedToc("track sector range overflows"))?;
+        if length == 0
+            || track_start < start
+            || track_end > u64::from(end) + 1
+            || previous.is_some_and(|prior| track_start <= prior)
+            || trl2[8 + i * 4 + 1] >= 60
+            || trl2[8 + i * 4 + 2] >= 75
+            || trl2[ARR2 + i * 4 + 1] >= 60
+            || trl2[ARR2 + i * 4 + 2] >= 75
+        {
+            return Err(SacdError::MalformedToc("track table is invalid"));
+        }
+        previous = Some(track_start);
+    }
+    Ok(key)
+}
+
+fn parse_stereo_area(
+    image: &mut SectorImage,
+    master: MasterToc,
+    toc: &[u8],
+) -> Result<SacdArea, SacdError> {
     let channels = toc[0x20];
-    if channels != 2 {
+    if channels != 2 || toc[0x21] & 0x1f != 0 {
         return Err(SacdError::Channels(channels));
     }
-    // A u8 cannot exceed 255, so the only impossible value is zero — an area
-    // that declares no tracks is a TOC we have misread, not an empty disc.
+    if toc[0x14] != 4 {
+        return Err(SacdError::SampleFrequency(toc[0x14]));
+    }
+    let encoding = match toc[0x15] & 0x0f {
+        0 => SacdEncoding::Dst,
+        2 => SacdEncoding::Dsd3In14,
+        3 => SacdEncoding::Dsd3In16,
+        other => return Err(SacdError::FrameFormat(other)),
+    };
     let track_count = toc[0x45];
     if track_count == 0 {
         return Err(SacdError::TrackCount(track_count));
     }
-    let total_playtime_secs = time_at(&toc, 0x40);
-    let track_start_lsn = be32(&toc, 0x48);
-    let track_end_lsn = be32(&toc, 0x4C);
+    let total_frames = time_frames_at(toc, 0x40);
+    if toc[0x41] >= 60 || toc[0x42] >= 75 {
+        return Err(SacdError::MalformedToc("invalid area playtime"));
+    }
+    let track_start_lsn = be32(toc, 0x48);
+    let track_end_lsn = be32(toc, 0x4c);
+    if track_start_lsn > track_end_lsn || u64::from(track_end_lsn) >= image.sectors() {
+        return Err(SacdError::MalformedToc(
+            "audio area points outside the image",
+        ));
+    }
 
-    // Sector 1 = SACDTRL1 (starts + lengths), sector 2 = SACDTRL2 (times).
-    let trl1 = &toc[SECTOR as usize..];
-    let trl2 = &toc[2 * SECTOR as usize..];
-    if &trl1[0..8] != b"SACDTRL1" {
-        return Err(SacdError::MissingBlock("SACDTRL1"));
-    }
-    if &trl2[0..8] != b"SACDTRL2" {
-        return Err(SacdError::MissingBlock("SACDTRL2"));
-    }
-    // Both blocks are two parallel arrays of 255 u32 big-endian entries: the
-    // second starts at 8 + 255*4.
+    let trl1 = find_toc_block(toc, b"SACDTRL1", None).ok_or(SacdError::MissingBlock("SACDTRL1"))?;
+    let trl2 = find_toc_block(toc, b"SACDTRL2", None).ok_or(SacdError::MissingBlock("SACDTRL2"))?;
     const ARR2: usize = 8 + 255 * 4;
 
-    let titles = read_titles(&toc, track_count as usize);
+    let text_offset = be16(toc, 0x80);
+    let text_charset = toc[0x5a];
+    let titles = find_toc_block(toc, b"SACDTTxt", (text_offset != 0).then_some(text_offset))
+        .map(|block| read_titles(block, track_count as usize, text_charset))
+        .unwrap_or_else(|| vec![None; track_count as usize]);
 
     let mut tracks = Vec::with_capacity(track_count as usize);
+    let mut previous_start = None;
     for i in 0..track_count as usize {
+        let start_lsn = be32(trl1, 8 + i * 4);
+        let length_lsn = be32(trl1, ARR2 + i * 4);
+        let start_frame = time_frames_at(trl2, 8 + i * 4);
+        let duration_frame = time_frames_at(trl2, ARR2 + i * 4);
+        if trl2[8 + i * 4 + 1] >= 60
+            || trl2[8 + i * 4 + 2] >= 75
+            || trl2[ARR2 + i * 4 + 1] >= 60
+            || trl2[ARR2 + i * 4 + 2] >= 75
+        {
+            return Err(SacdError::MalformedToc("invalid track timecode"));
+        }
+        let end = u64::from(start_lsn)
+            .checked_add(u64::from(length_lsn))
+            .ok_or(SacdError::MalformedToc("track sector range overflows"))?;
+        if length_lsn == 0
+            || start_lsn < track_start_lsn
+            || u64::from(start_lsn) > u64::from(track_end_lsn)
+            || end > u64::from(track_end_lsn) + 1
+            || previous_start.is_some_and(|previous| start_lsn <= previous)
+        {
+            return Err(SacdError::MalformedToc("track sector range is invalid"));
+        }
+        previous_start = Some(start_lsn);
         tracks.push(SacdTrack {
             number: (i + 1) as u8,
-            start_lsn: be32(trl1, 8 + i * 4),
-            length_lsn: be32(trl1, ARR2 + i * 4),
-            start_secs: time_at(trl2, 8 + i * 4),
-            duration_secs: time_at(trl2, ARR2 + i * 4),
+            start_lsn,
+            length_lsn,
+            start_secs: start_frame as f64 / 75.0,
+            duration_secs: duration_frame as f64 / 75.0,
+            start_frame,
+            duration_frames: duration_frame,
+            encoding,
             title: titles.get(i).cloned().flatten(),
         });
     }
 
-    let (album, artist) = read_master_text(&mut iso).unwrap_or((None, None));
-
+    let (album, artist) = read_master_text(image, master).unwrap_or((None, None));
     Ok(SacdArea {
         track_start_lsn,
         track_end_lsn,
         channels,
-        total_playtime_secs,
+        encoding,
+        total_playtime_secs: total_frames as f64 / 75.0,
         tracks,
         album,
         artist,
     })
+}
+
+fn find_toc_block<'a>(
+    toc: &'a [u8],
+    signature: &[u8; 8],
+    declared: Option<u16>,
+) -> Option<&'a [u8]> {
+    let at_sector = |relative: usize| -> Option<&'a [u8]> {
+        let at = relative.checked_mul(SECTOR as usize)?;
+        let block = toc.get(at..)?;
+        if block.len() < SECTOR as usize {
+            return None;
+        }
+        (&block[..8] == signature).then_some(block)
+    };
+    if let Some(relative) = declared {
+        return at_sector(usize::from(relative));
+    }
+    (0..toc.len() / SECTOR as usize).find_map(at_sector)
 }
 
 /// Album title and artist out of the Master TOC's text sector.
@@ -226,14 +722,14 @@ pub fn read_area(path: &Path) -> Result<SacdArea, SacdError> {
 ///
 /// Everything here is optional: an image whose Master TOC is unreadable or
 /// carries no text still plays, it just falls back to the file name.
-fn read_master_text(iso: &mut IsoImage) -> Option<(Option<String>, Option<String>)> {
-    // By LSN, not by name: the Master TOC is at a fixed place, and an image
-    // whose directory is odd should still give up its title.
-    let master = iso.read_sectors(510, 2).ok()?;
-    if &master[0..8] != b"SACDMTOC" {
+fn read_master_text(
+    image: &mut SectorImage,
+    master: MasterToc,
+) -> Option<(Option<String>, Option<String>)> {
+    if master.text_area_count == 0 {
         return None;
     }
-    let text = &master[SECTOR as usize..];
+    let text = image.read_sectors(master.lsn + 1, 1).ok()?;
     if &text[0..8] != b"SACDText" {
         return None;
     }
@@ -244,28 +740,15 @@ fn read_master_text(iso: &mut IsoImage) -> Option<(Option<String>, Option<String
     };
     let string_at = |off: usize| -> Option<String> {
         let end = text[off..].iter().position(|b| *b == 0)? + off;
-        let s = String::from_utf8_lossy(&text[off..end]).trim().to_string();
-        (!s.is_empty()).then_some(s)
+        decode_sacd_text(&text[off..end], master.text_charset, "Master TOC text")
     };
-    Some((
-        ptr(0x10).and_then(string_at),
-        ptr(0x12).and_then(string_at),
-    ))
+    Some((ptr(0x10).and_then(string_at), ptr(0x12).and_then(string_at)))
 }
 
-/// Track titles from the SACDTTxt block (sector 5 of the area TOC).
-///
-/// The pointer table holds one big-endian u16 per track, and each value is an
-/// offset RELATIVE TO THE START OF THE BLOCK — not to the file, and not to the
-/// sector the text happens to land in. Getting that wrong yields plausible
-/// garbage rather than an error, so titles are treated as optional throughout:
-/// a track with no readable name keeps its number.
-fn read_titles(toc: &[u8], count: usize) -> Vec<Option<String>> {
-    let base = 5 * SECTOR as usize;
-    let block = match toc.get(base..) {
-        Some(b) if b.len() > 8 && &b[0..8] == b"SACDTTxt" => b,
-        _ => return vec![None; count],
-    };
+/// Track titles from one validated `SACDTTxt` sector. The block's pointer
+/// table is relative to the block, and each pointed record can contain several
+/// typed strings; type 1 is the title.
+fn read_titles(block: &[u8], count: usize, charset: u8) -> Vec<Option<String>> {
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         let at = 8 + i * 2;
@@ -276,29 +759,71 @@ fn read_titles(toc: &[u8], count: usize) -> Vec<Option<String>> {
                 continue;
             }
         };
-        out.push(text_at(block, ptr));
+        out.push(track_title_at(block, ptr, charset, i + 1));
     }
     out
 }
 
-/// One entry of the text payload. The layout carries a small header before the
-/// string, so this scans for the first printable run rather than assuming an
-/// offset that was never measured — an honest approximation, and it degrades
-/// to `None` instead of to nonsense.
-fn text_at(block: &[u8], ptr: usize) -> Option<String> {
-    let slice = block.get(ptr..(ptr + 256).min(block.len()))?;
-    let start = slice.iter().position(|b| (0x20..0x7f).contains(b))?;
-    let end = slice[start..]
-        .iter()
-        .position(|b| *b == 0)
-        .map(|e| start + e)
-        .unwrap_or(slice.len());
-    let s = String::from_utf8_lossy(&slice[start..end]).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
+fn track_title_at(block: &[u8], ptr: usize, charset: u8, track: usize) -> Option<String> {
+    let amount = *block.get(ptr)? as usize;
+    let mut at = ptr.checked_add(4)?;
+    for _ in 0..amount {
+        let kind = *block.get(at)?;
+        at = at.checked_add(2)?;
+        let tail = block.get(at..)?;
+        let len = tail.iter().position(|byte| *byte == 0)?;
+        if kind == 1 {
+            return decode_sacd_text(&tail[..len], charset, &format!("track {track} title"));
+        }
+        at = at.checked_add(len)?;
+        while block.get(at).is_some_and(|byte| *byte == 0) {
+            at += 1;
+        }
     }
+    None
+}
+
+/// Convert one bounded Scarlet Book string to UTF-8. Invalid input degrades
+/// only that optional field: geometry and playback remain usable, but no
+/// replacement characters are invented and a warning records the fallback.
+fn decode_sacd_text(raw: &[u8], charset: u8, field: &str) -> Option<String> {
+    use encoding_rs::{BIG5, EUC_KR, GBK, SHIFT_JIS};
+
+    let code = charset & 0x07;
+    let decoded = match code {
+        // Unknown is not permission to guess. ISO 646 is 7-bit; reject a
+        // high byte rather than laundering it through UTF-8 replacement.
+        0 => None,
+        1 => raw
+            .iter()
+            .all(|byte| byte.is_ascii())
+            .then(|| String::from_utf8(raw.to_vec()).expect("ASCII is UTF-8")),
+        // ISO-8859-1 maps every byte directly to the same Unicode scalar.
+        // Code 7 permits escape sequences; the common no-escape form is the
+        // same mapping, while an actual ESC requires state we do not guess.
+        2 => Some(raw.iter().map(|byte| char::from(*byte)).collect()),
+        3 => SHIFT_JIS
+            .decode_without_bom_handling_and_without_replacement(raw)
+            .map(|value| value.into_owned()),
+        4 => EUC_KR
+            .decode_without_bom_handling_and_without_replacement(raw)
+            .map(|value| value.into_owned()),
+        5 => GBK
+            .decode_without_bom_handling_and_without_replacement(raw)
+            .map(|value| value.into_owned()),
+        6 => BIG5
+            .decode_without_bom_handling_and_without_replacement(raw)
+            .map(|value| value.into_owned()),
+        7 if !raw.contains(&0x1b) => Some(raw.iter().map(|byte| char::from(*byte)).collect()),
+        7 => None,
+        _ => unreachable!("charset code is masked to three bits"),
+    };
+    let Some(text) = decoded else {
+        log::warn!("[sacd] ignoring {field}: unknown charset {code} or invalid byte sequence");
+        return None;
+    };
+    let text = text.trim().to_string();
+    (!text.is_empty()).then_some(text)
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +838,16 @@ pub struct Packet {
     pub len: usize,
     /// Offset of the payload within the 2048-byte sector.
     pub at: usize,
+    /// Sector header bit. DST sectors carry four-byte frame-info records;
+    /// uncompressed DSD sectors carry three-byte records.
+    pub dst_encoded: bool,
+    /// For a DST frame-start packet, the declared number of sectors occupied
+    /// by this frame. Absent for continuation and uncompressed packets.
+    pub frame_sector_count: Option<u8>,
+    /// Absolute area timecode carried by the matching frame-info record.
+    pub frame_timecode: Option<u32>,
+    /// Channel count encoded in a DST frame-info record.
+    pub frame_channels: Option<u8>,
 }
 
 /// Decode one sector's framing.
@@ -324,8 +859,7 @@ pub struct Packet {
 ///            bit 15    frame_start
 ///            bits 14-11 data_type
 ///            bits 10-0  length IN BYTES        <- ELEVEN bits, not twelve
-///   then `frame_info_count` * 3 bytes
-///   header_len = 1 + packet_count*2 + frame_info_count*3
+///   then `frame_info_count` * (DST ? 4 : 3) bytes
 ///
 /// The eleven-bit length is the correction that matters. The widely-copied
 /// layout gives the length twelve bits, and the very first descriptor on both
@@ -341,9 +875,12 @@ pub fn parse_sector(sector: &[u8], lsn: u64) -> Result<Vec<Packet>, SacdError> {
         });
     }
     let b0 = sector[0];
+    let dst_encoded = b0 & 0x01 != 0;
     let packet_count = ((b0 >> 5) & 0x07) as usize;
     let frame_info_count = ((b0 >> 2) & 0x07) as usize;
-    let header_len = 1 + packet_count * 2 + frame_info_count * 3;
+    let frame_info_size = if dst_encoded { 4 } else { 3 };
+    let frame_info_at = 1 + packet_count * 2;
+    let header_len = frame_info_at + frame_info_count * frame_info_size;
     if packet_count == 0 || header_len > sector.len() {
         return Err(SacdError::BadSector {
             lsn,
@@ -354,27 +891,379 @@ pub fn parse_sector(sector: &[u8], lsn: u64) -> Result<Vec<Packet>, SacdError> {
     let mut packets = Vec::with_capacity(packet_count);
     let mut at = header_len;
     let mut total = header_len;
+    let mut frame_info = 0usize;
     for k in 0..packet_count {
         let w = u16::from_be_bytes([sector[1 + 2 * k], sector[2 + 2 * k]]);
         let len = (w & 0x07FF) as usize;
+        let frame_start = w & 0x8000 != 0;
+        let data_type = (w >> 11) & 0x07;
+        // Lead-out sectors on real discs mark their final padding packet as a
+        // frame start and pair it with an all-0xff sentinel frame-info row.
+        // The row still counts toward `frame_info_count`, but it has no audio
+        // semantics and its sentinel timecode must not be validated.
+        let info = if frame_start {
+            let info = frame_info_at + frame_info * frame_info_size;
+            frame_info += 1;
+            Some(info)
+        } else {
+            None
+        };
+        let (frame_sector_count, frame_timecode, frame_channels) =
+            if let Some(info) = info.filter(|_| data_type == DATA_TYPE_AUDIO) {
+                let time = sector.get(info..info + 3).ok_or(SacdError::BadSector {
+                    lsn,
+                    why: "frame-info table is truncated",
+                })?;
+                if time[1] >= 60 || time[2] >= 75 {
+                    return Err(SacdError::BadSector {
+                        lsn,
+                        why: "frame-info timecode is invalid",
+                    });
+                }
+                let timecode = (time[0] as u32 * 60 + time[1] as u32) * 75 + time[2] as u32;
+                if dst_encoded {
+                    let flags = sector[info + 3];
+                    let channels = match (flags & 0x02 != 0, flags & 0x01 != 0) {
+                        (true, false) => 6,
+                        (false, true) => 5,
+                        _ => 2,
+                    };
+                    (Some((flags >> 2) & 0x1f), Some(timecode), Some(channels))
+                } else {
+                    (None, Some(timecode), Some(2))
+                }
+            } else {
+                (None, None, None)
+            };
         packets.push(Packet {
-            frame_start: w & 0x8000 != 0,
-            data_type: (w >> 11) & 0x0F,
+            frame_start,
+            data_type,
             len,
             at,
+            dst_encoded,
+            frame_sector_count,
+            frame_timecode,
+            frame_channels,
         });
         at += len;
         total += len;
     }
-    // The sum rule. A sector that fails it has been decoded WRONG, and the
-    // right answer is to stop rather than to emit whatever bytes are there.
-    if total != SECTOR as usize {
+    // Flat DSD fills the sector exactly. Real DST authoring also permits an
+    // undeclared zero tail after the last packet (1..6 bytes commonly, and a
+    // larger zero tail when a compressed frame ends early). It is alignment,
+    // not audio: accept only all-zero DST tails and never publish them.
+    if total > SECTOR as usize
+        || (total < SECTOR as usize
+            && (!dst_encoded || sector[total..].iter().any(|byte| *byte != 0)))
+    {
         return Err(SacdError::BadSector {
             lsn,
-            why: "packet lengths do not fill the sector",
+            why: "packet lengths do not account for the sector",
+        });
+    }
+    if frame_info != frame_info_count {
+        return Err(SacdError::BadSector {
+            lsn,
+            why: "frame-info count does not match frame starts",
         });
     }
     Ok(packets)
+}
+
+pub const MAX_DST_FRAME: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SacdFrameKind {
+    Dsd,
+    Dst,
+}
+
+/// One complete, container-validated 1/75-second audio unit. DST remains
+/// compressed here; decoding belongs to qbz-dsd.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SacdAudioFrame {
+    pub kind: SacdFrameKind,
+    pub payload: Vec<u8>,
+    pub start_lsn: u64,
+    pub timecode_frame: u32,
+}
+
+struct BuildingFrame {
+    frame: SacdAudioFrame,
+    dst_packets_left: Option<u8>,
+}
+
+/// Assemble exact Scarlet Book frames inside one track window. The reader
+/// uses TRL2 timecodes as the publication boundary, so a sector shared by two
+/// tracks neither duplicates nor loses its boundary frame.
+pub struct SacdFrameReader {
+    image: SectorImage,
+    track: u8,
+    encoding: SacdEncoding,
+    start_lsn: u64,
+    next_lsn: u64,
+    end_lsn: u64,
+    track_start_frame: u32,
+    track_end_frame: u32,
+    target_frame: u32,
+    emitted: u32,
+    current: Option<BuildingFrame>,
+    ready: std::collections::VecDeque<SacdAudioFrame>,
+    search_started_at: u64,
+    searched_sectors: u8,
+    saw_frame_start: bool,
+}
+
+impl SacdFrameReader {
+    pub fn open(path: &Path, track: &SacdTrack) -> Result<Self, SacdError> {
+        let image = SectorImage::open(path)?;
+        let start_lsn = u64::from(track.start_lsn);
+        let end_lsn = start_lsn
+            .checked_add(u64::from(track.length_lsn))
+            .ok_or(SacdError::MalformedToc("track sector range overflows"))?;
+        if end_lsn > image.sectors() {
+            return Err(SacdError::MalformedToc("track points outside the image"));
+        }
+        let track_end_frame = track
+            .start_frame
+            .checked_add(track.duration_frames)
+            .ok_or(SacdError::MalformedToc("track timecode overflows"))?;
+        Ok(Self {
+            image,
+            track: track.number,
+            encoding: track.encoding,
+            start_lsn,
+            next_lsn: start_lsn,
+            end_lsn,
+            track_start_frame: track.start_frame,
+            track_end_frame,
+            target_frame: track.start_frame,
+            emitted: 0,
+            current: None,
+            ready: std::collections::VecDeque::new(),
+            search_started_at: start_lsn,
+            searched_sectors: 0,
+            saw_frame_start: false,
+        })
+    }
+
+    pub fn finished(&self) -> bool {
+        self.target_frame.saturating_add(self.emitted) >= self.track_end_frame
+    }
+
+    pub fn seek_to_fraction(
+        &mut self,
+        offset_units: u64,
+        total_units: u64,
+    ) -> Result<(), SacdError> {
+        let duration = self.track_end_frame - self.track_start_frame;
+        let frame_offset = if total_units == 0 {
+            0
+        } else {
+            ((u128::from(duration) * u128::from(offset_units.min(total_units)))
+                / u128::from(total_units)) as u32
+        };
+        self.target_frame = self.track_start_frame.saturating_add(frame_offset);
+        self.emitted = 0;
+        self.current = None;
+        self.ready.clear();
+        if self.target_frame >= self.track_end_frame {
+            self.next_lsn = self.end_lsn;
+        } else {
+            // DST is variable-rate: a proportional byte/sector estimate can
+            // be thousands of sectors past the requested time even though it
+            // looks convincing on constant-rate DSD. Binary-search the
+            // monotonic on-disc frame timecodes instead. A probe looks ahead
+            // at most the format's 31-sector DST-frame bound; the final
+            // 32-sector backoff guarantees the requested frame is reacquired
+            // whole rather than entered through a continuation packet.
+            let mut low = self.start_lsn;
+            let mut high = self.end_lsn;
+            while high.saturating_sub(low) > 1 {
+                let middle = low + (high - low) / 2;
+                match self.frame_at_or_after(middle)? {
+                    Some((_, timecode)) if timecode < self.target_frame => low = middle + 1,
+                    _ => high = middle,
+                }
+            }
+            self.next_lsn = low.saturating_sub(32).max(self.start_lsn);
+        }
+        self.search_started_at = self.next_lsn;
+        self.searched_sectors = 0;
+        self.saw_frame_start = false;
+        Ok(())
+    }
+
+    fn frame_at_or_after(&mut self, start_lsn: u64) -> Result<Option<(u64, u32)>, SacdError> {
+        let stop = start_lsn.saturating_add(32).min(self.end_lsn);
+        for lsn in start_lsn..stop {
+            let raw = self.image.read_sectors(lsn, 1)?;
+            let packets = parse_sector(&raw, lsn)?;
+            let sector_dst = packets.first().is_some_and(|packet| packet.dst_encoded);
+            if sector_dst != (self.encoding == SacdEncoding::Dst) {
+                return Err(SacdError::BadSector {
+                    lsn,
+                    why: "sector encoding disagrees with the area TOC",
+                });
+            }
+            if let Some(packet) = packets
+                .iter()
+                .find(|packet| packet.data_type == DATA_TYPE_AUDIO && packet.frame_start)
+            {
+                if packet.frame_channels != Some(2) {
+                    return Err(self.bad_frame(lsn, "frame is not stereo"));
+                }
+                return packet
+                    .frame_timecode
+                    .map(|timecode| Some((lsn, timecode)))
+                    .ok_or(SacdError::BadSector {
+                        lsn,
+                        why: "frame start has no timecode",
+                    });
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn next_frame(&mut self) -> Result<Option<SacdAudioFrame>, SacdError> {
+        if self.finished() {
+            self.image.verify_unchanged()?;
+            return Ok(None);
+        }
+        loop {
+            if let Some(frame) = self.ready.pop_front() {
+                if frame.timecode_frame < self.target_frame {
+                    continue;
+                }
+                let expected = self.target_frame.saturating_add(self.emitted);
+                if frame.timecode_frame != expected {
+                    return Err(self.bad_frame(
+                        frame.start_lsn,
+                        "frame timecode is discontinuous or seek overshot its target",
+                    ));
+                }
+                self.emitted += 1;
+                return Ok(Some(frame));
+            }
+            if self.next_lsn >= self.end_lsn {
+                self.finish_current()?;
+                if self.ready.is_empty() {
+                    return Err(
+                        self.bad_frame(self.end_lsn, "track ended before its TRL2 duration")
+                    );
+                }
+                continue;
+            }
+            self.read_next_sector()?;
+        }
+    }
+
+    fn read_next_sector(&mut self) -> Result<(), SacdError> {
+        let lsn = self.next_lsn;
+        let raw = self.image.read_sectors(lsn, 1)?;
+        self.next_lsn += 1;
+        let packets = parse_sector(&raw, lsn)?;
+        let sector_dst = packets.first().is_some_and(|packet| packet.dst_encoded);
+        if sector_dst != (self.encoding == SacdEncoding::Dst) {
+            return Err(SacdError::BadSector {
+                lsn,
+                why: "sector encoding disagrees with the area TOC",
+            });
+        }
+        self.searched_sectors = self.searched_sectors.saturating_add(1);
+        for packet in packets {
+            if packet.data_type != DATA_TYPE_AUDIO {
+                continue;
+            }
+            if packet.frame_start {
+                self.saw_frame_start = true;
+                self.finish_current()?;
+                let timecode_frame = packet.frame_timecode.ok_or(SacdError::BadSector {
+                    lsn,
+                    why: "frame start has no timecode",
+                })?;
+                if packet.frame_channels != Some(2) {
+                    return Err(self.bad_frame(lsn, "frame is not stereo"));
+                }
+                let dst_packets_left = if sector_dst {
+                    match packet.frame_sector_count {
+                        Some(1..=31) => packet.frame_sector_count,
+                        _ => return Err(self.bad_frame(lsn, "invalid DST sector count")),
+                    }
+                } else {
+                    None
+                };
+                self.current = Some(BuildingFrame {
+                    frame: SacdAudioFrame {
+                        kind: if sector_dst {
+                            SacdFrameKind::Dst
+                        } else {
+                            SacdFrameKind::Dsd
+                        },
+                        payload: Vec::with_capacity(if sector_dst {
+                            MAX_DST_FRAME.min(16 * 1024)
+                        } else {
+                            DSD64_STEREO_FRAME as usize
+                        }),
+                        start_lsn: lsn,
+                        timecode_frame,
+                    },
+                    dst_packets_left,
+                });
+            }
+            let Some(building) = self.current.as_mut() else {
+                continue;
+            };
+            if let Some(left) = building.dst_packets_left.as_mut() {
+                if *left == 0 {
+                    return Err(self.bad_frame(lsn, "DST sector count ended before the frame"));
+                }
+                *left -= 1;
+            }
+            let end = packet.at + packet.len;
+            building
+                .frame
+                .payload
+                .extend_from_slice(&raw[packet.at..end]);
+            if building.frame.payload.len() > MAX_DST_FRAME {
+                return Err(self.bad_frame(lsn, "audio frame exceeds 64 KiB"));
+            }
+        }
+        if !self.saw_frame_start && self.searched_sectors >= 32 {
+            return Err(SacdError::MissingFrameStart {
+                track: self.track,
+                lsn: self.search_started_at,
+            });
+        }
+        Ok(())
+    }
+
+    fn finish_current(&mut self) -> Result<(), SacdError> {
+        let Some(building) = self.current.take() else {
+            return Ok(());
+        };
+        let valid = match building.frame.kind {
+            SacdFrameKind::Dsd => building.frame.payload.len() == DSD64_STEREO_FRAME as usize,
+            SacdFrameKind::Dst => building.dst_packets_left == Some(0),
+        };
+        if !valid {
+            return Err(self.bad_frame(building.frame.start_lsn, "frame closed at the wrong size"));
+        }
+        if building.frame.timecode_frame >= self.target_frame
+            && building.frame.timecode_frame < self.track_end_frame
+        {
+            self.ready.push_back(building.frame);
+        }
+        Ok(())
+    }
+
+    fn bad_frame(&self, lsn: u64, why: &'static str) -> SacdError {
+        SacdError::BadAudioFrame {
+            track: self.track,
+            lsn,
+            why,
+        }
+    }
 }
 
 /// Streams the raw DSD of one track out of an image.
@@ -402,7 +1291,7 @@ pub enum FrameSync {
 }
 
 pub struct SacdTrackReader {
-    iso: IsoImage,
+    image: SectorImage,
     start_lsn: u64,
     next_lsn: u64,
     end_lsn: u64,
@@ -411,6 +1300,7 @@ pub struct SacdTrackReader {
     /// construction — `FromPayloadStart` simply starts out true — so the mode
     /// itself is not kept around to be read twice.
     synced: bool,
+    expected_dst: bool,
 }
 
 impl SacdTrackReader {
@@ -420,14 +1310,22 @@ impl SacdTrackReader {
 
     pub fn open_with(path: &Path, track: &SacdTrack, sync: FrameSync) -> Result<Self, SacdError> {
         let start_lsn = track.start_lsn as u64;
+        let image = SectorImage::open(path)?;
+        let end_lsn = start_lsn
+            .checked_add(u64::from(track.length_lsn))
+            .ok_or(SacdError::MalformedToc("track sector range overflows"))?;
+        if end_lsn > image.sectors() {
+            return Err(SacdError::MalformedToc("track points outside the image"));
+        }
         Ok(Self {
-            iso: IsoImage::open(path)?,
+            image,
             start_lsn,
             next_lsn: start_lsn,
             // `length_lsn` is how many sectors to read, including the shared
             // boundary sector — the disc's own accounting, not ours.
-            end_lsn: track.start_lsn as u64 + track.length_lsn as u64,
+            end_lsn,
             synced: matches!(sync, FrameSync::FromPayloadStart),
+            expected_dst: track.encoding == SacdEncoding::Dst,
         })
     }
 
@@ -466,11 +1364,24 @@ impl SacdTrackReader {
             return Ok(0);
         }
         let want = sectors.min((self.end_lsn - self.next_lsn) as usize);
-        let raw = self.iso.read_sectors(self.next_lsn, want)?;
+        let raw = self.image.read_sectors(self.next_lsn, want)?;
         for s in 0..want {
             let lsn = self.next_lsn + s as u64;
             let sector = &raw[s * SECTOR as usize..(s + 1) * SECTOR as usize];
-            for p in parse_sector(sector, lsn)? {
+            let packets = parse_sector(sector, lsn)?;
+            if packets
+                .first()
+                .is_some_and(|packet| packet.dst_encoded != self.expected_dst)
+            {
+                return Err(SacdError::BadSector {
+                    lsn,
+                    why: "sector encoding disagrees with the area TOC",
+                });
+            }
+            if self.expected_dst {
+                return Err(SacdError::Dst);
+            }
+            for p in packets {
                 if p.data_type != DATA_TYPE_AUDIO {
                     continue;
                 }
@@ -488,6 +1399,9 @@ impl SacdTrackReader {
             }
         }
         self.next_lsn += want as u64;
+        if self.finished() {
+            self.image.verify_unchanged()?;
+        }
         Ok(out.len())
     }
 }
@@ -523,7 +1437,10 @@ mod tests {
         // LSN 1254: 0x40 -> header 5, then (type 3, 27) + (type 2, 2016)
         let p = parse_sector(&sector(0x40, &[0x181B, 0x17E0]), 1254).unwrap();
         assert_eq!((p[0].len, p[0].at), (27, 5));
-        assert!(!p[0].frame_start && !p[1].frame_start, "0x40 declares no frame info");
+        assert!(
+            !p[0].frame_start && !p[1].frame_start,
+            "0x40 declares no frame info"
+        );
         assert_eq!(5 + 27 + 2016, 2048);
 
         // LSN 1257: 0x64 -> header 10, three packets, the last starting a frame
@@ -552,6 +1469,205 @@ mod tests {
             assert_eq!(((b0 >> 2) & 0x07) as usize, fic, "frame infos of {b0:#04x}");
             assert_eq!(1 + pc * 2 + fic * 3, header);
         }
+    }
+
+    #[test]
+    fn a_dst_sector_uses_four_byte_frame_info_and_exposes_its_boundary() {
+        let mut raw = sector(0x25, &[0x97f9]);
+        raw[3..7].copy_from_slice(&[1, 2, 3, 0x04]);
+        let packets = parse_sector(&raw, 77).unwrap();
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].at, 7);
+        assert_eq!(packets[0].len, 2041);
+        assert!(packets[0].dst_encoded);
+        assert_eq!(packets[0].frame_sector_count, Some(1));
+        assert_eq!(packets[0].frame_timecode, Some((60 + 2) * 75 + 3));
+        assert_eq!(packets[0].frame_channels, Some(2));
+    }
+
+    #[test]
+    fn frame_info_count_must_equal_the_number_of_starts() {
+        let raw = sector(0x25, &[0x17f9]);
+        assert!(matches!(
+            parse_sector(&raw, 78),
+            Err(SacdError::BadSector { .. })
+        ));
+    }
+
+    #[test]
+    fn a_lead_out_padding_start_consumes_but_does_not_validate_its_sentinel_info() {
+        // Exact shape of the last Bowie and Ritchie area sector: a normal
+        // supplementary packet followed by padding whose frame-start bit is
+        // paired with an all-0xff sentinel rather than an audio timecode.
+        let mut raw = sector(0x44, &[0x1818, 0xbfe0]);
+        raw[5..8].fill(0xff);
+        let packets = parse_sector(&raw, 959_402).unwrap();
+        assert_eq!(packets.len(), 2);
+        assert_eq!(packets[1].data_type, 7, "Scarlet Book padding");
+        assert!(packets[1].frame_start);
+        assert_eq!(packets[1].frame_timecode, None);
+        assert_eq!(packets[1].at + packets[1].len, SECTOR as usize);
+    }
+
+    #[test]
+    fn dst_zero_fill_is_alignment_not_audio() {
+        // Fidelio Disc 2 LSN 969 has this exact header: one 2041-byte audio
+        // continuation followed by four zero alignment bytes.
+        let raw = sector(0x21, &[0x17f9]);
+        let packets = parse_sector(&raw, 969).unwrap();
+        assert_eq!(packets.len(), 1);
+        assert_eq!((packets[0].at, packets[0].len), (3, 2041));
+        assert_eq!(packets[0].at + packets[0].len, 2044);
+
+        let mut nonzero_tail = raw;
+        nonzero_tail[2047] = 1;
+        assert!(matches!(
+            parse_sector(&nonzero_tail, 969),
+            Err(SacdError::BadSector { .. })
+        ));
+    }
+
+    #[test]
+    fn scarlet_book_text_is_converted_without_replacement_characters() {
+        assert_eq!(
+            decode_sacd_text(b"Ouvert\xfcre", 2, "test"),
+            Some("Ouvertüre".to_string())
+        );
+        assert_eq!(
+            decode_sacd_text(b"plain ASCII", 1, "test").as_deref(),
+            Some("plain ASCII")
+        );
+        assert_eq!(decode_sacd_text(b"bad\xff", 1, "test"), None);
+        assert_eq!(decode_sacd_text(b"do not guess", 0, "test"), None);
+        assert_eq!(decode_sacd_text(b"escape\x1bsequence", 7, "test"), None);
+    }
+
+    #[test]
+    fn a_changed_image_is_detected_before_more_data_is_trusted() {
+        use std::io::Write;
+
+        let dir = std::env::temp_dir().join(format!("qbz-sacd-change-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("changed.iso");
+        std::fs::write(&path, vec![0u8; SECTOR as usize]).unwrap();
+        let image = SectorImage::open(&path).unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&[0u8; 1])
+            .unwrap();
+        assert!(matches!(
+            image.verify_unchanged(),
+            Err(SacdError::ImageChangedDuringRead(_))
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_partial_sector_has_its_own_error_category() {
+        let dir = std::env::temp_dir().join(format!("qbz-sacd-length-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("partial.iso");
+        std::fs::write(&path, [0u8; 1]).unwrap();
+        assert!(matches!(
+            read_area(&path),
+            Err(SacdError::InvalidImageLength(1))
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dst_track_boundaries_are_taken_from_timecodes_not_shared_sectors() {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let dir = std::env::temp_dir().join(format!("qbz-sacd-frame-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("frames.iso");
+        let mut file = std::fs::File::create(&path).unwrap();
+        for (lsn, timecode) in [(1u64, [0u8, 0, 0]), (2, [0, 0, 1])] {
+            let mut raw = sector(0x25, &[0x97f9]);
+            raw[3..6].copy_from_slice(&timecode);
+            raw[6] = 0x04;
+            file.seek(SeekFrom::Start(lsn * SECTOR)).unwrap();
+            file.write_all(&raw).unwrap();
+        }
+        let track = SacdTrack {
+            number: 1,
+            start_lsn: 1,
+            length_lsn: 2,
+            start_secs: 0.0,
+            duration_secs: 1.0 / 75.0,
+            start_frame: 0,
+            duration_frames: 1,
+            encoding: SacdEncoding::Dst,
+            title: None,
+        };
+        let mut reader = SacdFrameReader::open(&path, &track).unwrap();
+        let frame = reader.next_frame().unwrap().unwrap();
+        assert_eq!(frame.kind, SacdFrameKind::Dst);
+        assert_eq!(frame.timecode_frame, 0);
+        assert_eq!(frame.start_lsn, 1);
+        assert_eq!(frame.payload.len(), 2041);
+        assert!(reader.next_frame().unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dst_seek_uses_timecodes_instead_of_assuming_a_constant_compression_ratio() {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let dir = std::env::temp_dir().join(format!("qbz-sacd-seek-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("variable-rate.iso");
+        let mut file = std::fs::File::create(&path).unwrap();
+        let mut lsn = 1u64;
+        let mut middle_lsn = 0u64;
+        for frame in 0..100u32 {
+            if frame == 50 {
+                middle_lsn = lsn;
+            }
+            let sectors = if frame < 50 { 31u8 } else { 1u8 };
+            let mut first = sector(0x25, &[0x97f9]);
+            first[3..6].copy_from_slice(&[0, (frame / 75) as u8, (frame % 75) as u8]);
+            first[6] = sectors << 2;
+            file.seek(SeekFrom::Start(lsn * SECTOR)).unwrap();
+            file.write_all(&first).unwrap();
+            lsn += 1;
+            for _ in 1..sectors {
+                let continuation = sector(0x21, &[0x17fd]);
+                file.seek(SeekFrom::Start(lsn * SECTOR)).unwrap();
+                file.write_all(&continuation).unwrap();
+                lsn += 1;
+            }
+        }
+        let track = SacdTrack {
+            number: 1,
+            start_lsn: 1,
+            length_lsn: (lsn - 1) as u32,
+            start_secs: 0.0,
+            duration_secs: 100.0 / 75.0,
+            start_frame: 0,
+            duration_frames: 100,
+            encoding: SacdEncoding::Dst,
+            title: None,
+        };
+        let mut reader = SacdFrameReader::open(&path, &track).unwrap();
+        reader.seek_to_fraction(50, 100).unwrap();
+        let frame = reader.next_frame().unwrap().unwrap();
+        assert_eq!(frame.timecode_frame, 50);
+        assert_eq!(frame.start_lsn, middle_lsn);
+
+        reader.seek_to_fraction(99, 100).unwrap();
+        assert_eq!(reader.next_frame().unwrap().unwrap().timecode_frame, 99);
+        assert!(reader.next_frame().unwrap().is_none());
+
+        reader.seek_to_fraction(100, 100).unwrap();
+        assert!(reader.next_frame().unwrap().is_none());
+
+        reader.seek_to_fraction(0, 100).unwrap();
+        assert_eq!(reader.next_frame().unwrap().unwrap().timecode_frame, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -588,13 +1704,16 @@ mod tests {
     fn an_uncompressed_stereo_frame_is_the_size_that_proves_no_dst() {
         assert_eq!(DSD64_STEREO_FRAME, 2 * 2_822_400 / 75 / 8);
         // The measured audio-payload totals divide by it exactly.
-        assert_eq!(350_495u64 * DSD64_STEREO_FRAME as u64 % DSD64_STEREO_FRAME as u64, 0);
+        assert_eq!(
+            350_495u64 * DSD64_STEREO_FRAME as u64 % DSD64_STEREO_FRAME as u64,
+            0
+        );
     }
 
-    /// The scan sniff: PVD + Master TOC signature, nothing else. Built from
-    /// bare sectors so no real image is needed.
+    /// The scan sniff: a bounded, internally plausible Master TOC. The ISO
+    /// compatibility layer is deliberately irrelevant.
     #[test]
-    fn sniff_accepts_only_an_iso_with_a_master_toc() {
+    fn sniff_accepts_raw_and_hybrid_images_with_a_master_toc() {
         use std::io::{Seek, SeekFrom, Write};
 
         let dir = std::env::temp_dir().join(format!("qbz-sacd-sniff-{}", std::process::id()));
@@ -610,19 +1729,46 @@ mod tests {
                 file.write_all(&sector).unwrap();
             }
             if let Some(lsn) = toc_lsn {
+                let mut master = [0u8; 2048];
+                master[..8].copy_from_slice(b"SACDMTOC");
+                master[8] = 1;
+                master[9] = 20;
+                master[0x40..0x44].copy_from_slice(&544u32.to_be_bytes());
+                master[0x54..0x56].copy_from_slice(&1u16.to_be_bytes());
                 file.seek(SeekFrom::Start(lsn * 2048)).unwrap();
-                file.write_all(b"SACDMTOC").unwrap();
+                file.write_all(&master).unwrap();
             }
-            file.seek(SeekFrom::Start(531 * 2048)).unwrap();
+            file.seek(SeekFrom::Start(545 * 2048)).unwrap();
             file.write_all(&[0u8; 2048]).unwrap();
             path
         };
 
-        assert!(super::is_sacd_image(&write("sacd.iso", Some(510), true)));
-        assert!(super::is_sacd_image(&write("backup.iso", Some(530), true)));
+        for path in [
+            write("sacd.iso", Some(510), true),
+            write("backup.iso", Some(530), true),
+            write("raw.iso", Some(510), false),
+        ] {
+            assert_eq!(
+                super::sniff_sacd_image(&path).unwrap(),
+                SacdSniff::Sacd,
+                "{}",
+                path.display()
+            );
+        }
         assert!(!super::is_sacd_image(&write("dvd.iso", None, true)));
-        assert!(!super::is_sacd_image(&write("nopvd.iso", Some(510), false)));
         assert!(!super::is_sacd_image(&dir.join("missing.iso")));
+
+        let truncated = write("truncated.iso", Some(510), false);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&truncated)
+            .unwrap()
+            .write_all(&[0])
+            .unwrap();
+        assert!(matches!(
+            super::sniff_sacd_image(&truncated),
+            Err(SacdError::InvalidImageLength(_))
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

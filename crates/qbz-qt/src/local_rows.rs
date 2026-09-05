@@ -31,6 +31,18 @@ use serde::Serialize;
 // Rows (the QML contract)
 // ---------------------------------------------------------------------------
 
+/// One physical media variant represented by a logical album row. Keeping
+/// source, format and quality together is load-bearing: the filter sections
+/// are AND-ed, so three independent aggregate arrays could claim a match by
+/// taking DSD from one copy and FLAC/local from another.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct AlbumMediaVariant {
+    #[serde(rename = "qualityTier")]
+    pub quality_tier: String,
+    pub format: String,
+    pub source: String,
+}
+
 /// One album card (Albums tab + Folders tab flat mode). `id` is the group key
 /// of the ACTIVE identity mode — folder or metadata — so the detail query can
 /// round-trip it. Plex albums carry the content-hash key `plex:<hash>`.
@@ -52,6 +64,11 @@ pub struct AlbumRow {
     #[serde(rename = "qualityDetail")]
     pub quality_detail: String,
     pub format: String,
+    /// Every physical quality/format/source combination represented by this
+    /// logical card. The scalar fields above remain the default/highest
+    /// quality version used by the visible badge.
+    #[serde(rename = "mediaVariants")]
+    pub media_variants: Vec<AlbumMediaVariant>,
     /// Every genre represented by this logical album, across all versions.
     pub genres: Vec<String>,
     #[serde(rename = "artKey")]
@@ -226,6 +243,45 @@ pub fn total_duration(secs: u64) -> String {
     }
 }
 
+/// Stable ordering for physical versions. DSD is its own top-level tier:
+/// treating its nominal one-bit depth as ordinary PCM made DSD64 lose to
+/// 24/96 even though the UI and version picker expose DSD as the premium
+/// representation. Within a tier, depth then rate preserve the existing PCM
+/// ordering; within DSD, the common depth is equal so the DSD rate decides.
+pub fn media_quality_rank(
+    format: &AudioFormat,
+    bit_depth: Option<u32>,
+    sample_rate_hz: f64,
+) -> (u8, u32, u64) {
+    let sample_rate = if sample_rate_hz.is_finite() && sample_rate_hz > 0.0 {
+        sample_rate_hz as u64
+    } else {
+        0
+    };
+    let depth = bit_depth.unwrap_or(0);
+    if matches!(format, AudioFormat::Dsd) {
+        return (4, depth, sample_rate);
+    }
+    let lossless = matches!(
+        format,
+        AudioFormat::Flac
+            | AudioFormat::Alac
+            | AudioFormat::Wav
+            | AudioFormat::Aiff
+            | AudioFormat::Ape
+    );
+    let tier = if lossless && (depth > 16 || sample_rate > 48_000) {
+        3
+    } else if lossless {
+        2
+    } else if !matches!(format, AudioFormat::Unknown) {
+        1
+    } else {
+        0
+    };
+    (tier, depth, sample_rate)
+}
+
 /// Tier for the shared QualityBadge, mirroring its own derivation order
 /// (MP3 first, then max / hires / cd) so a local card and a Qobuz card can
 /// never disagree.
@@ -267,6 +323,43 @@ pub fn detail_of(format: &AudioFormat, bit_depth: Option<u32>, sample_rate_hz: f
         return crate::quality_qt::dsd_multiple_label(Some(sample_rate_hz));
     }
     crate::home_qt::quality_detail_from_parts(bit_depth, Some(sample_rate_hz))
+}
+
+/// Physical filter variants for one source-native album record. Source words
+/// are projected through the same badge vocabulary as `AlbumRow.sources`, so
+/// a scanned Qobuz purchase remains in the Offline bucket while preserving
+/// its gold `qobuz_purchase` identity.
+pub fn album_media_variants(album: &LocalAlbum) -> Vec<AlbumMediaVariant> {
+    let quality_tier = tier_of(&album.format, album.bit_depth, album.sample_rate).to_string();
+    let format = album.format.to_string();
+    let source_words = if album.sources.is_empty() {
+        vec![album.source.as_str()]
+    } else {
+        album.sources.iter().map(String::as_str).collect()
+    };
+    let mut variants = source_words
+        .into_iter()
+        .map(|source| {
+            let raw = badge_source_raw(Some(source));
+            AlbumMediaVariant {
+                quality_tier: quality_tier.clone(),
+                format: format.clone(),
+                source: if raw.is_empty() {
+                    badge_source(Some(source))
+                } else {
+                    raw
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+    variants.sort_by(|left, right| {
+        left.source
+            .cmp(&right.source)
+            .then_with(|| left.quality_tier.cmp(&right.quality_tier))
+            .then_with(|| left.format.cmp(&right.format))
+    });
+    variants.dedup();
+    variants
 }
 
 pub fn basename(path: &str) -> String {
@@ -493,6 +586,7 @@ pub fn map_album_with_artists(
     art: &mut HashMap<String, (SourceId, String)>,
     artists: Vec<String>,
 ) -> AlbumRow {
+    let media_variants = album_media_variants(&a);
     let key = album_key(&a.id);
     if let Some(p) = a.artwork_path.as_ref().filter(|p| !p.is_empty()) {
         let artwork_source = a.artwork_source.as_deref().unwrap_or(a.source.as_str());
@@ -533,6 +627,7 @@ pub fn map_album_with_artists(
         quality_tier: tier_of(&a.format, a.bit_depth, a.sample_rate).into(),
         quality_detail: detail_of(&a.format, a.bit_depth, a.sample_rate),
         format: a.format.to_string(),
+        media_variants,
         genres: a.genres,
         year: a.year.map(|y| y.to_string()).unwrap_or_default(),
         duration: total_duration(a.total_duration_secs),

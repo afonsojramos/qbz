@@ -1,19 +1,16 @@
-//! Open a SACD disc image and adopt its virtual tracks into the local library.
+//! Open a SACD disc image as an in-memory ephemeral session.
 //!
 //! Unlike a CD, a SACD names itself: the Master TOC carries the album title
 //! and artist, and the area TOC carries a title per track. So this asks no
 //! network and invents nothing — every string below came off the disc.
 //!
-//! Scope, and it is stated in the UI rather than hidden: the STEREO area of an
-//! uncompressed image. A multichannel-only disc, a DST-compressed area or an
-//! image with no ISO 9660 layer is REPORTED, never approximated into silence.
+//! Scope: the stereo DSD64 area of a raw Scarlet Book or hybrid image, either
+//! flat or DST-compressed. A multichannel-only, malformed or unsupported image
+//! is reported, never approximated into silence.
 //!
 //! The rows themselves come from `qbz_library::sacd_scan::build_image_rows`,
-//! the same builder the folder scan uses for the images it finds; this file
-//! only adds what a manual open needs — the session identity, the ephemeral
-//! session and the translated fallback labels.
-
-use qbz_library::sacd_scan::{image_facts, observation_token};
+//! the same parser/row builder the folder scan uses. Catalogue ownership does
+//! not: only the folder scanner may import those rows into `library.db`.
 
 use crate::local_ephemeral;
 
@@ -30,11 +27,12 @@ pub fn open_image(path: &std::path::Path) -> Result<usize, String> {
             qbz_disc::sacd::SacdError::NoStereoArea => {
                 qbz_i18n::t("That image has no stereo audio area.")
             }
-            qbz_disc::sacd::SacdError::Dst => {
-                qbz_i18n::t("This disc is DST-compressed, which QBZ cannot play yet.")
+            qbz_disc::sacd::SacdError::MissingMasterToc
+            | qbz_disc::sacd::SacdError::NotRegularFile(_) => {
+                qbz_i18n::t("That file is not a SACD image.")
             }
-            qbz_disc::sacd::SacdError::Iso(_) => qbz_i18n::t("That file is not a disc image."),
-            other => format!("{other}"),
+            qbz_disc::sacd::SacdError::Iso(_) => qbz_i18n::t("Could not read the disc."),
+            _ => qbz_i18n::t("That SACD image is damaged or unsupported."),
         }
     })?;
 
@@ -55,73 +53,8 @@ pub fn open_image(path: &std::path::Path) -> Result<usize, String> {
         rows.album
     );
 
-    // The explicit Scarlet Book parse above is the discovery gate. Only a
-    // complete generation reaches the transaction; a missing/NAS-down image,
-    // malformed TOC or unsupported DST area leaves prior catalogue rows
-    // untouched and still falls back to the in-memory session behaviour.
-    persist(rows.import);
-
     local_ephemeral::adopt_tracks(&rows.album, rows.tracks);
     Ok(count)
-}
-
-/// Re-commit corrected naming/artwork from the currently open SACD without
-/// blocking the Qt thread. The snapshot is taken before scheduling so a late
-/// worker can never adopt rows from a newer session under the old fingerprint.
-pub fn persist_current_session(fingerprint: &str) {
-    let tracks = crate::local_ephemeral::tracks_snapshot();
-    let Some(image) = tracks
-        .first()
-        .and_then(|track| qbz_disc::SacdRef::parse(&track.file_path))
-        .map(|reference| reference.image)
-    else {
-        return;
-    };
-    if tracks.iter().any(|track| {
-        qbz_disc::SacdRef::parse(&track.file_path)
-            .map(|reference| reference.image != image)
-            .unwrap_or(true)
-    }) {
-        log::warn!("[qbz-qt] sacd: refusing a mixed-image session snapshot");
-        return;
-    }
-    let facts = image_facts(&image);
-    let import = qbz_library::SacdImageImport {
-        fingerprint: fingerprint.to_string(),
-        image_path: image.to_string_lossy().into_owned(),
-        image_size_bytes: facts.size_bytes,
-        image_modified_ns: facts.modified_ns,
-        observed_at: observation_token(),
-        tracks,
-    };
-    crate::spawn(async move {
-        let _ = tokio::task::spawn_blocking(move || persist(import)).await;
-    });
-}
-
-fn persist(import: qbz_library::SacdImageImport) -> bool {
-    let started = std::time::Instant::now();
-    let Some(result) = crate::library_db_qt::with_db(true, |db| db.import_sacd_image(&import))
-    else {
-        log::warn!("[qbz-qt] sacd: catalogue adoption failed; session remains available");
-        return false;
-    };
-    if result.stale {
-        log::debug!("[qbz-qt] sacd: stale catalogue snapshot ignored");
-        return true;
-    }
-    log::info!(
-        "[qbz-qt] sacd: catalogue adopted inserted={} updated={} removed={} elapsed_ms={}",
-        result.inserted,
-        result.updated,
-        result.removed,
-        started.elapsed().as_millis()
-    );
-    crate::local_catalog_qt::request_catch_up();
-    // Native readers republish after catch-up; this also refreshes the
-    // contractually retained legacy fallback immediately.
-    crate::local_bridge_ops::reload_browse();
-    true
 }
 
 #[cfg(test)]

@@ -1,16 +1,16 @@
-# Third-party licences shipped with QBZ for Windows
+# Third-party licences shipped with QBZ
 
 QBZ's own licence is in `LICENSE` at the repository root. This directory
-carries the notices that must travel **with the binaries**, because the Windows
-artifacts bundle their dependencies rather than resolving them from a system
-package manager the way the Linux packages do.
+carries the notices that must travel **with the binaries**. Every release
+format installs or embeds this directory; some entries apply only to artifacts
+that bundle the corresponding runtime.
 
 ## Qt 6 — LGPL v3
 
-The Windows MSI and the portable zip ship the Qt runtime. QBZ links against it
-**dynamically** and does not modify it, which is what the LGPL requires for the
-arrangement below; `LGPL-3.0.txt` is the full text, verbatim from
-<https://www.gnu.org/licenses/lgpl-3.0.txt>.
+The Windows, macOS, AppImage, Flatpak and Snap artifacts ship the Qt runtime.
+QBZ links against it **dynamically** and does not modify it, which is what the
+LGPL requires for the arrangement below; `LGPL-3.0.txt` is the full text,
+verbatim from <https://www.gnu.org/licenses/lgpl-3.0.txt>.
 
 **Version:** Qt 6.9.3, `win64_msvc2022_64`, installed by
 [aqtinstall](https://github.com/miurahr/aqtinstall) in
@@ -52,3 +52,17 @@ BSD and Unicode-DFS crates, all permissive and all requiring attribution rather
 than source availability. `cargo tree` and `Cargo.lock` are the authoritative
 list; the SBOM step in the release workflow is where a generated manifest
 belongs when that lands.
+
+### `dst-decoder` 0.1.2
+
+SACD DST playback adds the pinned Rust crate `dst-decoder` 0.1.2. Its complete
+Apache-2.0 license is bundled as `Apache-2.0-dst-decoder.txt`. Because upstream
+states that its implementation is based heavily on the MPEG-4 DST reference
+module, the complete provenance/copyright wording reproduced by upstream is
+also bundled verbatim as `dst-decoder-upstream-NOTICE.txt`; the short
+integration summary is `dst-decoder-NOTICE.md`.
+
+All release formats containing QBZ's DST decoder must install or otherwise
+carry those three files. The crate is used only for conforming MPEG-4 DST
+decoding. See the documented gate in
+`qbz-nix-docs/qt-frontend/2026-09-04-sacd-raw-dst/01-DECODER-GATE.md`.

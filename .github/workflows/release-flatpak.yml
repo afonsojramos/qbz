@@ -143,6 +143,7 @@ jobs:
           cp packaging/flatpak/com.blitzfc.qbz.desktop "$P/qbz.desktop"
           cp packaging/flatpak/com.blitzfc.qbz.metainfo.xml "$P/"
           cp LICENSE "$P/LICENSE"
+          cp -r licenses "$P/licenses"
           mkdir -p "$P/icons"; cp packaging/icons/{32x32,48x48,64x64,128x128,256x256,512x512}.png "$P/icons/"
           ls -la "$P"
 

@@ -154,6 +154,9 @@ jobs:
           cp -a AppDir/usr/bin AppDir/usr/lib AppDir/usr/plugins AppDir/usr/qml snap-payload/
           cp packaging/snap/snap/gui/qbz.desktop snap-payload/qbz.desktop
           cp packaging/snap/snap/gui/qbz.png     snap-payload/qbz.png
+          cp LICENSE snap-payload/LICENSE
+          cp -r licenses snap-payload/licenses
+          test -f snap-payload/licenses/Apache-2.0-dst-decoder.txt
           mkdir -p snap
           cp packaging/snap-qt/snapcraft.yaml snap/snapcraft.yaml
           sed -i "s/^version:.*/version: '${VER}'/" snap/snapcraft.yaml
@@ -207,6 +210,9 @@ jobs:
           cp -a AppDir/usr/bin AppDir/usr/lib AppDir/usr/plugins AppDir/usr/qml snap-payload/
           cp packaging/snap/snap/gui/qbz.desktop snap-payload/qbz.desktop
           cp packaging/snap/snap/gui/qbz.png     snap-payload/qbz.png
+          cp LICENSE snap-payload/LICENSE
+          cp -r licenses snap-payload/licenses
+          test -f snap-payload/licenses/Apache-2.0-dst-decoder.txt
           mkdir -p snap
           cp packaging/snap-qt/snapcraft-arm64.yaml snap/snapcraft.yaml
           sed -i "s/^version:.*/version: '${VER}'/" snap/snapcraft.yaml

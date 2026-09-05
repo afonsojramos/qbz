@@ -166,6 +166,8 @@ jobs:
           cp "crates/target/${{ matrix.target }}/release/qbz" "$APP/Contents/MacOS/qbz"
           chmod +x "$APP/Contents/MacOS/qbz"
           cp packaging/icons/icon.icns "$APP/Contents/Resources/icon.icns"
+          cp LICENSE "$APP/Contents/Resources/LICENSE.txt"
+          cp -r licenses "$APP/Contents/Resources/licenses"
           # The Liquid Glass app icon (packaging/icons/QBZ.icon, Icon Composer
           # source, issue #712): compiled by Xcode 26's actool into
           # Assets.car + CFBundleIconName=QBZ. macOS 26 renders the layered

@@ -5447,6 +5447,12 @@ msgstr "Диск сжат в DST — QBZ пока не может его вос�
 msgid "That file is not a disc image."
 msgstr "Это не образ диска."
 
+msgid "That file is not a SACD image."
+msgstr "Это не образ SACD."
+
+msgid "That SACD image is damaged or unsupported."
+msgstr "Этот образ SACD повреждён или не поддерживается."
+
 msgid "SACD"
 msgstr "SACD"
 

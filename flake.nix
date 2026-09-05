@@ -95,6 +95,7 @@
                 $out/share/icons/hicolor/"$size"x"$size"/apps/qbz.png
             done
             install -Dm644 $src/LICENSE $out/share/licenses/qbz/LICENSE
+            cp -r $src/licenses $out/share/licenses/qbz/third-party
           '';
 
           meta = with pkgs.lib; {

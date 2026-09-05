@@ -1,9 +1,9 @@
 //! Ephemeral folders and live disc sessions.
 //!
-//! A folder opened outside the indexed library and a physical CD never land a
-//! row in `library.db`. A parsed SACD is the deliberate exception: `sacd_qt`
-//! adopts its virtual tracks into the persistent catalogue first, then uses
-//! this same in-memory pane for the immediate open experience.
+//! A folder opened outside the indexed library, a physical CD and a manually
+//! opened SACD image never land a row in `library.db`. SACD images become
+//! persistent only when the regular folder scanner finds them below a
+//! registered Local Library root.
 //!
 //! Qt/QML port of the shipping Slint pair (`crates/qbz/src/ephemeral.rs` +
 //! the `EphemeralPane` arm of `crates/qbz/src/local_library.rs`). ADR-006:
@@ -635,7 +635,7 @@ pub fn open_path(path: String) {
 }
 
 /// Publish a session built from a track list rather than a directory scan — a
-/// physical CD or an already catalogue-adopted SACD image.
+/// physical CD or a manually opened SACD image.
 ///
 /// It goes through the SAME `publish_doc` as a folder, so the pane, the tab,
 /// the label and the open sequence all behave identically: a disc is not a
@@ -644,8 +644,8 @@ pub fn open_path(path: String) {
 ///
 /// This SESSION is not rehydrated. Re-opening a physical drive at boot could
 /// find a different CD (or none), so it deliberately starts clean. SACD
-/// catalogue persistence is separate and keyed by its TOC fingerprint; the
-/// user still explicitly opens an image to create this live pane.
+/// library indexing is a separate folder-scan concern; the user still
+/// explicitly opens an image to create this live pane.
 pub fn adopt_tracks(label: &str, tracks: Vec<LocalTrack>) {
     let label = label.to_string();
     // Taken HERE, on the reader's own thread, so it overlaps the reader's

@@ -50,6 +50,9 @@ contents:
     dst: /usr/share/doc/qbzd/README.md
   - src: LICENSE
     dst: /usr/share/licenses/qbzd/LICENSE
+  - src: licenses
+    dst: /usr/share/licenses/qbzd/third-party
+    type: tree
 
 overrides:
   deb:

@@ -16,7 +16,9 @@
 use std::collections::{HashMap, HashSet};
 
 use qbz_library::album_grouping::AlbumGroupMode;
-use qbz_library::{AlbumTrackEvidence, AudioFormat, LocalAlbum, LocalTrack};
+#[cfg(test)]
+use qbz_library::AudioFormat;
+use qbz_library::{AlbumTrackEvidence, LocalAlbum, LocalTrack};
 
 use crate::local_album_actions::AlbumDetailDoc;
 use crate::local_artist_match::{
@@ -24,8 +26,8 @@ use crate::local_artist_match::{
     merge_artists, normalize_artist, AlbumCredit, ArtistInput,
 };
 use crate::local_rows::{
-    artist_key, badge_source, map_album, map_album_with_artists, map_track, tier_of, AlbumRow,
-    ArtistRow, LocalCounts, TrackRow,
+    album_media_variants, artist_key, badge_source, map_album, map_album_with_artists, map_track,
+    media_quality_rank, tier_of, AlbumMediaVariant, AlbumRow, ArtistRow, LocalCounts, TrackRow,
 };
 use crate::local_state::{
     commit_tracks_page, group_mode, state, tracks_generation, with_art, with_db,
@@ -71,6 +73,14 @@ pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
     let t_sql = t0.elapsed();
     let identity_started = std::time::Instant::now();
     let source_album_count = page.albums.len();
+    // Preserve the physical tuples before coalescing chooses one visible
+    // representative. A logical card must match DSD when any of its versions
+    // is DSD, even when another copy owns the normal unfiltered badge.
+    let physical_media = page
+        .albums
+        .iter()
+        .map(|album| (album.id.clone(), album_media_variants(album)))
+        .collect::<HashMap<_, _>>();
     let (albums, version_ids) = coalesce_album_versions(page.albums);
     let t_identity = identity_started.elapsed();
     let total = albums.len() as u64;
@@ -88,8 +98,15 @@ pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
         albums
             .into_iter()
             .map(|a| {
+                let media_variants = logical_album_media_variants(
+                    &a,
+                    version_ids.get(&a.id).map(Vec::as_slice),
+                    &physical_media,
+                );
                 let artists = album_credit_names(&a.artist, &a.all_artists, &aliases);
-                map_album_with_artists(a, art, artists)
+                let mut row = map_album_with_artists(a, art, artists);
+                row.media_variants = media_variants;
+                row
             })
             .collect::<Vec<AlbumRow>>()
     });
@@ -333,28 +350,40 @@ fn coalesce_album_versions(
 }
 
 fn album_quality_rank(album: &LocalAlbum) -> (u8, u32, u64, u32) {
-    let lossless = matches!(
-        album.format,
-        AudioFormat::Flac
-            | AudioFormat::Alac
-            | AudioFormat::Wav
-            | AudioFormat::Aiff
-            | AudioFormat::Ape
-            | AudioFormat::Dsd
-    );
-    let sample_rate = album.sample_rate.max(0.0) as u64;
-    let depth = album.bit_depth.unwrap_or(0);
-    let tier =
-        if album.format == AudioFormat::Dsd || (lossless && (depth > 16 || sample_rate > 48_000)) {
-            3
-        } else if lossless {
-            2
-        } else if album.format != AudioFormat::Unknown {
-            1
-        } else {
-            0
-        };
+    let (tier, depth, sample_rate) =
+        media_quality_rank(&album.format, album.bit_depth, album.sample_rate);
     (tier, depth, sample_rate, album.track_count)
+}
+
+/// Reattach every physical media tuple to the logical card selected by
+/// `coalesce_album_versions`. `version_ids` is authoritative for a merged
+/// card; the fallback covers a single source-native album.
+fn logical_album_media_variants(
+    album: &LocalAlbum,
+    version_ids: Option<&[String]>,
+    physical_media: &HashMap<String, Vec<AlbumMediaVariant>>,
+) -> Vec<AlbumMediaVariant> {
+    let mut variants = version_ids
+        .into_iter()
+        .flatten()
+        .filter_map(|id| physical_media.get(id))
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    if variants.is_empty() {
+        variants = physical_media
+            .get(&album.id)
+            .cloned()
+            .unwrap_or_else(|| album_media_variants(album));
+    }
+    variants.sort_by(|left, right| {
+        left.source
+            .cmp(&right.source)
+            .then_with(|| left.quality_tier.cmp(&right.quality_tier))
+            .then_with(|| left.format.cmp(&right.format))
+    });
+    variants.dedup();
+    variants
 }
 
 fn source_order(source: &str) -> u8 {
@@ -1602,6 +1631,52 @@ mod phase_a_tests {
         );
         let (rows, _) = coalesce_album_versions(vec![rows[0].clone(), unrelated]);
         assert_eq!(rows.len(), 2, "title and artist alone must never merge");
+    }
+
+    #[test]
+    fn logical_album_keeps_all_media_variants_and_selects_dsd_by_default() {
+        let tracks = [
+            ("Holy Wars", 383),
+            ("Hangar 18", 311),
+            ("Take No Prisoners", 208),
+        ];
+        let pcm = album_copy("pcm-24-96", "user", "Rust in Peace", &tracks, 24, 96_000.0);
+        let mut dsd = album_copy(
+            "purchased-dsd",
+            "qobuz_purchase",
+            "Rust in Peace",
+            &tracks,
+            1,
+            2_822_400.0,
+        );
+        dsd.format = AudioFormat::Dsd;
+        let physical = [&pcm, &dsd]
+            .into_iter()
+            .map(|album| (album.id.clone(), album_media_variants(album)))
+            .collect::<HashMap<_, _>>();
+
+        let (rows, version_ids) = coalesce_album_versions(vec![pcm, dsd]);
+        assert_eq!(rows.len(), 1);
+        let logical = &rows[0];
+        assert_eq!(logical.format, AudioFormat::Dsd);
+        assert_eq!(
+            tier_of(&logical.format, logical.bit_depth, logical.sample_rate),
+            "dsd"
+        );
+
+        let variants = logical_album_media_variants(
+            logical,
+            version_ids.get(&logical.id).map(Vec::as_slice),
+            &physical,
+        );
+        assert!(variants.iter().any(|variant| {
+            variant.quality_tier == "dsd"
+                && variant.format == "DSD"
+                && variant.source == "qobuz_purchase"
+        }));
+        assert!(variants.iter().any(|variant| {
+            variant.quality_tier == "hires" && variant.format == "FLAC" && variant.source == "local"
+        }));
     }
 
     #[test]

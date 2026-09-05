@@ -18,9 +18,13 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
-use qbz_disc::sacd::{read_area, SacdError};
+use qbz_disc::sacd::{read_area, SacdError, SacdSniff};
 
 use crate::{AudioFormat, LibraryDatabase, LocalTrack, MetadataExtractor, SacdImageImport};
+
+/// Bump when a successful TOC parse can expose a different complete snapshot.
+/// This invalidates only the scan cache; disc identity remains geometry-only.
+pub const SACD_PARSER_REVISION: i64 = 2;
 
 /// Fallback naming for an image whose Master TOC carries no text.
 #[derive(Debug, Clone)]
@@ -235,6 +239,7 @@ pub fn build_image_rows(path: &Path, labels: &SacdLabels) -> Result<SacdImageRow
         image_size_bytes: facts.size_bytes,
         image_modified_ns: facts.modified_ns,
         observed_at: observation_token(),
+        parser_revision: SACD_PARSER_REVISION,
         tracks: tracks.clone(),
     };
     Ok(SacdImageRows {
@@ -258,6 +263,10 @@ pub struct SacdScanSummary {
     pub unchanged: u32,
     /// Files without the `SACDMTOC` signature — silently left alone.
     pub ignored: u32,
+    /// Persistent virtual tracks removed after a complete root walk.
+    pub removed: u32,
+    /// True only when the complete walk reached its ownership prune.
+    pub prune_authorized: bool,
     /// Real SACDs the parser or the import rejected: (path, reason).
     pub failed: Vec<(String, String)>,
 }
@@ -269,16 +278,19 @@ fn is_iso(path: &Path) -> bool {
 }
 
 /// Find and import the SACD images under one root. Runs after the root's
-/// audio/cue passes; nothing here touches `local_scan_files` or the audio
-/// prune, and a disc that disappears keeps its rows (the same rule the manual
-/// import follows for a NAS that is down).
+/// audio/cue passes; nothing here touches `local_scan_files`. A complete walk
+/// prunes images no longer present under this root, while cancellation or a
+/// traversal error preserves the last known-good rows.
 pub fn scan_root_for_sacd(
     db: &LibraryDatabase,
+    root_id: i64,
+    observed_generation: i64,
     root: &Path,
     labels: &SacdLabels,
     cancel: &AtomicBool,
 ) -> SacdScanSummary {
     let mut summary = SacdScanSummary::default();
+    let mut traversal_complete = true;
     let walk = walkdir::WalkDir::new(root)
         .follow_links(true)
         .sort_by_file_name()
@@ -291,6 +303,7 @@ pub fn scan_root_for_sacd(
             Ok(entry) => entry,
             Err(error) => {
                 log::debug!("[sacd] scan walk error: {error}");
+                traversal_complete = false;
                 continue;
             }
         };
@@ -303,26 +316,53 @@ pub fn scan_root_for_sacd(
 
         // Known and unchanged: no file I/O at all.
         let facts = image_facts(path);
-        match db.sacd_image_unchanged(&path_string, facts.size_bytes, facts.modified_ns) {
+        match db.observe_sacd_image(
+            root_id,
+            observed_generation,
+            &path_string,
+            facts.size_bytes,
+            facts.modified_ns,
+            SACD_PARSER_REVISION,
+        ) {
             Ok(true) => {
                 summary.unchanged = summary.unchanged.saturating_add(1);
                 continue;
             }
             Ok(false) => {}
             Err(error) => {
+                traversal_complete = false;
                 summary.failed.push((path_string, error.to_string()));
                 continue;
             }
         }
 
         // Signature first: a DVD or a data ISO leaves here silently.
-        if !qbz_disc::sacd::is_sacd_image(path) {
-            summary.ignored = summary.ignored.saturating_add(1);
-            continue;
+        match qbz_disc::sacd::sniff_sacd_image(path) {
+            Ok(SacdSniff::Sacd) => {}
+            Ok(SacdSniff::NotSacd) => {
+                summary.ignored = summary.ignored.saturating_add(1);
+                match db.remove_sacd_image_at_path(&path_string) {
+                    Ok(removed) => {
+                        summary.removed = summary
+                            .removed
+                            .saturating_add(removed.min(u32::MAX as usize) as u32);
+                    }
+                    Err(error) => {
+                        traversal_complete = false;
+                        summary.failed.push((path_string, error.to_string()));
+                    }
+                }
+                continue;
+            }
+            Err(error) => {
+                log::warn!("[sacd] scan: signed image has an invalid Master TOC: {error}");
+                summary.failed.push((path_string, error.to_string()));
+                continue;
+            }
         }
 
         match build_image_rows(path, labels) {
-            Ok(rows) => match db.import_sacd_image(&rows.import) {
+            Ok(rows) => match db.import_sacd_image(root_id, observed_generation, &rows.import) {
                 Ok(result) if result.stale => {
                     summary.unchanged = summary.unchanged.saturating_add(1);
                 }
@@ -343,6 +383,19 @@ pub fn scan_root_for_sacd(
                 log::warn!("[sacd] scan: image unusable: {error}");
                 summary.failed.push((path_string, error.to_string()));
             }
+        }
+    }
+    if !cancel.load(Ordering::Acquire) && traversal_complete {
+        match db.finish_sacd_root_scan(root_id, observed_generation) {
+            Ok(removed) => {
+                summary.removed = summary
+                    .removed
+                    .saturating_add(removed.min(u32::MAX as usize) as u32);
+                summary.prune_authorized = true;
+            }
+            Err(error) => summary
+                .failed
+                .push((root.to_string_lossy().into_owned(), error.to_string())),
         }
     }
     summary
@@ -385,12 +438,21 @@ mod tests {
         let db = LibraryDatabase::open(&temp.path().join("library.db")).unwrap();
         let root = temp.path().join("music");
         std::fs::create_dir_all(root.join("Some DVD")).unwrap();
+        let root_id = db
+            .add_folder_with_network_info(&root.to_string_lossy(), false, None)
+            .unwrap();
         write_plain_iso(&root.join("Some DVD/movie.iso"));
         std::fs::write(root.join("not-an-image.iso"), b"just bytes").unwrap();
         std::fs::write(root.join("song.flac"), b"").unwrap();
 
-        let summary =
-            scan_root_for_sacd(&db, &root, &SacdLabels::default(), &AtomicBool::new(false));
+        let summary = scan_root_for_sacd(
+            &db,
+            root_id,
+            1,
+            &root,
+            &SacdLabels::default(),
+            &AtomicBool::new(false),
+        );
         assert_eq!(
             summary,
             SacdScanSummary {
@@ -398,11 +460,20 @@ mod tests {
                 imported: 0,
                 unchanged: 0,
                 ignored: 2,
+                removed: 0,
+                prune_authorized: true,
                 failed: Vec::new(),
             }
         );
         assert!(!db
-            .sacd_image_unchanged(&root.join("Some DVD/movie.iso").to_string_lossy(), 0, 0)
+            .observe_sacd_image(
+                root_id,
+                2,
+                &root.join("Some DVD/movie.iso").to_string_lossy(),
+                0,
+                0,
+                super::SACD_PARSER_REVISION,
+            )
             .unwrap());
     }
 
@@ -411,8 +482,13 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let db = LibraryDatabase::open(&temp.path().join("library.db")).unwrap();
         write_plain_iso(&temp.path().join("movie.iso"));
+        let root_id = db
+            .add_folder_with_network_info(&temp.path().to_string_lossy(), false, None)
+            .unwrap();
         let summary = scan_root_for_sacd(
             &db,
+            root_id,
+            1,
             temp.path(),
             &SacdLabels::default(),
             &AtomicBool::new(true),

@@ -748,6 +748,20 @@ mod phase_a_tests {
     }
 
     #[test]
+    fn recycled_card_binding_repairs_are_bound_to_delegate_lifetimes() {
+        let local = include_str!("../qml/views/local/LocalAlbumCollection.qml");
+        let feed = include_str!("../qml/views/library/FeedGridCell.qml");
+        assert!(local.contains("id: mutableRestore"));
+        assert!(local.contains("mutableRestore.restart()"));
+        assert!(!local.contains(
+            "Qt.callLater(function () {\n                                    if (cardCell.slot"
+        ));
+        assert!(feed.contains("id: mutableRestore"));
+        assert!(feed.contains("mutableRestore.restart()"));
+        assert!(!feed.contains("Qt.callLater(function () {\n            if (cell.identity"));
+    }
+
+    #[test]
     fn genres_details_virtualizes_the_nested_box_set_rows() {
         // The outer ListView is album-granular: a 150-track box is one visible
         // delegate. A plain nested Repeater therefore creates every wrapper and
@@ -812,6 +826,31 @@ mod phase_a_tests {
         );
         assert!(versions.contains("id: versionMenuLoader\n        active: false"));
         assert!(album_row.contains("id: rowMenuLoader\n        active: false"));
+    }
+
+    #[test]
+    fn dsd_filter_prunes_explorer_parent_rows_and_remains_visible_when_collapsed() {
+        let view = include_str!("../qml/views/LocalLibraryView.qml");
+        let explorer = include_str!("../qml/views/local/LocalGenresTab.qml");
+
+        // Both parent projections use this gate: albums in Library Explorer
+        // and artists in the Artists tab. If DSD is omitted here, their tier
+        // comparison never runs even though the track/detail backend filters.
+        assert_eq!(
+            view.matches(
+                "var qAny = selected.dsd || selected.hires || selected.cd || selected.lossy",
+            )
+            .count(),
+            2
+        );
+        assert!(view.contains("(selected.dsd && tier === \"dsd\")"));
+        assert!(view.contains("(selected.dsd && value === \"dsd\")"));
+        assert!(view.contains("var variants = r.mediaVariants || []"));
+        assert!(view.contains("if (qok && fok && sok)"));
+
+        // Collapsing the facet browser must not make the active DSD filter
+        // invisible or impossible to clear from its applied-filter strip.
+        assert!(explorer.contains("{ key: \"dsd\", label: \"DSD\" }"));
     }
 
     #[test]

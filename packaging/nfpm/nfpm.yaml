@@ -57,6 +57,11 @@ contents:
   - src: ./AppDir/usr/qml
     dst: /opt/qbz/qml
     type: tree
+  - src: LICENSE
+    dst: /usr/share/licenses/qbz/LICENSE
+  - src: licenses
+    dst: /usr/share/licenses/qbz/third-party
+    type: tree
   - src: /opt/qbz/bin/qbz
     dst: /usr/bin/qbz
     type: symlink
