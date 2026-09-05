@@ -5,7 +5,7 @@
 //! always evaluated inside one `copy_id`, never by combining folders.
 
 use crate::{FileProbe, LibraryDatabase, LibraryError};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -138,14 +138,136 @@ pub(crate) fn init_schema(conn: &Connection) -> Result<(), LibraryError> {
         );
         "#,
     )
-    .map_err(|e| LibraryError::Database(format!("purchase copies schema: {e}")))
+    .map_err(|e| LibraryError::Database(format!("purchase copies schema: {e}")))?;
+
+    // A short-lived race in the first additive-registry migration could import
+    // the same physical album folder twice. Heal those rows before enforcing
+    // the identity invariant so old profiles do not keep rendering duplicate
+    // copies forever.
+    let repaired = deduplicate_copy_identities(conn)?;
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_copies_identity
+         ON purchase_download_copies(album_id, format_id, resolved_album_folder)",
+        [],
+    )
+    .map_err(|e| LibraryError::Database(format!("purchase copy identity index: {e}")))?;
+    if repaired > 0 {
+        log::info!("Repaired {repaired} duplicate purchase download copy record(s)");
+    }
+    Ok(())
+}
+
+/// Merge duplicate physical identities without losing coverage. The newest
+/// row wins conflicts for one track; disjoint track and expected-track rows
+/// from older duplicates are folded into it before those rows are removed.
+fn deduplicate_copy_identities(conn: &Connection) -> Result<usize, LibraryError> {
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate).map_err(db_error)?;
+    let identities = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT album_id, format_id, resolved_album_folder
+                 FROM purchase_download_copies
+                 GROUP BY album_id, format_id, resolved_album_folder
+                 HAVING COUNT(*) > 1",
+            )
+            .map_err(db_error)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        rows
+    };
+
+    let mut removed = 0;
+    for (album_id, format_id, folder) in identities {
+        let copy_ids = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT copy_id FROM purchase_download_copies
+                     WHERE album_id = ?1 AND format_id = ?2 AND resolved_album_folder = ?3
+                     ORDER BY updated_at DESC, created_at DESC, copy_id",
+                )
+                .map_err(db_error)?;
+            let rows = stmt
+                .query_map(params![album_id, format_id, folder], |row| row.get(0))
+                .map_err(db_error)?
+                .collect::<Result<Vec<String>, _>>()
+                .map_err(db_error)?;
+            rows
+        };
+        let Some(keeper) = copy_ids.first() else {
+            continue;
+        };
+        tx.execute(
+            "UPDATE purchase_download_copies
+             SET created_at = (SELECT MIN(created_at) FROM purchase_download_copies
+                               WHERE album_id = ?2 AND format_id = ?3
+                                 AND resolved_album_folder = ?4),
+                 updated_at = (SELECT MAX(updated_at) FROM purchase_download_copies
+                               WHERE album_id = ?2 AND format_id = ?3
+                                 AND resolved_album_folder = ?4)
+             WHERE copy_id = ?1",
+            params![keeper, album_id, format_id, folder],
+        )
+        .map_err(db_error)?;
+
+        for duplicate in copy_ids.iter().skip(1) {
+            tx.execute(
+                "INSERT OR IGNORE INTO purchase_download_copy_expected_tracks(copy_id, track_id)
+                 SELECT ?1, track_id FROM purchase_download_copy_expected_tracks
+                 WHERE copy_id = ?2",
+                params![keeper, duplicate],
+            )
+            .map_err(db_error)?;
+            tx.execute(
+                "INSERT OR IGNORE INTO purchase_download_copy_tracks
+                 (copy_id, track_id, file_path, mime_type, container, sample_rate_hz,
+                  bit_depth, channels, file_size, modified_ns, last_verified_at)
+                 SELECT ?1, track_id, file_path, mime_type, container, sample_rate_hz,
+                        bit_depth, channels, file_size, modified_ns, last_verified_at
+                 FROM purchase_download_copy_tracks WHERE copy_id = ?2",
+                params![keeper, duplicate],
+            )
+            .map_err(db_error)?;
+            // Foreign keys are intentionally not enabled on the app's SQLite
+            // connections, so remove children explicitly before the parent.
+            tx.execute(
+                "DELETE FROM purchase_download_copy_expected_tracks WHERE copy_id = ?1",
+                [duplicate],
+            )
+            .map_err(db_error)?;
+            tx.execute(
+                "DELETE FROM purchase_download_copy_tracks WHERE copy_id = ?1",
+                [duplicate],
+            )
+            .map_err(db_error)?;
+            removed += tx
+                .execute(
+                    "DELETE FROM purchase_download_copies WHERE copy_id = ?1",
+                    [duplicate],
+                )
+                .map_err(db_error)?;
+        }
+    }
+    tx.commit().map_err(db_error)?;
+    Ok(removed)
 }
 
 /// One-time, filesystem-free import of the compatibility registry. Grouping by
 /// album + format + parent folder is what prevents an old split registry from
 /// becoming one fabricated complete copy.
 pub(crate) fn migrate_legacy_registry(conn: &Connection) -> Result<(), LibraryError> {
-    let done = conn
+    // Serialize the marker check with the import itself. A process-local schema
+    // lock cannot protect two QBZ processes opening the same profile at once.
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate).map_err(db_error)?;
+    let done = tx
         .query_row(
             "SELECT value FROM library_kv WHERE key = ?1",
             [LEGACY_MIGRATION_KEY],
@@ -155,10 +277,10 @@ pub(crate) fn migrate_legacy_registry(conn: &Connection) -> Result<(), LibraryEr
         .map_err(|e| LibraryError::Database(format!("read purchase migration marker: {e}")))?
         .is_some();
     if done {
-        return Ok(());
+        return tx.commit().map_err(db_error);
     }
 
-    let mut stmt = conn
+    let mut stmt = tx
         .prepare(
             "SELECT track_id, format_id, album_id, file_path
              FROM downloaded_purchases WHERE album_id IS NOT NULL
@@ -191,28 +313,33 @@ pub(crate) fn migrate_legacy_registry(conn: &Connection) -> Result<(), LibraryEr
     }
 
     let now = unix_now();
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|e| LibraryError::Database(format!("begin purchase migration: {e}")))?;
     for ((album_id, format_id, folder), tracks) in groups {
         let copy_id = Uuid::new_v4().to_string();
         tx.execute(
-            "INSERT INTO purchase_download_copies
+            "INSERT OR IGNORE INTO purchase_download_copies
              (copy_id, album_id, format_id, resolved_album_folder, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
             params![copy_id, album_id, format_id, folder, now],
         )
         .map_err(|e| LibraryError::Database(format!("migrate purchase copy: {e}")))?;
+        let effective_copy_id: String = tx
+            .query_row(
+                "SELECT copy_id FROM purchase_download_copies
+                 WHERE album_id = ?1 AND format_id = ?2 AND resolved_album_folder = ?3",
+                params![album_id, format_id, folder],
+                |row| row.get(0),
+            )
+            .map_err(|e| LibraryError::Database(format!("resolve migrated purchase copy: {e}")))?;
         for (track_id, file_path) in tracks {
             let container = Path::new(&file_path)
                 .extension()
                 .and_then(|value| value.to_str())
                 .map(|value| value.to_ascii_lowercase());
             tx.execute(
-                "INSERT INTO purchase_download_copy_tracks
+                "INSERT OR IGNORE INTO purchase_download_copy_tracks
                  (copy_id, track_id, file_path, container, file_size)
                  VALUES (?1, ?2, ?3, ?4, 0)",
-                params![copy_id, track_id, file_path, container],
+                params![effective_copy_id, track_id, file_path, container],
             )
             .map_err(|e| LibraryError::Database(format!("migrate purchase track: {e}")))?;
         }
@@ -382,6 +509,61 @@ impl LibraryDatabase {
         copy_id: &str,
     ) -> Result<Vec<PurchaseDownloadCopyTrack>, LibraryError> {
         self.with_connection(|conn| select_copy_tracks(conn, copy_id))
+    }
+
+    /// Forget one inventory row while leaving the user's files untouched.
+    /// Any compatibility pointers that still name paths from this exact copy
+    /// are removed with it; pointers promoted from another copy survive.
+    pub fn delete_purchase_copy_record(&self, copy_id: &str) -> Result<bool, LibraryError> {
+        self.with_connection(|conn| {
+            let Some(copy) = select_copy(conn, copy_id)? else {
+                return Ok(false);
+            };
+            let tracks = select_copy_tracks(conn, copy_id)?;
+            let tx = conn.unchecked_transaction().map_err(db_error)?;
+            for track in &tracks {
+                tx.execute(
+                    "DELETE FROM downloaded_purchases
+                     WHERE track_id = ?1 AND format_id = ?2 AND album_id = ?3 AND file_path = ?4",
+                    params![
+                        track.track_id,
+                        copy.format_id,
+                        copy.album_id,
+                        track.file_path
+                    ],
+                )
+                .map_err(db_error)?;
+            }
+            tx.execute(
+                "DELETE FROM purchase_download_copy_expected_tracks WHERE copy_id = ?1",
+                [copy_id],
+            )
+            .map_err(db_error)?;
+            tx.execute(
+                "DELETE FROM purchase_download_copy_tracks WHERE copy_id = ?1",
+                [copy_id],
+            )
+            .map_err(db_error)?;
+            let removed = tx
+                .execute(
+                    "DELETE FROM purchase_download_copies WHERE copy_id = ?1",
+                    [copy_id],
+                )
+                .map_err(db_error)?
+                > 0;
+            tx.execute(
+                "DELETE FROM purchase_album_playback_preferences
+                 WHERE album_id = ?1 AND mode = 'purchase' AND format_id = ?2
+                   AND NOT EXISTS (
+                     SELECT 1 FROM purchase_download_copies
+                     WHERE album_id = ?1 AND format_id = ?2
+                   )",
+                params![copy.album_id, copy.format_id],
+            )
+            .map_err(db_error)?;
+            tx.commit().map_err(db_error)?;
+            Ok(removed)
+        })
     }
 
     /// Atomically point the compatibility registry at `copy_id`, but only if
@@ -875,27 +1057,34 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let db = LibraryDatabase::open(&root.path().join("library.db")).unwrap();
 
+        let complete_dir = root.path().join("complete");
+        let partial_dir = root.path().join("partial");
+        let legacy_dir = root.path().join("legacy");
+        std::fs::create_dir_all(&complete_dir).unwrap();
+        std::fs::create_dir_all(&partial_dir).unwrap();
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+
         let complete = db
-            .create_purchase_copy_with_expected_tracks("album", 55, root.path(), &[1, 2])
+            .create_purchase_copy_with_expected_tracks("album", 55, &complete_dir, &[1, 2])
             .unwrap();
         for id in [1, 2] {
-            let path = root.path().join(format!("complete-{id}.dsf"));
+            let path = complete_dir.join(format!("complete-{id}.dsf"));
             std::fs::write(&path, b"dsd").unwrap();
             db.upsert_purchase_copy_track(&track(&complete.copy_id, id, &path))
                 .unwrap();
         }
 
         let partial = db
-            .create_purchase_copy_with_expected_tracks("album", 55, root.path(), &[1, 2])
+            .create_purchase_copy_with_expected_tracks("album", 55, &partial_dir, &[1, 2])
             .unwrap();
-        let partial_path = root.path().join("partial-1.dsf");
+        let partial_path = partial_dir.join("partial-1.dsf");
         std::fs::write(&partial_path, b"dsd").unwrap();
         db.upsert_purchase_copy_track(&track(&partial.copy_id, 1, &partial_path))
             .unwrap();
 
-        let legacy = db.create_purchase_copy("album", 55, root.path()).unwrap();
+        let legacy = db.create_purchase_copy("album", 55, &legacy_dir).unwrap();
         for id in [1, 2] {
-            let path = root.path().join(format!("legacy-{id}.dsf"));
+            let path = legacy_dir.join(format!("legacy-{id}.dsf"));
             std::fs::write(&path, b"dsd").unwrap();
             db.upsert_purchase_copy_track(&track(&legacy.copy_id, id, &path))
                 .unwrap();
@@ -911,7 +1100,7 @@ mod tests {
             .unwrap()
             .is_empty());
 
-        std::fs::remove_file(root.path().join("complete-2.dsf")).unwrap();
+        std::fs::remove_file(complete_dir.join("complete-2.dsf")).unwrap();
         assert!(db
             .complete_healthy_purchase_track_candidates("album", 55, 1)
             .unwrap()
@@ -943,5 +1132,128 @@ mod tests {
             copies[0].resolved_album_folder,
             copies[1].resolved_album_folder
         );
+    }
+
+    #[test]
+    fn concurrent_legacy_migrations_import_one_physical_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let db_path = root.path().join("library.db");
+        {
+            let db = LibraryDatabase::open(&db_path).unwrap();
+            db.mark_purchase_downloaded(1, Some("album"), "/a/01.flac", 7)
+                .unwrap();
+            db.with_connection(|conn| {
+                conn.execute("DELETE FROM purchase_download_copy_tracks", [])
+                    .unwrap();
+                conn.execute("DELETE FROM purchase_download_copies", [])
+                    .unwrap();
+                conn.execute(
+                    "DELETE FROM library_kv WHERE key = ?1",
+                    [LEGACY_MIGRATION_KEY],
+                )
+                .unwrap();
+            });
+        }
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let path = db_path.clone();
+            let barrier = barrier.clone();
+            workers.push(std::thread::spawn(move || {
+                let conn = Connection::open(path).unwrap();
+                conn.busy_timeout(std::time::Duration::from_secs(2))
+                    .unwrap();
+                barrier.wait();
+                migrate_legacy_registry(&conn).unwrap();
+            }));
+        }
+        barrier.wait();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+
+        let db = LibraryDatabase::open(&db_path).unwrap();
+        assert_eq!(db.get_purchase_copies_for_album("album").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn reopening_repairs_duplicate_physical_identities_without_losing_coverage() {
+        let root = tempfile::tempdir().unwrap();
+        let db_path = root.path().join("library.db");
+        let folder = root.path().join("same-copy");
+        std::fs::create_dir_all(&folder).unwrap();
+        let first_path = folder.join("01.flac");
+        let second_path = folder.join("02.flac");
+        std::fs::write(&first_path, b"one").unwrap();
+        std::fs::write(&second_path, b"two").unwrap();
+        {
+            let db = LibraryDatabase::open(&db_path).unwrap();
+            db.with_connection(|conn| {
+                conn.execute("DROP INDEX idx_purchase_copies_identity", [])
+                    .unwrap();
+                for (copy_id, updated_at) in [("old", 10_i64), ("new", 20_i64)] {
+                    conn.execute(
+                        "INSERT INTO purchase_download_copies
+                         (copy_id, album_id, format_id, resolved_album_folder, created_at, updated_at)
+                         VALUES (?1, 'album', 7, ?2, 1, ?3)",
+                        params![copy_id, folder.to_string_lossy(), updated_at],
+                    )
+                    .unwrap();
+                }
+                for (copy_id, track_id, path) in [
+                    ("old", 1_i64, &first_path),
+                    ("new", 2_i64, &second_path),
+                ] {
+                    conn.execute(
+                        "INSERT INTO purchase_download_copy_tracks
+                         (copy_id, track_id, file_path, file_size)
+                         VALUES (?1, ?2, ?3, 3)",
+                        params![copy_id, track_id, path.to_string_lossy()],
+                    )
+                    .unwrap();
+                    conn.execute(
+                        "INSERT INTO purchase_download_copy_expected_tracks(copy_id, track_id)
+                         VALUES (?1, ?2)",
+                        params![copy_id, track_id],
+                    )
+                    .unwrap();
+                }
+            });
+        }
+
+        let db = LibraryDatabase::open(&db_path).unwrap();
+        let copies = db.get_purchase_copies_for_album("album").unwrap();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(copies[0].copy_id, "new", "the newest row is the keeper");
+        assert_eq!(db.get_purchase_copy_tracks("new").unwrap().len(), 2);
+        assert_eq!(
+            db.get_purchase_copy_expected_track_ids("new").unwrap(),
+            vec![1, 2]
+        );
+        assert!(db.create_purchase_copy("album", 7, &folder).is_err());
+    }
+
+    #[test]
+    fn forgetting_a_copy_removes_only_its_registry_and_leaves_files() {
+        let root = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&root.path().join("library.db")).unwrap();
+        let folder = root.path().join("copy");
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("01.flac");
+        std::fs::write(&path, b"one").unwrap();
+        let copy = db
+            .create_purchase_copy_with_expected_tracks("album", 7, &folder, &[1])
+            .unwrap();
+        db.upsert_purchase_copy_track(&track(&copy.copy_id, 1, &path))
+            .unwrap();
+        assert!(db
+            .promote_complete_purchase_copy(&copy.copy_id, &[1])
+            .unwrap());
+
+        assert!(db.delete_purchase_copy_record(&copy.copy_id).unwrap());
+        assert!(path.exists(), "forgetting never deletes the user's file");
+        assert!(db.get_purchase_copy(&copy.copy_id).unwrap().is_none());
+        assert!(db.get_downloaded_purchase_formats().unwrap().is_empty());
     }
 }

@@ -2278,6 +2278,24 @@ msgstr "Download finished"
 msgid "Not now"
 msgstr "Not now"
 
+msgid "Show location"
+msgstr "Show location"
+
+msgid "Remove from Local Library"
+msgstr "Remove from Local Library"
+
+msgid "Forget download record"
+msgstr "Forget download record"
+
+msgid "Could not open that folder."
+msgstr "Could not open that folder."
+
+msgid "Could not remove that library folder."
+msgstr "Could not remove that library folder."
+
+msgid "Could not forget that download."
+msgstr "Could not forget that download."
+
 msgid "Shuffle: On"
 msgstr "Shuffle: On"
 

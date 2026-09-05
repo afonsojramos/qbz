@@ -1425,6 +1425,24 @@ msgstr "Jetzt mit der Wiedergabe beginnen?"
 msgid "Not now"
 msgstr "Jetzt nicht"
 
+msgid "Show location"
+msgstr "Speicherort anzeigen"
+
+msgid "Remove from Local Library"
+msgstr "Aus lokaler Bibliothek entfernen"
+
+msgid "Forget download record"
+msgstr "Download-Eintrag vergessen"
+
+msgid "Could not open that folder."
+msgstr "Dieser Ordner konnte nicht geöffnet werden."
+
+msgid "Could not remove that library folder."
+msgstr "Dieser Bibliotheksordner konnte nicht entfernt werden."
+
+msgid "Could not forget that download."
+msgstr "Dieser Download konnte nicht vergessen werden."
+
 msgid "Create radio"
 msgstr "Radio erstellen"
 

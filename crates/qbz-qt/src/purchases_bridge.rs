@@ -1,6 +1,6 @@
 //! QbzPurchases — the Purchases domain bridge (contract §G.1).
 //!
-//! Two documents and a publish counter, twenty invokables. The controller is
+//! Two documents and a publish counter. The controller is
 //! `purchases_qt.rs`; this file is glue and nothing else, exactly like
 //! `musician_bridge.rs`.
 //!
@@ -164,6 +164,11 @@ pub mod qbz_purchases_bridge {
             track_ids_json: QString,
         );
 
+        /// Purchase detail Play: prefer the highest complete healthy local
+        /// copy, then enter the ordinary album playback pipeline.
+        #[qinvokable]
+        fn play_album(self: Pin<&mut QbzPurchases>);
+
         /// Read-only AlbumCard entitlement lookup. `revision` is a QML binding
         /// dependency; the controller reads the process-wide index.
         #[qinvokable]
@@ -228,6 +233,19 @@ pub mod qbz_purchases_bridge {
         /// Register/refresh one exact copy through Local Library's typed API.
         #[qinvokable]
         fn add_copy_to_library(self: Pin<&mut QbzPurchases>, copy_id: QString);
+
+        /// Open the registered copy folder in the platform file browser.
+        #[qinvokable]
+        fn show_copy_location(self: Pin<&mut QbzPurchases>, copy_id: QString);
+
+        /// Remove this exact copy folder from Local Library, preserving files
+        /// and the purchase-copy inventory.
+        #[qinvokable]
+        fn remove_copy_from_library(self: Pin<&mut QbzPurchases>, copy_id: QString);
+
+        /// Forget an unindexed download record without deleting user files.
+        #[qinvokable]
+        fn forget_copy_record(self: Pin<&mut QbzPurchases>, copy_id: QString);
 
         /// Acknowledge the one-shot post-batch modal without mutating the copy.
         #[qinvokable]
@@ -361,6 +379,10 @@ impl qbz_purchases_bridge::QbzPurchases {
         );
     }
 
+    pub fn play_album(self: Pin<&mut Self>) {
+        crate::purchases_qt::play_album();
+    }
+
     pub fn is_album_purchased(&self, album_id: QString, revision: i32) -> bool {
         crate::purchases_qt::is_album_purchased(&album_id.to_string(), revision)
     }
@@ -409,6 +431,18 @@ impl qbz_purchases_bridge::QbzPurchases {
 
     pub fn add_copy_to_library(self: Pin<&mut Self>, copy_id: QString) {
         crate::purchases_qt::add_copy_to_library(copy_id.to_string());
+    }
+
+    pub fn show_copy_location(self: Pin<&mut Self>, copy_id: QString) {
+        crate::purchases_qt::show_copy_location(copy_id.to_string());
+    }
+
+    pub fn remove_copy_from_library(self: Pin<&mut Self>, copy_id: QString) {
+        crate::purchases_qt::remove_copy_from_library(copy_id.to_string());
+    }
+
+    pub fn forget_copy_record(self: Pin<&mut Self>, copy_id: QString) {
+        crate::purchases_qt::forget_copy_record(copy_id.to_string());
     }
 
     pub fn dismiss_batch_result(self: Pin<&mut Self>, copy_id: QString) {

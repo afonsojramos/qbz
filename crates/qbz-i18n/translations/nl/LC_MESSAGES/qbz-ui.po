@@ -1425,6 +1425,24 @@ msgstr "Nu beginnen met afspelen?"
 msgid "Not now"
 msgstr "Niet nu"
 
+msgid "Show location"
+msgstr "Locatie tonen"
+
+msgid "Remove from Local Library"
+msgstr "Uit lokale bibliotheek verwijderen"
+
+msgid "Forget download record"
+msgstr "Downloadregistratie vergeten"
+
+msgid "Could not open that folder."
+msgstr "Deze map kon niet worden geopend."
+
+msgid "Could not remove that library folder."
+msgstr "Deze bibliotheekmap kon niet worden verwijderd."
+
+msgid "Could not forget that download."
+msgstr "Deze download kon niet worden vergeten."
+
 msgid "Create radio"
 msgstr "Radio aanmaken"
 
