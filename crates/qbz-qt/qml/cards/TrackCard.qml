@@ -28,6 +28,9 @@ Rectangle {
     property string artworkUrl: ""
     // ADR-008 source glyph (local/Plex) — the Library All-feed arm.
     property bool showSourceBadge: false
+    // Library injects its shared confirmation host. Other TrackCard surfaces
+    // never receive `releaseUnavailable`, so the callback remains unused.
+    property var confirmReleaseRemoval: null
 
     color: "transparent"
 
@@ -298,6 +301,7 @@ Rectangle {
         var t = QbzSession.tr
         var r = QbzSession.trRev
         var m = []
+        var releaseGone = root.item.releaseUnavailable === true
         if (!root.pulledDead) {
             m.push({ "label": t("Play", r), "icon": "play-fill", "action": "play" })
             m.push({ "label": t("Play next", r), "icon": "list-start", "action": "next" })
@@ -305,10 +309,16 @@ Rectangle {
             m.push({ "label": t("Add to queue", r), "icon": "list-end", "action": "queue" })
         }
         if (root.item.artistId) m.push({ "label": t("Go to artist", r), "icon": "user", "action": "go-artist" })
-        if (root.item.albumId) m.push({ "label": t("Go to album", r), "icon": "disc", "action": "go-album" })
-        if (!root.pulledDead)
-            m.push({ "label": root.favorite ? t("Remove from Library", r) : t("Add to Library", r),
-                     "icon": root.favorite ? "heart-filled" : "heart", "action": "favorite" })
+        if (root.item.albumId && !releaseGone)
+            m.push({ "label": t("Go to album", r), "icon": "disc", "action": "go-album" })
+        m.push({ "label": root.favorite ? t("Remove from Library", r) : t("Add to Library", r),
+                 "icon": root.favorite ? "heart-filled" : "heart", "action": "favorite" })
+        if (releaseGone) {
+            m.push({ "label": t("Look for better replacement", r),
+                     "icon": "search", "action": "find-release" })
+            m.push({ "label": t("Remove all favorites from this release", r),
+                     "icon": "trash-2", "action": "remove-release-favorites" })
+        }
         return m
     }
     function trackAction(a) {
@@ -322,5 +332,19 @@ Rectangle {
         else if (a === "go-artist") QbzArtist.openArtist(root.item.artistId)
         else if (a === "go-album") QbzAlbum.openAlbum(root.item.albumId)
         else if (a === "favorite") root.toggleFavorite()
+        else if (a === "find-release") QbzTrackReplace.openRelease(JSON.stringify({
+            "targetKind": "track",
+            "albumId": root.item.albumId || "",
+            "albumTitle": root.item.album || "",
+            "trackId": root.item.id || "",
+            "trackTitle": root.item.title || "",
+            "artist": root.item.artist || root.item.albumArtist || "",
+            "albumArtist": root.item.albumArtist || root.item.artist || "",
+            "isrc": root.item.isrc || "",
+            "durationSecs": root.item.durationSecs || 0
+        }))
+        else if (a === "remove-release-favorites"
+                 && typeof root.confirmReleaseRemoval === "function")
+            root.confirmReleaseRemoval(root.item)
     }
 }

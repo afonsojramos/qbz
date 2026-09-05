@@ -2343,3 +2343,60 @@ msgstr "Open Qobuz links in QBZ"
 
 msgid "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
 msgstr "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
+
+msgid "Look for better replacement"
+msgstr "Look for better replacement"
+
+msgid "Remove all favorites from this release"
+msgstr "Remove all favorites from this release"
+
+msgid "Remove all favorites from this release?"
+msgstr "Remove all favorites from this release?"
+
+msgid "Remove the album and every track from this release from your Library?"
+msgstr "Remove the album and every track from this release from your Library?"
+
+msgid "No replacement releases found"
+msgstr "No replacement releases found"
+
+msgid "Choosing a result opens the release. Your existing favorites are not changed."
+msgstr "Choosing a result opens the release. Your existing favorites are not changed."
+
+msgid "No favorites from this release to remove"
+msgstr "No favorites from this release to remove"
+
+msgid "Favorites removed from this release"
+msgstr "Favorites removed from this release"
+
+msgid "Could not remove favorites from this release"
+msgstr "Could not remove favorites from this release"
+
+msgid "Some favorites could not be removed"
+msgstr "Some favorites could not be removed"
+
+msgid "Replace in Library"
+msgstr "Replace in Library"
+
+msgid "Replacing favorite..."
+msgstr "Replacing favorite..."
+
+msgid "The selected release replaces the unavailable album favorite."
+msgstr "The selected release replaces the unavailable album favorite."
+
+msgid "The matching track from the selected release replaces the unavailable favorite."
+msgstr "The matching track from the selected release replaces the unavailable favorite."
+
+msgid "Could not open the selected release"
+msgstr "Could not open the selected release"
+
+msgid "Could not find a matching track in this release"
+msgstr "Could not find a matching track in this release"
+
+msgid "Could not add the replacement favorite"
+msgstr "Could not add the replacement favorite"
+
+msgid "Favorite replaced"
+msgstr "Favorite replaced"
+
+msgid "The replacement was added, but the unavailable favorite could not be removed"
+msgstr "The replacement was added, but the unavailable favorite could not be removed"

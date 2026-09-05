@@ -36,6 +36,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
+use futures_util::stream::{self, StreamExt};
 use qbz_app::settings::local_favorites::{LocalFavItem, LocalFavoritesService, DB_FILE_NAME};
 use qbz_app::shell::AppRuntime;
 use qbz_app::user_data::UserDataPaths;
@@ -64,13 +65,26 @@ pub struct FeedItem {
     pub album: String,
     #[serde(rename = "albumId")]
     pub album_id: String,
+    /// Track rows only: the release's MAIN artist name. `artist` is the
+    /// per-track performer and can differ on classical/features; replacement
+    /// release ranking must compare like with like.
+    #[serde(
+        default,
+        rename = "albumArtist",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub album_artist: String,
     /// Track rows only: the id of the ALBUM's main artist, beside the
     /// performer id in `artist_id`. A favourited track is a member of an
     /// artist's "In library" tab through EITHER — `artist_id` alone is the
     /// track's performer, which on features, interpreters and re-credited
     /// remasters is not the artist whose page is open (issue #737 round,
     /// contract §5). Skipped when empty so album/artist rows pay nothing.
-    #[serde(default, rename = "albumArtistId", skip_serializing_if = "String::is_empty")]
+    #[serde(
+        default,
+        rename = "albumArtistId",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub album_artist_id: String,
     #[serde(rename = "imageUrl")]
     pub image_url: String,
@@ -109,6 +123,15 @@ pub struct FeedItem {
         skip_serializing_if = "std::ops::Not::not"
     )]
     pub not_streamable: bool,
+    /// This track's owning Qobuz release is itself confirmed withdrawn. False
+    /// also covers UNKNOWN: transport/auth/parse failures must not hide a
+    /// navigation action or expose destructive release-wide cleanup.
+    #[serde(
+        default,
+        rename = "releaseUnavailable",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub release_unavailable: bool,
     /// The persisted local-favorite snapshot no longer resolves in the
     /// active Local Library.  Kept separate from `not_streamable`: a Qobuz
     /// withdrawal may still play from a complete download, while a missing
@@ -127,6 +150,13 @@ pub struct FeedItem {
     pub genre: String,
     pub year: String,
     pub duration: String,
+    /// Matching evidence carried by Qobuz favourite-track rows. Omitted for
+    /// every other feed kind so the high-cardinality mixed document only pays
+    /// for data the replacement picker can actually use.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub isrc: String,
+    #[serde(default, rename = "durationSecs", skip_serializing_if = "is_zero_u32")]
+    pub duration_secs: u32,
     pub explicit: bool,
     #[serde(rename = "playlistOwned")]
     pub playlist_owned: bool,
@@ -154,6 +184,10 @@ pub struct FeedItem {
 /// `skip_serializing_if` predicate for the default-false flags above.
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 fn is_zero_i32(value: &i32) -> bool {
@@ -436,6 +470,8 @@ fn map_track(track: Track) -> FeedItem {
     // while it was still there.
     let not_streamable = !track.is_streamable();
     let track_id = track.id.to_string();
+    let isrc = track.isrc.clone().unwrap_or_default();
+    let duration_secs = track.duration;
     let cache_status = if crate::offline_qt::is_cached(&track_id) {
         3
     } else {
@@ -454,7 +490,7 @@ fn map_track(track: Track) -> FeedItem {
     let album = track
         .album
         .as_ref()
-        .map(|a| a.title.clone())
+        .map(|a| crate::album_qt::format_album_title(&a.title, a.version.as_deref()))
         .unwrap_or_default();
     let album_id = track
         .album
@@ -473,6 +509,12 @@ fn map_track(track: Track) -> FeedItem {
         .and_then(|a| a.artist.as_ref())
         .map(|x| x.id.to_string())
         .unwrap_or_default();
+    let album_artist = track
+        .album
+        .as_ref()
+        .and_then(|a| a.artist.as_ref())
+        .map(|x| x.name.clone())
+        .unwrap_or_default();
     let (artist, artist_id) = track
         .performer
         .map(|p| (p.name, p.id.to_string()))
@@ -488,9 +530,12 @@ fn map_track(track: Track) -> FeedItem {
         artist_id,
         album,
         album_id,
+        album_artist,
         album_artist_id,
         genre,
-        duration: mmss(track.duration),
+        duration: mmss(duration_secs),
+        isrc,
+        duration_secs,
         quality_tier: home_qt::quality_tier_from_depth(track.maximum_bit_depth).to_string(),
         quality_detail: home_qt::quality_detail_from_parts(
             track.maximum_bit_depth,
@@ -742,6 +787,124 @@ async fn ready_offline_album_track_counts() -> std::collections::HashMap<String,
     counts
 }
 
+/// Three-way release verdict. `Unknown` is deliberately not a bool: collapsing
+/// a terse embedded album or a failed probe into `Unavailable` would hide a
+/// valid Go-to-album action and expose a destructive bulk action on a network
+/// failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReleaseAvailability {
+    Available,
+    Unavailable,
+    Unknown,
+}
+
+fn embedded_release_availability(track: &Track) -> ReleaseAvailability {
+    let Some(album) = track.album.as_ref() else {
+        return ReleaseAvailability::Unknown;
+    };
+    match album.streamable {
+        Some(true) => ReleaseAvailability::Available,
+        Some(false) if album.is_upcoming() => ReleaseAvailability::Available,
+        Some(false) => ReleaseAvailability::Unavailable,
+        None => ReleaseAvailability::Unknown,
+    }
+}
+
+/// A successful `/album/get` can prove a release-wide withdrawal either at
+/// the album level or through a non-empty track list in which every row is an
+/// explicit, non-upcoming withdrawal. Absence is never proof.
+fn fetched_release_unavailable(album: &Album) -> bool {
+    if qbz_models::types::upcoming_now(None, album.release_date_stream.as_deref()) {
+        return false;
+    }
+    if album.streamable == Some(false) {
+        return true;
+    }
+    album
+        .tracks
+        .as_ref()
+        .map(|tracks| {
+            !tracks.items.is_empty()
+                && tracks
+                    .items
+                    .iter()
+                    .all(|track| track.streamable == Some(false) && !track.is_upcoming())
+        })
+        .unwrap_or(false)
+}
+
+async fn probe_release_availability(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    album_id: String,
+) -> (String, ReleaseAvailability) {
+    let verdict = match runtime.core().get_album(&album_id).await {
+        Ok(album) if fetched_release_unavailable(&album) => ReleaseAvailability::Unavailable,
+        Ok(_) => ReleaseAvailability::Available,
+        Err(qbz_core::CoreError::Api(error)) if error.is_album_unavailable(&album_id) => {
+            ReleaseAvailability::Unavailable
+        }
+        Err(error) => {
+            log::warn!(
+                "[qbz-qt] library release availability probe {album_id} failed; keeping it unknown: {error}"
+            );
+            ReleaseAvailability::Unknown
+        }
+    };
+    (album_id, verdict)
+}
+
+/// Resolve release-wide availability only for favourite tracks already known
+/// to be unavailable. Explicit embedded answers cost no request; unknown album
+/// ids are de-duplicated and probed with a bounded fan-out.
+async fn unavailable_release_ids(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    tracks: &[Track],
+) -> HashSet<String> {
+    let mut verdicts: HashMap<String, ReleaseAvailability> = HashMap::new();
+    for track in tracks.iter().filter(|track| !track.is_streamable()) {
+        let Some(album) = track.album.as_ref().filter(|album| !album.id.is_empty()) else {
+            continue;
+        };
+        let incoming = embedded_release_availability(track);
+        verdicts
+            .entry(album.id.clone())
+            .and_modify(|current| {
+                // A positive availability signal wins over a contradictory
+                // tombstone signal; refusing valid navigation is the less
+                // recoverable mistake. Otherwise preserve unavailable over
+                // unknown.
+                *current = match (*current, incoming) {
+                    (ReleaseAvailability::Available, _) | (_, ReleaseAvailability::Available) => {
+                        ReleaseAvailability::Available
+                    }
+                    (ReleaseAvailability::Unavailable, _)
+                    | (_, ReleaseAvailability::Unavailable) => ReleaseAvailability::Unavailable,
+                    _ => ReleaseAvailability::Unknown,
+                }
+            })
+            .or_insert(incoming);
+    }
+
+    let to_probe: Vec<String> = verdicts
+        .iter()
+        .filter(|(_, verdict)| **verdict == ReleaseAvailability::Unknown)
+        .map(|(id, _)| id.clone())
+        .collect();
+    let probed = stream::iter(to_probe)
+        .map(|album_id| probe_release_availability(runtime, album_id))
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await;
+    for (id, verdict) in probed {
+        verdicts.insert(id, verdict);
+    }
+
+    verdicts
+        .into_iter()
+        .filter_map(|(id, verdict)| (verdict == ReleaseAvailability::Unavailable).then_some(id))
+        .collect()
+}
+
 /// The whole library load: fan out, normalize, merge (library_all.rs
 /// ordering semantics), compute the tab counts.
 pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<usize, String> {
@@ -853,9 +1016,11 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
     let mut feed: Vec<FeedItem> = Vec::new();
 
     let tracks: Vec<Track> = parse_items(raw_tracks, "track");
+    let unavailable_releases = unavailable_release_ids(runtime, &tracks).await;
     let n = tracks.len();
-    for (i, item) in tracks.into_iter().map(map_track).enumerate() {
-        let mut item = item;
+    for (i, track) in tracks.into_iter().enumerate() {
+        let mut item = map_track(track);
+        item.release_unavailable = unavailable_releases.contains(&item.album_id);
         item.added_rank = rank(i, n);
         feed.push(item);
     }
@@ -1353,7 +1518,10 @@ async fn fetch_purchases(
                         a.image.best().cloned().unwrap_or_default(),
                         a.title.clone(),
                         a.id.clone(),
-                        a.artist.as_ref().map(|x| x.id.to_string()).unwrap_or_default(),
+                        a.artist
+                            .as_ref()
+                            .map(|x| x.id.to_string())
+                            .unwrap_or_default(),
                     )
                 })
                 .unwrap_or_default();
@@ -1541,6 +1709,44 @@ pub async fn toggle_favorite(
             Some(current)
         }
     }
+}
+
+/// Every server-side favourite owned by one Qobuz release: its album heart and
+/// the hearts on its member tracks. Purchase representatives can carry a heart
+/// too, so membership is read from `is_favorite` as well as the favourites
+/// group. `(kind,id)` de-duplication prevents a favourite+purchase duplicate
+/// from issuing the same delete twice.
+fn release_favorite_targets_from(feed: &[FeedItem], album_id: &str) -> Vec<(String, String)> {
+    let mut seen = HashSet::new();
+    let mut targets = Vec::new();
+    for item in feed.iter().filter(|item| {
+        item.source == "qobuz"
+            && (item.is_favorite || item.group == "favorites")
+            && ((item.kind == "album" && item.id == album_id)
+                || (item.kind == "track" && item.album_id == album_id))
+    }) {
+        let key = (item.kind.clone(), item.id.clone());
+        if seen.insert(key.clone()) {
+            targets.push(key);
+        }
+    }
+    targets
+}
+
+pub(crate) fn release_favorite_targets(album_id: &str) -> Vec<(String, String)> {
+    let mut targets = with_library(|data| release_favorite_targets_from(&data.feed, album_id))
+        .unwrap_or_default();
+    // A freshly-set album heart can be in the O(1) cache before a Library row
+    // has been fetched/reconciled. Include it without taking the LIBRARY lock
+    // recursively through `is_favorite`.
+    if crate::fav_cache_qt::is_favorite("album", album_id)
+        && !targets
+            .iter()
+            .any(|(kind, id)| kind == "album" && id == album_id)
+    {
+        targets.push(("album".into(), album_id.into()));
+    }
+    targets
 }
 
 /// The playlist heart is a qbz-LOCAL flag, never a Qobuz favorite — the
@@ -2369,6 +2575,106 @@ mod tests {
         }
     }
 
+    #[test]
+    fn embedded_release_classification_is_three_way_and_future_safe() {
+        let unknown: Track =
+            serde_json::from_str(r#"{"id":1,"streamable":false,"album":{"id":"a","title":"A"}}"#)
+                .unwrap();
+        assert_eq!(
+            embedded_release_availability(&unknown),
+            ReleaseAvailability::Unknown
+        );
+
+        let live: Track = serde_json::from_str(
+            r#"{"id":1,"streamable":false,"album":{"id":"a","title":"A","streamable":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            embedded_release_availability(&live),
+            ReleaseAvailability::Available
+        );
+
+        let gone: Track = serde_json::from_str(
+            r#"{"id":1,"streamable":false,"album":{"id":"a","title":"A","streamable":false}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            embedded_release_availability(&gone),
+            ReleaseAvailability::Unavailable
+        );
+
+        let future: Track = serde_json::from_str(
+            r#"{"id":1,"streamable":false,"album":{"id":"a","title":"A","streamable":false,"release_date_stream":"2999-01-01"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            embedded_release_availability(&future),
+            ReleaseAvailability::Available
+        );
+    }
+
+    #[test]
+    fn fetched_release_needs_positive_withdrawal_evidence() {
+        let missing_signal: Album = serde_json::from_str(r#"{"id":"a","title":"A"}"#).unwrap();
+        assert!(!fetched_release_unavailable(&missing_signal));
+
+        let album_false: Album =
+            serde_json::from_str(r#"{"id":"a","title":"A","streamable":false}"#).unwrap();
+        assert!(fetched_release_unavailable(&album_false));
+
+        let all_tracks_false: Album = serde_json::from_str(
+            r#"{"id":"a","title":"A","streamable":true,"tracks":{"items":[{"id":1,"streamable":false},{"id":2,"streamable":false}],"total":2}}"#,
+        )
+        .unwrap();
+        assert!(fetched_release_unavailable(&all_tracks_false));
+
+        let one_live: Album = serde_json::from_str(
+            r#"{"id":"a","title":"A","streamable":true,"tracks":{"items":[{"id":1,"streamable":false},{"id":2,"streamable":true}],"total":2}}"#,
+        )
+        .unwrap();
+        assert!(!fetched_release_unavailable(&one_live));
+    }
+
+    #[test]
+    fn release_cleanup_targets_album_and_tracks_once_but_not_purchases_alone() {
+        let mut album_favorite = album("old-release");
+        album_favorite.source = "qobuz".into();
+        album_favorite.group = "favorites".into();
+        album_favorite.is_favorite = true;
+
+        let mut album_purchase_duplicate = album_favorite.clone();
+        album_purchase_duplicate.group = "purchases".into();
+
+        let mut favorite_track = track("11", "One");
+        favorite_track.source = "qobuz".into();
+        favorite_track.group = "favorites".into();
+        favorite_track.album_id = "old-release".into();
+        favorite_track.is_favorite = true;
+
+        let mut purchase_only = track("12", "Two");
+        purchase_only.source = "qobuz".into();
+        purchase_only.group = "purchases".into();
+        purchase_only.album_id = "old-release".into();
+        purchase_only.is_favorite = false;
+
+        let targets = release_favorite_targets_from(
+            &[
+                album_favorite,
+                album_purchase_duplicate,
+                favorite_track,
+                purchase_only,
+            ],
+            "old-release",
+        );
+        assert_eq!(
+            targets,
+            vec![
+                ("album".to_string(), "old-release".to_string()),
+                ("track".to_string(), "11".to_string()),
+            ]
+        );
+    }
+
     /// A server album key must route to the LOCAL detail view.
     ///
     /// The regression this pins: `open_album` asks `is_local_feed_id`, which
@@ -2631,7 +2937,13 @@ mod tests {
 
     // --- Artist page "In library" membership (#737 round, contract §3) ------
 
-    fn owned(kind: &str, id: &str, group: &str, artist_id: &str, album_artist_id: &str) -> FeedItem {
+    fn owned(
+        kind: &str,
+        id: &str,
+        group: &str,
+        artist_id: &str,
+        album_artist_id: &str,
+    ) -> FeedItem {
         FeedItem {
             kind: kind.into(),
             group: group.into(),

@@ -56,6 +56,12 @@ pub mod qbz_track_replace_bridge {
         #[qinvokable]
         fn open(self: Pin<&mut QbzTrackReplace>, payload_json: QString);
 
+        /// Library > All track/album tombstone: open the same ranked picker in
+        /// album-search mode. The footer then offers non-mutating navigation
+        /// and an explicit add-first favourite replacement.
+        #[qinvokable]
+        fn open_release(self: Pin<&mut QbzTrackReplace>, payload_json: QString);
+
         /// Re-run the search with an edited query (the reference's one good
         /// idea — the "title artist" guess is often not the right words).
         #[qinvokable]
@@ -64,6 +70,11 @@ pub mod qbz_track_replace_bridge {
         /// Pick a candidate row (the confirm button acts on this id).
         #[qinvokable]
         fn select(self: Pin<&mut QbzTrackReplace>, track_id: QString);
+
+        /// Non-mutating third action: open the selected candidate's album in
+        /// either playlist-track or Library-release mode.
+        #[qinvokable]
+        fn open_selected_album(self: Pin<&mut QbzTrackReplace>);
 
         /// Perform the swap: add -> reposition -> remove. See
         /// `track_replace_qt.rs`'s header for why that order and why neither
@@ -123,12 +134,20 @@ impl qbz_track_replace_bridge::QbzTrackReplace {
         crate::track_replace_qt::open(&payload_json.to_string());
     }
 
+    pub fn open_release(self: Pin<&mut Self>, payload_json: QString) {
+        crate::track_replace_qt::open_release(&payload_json.to_string());
+    }
+
     pub fn search(self: Pin<&mut Self>, query: QString) {
         crate::track_replace_qt::search(&query.to_string());
     }
 
     pub fn select(self: Pin<&mut Self>, track_id: QString) {
         crate::track_replace_qt::select(&track_id.to_string());
+    }
+
+    pub fn open_selected_album(self: Pin<&mut Self>) {
+        crate::track_replace_qt::open_selected_album();
     }
 
     pub fn apply(self: Pin<&mut Self>) {

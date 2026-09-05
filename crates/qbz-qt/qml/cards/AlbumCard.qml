@@ -70,6 +70,10 @@ Rectangle {
     // Explicit catalog withdrawal. Absence/false means the producer made no
     // unavailability claim. A complete offline copy keeps the album live.
     property bool qobuzUnavailable: false
+    // Library tombstones opt in to release replacement. Kept separate from
+    // qobuzUnavailable because a missing local/server source also uses the
+    // card's pulled presentation but has no Qobuz release to search for.
+    property bool replacementAffordance: false
     property int cacheStatus: 0
     readonly property bool pulled: root.qobuzUnavailable
     readonly property bool pulledDead: root.pulled && root.cacheStatus !== 3
@@ -352,6 +356,10 @@ Rectangle {
             m.push({ "label": root.isFavorite ? t("Remove from Library", r) : t("Add to Library", r),
                      "icon": root.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
         }
+        if (root.replacementAffordance && root.pulled) {
+            m.push({ "label": t("Look for better replacement", r),
+                     "icon": "search", "action": "find-release" })
+        }
         if (root.catalogAffordances && !root.pulled) {
             // QoL round: the album page's container + offline actions, on the
             // card. `catalogAffordances` is the catalog-id guarantee (the
@@ -402,6 +410,16 @@ Rectangle {
         // denormalized snapshot and a file:// cache path is dead on any other
         // machine, the same reason the pin payload uses it.
         if (a === "favorite") { root.toggleFavorite(); return }
+        if (a === "find-release") {
+            QbzTrackReplace.openRelease(JSON.stringify({
+                "targetKind": "album",
+                "albumId": root.albumId || "",
+                "albumTitle": root.title || "",
+                "artist": root.artist || "",
+                "albumArtist": root.artist || ""
+            }))
+            return
+        }
         if (a === "add-playlist") {
             if (root.localMode)
                 // The bulk "album" scope resolves a local group key to its

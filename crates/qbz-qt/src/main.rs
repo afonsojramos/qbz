@@ -525,8 +525,9 @@ mod tray_windows;
 // gating, so this mod line is not platform-gated.
 mod media_controls_qt;
 
+use std::collections::HashSet;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use cxx_qt::CxxQtThread;
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};
@@ -3180,6 +3181,77 @@ pub(crate) fn library_toggle_favorite(kind: String, id: String) {
     spawn(async move {
         if let Some(value) = library_qt::toggle_favorite(&runtime, &kind, &id).await {
             settle_favorite(&runtime, &kind, &id, value).await;
+        }
+    });
+}
+
+/// One release-wide removal at a time per album id. The confirmation modal
+/// closes before the async writes settle, so without a backend latch the same
+/// menu action could issue duplicate deletes while the first batch is live.
+static RELEASE_FAVORITE_REMOVALS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+pub(crate) fn library_remove_release_favorites(album_id: String) {
+    if album_id.is_empty() {
+        return;
+    }
+    {
+        let mut in_flight = RELEASE_FAVORITE_REMOVALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !in_flight.insert(album_id.clone()) {
+            return;
+        }
+    }
+
+    let runtime = app();
+    spawn(async move {
+        let targets = library_qt::release_favorite_targets(&album_id);
+        let mut removed: Vec<(String, String)> = Vec::new();
+        let mut failed = 0usize;
+
+        for (kind, id) in targets {
+            match runtime.core().remove_favorite(&kind, &id).await {
+                Ok(()) => {
+                    library_qt::set_feed_favorite(&kind, &id, false);
+                    fav_cache_qt::set(&kind, &id, false);
+                    removed.push((kind, id));
+                }
+                Err(error) => {
+                    failed += 1;
+                    log::error!(
+                        "[qbz-qt] remove release favourites {album_id}: {kind}:{id} failed: {error}"
+                    );
+                }
+            }
+        }
+
+        // Reconcile every confirmed server write before publishing, then
+        // replace the Library model at most once. A purchase representative
+        // stays and merely loses its heart.
+        let mut membership_changed = false;
+        for (kind, id) in &removed {
+            membership_changed |=
+                library_qt::reconcile_qobuz_favorite(&runtime, kind, id, false).await;
+            emit_library_favorite(kind, id, false);
+        }
+        if membership_changed {
+            publish_library_document();
+        }
+
+        RELEASE_FAVORITE_REMOVALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&album_id);
+
+        if removed.is_empty() && failed == 0 {
+            toast_qt::info(qbz_i18n::t("No favorites from this release to remove"));
+        } else if failed == 0 {
+            toast_qt::success(qbz_i18n::t("Favorites removed from this release"));
+        } else if removed.is_empty() {
+            toast_qt::error(qbz_i18n::t("Could not remove favorites from this release"));
+        } else {
+            toast_qt::error(qbz_i18n::t("Some favorites could not be removed"));
         }
     });
 }

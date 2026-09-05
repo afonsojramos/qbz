@@ -76,6 +76,12 @@ pub mod qbz_library_bridge {
         #[qinvokable]
         fn library_toggle_favorite(self: Pin<&mut QbzLibrary>, kind: QString, id: QString);
 
+        /// Confirmed Library action: remove the album heart and every track
+        /// heart belonging to one withdrawn Qobuz release. Downloads and
+        /// purchase entitlements are untouched.
+        #[qinvokable]
+        fn library_remove_release_favorites(self: Pin<&mut QbzLibrary>, album_id: QString);
+
         /// LibraryView row play (PARITY-DEBT #5). `visible_ids_json` is the
         /// JSON array of the track ids the view is CURRENTLY rendering, in
         /// render order; `clicked_id` is the row that was hit. The Slint
@@ -258,6 +264,10 @@ impl qbz_library_bridge::QbzLibrary {
 
     pub fn library_toggle_favorite(self: Pin<&mut Self>, kind: QString, id: QString) {
         crate::library_toggle_favorite(kind.to_string(), id.to_string());
+    }
+
+    pub fn library_remove_release_favorites(self: Pin<&mut Self>, album_id: QString) {
+        crate::library_remove_release_favorites(album_id.to_string());
     }
 
     pub fn library_play_visible(

@@ -6775,3 +6775,60 @@ msgstr "Открывать ссылки Qobuz в QBZ"
 
 msgid "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
 msgstr "Делает QBZ обработчиком ссылок qobuzapp:// из браузера. Если выключено, их оставляет официальное приложение Qobuz; собственные ссылки qbz:// всегда открываются здесь."
+
+msgid "Look for better replacement"
+msgstr "Найти лучшую замену"
+
+msgid "Remove all favorites from this release"
+msgstr "Удалить всё избранное из этого релиза"
+
+msgid "Remove all favorites from this release?"
+msgstr "Удалить всё избранное из этого релиза?"
+
+msgid "Remove the album and every track from this release from your Library?"
+msgstr "Удалить альбом и все треки этого релиза из вашей медиатеки?"
+
+msgid "No replacement releases found"
+msgstr "Релизы на замену не найдены"
+
+msgid "Choosing a result opens the release. Your existing favorites are not changed."
+msgstr "Выбор результата откроет релиз. Ваше текущее избранное не изменится."
+
+msgid "No favorites from this release to remove"
+msgstr "В этом релизе нет избранного для удаления"
+
+msgid "Favorites removed from this release"
+msgstr "Избранное этого релиза удалено"
+
+msgid "Could not remove favorites from this release"
+msgstr "Не удалось удалить избранное этого релиза"
+
+msgid "Some favorites could not be removed"
+msgstr "Некоторые элементы избранного не удалось удалить"
+
+msgid "Replace in Library"
+msgstr "Заменить в медиатеке"
+
+msgid "Replacing favorite..."
+msgstr "Замена избранного..."
+
+msgid "The selected release replaces the unavailable album favorite."
+msgstr "Выбранный релиз заменит недоступный альбом в избранном."
+
+msgid "The matching track from the selected release replaces the unavailable favorite."
+msgstr "Соответствующий трек из выбранного релиза заменит недоступный трек в избранном."
+
+msgid "Could not open the selected release"
+msgstr "Не удалось открыть выбранный релиз"
+
+msgid "Could not find a matching track in this release"
+msgstr "В этом релизе не найден соответствующий трек"
+
+msgid "Could not add the replacement favorite"
+msgstr "Не удалось добавить замену в избранное"
+
+msgid "Favorite replaced"
+msgstr "Избранное заменено"
+
+msgid "The replacement was added, but the unavailable favorite could not be removed"
+msgstr "Замена добавлена, но недоступный элемент не удалось удалить из избранного"

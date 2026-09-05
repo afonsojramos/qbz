@@ -76,6 +76,7 @@ Rectangle {
     }
 
     property string activeTab: "all"
+    property string pendingReleaseRemovalId: ""
 
     readonly property var settingsDoc: {
         try { return JSON.parse(QbzBridge.settingsJson) }
@@ -1014,6 +1015,7 @@ Rectangle {
     // seed.
     function trackMenuModel(item, favorite, pulledDead) {
         var m = []
+        var releaseGone = item.releaseUnavailable === true
         if (!pulledDead) {
             m.push({ "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" })
             m.push({ "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" })
@@ -1021,11 +1023,25 @@ Rectangle {
             m.push({ "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" })
         }
         if (item.artistId !== "") m.push({ "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" })
-        if (item.albumId !== "") m.push({ "label": QbzSession.tr("Go to album", QbzSession.trRev), "icon": "disc", "action": "go-album" })
-        if (!pulledDead)
-            m.push({ "label": favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
-                     "icon": favorite ? "heart-filled" : "heart", "action": "favorite" })
+        if (item.albumId !== "" && !releaseGone)
+            m.push({ "label": QbzSession.tr("Go to album", QbzSession.trRev), "icon": "disc", "action": "go-album" })
+        // A dead favourite is still a favourite. Suppressing this row was the
+        // bug: it made the tombstone impossible to remove.
+        m.push({ "label": favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
+                 "icon": favorite ? "heart-filled" : "heart", "action": "favorite" })
+        if (releaseGone) {
+            m.push({ "label": QbzSession.tr("Look for better replacement", QbzSession.trRev),
+                     "icon": "search", "action": "find-release" })
+            m.push({ "label": QbzSession.tr("Remove all favorites from this release", QbzSession.trRev),
+                     "icon": "trash-2", "action": "remove-release-favorites" })
+        }
         return m
+    }
+    function askRemoveReleaseFavorites(item) {
+        if (!item || (item.albumId || "") === "")
+            return
+        root.pendingReleaseRemovalId = item.albumId
+        releaseRemovalConfirm.open()
     }
     // Takes the ROW, not the item — "favorite" has to go through the row's
     // own property (a write to `item.isFavorite` notifies nothing).
@@ -1041,6 +1057,18 @@ Rectangle {
         else if (a === "go-artist") QbzArtist.openArtist(item.artistId)
         else if (a === "go-album") QbzAlbum.openAlbum(item.albumId)
         else if (a === "favorite") row.toggleFavorite()
+        else if (a === "find-release") QbzTrackReplace.openRelease(JSON.stringify({
+            "targetKind": "track",
+            "albumId": item.albumId || "",
+            "albumTitle": item.album || "",
+            "trackId": item.id || "",
+            "trackTitle": item.title || "",
+            "artist": item.artist || item.albumArtist || "",
+            "albumArtist": item.albumArtist || item.artist || "",
+            "isrc": item.isrc || "",
+            "durationSecs": item.durationSecs || 0
+        }))
+        else if (a === "remove-release-favorites") root.askRemoveReleaseFavorites(item)
     }
 
     // ============================ view ===================================
@@ -1634,5 +1662,26 @@ Rectangle {
         // Under the 56px toolbar, right-aligned like the Slint overlay.
         anchorTop: 62
         anchorRight: 32
+    }
+
+    // Release-wide cleanup is destructive enough to confirm: it can remove an
+    // album heart plus several track hearts in one server batch. Mounted after
+    // every view overlay so declaration order and QbzConfirmModal's own z=3100
+    // keep it above the feed and filter popup.
+    QbzConfirmModal {
+        id: releaseRemovalConfirm
+        anchors.fill: parent
+        title: QbzSession.tr("Remove all favorites from this release?", QbzSession.trRev)
+        body: QbzSession.tr("Remove the album and every track from this release from your Library?",
+                            QbzSession.trRev)
+        confirmLabel: QbzSession.tr("Remove", QbzSession.trRev)
+        danger: true
+        onConfirmed: {
+            var albumId = root.pendingReleaseRemovalId
+            root.pendingReleaseRemovalId = ""
+            if (albumId !== "")
+                QbzLibrary.libraryRemoveReleaseFavorites(albumId)
+        }
+        onCancelled: root.pendingReleaseRemovalId = ""
     }
 }
