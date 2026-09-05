@@ -93,6 +93,7 @@ Rectangle {
     readonly property var batchResult: doc.batchResult || ({})
     readonly property bool downloadable: doc.downloadable !== false
     property int shownBatchSerial: 0
+    property var copyMenuTarget: ({})
 
     function copyStateLabel(state) {
         if (state === "complete") return root.t("Complete")
@@ -108,6 +109,14 @@ Rectangle {
             if (Number(root.formats[i].id) === Number(formatId))
                 return root.formats[i].label || ("#" + String(formatId))
         return "#" + String(formatId)
+    }
+    function copyTitle(copy) {
+        var folder = copy.folderLabel || ""
+        var format = root.copyFormatLabel(copy.formatId)
+        if (folder === "") return format
+        if (format === "" || folder.toLowerCase().indexOf(format.toLowerCase()) >= 0)
+            return folder
+        return folder + "  ·  " + format
     }
     function batchResultBody() {
         var result = root.batchResult
@@ -128,8 +137,11 @@ Rectangle {
             var serial = Number(result.serial || 0)
             if (serial > 0 && serial !== root.shownBatchSerial) {
                 root.shownBatchSerial = serial
+                copiesModal.close()
                 batchModal.open()
             }
+            if (copiesModal.opened && root.copies.length === 0)
+                copiesModal.close()
         }
     }
 
@@ -196,6 +208,12 @@ Rectangle {
         }
         return false
     }
+    readonly property bool anyCompleteHealthyCopy: {
+        for (var i = 0; i < root.copies.length; i++)
+            if (root.copies[i].state === "complete") return true
+        return false
+    }
+    readonly property bool anyPlayable: root.anyStreamable || root.anyCompleteHealthyCopy
 
     // ---- The one animation clock ----------------------------------------
     // Advanced on the shared shell pulse and ONLY while something is actually
@@ -509,11 +527,11 @@ Rectangle {
                     Item { width: 1; height: 20 }
 
                     // --- Action row --------------------------------------
-                    // Rendered ONLY for a downloadable album (recon §B.2.2-6):
-                    // on an album the account cannot download, none of these
-                    // has anything to act on.
+                    // Remote download actions follow the current entitlement,
+                    // but an existing local copy remains playable/manageable
+                    // if that catalog edition later becomes unavailable.
                     Row {
-                        visible: root.downloadable
+                        visible: root.downloadable || root.copies.length > 0
                         width: parent.width
                         spacing: 12
 
@@ -523,14 +541,15 @@ Rectangle {
                         // 44px primary Play of the catalog album page read as
                         // the main event here (smoke 2026-09-02).
                         QbzCircleAction {
-                            visible: root.anyStreamable
+                            visible: root.anyPlayable
                             primary: false
                             diameterOverride: 38
                             name: "play-fill"
                             anchors.verticalCenter: parent.verticalCenter
-                            onClicked: QbzPlayer.playAlbum(root.doc.id || "")
+                            onClicked: QbzPurchases.playAlbum()
                         }
                         IconTextButton {
+                            visible: root.downloadable
                             label: root.t("Download another copy")
                             iconName: "cloud-download"
                             btnEnabled: !(root.progress.active === true)
@@ -541,6 +560,13 @@ Rectangle {
                                     QbzPurchases.downloadAlbum()
                             }
                         }
+                        IconTextButton {
+                            visible: root.copies.length > 0
+                            label: root.t("Local purchase copies") + " (" + root.copies.length + ")"
+                            iconName: "hard-drive"
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: copiesModal.open()
+                        }
                         // THE FORMAT DROPDOWN. Options in document order —
                         // that order IS the dropdown order and index 0 is the
                         // default. Choosing one re-scopes every downloaded
@@ -548,7 +574,7 @@ Rectangle {
                         // of that is computed here, it arrives in the next
                         // republish.
                         QbzSelect {
-                            visible: root.formats.length > 0
+                            visible: root.downloadable && root.formats.length > 0
                             anchors.verticalCenter: parent.verticalCenter
                             menuWidth: 200
                             options: root.formatLabels
@@ -560,7 +586,7 @@ Rectangle {
                             }
                         }
                         Text {
-                            visible: root.formats.length === 0
+                            visible: root.downloadable && root.formats.length === 0
                             anchors.verticalCenter: parent.verticalCenter
                             text: root.t("No downloadable formats available")
                             color: theme.textMuted
@@ -586,7 +612,9 @@ Rectangle {
                         // account will never populate this, so a wrong empty
                         // state would be a permanent wrong nobody can see.
                         IconTextButton {
-                            visible: root.goodies.length > 0 && !goodieCount.visible
+                            visible: root.downloadable
+                                     && root.goodies.length > 0
+                                     && !goodieCount.visible
                             anchors.verticalCenter: parent.verticalCenter
                             label: root.t("Download goodies")
                             iconName: "cloud-download"
@@ -786,93 +814,6 @@ Rectangle {
                             height: parent.height
                             radius: parent.radius
                             color: progressBox.done ? theme.success : theme.accent
-                        }
-                    }
-                }
-            }
-
-            // Persistent copies stay separate by copy id/folder. Coverage on
-            // this surface never sums files from two destinations.
-            Item { visible: copiesBox.visible; width: 1; height: 16 }
-            Rectangle {
-                id: copiesBox
-                visible: root.ready && root.copies.length > 0
-                width: parent.width - 64
-                height: visible ? copiesColumn.implicitHeight + 28 : 0
-                radius: theme.radiusSm
-                color: theme.surfaceCard
-                border.width: 1
-                border.color: theme.borderSubtle
-
-                Column {
-                    id: copiesColumn
-                    x: 14
-                    y: 14
-                    width: parent.width - 28
-                    spacing: 10
-                    Text {
-                        text: root.t("Local purchase copies")
-                        color: theme.textPrimary
-                        font.pixelSize: theme.fontBody
-                        font.weight: theme.weightSemibold
-                    }
-                    Repeater {
-                        model: root.copies
-                        delegate: Item {
-                            required property var modelData
-                            width: copiesColumn.width
-                            height: 38
-                            Column {
-                                anchors.left: parent.left
-                                anchors.right: actionRow.left
-                                anchors.rightMargin: 10
-                                anchors.verticalCenter: parent.verticalCenter
-                                spacing: 2
-                                Text {
-                                    width: parent.width
-                                    text: (modelData.folderLabel || "") + "  ·  "
-                                          + root.copyFormatLabel(modelData.formatId)
-                                    color: theme.textPrimary
-                                    font.pixelSize: theme.fontLegal
-                                    elide: Text.ElideMiddle
-                                }
-                                Text {
-                                    text: root.copyStateLabel(modelData.state) + "  ·  "
-                                          + root.t("{} of {} tracks")
-                                              .replace("{}", modelData.healthyTracks || 0)
-                                              .replace("{}", modelData.totalTracks || 0)
-                                    color: theme.textMuted
-                                    font.pixelSize: theme.fontLegal
-                                }
-                            }
-                            Row {
-                                id: actionRow
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                spacing: 8
-                                IconTextButton {
-                                    visible: modelData.continuable === true
-                                             && Number(modelData.formatId) === Number(root.doc.selectedFormatId)
-                                    label: root.t("Continue copy")
-                                    iconName: "cloud-download"
-                                    btnEnabled: root.progress.active !== true
-                                    onClicked: QbzPurchases.continueCopy(modelData.copyId || "")
-                                }
-                                IconTextButton {
-                                    visible: modelData.inLocalLibrary !== true
-                                             && Number(modelData.downloadedTracks || 0) > 0
-                                    label: root.t("Add to Local Library")
-                                    iconName: "hard-drive"
-                                    onClicked: QbzPurchases.addCopyToLibrary(modelData.copyId || "")
-                                }
-                                Text {
-                                    visible: modelData.inLocalLibrary === true
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: root.t("In Local Library")
-                                    color: theme.success
-                                    font.pixelSize: theme.fontLegal
-                                }
-                            }
                         }
                     }
                 }
@@ -1171,6 +1112,304 @@ Rectangle {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         target: pageFlick
+    }
+
+    Popup {
+        id: copiesModal
+        parent: Overlay.overlay
+        x: 0
+        y: 0
+        width: parent ? parent.width : 0
+        height: parent ? parent.height : 0
+        padding: 0
+        z: 3100
+        modal: true
+        dim: false
+        closePolicy: Popup.CloseOnEscape
+
+        background: Rectangle { color: "#bf000000" }
+
+        contentItem: Item {
+            MouseArea {
+                anchors.fill: parent
+                onClicked: copiesModal.close()
+                onWheel: function (wheel) { wheel.accepted = true }
+            }
+
+            Rectangle {
+                id: copiesCard
+                width: Math.min(copiesModal.width - 48, 840)
+                height: Math.min(copiesModal.height - 80,
+                                 Math.max(180, 96 + root.copies.length * 84))
+                anchors.centerIn: parent
+                radius: theme.radiusMd
+                color: theme.surfaceCard
+                border.width: 1
+                border.color: theme.borderSubtle
+                clip: true
+
+                MouseArea {
+                    anchors.fill: parent
+                    onWheel: function (wheel) { wheel.accepted = true }
+                }
+
+                Text {
+                    id: copiesTitle
+                    anchors.left: parent.left
+                    anchors.leftMargin: 24
+                    anchors.right: copiesClose.left
+                    anchors.rightMargin: 16
+                    anchors.top: parent.top
+                    anchors.topMargin: 20
+                    text: root.t("Local purchase copies")
+                    color: theme.textPrimary
+                    font.pixelSize: theme.fontSection
+                    font.weight: theme.weightBold
+                    elide: Text.ElideRight
+                }
+
+                Rectangle {
+                    id: copiesClose
+                    width: 32
+                    height: 32
+                    radius: theme.radiusSm
+                    anchors.right: parent.right
+                    anchors.rightMargin: 16
+                    anchors.top: parent.top
+                    anchors.topMargin: 14
+                    color: copiesCloseArea.containsMouse ? theme.surfaceHover : "transparent"
+                    Accessible.role: Accessible.Button
+                    Accessible.name: root.t("Close")
+                    Accessible.onPressAction: copiesModal.close()
+                    QbzIcon {
+                        anchors.centerIn: parent
+                        name: "x"
+                        width: 16
+                        height: 16
+                        tintName: "muted"
+                    }
+                    MouseArea {
+                        id: copiesCloseArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: copiesModal.close()
+                    }
+                }
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.topMargin: 64
+                    height: 1
+                    color: theme.borderSubtle
+                }
+
+                ListView {
+                    id: copiesList
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.leftMargin: 20
+                    anchors.rightMargin: 20
+                    anchors.topMargin: 76
+                    anchors.bottomMargin: 16
+                    spacing: 6
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    model: root.copies
+
+                    delegate: Rectangle {
+                        id: copyRow
+                        required property var modelData
+                        width: copiesList.width - 8
+                        height: 78
+                        radius: theme.radiusSm
+                        color: theme.surfaceElevated
+                        border.width: 1
+                        border.color: theme.borderSubtle
+
+                        Column {
+                            anchors.left: parent.left
+                            anchors.right: copyActions.left
+                            anchors.leftMargin: 12
+                            anchors.rightMargin: 12
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 4
+                            Text {
+                                width: parent.width
+                                text: root.copyTitle(copyRow.modelData)
+                                color: theme.textPrimary
+                                font.pixelSize: theme.fontBody
+                                font.weight: theme.weightSemibold
+                                elide: Text.ElideMiddle
+                            }
+                            Text {
+                                width: parent.width
+                                text: copyRow.modelData.folderPath
+                                      || copyRow.modelData.folderLabel || ""
+                                color: theme.textSecondary
+                                font.pixelSize: theme.fontLegal
+                                elide: Text.ElideMiddle
+                            }
+                            Text {
+                                width: parent.width
+                                text: root.copyStateLabel(copyRow.modelData.state) + "  ·  "
+                                      + root.t("{} of {} tracks")
+                                          .replace("{}", copyRow.modelData.healthyTracks || 0)
+                                          .replace("{}", copyRow.modelData.totalTracks || 0)
+                                color: theme.textMuted
+                                font.pixelSize: theme.fontLegal
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        Row {
+                            id: copyActions
+                            anchors.right: parent.right
+                            anchors.rightMargin: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 8
+                            Text {
+                                visible: copyRow.modelData.inLocalLibrary === true
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: root.t("In Local Library")
+                                color: theme.success
+                                font.pixelSize: theme.fontLegal
+                            }
+                            IconTextButton {
+                                visible: copyRow.modelData.continuable === true
+                                         && Number(copyRow.modelData.formatId) === Number(root.doc.selectedFormatId)
+                                label: root.t("Continue copy")
+                                iconName: "cloud-download"
+                                btnEnabled: root.progress.active !== true
+                                onClicked: {
+                                    copiesModal.close()
+                                    QbzPurchases.continueCopy(copyRow.modelData.copyId || "")
+                                }
+                            }
+                            IconTextButton {
+                                visible: copyRow.modelData.inLocalLibrary !== true
+                                         && Number(copyRow.modelData.libraryFolderId || 0) <= 0
+                                         && Number(copyRow.modelData.downloadedTracks || 0) > 0
+                                label: root.t("Add to Local Library")
+                                iconName: "hard-drive"
+                                onClicked: {
+                                    copiesModal.close()
+                                    QbzPurchases.addCopyToLibrary(copyRow.modelData.copyId || "")
+                                }
+                            }
+                            Rectangle {
+                                width: 32
+                                height: 32
+                                radius: theme.radiusSm
+                                color: copyMoreArea.containsMouse ? theme.surfaceHover : "transparent"
+                                Accessible.role: Accessible.Button
+                                Accessible.name: root.t("More options")
+                                Accessible.onPressAction: {
+                                    root.copyMenuTarget = copyRow.modelData
+                                    copyMenu.openBelowRight(copyMoreArea)
+                                }
+                                QbzIcon {
+                                    anchors.centerIn: parent
+                                    name: "ellipsis"
+                                    width: 16
+                                    height: 16
+                                    tintName: "muted"
+                                }
+                                MouseArea {
+                                    id: copyMoreArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        root.copyMenuTarget = copyRow.modelData
+                                        copyMenu.openBelowRight(copyMoreArea)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                }
+
+                QbzScrollBar {
+                    anchors.right: parent.right
+                    anchors.rightMargin: 4
+                    anchors.top: copiesList.top
+                    anchors.bottom: copiesList.bottom
+                    target: copiesList
+                }
+            }
+        }
+    }
+
+    QbzContextMenu {
+        id: copyMenu
+        z: 3300
+        menuWidth: 230
+
+        Rectangle {
+            width: parent.width
+            height: 33
+            radius: theme.radiusSm
+            color: showLocationArea.containsMouse ? theme.surfaceHover : "transparent"
+            QbzIcon { x: 9; anchors.verticalCenter: parent.verticalCenter; name: "folder-open"; width: 15; height: 15; tintName: "muted" }
+            Text { x: 32; anchors.verticalCenter: parent.verticalCenter; text: root.t("Show location"); color: theme.textPrimary; font.pixelSize: theme.fontLegal }
+            MouseArea {
+                id: showLocationArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    copyMenu.close()
+                    QbzPurchases.showCopyLocation(root.copyMenuTarget.copyId || "")
+                }
+            }
+        }
+
+        Rectangle {
+            visible: Number(root.copyMenuTarget.libraryFolderId || 0) > 0
+            width: parent.width
+            height: visible ? 33 : 0
+            radius: theme.radiusSm
+            color: removeLibraryArea.containsMouse ? theme.dangerHover : "transparent"
+            QbzIcon { x: 9; anchors.verticalCenter: parent.verticalCenter; name: "hard-drive"; width: 15; height: 15; tintName: "danger" }
+            Text { x: 32; anchors.verticalCenter: parent.verticalCenter; text: root.t("Remove from Local Library"); color: theme.danger; font.pixelSize: theme.fontLegal }
+            MouseArea {
+                id: removeLibraryArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    copyMenu.close()
+                    QbzPurchases.removeCopyFromLibrary(root.copyMenuTarget.copyId || "")
+                }
+            }
+        }
+
+        Rectangle {
+            visible: root.copyMenuTarget.inLocalLibrary !== true
+                     && Number(root.copyMenuTarget.libraryFolderId || 0) <= 0
+            width: parent.width
+            height: visible ? 33 : 0
+            radius: theme.radiusSm
+            color: forgetRecordArea.containsMouse ? theme.dangerHover : "transparent"
+            QbzIcon { x: 9; anchors.verticalCenter: parent.verticalCenter; name: "trash-2"; width: 15; height: 15; tintName: "danger" }
+            Text { x: 32; anchors.verticalCenter: parent.verticalCenter; text: root.t("Forget download record"); color: theme.danger; font.pixelSize: theme.fontLegal }
+            MouseArea {
+                id: forgetRecordArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    copyMenu.close()
+                    QbzPurchases.forgetCopyRecord(root.copyMenuTarget.copyId || "")
+                }
+            }
+        }
     }
 
     QbzConfirmModal {

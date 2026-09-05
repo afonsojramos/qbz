@@ -1425,6 +1425,24 @@ msgstr "Lancer la lecture maintenant ?"
 msgid "Not now"
 msgstr "Pas maintenant"
 
+msgid "Show location"
+msgstr "Afficher l’emplacement"
+
+msgid "Remove from Local Library"
+msgstr "Retirer de la bibliothèque locale"
+
+msgid "Forget download record"
+msgstr "Oublier l’enregistrement du téléchargement"
+
+msgid "Could not open that folder."
+msgstr "Impossible d’ouvrir ce dossier."
+
+msgid "Could not remove that library folder."
+msgstr "Impossible de retirer ce dossier de la bibliothèque."
+
+msgid "Could not forget that download."
+msgstr "Impossible d’oublier ce téléchargement."
+
 msgid "Create radio"
 msgstr "Créer une radio"
 

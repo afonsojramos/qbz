@@ -1604,6 +1604,10 @@ struct AlbumPurchaseCopyDoc {
     format_id: i64,
     #[serde(rename = "folderLabel")]
     folder_label: String,
+    /// Full registered location. The inventory modal needs this to
+    /// distinguish copies whose final directory names happen to match.
+    #[serde(rename = "folderPath")]
+    folder_path: String,
     state: String,
     #[serde(rename = "downloadedTracks")]
     downloaded_tracks: u32,
@@ -1613,6 +1617,11 @@ struct AlbumPurchaseCopyDoc {
     total_tracks: u32,
     #[serde(rename = "inLocalLibrary")]
     in_local_library: bool,
+    /// Exact Local Library root id for this copy. A broader registered root
+    /// may cover the copy (`inLocalLibrary=true`) but must never be removed
+    /// from a per-copy menu.
+    #[serde(rename = "libraryFolderId")]
+    library_folder_id: i64,
     continuable: bool,
 }
 
@@ -1693,13 +1702,32 @@ fn copy_health_word(health: PurchaseCopyHealth) -> &'static str {
     }
 }
 
-fn folder_is_in_local_library(folder: &str, roots: &[qbz_library::LibraryFolder]) -> bool {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct CopyLibraryCoverage {
+    in_local_library: bool,
+    exact_folder_id: i64,
+}
+
+fn copy_library_coverage(
+    folder: &str,
+    roots: &[qbz_library::LibraryFolder],
+) -> CopyLibraryCoverage {
     let candidate = Path::new(folder)
         .canonicalize()
         .unwrap_or_else(|_| PathBuf::from(folder));
-    roots
-        .iter()
-        .any(|root| root.enabled && candidate.starts_with(Path::new(&root.path)))
+    let mut coverage = CopyLibraryCoverage::default();
+    for root in roots {
+        let root_path = Path::new(&root.path)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(&root.path));
+        if candidate == root_path {
+            coverage.exact_folder_id = root.id;
+        }
+        if root.enabled && candidate.starts_with(&root_path) {
+            coverage.in_local_library = true;
+        }
+    }
+    coverage
 }
 
 fn local_album_purchase_state(
@@ -1734,15 +1762,18 @@ fn purchase_copy_doc(
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_string();
+    let coverage = copy_library_coverage(&snapshot.copy.resolved_album_folder, folders);
     AlbumPurchaseCopyDoc {
         copy_id: snapshot.copy.copy_id.clone(),
         format_id: snapshot.copy.format_id,
         folder_label,
+        folder_path: snapshot.copy.resolved_album_folder.clone(),
         state: copy_health_word(snapshot.health).to_string(),
         downloaded_tracks: snapshot.downloaded_tracks,
         healthy_tracks: snapshot.healthy_tracks,
         total_tracks: snapshot.total_tracks,
-        in_local_library: folder_is_in_local_library(&snapshot.copy.resolved_album_folder, folders),
+        in_local_library: coverage.in_local_library,
+        library_folder_id: coverage.exact_folder_id,
         continuable: matches!(
             snapshot.health,
             PurchaseCopyHealth::Partial
@@ -2506,6 +2537,74 @@ pub fn set_album_playback_mode(
     });
 }
 
+fn best_complete_purchase_format(copies: &[qbz_library::PurchaseCopySnapshot]) -> Option<i64> {
+    copies
+        .iter()
+        .filter(|copy| copy.health == PurchaseCopyHealth::CompleteHealthy)
+        .max_by_key(|copy| svc::format_rank(copy.copy.format_id.max(0) as u32))
+        .map(|copy| copy.copy.format_id)
+}
+
+/// Purchase detail's Play promise is local-first: once a complete healthy copy
+/// exists, select its highest format before building the ordinary Qobuz queue.
+/// AlbumView remains the surface where the user may explicitly switch the
+/// shared preference back to Qobuz.
+pub fn play_album() {
+    let request = with_detail(|state| {
+        let album = state.album.as_ref()?;
+        let expected = album
+            .tracks
+            .as_ref()?
+            .items
+            .iter()
+            .map(|track| track.id as i64)
+            .collect::<Vec<_>>();
+        (!album.id.is_empty() && !expected.is_empty()).then(|| (album.id.clone(), expected))
+    });
+    let Some((album_id, expected)) = request else {
+        return;
+    };
+
+    crate::spawn(async move {
+        let lookup_album_id = album_id.clone();
+        let selected = tokio::task::spawn_blocking(move || {
+            crate::library_db_qt::with_db(false, |db| {
+                let copies = db.inspect_purchase_copies(&lookup_album_id, &expected)?;
+                let Some(format_id) = best_complete_purchase_format(&copies) else {
+                    return Ok(None);
+                };
+                for copy in copies.iter().filter(|copy| {
+                    copy.copy.format_id == format_id
+                        && copy.health == PurchaseCopyHealth::CompleteHealthy
+                }) {
+                    db.set_purchase_copy_expected_tracks(&copy.copy.copy_id, &expected)?;
+                }
+                db.set_purchase_playback_preference(
+                    &lookup_album_id,
+                    PurchasePlaybackMode::Purchase,
+                    Some(format_id),
+                )?;
+                Ok(Some(format_id))
+            })
+            .flatten()
+        })
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(format_id) = selected {
+            log::info!(
+                "[qbz-qt] purchases: album {album_id} Play selected local format {format_id}"
+            );
+            crate::album_qt::patch_purchase_playback_preference(&album_id, "purchase", format_id);
+        }
+        let runtime = crate::app();
+        if let Err(error) = crate::playback_qt::play_album(&runtime, &album_id).await {
+            log::error!("[qbz-qt] purchases: play album {album_id} failed: {error}");
+        }
+    });
+}
+
 /// Opening the detail is a request GRAPH in the reference: `/album/get`, then
 /// ALL album and track purchase pages (to recover `downloadable` and
 /// `purchased_at`), and CONCURRENTLY a SECOND `/album/get` for the formats.
@@ -2516,14 +2615,11 @@ pub fn set_album_playback_mode(
 /// status and parses the STRICT structs, so a bad payload fails the whole
 /// screen — and it now fails it once instead of twice.
 ///
-/// **The format menu is the ENTITLEMENT (2026-09-01 contract §1.4), not a
-/// synthesis from the catalog.** The purchases listing fetched here carries
-/// `downloadable_format_ids` per album — `[55]` for a DSD64 purchase whose
-/// catalog streams at 16/44.1, `[56]` for DSD128, `[7, 6, 5]` for a hi-res
-/// FLAC — and those are the only ids `getFileUrl(intent=download)` will
-/// honour. The old `synth_formats` ladder (27/7/6/5 from `album.hires`) stays
-/// as the fallback for a listing that does not carry the field, so an older
-/// wire still gets a menu instead of nothing.
+/// **The format menu starts with the ENTITLEMENT and may append the catalog's
+/// streaming ladder strictly below it.** Entitled ids use `intent=download`;
+/// lower catalog formats use `intent=stream`, and appear only while this exact
+/// edition is streamable (`hires_streamable` gates the hi-res rungs). A
+/// purchase-only edition therefore exposes only its purchased master.
 async fn load_album(generation: u64, album_id: String) {
     let Some(client) = snapshot_client().await else {
         fail_album(generation);
@@ -2582,7 +2678,10 @@ async fn load_album(generation: u64, album_id: String) {
 
     let album =
         svc::build_purchase_album(&catalog, &purchases, &reg.downloaded_ids, &reg.format_map);
-    let formats = svc::entitlement_formats(&svc::entitlement_format_ids(&purchases, &album_id));
+    let formats = svc::purchase_formats(
+        &catalog,
+        &svc::entitlement_format_ids(&purchases, &album_id),
+    );
     let cover_url = catalog.image.best().cloned().unwrap_or_default();
 
     let applied = with_detail(|s| {
@@ -2698,12 +2797,30 @@ async fn revalidate_download(plan: &DownloadPlan) -> bool {
     let valid = refresh_entitlement_index().await.is_some_and(|index| {
         index
             .downloadable_album(&plan.album_id)
-            .is_some_and(|album| album.downloadable_format_ids.contains(&plan.format_id))
+            .is_some_and(|album| {
+                download_format_is_permitted(
+                    &plan.catalog,
+                    &album.downloadable_format_ids,
+                    plan.format_id,
+                    plan.streaming,
+                )
+            })
     });
     if !valid {
         crate::toast_qt::error(qbz_i18n::t("This purchase is not available for download."));
     }
     valid
+}
+
+fn download_format_is_permitted(
+    catalog: &Album,
+    entitlement_ids: &[u32],
+    format_id: u32,
+    streaming: bool,
+) -> bool {
+    svc::purchase_formats(catalog, entitlement_ids)
+        .into_iter()
+        .any(|format| format.id == format_id && format.streaming == streaming)
 }
 
 fn suffixed_copy_folder(base: &Path, number: u32) -> PathBuf {
@@ -3559,6 +3676,141 @@ pub fn dismiss_batch_result(copy_id: String) {
     publish_album();
 }
 
+fn detail_inventory_request() -> Option<(String, Vec<i64>)> {
+    with_detail(|state| {
+        state.album.as_ref().map(|album| {
+            (
+                album.id.clone(),
+                album
+                    .tracks
+                    .as_ref()
+                    .map(|page| page.items.iter().map(|track| track.id as i64).collect())
+                    .unwrap_or_default(),
+            )
+        })
+    })
+}
+
+/// Open only the path stored for a copy owned by the currently visible album.
+/// QML never supplies an arbitrary filesystem path.
+pub fn show_copy_location(copy_id: String) {
+    let copy_id = copy_id.trim().to_string();
+    let album_id = with_detail(|state| state.album_id.clone());
+    if copy_id.is_empty() || album_id.is_empty() {
+        return;
+    }
+    crate::spawn(async move {
+        let opened = tokio::task::spawn_blocking(move || {
+            let path = crate::library_db_qt::with_db(false, |db| {
+                let copy = db
+                    .get_purchase_copy(&copy_id)?
+                    .filter(|copy| copy.album_id == album_id);
+                Ok(copy.map(|copy| copy.resolved_album_folder))
+            })
+            .flatten();
+            path.is_some_and(|path| open::that(path).is_ok())
+        })
+        .await
+        .unwrap_or(false);
+        if !opened {
+            crate::toast_qt::error(qbz_i18n::t("Could not open that folder."));
+        }
+    });
+}
+
+/// Remove only an exact Local Library root for this copy. If a broader root
+/// covers the folder, the per-copy menu must not delete that unrelated root.
+pub fn remove_copy_from_library(copy_id: String) {
+    let copy_id = copy_id.trim().to_string();
+    let Some((album_id, expected)) = detail_inventory_request() else {
+        return;
+    };
+    if copy_id.is_empty() {
+        return;
+    }
+    crate::spawn(async move {
+        let lookup_album_id = album_id.clone();
+        let folder_id = tokio::task::spawn_blocking(move || {
+            crate::library_db_qt::with_db(false, |db| {
+                let copy = db
+                    .get_purchase_copy(&copy_id)?
+                    .filter(|copy| copy.album_id == lookup_album_id);
+                let Some(copy) = copy else {
+                    return Ok(None);
+                };
+                let folders = db.get_folders_with_metadata()?;
+                let coverage = copy_library_coverage(&copy.resolved_album_folder, &folders);
+                Ok((coverage.exact_folder_id > 0).then_some(coverage.exact_folder_id))
+            })
+            .flatten()
+        })
+        .await
+        .ok()
+        .flatten();
+        let Some(folder_id) = folder_id else {
+            crate::toast_qt::error(qbz_i18n::t("Could not remove that library folder."));
+            return;
+        };
+        crate::settings_qt::library::remove_folders(vec![folder_id]).await;
+        refresh_local_album_link().await;
+        refresh_detail_copy_inventory(album_id, expected).await;
+    });
+}
+
+/// Drop an unindexed copy from QBZ's inventory without touching its folder or
+/// files. The operation re-checks Local Library at click time so a stale modal
+/// cannot forget a copy that was just registered elsewhere.
+pub fn forget_copy_record(copy_id: String) {
+    let copy_id = copy_id.trim().to_string();
+    let Some((album_id, _)) = detail_inventory_request() else {
+        return;
+    };
+    if copy_id.is_empty() {
+        return;
+    }
+    crate::spawn(async move {
+        let lookup_album_id = album_id.clone();
+        let preference = tokio::task::spawn_blocking(move || {
+            crate::library_db_qt::with_db(false, |db| {
+                let copy = db
+                    .get_purchase_copy(&copy_id)?
+                    .filter(|copy| copy.album_id == lookup_album_id);
+                let Some(copy) = copy else {
+                    return Ok(None);
+                };
+                let folders = db.get_folders_with_metadata()?;
+                let coverage = copy_library_coverage(&copy.resolved_album_folder, &folders);
+                if coverage.in_local_library || coverage.exact_folder_id > 0 {
+                    return Ok(None);
+                }
+                if !db.delete_purchase_copy_record(&copy.copy_id)? {
+                    return Ok(None);
+                }
+                Ok(Some(db.purchase_playback_preference(&lookup_album_id)?))
+            })
+            .flatten()
+        })
+        .await
+        .ok()
+        .flatten();
+        let Some(preference) = preference else {
+            crate::toast_qt::error(qbz_i18n::t("Could not forget that download."));
+            return;
+        };
+        crate::album_qt::patch_purchase_playback_preference(
+            &album_id,
+            match preference.mode {
+                PurchasePlaybackMode::Qobuz => "qobuz",
+                PurchasePlaybackMode::Purchase => "purchase",
+            },
+            preference.format_id.unwrap_or(0),
+        );
+        refresh_after_download().await;
+        let runtime = crate::app();
+        crate::playback_qt::rematerialize_current_album_source(&runtime, &album_id).await;
+    });
+}
+
 /// Delegate one exact copy folder to Local Library's typed authority. Exact
 /// duplicates refresh, ancestors cover, disabled roots stay disabled, and the
 /// queued scan machinery prevents a concurrent scan from dropping this one.
@@ -4340,6 +4592,91 @@ mod tests {
         );
         assert_eq!(highest_entitled_quality(&[55, 56]), "DSD128 · DSF");
         assert_eq!(highest_entitled_quality(&[]), "");
+    }
+
+    #[test]
+    fn download_revalidation_preserves_the_grant_route_and_stream_availability() {
+        let catalog: Album = serde_json::from_str(
+            r#"{"id":"dsd","streamable":true,"hires":false,
+                 "hires_streamable":false,"maximum_sampling_rate":44.1}"#,
+        )
+        .unwrap();
+        assert!(download_format_is_permitted(&catalog, &[55], 55, false));
+        assert!(download_format_is_permitted(&catalog, &[55], 6, true));
+        assert!(!download_format_is_permitted(&catalog, &[55], 6, false));
+        assert!(!download_format_is_permitted(&catalog, &[55], 7, true));
+
+        let purchase_only: Album = serde_json::from_str(
+            r#"{"id":"store-only","streamable":false,"hires":true,
+                 "hires_streamable":true,"maximum_sampling_rate":192.0}"#,
+        )
+        .unwrap();
+        assert!(download_format_is_permitted(
+            &purchase_only,
+            &[56],
+            56,
+            false
+        ));
+        assert!(!download_format_is_permitted(
+            &purchase_only,
+            &[56],
+            27,
+            true
+        ));
+    }
+
+    #[test]
+    fn purchase_detail_play_prefers_the_highest_complete_healthy_copy() {
+        fn snapshot(
+            format_id: i64,
+            health: PurchaseCopyHealth,
+        ) -> qbz_library::PurchaseCopySnapshot {
+            qbz_library::PurchaseCopySnapshot {
+                copy: qbz_library::PurchaseDownloadCopy {
+                    copy_id: format!("copy-{format_id}"),
+                    album_id: "album".to_string(),
+                    format_id,
+                    resolved_album_folder: format!("/tmp/{format_id}"),
+                    created_at: 0,
+                    updated_at: 0,
+                },
+                health,
+                downloaded_tracks: 1,
+                healthy_tracks: 1,
+                total_tracks: 1,
+                tracks: Vec::new(),
+            }
+        }
+        let copies = vec![
+            snapshot(6, PurchaseCopyHealth::CompleteHealthy),
+            snapshot(55, PurchaseCopyHealth::CompleteHealthy),
+            snapshot(56, PurchaseCopyHealth::Partial),
+        ];
+        assert_eq!(best_complete_purchase_format(&copies), Some(55));
+    }
+
+    #[test]
+    fn copy_library_coverage_only_exposes_an_exact_root_for_removal() {
+        let parent = PathBuf::from("/tmp/qbz-copy-coverage-test/Music");
+        let copy = parent.join("Artist/Album");
+        let folder = |id, path: &Path| qbz_library::LibraryFolder {
+            id,
+            path: path.to_string_lossy().into_owned(),
+            alias: None,
+            enabled: true,
+            is_network: false,
+            network_fs_type: None,
+            user_override_network: false,
+            last_scan: None,
+        };
+
+        let covered = copy_library_coverage(&copy.to_string_lossy(), &[folder(1, &parent)]);
+        assert!(covered.in_local_library);
+        assert_eq!(covered.exact_folder_id, 0);
+
+        let exact = copy_library_coverage(&copy.to_string_lossy(), &[folder(2, &copy)]);
+        assert!(exact.in_local_library);
+        assert_eq!(exact.exact_folder_id, 2);
     }
 }
 

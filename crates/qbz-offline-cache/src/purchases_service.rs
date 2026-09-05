@@ -437,6 +437,13 @@ pub fn purchase_formats(album: &Album, entitlement_ids: &[u32]) -> Vec<PurchaseF
         );
         return synth_formats(album);
     }
+    // A purchase may remain downloadable after its catalog edition stops
+    // streaming (purchase-only, regional withdrawal, or label takedown). The
+    // entitlement still grants its exact master, but there is no streaming
+    // ladder to append in that state.
+    if !album.is_streamable() {
+        return menu;
+    }
     let top = menu.iter().map(|f| format_rank(f.id)).max().unwrap_or(0);
     for mut extra in synth_formats(album) {
         let owned = menu.iter().any(|f| f.id == extra.id);
@@ -1750,7 +1757,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dsd64_purchase_streaming_at_cd_quality_offers_only_its_entitlement() {
+    fn a_dsd64_purchase_streaming_at_cd_quality_adds_lower_stream_formats() {
         // Megadeth, Rust In Peace on the live account: hires:false, 16/44.1
         // catalog, downloadable_format_ids [55]. The synthesis would say "CD
         // FLAC + MP3"; the entitlement says DSD64 and nothing else.
@@ -1790,6 +1797,15 @@ mod tests {
         let menu = purchase_formats(&cd_streams, &[56]);
         let ids: Vec<(u32, bool)> = menu.iter().map(|f| (f.id, f.streaming)).collect();
         assert_eq!(ids, vec![(56, false), (6, true), (5, true)]);
+    }
+
+    #[test]
+    fn a_purchase_only_album_offers_only_its_entitled_master() {
+        let mut album = album_streaming(true, Some(192.0), true);
+        album.streamable = Some(false);
+        let menu = purchase_formats(&album, &[56]);
+        let ids: Vec<(u32, bool)> = menu.iter().map(|f| (f.id, f.streaming)).collect();
+        assert_eq!(ids, vec![(56, false)]);
     }
 
     #[test]

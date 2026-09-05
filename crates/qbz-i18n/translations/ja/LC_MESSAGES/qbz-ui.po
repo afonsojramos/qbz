@@ -1386,6 +1386,24 @@ msgstr "今すぐ再生を開始しますか？"
 msgid "Not now"
 msgstr "今はしない"
 
+msgid "Show location"
+msgstr "場所を表示"
+
+msgid "Remove from Local Library"
+msgstr "ローカルライブラリから削除"
+
+msgid "Forget download record"
+msgstr "ダウンロード記録を消去"
+
+msgid "Could not open that folder."
+msgstr "このフォルダーを開けませんでした。"
+
+msgid "Could not remove that library folder."
+msgstr "このフォルダーをライブラリから削除できませんでした。"
+
+msgid "Could not forget that download."
+msgstr "このダウンロード記録を消去できませんでした。"
+
 msgid "Create radio"
 msgstr "ラジオを作成"
 

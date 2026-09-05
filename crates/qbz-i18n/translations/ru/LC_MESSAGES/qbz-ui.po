@@ -1387,6 +1387,24 @@ msgstr "Начать воспроизведение сейчас?"
 msgid "Not now"
 msgstr "Не сейчас"
 
+msgid "Show location"
+msgstr "Показать расположение"
+
+msgid "Remove from Local Library"
+msgstr "Удалить из локальной библиотеки"
+
+msgid "Forget download record"
+msgstr "Забыть запись о загрузке"
+
+msgid "Could not open that folder."
+msgstr "Не удалось открыть эту папку."
+
+msgid "Could not remove that library folder."
+msgstr "Не удалось удалить эту папку из библиотеки."
+
+msgid "Could not forget that download."
+msgstr "Не удалось забыть эту загрузку."
+
 msgid "Create radio"
 msgstr "Создать радио"
 

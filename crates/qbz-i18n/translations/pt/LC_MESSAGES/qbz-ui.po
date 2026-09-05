@@ -1425,6 +1425,24 @@ msgstr "Iniciar a reprodução agora?"
 msgid "Not now"
 msgstr "Agora não"
 
+msgid "Show location"
+msgstr "Mostrar localização"
+
+msgid "Remove from Local Library"
+msgstr "Remover da biblioteca local"
+
+msgid "Forget download record"
+msgstr "Esquecer registro do download"
+
+msgid "Could not open that folder."
+msgstr "Não foi possível abrir essa pasta."
+
+msgid "Could not remove that library folder."
+msgstr "Não foi possível remover essa pasta da biblioteca."
+
+msgid "Could not forget that download."
+msgstr "Não foi possível esquecer esse download."
+
 msgid "Create radio"
 msgstr "Criar rádio"
 
