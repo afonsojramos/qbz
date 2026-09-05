@@ -5430,6 +5430,12 @@ msgstr "Diese Disc ist DST-komprimiert; QBZ kann sie noch nicht abspielen."
 msgid "That file is not a disc image."
 msgstr "Diese Datei ist kein Disc-Image."
 
+msgid "That file is not a SACD image."
+msgstr "Diese Datei ist kein SACD-Abbild."
+
+msgid "That SACD image is damaged or unsupported."
+msgstr "Dieses SACD-Abbild ist beschädigt oder wird nicht unterstützt."
+
 msgid "SACD"
 msgstr "SACD"
 

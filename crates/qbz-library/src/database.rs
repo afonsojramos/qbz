@@ -1,7 +1,9 @@
 //! SQLite database layer for library persistence
 
 use rusqlite::{params, Connection, OptionalExtension};
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use crate::{
@@ -37,6 +39,19 @@ pub struct LibraryDatabase {
     conn: Connection,
 }
 
+/// Qt creates several library-backed singletons and starts the folder scanner
+/// during the same startup turn. Each owns a separate SQLite connection, but
+/// schema discovery plus `ALTER TABLE` is a check-then-act sequence and must
+/// not run concurrently inside this process.
+static SCHEMA_INIT_LOCK: Mutex<()> = Mutex::new(());
+
+/// Scope reconciliation walks every indexed SACD against every registered
+/// root. One pass per database and process is enough: runtime folder changes
+/// update ownership directly, while the next process start repairs legacy or
+/// externally modified state again.
+static SACD_SCOPE_RECONCILED: LazyLock<Mutex<HashSet<PathBuf>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
 /// A SQL predicate restricting the shared remote mirror to the sources the user
 /// has enabled.
 ///
@@ -68,6 +83,10 @@ impl LibraryDatabase {
         conn.busy_timeout(Duration::from_millis(2_500))
             .map_err(|e| LibraryError::Database(format!("Failed to set busy timeout: {}", e)))?;
 
+        let schema_guard = SCHEMA_INIT_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         // Enable WAL mode for better concurrent access
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
             .map_err(|e| LibraryError::Database(format!("Failed to set WAL mode: {}", e)))?;
@@ -75,6 +94,18 @@ impl LibraryDatabase {
         let db = Self { conn };
         db.init_schema()?;
         db.run_migrations()?;
+        let needs_sacd_scope_reconcile = SACD_SCOPE_RECONCILED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(db_path)
+            .is_none();
+        if needs_sacd_scope_reconcile {
+            db.reconcile_sacd_catalog_scope()?;
+            SACD_SCOPE_RECONCILED
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(db_path.to_path_buf());
+        }
         // First-class LOCAL playlists (offline-mode D7) — separate module,
         // same database file. Idempotent CREATE IF NOT EXISTS.
         crate::local_playlists::init_schema(&db.conn)
@@ -84,6 +115,7 @@ impl LibraryDatabase {
         crate::qobuz_playlist_snapshot::init_schema(&db.conn).map_err(|e| {
             LibraryError::Database(format!("qobuz_playlist_snapshot schema: {}", e))
         })?;
+        drop(schema_guard);
         Ok(db)
     }
 
@@ -147,7 +179,8 @@ impl LibraryDatabase {
                 image_path TEXT NOT NULL UNIQUE,
                 image_size_bytes INTEGER NOT NULL,
                 image_modified_ns INTEGER NOT NULL,
-                observed_at INTEGER NOT NULL
+                observed_at INTEGER NOT NULL,
+                parser_revision INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS local_sacd_tracks (
@@ -159,6 +192,19 @@ impl LibraryDatabase {
 
             CREATE INDEX IF NOT EXISTS idx_local_sacd_tracks_local_id
                 ON local_sacd_tracks(local_track_id);
+
+            -- A registered Local Library root owns an indexed SACD. Keeping
+            -- this separate from the image allows overlapping roots without
+            -- making a manually opened image persistent.
+            CREATE TABLE IF NOT EXISTS local_sacd_roots (
+                root_id INTEGER NOT NULL,
+                fingerprint TEXT NOT NULL,
+                observed_generation INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(root_id, fingerprint)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_local_sacd_roots_fingerprint
+                ON local_sacd_roots(fingerprint);
 
             -- Incremental scanner state. `local_tracks` remains authoritative;
             -- these tables only remember what each root observed and whether
@@ -411,6 +457,42 @@ impl LibraryDatabase {
 
     /// Run schema migrations for existing databases
     fn run_migrations(&self) -> Result<(), LibraryError> {
+        let has_sacd_parser_revision: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('local_sacd_images') WHERE name = 'parser_revision'",
+                [],
+                |row| row.get::<_, i32>(0),
+            )
+            .map(|count| count > 0)
+            .unwrap_or(false);
+        if !has_sacd_parser_revision {
+            log::info!("Running migration: adding parser_revision to local_sacd_images");
+            if let Err(error) = self.conn.execute_batch(
+                "ALTER TABLE local_sacd_images ADD COLUMN parser_revision INTEGER NOT NULL DEFAULT 0;",
+            ) {
+                // The in-process lock handles QBZ's startup fan-out. This
+                // second check also covers two QBZ processes migrating the
+                // same profile: accept the losing ALTER only if the intended
+                // schema is now observable, never by matching error text.
+                let installed_by_peer = self
+                    .conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM pragma_table_info('local_sacd_images') WHERE name = 'parser_revision'",
+                        [],
+                        |row| row.get::<_, i32>(0),
+                    )
+                    .map(|count| count > 0)
+                    .unwrap_or(false);
+                if !installed_by_peer {
+                    return Err(LibraryError::Database(format!(
+                        "SACD parser revision migration failed: {error}"
+                    )));
+                }
+                log::debug!("SACD parser revision migration completed by another process");
+            }
+        }
+
         // Migration: Add qobuz download tracking fields
         let has_source: bool = self
             .conn
@@ -1057,6 +1139,11 @@ impl LibraryDatabase {
             .optional()
             .map_err(|e| LibraryError::Database(e.to_string()))?;
         if let Some(root_id) = root_id {
+            // A newly registered overlapping root may not have scanned yet.
+            // Materialize every path-based owner before dropping this one so
+            // removing the outer folder cannot orphan a still-owned image.
+            self.reconcile_sacd_catalog_scope()?;
+            self.remove_sacd_root(root_id)?;
             self.conn
                 .execute(
                     "DELETE FROM local_scan_files WHERE root_id = ?",
@@ -1264,6 +1351,7 @@ impl LibraryDatabase {
                 params![id],
             )
             .map_err(|e| LibraryError::Database(e.to_string()))?;
+        self.reconcile_sacd_catalog_scope()?;
         Ok(())
     }
 
@@ -1613,6 +1701,7 @@ impl LibraryDatabase {
                 "BEGIN IMMEDIATE;
                  DELETE FROM local_tracks WHERE source IS NULL OR source != 'qobuz_download';
                  DELETE FROM local_sacd_tracks;
+                 DELETE FROM local_sacd_roots;
                  DELETE FROM local_sacd_images;
                  DELETE FROM local_scan_files;
                  DELETE FROM local_scan_cue_refs;
@@ -9019,5 +9108,57 @@ mod purchase_registry_reachability_tests {
             .unwrap();
         assert_eq!(remaining, 1, "I/O errors are unreachable, never missing");
         crate::reachability::reset_cooldowns();
+    }
+}
+
+#[cfg(test)]
+mod schema_init_concurrency_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn concurrent_opens_serialize_a_legacy_schema_migration() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("library.db");
+        let legacy = Connection::open(&path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE local_sacd_images (
+                    fingerprint TEXT PRIMARY KEY,
+                    image_path TEXT NOT NULL UNIQUE,
+                    image_size_bytes INTEGER NOT NULL,
+                    image_modified_ns INTEGER NOT NULL,
+                    observed_at INTEGER NOT NULL
+                );",
+            )
+            .unwrap();
+        drop(legacy);
+
+        const THREADS: usize = 8;
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles = (0..THREADS)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    LibraryDatabase::open(&path).map(drop)
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+
+        let db = Connection::open(&path).unwrap();
+        let columns: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('local_sacd_images')
+                  WHERE name='parser_revision'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 1);
     }
 }

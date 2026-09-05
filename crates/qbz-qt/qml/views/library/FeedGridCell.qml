@@ -52,11 +52,8 @@ Item {
         }
     }
     function scheduleMutableRestore() {
-        var expected = cell.identity
-        Qt.callLater(function () {
-            if (cell.identity === expected)
-                cell.restoreMutableBindings()
-        })
+        mutableRestore.expectedIdentity = cell.identity
+        mutableRestore.restart()
     }
     onItemChanged: {
         // A popup is a window-overlay child; close it while the old loaded
@@ -70,6 +67,19 @@ Item {
 
     width: 200
     height: 246
+
+    // Lifetime-bound counterpart to Qt.callLater: recycling may destroy this
+    // cell before a global deferred closure runs.
+    Timer {
+        id: mutableRestore
+        interval: 0
+        repeat: false
+        property string expectedIdentity: ""
+        onTriggered: {
+            if (cell.identity === expectedIdentity)
+                cell.restoreMutableBindings()
+        }
+    }
 
     Component {
         id: albumCardComp

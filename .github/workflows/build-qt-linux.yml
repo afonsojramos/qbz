@@ -228,11 +228,15 @@ jobs:
           scripts/packaging/desktop_entry_check.sh --appdir AppDir
           # Nothing in the app uses Qt SQL / network-information plugins.
           rm -rf AppDir/usr/plugins/sqldrivers AppDir/usr/plugins/networkinformation
+          mkdir -p AppDir/usr/share/licenses/qbz
+          cp LICENSE AppDir/usr/share/licenses/qbz/LICENSE
+          cp -r licenses AppDir/usr/share/licenses/qbz/third-party
           echo "platforms: $(find AppDir/usr/plugins/platforms -maxdepth 1 -type f -printf '%f ')"
           test -f AppDir/usr/plugins/platforms/libqwayland-generic.so
           test -f AppDir/usr/plugins/platforms/libqoffscreen.so
           test -f AppDir/usr/qml/QtQuick/Effects/libeffectsplugin.so
           test -f AppDir/usr/bin/qt.conf
+          test -f AppDir/usr/share/licenses/qbz/third-party/Apache-2.0-dst-decoder.txt
           du -sh AppDir
 
       # THE gate. Runs the AppDir with the Qt install removed from the

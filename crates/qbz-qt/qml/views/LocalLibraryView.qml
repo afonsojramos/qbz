@@ -772,7 +772,7 @@ Rectangle {
     function applyFilter(rows, selectedFilter) {
         var selected = selectedFilter || ({})
         if (Object.keys(selected).length === 0) return rows
-        var qAny = selected.hires || selected.cd || selected.lossy
+        var qAny = selected.dsd || selected.hires || selected.cd || selected.lossy
         var fAny = selected.flac || selected.alac || selected.ape || selected.wav
             || selected.mp3 || selected.aac || selected.other
         var sAny = selected.local || selected.offline || selected.plex
@@ -782,41 +782,45 @@ Rectangle {
         for (var i = 0; i < rows.length; i++) {
             var r = rows[i]
             if (selected.favorite === true && !root.albumFavorite(r)) continue
-            var tier = (r.qualityTier || "").toLowerCase()
-            var fmt = (r.format || "").toLowerCase()
-            if (qAny) {
-                var qok = (selected.dsd && tier === "dsd")
-                    || (selected.hires && (tier === "hires" || tier === "max"))
-                    || (selected.cd && tier === "cd")
-                    || (selected.lossy && (tier === "mp3" || tier === "lossy"))
-                if (!qok) continue
-            }
-            if (fAny) {
-                var fok = selected[fmt] === true
-                    || (selected.other === true && known[fmt] !== 1)
-                if (!fok) continue
-            }
-            if (sAny) {
-                // The chips are keyed off the FOLDED word, which is why
-                // local_rows.rs keeps folding `qobuz_purchase` into "offline"
-                // — a purchased album IS a Qobuz download as far as this row
-                // of chips is concerned, and the badge reads `sourceRaw`
-                // instead of splitting the bucket.
-                //
-                // The normalisation below is the reference's §10-H bug kept
-                // closed: Tauri's three arms never mention `qobuz_purchase`,
-                // so a raw word reaching here matches no chip and ticking ANY
-                // source filter hides every purchased album, silently.
-                var sources = r.sources && r.sources.length > 0
-                    ? r.sources : [r.source || "local"]
-                var sourceMatches = false
-                for (var si = 0; si < sources.length; si++) {
-                    if (selected[sourceBucket(sources[si])] === true) {
-                        sourceMatches = true
+            if (qAny || fAny || sAny) {
+                // Test all active media sections against ONE physical copy.
+                // Independent aggregate arrays are not enough: a logical
+                // album can carry DSD on its purchased copy and FLAC on a
+                // different local copy. DSD+FLAC must not manufacture a
+                // parent whose filtered detail has zero tracks.
+                var variants = r.mediaVariants || []
+                if (variants.length === 0) {
+                    var sources = r.sources && r.sources.length > 0
+                        ? r.sources : [r.source || "local"]
+                    variants = []
+                    for (var si = 0; si < sources.length; si++) {
+                        variants.push({ "qualityTier": r.qualityTier || "",
+                                      "format": r.format || "",
+                                      "source": sources[si] })
+                    }
+                }
+                var mediaMatches = false
+                for (var vi = 0; vi < variants.length; vi++) {
+                    var variant = variants[vi]
+                    var tier = (variant.qualityTier || "").toLowerCase()
+                    var fmt = (variant.format || "").toLowerCase()
+                    var qok = !qAny
+                        || (selected.dsd && tier === "dsd")
+                        || (selected.hires && (tier === "hires" || tier === "max"))
+                        || (selected.cd && tier === "cd")
+                        || (selected.lossy && (tier === "mp3" || tier === "lossy"))
+                    var fok = !fAny || selected[fmt] === true
+                        || (selected.other === true && known[fmt] !== 1)
+                    // `sourceBucket` folds qobuz_purchase into Offline while
+                    // its raw word remains available to the gold badge.
+                    var sok = !sAny
+                        || selected[sourceBucket(variant.source)] === true
+                    if (qok && fok && sok) {
+                        mediaMatches = true
                         break
                     }
                 }
-                if (!sourceMatches) continue
+                if (!mediaMatches) continue
             }
             out.push(r)
         }
@@ -886,7 +890,7 @@ Rectangle {
 
     function artistMatchesFilter(artist, selected) {
         if (!selected || Object.keys(selected).length === 0) return true
-        var qAny = selected.hires || selected.cd || selected.lossy
+        var qAny = selected.dsd || selected.hires || selected.cd || selected.lossy
         var fAny = selected.flac || selected.alac || selected.ape || selected.wav
             || selected.mp3 || selected.aac || selected.other
         var sAny = selected.local || selected.offline || selected.plex

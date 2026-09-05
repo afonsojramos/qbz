@@ -455,15 +455,28 @@ Item {
                                 })
                             }
                             function scheduleMutableRestore() {
-                                var expected = cardCell.slot
-                                Qt.callLater(function () {
-                                    if (cardCell.slot === expected)
-                                        cardCell.restoreMutableBindings()
-                                })
+                                mutableRestore.expected = cardCell.slot
+                                mutableRestore.restart()
                             }
                             onSlotChanged: cardCell.scheduleMutableRestore()
                             Component.onCompleted:
                                 cardCell.scheduleMutableRestore()
+
+                            // A queued Qt.callLater closure can outlive this
+                            // recycled delegate and then call into an invalid
+                            // QML context. A child timer is cancelled with its
+                            // owner, so delayed binding repair cannot escape
+                            // the card cell's lifetime.
+                            Timer {
+                                id: mutableRestore
+                                interval: 0
+                                repeat: false
+                                property var expected: null
+                                onTriggered: {
+                                    if (cardCell.slot === expected)
+                                        cardCell.restoreMutableBindings()
+                                }
+                            }
 
                             AlbumCard {
                                 id: albumCard

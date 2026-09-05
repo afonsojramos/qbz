@@ -5416,6 +5416,12 @@ msgstr "このディスクはDST圧縮のため、QBZではまだ再生できま
 msgid "That file is not a disc image."
 msgstr "そのファイルはディスクイメージではありません。"
 
+msgid "That file is not a SACD image."
+msgstr "そのファイルはSACDイメージではありません。"
+
+msgid "That SACD image is damaged or unsupported."
+msgstr "そのSACDイメージは破損しているか、サポートされていません。"
+
 msgid "SACD"
 msgstr "SACD"
 

@@ -94,6 +94,8 @@ parts:
       qml: opt/qbz/qml
       qbz.desktop: usr/share/applications/qbz.desktop
       qbz.png: usr/share/icons/hicolor/256x256/apps/qbz.png
+      LICENSE: usr/share/licenses/qbz/LICENSE
+      licenses: usr/share/licenses/qbz/third-party
     # Runtime the AppDir does NOT carry. The AppDir contains Qt/QML, D-Bus and
     # the non-system xcb/Wayland helpers selected by linuxdeploy; the GNOME
     # extension supplies the host graphics, display and font stack. Keep this

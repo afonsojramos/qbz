@@ -17,7 +17,7 @@ use serde::Serialize;
 use crate::local_bridge::ui;
 use crate::local_rows::{
     album_favorite_source, badge_source, badge_source_raw, catalog_album_sources, detail_of,
-    total_duration, AlbumRow,
+    total_duration, AlbumMediaVariant, AlbumRow,
 };
 
 const PAGE_ENTRIES: usize = 100;
@@ -1074,6 +1074,23 @@ fn map_album(record: &AlbumRecord, index: usize) -> NativeAlbum {
     let source = badge_source(Some(record.source_raw_or_kind()));
     let source_raw = badge_source_raw(Some(record.source_raw_or_kind()));
     let sources = catalog_album_sources(record);
+    let variant_sources = if sources.is_empty() {
+        vec![if source_raw.is_empty() {
+            source.clone()
+        } else {
+            source_raw.clone()
+        }]
+    } else {
+        sources.clone()
+    };
+    let media_variants = variant_sources
+        .into_iter()
+        .map(|variant_source| AlbumMediaVariant {
+            quality_tier: record.quality_tier.clone(),
+            format: record.format.to_ascii_uppercase(),
+            source: variant_source,
+        })
+        .collect();
     let favoriteable = album_favorite_source(&sources).is_some();
     NativeAlbum {
         row: AlbumRow {
@@ -1094,6 +1111,7 @@ fn map_album(record: &AlbumRecord, index: usize) -> NativeAlbum {
                 record.sample_rate_hz.unwrap_or(0) as f64,
             ),
             format: record.format.to_ascii_uppercase(),
+            media_variants,
             genres: Vec::new(),
             art_key,
             source,

@@ -10,7 +10,7 @@
 #     distros without a usable Qt (Ubuntu 24.04 = Qt 6.4) keep working.
 #
 # CONTRACT (do not break): the release must keep publishing
-#   qbz_${VERSION}_arm64.tar.gz   (dir qbz_${VERSION}_arm64/{qbz, qbzd, LICENSE, qbz.desktop,
+#   qbz_${VERSION}_arm64.tar.gz   (dir qbz_${VERSION}_arm64/{qbz, qbzd, LICENSE, licenses/, qbz.desktop,
 #                                  com.blitzfc.qbz.metainfo.xml, qbzd.service,
 #                                  completions/, icons/hicolor/...})
 #   QBZ_${VERSION}_arm64.deb / QBZ-${VERSION}-1.aarch64.rpm / QBZ_${VERSION}_arm64.AppImage
@@ -290,6 +290,7 @@ jobs:
           cp packaging/linux/qbz.desktop "tarball-staging/${TARBALL_DIR}/qbz.desktop"
           cp packaging/flatpak/com.blitzfc.qbz.metainfo.xml "tarball-staging/${TARBALL_DIR}/com.blitzfc.qbz.metainfo.xml"
           cp LICENSE "tarball-staging/${TARBALL_DIR}/LICENSE"
+          cp -r licenses "tarball-staging/${TARBALL_DIR}/licenses"
           cp qbzd "tarball-staging/${TARBALL_DIR}/qbzd"
           chmod +x "tarball-staging/${TARBALL_DIR}/qbzd"
           cp crates/qbzd/service/qbzd.service "tarball-staging/${TARBALL_DIR}/qbzd.service"
@@ -312,6 +313,7 @@ jobs:
           cp qbzd.fish "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.fish"
           cp packaging/linux/qbzd-standalone-README.md "qbzd-tarball-staging/${QBZD_DIR}/README.md"
           cp LICENSE "qbzd-tarball-staging/${QBZD_DIR}/LICENSE"
+          cp -r licenses "qbzd-tarball-staging/${QBZD_DIR}/licenses"
           tar -czvf "dist/qbzd-${VERSION}-linux-${DEB_ARCH}.tar.gz" -C qbzd-tarball-staging "${QBZD_DIR}"
           ls -la dist
 

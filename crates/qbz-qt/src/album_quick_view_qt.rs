@@ -174,22 +174,7 @@ fn map_album(requested_id: String, album: Album) -> QuickViewDoc {
 }
 
 fn local_quality_rank(track: &LocalTrack) -> (u8, u32, u64) {
-    let tier = match crate::local_rows::tier_of(&track.format, track.bit_depth, track.sample_rate) {
-        "max" => 4,
-        "hires" => 3,
-        "cd" => 2,
-        "mp3" => 1,
-        _ => 0,
-    };
-    (
-        tier,
-        track.bit_depth.unwrap_or(0),
-        if track.sample_rate.is_finite() && track.sample_rate > 0.0 {
-            track.sample_rate as u64
-        } else {
-            0
-        },
-    )
+    crate::local_rows::media_quality_rank(&track.format, track.bit_depth, track.sample_rate)
 }
 
 /// Build a preview from the best physical copy without calling

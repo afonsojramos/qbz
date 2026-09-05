@@ -10,3 +10,4 @@ qbz-disc = { path = "../qbz-disc" }
 thiserror = { workspace = true }
 log = { workspace = true }
 id3 = "1"
+dst-decoder = "=0.1.2"
