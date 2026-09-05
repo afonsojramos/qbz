@@ -52,13 +52,16 @@
 use std::sync::{LazyLock, Mutex};
 
 use cxx_qt_lib::QString;
-use qbz_models::Track;
+use qbz_models::{Album, Track};
 use qbz_playlist_import::{rank_candidates, ImportTrack};
 use serde::{Deserialize, Serialize};
 
 /// The reference's limit, and the matcher's own `SEARCH_LIMIT`. Twenty rows is
 /// as many as a human will actually read.
 const SEARCH_LIMIT: u32 = 20;
+const RELEASE_TITLE_WEIGHT: f32 = 0.75;
+const RELEASE_ARTIST_WEIGHT: f32 = 0.25;
+const RELEASE_MIN_SCORE: f32 = 0.65;
 
 // ---------------------------------------------------------------------------
 // D3 — the session memory of tracks that died under the player
@@ -150,9 +153,36 @@ pub struct DeadRow {
     pub duration_secs: u64,
 }
 
+/// Withdrawn release opened from Library > All. Album search chooses the new
+/// release; the old track evidence lets the explicit primary action resolve
+/// and replace the corresponding favourite inside that release.
+#[derive(Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseSeed {
+    /// `track` replaces one favourite with its equivalent inside the chosen
+    /// release; `album` replaces the withdrawn release favourite itself.
+    pub target_kind: String,
+    pub album_id: String,
+    pub album_title: String,
+    #[serde(default)]
+    pub track_id: String,
+    #[serde(default)]
+    pub track_title: String,
+    #[serde(default)]
+    pub artist: String,
+    #[serde(default)]
+    pub album_artist: String,
+    #[serde(default)]
+    pub isrc: String,
+    #[serde(default)]
+    pub duration_secs: u64,
+}
+
 #[derive(Clone, Default, Serialize)]
 pub struct CandidateRow {
     pub id: String,
+    #[serde(rename = "albumId")]
+    pub album_id: String,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -165,6 +195,9 @@ pub struct CandidateRow {
     #[serde(rename = "qualityDetail")]
     pub quality_detail: String,
     pub duration: String,
+    /// Release mode uses this for the catalog year. Empty for playlist-track
+    /// candidates so the existing row layout remains unchanged.
+    pub year: String,
     pub score: f32,
     /// ISRC-identical to the dead row: the SAME recording under a new id. The
     /// modal says so, because it is the difference between a certainty and a
@@ -180,6 +213,10 @@ pub struct CandidateRow {
 #[derive(Clone, Default, Serialize)]
 pub struct ReplaceDoc {
     pub open: bool,
+    /// `track` (playlist mutation) or `release` (Library discovery/navigation).
+    pub mode: String,
+    #[serde(rename = "targetKind")]
+    pub target_kind: String,
     pub loading: bool,
     pub applying: bool,
     pub query: String,
@@ -190,6 +227,8 @@ pub struct ReplaceDoc {
     pub candidates: Vec<CandidateRow>,
     #[serde(rename = "selectedId")]
     pub selected_id: String,
+    #[serde(rename = "selectedAlbumId")]
+    pub selected_album_id: String,
     #[serde(rename = "hasExact")]
     pub has_exact: bool,
 }
@@ -197,9 +236,11 @@ pub struct ReplaceDoc {
 #[derive(Default)]
 struct ReplaceState {
     open: bool,
+    mode: String,
     loading: bool,
     applying: bool,
     dead: DeadRow,
+    release: ReleaseSeed,
     query: String,
     candidates: Vec<CandidateRow>,
     selected_id: String,
@@ -220,13 +261,35 @@ fn with_state<R>(f: impl FnOnce(&mut ReplaceState) -> R) -> R {
 fn publish() {
     let doc = with_state(|st| ReplaceDoc {
         open: st.open,
+        mode: st.mode.clone(),
+        target_kind: if st.mode == "release" {
+            st.release.target_kind.clone()
+        } else {
+            "playlist".into()
+        },
         loading: st.loading,
         applying: st.applying,
         query: st.query.clone(),
-        dead_title: st.dead.title.clone(),
-        dead_artist: st.dead.artist.clone(),
+        dead_title: if st.mode == "release" && st.release.target_kind == "track" {
+            st.release.track_title.clone()
+        } else if st.mode == "release" {
+            st.release.album_title.clone()
+        } else {
+            st.dead.title.clone()
+        },
+        dead_artist: if st.mode == "release" {
+            st.release.artist.clone()
+        } else {
+            st.dead.artist.clone()
+        },
         candidates: st.candidates.clone(),
         selected_id: st.selected_id.clone(),
+        selected_album_id: st
+            .candidates
+            .iter()
+            .find(|candidate| candidate.id == st.selected_id)
+            .map(|candidate| candidate.album_id.clone())
+            .unwrap_or_default(),
         has_exact: st.candidates.iter().any(|c| c.exact),
     });
     let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".into());
@@ -258,9 +321,11 @@ pub(crate) fn open(payload_json: &str) {
     let query = format!("{} {}", dead.title, dead.artist);
     let generation = with_state(|st| {
         st.open = true;
+        st.mode = "track".into();
         st.loading = true;
         st.applying = false;
         st.dead = dead.clone();
+        st.release = ReleaseSeed::default();
         st.query = query.clone();
         // A stale list would show the PREVIOUS row's candidates under this
         // row's title for as long as the search takes.
@@ -274,37 +339,95 @@ pub(crate) fn open(payload_json: &str) {
     crate::spawn(async move { run_search(dead, query, generation).await });
 }
 
+/// Open the same ranked-candidate surface in Library RELEASE mode. Unlike the
+/// playlist path this does not swap a track: the selected result is opened and
+/// all favourite cleanup stays behind its own explicit action.
+pub(crate) fn open_release(payload_json: &str) {
+    let release: ReleaseSeed = match serde_json::from_str(payload_json) {
+        Ok(seed) => seed,
+        Err(error) => {
+            log::warn!("[qbz-qt] release replace: unreadable payload: {error}");
+            return;
+        }
+    };
+    let valid_target = match release.target_kind.as_str() {
+        "album" => true,
+        "track" => !release.track_id.is_empty() && !release.track_title.trim().is_empty(),
+        _ => false,
+    };
+    if release.album_id.is_empty() || release.album_title.trim().is_empty() || !valid_target {
+        log::warn!("[qbz-qt] release replace: invalid album/track replacement payload, ignored");
+        return;
+    }
+
+    // The query is intentionally the edition-stripped TITLE ALONE. Artist is
+    // a ranking signal, not a word that can push the right release beyond the
+    // API's first 20 hits.
+    let normalized = qbz_external_reco::normalize_catalog_name(&release.album_title);
+    let query = if normalized.is_empty() {
+        release.album_title.trim().to_string()
+    } else {
+        normalized
+    };
+    let generation = with_state(|st| {
+        st.open = true;
+        st.mode = "release".into();
+        st.loading = true;
+        st.applying = false;
+        st.dead = DeadRow::default();
+        st.release = release.clone();
+        st.query = query.clone();
+        st.candidates.clear();
+        st.selected_id.clear();
+        st.generation = st.generation.wrapping_add(1);
+        st.generation
+    });
+    publish();
+    crate::spawn(async move { run_release_search(release, query, generation).await });
+}
+
 /// The query is editable and re-searchable (the reference's one good idea).
 pub(crate) fn search(query: &str) {
     let query = query.trim().to_string();
     if query.is_empty() {
         return;
     }
-    let Some((dead, generation)) = with_state(|st| {
+    let Some((mode, dead, release, generation)) = with_state(|st| {
         if !st.open || st.applying {
             return None;
         }
         st.query = query.clone();
         st.loading = true;
         st.generation = st.generation.wrapping_add(1);
-        Some((st.dead.clone(), st.generation))
+        Some((
+            st.mode.clone(),
+            st.dead.clone(),
+            st.release.clone(),
+            st.generation,
+        ))
     }) else {
         return;
     };
     publish();
 
-    crate::spawn(async move { run_search(dead, query, generation).await });
+    crate::spawn(async move {
+        if mode == "release" {
+            run_release_search(release, query, generation).await;
+        } else {
+            run_search(dead, query, generation).await;
+        }
+    });
 }
 
 /// Pick a candidate. An id that is not in the list is ignored rather than
 /// stored: the apply path trusts this field, and a selection the user cannot
 /// see is exactly the state the same-id guard exists to keep out.
-pub(crate) fn select(track_id: &str) {
+pub(crate) fn select(candidate_id: &str) {
     let changed = with_state(|st| {
-        if st.applying || !st.candidates.iter().any(|c| c.id == track_id) {
+        if st.applying || !st.candidates.iter().any(|c| c.id == candidate_id) {
             return false;
         }
-        st.selected_id = track_id.to_string();
+        st.selected_id = candidate_id.to_string();
         true
     });
     if changed {
@@ -312,12 +435,36 @@ pub(crate) fn select(track_id: &str) {
     }
 }
 
+/// Non-mutating inspection path shared by both picker modes. Release rows use
+/// their own id; playlist-track rows carry their embedded album id. A terse
+/// search result with no album id leaves the button disabled in QML and is
+/// guarded again here.
+pub(crate) fn open_selected_album() {
+    let album_id = with_state(|st| {
+        if st.applying || !st.open {
+            return String::new();
+        }
+        st.candidates
+            .iter()
+            .find(|candidate| candidate.id == st.selected_id)
+            .map(|candidate| candidate.album_id.clone())
+            .unwrap_or_default()
+    });
+    if album_id.is_empty() {
+        return;
+    }
+    close();
+    crate::open_album(album_id);
+}
+
 pub(crate) fn close() {
     with_state(|st| {
         st.open = false;
+        st.mode.clear();
         st.loading = false;
         st.applying = false;
         st.dead = DeadRow::default();
+        st.release = ReleaseSeed::default();
         st.query.clear();
         st.candidates.clear();
         st.selected_id.clear();
@@ -451,6 +598,155 @@ async fn run_search(dead: DeadRow, query: String, generation: u64) {
     }
 }
 
+/// Release search deliberately uses `/album/search` rather than trying to
+/// infer a new album id from track hits. The user asked to choose among
+/// editions, so one row must equal one release.
+async fn run_release_search(release: ReleaseSeed, query: String, generation: u64) {
+    let runtime = crate::app();
+    let found = runtime
+        .core()
+        .search_albums(&query, SEARCH_LIMIT, 0, None)
+        .await
+        .map(|page| page.items)
+        .unwrap_or_else(|error| {
+            log::warn!("[qbz-qt] release replace: search '{query}' failed: {error}");
+            Vec::new()
+        });
+
+    let rows: Vec<CandidateRow> = rank_release_candidates(&release, &found)
+        .into_iter()
+        .map(|(album, score)| map_release_candidate(&album, score))
+        .collect();
+    let art_urls: Vec<String> = rows
+        .iter()
+        .filter(|row| row.art_path.is_empty() && !row.art_url.is_empty())
+        .map(|row| row.art_url.clone())
+        .collect();
+
+    let landed = with_state(|st| {
+        if !st.open || st.mode != "release" || st.generation != generation {
+            return false;
+        }
+        st.selected_id = rows.first().map(|row| row.id.clone()).unwrap_or_default();
+        st.candidates = rows;
+        st.loading = false;
+        true
+    });
+    if !landed {
+        return;
+    }
+    publish();
+
+    if !art_urls.is_empty() {
+        crate::artwork_qt::download_missing(art_urls).await;
+        let still_ours = with_state(|st| {
+            if !st.open || st.mode != "release" || st.generation != generation {
+                return false;
+            }
+            for row in st.candidates.iter_mut() {
+                if row.art_path.is_empty() && !row.art_url.is_empty() {
+                    row.art_path = crate::artwork_qt::cached_path(&row.art_url);
+                }
+            }
+            true
+        });
+        if still_ours {
+            publish();
+        }
+    }
+}
+
+fn release_quality(album: &Album) -> (u32, f64) {
+    let bit_depth = album
+        .audio_info
+        .as_ref()
+        .and_then(|info| info.maximum_bit_depth)
+        .or(album.maximum_bit_depth)
+        .unwrap_or(0);
+    let sample_rate = album
+        .audio_info
+        .as_ref()
+        .and_then(|info| info.maximum_sampling_rate)
+        .or(album.maximum_sampling_rate)
+        .unwrap_or(0.0);
+    (bit_depth, sample_rate)
+}
+
+/// Best semantic match first; quality only breaks a score tie. The sort is
+/// stable so Qobuz relevance remains the final tie-breaker.
+fn rank_release_candidates(seed: &ReleaseSeed, candidates: &[Album]) -> Vec<(Album, f32)> {
+    let seed_artist = if seed.album_artist.trim().is_empty() {
+        &seed.artist
+    } else {
+        &seed.album_artist
+    };
+    let mut ranked: Vec<(Album, f32)> = candidates
+        .iter()
+        .filter(|album| album.id != seed.album_id && album.is_streamable())
+        .map(|album| {
+            let title = crate::album_qt::format_album_title(&album.title, album.version.as_deref());
+            let title_score = qbz_external_reco::catalog_similarity(&seed.album_title, &title);
+            let artist_score =
+                qbz_external_reco::catalog_similarity(seed_artist, &album.artist.name);
+            let score = title_score * RELEASE_TITLE_WEIGHT
+                + if seed_artist.trim().is_empty() {
+                    0.0
+                } else {
+                    artist_score * RELEASE_ARTIST_WEIGHT
+                };
+            (album.clone(), score)
+        })
+        .collect();
+
+    fn bucket(score: f32) -> i32 {
+        (score * 100.0).round() as i32
+    }
+    ranked.sort_by(|(a, a_score), (b, b_score)| {
+        let (a_depth, a_rate) = release_quality(a);
+        let (b_depth, b_rate) = release_quality(b);
+        bucket(*b_score)
+            .cmp(&bucket(*a_score))
+            .then_with(|| b_depth.cmp(&a_depth))
+            .then_with(|| b_rate.total_cmp(&a_rate))
+    });
+    ranked
+}
+
+fn map_release_candidate(album: &Album, score: f32) -> CandidateRow {
+    let art_url = album.image.best().cloned().unwrap_or_default();
+    let (bit_depth, sample_rate) = release_quality(album);
+    let date = album
+        .dates
+        .as_ref()
+        .and_then(|dates| {
+            dates
+                .original
+                .as_deref()
+                .or(dates.stream.as_deref())
+                .or(dates.download.as_deref())
+        })
+        .or(album.release_date_original.as_deref());
+    CandidateRow {
+        id: album.id.clone(),
+        album_id: album.id.clone(),
+        title: crate::album_qt::format_album_title(&album.title, album.version.as_deref()),
+        artist: album.artist.name.clone(),
+        album: String::new(),
+        art_path: crate::artwork_qt::cached_path(&art_url),
+        art_url,
+        quality_tier: crate::playlist_qt::tier((bit_depth > 0).then_some(bit_depth)).to_string(),
+        quality_detail: crate::home_qt::quality_detail_from_parts(
+            (bit_depth > 0).then_some(bit_depth),
+            (sample_rate > 0.0).then_some(sample_rate),
+        ),
+        duration: String::new(),
+        year: qbz_text_utils::dates::release_label(date),
+        score,
+        exact: false,
+        weak: score < RELEASE_MIN_SCORE,
+    }
+}
+
 fn map_candidate(track: &Track, score: f32, exact: bool) -> CandidateRow {
     let album = track.album.as_ref();
     let art_url = album
@@ -458,6 +754,7 @@ fn map_candidate(track: &Track, score: f32, exact: bool) -> CandidateRow {
         .unwrap_or_default();
     CandidateRow {
         id: track.id.to_string(),
+        album_id: album.map(|album| album.id.clone()).unwrap_or_default(),
         // The version suffix is load-bearing HERE above anywhere else: "(2011
         // Remaster)" is often the entire difference between the candidates.
         title: match track.version.as_ref().filter(|v| !v.is_empty()) {
@@ -478,6 +775,7 @@ fn map_candidate(track: &Track, score: f32, exact: bool) -> CandidateRow {
             track.maximum_sampling_rate,
         ),
         duration: crate::playlist_qt::mmss(track.duration),
+        year: String::new(),
         score,
         exact,
         // An ISRC hit is never weak, whatever the text says about it.
@@ -489,19 +787,30 @@ fn map_candidate(track: &Track, score: f32, exact: bool) -> CandidateRow {
 // Apply: ADD -> REPOSITION -> REMOVE
 // ---------------------------------------------------------------------------
 
-/// See the module header for why that order and why neither failure path rolls
-/// anything back.
+/// See the module header for the playlist transaction. Release mode uses the
+/// same safety invariant for favourites: add the live replacement first and
+/// only then remove the unavailable heart.
 pub(crate) fn apply() {
-    let Some((dead, selected)) = with_state(|st| {
+    let Some((mode, dead, release, selected)) = with_state(|st| {
         if st.applying || st.selected_id.is_empty() || !st.open {
             return None;
         }
         st.applying = true;
-        Some((st.dead.clone(), st.selected_id.clone()))
+        Some((
+            st.mode.clone(),
+            st.dead.clone(),
+            st.release.clone(),
+            st.selected_id.clone(),
+        ))
     }) else {
         return;
     };
     publish();
+
+    if mode == "release" {
+        apply_library_replacement(release, selected);
+        return;
+    }
 
     let (Ok(pid), Ok(new_id), Ok(dead_ptid)) = (
         dead.playlist_id.parse::<u64>(),
@@ -581,6 +890,167 @@ pub(crate) fn apply() {
     });
 }
 
+fn release_track_source(seed: &ReleaseSeed) -> ImportTrack {
+    ImportTrack {
+        title: seed.track_title.clone(),
+        artist: seed.artist.clone(),
+        album: (!seed.album_title.is_empty()).then(|| seed.album_title.clone()),
+        duration_ms: (seed.duration_secs > 0).then(|| seed.duration_secs * 1000),
+        isrc: (!seed.isrc.is_empty()).then(|| seed.isrc.clone()),
+        provider_id: None,
+        provider_url: None,
+    }
+}
+
+/// Resolve the old recording inside the release the human selected. Album
+/// track payloads can omit `performer`; fill only that absent evidence from the
+/// album's main artist before using the shared matcher. ISRC equality remains
+/// its 1.0 short-circuit. A text-only guess below the importer's own confidence
+/// floor is refused.
+fn matching_track_in_release(seed: &ReleaseSeed, album: &Album) -> Option<(Track, f32, bool)> {
+    let old_id = seed.track_id.parse::<u64>().unwrap_or(0);
+    let mut candidates = album.tracks.as_ref()?.items.clone();
+    candidates.retain(|track| track.id != old_id && track.is_streamable());
+    for track in &mut candidates {
+        if track.performer.is_none() && !album.artist.name.is_empty() {
+            track.performer = Some(album.artist.clone());
+        }
+    }
+
+    let source = release_track_source(seed);
+    let (track, score) = rank_candidates(&source, &candidates).into_iter().next()?;
+    let exact = !seed.isrc.trim().is_empty()
+        && track
+            .isrc
+            .as_deref()
+            .map(|isrc| seed.isrc.eq_ignore_ascii_case(isrc))
+            .unwrap_or(false);
+    (exact || score >= qbz_playlist_import::MIN_MATCH_SCORE).then_some((track, score, exact))
+}
+
+fn apply_library_replacement(seed: ReleaseSeed, album_id: String) {
+    let runtime = crate::app();
+    crate::spawn(async move {
+        if seed.target_kind == "album" {
+            log::info!(
+                "[qbz-qt] library album replace: {} -> {}",
+                seed.album_id,
+                album_id
+            );
+            replace_library_favorite(&runtime, "album", &seed.album_id, &album_id).await;
+            return;
+        }
+
+        let album = match runtime.core().get_album(&album_id).await {
+            Ok(album) => album,
+            Err(error) => {
+                log::error!(
+                    "[qbz-qt] library track replace: selected album {album_id} failed: {error}"
+                );
+                stop_applying();
+                crate::toast_qt::error(qbz_i18n::t("Could not open the selected release"));
+                return;
+            }
+        };
+        let Some((replacement, score, exact)) = matching_track_in_release(&seed, &album) else {
+            log::warn!(
+                "[qbz-qt] library track replace: no confident match for {} in album {album_id}",
+                seed.track_id
+            );
+            stop_applying();
+            crate::toast_qt::error(qbz_i18n::t(
+                "Could not find a matching track in this release",
+            ));
+            return;
+        };
+        let new_id = replacement.id.to_string();
+        if new_id == seed.track_id {
+            log::error!(
+                "[qbz-qt] library track replace: selected release resolved to dead id {new_id}"
+            );
+            stop_applying();
+            crate::toast_qt::error(qbz_i18n::t(
+                "Could not find a matching track in this release",
+            ));
+            return;
+        }
+        log::info!(
+            "[qbz-qt] library track replace: {} -> {} via album {} (score={score:.3}, exact_isrc={exact})",
+            seed.track_id,
+            new_id,
+            album_id
+        );
+
+        replace_library_favorite(&runtime, "track", &seed.track_id, &new_id).await;
+    });
+}
+
+/// Add-first favourite swap shared by album and track tombstones. Every server
+/// success settles the feed/cache independently; a failed removal deliberately
+/// keeps both hearts because deleting the new live one would be a second write
+/// exposed to the same failure.
+async fn replace_library_favorite(
+    runtime: &std::sync::Arc<qbz_app::shell::AppRuntime<qbz_core::LoggingAdapter>>,
+    kind: &str,
+    old_id: &str,
+    new_id: &str,
+) {
+    if old_id == new_id {
+        log::error!("[qbz-qt] library {kind} replace: old and new id are both {old_id}");
+        stop_applying();
+        crate::toast_qt::error(qbz_i18n::t("Could not add the replacement favorite"));
+        return;
+    }
+
+    // Add first. A failed create leaves the old favourite untouched.
+    if let Err(error) = runtime.core().add_favorite(kind, new_id).await {
+        log::error!("[qbz-qt] library {kind} replace: add favourite {new_id} failed: {error}");
+        stop_applying();
+        crate::toast_qt::error(qbz_i18n::t("Could not add the replacement favorite"));
+        return;
+    }
+
+    crate::fav_cache_qt::set(kind, new_id, true);
+    crate::library_qt::set_feed_favorite(kind, new_id, true);
+    let mut membership_changed =
+        crate::library_qt::reconcile_qobuz_favorite(runtime, kind, new_id, true).await;
+    crate::emit_library_favorite(kind, new_id, true);
+
+    let old_removed = match runtime.core().remove_favorite(kind, old_id).await {
+        Ok(()) => {
+            crate::fav_cache_qt::set(kind, old_id, false);
+            crate::library_qt::set_feed_favorite(kind, old_id, false);
+            membership_changed |=
+                crate::library_qt::reconcile_qobuz_favorite(runtime, kind, old_id, false).await;
+            crate::emit_library_favorite(kind, old_id, false);
+            if kind == "track" {
+                if let Ok(old_track_id) = old_id.parse::<u64>() {
+                    session_unavailable::forget(old_track_id);
+                }
+            }
+            true
+        }
+        Err(error) => {
+            log::error!(
+                "[qbz-qt] library {kind} replace: replacement {new_id} landed but removing {old_id} failed: {error}"
+            );
+            false
+        }
+    };
+
+    if membership_changed {
+        crate::publish_library_document();
+    }
+    close();
+    if old_removed {
+        crate::toast_qt::success(qbz_i18n::t("Favorite replaced"));
+    } else {
+        crate::toast_qt::error(qbz_i18n::t(
+            "The replacement was added, but the unavailable favorite could not be removed",
+        ));
+    }
+}
+
 /// Move the freshly-appended replacement into the dead row's slot.
 ///
 /// Returns whether the move actually happened. EVERY exit is a `false` plus a
@@ -657,4 +1127,129 @@ async fn reposition(
         return false;
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn album(id: &str, title: &str, artist: &str, depth: u32, rate: f64) -> Album {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "title": title,
+            "artist": { "id": 1, "name": artist },
+            "streamable": true,
+            "maximum_bit_depth": depth,
+            "maximum_sampling_rate": rate
+        }))
+        .expect("album fixture")
+    }
+
+    #[test]
+    fn release_query_cleanup_strips_edition_noise_and_leading_punctuation() {
+        assert_eq!(
+            qbz_external_reco::normalize_catalog_name("...And Justice for All (Remastered 2018)"),
+            "and justice for all"
+        );
+    }
+
+    #[test]
+    fn release_ranking_filters_old_and_unavailable_ids_and_uses_quality_for_ties() {
+        let seed = ReleaseSeed {
+            target_kind: "album".into(),
+            album_id: "old".into(),
+            album_title: "...And Justice for All (Remastered 2018)".into(),
+            artist: "Metallica".into(),
+            album_artist: "Metallica".into(),
+            ..Default::default()
+        };
+        let same = album("old", "...And Justice for All", "Metallica", 24, 192.0);
+        let mut unavailable = album("gone", "...And Justice for All", "Metallica", 24, 192.0);
+        unavailable.streamable = Some(false);
+        let cd = album("cd", "...And Justice for All", "Metallica", 16, 44.1);
+        let hires = album("hires", "...And Justice for All", "Metallica", 24, 96.0);
+        let wrong_artist = album(
+            "tribute",
+            "...And Justice for All",
+            "Various Artists",
+            24,
+            192.0,
+        );
+
+        let ranked = rank_release_candidates(&seed, &[same, unavailable, cd, wrong_artist, hires]);
+        let ids: Vec<&str> = ranked.iter().map(|(album, _)| album.id.as_str()).collect();
+        assert_eq!(ids, vec!["hires", "cd", "tribute"]);
+    }
+
+    #[test]
+    fn release_candidate_keeps_version_year_and_quality_as_decision_aids() {
+        let mut candidate = album("new", "Album", "Artist", 24, 96.0);
+        candidate.version = Some("Remastered 2024".into());
+        candidate.release_date_original = Some("1988-09-07".into());
+        let row = map_release_candidate(&candidate, 1.0);
+        assert_eq!(row.title, "Album (Remastered 2024)");
+        assert_eq!(row.artist, "Artist");
+        assert!(!row.year.is_empty());
+        assert!(!row.quality_detail.is_empty());
+    }
+
+    #[test]
+    fn selected_release_resolves_the_live_equivalent_track() {
+        let seed = ReleaseSeed {
+            target_kind: "track".into(),
+            album_id: "old-album".into(),
+            album_title: "Album (Remastered 2018)".into(),
+            track_id: "10".into(),
+            track_title: "One (Remastered 2018)".into(),
+            artist: "Metallica".into(),
+            album_artist: "Metallica".into(),
+            isrc: "US-OLD-123".into(),
+            duration_secs: 447,
+        };
+        let mut selected = album("new-album", "Album", "Metallica", 24, 96.0);
+        selected.tracks = Some(qbz_models::TracksContainer {
+            items: vec![serde_json::from_value(serde_json::json!({
+                "id": 20,
+                "title": "One",
+                "isrc": "US-OLD-123",
+                "duration": 447,
+                "streamable": true
+            }))
+            .unwrap()],
+            total: 1,
+        });
+
+        let (track, score, exact) = matching_track_in_release(&seed, &selected).unwrap();
+        assert_eq!(track.id, 20);
+        assert_eq!(score, 1.0);
+        assert!(exact);
+    }
+
+    #[test]
+    fn selected_release_refuses_an_unrelated_track() {
+        let seed = ReleaseSeed {
+            target_kind: "track".into(),
+            album_id: "old-album".into(),
+            album_title: "Album".into(),
+            track_id: "10".into(),
+            track_title: "One".into(),
+            artist: "Metallica".into(),
+            album_artist: "Metallica".into(),
+            ..Default::default()
+        };
+        let mut selected = album("new-album", "Album", "Metallica", 24, 96.0);
+        selected.tracks = Some(qbz_models::TracksContainer {
+            items: vec![serde_json::from_value(serde_json::json!({
+                "id": 21,
+                "title": "Completely Different",
+                "performer": { "id": 2, "name": "Someone Else" },
+                "duration": 120,
+                "streamable": true
+            }))
+            .unwrap()],
+            total: 1,
+        });
+
+        assert!(matching_track_in_release(&seed, &selected).is_none());
+    }
 }

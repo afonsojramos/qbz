@@ -80,6 +80,11 @@ Rectangle {
         // its favorite entry instead of being left with a permanent tombstone.
         m.push({ "label": feedRow.favorite ? t("Remove from Library", r) : t("Add to Library", r),
                  "icon": feedRow.favorite ? "heart-filled" : "heart", "action": "favorite" })
+        if (feedRow.item.source === "qobuz"
+                && feedRow.item.qobuzUnavailable === true) {
+            m.push({ "label": t("Look for better replacement", r),
+                     "icon": "search", "action": "find-release" })
+        }
         return m
     }
     function albumAction(action) {
@@ -88,6 +93,13 @@ Rectangle {
         if (action === "open") QbzAlbum.openAlbum(feedRow.item.id)
         else if (action === "play") QbzPlayer.playAlbum(feedRow.item.id)
         else if (action === "favorite") feedRow.toggleFavorite()
+        else if (action === "find-release") QbzTrackReplace.openRelease(JSON.stringify({
+            "targetKind": "album",
+            "albumId": feedRow.item.id || "",
+            "albumTitle": feedRow.item.title || "",
+            "artist": feedRow.item.artist || "",
+            "albumArtist": feedRow.item.artist || ""
+        }))
     }
     // Settle + rollback + cross-surface walk. `artKey` IS
     // `library_qt::feed_key(kind, id)`, the very key the signal carries —

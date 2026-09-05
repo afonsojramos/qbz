@@ -679,6 +679,40 @@ pub struct AlbumSummary {
     /// "In library" tab admits a track through either.
     #[serde(default)]
     pub artist: Option<Artist>,
+    /// Release/edition suffix on embedded album rows (for example
+    /// "Remastered 2021"). Search and favourites payloads carry it even
+    /// though older endpoints omit it.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Availability of the release that owns this track. As with the full
+    /// [`Album`] model, absence means unknown — never unavailable.
+    #[serde(default)]
+    pub streamable: Option<bool>,
+    /// Unix timestamp at which this release becomes streamable, when supplied
+    /// by the embedding endpoint.
+    #[serde(default)]
+    pub streamable_at: Option<i64>,
+    /// ISO streaming release date, used as the fallback upcoming signal.
+    #[serde(default)]
+    pub release_date_stream: Option<String>,
+}
+
+impl AlbumSummary {
+    /// `None` is a terse endpoint, not a withdrawal.
+    pub fn is_streamable(&self) -> bool {
+        self.streamable.unwrap_or(true)
+    }
+
+    /// Distinguish a future release from a withdrawn one using the same rule
+    /// as [`Track::is_upcoming`].
+    pub fn is_upcoming(&self) -> bool {
+        !self.is_streamable()
+            && upcoming_from(
+                self.streamable_at,
+                self.release_date_stream.as_deref(),
+                chrono::Utc::now(),
+            )
+    }
 }
 
 /// Album model
@@ -2137,6 +2171,31 @@ mod purchase_deserializer_tests {
         assert!(!album.is_streamable());
     }
 
+    #[test]
+    fn embedded_album_availability_keeps_unknown_distinct_from_false() {
+        let absent: AlbumSummary = serde_json::from_str(r#"{"id":"a","title":"A"}"#).unwrap();
+        assert_eq!(absent.streamable, None);
+        assert!(absent.is_streamable());
+
+        let withdrawn: AlbumSummary = serde_json::from_str(
+            r#"{"id":"a","title":"A","version":"Remastered","streamable":false}"#,
+        )
+        .unwrap();
+        assert_eq!(withdrawn.streamable, Some(false));
+        assert!(!withdrawn.is_streamable());
+        assert!(!withdrawn.is_upcoming());
+        assert_eq!(withdrawn.version.as_deref(), Some("Remastered"));
+    }
+
+    #[test]
+    fn embedded_future_album_is_upcoming_not_withdrawn() {
+        let upcoming: AlbumSummary = serde_json::from_str(
+            r#"{"id":"a","title":"A","streamable":false,"release_date_stream":"2999-01-01"}"#,
+        )
+        .unwrap();
+        assert!(upcoming.is_upcoming());
+    }
+
     /// `downloadable` drives three list behaviours (the hide-unavailable filter,
     /// the album click gate, the unavailable marker), so its default is not
     /// decoration: getting it wrong ships clickable unavailable albums.
@@ -2319,8 +2378,16 @@ mod upcoming_tests {
     fn future_streamable_at_wins_over_the_date() {
         let now = Utc.with_ymd_and_hms(2026, 9, 2, 12, 0, 0).unwrap();
         assert!(upcoming_from(Some(now.timestamp() + 60), None, now));
-        assert!(upcoming_from(Some(now.timestamp() + 60), Some("2000-01-01"), now));
-        assert!(!upcoming_from(Some(now.timestamp() - 60), Some("2099-01-01"), now));
+        assert!(upcoming_from(
+            Some(now.timestamp() + 60),
+            Some("2000-01-01"),
+            now
+        ));
+        assert!(!upcoming_from(
+            Some(now.timestamp() - 60),
+            Some("2099-01-01"),
+            now
+        ));
         // The captured dead track: `streamable_at: null`, past release date.
         assert!(!upcoming_from(None, Some("2013-06-21"), now));
     }
@@ -2329,7 +2396,10 @@ mod upcoming_tests {
     fn release_date_is_the_fallback_and_absence_is_not_upcoming() {
         let now = Utc.with_ymd_and_hms(2026, 9, 2, 12, 0, 0).unwrap();
         assert!(upcoming_from(None, Some("2026-10-16"), now));
-        assert!(!upcoming_from(None, Some("2026-09-02"), now), "today is not upcoming");
+        assert!(
+            !upcoming_from(None, Some("2026-09-02"), now),
+            "today is not upcoming"
+        );
         assert!(!upcoming_from(None, Some("not a date"), now));
         assert!(!upcoming_from(None, None, now));
     }

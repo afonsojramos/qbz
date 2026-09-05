@@ -41,6 +41,9 @@ Item {
     readonly property bool loading: doc.loading === true
     readonly property bool applying: doc.applying === true
     readonly property string selectedId: doc.selectedId || ""
+    readonly property string selectedAlbumId: doc.selectedAlbumId || ""
+    readonly property bool releaseMode: doc.mode === "release"
+    readonly property string targetKind: doc.targetKind || "playlist"
 
     // The ONLY local state in the file: what the user has typed but not yet
     // submitted. Everything else is Rust's document, so a republish (a late
@@ -86,8 +89,8 @@ Item {
     Rectangle {
         id: card
         anchors.centerIn: parent
-        width: Math.min(parent.width - 80, 620)
-        height: Math.min(Math.max(420, panel.implicitHeight + 66), parent.height * 0.9)
+        width: Math.min(parent.width - 48, 760)
+        height: Math.min(parent.height - 48, 520)
         radius: theme.radiusLg
         color: theme.surfaceCard
         border.width: 1
@@ -118,7 +121,9 @@ Item {
                     spacing: 3
                     Text {
                         width: parent.width
-                        text: QbzSession.tr("Find available version", QbzSession.trRev)
+                        text: root.releaseMode
+                            ? QbzSession.tr("Look for better replacement", QbzSession.trRev)
+                            : QbzSession.tr("Find available version", QbzSession.trRev)
                         color: theme.textPrimary
                         font.pixelSize: theme.fontSection
                         font.weight: theme.weightSemibold
@@ -237,7 +242,7 @@ Item {
                 width: parent.width
                 // Fills whatever the card has left between the query row and
                 // the footer, so the list scrolls instead of the card growing.
-                height: Math.max(120, card.height - 72 - 1 - 67 - 66)
+                height: Math.max(120, card.height - 72 - 1 - 67 - 100)
 
                 QbzSpinner {
                     anchors.centerIn: parent
@@ -251,7 +256,9 @@ Item {
                     anchors.centerIn: parent
                     width: parent.width - 96
                     visible: !root.loading && root.rows.length === 0
-                    text: QbzSession.tr("No available version found", QbzSession.trRev)
+                    text: root.releaseMode
+                        ? QbzSession.tr("No replacement releases found", QbzSession.trRev)
+                        : QbzSession.tr("No available version found", QbzSession.trRev)
                     color: theme.textMuted
                     font.pixelSize: theme.fontLink
                     horizontalAlignment: Text.AlignHCenter
@@ -276,7 +283,7 @@ Item {
                         required property var modelData
                         readonly property bool picked: root.selectedId === modelData.id
                         width: ListView.view ? ListView.view.width : 0
-                        height: 56
+                        height: 64
                         radius: theme.radiusSm
                         color: picked ? theme.surfaceElevated
                              : (candArea.containsMouse ? theme.surfaceHover : "transparent")
@@ -295,8 +302,8 @@ Item {
                             // normal first frame, not a failure.
                             Rectangle {
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: 40
-                                height: 40
+                                width: 46
+                                height: 46
                                 radius: 3
                                 color: theme.surfaceElevated
                                 clip: true
@@ -378,8 +385,11 @@ Item {
                                 Text {
                                     width: parent.width
                                     text: (cand.modelData.artist || "")
-                                          + ((cand.modelData.album || "") !== ""
-                                              ? "  ·  " + cand.modelData.album : "")
+                                          + (root.releaseMode
+                                              ? (((cand.modelData.year || "") !== "")
+                                                  ? "  ·  " + cand.modelData.year : "")
+                                              : (((cand.modelData.album || "") !== "")
+                                                  ? "  ·  " + cand.modelData.album : ""))
                                     color: theme.textMuted
                                     font.pixelSize: theme.fontLegal
                                     elide: Text.ElideRight
@@ -401,7 +411,7 @@ Item {
                                 }
                                 Text {
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: cand.modelData.duration || ""
+                                    text: root.releaseMode ? "" : (cand.modelData.duration || "")
                                     color: theme.textMuted
                                     font.pixelSize: theme.fontLegal
                                 }
@@ -422,57 +432,84 @@ Item {
         }
 
         // --- Footer, pinned to the card bottom ---------------------------
-        Rectangle {
+        Item {
+            id: footer
             anchors.left: parent.left
             anchors.right: parent.right
-            anchors.bottom: footerRow.top
-            anchors.bottomMargin: 16
-            height: 1
-            color: theme.borderSubtle
-        }
-        // What the swap will DO to the playlist, said before it is done. The
-        // reference silently appended; this one takes the dead row's slot, and
-        // when the reposition call fails the toast says so instead.
-        Text {
-            anchors.left: parent.left
-            anchors.leftMargin: 24
-            anchors.right: footerRow.left
-            anchors.rightMargin: 12
-            anchors.verticalCenter: footerRow.verticalCenter
-            visible: root.rows.length > 0
-            text: QbzSession.tr("The replacement takes the unavailable track's place in the playlist.",
-                                QbzSession.trRev)
-            color: theme.textMuted
-            font.pixelSize: theme.fontLegal
-            wrapMode: Text.WordWrap
-            elide: Text.ElideRight
-        }
-        Row {
-            id: footerRow
-            anchors.right: parent.right
-            anchors.rightMargin: 24
             anchors.bottom: parent.bottom
-            anchors.bottomMargin: 16
-            spacing: 12
+            height: 100
 
-            SettingsButton {
-                anchors.verticalCenter: parent.verticalCenter
-                text: QbzSession.tr("Cancel", QbzSession.trRev)
-                btnHeight: 34
-                minWidth: 0
-                enabled: !root.applying
-                onClicked: QbzTrackReplace.close()
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: theme.borderSubtle
             }
-            // The single accent confirm (ADR-008). Disabled until something is
-            // selected — there is no in-body error state to fall back on.
-            QbzPrimaryButton {
-                anchors.verticalCenter: parent.verticalCenter
-                btnHeight: 34
-                label: root.applying
-                    ? QbzSession.tr("Replacing...", QbzSession.trRev)
-                    : QbzSession.tr("Replace", QbzSession.trRev)
-                btnEnabled: !root.applying && !root.loading && root.selectedId !== ""
-                onClicked: QbzTrackReplace.apply()
+
+            // State the write separately from the action row. This keeps the
+            // disclosure readable after the shared third button is added.
+            Text {
+                anchors.left: parent.left
+                anchors.leftMargin: 24
+                anchors.right: parent.right
+                anchors.rightMargin: 24
+                anchors.top: parent.top
+                anchors.topMargin: 9
+                visible: root.rows.length > 0
+                text: root.releaseMode
+                    ? (root.targetKind === "album"
+                        ? QbzSession.tr("The selected release replaces the unavailable album favorite.",
+                                        QbzSession.trRev)
+                        : QbzSession.tr("The matching track from the selected release replaces the unavailable favorite.",
+                                        QbzSession.trRev))
+                    : QbzSession.tr("The replacement takes the unavailable track's place in the playlist.",
+                                    QbzSession.trRev)
+                color: theme.textMuted
+                font.pixelSize: theme.fontLegal
+                elide: Text.ElideRight
+            }
+
+            Row {
+                id: footerRow
+                anchors.right: parent.right
+                anchors.rightMargin: 24
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 14
+                spacing: 10
+
+                SettingsButton {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: QbzSession.tr("Cancel", QbzSession.trRev)
+                    btnHeight: 34
+                    minWidth: 0
+                    enabled: !root.applying
+                    onClicked: QbzTrackReplace.close()
+                }
+                SettingsButton {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: QbzSession.tr("Open album", QbzSession.trRev)
+                    btnHeight: 34
+                    minWidth: 0
+                    enabled: !root.applying && !root.loading
+                        && root.selectedAlbumId !== ""
+                    onClicked: QbzTrackReplace.openSelectedAlbum()
+                }
+                // The single accent mutation (ADR-008). Open album remains a
+                // neutral inspection action and never writes.
+                QbzPrimaryButton {
+                    anchors.verticalCenter: parent.verticalCenter
+                    btnHeight: 34
+                    label: root.releaseMode
+                        ? (root.applying
+                            ? QbzSession.tr("Replacing favorite...", QbzSession.trRev)
+                            : QbzSession.tr("Replace in Library", QbzSession.trRev))
+                        : (root.applying
+                        ? QbzSession.tr("Replacing...", QbzSession.trRev)
+                        : QbzSession.tr("Replace", QbzSession.trRev))
+                    btnEnabled: !root.applying && !root.loading && root.selectedId !== ""
+                    onClicked: QbzTrackReplace.apply()
+                }
             }
         }
     }

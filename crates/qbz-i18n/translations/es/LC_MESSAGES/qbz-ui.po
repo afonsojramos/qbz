@@ -6762,3 +6762,60 @@ msgstr "Abrir enlaces de Qobuz en QBZ"
 
 msgid "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
 msgstr "Hace que QBZ maneje los enlaces qobuzapp:// que salen de tu navegador. Apagado, la app oficial de Qobuz se queda con ellos; los enlaces qbz:// de QBZ siempre abren aquí."
+
+msgid "Look for better replacement"
+msgstr "Buscar un reemplazo mejor"
+
+msgid "Remove all favorites from this release"
+msgstr "Eliminar todos los favoritos de este lanzamiento"
+
+msgid "Remove all favorites from this release?"
+msgstr "¿Eliminar todos los favoritos de este lanzamiento?"
+
+msgid "Remove the album and every track from this release from your Library?"
+msgstr "¿Eliminar de tu Biblioteca el álbum y todas las pistas de este lanzamiento?"
+
+msgid "No replacement releases found"
+msgstr "No se encontraron lanzamientos de reemplazo"
+
+msgid "Choosing a result opens the release. Your existing favorites are not changed."
+msgstr "Al elegir un resultado se abre el lanzamiento. Tus favoritos actuales no cambian."
+
+msgid "No favorites from this release to remove"
+msgstr "No hay favoritos de este lanzamiento para eliminar"
+
+msgid "Favorites removed from this release"
+msgstr "Se eliminaron los favoritos de este lanzamiento"
+
+msgid "Could not remove favorites from this release"
+msgstr "No se pudieron eliminar los favoritos de este lanzamiento"
+
+msgid "Some favorites could not be removed"
+msgstr "No se pudieron eliminar algunos favoritos"
+
+msgid "Replace in Library"
+msgstr "Reemplazar en la Biblioteca"
+
+msgid "Replacing favorite..."
+msgstr "Reemplazando favorito..."
+
+msgid "The selected release replaces the unavailable album favorite."
+msgstr "El lanzamiento seleccionado reemplaza el álbum favorito no disponible."
+
+msgid "The matching track from the selected release replaces the unavailable favorite."
+msgstr "La pista equivalente del lanzamiento seleccionado reemplaza el favorito no disponible."
+
+msgid "Could not open the selected release"
+msgstr "No se pudo abrir el lanzamiento seleccionado"
+
+msgid "Could not find a matching track in this release"
+msgstr "No se encontró una pista equivalente en este lanzamiento"
+
+msgid "Could not add the replacement favorite"
+msgstr "No se pudo agregar el favorito de reemplazo"
+
+msgid "Favorite replaced"
+msgstr "Favorito reemplazado"
+
+msgid "The replacement was added, but the unavailable favorite could not be removed"
+msgstr "Se agregó el reemplazo, pero no se pudo eliminar el favorito no disponible"

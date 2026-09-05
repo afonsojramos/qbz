@@ -6737,3 +6737,60 @@ msgstr "Qobuz のリンクを QBZ で開く"
 
 msgid "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
 msgstr "ブラウザーからの qobuzapp:// リンクを QBZ で処理します。オフの場合は公式の Qobuz アプリが処理します。QBZ 独自の qbz:// リンクは常にここで開きます。"
+
+msgid "Look for better replacement"
+msgstr "より良い代替盤を探す"
+
+msgid "Remove all favorites from this release"
+msgstr "このリリースのすべてのお気に入りを削除"
+
+msgid "Remove all favorites from this release?"
+msgstr "このリリースのすべてのお気に入りを削除しますか？"
+
+msgid "Remove the album and every track from this release from your Library?"
+msgstr "このリリースのアルバムとすべてのトラックをライブラリから削除しますか？"
+
+msgid "No replacement releases found"
+msgstr "代替リリースが見つかりません"
+
+msgid "Choosing a result opens the release. Your existing favorites are not changed."
+msgstr "結果を選ぶとリリースが開きます。現在のお気に入りは変更されません。"
+
+msgid "No favorites from this release to remove"
+msgstr "このリリースには削除するお気に入りがありません"
+
+msgid "Favorites removed from this release"
+msgstr "このリリースのお気に入りを削除しました"
+
+msgid "Could not remove favorites from this release"
+msgstr "このリリースのお気に入りを削除できませんでした"
+
+msgid "Some favorites could not be removed"
+msgstr "一部のお気に入りを削除できませんでした"
+
+msgid "Replace in Library"
+msgstr "ライブラリ内で置き換え"
+
+msgid "Replacing favorite..."
+msgstr "お気に入りを置き換えています..."
+
+msgid "The selected release replaces the unavailable album favorite."
+msgstr "選択したリリースで、利用できないお気に入りのアルバムを置き換えます。"
+
+msgid "The matching track from the selected release replaces the unavailable favorite."
+msgstr "選択したリリース内の一致する曲で、利用できないお気に入りを置き換えます。"
+
+msgid "Could not open the selected release"
+msgstr "選択したリリースを開けませんでした"
+
+msgid "Could not find a matching track in this release"
+msgstr "このリリース内に一致する曲が見つかりませんでした"
+
+msgid "Could not add the replacement favorite"
+msgstr "置き換え用のお気に入りを追加できませんでした"
+
+msgid "Favorite replaced"
+msgstr "お気に入りを置き換えました"
+
+msgid "The replacement was added, but the unavailable favorite could not be removed"
+msgstr "置き換えを追加しましたが、利用できないお気に入りを削除できませんでした"

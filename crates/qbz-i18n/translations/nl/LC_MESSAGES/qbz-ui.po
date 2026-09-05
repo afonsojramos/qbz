@@ -6744,3 +6744,60 @@ msgstr "Qobuz-links openen in QBZ"
 
 msgid "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
 msgstr "Maakt QBZ de handler voor qobuzapp://-links uit je browser. Uit: de officiële Qobuz-app houdt ze; QBZ's eigen qbz://-links openen altijd hier."
+
+msgid "Look for better replacement"
+msgstr "Een betere vervanging zoeken"
+
+msgid "Remove all favorites from this release"
+msgstr "Alle favorieten van deze uitgave verwijderen"
+
+msgid "Remove all favorites from this release?"
+msgstr "Alle favorieten van deze uitgave verwijderen?"
+
+msgid "Remove the album and every track from this release from your Library?"
+msgstr "Het album en alle nummers van deze uitgave uit je bibliotheek verwijderen?"
+
+msgid "No replacement releases found"
+msgstr "Geen vervangende uitgaven gevonden"
+
+msgid "Choosing a result opens the release. Your existing favorites are not changed."
+msgstr "Als je een resultaat kiest, wordt de uitgave geopend. Je bestaande favorieten blijven ongewijzigd."
+
+msgid "No favorites from this release to remove"
+msgstr "Geen favorieten van deze uitgave om te verwijderen"
+
+msgid "Favorites removed from this release"
+msgstr "Favorieten van deze uitgave verwijderd"
+
+msgid "Could not remove favorites from this release"
+msgstr "Favorieten van deze uitgave konden niet worden verwijderd"
+
+msgid "Some favorites could not be removed"
+msgstr "Sommige favorieten konden niet worden verwijderd"
+
+msgid "Replace in Library"
+msgstr "Vervangen in bibliotheek"
+
+msgid "Replacing favorite..."
+msgstr "Favoriet wordt vervangen..."
+
+msgid "The selected release replaces the unavailable album favorite."
+msgstr "De geselecteerde release vervangt het niet-beschikbare favoriete album."
+
+msgid "The matching track from the selected release replaces the unavailable favorite."
+msgstr "De overeenkomende track van de geselecteerde release vervangt de niet-beschikbare favoriet."
+
+msgid "Could not open the selected release"
+msgstr "De geselecteerde release kon niet worden geopend"
+
+msgid "Could not find a matching track in this release"
+msgstr "Er is geen overeenkomende track in deze release gevonden"
+
+msgid "Could not add the replacement favorite"
+msgstr "De vervangende favoriet kon niet worden toegevoegd"
+
+msgid "Favorite replaced"
+msgstr "Favoriet vervangen"
+
+msgid "The replacement was added, but the unavailable favorite could not be removed"
+msgstr "De vervanging is toegevoegd, maar de niet-beschikbare favoriet kon niet worden verwijderd"
