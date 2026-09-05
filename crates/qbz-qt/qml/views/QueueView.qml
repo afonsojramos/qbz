@@ -38,6 +38,56 @@ Rectangle {
         && root.doc.currentIndex < root.rows.length
     readonly property int actionRailWidth: 52
 
+    // Timing for the chronological projection currently on screen. History is
+    // fully elapsed, the current row contributes the player's live position,
+    // and upcoming rows are fully remaining. A filtered listen list therefore
+    // reports the duration of exactly the rows its count describes.
+    readonly property var queueTiming: {
+        var total = 0
+        var elapsed = 0
+        for (var i = 0; i < root.rows.length; i++) {
+            var row = root.rows[i] || ({})
+            var secs = Math.max(0, Math.floor(row.durationSecs || 0))
+            total += secs
+            if (row.phase === "history")
+                elapsed += secs
+            else if (row.phase === "current")
+                elapsed += Math.min(secs, Math.max(0, QbzPlayer.npElapsedSecs))
+        }
+        return ({ "total": total, "elapsed": Math.min(total, elapsed),
+                  "remaining": Math.max(0, total - elapsed) })
+    }
+
+    function compactDuration(secs) {
+        var value = Math.max(0, Math.floor(secs || 0))
+        var hours = Math.floor(value / 3600)
+        var minutes = Math.floor((value % 3600) / 60)
+        if (hours > 0)
+            return hours + "h " + minutes + "m"
+        return minutes + "m"
+    }
+
+    function clockDuration(secs) {
+        var value = Math.max(0, Math.floor(secs || 0))
+        var hours = Math.floor(value / 3600)
+        var minutes = Math.floor((value % 3600) / 60)
+        var seconds = value % 60
+        var mm = (hours > 0 && minutes < 10 ? "0" : "") + minutes
+        var ss = (seconds < 10 ? "0" : "") + seconds
+        return hours > 0 ? hours + ":" + mm + ":" + ss : minutes + ":" + ss
+    }
+
+    readonly property string queueTimingTooltip:
+        QbzSession.tr("Elapsed: {}", QbzSession.trRev)
+            .replace("{}", root.clockDuration(root.queueTiming.elapsed))
+        + "\n"
+        + QbzSession.tr("Remaining: {}", QbzSession.trRev)
+            .replace("{}", root.clockDuration(root.queueTiming.remaining))
+    onQueueTimingTooltipChanged: {
+        if (queueSummaryHover.containsMouse)
+            tips.showAbove(queueSummary, "queue-timing", root.queueTimingTooltip)
+    }
+
     // Opt-in follow mode. It survives playback-driven document updates but
     // yields immediately to any user scroll or queue-ordering gesture, so a
     // track transition can never yank the viewport away while the user is
@@ -460,11 +510,20 @@ Rectangle {
                     font.weight: theme.weightSemibold
                 }
                 Text {
+                    id: queueSummary
                     anchors.verticalCenter: parent.verticalCenter
                     visible: root.width >= 900
                     text: root.rows.length + " " + QbzSession.tr("tracks", QbzSession.trRev)
+                        + "  •  " + root.compactDuration(root.queueTiming.total)
                     color: theme.textMuted
                     font.pixelSize: 11
+                    MouseArea {
+                        id: queueSummaryHover
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onContainsMouseChanged: tips.hover(containsMouse, queueSummary,
+                            "queue-timing", root.queueTimingTooltip)
+                    }
                 }
             }
 

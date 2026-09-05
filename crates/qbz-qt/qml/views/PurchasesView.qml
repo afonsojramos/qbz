@@ -369,19 +369,39 @@ Rectangle {
 
             // ── 5/6. Body and its states ──────────────────────────────────
 
-            // Loading — the .slint's centred spinner under an 80px lead-in.
+            // Loading — one shared composite skeleton shaped like the active
+            // collection. The bridge marks loading before its first publish,
+            // so the account-empty state can never flash ahead of this block.
             Item {
-                // `searching` too, not just `loading`. A search REFETCHES both
-                // complete purchase sets from the server (§5); without this the
-                // screen sits on stale rows for the whole round trip with no
-                // sign anything is happening, and the user retypes.
-                visible: root.loading || root.doc.searching === true
+                visible: root.loading
                 width: page.contentW
-                height: visible ? 112 : 0
+                height: visible ? Math.max(260, Math.min(620, flick.height - 180)) : 0
+                QbzSkeleton {
+                    anchors.fill: parent
+                    visible: parent.visible
+                    selfDrive: true
+                    variant: root.albumsTab && root.viewMode !== "list"
+                        ? "cardGrid" : "rowList"
+                    cellW: root.albumsTab ? 178 : parent.width
+                    cellH: root.albumsTab ? 248 : 58
+                    cardW: 162
+                    cardH: 232
+                    rowH: root.albumsTab ? 60 : 56
+                    rowGap: root.albumsTab ? 4 : 2
+                    rowArtSize: root.albumsTab ? 48 : 40
+                }
+            }
+
+            // Search keeps the settled rows in place while its server-side
+            // refetch runs; a compact progress indicator avoids replacing the
+            // whole collection with a second first-load skeleton.
+            Item {
+                visible: !root.loading && root.doc.searching === true
+                width: page.contentW
+                height: visible ? 52 : 0
                 QbzSpinner {
-                    size: 32
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.bottom: parent.bottom
+                    size: 28
+                    anchors.centerIn: parent
                 }
             }
 
@@ -431,7 +451,8 @@ Rectangle {
             // which is a lie about their account rather than about the filter.
             // Neither line accuses the network (§15.1-6).
             Column {
-                visible: !root.loading && root.loadError === "" && root.rows.length === 0
+                visible: !root.loading && root.doc.searching !== true
+                    && root.loadError === "" && root.rows.length === 0
                 width: page.contentW
                 spacing: 0
                 Item { width: 1; height: 60 }
@@ -457,6 +478,7 @@ Rectangle {
                 width: page.contentW
                 albums: (root.albumsTab && !root.grouped) ? root.albums : []
                 viewMode: root.viewMode
+                flick: flick
                 onOpenAlbum: function (id) { root.openAlbum(id) }
             }
 
@@ -484,6 +506,7 @@ Rectangle {
                             width: parent.width
                             albums: modelData.items
                             viewMode: root.viewMode
+                            flick: flick
                             onOpenAlbum: function (id) { root.openAlbum(id) }
                         }
                     }
@@ -491,22 +514,13 @@ Rectangle {
             }
 
             // --- TRACKS, flat -------------------------------------------------
-            Column {
+            PurchaseTracksCollection {
                 visible: !root.loading && root.loadError === "" && !root.albumsTab
                     && !root.grouped && root.tracks.length > 0
                 width: page.contentW
-                spacing: 2
-                Repeater {
-                    model: (!root.albumsTab && !root.grouped) ? root.tracks : []
-                    delegate: PurchaseTrackRow {
-                        required property var modelData
-                        required property int index
-                        width: page.contentW
-                        track: modelData
-                        rowIndex: index
-                        onPlayRequested: QbzPlayer.playTrack(modelData.id || "")
-                    }
-                }
+                tracks: (!root.albumsTab && !root.grouped) ? root.tracks : []
+                flick: flick
+                onPlayRequested: function (id) { QbzPlayer.playTrack(id) }
             }
 
             // --- TRACKS, grouped ----------------------------------------------
@@ -529,20 +543,11 @@ Rectangle {
                             font.weight: theme.weightSemibold
                             elide: Text.ElideRight
                         }
-                        Column {
+                        PurchaseTracksCollection {
                             width: parent.width
-                            spacing: 2
-                            Repeater {
-                                model: modelData.items
-                                delegate: PurchaseTrackRow {
-                                    required property var modelData
-                                    required property int index
-                                    width: parent ? parent.width : 0
-                                    track: modelData
-                                    rowIndex: index
-                                    onPlayRequested: QbzPlayer.playTrack(modelData.id || "")
-                                }
-                            }
+                            tracks: modelData.items
+                            flick: flick
+                            onPlayRequested: function (id) { QbzPlayer.playTrack(id) }
                         }
                     }
                 }

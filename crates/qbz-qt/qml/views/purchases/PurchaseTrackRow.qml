@@ -34,6 +34,7 @@ Rectangle {
 
     /// One row of `list_json.tracks` (§G.2).
     property var track: ({})
+    property string artSource: ""
     /// Row index — the odd-row zebra every other track list draws.
     property int rowIndex: 0
     signal playRequested()
@@ -116,7 +117,8 @@ Rectangle {
                     id: art
                     anchors.fill: parent
                     // `artPath`, never `artworkUrl` — see PurchaseGridCard.
-                    source: root.track.artPath || ""
+                    source: root.artSource !== "" ? root.artSource
+                                                  : (root.track.artPath || "")
                     radius: theme.radiusSm
                 }
                 QbzIcon {

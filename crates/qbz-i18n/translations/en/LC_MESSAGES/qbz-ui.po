@@ -2152,6 +2152,9 @@ msgstr "Step {} of {}"
 msgid "Elapsed: {}"
 msgstr "Elapsed: {}"
 
+msgid "Remaining: {}"
+msgstr "Remaining: {}"
+
 msgid "Review the saved source profiles, choose what to copy, and confirm the signed-in destination account."
 msgstr "Review the saved source profiles, choose what to copy, and confirm the signed-in destination account."
 

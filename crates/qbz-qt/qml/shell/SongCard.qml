@@ -45,6 +45,8 @@ Rectangle {
     // Small bar: title+meta as a TIGHT centred group instead of the
     // full-height, space-distributed column.
     property bool textCenter: false
+    /// AppShell's shared topmost tooltip, forwarded to the in-card stamp.
+    property Item tooltip: null
 
     // Furniture is admitted by intrinsic fit, not by a window breakpoint.
     // When a host becomes genuinely narrow, metadata keeps the runway and the
@@ -383,6 +385,7 @@ Rectangle {
 
     SongCardStamp {
         id: stamp
+        tooltipHost: root.tooltip
         visible: root.showBadges && root.stampFits && QbzPlayer.npHasTrack
         anchors.right: parent.right
         // Classic (glass) insets the stamp by pad + stamp-right-margin

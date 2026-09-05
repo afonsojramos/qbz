@@ -2600,6 +2600,57 @@ pub fn tab_changed(tab: i32) {
 /// search.rs PAGE_SIZE (matches the Tauri search page size).
 const PAGE_SIZE: u32 = 20;
 
+/// Finish the artwork half of a page-2+ search request. `attach_urls` resolves
+/// warm cache hits before the rows publish; this downloads the remaining URLs
+/// and performs one guarded refresh so every appended card eventually carries
+/// its real local path. The QML grid can show individual window hits sooner,
+/// but this document refresh retires its loading placeholders definitively.
+async fn refresh_loaded_page_art(version: u64, mut missing: Vec<String>) {
+    if missing.is_empty() {
+        return;
+    }
+    missing.sort();
+    missing.dedup();
+    crate::artwork_qt::download_missing(missing).await;
+    if !is_current_page_version(version) {
+        return;
+    }
+    let doc = {
+        let mut guard = PAGE.lock().unwrap();
+        let Some(page) = guard.as_mut() else { return };
+        if !is_current_page_version(version) {
+            return;
+        }
+        let doc = &mut page.doc;
+        let _ = attach_urls(
+            doc.albums
+                .iter_mut()
+                .map(|row| (row.art_url.clone(), &mut row.art_path))
+                .collect(),
+        );
+        let _ = attach_urls(
+            doc.tracks
+                .iter_mut()
+                .map(|row| (row.art_url.clone(), &mut row.art_path))
+                .collect(),
+        );
+        let _ = attach_urls(
+            doc.artists
+                .iter_mut()
+                .map(|row| (row.art_url.clone(), &mut row.art_path))
+                .collect(),
+        );
+        let _ = attach_urls(
+            doc.playlists
+                .iter_mut()
+                .map(|row| (row.art_url.clone(), &mut row.art_path))
+                .collect(),
+        );
+        doc.clone()
+    };
+    publish_page(&doc);
+}
+
 /// Load more rows for the active per-type tab (offset = rows already loaded).
 pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
     let (query, filter, offset) = {
@@ -2652,7 +2703,11 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
                         publish_page(&doc);
                     }
                 }
-                let _ = missing;
+                if !missing.is_empty() {
+                    crate::spawn(async move {
+                        refresh_loaded_page_art(version, missing).await;
+                    });
+                }
             }
             Err(e) => log::error!("[qbz-qt] search load-more albums failed: {e}"),
         },
@@ -2684,7 +2739,11 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
                         publish_page(&doc);
                     }
                 }
-                let _ = missing;
+                if !missing.is_empty() {
+                    crate::spawn(async move {
+                        refresh_loaded_page_art(version, missing).await;
+                    });
+                }
             }
             Err(e) => log::error!("[qbz-qt] search load-more tracks failed: {e}"),
         },
@@ -2718,7 +2777,11 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
                         publish_page(&doc);
                     }
                 }
-                let _ = missing;
+                if !missing.is_empty() {
+                    crate::spawn(async move {
+                        refresh_loaded_page_art(version, missing).await;
+                    });
+                }
             }
             Err(e) => log::error!("[qbz-qt] search load-more artists failed: {e}"),
         },
@@ -2745,7 +2808,11 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
                         publish_page(&doc);
                     }
                 }
-                let _ = missing;
+                if !missing.is_empty() {
+                    crate::spawn(async move {
+                        refresh_loaded_page_art(version, missing).await;
+                    });
+                }
             }
             Err(e) => log::error!("[qbz-qt] search load-more playlists failed: {e}"),
         },

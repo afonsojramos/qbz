@@ -897,6 +897,7 @@ fn main() {
                 "qml/views/purchases/PurchaseListRow.qml",
                 "qml/views/purchases/PurchaseListHeader.qml",
                 "qml/views/purchases/PurchaseTrackRow.qml",
+                "qml/views/purchases/PurchaseTracksCollection.qml",
                 "qml/views/purchases/PurchasesToolbar.qml",
                 // Playlist Manager (route "playlistmanager"): the router target
                 // plus the TWELVE files of its own module directory. A .qml

@@ -463,6 +463,7 @@ Rectangle {
                     AudioStamp {
                         visible: QbzPlayer.npHasTrack
                         anchors.verticalCenter: parent.verticalCenter
+                        tooltipHost: root.tooltip
                         maxWidth: (QbzPlayer.npIsRemote && QbzPlayer.npCastTarget !== "")
                             ? 280 : 150
                     }

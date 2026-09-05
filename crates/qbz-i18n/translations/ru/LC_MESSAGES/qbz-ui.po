@@ -6605,6 +6605,9 @@ msgstr "Шаг {} из {}"
 msgid "Elapsed: {}"
 msgstr "Прошло времени: {}"
 
+msgid "Remaining: {}"
+msgstr "Осталось: {}"
+
 msgid "Review the saved source profiles, choose what to copy, and confirm the signed-in destination account."
 msgstr "Проверьте сохранённые исходные профили, выберите данные для копирования и подтвердите целевой аккаунт, в который выполнен вход."
 

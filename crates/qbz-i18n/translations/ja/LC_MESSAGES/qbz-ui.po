@@ -6567,6 +6567,9 @@ msgstr "ステップ {} / {}"
 msgid "Elapsed: {}"
 msgstr "経過時間：{}"
 
+msgid "Remaining: {}"
+msgstr "残り時間：{}"
+
 msgid "Review the saved source profiles, choose what to copy, and confirm the signed-in destination account."
 msgstr "保存済みの移行元プロファイルを確認し、コピーする項目を選択して、現在サインイン中の移行先アカウントを確認します。"
 
