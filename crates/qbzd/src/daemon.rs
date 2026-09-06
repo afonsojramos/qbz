@@ -913,6 +913,7 @@ fn diagnose_lock(e: LockError) -> String {
             eprintln!("error: qbzd is already running {who}");
             eprintln!("  → stop it first:  systemctl --user stop qbzd");
             eprintln!("  → or inspect it:  systemctl --user status qbzd");
+            log::logger().flush();
             std::process::exit(3);
         }
         LockError::Io(msg) => {

@@ -202,6 +202,8 @@ pub fn set_auto_tail(on: bool) {
 /// The filtered view as plain redacted lines — what "Copy" puts on the
 /// clipboard.
 fn filtered_text() -> String {
+    // Export the partial repeat count without resetting every auto-tail refresh.
+    log::logger().flush();
     snapshot_doc()
         .rows
         .iter()
@@ -237,6 +239,7 @@ pub fn copy_all() {
 /// takes the `log_upload` shape. The clipboard therefore lands one tick after
 /// the click.
 async fn bundle_text() -> String {
+    log::logger().flush();
     let lines = qbz_log::ring::snapshot();
     let report = crate::diagnostics_qt::report_markdown().await;
     let fields = qbz_log::bundle::DiagFields {

@@ -3675,6 +3675,15 @@ pub(crate) fn arm_hard_exit_watchdog(source: &'static str) {
 
 fn main() {
     qbz_log::install("info");
+    // Declared first so normal/early returns flush after all later destructors,
+    // including the final summary of a consecutive logging burst.
+    struct FlushLogsOnExit;
+    impl Drop for FlushLogsOnExit {
+        fn drop(&mut self) {
+            log::logger().flush();
+        }
+    }
+    let _flush_logs = FlushLogsOnExit;
     cap_malloc_arenas();
     // Before even the disposable GPU-preflight QGuiApplication. A child
     // spawned later inherits the resolved factor and takes the same path.
