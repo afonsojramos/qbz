@@ -538,6 +538,33 @@ pub fn badge_source_raw(raw: Option<&str>) -> String {
     }
 }
 
+/// The same badge vocabulary on Local Library cards, mixed feeds and pins.
+/// Routing keeps its own source discriminator; these words are presentation.
+pub(crate) fn source_badges<'a>(sources: impl IntoIterator<Item = Option<&'a str>>) -> Vec<String> {
+    let mut badges = Vec::new();
+    for source in sources {
+        let raw = badge_source_raw(source);
+        let badge = if raw.is_empty() {
+            badge_source(source)
+        } else {
+            raw
+        };
+        if !badges.contains(&badge) {
+            badges.push(badge);
+        }
+    }
+    badges
+}
+
+pub(crate) fn album_badge_sources(album: &LocalAlbum) -> Vec<String> {
+    let sources = if album.sources.is_empty() {
+        std::slice::from_ref(&album.source)
+    } else {
+        album.sources.as_slice()
+    };
+    source_badges(sources.iter().map(|word| Some(word.as_str())))
+}
+
 /// `(owning source, raw token)` for a row's artwork — the pair the artwork
 /// window needs in order to resolve it WITHOUT guessing.
 ///
@@ -601,26 +628,7 @@ pub fn map_album_with_artists(
         .unwrap_or(0);
     let source = badge_source(Some(a.source.as_str()));
     let source_raw = badge_source_raw(Some(a.source.as_str()));
-    let mut sources = if a.sources.is_empty() {
-        vec![if source_raw.is_empty() {
-            source.clone()
-        } else {
-            source_raw.clone()
-        }]
-    } else {
-        a.sources
-            .iter()
-            .map(|value| {
-                let raw = badge_source_raw(Some(value));
-                if raw.is_empty() {
-                    badge_source(Some(value))
-                } else {
-                    raw
-                }
-            })
-            .collect::<Vec<_>>()
-    };
-    sources.dedup();
+    let sources = album_badge_sources(&a);
     let favoriteable = album_favorite_source(&sources).is_some();
     let is_favorite = favoriteable && crate::library_qt::is_local_favorite("album", &a.id);
     AlbumRow {
@@ -787,6 +795,29 @@ mod tests {
             album_favorite_source(&sources(&["qobuz_purchase", "offline"])),
             None
         );
+    }
+
+    #[test]
+    fn album_badges_keep_physical_origins_without_changing_routing_words() {
+        assert_eq!(
+            super::source_badges([None, Some("user"), Some("local")]),
+            ["local"]
+        );
+        assert_eq!(
+            super::source_badges([
+                Some("qobuz_download"),
+                Some("qobuz_purchase"),
+                Some("plex"),
+                Some("jellyfin"),
+                Some("navidrome"),
+                Some("gonic")
+            ]),
+            ["offline", "qobuz_purchase", "plex", "jellyfin", "subsonic"]
+        );
+        // The menu/filter discriminator stays folded; only badge data keeps
+        // the purchase identity. The card must not confuse a downloaded copy
+        // with a catalog purchase that has never been downloaded.
+        assert_eq!(super::badge_source(Some("qobuz_purchase")), "offline");
     }
 
     #[test]

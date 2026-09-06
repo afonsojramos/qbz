@@ -110,12 +110,10 @@ Item {
             // Local/server rows have no portable catalog URL; retain their
             // resolved artwork snapshot for the per-machine Pinned rail.
             pinArtworkUrl: artworkUrl !== "" ? artworkUrl : artSource
-            // The source word is ALWAYS passed (the "Block this album" menu
-            // gate reads it); the toolbar's show-local toggle only decides
-            // whether the BADGE is drawn — FavoritesView.slint:1097
-            // `show-source-badge: LibraryAllState.show-local`, the same gate
-            // the track card below already uses.
+            // Local source badges remain visible on every album. The toolbar
+            // may additionally show the catalog mark in the mixed feed.
             source: cell.item.source
+            sources: cell.item.sources || []
             showSourceBadge: cell.view.showLocal
         }
     }

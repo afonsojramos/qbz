@@ -136,17 +136,34 @@ pub fn load_albums_blocking() -> Result<Vec<AlbumRow>, String> {
 pub fn existing_favorite_album_ids_blocking(
     candidates: Vec<(String, String)>,
 ) -> Result<HashSet<String>, String> {
+    existing_favorite_album_sources_blocking(candidates).map(|rows| rows.into_keys().collect())
+}
+
+/// Preserve the badge sources from the rows already read by the availability
+/// check. A logical album key cannot identify its physical sources by itself.
+pub(crate) fn existing_favorite_album_sources_blocking(
+    candidates: Vec<(String, String)>,
+) -> Result<HashMap<String, Vec<String>>, String> {
     if candidates.is_empty() {
-        return Ok(HashSet::new());
+        return Ok(HashMap::new());
     }
     if candidates.iter().any(|(id, _)| id.starts_with("logical:")) {
-        return load_albums_blocking().map(|rows| rows.into_iter().map(|row| row.id).collect());
+        return load_albums_blocking()
+            .map(|rows| rows.into_iter().map(|row| (row.id, row.sources)).collect());
     }
 
-    let mut existing = HashSet::new();
+    let mut existing = HashMap::new();
     for (id, _) in candidates.iter().filter(|(_, source)| source == "plex") {
-        if crate::local_plex::is_configured() && !crate::local_plex::album_tracks(id).is_empty() {
-            existing.insert(id.clone());
+        if crate::local_plex::is_configured() {
+            let tracks = crate::local_plex::album_tracks(id);
+            if !tracks.is_empty() {
+                existing.insert(
+                    id.clone(),
+                    crate::local_rows::source_badges(
+                        tracks.iter().map(|track| track.source.as_deref()),
+                    ),
+                );
+            }
         }
     }
 
@@ -154,8 +171,15 @@ pub fn existing_favorite_album_ids_blocking(
         .iter()
         .filter(|(_, source)| matches!(source.as_str(), "jellyfin" | "subsonic"))
     {
-        if crate::media_servers_qt::album_tracks(id).is_some_and(|tracks| !tracks.is_empty()) {
-            existing.insert(id.clone());
+        if let Some(tracks) =
+            crate::media_servers_qt::album_tracks(id).filter(|tracks| !tracks.is_empty())
+        {
+            existing.insert(
+                id.clone(),
+                crate::local_rows::source_badges(
+                    tracks.iter().map(|track| track.source.as_deref()),
+                ),
+            );
         }
     }
 
@@ -169,7 +193,7 @@ pub fn existing_favorite_album_ids_blocking(
     }
     let mode = group_mode();
     let found = with_db(|db| {
-        let mut found = HashSet::new();
+        let mut found = HashMap::new();
         for id in &local_ids {
             let tracks = match mode {
                 AlbumGroupMode::Metadata => {
@@ -183,7 +207,12 @@ pub fn existing_favorite_album_ids_blocking(
                 AlbumGroupMode::Folder => db.get_album_tracks(id)?,
             };
             if !tracks.is_empty() {
-                found.insert(id.clone());
+                found.insert(
+                    id.clone(),
+                    crate::local_rows::source_badges(
+                        tracks.iter().map(|track| track.source.as_deref()),
+                    ),
+                );
             }
         }
         Ok(found)

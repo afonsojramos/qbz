@@ -56,6 +56,8 @@ pub struct FeedItem {
     pub kind: String,   // track | album | artist | playlist | label
     pub group: String,  // favorites | following | purchases | local
     pub source: String, // qobuz | local | plex
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
     pub id: String,
     pub title: String,
     pub subtitle: String,
@@ -1299,11 +1301,13 @@ fn all_local_feed_blocking() -> Vec<FeedItem> {
             "subsonic" | "navidrome" | "gonic" | "airsonic" | "astiga" => "subsonic",
             _ => "local",
         };
+        let sources = crate::local_rows::album_badge_sources(&a);
         out.push(
             FeedItem {
                 kind: "album".into(),
                 group: "local".into(),
                 source: source.into(),
+                sources,
                 subtitle: a.artist.clone(),
                 artist: a.artist,
                 image_url: a.artwork_path.unwrap_or_default(),

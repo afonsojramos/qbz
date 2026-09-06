@@ -57,6 +57,8 @@ Column {
             model: root.items
             delegate: AlbumCard {
                 albumId: modelData.id
+                source: modelData.source || ""
+                sources: modelData.sources || []
                 title: modelData.title
                 artist: modelData.artist
                 artistId: modelData.artistId

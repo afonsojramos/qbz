@@ -89,6 +89,8 @@ pub struct HomeCard {
     /// it; every other kind leaves it empty and it stays off the wire.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
     #[serde(rename = "isPinned", default)]
     pub is_pinned: bool,
     /// Heart state at BUILD time, from `fav_cache_qt` — the row's own kind
@@ -385,6 +387,11 @@ fn pinned_cards() -> Vec<HomeCard> {
                         .parse::<u64>()
                         .map(crate::playlist_qt::is_following)
                         .unwrap_or(false),
+                source: if is_local_album {
+                    pinned_local_source(&p.id)
+                } else {
+                    String::new()
+                },
                 id: p.id,
                 title: p.title,
                 artist: p.subtitle.clone(),
@@ -478,7 +485,7 @@ pub(crate) fn publish_pinned() {
     );
     crate::spawn(async move {
         let checked = tokio::task::spawn_blocking(move || {
-            crate::local_albums::existing_favorite_album_ids_blocking(local_candidates)
+            crate::local_albums::existing_favorite_album_sources_blocking(local_candidates)
         })
         .await;
         if PINNED_PUBLISH_REVISION.load(Ordering::Acquire) != revision {
@@ -499,8 +506,13 @@ pub(crate) fn publish_pinned() {
         };
         let visible = cards
             .into_iter()
-            .filter(|card| {
-                !card.is_local_album || existing.as_ref().is_none_or(|ids| ids.contains(&card.id))
+            .filter_map(|mut card| {
+                if card.is_local_album {
+                    if let Some(sources) = existing.as_ref() {
+                        card.sources = sources.get(&card.id)?.clone();
+                    }
+                }
+                Some(card)
             })
             .collect();
         publish_pinned_cards(visible, revision, true);

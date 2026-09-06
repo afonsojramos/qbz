@@ -601,6 +601,8 @@ Rectangle {
 
                     AlbumCard {
                         albumId: modelData.id
+                        source: modelData.source || ""
+                        sources: modelData.sources || []
                         title: modelData.title
                         artist: modelData.artist
                         artistId: modelData.artistId
@@ -882,6 +884,8 @@ Rectangle {
                             readonly property bool localPinned:
                                 modelData.isLocalAlbum === true
                             localMode: localPinned
+                            source: modelData.source || ""
+                            sources: modelData.sources || []
                             quickViewAffordance: true
                             pinAffordance: true
                             albumId: modelData.id
@@ -1260,6 +1264,8 @@ Rectangle {
                         id: albumCardComp
                         AlbumCard {
                             albumId: modelData.album.id
+                            source: modelData.album.source || ""
+                            sources: modelData.album.sources || []
                             title: modelData.album.title
                             artist: modelData.album.artist
                             artistId: modelData.album.artistId

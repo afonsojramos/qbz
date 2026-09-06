@@ -382,6 +382,8 @@ Column {
                     ? sg.reveal : 1.0
                 AlbumCard {
                     albumId: gcell.modelData.id
+                    source: gcell.modelData.source || ""
+                    sources: gcell.modelData.sources || []
                     title: gcell.modelData.title
                     artist: gcell.modelData.artist
                     artistId: gcell.modelData.artistId
@@ -557,6 +559,8 @@ Column {
                 AlbumCard {
                     id: mountedCard
                     albumId: cell.cardData.id
+                    source: cell.cardData.source || ""
+                    sources: cell.cardData.sources || []
                     title: cell.cardData.title
                     artist: cell.cardData.artist
                     artistId: cell.cardData.artistId

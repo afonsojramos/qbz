@@ -102,11 +102,12 @@ Rectangle {
         || root.source === "subsonic" || root.source === "navidrome"
         || root.source === "gonic" || root.source === "airsonic"
         || root.source === "astiga"
-    // discover/AlbumCard.slint:79 `show-source-badge` — default OFF; the two
-    // hosts that turn it on are the Library ALL grid (gated on the toolbar's
-    // show-local toggle, FavoritesView.slint:1097) and the Local Library
-    // grid (LocalLibraryView.slint:1267).
+    // Hosts can also show catalog badges. Local Library provenance is always
+    // visible, even when a host's optional catalog-badge toggle is off.
     property bool showSourceBadge: false
+    readonly property bool hasLocalSourceBadge: root.badgeSources.some(function (source) {
+        return source !== "" && source !== "qobuz"
+    })
     // Local play count — rendered as the muted "{} plays" line under the
     // artist, and ONLY there (discover/AlbumCard.slint:508-513). Every
     // surface but Most Played Albums publishes 0, which is why that page's
@@ -844,7 +845,8 @@ Rectangle {
             // `hard-drive` for Plex — a blue hard drive where the design calls
             // for the Plex mark.
             Rectangle {
-                visible: root.showSourceBadge && root.badgeSources.length > 0
+                visible: (root.showSourceBadge || root.hasLocalSourceBadge)
+                    && root.badgeSources.length > 0
                 x: parent.width - width - 6
                 y: parent.height - height - 6
                 width: sourceBadgeRow.implicitWidth
