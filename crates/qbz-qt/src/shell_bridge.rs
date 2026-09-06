@@ -518,6 +518,8 @@ pub mod qbz_shell {
         fn report_scroll(self: Pin<&mut QbzShell>, scope: QString, y: f32);
         #[qinvokable]
         fn report_nav_state(self: Pin<&mut QbzShell>, scope: QString, state: QString);
+        #[qinvokable]
+        fn local_navigation_state(self: &QbzShell) -> QString;
 
         /// Sidebar navigation: record a content view ("home" | "library")
         /// and lazy-load its data on first visit.
@@ -1293,7 +1295,16 @@ impl qbz_shell::QbzShell {
     }
 
     pub fn report_nav_state(self: Pin<&mut Self>, scope: QString, state: QString) {
-        crate::nav_qt::set_live_state(&scope.to_string(), &state.to_string());
+        let scope = scope.to_string();
+        let state = state.to_string();
+        crate::nav_qt::set_live_state(&scope, &state);
+        if scope == "local" {
+            crate::local_restore_qt::save_browser(&state);
+        }
+    }
+
+    pub fn local_navigation_state(&self) -> QString {
+        QString::from(crate::local_restore_qt::browser_json())
     }
 
     pub fn navigate_to(self: Pin<&mut Self>, view: QString) {

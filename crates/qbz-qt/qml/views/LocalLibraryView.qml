@@ -165,6 +165,7 @@ Rectangle {
     // this document restores the controls that determine what that offset
     // means before the tab asks for data.
     property bool _restoringNavigationState: false
+    property bool _navigationReady: false
     readonly property string navigationStateJson: JSON.stringify({
         activeTab: root.activeTab,
         albumsSearch: root.albumsSearch,
@@ -203,14 +204,16 @@ Rectangle {
         genresSort: root.genresSort
     })
     onNavigationStateJsonChanged: {
-        if (!root._restoringNavigationState && QbzShell.currentView === "local")
+        if (root._navigationReady && !root._restoringNavigationState
+                && QbzShell.currentView === "local")
             QbzShell.reportNavState("local", root.navigationStateJson)
     }
     function restoreNavigationState() {
-        if (QbzShell.restoreStateScope !== "local" || QbzShell.stateRestore === "")
-            return
+        var state = QbzShell.restoreStateScope === "local" && QbzShell.stateRestore !== ""
+            ? QbzShell.stateRestore : QbzShell.localNavigationState()
+        if (state === "") return
         var saved
-        try { saved = JSON.parse(QbzShell.stateRestore) }
+        try { saved = JSON.parse(state) }
         catch (e) { QbzShell.restoreStateScope = ""; return }
         root._restoringNavigationState = true
         function text(name, fallback) {
@@ -654,6 +657,7 @@ Rectangle {
     // one query; the Albums/Folders/Artists sets are bounded).
     Component.onCompleted: {
         restoreNavigationState()
+        root._navigationReady = true
         // Initial bindings are not a reliable change notification contract:
         // explicitly seed history even when this is a fresh entry whose state
         // happens to equal every default.

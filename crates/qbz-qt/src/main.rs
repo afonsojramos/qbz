@@ -230,6 +230,7 @@ mod local_bulk;
 mod local_ephemeral;
 mod local_playback;
 mod local_playlist_qt;
+mod local_restore_qt;
 mod local_tree;
 mod plex_pin_qt;
 // MyQBZ domain controllers. One module per concern, all driven by the three
