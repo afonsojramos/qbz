@@ -30,9 +30,9 @@
 #   2. the shader bake gate with the qsb on PATH (CI: the pinned aqt qsb)
 #   3. the Slint-free dep-graph gate for qbz-qt
 #   4. cargo test -p qbz-qt (debug)
-#   5. an offscreen boot of the debug binary: >= 10 log lines, zero QML
-#      complaints, QbzCore initialized (the login screen; `home published`
-#      needs a session CI does not have)
+#   5. offscreen boots of BOTH debug and release: zero QML complaints,
+#      QbzCore initialized, and process still alive at the deadline.
+#      Native Qt SDK content participates in the C++ dependency cache.
 #
 # Usage:
 #   ./scripts/cargo-test.sh                 # job `test`
@@ -44,6 +44,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 say() { printf '[cargo-test] %s\n' "$*"; }
+
+say "gate: native Qt SDK cache and crash-aware smoke regressions"
+python3 scripts/test_qt_build_gates.py
 
 say "gate: all eight gettext catalogs"
 for locale in en es de fr pt ru ja nl; do
@@ -129,30 +132,6 @@ hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbz-qt -e normal \
        | grep -E '\b(slint|qbz-ui|qbz-slint-common|qbz-dac-wizard) v' || true)
 [[ -z "$hits" ]] || { echo "qbz-qt graph resolves Slint crates:"; echo "$hits"; exit 1; }
 
-say "qt gate 4/5: cargo test -p qbz-qt (debug)"
-# Match qt-gate: shader_bake_gate above proves compilation independently;
-# the binary embeds the committed packs without mtime-driven rewrites.
-export QBZ_PREBUILT_SHADERS=1
-cargo test --manifest-path crates/Cargo.toml -p qbz-qt --no-fail-fast
-
-say "qt gate 5/5: offscreen boot of the debug binary"
-cargo build --manifest-path crates/Cargo.toml -p qbz-qt
-target_dir="${CARGO_TARGET_DIR:-$ROOT/crates/target}"
-log="$(mktemp "${TMPDIR:-/tmp}/qbz-test-smoke-XXXXXX")"
-# Isolated: its own XDG dirs (never the developer's config/session) and a
-# PRIVATE session bus — the single-instance lock is a D-Bus well-known name,
-# so a running QBZ would otherwise make this instance present-and-exit with
-# one log line. CI has no other instance; the same command keeps both equal.
-iso="$(mktemp -d "${TMPDIR:-/tmp}/qbz-test-xdg-XXXXXX")"
-bus=(); command -v dbus-run-session >/dev/null && bus=(dbus-run-session --)
-XDG_CONFIG_HOME="$iso/config" XDG_DATA_HOME="$iso/data" XDG_CACHE_HOME="$iso/cache" XDG_STATE_HOME="$iso/state" \
-  QT_QPA_PLATFORM=offscreen RUST_LOG=info "${bus[@]}" timeout 75 "$target_dir/debug/qbz" > "$log" 2>&1 || true
-rm -rf "$iso"
-lines=$(wc -l < "$log")
-(( lines >= 10 )) || { cat "$log"; echo "smoke: the app did not start ($lines lines)"; exit 1; }
-pat='is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed'
-errs=$(grep -av 'propertyCache' "$log" | grep -aciE "$pat" || true)
-if (( errs > 0 )); then grep -av 'propertyCache' "$log" | grep -aiE "$pat" | head -20; echo "smoke: $errs QML complaint(s) — $log"; exit 1; fi
-grep -aq 'QbzCore initialized' "$log" || { tail -20 "$log"; echo "smoke: never reached QbzCore init — $log"; exit 1; }
-say "smoke OK (0 QML complaints, core initialized)"
+say "qt gates 4/5 + 5/5: tests and debug/release startup liveness"
+bash scripts/qt-runtime-gate.sh
 say "done"

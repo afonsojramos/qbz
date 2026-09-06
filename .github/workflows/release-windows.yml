@@ -240,7 +240,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates -> target
-          shared-key: qt-windows-x86_64
+          shared-key: qt-windows-x86_64-${{ env.QT_VERSION }}
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/pre-release' }}
 
@@ -260,7 +260,7 @@ jobs:
           # the link and let the PDB carry them.
           CARGO_PROFILE_RELEASE_STRIP: "none"
         run: |
-          cargo build --release --manifest-path crates/Cargo.toml \
+          python3 scripts/qt-cargo.py build --release --manifest-path crates/Cargo.toml \
             -p qbz-qt --target "$TARGET"
           ls -la "crates/target/$TARGET/release/qbz.exe" "crates/target/$TARGET/release/qbz.pdb"
 

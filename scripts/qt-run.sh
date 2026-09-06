@@ -127,7 +127,7 @@ if [[ "${DEBUG:-0}" == 1 ]]; then
 else
   PROFILE=release; PROFILE_ARGS=(--release)
 fi
-BIN="crates/target/${PROFILE}/qbz"
+BIN="${CARGO_TARGET_DIR:-crates/target}/${PROFILE}/qbz"
 
 # --- ONE BUILD AT A TIME, BOX-WIDE ------------------------------------------
 # Not paranoia: a Slint `qbz-ui` rustc in another worktree peaks 20-30 GB on a
@@ -230,7 +230,7 @@ if [[ "${NO_TICKER:-0}" != 1 ]] && [[ -t 2 ]]; then
 fi
 
 # --- The build ---------------------------------------------------------------
-cargo build "${PROFILE_ARGS[@]}" --manifest-path crates/Cargo.toml -p qbz-qt
+python3 scripts/qt-cargo.py build "${PROFILE_ARGS[@]}" --manifest-path crates/Cargo.toml -p qbz-qt
 
 # --- Stop the ticker, record the duration, print the final banner ------------
 [[ -n "${tick_pid}" ]] && { kill "${tick_pid}" 2>/dev/null || true; wait "${tick_pid}" 2>/dev/null || true; }
@@ -243,7 +243,7 @@ printf '%s[qt-run] ✔ build finished %s  ·  took %s  (%s)%s\n' \
 # --- Tests (opt-in) ----------------------------------------------------------
 if [[ "${TEST:-0}" == 1 ]]; then
   say "running cargo test -p qbz-qt"
-  cargo test --manifest-path crates/Cargo.toml -p qbz-qt
+  python3 scripts/qt-cargo.py test --manifest-path crates/Cargo.toml -p qbz-qt
 fi
 
 # --- Offscreen smoke gate (opt-in) -------------------------------------------
@@ -251,6 +251,11 @@ fi
 # and prove the QML tree actually resolves. A lazily-resolved type error only
 # ever shows up here or in front of the owner.
 if [[ "${SMOKE:-0}" == 1 ]]; then
+  if [[ "${UNAME_S}" == "Linux" ]]; then
+    log="$(mktemp "${TMPDIR:-/tmp}/qbz-qt-smoke-XXXXXX")"
+    python3 scripts/qt-smoke.py "${BIN}" --log "${log}"
+    exit 0
+  fi
   # BSD mktemp -t takes a bare prefix, GNU takes a template; give both a full
   # template path so the two agree.
   log="$(mktemp "${TMPDIR:-/tmp}/qbz-qt-smoke-XXXXXX")"
@@ -288,4 +293,4 @@ fi
 
 # exec the binary directly — no `cargo run`, so no CARGO_* env / cargo context,
 # so process monitors show `qbz-qt` rather than `cargo`.
-exec "./${BIN}" "$@"
+exec "${BIN}" "$@"

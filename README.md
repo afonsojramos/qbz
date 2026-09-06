@@ -502,6 +502,7 @@ crate is `qbz-qt`, which builds a binary called `qbz`.
 - **Qt 6.8 or newer**, including its development headers *and* the private
   headers (`<rhi/qrhi.h>` lives in Qt's private tree and the custom scene-graph
   items need it).
+- **Python 3**, for the Qt SDK cache guard and QML audits.
 - Linux or macOS with audio support.
 - No Node.js/npm required.
 
@@ -510,7 +511,7 @@ crate is `qbz-qt`, which builds a binary called `qbz`.
 **Debian / Ubuntu:**
 
 ```bash
-sudo apt install build-essential pkg-config cmake clang libclang-dev nasm \
+sudo apt install build-essential pkg-config cmake clang libclang-dev nasm python3 \
   qt6-base-dev qt6-base-private-dev \
   qt6-declarative-dev qt6-declarative-private-dev \
   qt6-shadertools-dev \
@@ -536,7 +537,7 @@ without any `PATH` fiddling.
 
 ```bash
 git clone https://github.com/vicrodh/qbz.git && cd qbz
-cargo build --release --manifest-path crates/Cargo.toml -p qbz-qt
+NORUN=1 ./scripts/qt-run.sh
 ./crates/target/release/qbz
 ```
 
@@ -563,6 +564,15 @@ JOBS=4     ./scripts/qt-run.sh  # cargo build jobs
 ```
 
 It works on Linux and macOS.
+
+Qt builds use `scripts/qt-cargo.py` to include the installed SDK's header
+contents in the native build cache. This prevents mixing stale C++ objects
+with new Qt headers after a system update, without deleting `target/` or
+changing Rust optimization flags. For custom Cargo commands, use
+`python3 scripts/qt-cargo.py build --release --manifest-path crates/Cargo.toml -p qbz-qt`
+(or `test` instead of `build`). On Linux, the smoke uses an isolated profile
+and private D-Bus session, and fails on early exits, including segmentation
+faults. The CI runtime gate checks both debug and release.
 
 ### Nix / NixOS
 

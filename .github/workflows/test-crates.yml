@@ -14,14 +14,16 @@
 #               consecutive-log repetition regression checks. ~5 min cold.
 #   qt-gate   — the Qt frontend: the five static QML audits, `cargo test -p
 #               qbz-qt`, the Slint-free dep-graph gate, and an OFFSCREEN BOOT of
-#               the debug binary. This is the thing `cargo check` cannot give:
+#               debug AND release binaries (including process liveness).
+#               This is the thing `cargo check` cannot give:
 #               a missing QML component or a call to a bridge member that does
 #               not exist compiles clean and throws when the user opens the
 #               view. Qt comes from aqt — ubuntu-24.04's own Qt is 6.4.2 and has
 #               no QtQuick.Effects module.
 #
-# Rewritten 2026-08-25 for the Slint -> Qt frontend switch. Release builds stay
-# tag/dispatch-only; this is the one workflow that runs on pre-release
+# Rewritten 2026-08-25 for the Slint -> Qt frontend switch. Release packaging
+# stays tag/dispatch-only; this workflow also tests optimized startup on
+# pre-release
 # integration so regressions land before a release cut.
 
 name: test-crates
@@ -34,6 +36,9 @@ on:
     paths:
       - "crates/**"
       - "scripts/cargo-test.sh"
+      - "scripts/qt-*.py"
+      - "scripts/qt-*.sh"
+      - "scripts/test_qt_build_gates.py"
       - "scripts/qml-audits/**"
       - ".github/workflows/test-crates.yml"
   push:
@@ -42,6 +47,9 @@ on:
     paths:
       - "crates/**"
       - "scripts/cargo-test.sh"
+      - "scripts/qt-*.py"
+      - "scripts/qt-*.sh"
+      - "scripts/test_qt_build_gates.py"
       - "scripts/qml-audits/**"
       - ".github/workflows/test-crates.yml"
   workflow_dispatch:
@@ -181,14 +189,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates -> target
-          shared-key: qt-gate
+          shared-key: qt-gate-${{ env.QT_VERSION }}
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/pre-release' }}
 
       # The exact QT=1 half of scripts/cargo-test.sh, minus its `test` job
       # (already run above) and its shader gate (the shader-gate job, so qsb
       # is never on PATH while cargo runs here): dep-graph gate, cargo test
-      # -p qbz-qt, offscreen boot. Kept in the script so local == CI.
+      # -p qbz-qt, debug/release offscreen boot. One shared runtime script.
       - name: qt gates (scripts/cargo-test.sh QT=1, without the workspace test)
         env:
           CARGO_TERM_COLOR: always
@@ -199,17 +207,4 @@ jobs:
           hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbz-qt -e normal \
                  | grep -E '\b(slint|qbz-ui|qbz-slint-common|qbz-dac-wizard) v' || true)
           [ -z "$hits" ] || { echo "::error::qbz-qt graph resolves Slint crates:"; echo "$hits"; exit 1; }
-          cargo test --manifest-path crates/Cargo.toml -p qbz-qt --no-fail-fast
-          cargo build --manifest-path crates/Cargo.toml -p qbz-qt
-          # Same isolation as scripts/cargo-test.sh: private XDG dirs + a
-          # private session bus (the single-instance lock is a D-Bus name).
-          iso="$(mktemp -d)"
-          XDG_CONFIG_HOME="$iso/config" XDG_DATA_HOME="$iso/data" XDG_CACHE_HOME="$iso/cache" XDG_STATE_HOME="$iso/state" \
-            QT_QPA_PLATFORM=offscreen RUST_LOG=info dbus-run-session -- timeout 75 ./crates/target/debug/qbz > smoke.log 2>&1 || true
-          lines=$(wc -l < smoke.log); echo "smoke log: $lines lines"
-          if (( lines < 10 )); then cat smoke.log; echo "::error::the app did not start"; exit 1; fi
-          pat='is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed'
-          errs=$(grep -av 'propertyCache' smoke.log | grep -aciE "$pat" || true)
-          if (( errs > 0 )); then grep -av 'propertyCache' smoke.log | grep -aiE "$pat" | head -20; echo "::error::$errs QML complaint(s)"; exit 1; fi
-          grep -aq 'QbzCore initialized' smoke.log || { tail -20 smoke.log; echo "::error::never reached QbzCore init"; exit 1; }
-          echo "smoke OK (0 QML complaints, core initialized)"
+          bash scripts/qt-runtime-gate.sh

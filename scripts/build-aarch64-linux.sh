@@ -47,7 +47,7 @@ die() { say "ERROR: $*" >&2; exit 1; }
 # Build deps for the Qt `qbz` binary — the same list as build-qt-linux.yml
 # minus what aqt provides there (here the distro's Qt provides it).
 DEPS=(
-  build-essential pkg-config cmake clang libclang-dev nasm curl
+  build-essential pkg-config cmake clang libclang-dev nasm curl python3
   libasound2-dev libjack-jackd2-dev libdbus-1-dev libssl-dev
   libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev
   qt6-base-dev qt6-base-private-dev
@@ -89,7 +89,7 @@ case "$arch" in
     else jobs="$(nproc)"; fi
     say "RAM ${mem_mb} MB -> CARGO_BUILD_JOBS=${jobs}"
     # No RUSTFLAGS, no mold, stable: same cache rule as qt-run.sh.
-    ( cd crates && CARGO_BUILD_JOBS="$jobs" CARGO_INCREMENTAL=0 cargo build --release -p qbz-qt )
+    CARGO_BUILD_JOBS="$jobs" CARGO_INCREMENTAL=0 python3 scripts/qt-cargo.py build --release --manifest-path crates/Cargo.toml -p qbz-qt
     install -Dm755 "crates/target/release/qbz" "$OUT"
     ;;
   x86_64 | amd64)

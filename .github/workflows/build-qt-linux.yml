@@ -141,7 +141,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates -> target
-          shared-key: qt-linux-${{ inputs.arch }}
+          shared-key: qt-linux-${{ inputs.arch }}-${{ env.QT_VERSION }}
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/pre-release' }}
 
@@ -168,7 +168,7 @@ jobs:
           "$QT_ROOT_DIR/libexec/moc" --version || true
           "$QT_ROOT_DIR/libexec/qmlcachegen" --version || true
           "$QMAKE" -query QT_VERSION
-          cargo build --release --manifest-path crates/Cargo.toml -p qbz-qt
+          python3 scripts/qt-cargo.py build --release --manifest-path crates/Cargo.toml -p qbz-qt
           cp crates/target/release/qbz qbz-unstripped
           strip -o qbz crates/target/release/qbz
           ls -la qbz qbz-unstripped
