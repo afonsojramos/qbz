@@ -6737,3 +6737,6 @@ msgstr "Qobuz のリンクを QBZ で開く"
 
 msgid "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
 msgstr "ブラウザーからの qobuzapp:// リンクを QBZ で処理します。オフの場合は公式の Qobuz アプリが処理します。QBZ 独自の qbz:// リンクは常にここで開きます。"
+
+msgid "Failed to send playback to the selected device"
+msgstr "選択したデバイスに再生を転送できませんでした"

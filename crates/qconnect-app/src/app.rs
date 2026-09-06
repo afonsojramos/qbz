@@ -215,16 +215,60 @@ where
             sent_at_ms: now_ms(),
         };
 
-        {
+        // Validate/encode before reserving the slot: a malformed command must
+        // not strand all later actions behind an unsent request.
+        let command_type = command.command_type;
+        let envelope = build_qconnect_outbound_envelope(command)?;
+        let send_without_pending = {
             let mut state = self.state.lock().await;
-            state.pending.start(pending)?;
+            // These controls do not mutate the queue or carry an action UUID
+            // on the wire. Mac sends volume/loop/renderer selection directly;
+            // its noWait player-state/state-query actions still wait behind a
+            // current queue action. QBZ deliberately admits those two during a
+            // read as well, to keep takeover controls responsive. This is a
+            // local scheduling adaptation, not a claim of identical scheduling.
+            // Keep the read's UUID/timeout and never bypass a real queue write.
+            let bypass = state.pending.current().is_some_and(|action| {
+                action.is_ask_for_state_action
+                    && matches!(
+                        command_type,
+                        QueueCommandType::CtrlSrvrSetPlayerState
+                            | QueueCommandType::CtrlSrvrSetActiveRenderer
+                            | QueueCommandType::CtrlSrvrAskForRendererState
+                            | QueueCommandType::CtrlSrvrSetVolume
+                            | QueueCommandType::CtrlSrvrMuteVolume
+                            | QueueCommandType::CtrlSrvrSetLoopMode
+                    )
+            }) || (state.pending.current().is_none()
+                && matches!(command_type, QueueCommandType::CtrlSrvrMuteVolume));
+            // Mute is a direct control in the official client, with no action
+            // UUID response. Do not invent an uncompletable pending action for
+            // it, even when no queue read is present. Real writes still fence it.
+            if !bypass {
+                if let Some(active) = state.pending.current() {
+                    log::warn!(
+                        "[QConnect] Command {command_type:?} blocked by pending {} (age_s={})",
+                        if active.is_ask_for_state_action {
+                            "queue-state read"
+                        } else {
+                            "action"
+                        },
+                        now_ms().saturating_sub(active.sent_at_ms) / 1000,
+                    );
+                }
+                state.pending.start(pending)?;
+            }
+            bypass
+        };
+
+        if let Err(err) = self.transport.send(envelope).await {
+            self.clear_pending_if_matches(&action_uuid).await;
+            return Err(err.into());
         }
 
-        let envelope = build_qconnect_outbound_envelope(command)?;
-        if let Err(err) = self.transport.send(envelope).await {
-            let mut state = self.state.lock().await;
-            state.pending.clear();
-            return Err(err.into());
+        if send_without_pending {
+            log::debug!("[QConnect] Sent {command_type:?} without replacing pending queue state");
+            return Ok(action_uuid);
         }
 
         self.sink
@@ -440,10 +484,14 @@ where
         if event.event_type.is_session_management() {
             let completed_uuid = {
                 let mut state = self.state.lock().await;
-                let matched_by_uuid = matches!(
-                    state.pending.correlate(event.action_uuid.as_deref()),
-                    PendingCorrelation::Matched
-                );
+                let matched_by_uuid = !state
+                    .pending
+                    .current()
+                    .is_some_and(|p| p.is_ask_for_state_action)
+                    && matches!(
+                        state.pending.correlate(event.action_uuid.as_deref()),
+                        PendingCorrelation::Matched
+                    );
                 let matched_by_session_effect = state
                     .pending
                     .current()
@@ -492,14 +540,37 @@ where
         {
             let mut state = self.state.lock().await;
             match state.pending.correlate(event.action_uuid.as_deref()) {
+                PendingCorrelation::Matched
+                    if state
+                        .pending
+                        .current()
+                        .is_some_and(|p| p.is_ask_for_state_action)
+                        && !matches!(
+                            event.event_type,
+                            QueueEventType::SrvrCtrlQueueState
+                                | QueueEventType::SrvrCtrlQueueErrorMessage
+                        ) => {}
                 PendingCorrelation::Matched => {
                     completed_uuid = state.pending.clear().map(|pending| pending.uuid);
                 }
                 PendingCorrelation::Concurrent => {
-                    state.pending.mark_concurrency_error();
-                    canceled_uuid = state.pending.clear().map(|pending| pending.uuid);
-                    state.concurrency_canceled_action_uuid = canceled_uuid.clone();
-                    should_trigger_resync = canceled_uuid.is_some();
+                    if !state
+                        .pending
+                        .current()
+                        .is_some_and(|p| p.is_ask_for_state_action)
+                    {
+                        state.pending.mark_concurrency_error();
+                        canceled_uuid = state.pending.clear().map(|pending| pending.uuid);
+                        state.concurrency_canceled_action_uuid = canceled_uuid.clone();
+                        // A full snapshot already supplies authoritative recovery.
+                        // Asking again here can feed an endless snapshot cycle.
+                        should_trigger_resync = canceled_uuid.is_some()
+                            && !matches!(event.event_type, QueueEventType::SrvrCtrlQueueState);
+                    }
+                    // A read is not a conflicting write. Unrelated broadcasts
+                    // may be applied but must neither replace its UUID nor
+                    // restart its timeout. Keep writes serialized until the
+                    // correlated reply/timeout; controls can still pass above.
                 }
                 PendingCorrelation::EventWithoutActionUuid
                     if matches!(event.event_type, QueueEventType::SrvrCtrlQueueErrorMessage)
@@ -530,16 +601,18 @@ where
                 state.concurrency_canceled_action_uuid = None;
             } else {
                 let queue_event = map_server_event(&event, &state.queue);
+                let incomplete_shuffle = shuffle_event_needs_snapshot(&queue_event, &state.queue);
                 let reducer_outcome = apply_event(&mut state.queue, &queue_event, now_ms());
                 let _metric_name = telemetry::queue_reducer_event_name(reducer_outcome.event_name);
                 should_emit_queue_update = true;
-                if matches!(
-                    event.event_type,
-                    QueueEventType::SrvrCtrlShuffleModeSet
-                        | QueueEventType::SrvrCtrlQueueTracksReordered
-                        | QueueEventType::SrvrCtrlQueueTracksRemoved
-                        | QueueEventType::SrvrCtrlQueueTracksAddedFromAutoplay
-                ) {
+                if incomplete_shuffle
+                    || matches!(
+                        event.event_type,
+                        QueueEventType::SrvrCtrlQueueTracksReordered
+                            | QueueEventType::SrvrCtrlQueueTracksRemoved
+                            | QueueEventType::SrvrCtrlQueueTracksAddedFromAutoplay
+                    )
+                {
                     should_trigger_resync = true;
                 }
 
@@ -1914,6 +1987,30 @@ where
     }
 }
 
+/// A complete WS shuffle event is itself authoritative (Mac 8.2 controller
+/// onShuffleModeSet); materializing its seed is not grounds for another read.
+/// Still recover when the input cannot describe the order of our known queue.
+fn shuffle_event_needs_snapshot(event: &QueueEvent, queue: &QConnectQueueState) -> bool {
+    let QueueEvent::ShuffleModeSet {
+        shuffle_mode,
+        shuffle_seed,
+        shuffle_pivot_queue_item_id,
+        ..
+    } = event
+    else {
+        return false;
+    };
+    *shuffle_mode
+        && (shuffle_seed.is_none()
+            || shuffle_pivot_queue_item_id.is_some_and(|pivot| {
+                pivot != 0
+                    && !queue
+                        .queue_items
+                        .iter()
+                        .any(|item| item.queue_item_id == pivot)
+            }))
+}
+
 /// Attempt budget for the Lagged-recovery re-AskForQueueState loop (P1-8).
 const QCONNECT_REASK_QUEUE_STATE_MAX_ATTEMPTS: u32 = 5;
 
@@ -2621,21 +2718,24 @@ where
 
 #[cfg(test)]
 mod tests {
+    mod controller_takeover;
+
     use std::collections::VecDeque;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+    use std::time::Duration;
 
     use async_trait::async_trait;
     use qconnect_core::{QueueEvent, QueueVersion};
-    use qconnect_transport_ws::{InMemoryWsTransport, TransportEvent};
+    use qconnect_transport_ws::{InMemoryWsTransport, TransportEvent, WsTransport};
 
     use crate::renderer::PLAYING_STATE_PLAYING;
     use crate::session::{
         LocalIdentity, QconnectLifecycleState, QconnectRendererInfo, ServerActiveState,
     };
-    use crate::QconnectRemoteSyncState;
+    use crate::{QconnectAppError, QconnectRemoteSyncState};
     use serde_json::json;
     use tokio::sync::Mutex;
 
@@ -2644,7 +2744,7 @@ mod tests {
     use super::{map_server_event, queue_hashes_diverge, QconnectApp, SessionLoopHost};
     use qconnect_core::QConnectQueueState;
     use qconnect_protocol::{
-        QueueCommandType, QueueEventType, QueueServerEvent, RendererCommandType,
+        QueueCommand, QueueCommandType, QueueEventType, QueueServerEvent, RendererCommandType,
         RendererServerCommand,
     };
     use qconnect_transport_ws::WsTransportConfig;
@@ -3524,38 +3624,596 @@ mod tests {
         assert_eq!(state.shuffle_order, None);
     }
 
-    #[tokio::test]
-    async fn shuffle_mode_set_requests_authoritative_queue_state() {
-        let (app, sink, transport, _events_rx) = build_connected_app().await;
+    mod controller_smoke {
+        use super::*;
 
-        app.apply_server_event(QueueServerEvent {
-            event_type: QueueEventType::SrvrCtrlShuffleModeSet,
-            action_uuid: Some("6f9f8d84-cd82-486f-a423-cd467117f39d".to_string()),
-            queue_version: Some(QueueVersion::new(1, 2)),
-            payload: json!({
-                "shuffle_mode": true,
-                "shuffle_seed": 123,
-                "shuffle_pivot_queue_item_id": 0,
-                "autoplay_reset": false,
-                "autoplay_loading": false
-            }),
-        })
-        .await
-        .expect("apply shuffle-mode-set event");
+        #[tokio::test]
+        async fn foreign_queue_delta_does_not_replace_the_pending_read() {
+            let (app, sink, transport, _events_rx) = build_connected_app().await;
+            app.trigger_queue_state_resync().await;
+            let query_uuid = app
+                .state_handle()
+                .lock()
+                .await
+                .pending
+                .current()
+                .unwrap()
+                .uuid
+                .clone();
+            app.apply_server_event(QueueServerEvent {
+                event_type: QueueEventType::SrvrCtrlQueueTracksRemoved,
+                action_uuid: Some("00000000-0000-4000-8000-000000000001".into()),
+                queue_version: Some(QueueVersion::new(2, 1)),
+                payload: json!({"queue_item_ids": [100]}),
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                app.state_handle()
+                    .lock()
+                    .await
+                    .pending
+                    .current()
+                    .unwrap()
+                    .uuid,
+                query_uuid
+            );
+            assert_eq!(
+                app.queue_state_snapshot().await.version,
+                QueueVersion::new(2, 1)
+            );
+            assert_eq!(transport.sent_messages().await.len(), 1);
+            assert!(!sink.snapshot().await.iter().any(|event| matches!(
+                event,
+                QconnectAppEvent::PendingActionCanceledByConcurrentRemoteEvent { .. }
+            )));
+            app.disconnect().await.unwrap();
+        }
 
-        let events = sink.snapshot().await;
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, QconnectAppEvent::QueueUpdated(_))));
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, QconnectAppEvent::QueueResyncTriggered)));
+        #[tokio::test]
+        async fn bypassed_control_notifications_preserve_read_until_its_snapshot() {
+            let (app, _sink, _transport, _events_rx) = build_connected_app().await;
+            app.trigger_queue_state_resync().await;
+            let query_uuid = app
+                .state_handle()
+                .lock()
+                .await
+                .pending
+                .current()
+                .unwrap()
+                .uuid
+                .clone();
+            let pause = app
+                .build_queue_command(
+                    QueueCommandType::CtrlSrvrSetPlayerState,
+                    json!({"playing_state": 3}),
+                )
+                .await;
+            let pause_uuid = app.send_queue_command(pause).await.unwrap();
+            for action_uuid in [None, Some(pause_uuid)] {
+                for (event_type, payload) in [
+                    (
+                        QueueEventType::SrvrCtrlRendererStateUpdated,
+                        json!({"renderer_id": 7, "playing_state": 3}),
+                    ),
+                    (
+                        QueueEventType::SrvrCtrlVolumeChanged,
+                        json!({"renderer_id": 7, "volume": 50}),
+                    ),
+                    (
+                        QueueEventType::SrvrCtrlActiveRendererChanged,
+                        json!({"renderer_id": 7}),
+                    ),
+                ] {
+                    app.apply_server_event(QueueServerEvent {
+                        event_type,
+                        action_uuid: action_uuid.clone(),
+                        queue_version: None,
+                        payload,
+                    })
+                    .await
+                    .unwrap();
+                    assert_eq!(
+                        app.state_handle()
+                            .lock()
+                            .await
+                            .pending
+                            .current()
+                            .unwrap()
+                            .uuid,
+                        query_uuid
+                    );
+                }
+            }
+            app.apply_server_event(QueueServerEvent {
+                event_type: QueueEventType::SrvrCtrlQueueState,
+                action_uuid: Some(query_uuid),
+                queue_version: Some(QueueVersion::new(2, 1)),
+                payload: json!({"tracks": [], "shuffle_mode": false}),
+            })
+            .await
+            .unwrap();
+            assert!(app.state_handle().lock().await.pending.current().is_none());
+            app.disconnect().await.unwrap();
+        }
 
-        let sent = transport.sent_messages().await;
-        assert!(
-            !sent.is_empty(),
-            "expected ask-for-state resync after shuffle"
-        );
+        #[tokio::test]
+        async fn complete_shuffle_mode_set_does_not_request_another_snapshot() {
+            let (app, sink, transport, _events_rx) = build_connected_app().await;
+
+            {
+                let state = app.state_handle();
+                let mut state = state.lock().await;
+                state.queue.version = QueueVersion::new(1, 1);
+                state.queue.queue_items = [100, 200]
+                    .into_iter()
+                    .map(|id| qconnect_core::QueueItem {
+                        track_id: id,
+                        queue_item_id: id,
+                        track_context_uuid: String::new(),
+                    })
+                    .collect();
+            }
+
+            app.apply_server_event(QueueServerEvent {
+                event_type: QueueEventType::SrvrCtrlShuffleModeSet,
+                action_uuid: Some("6f9f8d84-cd82-486f-a423-cd467117f39d".to_string()),
+                queue_version: Some(QueueVersion::new(1, 2)),
+                payload: json!({
+                    "shuffle_mode": true,
+                    "shuffle_seed": 123,
+                    "shuffle_pivot_queue_item_id": 200,
+                    "autoplay_reset": false,
+                    "autoplay_loading": false
+                }),
+            })
+            .await
+            .expect("apply shuffle-mode-set event");
+
+            assert_eq!(
+                app.queue_state_snapshot().await.shuffle_order,
+                Some(vec![1, 0])
+            );
+            let events = sink.snapshot().await;
+            assert!(events
+                .iter()
+                .any(|event| matches!(event, QconnectAppEvent::QueueUpdated(_))));
+            assert!(!events
+                .iter()
+                .any(|event| matches!(event, QconnectAppEvent::QueueResyncTriggered)));
+
+            let sent = transport.sent_messages().await;
+            assert!(
+                sent.is_empty(),
+                "an authoritative seed is sufficient; querying again can feed a snapshot loop"
+            );
+        }
+
+        #[tokio::test]
+        async fn repeated_snapshot_shuffle_and_loop_notifications_leave_controls_available() {
+            let (app, _sink, transport, _events_rx) = build_connected_app().await;
+            for _ in 0..5 {
+                for (event_type, payload) in [
+                    (
+                        QueueEventType::SrvrCtrlQueueState,
+                        json!({"tracks": [], "shuffle_mode": false}),
+                    ),
+                    (
+                        QueueEventType::SrvrCtrlShuffleModeSet,
+                        json!({"shuffle_mode": false}),
+                    ),
+                    (QueueEventType::SrvrCtrlLoopModeSet, json!({"loop_mode": 1})),
+                ] {
+                    app.apply_server_event(QueueServerEvent {
+                        event_type,
+                        action_uuid: None,
+                        queue_version: Some(QueueVersion::new(2, 1)),
+                        payload,
+                    })
+                    .await
+                    .unwrap();
+                }
+                let pause = app
+                    .build_queue_command(
+                        QueueCommandType::CtrlSrvrSetPlayerState,
+                        json!({"playing_state": 3}),
+                    )
+                    .await;
+                let uuid = app
+                    .send_queue_command(pause)
+                    .await
+                    .expect("pause must reach transport");
+                app.clear_pending_if_matches(&uuid).await;
+            }
+            let sent = transport.sent_messages().await;
+            assert_eq!(sent.len(), 5, "only the five user commands should be sent");
+            assert!(sent
+                .iter()
+                .all(|message| message.message_type == "MESSAGE_TYPE_CTRL_SRVR_SET_PLAYER_STATE"));
+            app.disconnect().await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn foreign_uuid_queue_snapshot_does_not_recursively_reask() {
+            let (app, sink, transport, _events_rx) = build_connected_app().await;
+            app.trigger_queue_state_resync().await;
+            for _ in 0..5 {
+                app.apply_server_event(QueueServerEvent {
+                    event_type: QueueEventType::SrvrCtrlQueueState,
+                    action_uuid: Some("00000000-0000-4000-8000-000000000001".into()),
+                    queue_version: Some(QueueVersion::new(2, 1)),
+                    payload: json!({"tracks": [], "shuffle_mode": false}),
+                })
+                .await
+                .unwrap();
+            }
+            assert_eq!(
+                transport.sent_messages().await.len(),
+                1,
+                "a snapshot fulfills a read, not a write conflict"
+            );
+            assert!(!sink.snapshot().await.iter().any(|event| matches!(
+                event,
+                QconnectAppEvent::PendingActionCanceledByConcurrentRemoteEvent { .. }
+            )));
+            app.disconnect().await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn background_queue_read_does_not_block_controller_intent() {
+            for (command_type, payload) in [
+                (
+                    QueueCommandType::CtrlSrvrSetPlayerState,
+                    json!({"playing_state": 3}),
+                ),
+                (
+                    QueueCommandType::CtrlSrvrSetPlayerState,
+                    json!({"playing_state": 2}),
+                ),
+                (
+                    QueueCommandType::CtrlSrvrSetActiveRenderer,
+                    json!({"renderer_id": 7}),
+                ),
+                (
+                    QueueCommandType::CtrlSrvrAskForRendererState,
+                    json!({"renderer_id": 7}),
+                ),
+                (
+                    QueueCommandType::CtrlSrvrSetVolume,
+                    json!({"renderer_id": 7, "volume": 50}),
+                ),
+                (
+                    QueueCommandType::CtrlSrvrSetLoopMode,
+                    json!({"loop_mode": 1}),
+                ),
+                (
+                    QueueCommandType::CtrlSrvrMuteVolume,
+                    json!({"renderer_id": 7, "value": false}),
+                ),
+            ] {
+                let (app, _sink, transport, _events_rx) = build_connected_app().await;
+                app.trigger_queue_state_resync().await;
+                let query_uuid = app
+                    .state_handle()
+                    .lock()
+                    .await
+                    .pending
+                    .current()
+                    .unwrap()
+                    .uuid
+                    .clone();
+                let command = app.build_queue_command(command_type, payload).await;
+                app.send_queue_command(command)
+                    .await
+                    .expect("background reads must not starve user commands");
+                assert_eq!(transport.sent_messages().await.len(), 2);
+                assert_eq!(
+                    app.state_handle()
+                        .lock()
+                        .await
+                        .pending
+                        .current()
+                        .unwrap()
+                        .uuid,
+                    query_uuid
+                );
+                app.disconnect().await.unwrap();
+            }
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn unrelated_snapshots_do_not_renew_the_queue_read_timeout() {
+            let (app, sink, transport, _events_rx) = build_connected_app().await;
+            app.trigger_queue_state_resync().await;
+            tokio::task::yield_now().await;
+            let query_uuid = app
+                .state_handle()
+                .lock()
+                .await
+                .pending
+                .current()
+                .unwrap()
+                .uuid
+                .clone();
+            for _ in 0..9 {
+                tokio::time::advance(Duration::from_secs(1)).await;
+                app.apply_server_event(QueueServerEvent {
+                    event_type: QueueEventType::SrvrCtrlQueueState,
+                    action_uuid: Some("00000000-0000-4000-8000-000000000001".into()),
+                    queue_version: Some(QueueVersion::new(2, 1)),
+                    payload: json!({"tracks": [], "shuffle_mode": false}),
+                })
+                .await
+                .unwrap();
+                assert_eq!(
+                    app.state_handle()
+                        .lock()
+                        .await
+                        .pending
+                        .current()
+                        .unwrap()
+                        .uuid,
+                    query_uuid
+                );
+            }
+            tokio::time::advance(Duration::from_millis(1001)).await;
+            tokio::task::yield_now().await;
+            assert!(app.state_handle().lock().await.pending.current().is_none());
+            assert_eq!(transport.sent_messages().await.len(), 1);
+            assert!(sink.snapshot().await.iter().any(|event| matches!(event,
+                QconnectAppEvent::PendingActionTimedOut { uuid, .. } if uuid == &query_uuid
+            )));
+            let load = app
+                .build_queue_command(
+                    QueueCommandType::CtrlSrvrQueueLoadTracks,
+                    json!({"track_ids": [101]}),
+                )
+                .await;
+            app.send_queue_command(load)
+                .await
+                .expect("a timed-out read must release queue writes");
+            assert_eq!(transport.sent_messages().await.len(), 2);
+            app.disconnect().await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn unrelated_snapshot_cannot_release_read_and_admit_a_write_before_its_reply() {
+            let (app, _sink, transport, _events_rx) = build_connected_app().await;
+            app.trigger_queue_state_resync().await;
+            let query_uuid = app
+                .state_handle()
+                .lock()
+                .await
+                .pending
+                .current()
+                .unwrap()
+                .uuid
+                .clone();
+            let snapshot = |action_uuid| QueueServerEvent {
+                event_type: QueueEventType::SrvrCtrlQueueState,
+                action_uuid,
+                queue_version: Some(QueueVersion::new(2, 1)),
+                payload: json!({"tracks": [], "shuffle_mode": false}),
+            };
+            app.apply_server_event(snapshot(Some(
+                "00000000-0000-4000-8000-000000000001".into(),
+            )))
+            .await
+            .unwrap();
+            let load = app
+                .build_queue_command(
+                    QueueCommandType::CtrlSrvrQueueLoadTracks,
+                    json!({"track_ids": [101]}),
+                )
+                .await;
+            assert!(matches!(
+                app.send_queue_command(load).await,
+                Err(QconnectAppError::Pending(_))
+            ));
+            assert_eq!(
+                transport.sent_messages().await.len(),
+                1,
+                "no write may overlap the outstanding read"
+            );
+            app.apply_server_event(snapshot(Some(query_uuid)))
+                .await
+                .unwrap();
+            let load = app
+                .build_queue_command(
+                    QueueCommandType::CtrlSrvrQueueLoadTracks,
+                    json!({"track_ids": [101]}),
+                )
+                .await;
+            let load_uuid = app
+                .send_queue_command(load)
+                .await
+                .expect("new queue can be sent after the read reply");
+            let second_load = app
+                .build_queue_command(
+                    QueueCommandType::CtrlSrvrQueueLoadTracks,
+                    json!({"track_ids": [102]}),
+                )
+                .await;
+            assert!(matches!(
+                app.send_queue_command(second_load).await,
+                Err(QconnectAppError::Pending(_))
+            ));
+            assert_eq!(
+                app.state_handle()
+                    .lock()
+                    .await
+                    .pending
+                    .current()
+                    .unwrap()
+                    .uuid,
+                load_uuid
+            );
+            app.disconnect().await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn full_snapshot_recovers_write_conflict_without_querying_again() {
+            let (app, sink, transport, _events_rx) = build_connected_app().await;
+            let load = app
+                .build_queue_command(
+                    QueueCommandType::CtrlSrvrQueueLoadTracks,
+                    json!({"track_ids": [101]}),
+                )
+                .await;
+            app.send_queue_command(load).await.unwrap();
+            app.apply_server_event(QueueServerEvent {
+                event_type: QueueEventType::SrvrCtrlQueueState,
+                action_uuid: Some("00000000-0000-4000-8000-000000000001".into()),
+                queue_version: Some(QueueVersion::new(2, 1)),
+                payload: json!({"tracks": [], "shuffle_mode": false}),
+            })
+            .await
+            .unwrap();
+            assert!(app.state_handle().lock().await.pending.current().is_none());
+            assert_eq!(transport.sent_messages().await.len(), 1);
+            assert!(sink.snapshot().await.iter().any(|event| matches!(
+                event,
+                QconnectAppEvent::PendingActionCanceledByConcurrentRemoteEvent { .. }
+            )));
+            app.disconnect().await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn shuffle_snapshot_fallback_is_only_for_incomplete_information() {
+            for (version, payload, needs_snapshot) in [
+                (
+                    QueueVersion::new(1, 2),
+                    json!({"shuffle_mode": true, "shuffle_seed": 0}),
+                    false,
+                ),
+                (
+                    QueueVersion::new(1, 2),
+                    json!({"shuffle_mode": false}),
+                    false,
+                ),
+                (QueueVersion::new(1, 2), json!({"shuffle_mode": true}), true),
+                (
+                    QueueVersion::new(1, 2),
+                    json!({"shuffle_mode": true, "shuffle_seed": 123, "shuffle_pivot_queue_item_id": 99}),
+                    true,
+                ),
+                (
+                    QueueVersion::new(1, 3),
+                    json!({"shuffle_mode": false}),
+                    false,
+                ),
+            ] {
+                let (app, _sink, transport, _events_rx) = build_connected_app().await;
+                app.state_handle().lock().await.queue.version = QueueVersion::new(1, 1);
+                app.apply_server_event(QueueServerEvent {
+                    event_type: QueueEventType::SrvrCtrlShuffleModeSet,
+                    action_uuid: None,
+                    queue_version: Some(version),
+                    payload,
+                })
+                .await
+                .unwrap();
+                assert_eq!(!transport.sent_messages().await.is_empty(), needs_snapshot);
+                app.disconnect().await.unwrap();
+            }
+        }
+
+        #[tokio::test]
+        async fn failed_control_send_preserves_outstanding_queue_read() {
+            let (app, _sink, transport, _events_rx) = build_connected_app().await;
+            app.trigger_queue_state_resync().await;
+            let query_uuid = app
+                .state_handle()
+                .lock()
+                .await
+                .pending
+                .current()
+                .unwrap()
+                .uuid
+                .clone();
+            transport.disconnect().await.unwrap();
+            let pause = app
+                .build_queue_command(
+                    QueueCommandType::CtrlSrvrSetPlayerState,
+                    json!({"playing_state": 3}),
+                )
+                .await;
+            assert!(matches!(
+                app.send_queue_command(pause).await,
+                Err(QconnectAppError::Transport(_))
+            ));
+            assert_eq!(
+                app.state_handle()
+                    .lock()
+                    .await
+                    .pending
+                    .current()
+                    .unwrap()
+                    .uuid,
+                query_uuid
+            );
+            app.abort_background_tasks().await;
+        }
+
+        #[tokio::test]
+        async fn malformed_command_never_occupies_pending_slot() {
+            let (app, _sink, transport, _events_rx) = build_connected_app().await;
+            let command = QueueCommand::new(
+                QueueCommandType::CtrlSrvrQueueLoadTracks,
+                "not-a-uuid",
+                QueueVersion::default(),
+                json!({"track_ids": [101]}),
+            );
+            assert!(matches!(
+                app.send_queue_command(command).await,
+                Err(QconnectAppError::Protocol(_))
+            ));
+            assert!(app.state_handle().lock().await.pending.current().is_none());
+            assert!(transport.sent_messages().await.is_empty());
+            app.disconnect().await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn correlated_partial_and_session_events_do_not_complete_queue_read() {
+            let (app, _sink, _transport, _events_rx) = build_connected_app().await;
+            app.trigger_queue_state_resync().await;
+            let query_uuid = app
+                .state_handle()
+                .lock()
+                .await
+                .pending
+                .current()
+                .unwrap()
+                .uuid
+                .clone();
+            for (event_type, payload) in [
+                (
+                    QueueEventType::SrvrCtrlShuffleModeSet,
+                    json!({"shuffle_mode": false}),
+                ),
+                (QueueEventType::SrvrCtrlLoopModeSet, json!({"loop_mode": 1})),
+            ] {
+                app.apply_server_event(QueueServerEvent {
+                    event_type,
+                    action_uuid: Some(query_uuid.clone()),
+                    queue_version: Some(QueueVersion::default()),
+                    payload,
+                })
+                .await
+                .unwrap();
+                assert_eq!(
+                    app.state_handle()
+                        .lock()
+                        .await
+                        .pending
+                        .current()
+                        .unwrap()
+                        .uuid,
+                    query_uuid
+                );
+            }
+            app.disconnect().await.unwrap();
+        }
     }
 
     #[tokio::test]

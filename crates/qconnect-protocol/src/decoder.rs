@@ -807,11 +807,15 @@ fn map_ctrl_renderer_state_updated(
 ) -> Result<QueueServerEvent, ProtocolError> {
     let player_state = payload.player_state.map(|ps| {
         json!({
-            "playing_state": ps.playing_state,
-            "buffer_state": ps.buffer_state,
-            "current_position": ps.current_position.as_ref().and_then(|pos| pos.value),
-            "duration": ps.duration,
-            "current_queue_item_id": ps.current_queue_item_id
+            "playing_state": ps.playing_state.unwrap_or(0),
+            "buffer_state": ps.buffer_state.unwrap_or(0),
+            "current_position": ps.current_position.as_ref().map(|pos| pos.value.unwrap_or(0)),
+            "duration": ps.duration.unwrap_or(0),
+            // Official proto3 RendererPlayerState defaults an omitted scalar
+            // cursor to 0. Only an absent player_state is absent; -1 is the
+            // explicit no-track sentinel. Treating zero as unknown strands
+            // next/previous on the first item after a peer takeover.
+            "current_queue_item_id": ps.current_queue_item_id.unwrap_or(0)
         })
     });
 
@@ -906,7 +910,7 @@ fn map_ctrl_volume_changed(
         queue_version: None,
         payload: json!({
             "renderer_id": payload.renderer_id,
-            "volume": payload.volume
+            "volume": payload.volume.unwrap_or(0)
         }),
     })
 }
@@ -933,7 +937,7 @@ fn map_ctrl_volume_muted(
         queue_version: None,
         payload: json!({
             "renderer_id": payload.renderer_id,
-            "value": payload.value
+            "value": payload.value.unwrap_or(false)
         }),
     })
 }
@@ -1033,8 +1037,16 @@ fn queue_version_opt(
     };
 
     // Qobuz may send QueueVersionRef with missing major/minor — default to 0
-    let major = version.major.map(|v| i32_to_u64(v)).transpose()?.unwrap_or(0);
-    let minor = version.minor.map(|v| i32_to_u64(v)).transpose()?.unwrap_or(0);
+    let major = version
+        .major
+        .map(|v| i32_to_u64(v))
+        .transpose()?
+        .unwrap_or(0);
+    let minor = version
+        .minor
+        .map(|v| i32_to_u64(v))
+        .transpose()?
+        .unwrap_or(0);
     Ok(Some(QueueVersion::new(major, minor)))
 }
 
@@ -1094,6 +1106,86 @@ mod tests {
     use super::{
         decode_playback_error, decode_queue_server_events, decode_renderer_server_commands,
     };
+
+    #[test]
+    fn controller_state_proto3_zero_cursor_and_position_are_not_missing() {
+        // Official proto3 encoder omits scalar zero, including queue item 0.
+        // Type 82, renderer 1, PLAY, present-but-empty position, no cursor tag.
+        let raw = [
+            0x08, 0x52, 0x92, 0x05, 0x08, 0x08, 0x01, 0x1a, 0x04, 0x08, 0x02, 0x1a, 0x00,
+        ];
+        let batch = QConnectMessages {
+            messages: vec![QConnectMessage::decode(raw.as_slice()).unwrap()],
+            ..Default::default()
+        };
+        let events = decode_queue_server_events(&batch.encode_to_vec()).unwrap();
+        let state = &events[0].payload["player_state"];
+        assert_eq!(state["current_queue_item_id"], 0);
+        assert_eq!(state["current_position"], 0);
+        assert_eq!(state["playing_state"], 2);
+    }
+
+    #[test]
+    fn controller_state_absent_player_or_position_stays_absent() {
+        use crate::queue_command_proto::{
+            CtrlRendererPlayerState, CtrlRendererStateUpdatedMessage,
+        };
+        for player_state in [
+            None,
+            Some(CtrlRendererPlayerState {
+                current_queue_item_id: Some(-1),
+                ..Default::default()
+            }),
+        ] {
+            let has_player = player_state.is_some();
+            let batch = QConnectMessages {
+                messages: vec![QConnectMessage {
+                    srvr_ctrl_renderer_state_updated: Some(CtrlRendererStateUpdatedMessage {
+                        renderer_id: Some(1),
+                        player_state,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let events = decode_queue_server_events(&batch.encode_to_vec()).unwrap();
+            let state = &events[0].payload["player_state"];
+            if has_player {
+                assert_eq!(state["current_queue_item_id"], -1);
+                assert!(state["current_position"].is_null());
+            } else {
+                assert!(state.is_null());
+            }
+        }
+    }
+
+    #[test]
+    fn controller_volume_zero_and_unmute_decode_official_scalar_defaults() {
+        use crate::queue_command_proto::{CtrlVolumeChangedMessage, CtrlVolumeMutedMessage};
+        let batch = QConnectMessages {
+            messages: vec![
+                QConnectMessage {
+                    srvr_ctrl_volume_changed: Some(CtrlVolumeChangedMessage {
+                        renderer_id: Some(2),
+                        volume: None,
+                    }),
+                    ..Default::default()
+                },
+                QConnectMessage {
+                    srvr_ctrl_volume_muted: Some(CtrlVolumeMutedMessage {
+                        renderer_id: Some(2),
+                        value: None,
+                    }),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let events = decode_queue_server_events(&batch.encode_to_vec()).unwrap();
+        assert_eq!(events[0].payload["volume"], 0);
+        assert_eq!(events[1].payload["value"], false);
+    }
 
     #[test]
     fn decodes_playback_error_track_not_streamable() {

@@ -6762,3 +6762,6 @@ msgstr "Abrir enlaces de Qobuz en QBZ"
 
 msgid "Make QBZ the handler for qobuzapp:// links from your browser. Off, the official Qobuz app keeps them; QBZ's own qbz:// links always open here."
 msgstr "Hace que QBZ maneje los enlaces qobuzapp:// que salen de tu navegador. Apagado, la app oficial de Qobuz se queda con ellos; los enlaces qbz:// de QBZ siempre abren aquí."
+
+msgid "Failed to send playback to the selected device"
+msgstr "No se pudo enviar la reproducción al dispositivo seleccionado"

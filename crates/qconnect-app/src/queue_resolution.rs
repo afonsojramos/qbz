@@ -214,12 +214,9 @@ fn resolve_current_cursor_index_from_snapshots(
         return (current_track_index, "queue_track_id_match");
     }
 
-    if let Some(next_index) = next_queue_index {
-        if next_index > 0 {
-            return (Some(next_index - 1), "queue_item_before_renderer_next");
-        }
-    }
-
+    // A prefetched successor does not identify the current item. In repeat-one
+    // it can name the current item itself; without a current qid/track match,
+    // inferring its predecessor would invent a cursor and send a wrong skip.
     (None, "no_current_queue_item")
 }
 
@@ -228,6 +225,24 @@ pub fn resolve_controller_queue_item_from_snapshots(
     renderer: &QConnectRendererState,
     direction: QconnectRemoteSkipDirection,
 ) -> QconnectControllerQueueItemResolution {
+    // Do not fabricate a linear order while a shuffled queue is waiting for
+    // its WS-authored indexes. No local reshuffle or next-track hint is an
+    // authoritative substitute.
+    if queue.shuffle_mode
+        && !queue.queue_items.is_empty()
+        && !queue.shuffle_order.as_ref().is_some_and(|order| {
+            is_valid_ordered_queue_shuffle_order(order, queue.queue_items.len())
+        })
+    {
+        return QconnectControllerQueueItemResolution {
+            target_queue_item_id: None,
+            strategy: "missing_authoritative_shuffle_order",
+            queue_index: None,
+            matched_track_id: None,
+            matched_queue_item_id: None,
+        };
+    }
+
     let cursors = ordered_queue_cursors(queue);
     if cursors.is_empty() {
         return QconnectControllerQueueItemResolution {
@@ -242,46 +257,65 @@ pub fn resolve_controller_queue_item_from_snapshots(
     let (current_index, _current_strategy) =
         resolve_current_cursor_index_from_snapshots(queue, renderer, &cursors);
 
-    let (target_index, strategy) = match direction {
-        QconnectRemoteSkipDirection::Next => {
-            let next_index = find_cursor_index_by_queue_item_id(
-                &cursors,
-                queue,
-                renderer.next_track.as_ref().map(|item| item.queue_item_id),
-            );
-            if let Some(next_index) = next_index {
-                (Some(next_index), "renderer_next_queue_item_id_verified")
-            } else if let Some(current_index) = current_index {
-                if current_index + 1 < cursors.len() {
-                    (Some(current_index + 1), "queue_item_after_current")
-                } else {
-                    (None, "no_next_queue_item")
-                }
-            } else {
-                (None, "no_next_queue_item")
-            }
-        }
-        QconnectRemoteSkipDirection::Previous => {
-            if let Some(current_index) = current_index {
-                if current_index > 0 {
-                    (Some(current_index - 1), "queue_item_before_current")
-                } else {
-                    (Some(current_index), "restart_current_queue_item")
-                }
-            } else {
-                (None, "no_previous_queue_item")
-            }
-        }
-    };
-
-    let Some(target_index) = target_index else {
+    let Some(current_index) = current_index else {
         return QconnectControllerQueueItemResolution {
             target_queue_item_id: None,
-            strategy,
+            strategy: "no_current_queue_item",
             queue_index: None,
             matched_track_id: None,
             matched_queue_item_id: None,
         };
+    };
+
+    // Official Mac 8.2 getNextIndexOnUserAction/getPreviousIndex: manual
+    // Next ignores repeat-one (unlike the prefetch/completion successor),
+    // repeat-all wraps ONLY the main queue, and off/one clamp at the boundary.
+    // The combined cursor sequence already preserves the WS shuffle order.
+    let repeat_all = renderer.loop_mode == Some(3);
+    let main_len = queue.queue_items.len();
+    if repeat_all && main_len == 0 {
+        return QconnectControllerQueueItemResolution {
+            target_queue_item_id: None,
+            strategy: "no_repeat_queue_items",
+            queue_index: None,
+            matched_track_id: None,
+            matched_queue_item_id: None,
+        };
+    }
+    let (target_index, strategy) = match direction {
+        QconnectRemoteSkipDirection::Next => {
+            let target = if repeat_all {
+                (current_index + 1) % main_len
+            } else {
+                (current_index + 1).min(cursors.len() - 1)
+            };
+            let strategy = if target < current_index {
+                "queue_wrap_next"
+            } else if target == current_index {
+                "last_queue_item"
+            } else {
+                "queue_item_after_current"
+            };
+            (target, strategy)
+        }
+        QconnectRemoteSkipDirection::Previous => {
+            let offset = usize::from(renderer.current_position_ms.unwrap_or(0) <= 4000);
+            let target = if repeat_all {
+                // Reduce before subtracting to avoid unsigned underflow on
+                // the first item, including the one-item repeat-all queue.
+                (current_index % main_len + main_len - offset % main_len) % main_len
+            } else {
+                current_index.saturating_sub(offset)
+            };
+            let strategy = if target == current_index {
+                "restart_current_queue_item"
+            } else if target > current_index {
+                "queue_wrap_previous"
+            } else {
+                "queue_item_before_current"
+            };
+            (target, strategy)
+        }
     };
 
     let cursor = cursors[target_index];
@@ -590,5 +624,215 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(resolve_qconnect_shuffle_pivot(&q, &renderer), Some(22));
+    }
+
+    #[test]
+    fn manual_skip_matches_official_loop_position_shuffle_and_autoplay_matrix() {
+        for shuffle in [false, true] {
+            for autoplay in [false, true] {
+                let mut q = queue(vec![item(0, 100), item(1, 101), item(2, 102)]);
+                q.shuffle_mode = shuffle;
+                q.shuffle_order = shuffle.then(|| vec![2, 0, 1]);
+                q.autoplay_mode = autoplay;
+                if autoplay {
+                    q.autoplay_items = vec![item(3, 103), item(4, 104)];
+                }
+                let expected_qids: &[u64] = match (shuffle, autoplay) {
+                    (false, false) => &[0, 1, 2],
+                    (true, false) => &[2, 0, 1],
+                    (false, true) => &[0, 1, 2, 3, 4],
+                    (true, true) => &[2, 0, 1, 3, 4],
+                };
+                for loop_mode in [1, 2, 3] {
+                    // Expected indexes are literal fixtures for the official
+                    // helpers, not a second copy of the production formula.
+                    let next_indexes: &[usize] = match (loop_mode, autoplay) {
+                        (3, false) => &[1, 2, 0],
+                        (3, true) => &[1, 2, 0, 1, 2],
+                        (_, false) => &[1, 2, 2],
+                        (_, true) => &[1, 2, 3, 4, 4],
+                    };
+                    for position_ms in [0, 4000, 4001, 60_000] {
+                        let previous_indexes: &[usize] =
+                            match (loop_mode, autoplay, position_ms > 4000) {
+                                (3, false, false) => &[2, 0, 1],
+                                (3, true, false) => &[2, 0, 1, 2, 0],
+                                (3, false, true) => &[0, 1, 2],
+                                (3, true, true) => &[0, 1, 2, 0, 1],
+                                (_, false, false) => &[0, 0, 1],
+                                (_, true, false) => &[0, 0, 1, 2, 3],
+                                (_, false, true) => &[0, 1, 2],
+                                (_, true, true) => &[0, 1, 2, 3, 4],
+                            };
+                        for (current_index, &current_qid) in expected_qids.iter().enumerate() {
+                            let current = item(current_qid, 100 + current_qid);
+                            let renderer = QConnectRendererState {
+                                current_track: Some(current.clone()),
+                                // A repeat-one prefetch names the same item.
+                                // It must never turn a manual Next into repeat.
+                                next_track: Some(current),
+                                loop_mode: Some(loop_mode),
+                                current_position_ms: Some(position_ms),
+                                ..Default::default()
+                            };
+                            for (direction, target_index) in [
+                                (
+                                    QconnectRemoteSkipDirection::Next,
+                                    next_indexes[current_index],
+                                ),
+                                (
+                                    QconnectRemoteSkipDirection::Previous,
+                                    previous_indexes[current_index],
+                                ),
+                            ] {
+                                let result = resolve_controller_queue_item_from_snapshots(
+                                    &q, &renderer, direction,
+                                );
+                                assert_eq!(
+                                    result.target_queue_item_id,
+                                    Some(expected_qids[target_index]),
+                                    "shuffle={shuffle} autoplay={autoplay} loop={loop_mode} pos={position_ms} current={current_index} direction={direction:?}"
+                                );
+                                assert_eq!(result.queue_index, Some(target_index));
+                                assert_eq!(
+                                    result.matched_track_id,
+                                    Some(100 + expected_qids[target_index])
+                                );
+                                if direction == QconnectRemoteSkipDirection::Previous {
+                                    assert_eq!(
+                                        result.strategy == "restart_current_queue_item",
+                                        target_index == current_index
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn manual_skip_next_uses_current_cursor_instead_of_stale_prefetch_cursor() {
+        let q = queue(vec![item(0, 100), item(1, 101), item(2, 102)]);
+        let renderer = QConnectRendererState {
+            current_track: Some(item(1, 101)),
+            next_track: Some(item(0, 100)),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_controller_queue_item_from_snapshots(
+                &q,
+                &renderer,
+                QconnectRemoteSkipDirection::Next
+            )
+            .target_queue_item_id,
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn manual_skip_never_infers_current_from_prefetch_alone() {
+        let q = queue(vec![item(0, 100), item(1, 101), item(2, 102)]);
+        for current_track in [None, Some(item(999, 999))] {
+            let renderer = QConnectRendererState {
+                current_track,
+                next_track: Some(item(2, 102)),
+                ..Default::default()
+            };
+            for direction in [
+                QconnectRemoteSkipDirection::Next,
+                QconnectRemoteSkipDirection::Previous,
+            ] {
+                let result = resolve_controller_queue_item_from_snapshots(&q, &renderer, direction);
+                assert_eq!(result.target_queue_item_id, None);
+                assert_eq!(result.strategy, "no_current_queue_item");
+            }
+        }
+    }
+
+    #[test]
+    fn manual_skip_one_item_queue_restarts_without_division_or_boundary_failure() {
+        let q = queue(vec![item(0, 100)]);
+        for loop_mode in [None, Some(1), Some(2), Some(3)] {
+            for position_ms in [None, Some(4000), Some(4001)] {
+                let renderer = QConnectRendererState {
+                    current_track: Some(item(0, 100)),
+                    loop_mode,
+                    current_position_ms: position_ms,
+                    ..Default::default()
+                };
+                for direction in [
+                    QconnectRemoteSkipDirection::Next,
+                    QconnectRemoteSkipDirection::Previous,
+                ] {
+                    let result =
+                        resolve_controller_queue_item_from_snapshots(&q, &renderer, direction);
+                    assert_eq!(result.target_queue_item_id, Some(0));
+                    if direction == QconnectRemoteSkipDirection::Previous {
+                        assert_eq!(result.strategy, "restart_current_queue_item");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn manual_skip_requires_authoritative_shuffle_order() {
+        let mut q = queue(vec![item(0, 100), item(1, 101), item(2, 102)]);
+        q.shuffle_mode = true;
+        let renderer = QConnectRendererState {
+            current_track: Some(item(1, 101)),
+            next_track: Some(item(2, 102)),
+            ..Default::default()
+        };
+        for order in [
+            None,
+            Some(vec![0, 0, 1]),
+            Some(vec![0, 1, 3]),
+            Some(vec![0, 1]),
+        ] {
+            q.shuffle_order = order;
+            for direction in [
+                QconnectRemoteSkipDirection::Next,
+                QconnectRemoteSkipDirection::Previous,
+            ] {
+                let result = resolve_controller_queue_item_from_snapshots(&q, &renderer, direction);
+                assert_eq!(result.target_queue_item_id, None);
+                assert_eq!(result.strategy, "missing_authoritative_shuffle_order");
+            }
+        }
+    }
+
+    #[test]
+    fn manual_skip_handles_empty_main_queue_without_inventing_repeat_targets() {
+        let mut q = queue(Vec::new());
+        let mut renderer = QConnectRendererState {
+            current_track: Some(item(4, 104)),
+            ..Default::default()
+        };
+        for direction in [
+            QconnectRemoteSkipDirection::Next,
+            QconnectRemoteSkipDirection::Previous,
+        ] {
+            assert_eq!(
+                resolve_controller_queue_item_from_snapshots(&q, &renderer, direction).strategy,
+                "no_queue_items"
+            );
+        }
+        q.autoplay_items = vec![item(4, 104), item(5, 105)];
+        for loop_mode in [1, 2, 3] {
+            renderer.loop_mode = Some(loop_mode);
+            for (direction, qid) in [
+                (QconnectRemoteSkipDirection::Next, 5),
+                (QconnectRemoteSkipDirection::Previous, 4),
+            ] {
+                let result = resolve_controller_queue_item_from_snapshots(&q, &renderer, direction);
+                assert_eq!(result.target_queue_item_id, (loop_mode != 3).then_some(qid));
+                if loop_mode == 3 {
+                    assert_eq!(result.strategy, "no_repeat_queue_items");
+                }
+            }
+        }
     }
 }
