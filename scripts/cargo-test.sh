@@ -33,6 +33,7 @@
 #   5. offscreen boots of BOTH debug and release: zero QML complaints,
 #      QbzCore initialized, and process still alive at the deadline.
 #      Native Qt SDK content participates in the C++ dependency cache.
+#   6. release xcb boot against a private silent D-Bus (requires Xvfb).
 #
 # Usage:
 #   ./scripts/cargo-test.sh                 # job `test`

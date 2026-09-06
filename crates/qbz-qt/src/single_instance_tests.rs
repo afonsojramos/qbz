@@ -185,14 +185,19 @@ fn stalled_phase_after_delays(
     let started = Instant::now();
     let result = probe_at(&dir.address(), &mut url, budget, TestIface::default());
     let error = result.err().expect("stalled bus must fail open");
-    assert!(error.contains("deadline"), "{error}");
+    assert!(error.detail.contains("deadline"), "{error}");
+    assert_eq!(
+        error.quarantine_bus,
+        matches!(phase, "AUTH" | "Hello" | "RequestName"),
+        "only a bus failure may disable D-Bus before Qt: {error}"
+    );
     assert!(
         started.elapsed() < budget + Duration::from_millis(170),
         "{error}"
     );
     if !delay.is_zero() {
         assert!(
-            error.contains(phase),
+            error.detail.contains(phase),
             "must reach the final phase within the global budget: {error}"
         );
     }
@@ -246,13 +251,15 @@ fn missing_and_refused_bus_return_promptly() {
         }
         let started = Instant::now();
         let mut link = Some("qobuzapp://track/1".into());
-        assert!(probe_at(
+        let error = probe_at(
             &dir.address(),
             &mut link,
             PROBE_TIMEOUT,
-            TestIface::default()
+            TestIface::default(),
         )
-        .is_err());
+        .err()
+        .expect("unavailable bus must fail open");
+        assert!(error.quarantine_bus);
         assert!(started.elapsed() < Duration::from_secs(1));
         assert!(link.is_some());
     }
@@ -264,6 +271,41 @@ fn unsupported_transport_does_not_launch_an_external_worker() {
         .try_into()
         .unwrap();
     assert!(socket_path(&address).is_err());
+    let error = probe_at(&address, &mut None, PROBE_TIMEOUT, TestIface::default())
+        .err()
+        .expect("unsupported transport must fail open");
+    assert!(!error.quarantine_bus, "Qt may support this transport");
+}
+
+#[test]
+fn rejected_bus_method_does_not_disable_a_responsive_bus() {
+    let error = zbus::Error::MethodError(
+        "org.freedesktop.DBus.Error.AccessDenied"
+            .try_into()
+            .unwrap(),
+        Some("fixture policy".into()),
+        Message::signal("/fixture", "com.example.Fixture", "Test")
+            .unwrap()
+            .build(&())
+            .unwrap(),
+    );
+    assert!(
+        !ProbePhase::RequestName
+            .failure(error.to_string(), Some(&error))
+            .quarantine_bus
+    );
+}
+
+#[test]
+fn quarantined_bus_cannot_autolaunch_or_wait_for_auth() {
+    let address = UNAVAILABLE_BUS.try_into().unwrap();
+    let started = Instant::now();
+    let error = probe_at(&address, &mut None, PROBE_TIMEOUT, TestIface::default())
+        .err()
+        .expect("quarantined bus must fail immediately");
+    assert!(error.quarantine_bus);
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(error.detail.starts_with("connect:"));
 }
 
 struct RealBus {

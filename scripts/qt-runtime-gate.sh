@@ -13,3 +13,5 @@ for profile in debug release; do
   python3 scripts/qt-cargo.py build "${args[@]}" --manifest-path crates/Cargo.toml -p qbz-qt
   python3 scripts/qt-smoke.py "$target_dir/$profile/qbz" --log "$logs/$profile.log"
 done
+# A healthy offscreen bus cannot expose Qt's synchronous xcb D-Bus startup.
+python3 scripts/qt-smoke.py "$target_dir/release/qbz" --silent-bus --log "$logs/release-silent-bus.log"

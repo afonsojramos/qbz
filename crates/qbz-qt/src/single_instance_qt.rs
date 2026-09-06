@@ -22,6 +22,60 @@ const OBJECT_PATH: &str = "/com/blitzfc/qbz";
 const IFACE_NAME: &str = "com.blitzfc.qbz.SingleInstance";
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+// An existing non-socket gives Qt/libdbus an immediate connection failure.
+// Unsetting the address would enable autolaunch and another unbounded wait.
+const UNAVAILABLE_BUS: &str = "unix:path=/dev/null";
+
+#[derive(Debug)]
+struct ProbeError {
+    detail: String,
+    quarantine_bus: bool,
+}
+
+impl std::fmt::Display for ProbeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ProbePhase {
+    Connect,
+    Handshake,
+    RequestName,
+    OpenUrl,
+    Present,
+    Raise,
+}
+
+impl ProbePhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Handshake => "AUTH/Hello/object registration",
+            Self::RequestName => "RequestName",
+            Self::OpenUrl => "OpenUrl",
+            Self::Present => "Present",
+            Self::Raise => "MPRIS Raise",
+        }
+    }
+
+    fn failure(self, detail: String, error: Option<&zbus::Error>) -> ProbeError {
+        // A stalled remote QBZ method says nothing about the session bus.
+        // Likewise, a D-Bus error reply proves that the bus is responsive.
+        // Unsupported transports remain available to Qt, which supports more
+        // address types than this deliberately Unix-only startup probe.
+        let quarantine_bus = matches!(self, Self::Connect | Self::Handshake | Self::RequestName)
+            && !matches!(
+                error,
+                Some(zbus::Error::Unsupported | zbus::Error::MethodError(..))
+            );
+        ProbeError {
+            detail: format!("{}: {detail}", self.label()),
+            quarantine_bus,
+        }
+    }
+}
 
 static CONN: OnceLock<SessionConnection> = OnceLock::new();
 static UI_READY: AtomicBool = AtomicBool::new(false);
@@ -81,7 +135,10 @@ impl Drop for SessionConnection {
 pub(crate) fn acquire_or_raise() -> bool {
     let mut pending = crate::deep_link_qt::take_pending();
     let result = zbus::Address::session()
-        .map_err(|error| format!("address: {error}"))
+        .map_err(|error| ProbeError {
+            detail: format!("address: {error}"),
+            quarantine_bus: false,
+        })
         .and_then(|address| probe_at(&address, &mut pending, PROBE_TIMEOUT, SingleInstanceIface));
     if let Some(url) = pending {
         crate::deep_link_qt::restore_pending(url);
@@ -94,6 +151,16 @@ pub(crate) fn acquire_or_raise() -> bool {
         Ok(None) => false,
         Err(error) => {
             log::warn!("[qbz-qt] single-instance probe failed ({error}); continuing");
+            if error.quarantine_bus {
+                // Before either graphics child or the main QGuiApplication:
+                // QDesktopUnixServices synchronously opens QDBusConnection
+                // during platform integration. Without this handoff, it can
+                // repeat the AUTH/Hello hang we just bounded and canceled.
+                // This affects only this process and its children; nothing is
+                // persisted and the next launch retries the original bus.
+                std::env::set_var("DBUS_SESSION_BUS_ADDRESS", UNAVAILABLE_BUS);
+                log::warn!("[qbz-qt] D-Bus disabled for this launch before Qt startup");
+            }
             true
         }
     }
@@ -127,16 +194,16 @@ fn probe_at<I: zbus::object_server::Interface>(
     pending: &mut Option<String>,
     budget: Duration,
     interface: I,
-) -> Result<Option<SessionConnection>, String> {
+) -> Result<Option<SessionConnection>, ProbeError> {
     let deadline = Instant::now() + budget;
-    let phase = Cell::new("connect");
+    let phase = Cell::new(ProbePhase::Connect);
     let operation = async {
         let socket = Arc::new(Async::<UnixStream>::connect(socket_path(address)?).await?);
         let mut owned = SessionConnection {
             socket,
             connection: None,
         };
-        phase.set("AUTH/Hello/object registration");
+        phase.set(ProbePhase::Handshake);
         let conn = zbus::connection::Builder::socket(zbus::connection::socket::BoxedSplit::new(
             Box::new(owned.socket.clone()),
             Box::new(owned.socket.clone()),
@@ -151,7 +218,7 @@ fn probe_at<I: zbus::object_server::Interface>(
             return Err(zbus::Error::Handshake("session bus GUID mismatch".into()));
         }
         owned.connection = Some(conn.clone());
-        phase.set("RequestName");
+        phase.set(ProbePhase::RequestName);
         // Raw calls avoid proxy property subscriptions and detached cleanup
         // RPCs. The sole timeout below includes every call and the handshake.
         let reply = conn
@@ -167,7 +234,7 @@ fn probe_at<I: zbus::object_server::Interface>(
             RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(Some(owned)),
             RequestNameReply::Exists | RequestNameReply::InQueue => {
                 if let Some(url) = pending.as_deref() {
-                    phase.set("OpenUrl");
+                    phase.set(ProbePhase::OpenUrl);
                     conn.call_method(
                         Some(BUS_NAME),
                         OBJECT_PATH,
@@ -181,7 +248,7 @@ fn probe_at<I: zbus::object_server::Interface>(
                     pending.take();
                     return Ok(None);
                 }
-                phase.set("Present");
+                phase.set(ProbePhase::Present);
                 if conn
                     .call_method(
                         Some(BUS_NAME),
@@ -195,7 +262,7 @@ fn probe_at<I: zbus::object_server::Interface>(
                 {
                     return Ok(None);
                 }
-                phase.set("MPRIS Raise");
+                phase.set(ProbePhase::Raise);
                 conn.call_method(
                     Some("org.mpris.MediaPlayer2.com.blitzfc.qbz"),
                     "/org/mpris/MediaPlayer2",
@@ -214,15 +281,13 @@ fn probe_at<I: zbus::object_server::Interface>(
         match select(Box::pin(Timer::at(deadline)), Box::pin(operation)).await {
             Either::Left((_, operation)) => {
                 drop(operation);
-                Err(format!(
-                    "{}: total deadline of {} ms expired",
-                    phase.get(),
-                    budget.as_millis()
+                Err(phase.get().failure(
+                    format!("total deadline of {} ms expired", budget.as_millis()),
+                    None,
                 ))
             }
-            Either::Right((result, _)) => {
-                result.map_err(|error: zbus::Error| format!("{}: {error}", phase.get()))
-            }
+            Either::Right((result, _)) => result
+                .map_err(|error: zbus::Error| phase.get().failure(error.to_string(), Some(&error))),
         }
     })
 }
