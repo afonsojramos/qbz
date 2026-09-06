@@ -574,6 +574,12 @@ fn publish_opening(outstanding: usize) {
 }
 
 fn publish_doc(doc: &EphemeralDoc, loading: bool) {
+    publish_doc_with_navigation(doc, loading, false);
+}
+
+/// An explicit open navigates only after its session is visible to QML.
+/// Restore, scan completion and metadata updates must not steal navigation.
+fn publish_doc_with_navigation(doc: &EphemeralDoc, loading: bool, user_open: bool) {
     let json = to_json(doc);
     let label = display_label(doc);
     ui(move |mut b| {
@@ -583,6 +589,13 @@ fn publish_doc(doc: &EphemeralDoc, loading: bool) {
         b.as_mut()
             .set_local_ephemeral_label(QString::from(label.as_str()));
         b.as_mut().set_local_ephemeral_loading(loading);
+        if user_open {
+            // QML handles this signal synchronously and rejects an inactive
+            // ephemeral tab. Publish it LAST, in the same Qt-thread callback.
+            // A sequence also fires when another session is already active.
+            let seq = OPEN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            b.as_mut().set_local_ephemeral_open_seq(seq);
+        }
     });
 }
 
@@ -655,10 +668,6 @@ pub fn adopt_tracks(label: &str, tracks: Vec<LocalTrack>) {
     crate::spawn(async move {
         let _busy = busy;
         wipe_if_playing(&crate::app()).await;
-        let seq = OPEN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        ui(move |mut b| {
-            b.as_mut().set_local_ephemeral_open_seq(seq);
-        });
         // Derived from the rows, not passed in: whoever builds the session
         // already knows what the tracks are, and a separate flag is one more
         // thing a future medium can forget to set.
@@ -676,7 +685,7 @@ pub fn adopt_tracks(label: &str, tracks: Vec<LocalTrack>) {
                     label,
                     res.tracks.len()
                 );
-                publish_doc(&build_doc(&label, &label, &res.tracks), false);
+                publish_doc_with_navigation(&build_doc(&label, &label, &res.tracks), false, true);
             }
             Err(e) => {
                 log::warn!("[qbz-qt] ephemeral adopt failed: {e}");
@@ -839,22 +848,10 @@ async fn scan(runtime: Option<Runtime>, path: String) {
     crate::disc_identity::clear();
     if let Some(rt) = &runtime {
         wipe_if_playing(rt).await;
-        // `runtime.is_some()` is ALREADY the "the user asked for this"
-        // discriminator: `open()` and `open_path()` pass one, `rehydrate()`
-        // passes None. Bumping here — before the loading frame below — is what
-        // moves the view onto the session's tab, and it must be a SEQUENCE
-        // rather than the `active` flag: opening a second folder over a first
-        // leaves `active` true, so nothing watching that flag ever fires.
-        // Bumping only for a user open is what keeps the boot restore from
-        // hijacking whatever tab the user actually opened the view on.
-        let seq = OPEN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        ui(move |mut b| {
-            b.as_mut().set_local_ephemeral_open_seq(seq);
-        });
     }
     let name = folder_display_name(&path);
     // Header + spinner immediately; the scan of a big folder is not instant.
-    publish_doc(
+    publish_doc_with_navigation(
         &EphemeralDoc {
             name: name.clone(),
             title: name.clone(),
@@ -866,6 +863,7 @@ async fn scan(runtime: Option<Runtime>, path: String) {
             albums: Vec::new(),
         },
         true,
+        runtime.is_some(),
     );
     let scan_path = path.clone();
     let result =
