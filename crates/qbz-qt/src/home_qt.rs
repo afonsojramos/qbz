@@ -59,6 +59,10 @@ pub struct HomeCard {
     pub subtitle: String,
     #[serde(rename = "artistId")]
     pub artist_id: String,
+    /// History snapshots route by source and can resolve older catalog rows
+    /// that were recorded before artist ids were retained.
+    #[serde(rename = "historyArtistLink")]
+    pub history_artist_link: bool,
     /// Complete Qobuz contributor set used only while assembling Home. The
     /// wire keeps the historical primary `artistId`, but blacklist matching
     /// must also catch featured artists (`DiscoverAlbum.artists[]`). Keeping
@@ -543,6 +547,55 @@ pub(crate) fn open_pinned_album_artist(album_id: String, artist_name: String) {
             }
         }
     });
+}
+
+#[derive(Debug, PartialEq)]
+enum HistoryArtistTarget {
+    Local(String),
+    Catalog(String),
+    AlbumLookup,
+    None,
+}
+
+fn history_artist_target(
+    album_id: &str,
+    source: &str,
+    name: &str,
+    artist_id: &str,
+) -> HistoryArtistTarget {
+    if name.trim().is_empty() {
+        return HistoryArtistTarget::None;
+    }
+    let source = source.trim().to_ascii_lowercase();
+    let local = matches!(source.as_str(), "local" | "user")
+        || matches!(qbz_source::SourceId::from_word(&source), Some(id) if id != qbz_source::SourceId::QOBUZ)
+        || crate::library_qt::is_local_album_key(album_id);
+    if local {
+        HistoryArtistTarget::Local(name.trim().to_string())
+    } else if artist_id.parse::<u64>().is_ok_and(|id| id > 0) {
+        HistoryArtistTarget::Catalog(artist_id.to_string())
+    } else if !album_id.is_empty() {
+        HistoryArtistTarget::AlbumLookup
+    } else {
+        HistoryArtistTarget::None
+    }
+}
+
+pub(crate) fn open_history_album_artist(
+    album_id: String,
+    source: String,
+    name: String,
+    artist_id: String,
+) {
+    match history_artist_target(&album_id, &source, &name, &artist_id) {
+        HistoryArtistTarget::Local(name) => {
+            crate::local_album_actions::open_artist_by_name(name);
+            crate::navigate_to("local");
+        }
+        HistoryArtistTarget::Catalog(id) => crate::open_artist(id),
+        HistoryArtistTarget::AlbumLookup => open_pinned_album_artist(album_id, name),
+        HistoryArtistTarget::None => {}
+    }
 }
 
 /// Build the three local recently-played ordering slots from their stores.
@@ -2118,6 +2171,12 @@ pub(crate) fn map_recent_album(a: crate::recently_qt::RecentAlbum) -> HomeCard {
         id: a.id,
         title: a.title,
         artist: a.artist,
+        artist_id: a
+            .artist_id
+            .filter(|id| *id > 0)
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
+        history_artist_link: true,
         blacklist_album_id,
         genre: a.genre,
         year: if a.release_date.is_empty() {
@@ -2395,6 +2454,41 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_album_artist_route_uses_source_before_catalog_identity() {
+        for source in [
+            "local",
+            "user",
+            "plex",
+            "jellyfin",
+            "navidrome",
+            "qobuz_purchase",
+        ] {
+            assert_eq!(
+                history_artist_target("old-id", source, "Led Zeppelin", "123"),
+                HistoryArtistTarget::Local("Led Zeppelin".into())
+            );
+        }
+        assert_eq!(
+            history_artist_target("plex:old-id", "", "Led Zeppelin", "123"),
+            HistoryArtistTarget::Local("Led Zeppelin".into())
+        );
+        for source in ["qobuz", "qobuz_connect_remote", ""] {
+            assert_eq!(
+                history_artist_target("catalog-album", source, "Led Zeppelin", "123"),
+                HistoryArtistTarget::Catalog("123".into())
+            );
+            assert_eq!(
+                history_artist_target("catalog-album", source, "Led Zeppelin", ""),
+                HistoryArtistTarget::AlbumLookup
+            );
+        }
+        assert_eq!(
+            history_artist_target("catalog-album", "qobuz", "", "123"),
+            HistoryArtistTarget::None
+        );
+    }
 
     fn audio(depth: Option<u32>, rate: Option<f64>) -> DiscoverAudioInfo {
         DiscoverAudioInfo {

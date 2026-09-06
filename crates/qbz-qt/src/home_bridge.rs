@@ -179,6 +179,14 @@ pub mod qbz_home {
             album_id: QString,
             artist_name: QString,
         );
+        #[qinvokable]
+        fn open_history_album_artist(
+            self: Pin<&mut QbzHome>,
+            album_id: QString,
+            source: QString,
+            artist_name: QString,
+            artist_id: QString,
+        );
         /// Configurator > "Refresh now": rebuild every row, bypassing the
         /// results blob. The engine still honours its own per-week
         /// ListenBrainz cache, so this is not a way to hammer that service.
@@ -547,6 +555,21 @@ impl qbz_home::QbzHome {
 
     pub fn open_pinned_album_artist(self: Pin<&mut Self>, album_id: QString, artist_name: QString) {
         crate::home_qt::open_pinned_album_artist(album_id.to_string(), artist_name.to_string());
+    }
+
+    pub fn open_history_album_artist(
+        self: Pin<&mut Self>,
+        album_id: QString,
+        source: QString,
+        artist_name: QString,
+        artist_id: QString,
+    ) {
+        crate::home_qt::open_history_album_artist(
+            album_id.to_string(),
+            source.to_string(),
+            artist_name.to_string(),
+            artist_id.to_string(),
+        );
     }
 
     pub fn clear_playlist_tags(self: Pin<&mut Self>) {

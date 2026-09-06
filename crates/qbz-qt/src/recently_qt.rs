@@ -79,6 +79,8 @@ pub struct RecentAlbum {
     #[serde(default)]
     pub artist: String,
     #[serde(default)]
+    pub artist_id: Option<u64>,
+    #[serde(default)]
     pub artwork_url: String,
     #[serde(default)]
     pub quality_tier: String,
@@ -116,6 +118,7 @@ fn derive_albums(tracks: &[RecentTrack]) -> Vec<RecentAlbum> {
             id: track.album_id.clone(),
             title: track.album_title.clone(),
             artist: track.album_artist.clone(),
+            artist_id: track.artist_id,
             artwork_url: track.album_artwork_url.clone(),
             quality_tier: track.quality_tier.clone(),
             quality_label: track.quality_label.clone(),
@@ -276,6 +279,7 @@ pub(crate) fn record_in_context(track: RecentTrack, context_kind: &str) {
                 id: track.album_id.clone(),
                 title: track.album_title.clone(),
                 artist: track.album_artist.clone(),
+                artist_id: track.artist_id,
                 artwork_url: track.album_artwork_url.clone(),
                 quality_tier: track.quality_tier.clone(),
                 quality_label: track.quality_label.clone(),
@@ -433,6 +437,32 @@ pub(crate) fn record_queue_track(track: &qbz_models::QueueTrack) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn album_history_keeps_artist_identity_and_reads_old_snapshots() {
+        let tracks = vec![RecentTrack {
+            album_id: "catalog-album".into(),
+            album_artist: "Led Zeppelin".into(),
+            artist_id: Some(123),
+            source: "qobuz".into(),
+            ..Default::default()
+        }];
+        let albums = derive_albums(&tracks);
+        let encoded = serde_json::to_string(&albums[0]).unwrap();
+        let album: RecentAlbum = serde_json::from_str(&encoded).unwrap();
+        let card = crate::home_qt::map_recent_album(album);
+        assert_eq!(card.artist_id, "123");
+        assert!(card.history_artist_link);
+        let old: RecentAlbum =
+            serde_json::from_str(r#"{"id":"old-album","artist":"Led Zeppelin"}"#).unwrap();
+        assert_eq!(old.artist_id, None);
+        let card = crate::home_qt::map_recent_album(old);
+        assert!(card.artist_id.is_empty());
+        assert!(
+            card.history_artist_link,
+            "old albums still need a clickable name"
+        );
+    }
 
     #[test]
     fn local_dsd_queue_metadata_records_the_multiple_in_both_histories() {

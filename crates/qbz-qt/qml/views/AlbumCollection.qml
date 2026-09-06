@@ -386,7 +386,10 @@ Column {
                     sources: gcell.modelData.sources || []
                     title: gcell.modelData.title
                     artist: gcell.modelData.artist
-                    artistId: gcell.modelData.artistId
+                    artistId: gcell.modelData.historyArtistLink ? "" : gcell.modelData.artistId
+                    hostArtistLink: gcell.modelData.historyArtistLink === true && (gcell.modelData.artist || "").trim() !== ""
+                    onArtistRequested: QbzHome.openHistoryAlbumArtist(
+                        gcell.modelData.id, gcell.modelData.source || "", gcell.modelData.artist || "", gcell.modelData.artistId || "")
                     genre: gcell.modelData.genre
                     year: gcell.modelData.year
                     qualityTier: gcell.modelData.qualityTier
@@ -563,7 +566,10 @@ Column {
                     sources: cell.cardData.sources || []
                     title: cell.cardData.title
                     artist: cell.cardData.artist
-                    artistId: cell.cardData.artistId
+                    artistId: cell.cardData.historyArtistLink ? "" : cell.cardData.artistId
+                    hostArtistLink: cell.cardData.historyArtistLink === true && (cell.cardData.artist || "").trim() !== ""
+                    onArtistRequested: QbzHome.openHistoryAlbumArtist(
+                        cell.cardData.id, cell.cardData.source || "", cell.cardData.artist || "", cell.cardData.artistId || "")
                     genre: cell.cardData.genre
                     year: cell.cardData.year
                     qualityTier: cell.cardData.qualityTier

@@ -605,7 +605,10 @@ Rectangle {
                         sources: modelData.sources || []
                         title: modelData.title
                         artist: modelData.artist
-                        artistId: modelData.artistId
+                        artistId: modelData.historyArtistLink ? "" : modelData.artistId
+                        hostArtistLink: modelData.historyArtistLink === true && (modelData.artist || "").trim() !== ""
+                        onArtistRequested: QbzHome.openHistoryAlbumArtist(
+                            modelData.id, modelData.source || "", modelData.artist || "", modelData.artistId || "")
                         genre: modelData.genre
                         year: modelData.year
                         qualityTier: modelData.qualityTier
