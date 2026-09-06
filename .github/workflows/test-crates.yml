@@ -16,6 +16,7 @@
 #               qbz-qt`, the Slint-free dep-graph gate, and an OFFSCREEN BOOT of
 #               debug AND release binaries (including process liveness).
 #               Release also boots on Xvfb with a deliberately silent D-Bus.
+#               Node executes the actual Local Library filter/tab expressions.
 #               This is the thing `cargo check` cannot give:
 #               a missing QML component or a call to a bridge member that does
 #               not exist compiles clean and throws when the user opens the
@@ -152,7 +153,7 @@ jobs:
             build-essential pkg-config cmake clang libclang-dev lld nasm dbus \
             libasound2-dev libjack-jackd2-dev libdbus-1-dev libssl-dev \
             libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev libwayland-dev \
-            xvfb libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            xvfb nodejs libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
             libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0
           # cxx-qt prefers LLD when present; without it, Ubuntu falls back to
           # the deprecated gold linker. Do not add workspace-wide RUSTFLAGS.

@@ -567,11 +567,14 @@ Item {
     /// line number.) A handler runs once per item change and registers no
     /// dependency, so the guard survives and the cycle does not.
     property bool _itemTabbed: false
+    property bool _itemTabRequest: false
     Connections {
         target: viewLoader
         function onItemChanged() {
             root._itemTabbed = viewLoader.item !== null
                 && typeof viewLoader.item.activeTab === "string"
+            root._itemTabRequest = viewLoader.item !== null
+                && typeof viewLoader.item.tabNavigationRequest !== "undefined"
         }
     }
 
@@ -590,12 +593,14 @@ Item {
 
     Binding {
         target: viewLoader.item
-        property: "activeTab"
+        property: root._itemTabRequest ? "tabNavigationRequest" : "activeTab"
         when: !root._armed
               && root._itemTabbed
               && QbzShell.navTab !== ""
               && QbzShell.navTabView === QbzShell.currentView
-        value: (QbzShell.navTabSeq, QbzShell.navTab)
+        value: root._itemTabRequest
+            ? ({ "tab": QbzShell.navTab, "sequence": QbzShell.navTabSeq })
+            : (QbzShell.navTabSeq, QbzShell.navTab)
         restoreMode: Binding.RestoreNone
     }
 }

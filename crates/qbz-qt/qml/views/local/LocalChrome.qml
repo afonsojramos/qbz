@@ -237,7 +237,7 @@ Item {
                              "count": root.view.ephemeralTrackCount })
                 return t
             }
-            onSelected: function (id) { root.view.activeTab = id }
+            onSelected: function (id) { root.view.activateTab(id) }
         }
 
         LocalToolbar {

@@ -62,16 +62,10 @@ struct Entry {
     /// "album", "library:albums", "local:tracks". Opaque here: this module
     /// never builds one and never parses one, it only carries it back.
     ///
-    /// THIS IS WHY THERE IS NO `scope_for(entry)` TABLE like the Slint build's
-    /// (`crates/qbz/src/main.rs:3068`). Slint can derive the scope from the
-    /// entry because ITS history entries carry the tab — `Favorites { tab }`
-    /// and `LocalLibrary { tab }` are separate entries there. This port's
-    /// entry is a bare route id, so a derived scope would read `"library"` for
-    /// all five Library tabs, and coming back would drop the Albums grid's
-    /// offset into whatever tab the view happened to mount on. Letting the
-    /// reporter name its own scope buys tab granularity without turning tabs
-    /// into history entries, and the mismatch case degrades the right way: an
-    /// unmatched scope restores NOTHING instead of restoring the wrong thing.
+    /// The route id alone cannot identify a tab's scroll container. Local
+    /// Library tab changes push entries with view-owned state, while the
+    /// reporter supplies the exact scope to restore. An unmatched scope
+    /// restores nothing instead of applying another tab's scroll offset.
     scope: String,
     /// Saved `contentY` of that container, in Qt's convention: 0 at the top,
     /// POSITIVE downward. (Slint stores the same distance as a negative
@@ -322,6 +316,32 @@ pub fn shell_entry_view() -> String {
 }
 
 pub fn record(view: &str) {
+    record_entry(view, false);
+}
+
+/// A user-selected Local Library tab is a distinct history destination even
+/// though ContentRouter keeps the same page mounted. Called before QML changes
+/// the tab, so the outgoing filters, selection and scroll are still intact.
+pub fn record_local_tab(tab: &str, state: &str) {
+    if current_view() != "local" {
+        return;
+    }
+    let Ok(mut next) = serde_json::from_str::<serde_json::Value>(state) else {
+        return;
+    };
+    let Some(previous) = next.get("activeTab").and_then(|value| value.as_str()) else {
+        return;
+    };
+    if previous == tab || tab.is_empty() {
+        return;
+    }
+    set_live_state("local", state);
+    record_entry("local", true);
+    next["activeTab"] = serde_json::json!(tab);
+    set_live_state("local", &next.to_string());
+}
+
+fn record_entry(view: &str, force: bool) {
     // Persist BEFORE the history mutation so the write reflects the view the
     // user actually reached, and only for the safe set — a detail view leaves
     // the stored value on the last safe root, which is exactly what the
@@ -331,7 +351,7 @@ pub fn record(view: &str) {
     }
     let (can_back, can_forward, current, pushed) = with_history(|h| {
         let mut pushed = false;
-        if h.entries[h.index].view != view {
+        if force || h.entries[h.index].view != view {
             // Stamp the page we are leaving with its live scroll position.
             let (scope, y) = live_scroll();
             log::debug!(
@@ -444,6 +464,9 @@ fn step(delta: isize) {
         String::new()
     };
     log::debug!("[qbz-qt] scroll: {current:?} arms scope {armed:?} y={scroll}");
+    // A prior flyout request is not the destination of Back/Forward. Leaving
+    // it armed would override the restored tab when Local Library remounts.
+    crate::shell_bridge::ui(|mut b| b.as_mut().set_nav_tab(QString::default()));
     publish(
         can_back,
         can_forward,
@@ -505,6 +528,61 @@ mod tests {
         *super::HISTORY.lock().unwrap() = None;
         super::reset_live_scroll();
         super::reset_live_state();
+    }
+
+    #[test]
+    fn local_tabs_are_history_entries_with_independent_state_and_scroll() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset();
+        super::record("home");
+        super::record("local");
+        let explorer = r#"{"activeTab":"genres","selectedGenres":{"rock":true}}"#;
+        super::set_live_state("local", explorer);
+        super::set_live_scroll("local:genres", 412.0);
+        super::record_local_tab("artists", explorer);
+        let artists = r#"{"activeTab":"artists","selectedArtist":"Led Zeppelin","artistsFilter":{"local":true}}"#;
+        super::set_live_state("local", artists);
+        super::set_live_scroll("local:artists", 620.0);
+
+        super::back();
+        assert_eq!(super::current_view(), "local");
+        assert_eq!(super::live_state(), ("local".into(), explorer.into()));
+        assert_eq!(super::live_scroll(), ("local:genres".into(), 412.0));
+        super::back();
+        assert_eq!(super::current_view(), "home");
+        super::forward();
+        assert_eq!(super::live_state(), ("local".into(), explorer.into()));
+        super::forward();
+        assert_eq!(super::live_state(), ("local".into(), artists.into()));
+        assert_eq!(super::live_scroll(), ("local:artists".into(), 620.0));
+
+        super::back();
+        super::record_local_tab("albums", explorer);
+        assert!(!super::with_history(|history| super::snapshot(history).1));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&super::live_state().1).unwrap()["activeTab"],
+            "albums"
+        );
+        super::back();
+        assert_eq!(super::live_state(), ("local".into(), explorer.into()));
+    }
+
+    #[test]
+    fn local_tab_reselection_does_not_push_or_clear_forward_history() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset();
+        super::record("local");
+        let explorer = r#"{"activeTab":"genres"}"#;
+        super::record_local_tab("artists", explorer);
+        super::back();
+        let before = super::with_history(|history| (history.entries.len(), history.index));
+        super::record_local_tab("genres", explorer);
+        super::record_local_tab("artists", "bad snapshot");
+        assert_eq!(
+            super::with_history(|history| (history.entries.len(), history.index)),
+            before
+        );
+        assert!(super::with_history(|history| super::snapshot(history).1));
     }
 
     #[test]

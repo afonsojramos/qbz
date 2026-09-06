@@ -87,6 +87,19 @@ Rectangle {
         return "top"
     }
     property string activeTab: localDefaultTab
+    // Router requests go through the same history path as the in-view bar.
+    // The sequence makes reselecting a flyout tab after an in-view change work.
+    property var tabNavigationRequest: ({})
+    onTabNavigationRequestChanged: {
+        if (tabNavigationRequest.tab) activateTab(tabNavigationRequest.tab)
+    }
+    function activateTab(tab) {
+        if (tab === activeTab) return
+        if (localTabOrder.indexOf(tab) < 0 && !(tab === "ephemeral" && ephemeralActive)) return
+        if (_navigationReady && !_restoringNavigationState && QbzShell.currentView === "local")
+            QbzShell.recordLocalTab(tab, navigationStateJson)
+        activeTab = tab
+    }
     // Session-only file reachability. Keys are `source:id`; values are the
     // user-facing reason. This is deliberately not persisted: a moved file or
     // unavailable NAS must remain retryable and a rescan remains authoritative.
@@ -284,6 +297,28 @@ Rectangle {
         root._restoringNavigationState = false
         QbzShell.reportNavState("local", root.navigationStateJson)
     }
+    Connections {
+        target: QbzShell
+        function onStateRestoreChanged() {
+            // Back/Forward between tabs keeps this component mounted: there
+            // is no Component.onCompleted to consume the destination state.
+            if (root._navigationReady && QbzShell.currentView === "local"
+                    && QbzShell.restoreStateScope === "local" && QbzShell.stateRestore !== "") {
+                root.restoreNavigationState()
+                root.loadActiveTab()
+            }
+        }
+    }
+    Timer {
+        id: navigationSeed
+        interval: 0
+        onTriggered: {
+            // Initial persisted state, pending artist and flyout landing tab
+            // are one arrival, not separate history entries.
+            root._navigationReady = true
+            QbzShell.reportNavState("local", root.navigationStateJson)
+        }
+    }
 
     // One quality/format/source funnel follows the user across Albums,
     // Artists, Genres and Tracks. Favorites remains an Albums/Genres-only
@@ -473,7 +508,7 @@ Rectangle {
     /// the tab you actually navigated to.
     Connections {
         target: QbzLocal
-        function onLocalEphemeralOpenSeqChanged() { root.activeTab = "ephemeral" }
+        function onLocalEphemeralOpenSeqChanged() { root.activateTab("ephemeral") }
     }
 
     function loadTabForView(tab) {
@@ -621,7 +656,7 @@ Rectangle {
     function consumePendingArtist() {
         var pending = QbzLocal.localPendingArtist
         if (pending === "") return
-        activeTab = "artists"
+        activateTab("artists")
         selectedArtist = pending
         QbzLocal.clearPendingArtist()
     }
@@ -635,7 +670,7 @@ Rectangle {
         if (raw === "") return
         var route
         try { route = JSON.parse(raw) } catch (e) { QbzLocal.clearPendingRoute(); return }
-        if (route.tab) activeTab = route.tab
+        if (route.tab) activateTab(route.tab)
         // The query pre-filters the TRACKS tab only; the albums and artists
         // tabs have no search box of their own.
         if (route.tab === "tracks" && route.query) {
@@ -657,19 +692,18 @@ Rectangle {
     // one query; the Albums/Folders/Artists sets are bounded).
     Component.onCompleted: {
         restoreNavigationState()
-        root._navigationReady = true
-        // Initial bindings are not a reliable change notification contract:
-        // explicitly seed history even when this is a fresh entry whose state
-        // happens to equal every default.
-        QbzShell.reportNavState("local", root.navigationStateJson)
+        consumePendingArtist()
+        consumePendingRoute()
+        loadActiveTab()
+        navigationSeed.restart()
+    }
+    function loadActiveTab() {
         if (root.activeTab === "tracks")
             QbzLocal.tracksSetFilterJson(JSON.stringify(root.tracksFilter))
         else
             root.loadTabForView(root.activeTab)
         if (root.activeTab === "tracks" && root.tracksSearch !== "")
             QbzLocal.tracksSearch(root.tracksSearch)
-        consumePendingArtist()
-        consumePendingRoute()
     }
     Component.onDestruction: {
         if (QbzLocal.localAlbumsNativeActive) QbzLocal.albumsNativeClearSelection()

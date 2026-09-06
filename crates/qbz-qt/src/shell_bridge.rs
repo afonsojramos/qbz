@@ -519,6 +519,8 @@ pub mod qbz_shell {
         #[qinvokable]
         fn report_nav_state(self: Pin<&mut QbzShell>, scope: QString, state: QString);
         #[qinvokable]
+        fn record_local_tab(self: Pin<&mut QbzShell>, tab: QString, state: QString);
+        #[qinvokable]
         fn local_navigation_state(self: &QbzShell) -> QString;
 
         /// Sidebar navigation: record a content view ("home" | "library")
@@ -1305,6 +1307,10 @@ impl qbz_shell::QbzShell {
 
     pub fn local_navigation_state(&self) -> QString {
         QString::from(crate::local_restore_qt::browser_json())
+    }
+
+    pub fn record_local_tab(self: Pin<&mut Self>, tab: QString, state: QString) {
+        crate::nav_qt::record_local_tab(&tab.to_string(), &state.to_string());
     }
 
     pub fn navigate_to(self: Pin<&mut Self>, view: QString) {
