@@ -566,6 +566,7 @@ async fn main() {
             tui::run(roots).await
         }
     };
+    log::logger().flush();
     std::process::exit(code);
 }
 

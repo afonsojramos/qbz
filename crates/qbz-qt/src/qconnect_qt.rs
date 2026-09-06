@@ -373,6 +373,8 @@ pub struct RemoteNowPlaying {
     /// reported a volume yet — the bar then clamps to a safe 50% instead of
     /// reflecting QBZ's local 100, so a drag never nukes the AVR.
     pub volume: Option<i32>,
+    /// Peer mute state; independent of the owner's saved local mute toggle.
+    pub muted: bool,
     /// The peer's current track id (from the effective remote renderer
     /// snapshot's `current_track`; 0 when none). The poll loop edge-detects a
     /// change against its last-seen value to refresh the bar/queue meta when
@@ -385,6 +387,76 @@ pub struct RemoteNowPlaying {
     /// (0=off, 1=all, 2=one) from the QConnect wire loop_mode (1=off, 3=all,
     /// 2=one), so the controller bar's repeat button reflects the REMOTE state.
     pub repeat_mode: i32,
+}
+
+fn peer_seek_position_ms(
+    fraction: f32,
+    track_id: u64,
+    tracks: &[qbz_models::QueueTrack],
+) -> Option<i64> {
+    let duration_secs = tracks
+        .iter()
+        .find(|track| track.id == track_id)
+        .map(|track| track.duration_secs)
+        .filter(|duration| *duration > 0)?;
+    if !fraction.is_finite() {
+        return None;
+    }
+    let position_ms = (fraction.clamp(0.0, 1.0) as f64 * duration_secs as f64 * 1000.0).round();
+    (position_ms <= i32::MAX as f64).then_some(position_ms as i64)
+}
+
+fn project_peer_seek(
+    sync: &mut QconnectRemoteSyncState,
+    renderer_id: i32,
+    queue_item_id: u64,
+    position_ms: u64,
+    updated_at_ms: u64,
+) -> bool {
+    if sync.session.active_renderer_id != Some(renderer_id)
+        || !is_peer_renderer_active(&sync.session)
+    {
+        return false;
+    }
+    let Some(renderer) = sync.session_renderer_states.get_mut(&renderer_id) else {
+        return false;
+    };
+    if renderer.current_queue_item_id != Some(queue_item_id) {
+        return false;
+    }
+    renderer.current_position_ms = Some(position_ms);
+    renderer.updated_at_ms = updated_at_ms;
+    true
+}
+
+fn project_peer_mute(sync: &mut QconnectRemoteSyncState, renderer_id: i32, muted: bool) -> bool {
+    if sync.session.active_renderer_id != Some(renderer_id)
+        || !is_peer_renderer_active(&sync.session)
+    {
+        return false;
+    }
+    // Mute does not establish a new playback-position anchor.
+    ensure_session_renderer_state(sync, renderer_id).muted = Some(muted);
+    true
+}
+
+fn active_renderer_projection(
+    queue: &QConnectQueueState,
+    local_renderer: &QConnectRendererState,
+    sync: &QconnectRemoteSyncState,
+) -> QConnectRendererState {
+    let cached = sync
+        .session
+        .active_renderer_id
+        .and_then(|id| sync.session_renderer_states.get(&id));
+    if is_peer_renderer_active(&sync.session) {
+        // Local renderer commands describe THIS device, never the active peer.
+        // Missing/-1/unresolvable peer cursors must not inherit a stale local
+        // track, playback state, volume or mute and send controls to that item.
+        qconnect_app::build_session_renderer_snapshot(queue, cached, sync.session_loop_mode)
+    } else {
+        build_effective_renderer_snapshot(queue, local_renderer, cached, sync.session_loop_mode)
+    }
 }
 
 /// Process-wide QConnect service singleton (one per app, like the playback
@@ -914,6 +986,106 @@ fn build_visible_upcoming_projection(
         current_track_qid,
         upcoming_qids,
     }
+}
+
+fn remote_upcoming_selection(
+    queue: &QConnectQueueState,
+    renderer: &QConnectRendererState,
+    upcoming_index: usize,
+    expected_track_id: u64,
+) -> Option<QconnectSetPlayerStateRequest> {
+    if queue.shuffle_mode
+        && !queue.shuffle_order.as_ref().is_some_and(|order| {
+            qconnect_app::queue_resolution::is_valid_ordered_queue_shuffle_order(
+                order,
+                queue.queue_items.len(),
+            )
+        })
+    {
+        return None;
+    }
+    let projection = build_visible_upcoming_projection(queue, renderer);
+    let target_qid = *projection.upcoming_qids.get(upcoming_index)?;
+    let target = ordered_queue_cursors(queue)
+        .into_iter()
+        .filter_map(|cursor| queue_item_snapshot_for_cursor(queue, cursor))
+        .find(|item| item.queue_item_id == target_qid)?;
+    if target.track_id != expected_track_id {
+        return None;
+    }
+    Some(QconnectSetPlayerStateRequest {
+        playing_state: Some(PLAYING_STATE_PLAYING),
+        current_position: Some(0),
+        current_queue_item: Some(QconnectSetPlayerStateQueueItemPayload {
+            queue_version: Some(QconnectQueueVersionPayload {
+                major: queue.version.major,
+                minor: queue.version.minor,
+            }),
+            id: Some(i32::try_from(target_qid).ok()?),
+        }),
+    })
+}
+
+fn local_upcoming_matches_remote(
+    queue: &QConnectQueueState,
+    renderer: &QConnectRendererState,
+    tracks: &[qbz_models::QueueTrack],
+    local: &qbz_models::QueueState,
+) -> bool {
+    // Hydration can omit unavailable rows. Do not shift an index silently,
+    // especially when multiple queue occurrences have the same catalog id.
+    if !tracks.iter().all(is_qconnect_queue_track)
+        || !tracks
+            .iter()
+            .map(|track| track.id)
+            .eq(queue.queue_items.iter().map(|item| item.track_id))
+        || local.shuffle != queue.shuffle_mode
+    {
+        return false;
+    }
+    let Some(current_qid) = renderer
+        .current_track
+        .as_ref()
+        .map(|item| item.queue_item_id)
+    else {
+        return false;
+    };
+    let Some(current_index) = queue.queue_items.iter().enumerate().position(|(index, _)| {
+        qconnect_app::queue_resolution::normalize_current_queue_item_id_from_queue_state(
+            queue, index,
+        ) == current_qid
+    }) else {
+        return false;
+    };
+    if local.current_index != Some(current_index) {
+        return false;
+    }
+    let projection = build_visible_upcoming_projection(queue, renderer);
+    let main_by_qid: std::collections::HashMap<_, _> = queue
+        .queue_items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            (
+                qconnect_app::queue_resolution::normalize_current_queue_item_id_from_queue_state(
+                    queue, index,
+                ),
+                item.track_id,
+            )
+        })
+        .collect();
+    if main_by_qid.len() != queue.queue_items.len() {
+        return false;
+    }
+    let main_upcoming_ids = projection
+        .upcoming_qids
+        .iter()
+        .filter_map(|qid| main_by_qid.get(qid).copied());
+    local
+        .upcoming
+        .iter()
+        .map(|track| track.id)
+        .eq(main_upcoming_ids)
 }
 
 /// 1:1 port of the Tauri `build_qconnect_reorder_payload`. `from_index`/
@@ -2434,6 +2606,9 @@ impl QtQconnectService {
             }
             Err(err) => {
                 log::warn!("[QConnect] play_on_peer: queue push failed: {err}");
+                crate::toast_qt::error(qbz_i18n::t(
+                    "Failed to send playback to the selected device",
+                ));
                 // Still handled: a peer owns playback; never fall back to local.
                 return true;
             }
@@ -2445,6 +2620,9 @@ impl QtQconnectService {
             Ok(_) => {}
             Err(err) => {
                 log::warn!("[QConnect] play_on_peer: play_remote_track failed: {err}");
+                crate::toast_qt::error(qbz_i18n::t(
+                    "Failed to send playback to the selected device",
+                ));
             }
         }
         true
@@ -3061,20 +3239,6 @@ impl QtQconnectService {
             .map_err(|err| format!("qconnect send command failed: {err}"))
     }
 
-    /// Update the app's cached renderer position (controller optimistic seek).
-    async fn update_renderer_position(&self, position_ms: u64) {
-        let app = {
-            let guard = lock_inner(&self.inner);
-            guard
-                .runtime
-                .as_ref()
-                .map(|runtime| Arc::clone(&runtime.app))
-        };
-        if let Some(app) = app {
-            app.update_renderer_position(position_ms).await;
-        }
-    }
-
     /// Best-effort local cursor alignment after a remote handoff so a later
     /// local takeover ("Play here") continues at the right track.
     /// `sync_current_to_id` only moves the queue pointer; it never starts
@@ -3093,10 +3257,9 @@ impl QtQconnectService {
         }
     }
 
-    /// The active renderer's effective snapshot (base local view merged with the
-    /// cloud's cached per-renderer state + session loop mode). Returns `None`
-    /// when not connected or no active renderer. Mirrors the Tauri
-    /// `effective_active_renderer_snapshot`.
+    /// Project the active renderer from its own state. Only the local renderer
+    /// may inherit the local command snapshot; peers use their session cache.
+    /// Returns `None` when not connected or no renderer is active.
     pub(crate) async fn effective_active_renderer_snapshot(
         &self,
     ) -> Result<
@@ -3119,20 +3282,11 @@ impl QtQconnectService {
         let base_renderer = app.renderer_state_snapshot().await;
         let state = sync_state.lock().await;
         let session = state.session.clone();
-        let Some(active_renderer_id) = session.active_renderer_id else {
+        let Some(_) = session.active_renderer_id else {
             return Ok(None);
         };
 
-        let renderer_state = state
-            .session_renderer_states
-            .get(&active_renderer_id)
-            .cloned();
-        let renderer = build_effective_renderer_snapshot(
-            &queue,
-            &base_renderer,
-            renderer_state.as_ref(),
-            state.session_loop_mode,
-        );
+        let renderer = active_renderer_projection(&queue, &base_renderer, &state);
 
         Ok(Some((renderer, queue, session)))
     }
@@ -3197,6 +3351,7 @@ impl QtQconnectService {
             updated_at_ms: renderer.updated_at_ms,
             playing: renderer.playing_state == Some(PLAYING_STATE_PLAYING),
             volume: renderer.volume,
+            muted: renderer.muted.unwrap_or(false),
             track_id: renderer
                 .current_track
                 .as_ref()
@@ -3333,8 +3488,13 @@ impl QtQconnectService {
 
         let Some(target_queue_item_id) = resolution.target_queue_item_id else {
             log::warn!(
-                "[QConnect] skip {direction_label} handoff: no target queue item resolved (strategy={})",
-                resolution.strategy
+                "[QConnect] skip {direction_label} handoff: no target queue item resolved (strategy={}, current_qid={:?}, next_qid={:?}, queue_version={}.{}, items={}, shuffle={}, order_present={})",
+                resolution.strategy,
+                renderer.current_track.as_ref().map(|item| item.queue_item_id),
+                renderer.next_track.as_ref().map(|item| item.queue_item_id),
+                queue.version.major, queue.version.minor,
+                queue.queue_items.len() + queue.autoplay_items.len(),
+                queue.shuffle_mode, queue.shuffle_order.is_some(),
             );
             dev_push_event(format!(
                 "controller skip {direction_label}: NO TARGET ({})",
@@ -3347,23 +3507,33 @@ impl QtQconnectService {
 
         let target_queue_item_id_i32 = i32::try_from(target_queue_item_id)
             .map_err(|_| format!("target queue item id out of range: {target_queue_item_id}"))?;
+        // Official manual next/previous always starts playback. Previous that
+        // restarts the current item is a bare seek, not a track reselection.
+        let restart_current = matches!(direction, QconnectRemoteSkipDirection::Previous)
+            && resolution.strategy == "restart_current_queue_item";
         let payload = serde_json::to_value(QconnectSetPlayerStateRequest {
-            playing_state: renderer.playing_state,
+            playing_state: Some(PLAYING_STATE_PLAYING),
             current_position: Some(0),
-            current_queue_item: Some(QconnectSetPlayerStateQueueItemPayload {
-                queue_version: Some(QconnectQueueVersionPayload {
-                    major: queue.version.major,
-                    minor: queue.version.minor,
-                }),
-                id: Some(target_queue_item_id_i32),
-            }),
+            current_queue_item: (!restart_current).then_some(
+                QconnectSetPlayerStateQueueItemPayload {
+                    queue_version: Some(QconnectQueueVersionPayload {
+                        major: queue.version.major,
+                        minor: queue.version.minor,
+                    }),
+                    id: Some(target_queue_item_id_i32),
+                },
+            ),
         })
         .map_err(|err| format!("serialize controller skip payload: {err}"))?;
 
         self.send_command(QueueCommandType::CtrlSrvrSetPlayerState, payload)
             .await?;
-        self.prime_remote_renderer_state(target_queue_item_id, renderer.playing_state, Some(0))
-            .await;
+        self.prime_remote_renderer_state(
+            target_queue_item_id,
+            Some(PLAYING_STATE_PLAYING),
+            Some(0),
+        )
+        .await;
         if let Some(target_track_id) = resolution.matched_track_id {
             self.align_local_cursor(target_track_id).await;
         }
@@ -3444,6 +3614,55 @@ impl QtQconnectService {
             session.active_renderer_id
         ));
 
+        Ok(true)
+    }
+
+    /// Select an existing visible upcoming occurrence without replacing the
+    /// remote queue. The index is validated against the materialized projection
+    /// so duplicate catalog ids retain their distinct cloud queue-item ids.
+    pub async fn play_remote_upcoming_if_active(
+        &self,
+        upcoming_index: usize,
+        expected_track_id: u64,
+    ) -> Result<bool, String> {
+        let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
+            return Ok(false);
+        };
+        // Keep the common playback funnel's Cast-first precedence.
+        if crate::cast_qt::is_casting().await {
+            return Ok(false);
+        }
+        // D8: an offline-only playlist retains its local playback route even
+        // when catalog ids happen to match an existing cloud queue.
+        if self.runtime.core().queue_is_offline_only() {
+            return Ok(false);
+        }
+        let Some((renderer, queue, _session)) = self.effective_remote_renderer_snapshot().await?
+        else {
+            return Ok(false);
+        };
+        let (tracks, _) = self.runtime.core().get_all_queue_tracks().await;
+        let local = self.runtime.core().get_queue_state_full().await;
+        if !local_upcoming_matches_remote(&queue, &renderer, &tracks, &local) {
+            return Err("remote queue projection is not ready for selection".to_string());
+        }
+        let request =
+            remote_upcoming_selection(&queue, &renderer, upcoming_index, expected_track_id)
+                .ok_or_else(|| "remote upcoming selection changed or is unavailable".to_string())?;
+        let target_qid = request
+            .current_queue_item
+            .as_ref()
+            .and_then(|item| item.id)
+            .expect("validated upcoming selection has an item") as u64;
+        let payload = serde_json::to_value(request)
+            .map_err(|error| format!("serialize remote upcoming selection: {error}"))?;
+        self.send_command(QueueCommandType::CtrlSrvrSetPlayerState, payload)
+            .await?;
+        // Acceptance by the transport is not acceptance by the renderer.
+        // Keep both local and peer cursors unchanged until authoritative echo.
+        // Do not align the core by catalog id: it would select the first of
+        // duplicate occurrences. The authoritative peer echo owns that cursor.
+        log::info!("[QConnect] selected remote upcoming item {target_qid}");
         Ok(true)
     }
 
@@ -3799,15 +4018,16 @@ impl QtQconnectService {
         Ok(true)
     }
 
-    /// Mute/unmute the active PEER renderer. Mirrors the Tauri `mute_if_remote`.
-    pub async fn mute_if_remote(&self, value: bool) -> Result<bool, String> {
+    /// Toggle the active peer's mute, independently of the owner's local mute.
+    pub async fn toggle_mute_if_remote(&self) -> Result<bool, String> {
         let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
             return Ok(false);
         };
         let remote_context = self.effective_remote_renderer_snapshot().await?;
-        let Some((_renderer, _queue, session)) = remote_context else {
+        let Some((renderer, _queue, session)) = remote_context else {
             return Ok(false);
         };
+        let value = !renderer.muted.unwrap_or(false);
 
         let payload = serde_json::to_value(QconnectMuteVolumeRequest {
             renderer_id: session.active_renderer_id,
@@ -3817,6 +4037,20 @@ impl QtQconnectService {
 
         self.send_command(QueueCommandType::CtrlSrvrMuteVolume, payload)
             .await?;
+
+        let sync_state = {
+            let guard = lock_inner(&self.inner);
+            guard
+                .runtime
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.sync_state))
+        };
+        if let (Some(sync_state), Some(renderer_id)) = (sync_state, session.active_renderer_id) {
+            let mut sync = sync_state.lock().await;
+            if project_peer_mute(&mut sync, renderer_id, value) {
+                crate::now_playing::set_muted(value);
+            }
+        }
 
         log::info!("[QConnect] mute handoff -> {value}");
         dev_push_event(format!(
@@ -3941,10 +4175,10 @@ impl QtQconnectService {
         Ok(true)
     }
 
-    /// Seek the active PEER renderer to `position_ms`. `playing_state` is not
-    /// touched (a seek must not toggle play/pause). Mirrors the Tauri
-    /// `set_position_if_remote`.
-    pub async fn set_position_if_remote(&self, position_ms: i64) -> Result<bool, String> {
+    /// Seek against the peer's current track metadata, never the stopped local
+    /// audio engine's duration. Preserve the captured peer track/version and
+    /// leave playing_state absent so seeking cannot toggle play/pause.
+    pub async fn seek_fraction_if_remote(&self, fraction: f32) -> Result<bool, String> {
         let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
             return Ok(false);
         };
@@ -3953,14 +4187,19 @@ impl QtQconnectService {
             return Ok(false);
         };
 
-        let current_queue_item_id = renderer
+        let current_track = renderer
             .current_track
             .as_ref()
-            .map(|item| item.queue_item_id);
+            .ok_or_else(|| "remote renderer current track is unknown".to_string())?;
+        let (tracks, _) = self.runtime.core().get_all_queue_tracks().await;
+        let position_ms = peer_seek_position_ms(fraction, current_track.track_id, &tracks)
+            .ok_or_else(|| {
+                "remote renderer track duration or seek position is unavailable".to_string()
+            })?;
 
         let request = build_set_position_player_state_request(
             position_ms,
-            current_queue_item_id,
+            Some(current_track.queue_item_id),
             QconnectQueueVersionPayload {
                 major: queue.version.major,
                 minor: queue.version.minor,
@@ -3972,8 +4211,22 @@ impl QtQconnectService {
         self.send_command(QueueCommandType::CtrlSrvrSetPlayerState, payload)
             .await?;
 
-        if position_ms >= 0 {
-            self.update_renderer_position(position_ms as u64).await;
+        let sync_state = {
+            let guard = lock_inner(&self.inner);
+            guard
+                .runtime
+                .as_ref()
+                .map(|runtime| Arc::clone(&runtime.sync_state))
+        };
+        if let (Some(sync_state), Some(renderer_id)) = (sync_state, session.active_renderer_id) {
+            let mut sync = sync_state.lock().await;
+            project_peer_seek(
+                &mut sync,
+                renderer_id,
+                current_track.queue_item_id,
+                position_ms as u64,
+                qconnect_now_ms(),
+            );
         }
 
         log::info!("[QConnect] set_position handoff -> {position_ms}ms");
@@ -4714,8 +4967,57 @@ async fn deferred_renderer_join(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_qconnect_queue_track, resolvable_queue_projection, resolvable_track_ids};
+    use super::{
+        active_renderer_projection, is_qconnect_queue_track, local_upcoming_matches_remote,
+        peer_seek_position_ms, project_peer_mute, project_peer_seek, remote_upcoming_selection,
+        resolvable_queue_projection, resolvable_track_ids,
+    };
     use qbz_models::QueueTrack;
+    use qconnect_app::{
+        ensure_session_renderer_state, QConnectQueueState, QConnectRendererState,
+        QconnectRemoteSyncState,
+    };
+
+    #[test]
+    fn active_peer_never_inherits_a_stale_local_renderer_snapshot() {
+        let queue = QConnectQueueState {
+            queue_items: vec![serde_json::from_value(serde_json::json!({
+                "queue_item_id": 0,
+                "track_id": 100,
+                "track_context_uuid": "",
+            }))
+            .expect("queue item fixture")],
+            ..Default::default()
+        };
+        let local = QConnectRendererState {
+            current_track: Some(queue.queue_items[0].clone()),
+            playing_state: Some(2),
+            volume: Some(100),
+            muted: Some(true),
+            ..Default::default()
+        };
+        let mut sync = peer_sync();
+        for qid in [None, Some(99)] {
+            let peer = ensure_session_renderer_state(&mut sync, 2);
+            peer.current_queue_item_id = qid;
+            peer.volume = None;
+            peer.muted = None;
+            let projection = active_renderer_projection(&queue, &local, &sync);
+            assert!(projection.current_track.is_none());
+            assert!(projection.next_track.is_none());
+            assert_eq!(projection.volume, None);
+            assert_eq!(projection.muted, None);
+        }
+        sync.session_renderer_states.clear();
+        let projection = active_renderer_projection(&queue, &local, &sync);
+        assert!(projection.current_track.is_none());
+        assert_eq!(projection.playing_state, None);
+        sync.session.active_renderer_id = Some(1);
+        let projection = active_renderer_projection(&queue, &local, &sync);
+        assert_eq!(projection.current_track, local.current_track);
+        assert_eq!(projection.volume, Some(100));
+        assert_eq!(projection.muted, Some(true));
+    }
 
     fn track(source: Option<&str>, is_local: bool) -> QueueTrack {
         QueueTrack {
@@ -4742,6 +5044,237 @@ mod tests {
             isrc: None,
             recording_mbid: None,
         }
+    }
+
+    fn peer_sync() -> QconnectRemoteSyncState {
+        let mut sync = QconnectRemoteSyncState::default();
+        sync.session.local_renderer_id = Some(1);
+        sync.session.active_renderer_id = Some(2);
+        let peer = ensure_session_renderer_state(&mut sync, 2);
+        peer.current_queue_item_id = Some(0);
+        peer.current_position_ms = Some(3_000);
+        peer.playing_state = Some(3);
+        peer.muted = Some(false);
+        peer.updated_at_ms = 100;
+        sync
+    }
+
+    fn remote_selection_fixture() -> (QConnectQueueState, QConnectRendererState) {
+        let mut queue = QConnectQueueState::default();
+        queue.queue_items = [100, 200, 200, 300]
+            .iter()
+            .enumerate()
+            .map(|(index, track_id)| {
+                serde_json::from_value(serde_json::json!({
+                    "track_context_uuid": "",
+                    "track_id": track_id,
+                    "queue_item_id": index + 10,
+                }))
+                .expect("queue item fixture")
+            })
+            .collect();
+        let renderer = QConnectRendererState {
+            current_track: Some(queue.queue_items[0].clone()),
+            ..Default::default()
+        };
+        (queue, renderer)
+    }
+
+    fn local_selection_fixture(
+        queue: &QConnectQueueState,
+    ) -> (Vec<QueueTrack>, qbz_models::QueueState) {
+        let tracks: Vec<_> = queue
+            .queue_items
+            .iter()
+            .map(|item| {
+                let mut row = track(Some("qobuz_connect_remote"), false);
+                row.id = item.track_id;
+                row
+            })
+            .collect();
+        let order = queue
+            .shuffle_order
+            .clone()
+            .unwrap_or_else(|| (0..tracks.len()).collect());
+        let local = qbz_models::QueueState {
+            current_track: Some(tracks[0].clone()),
+            current_index: Some(0),
+            upcoming: order
+                .iter()
+                .skip(1)
+                .map(|index| tracks[*index].clone())
+                .collect(),
+            history: Vec::new(),
+            shuffle: queue.shuffle_mode,
+            repeat: Default::default(),
+            total_tracks: tracks.len(),
+            stop_after_track_id: None,
+            manual_next_count: 0,
+        };
+        (tracks, local)
+    }
+
+    #[test]
+    fn upcoming_selection_preserves_distinct_duplicate_queue_item_ids() {
+        let (queue, renderer) = remote_selection_fixture();
+        let first = remote_upcoming_selection(&queue, &renderer, 0, 200).expect("first duplicate");
+        let second =
+            remote_upcoming_selection(&queue, &renderer, 1, 200).expect("second duplicate");
+        assert_eq!(first.current_queue_item.unwrap().id, Some(11));
+        assert_eq!(second.current_queue_item.unwrap().id, Some(12));
+    }
+
+    #[test]
+    fn upcoming_selection_uses_ws_shuffle_and_only_sends_player_state() {
+        let (mut queue, renderer) = remote_selection_fixture();
+        queue.shuffle_mode = true;
+        queue.shuffle_order = Some(vec![0, 3, 2, 1]);
+        queue.autoplay_mode = true;
+        let request = remote_upcoming_selection(&queue, &renderer, 0, 300).expect("shuffled row");
+        assert_eq!(request.current_queue_item.as_ref().unwrap().id, Some(13));
+        assert_eq!(request.playing_state, Some(super::PLAYING_STATE_PLAYING));
+        assert_eq!(request.current_position, Some(0));
+        let payload = serde_json::to_value(request).expect("player state payload");
+        assert_eq!(payload.as_object().unwrap().len(), 3);
+        for forbidden in [
+            "track_ids",
+            "shuffle_mode",
+            "autoplay_reset",
+            "context_uuid",
+        ] {
+            assert!(payload.get(forbidden).is_none(), "{forbidden}");
+        }
+    }
+
+    #[test]
+    fn upcoming_selection_refuses_changed_missing_or_incomplete_rows() {
+        let (mut queue, renderer) = remote_selection_fixture();
+        assert!(remote_upcoming_selection(&queue, &renderer, 0, 300).is_none());
+        assert!(remote_upcoming_selection(&queue, &renderer, 100, 200).is_none());
+        queue.shuffle_mode = true;
+        assert!(remote_upcoming_selection(&queue, &renderer, 0, 200).is_none());
+        queue.queue_items.clear();
+        assert!(remote_upcoming_selection(&queue, &renderer, 0, 200).is_none());
+    }
+
+    #[test]
+    fn upcoming_projection_validates_full_hydration_cursor_and_order() {
+        let (mut queue, renderer) = remote_selection_fixture();
+        queue.shuffle_mode = true;
+        queue.shuffle_order = Some(vec![0, 3, 2, 1]);
+        let (tracks, mut local) = local_selection_fixture(&queue);
+        assert!(local_upcoming_matches_remote(
+            &queue, &renderer, &tracks, &local
+        ));
+        let mut partial = tracks.clone();
+        partial.remove(1);
+        assert!(!local_upcoming_matches_remote(
+            &queue, &renderer, &partial, &local
+        ));
+        local.upcoming.swap(0, 1);
+        assert!(!local_upcoming_matches_remote(
+            &queue, &renderer, &tracks, &local
+        ));
+        local.upcoming.swap(0, 1);
+        local.current_index = Some(1);
+        assert!(!local_upcoming_matches_remote(
+            &queue, &renderer, &tracks, &local
+        ));
+    }
+
+    #[test]
+    fn upcoming_projection_rejects_foreign_sources_with_matching_catalog_ids() {
+        let (queue, renderer) = remote_selection_fixture();
+        let (mut tracks, local) = local_selection_fixture(&queue);
+        for source in ["local", "plex", "jellyfin"] {
+            tracks[1].source = Some(source.to_string());
+            tracks[1].is_local = true;
+            assert!(!local_upcoming_matches_remote(
+                &queue, &renderer, &tracks, &local
+            ));
+        }
+        tracks[1].source = Some("qobuz_download".to_string());
+        assert!(local_upcoming_matches_remote(
+            &queue, &renderer, &tracks, &local
+        ));
+    }
+
+    #[test]
+    fn peer_seek_uses_the_reported_track_not_the_old_local_track() {
+        let mut old_local = track(Some("qobuz"), false);
+        old_local.id = 10;
+        old_local.duration_secs = 120;
+        let mut peer = track(Some("qobuz_connect_remote"), false);
+        peer.id = 20;
+        peer.duration_secs = 360;
+        let tracks = [old_local, peer];
+        assert_eq!(peer_seek_position_ms(0.5, 20, &tracks), Some(180_000));
+        assert_eq!(peer_seek_position_ms(0.5, 10, &tracks), Some(60_000));
+        assert_eq!(peer_seek_position_ms(0.5, 30, &tracks), None);
+        assert_eq!(peer_seek_position_ms(-1.0, 20, &tracks), Some(0));
+        assert_eq!(peer_seek_position_ms(2.0, 20, &tracks), Some(360_000));
+        assert_eq!(peer_seek_position_ms(f32::NAN, 20, &tracks), None);
+    }
+
+    #[test]
+    fn peer_seek_refuses_unknown_or_unrepresentable_duration() {
+        let mut row = track(Some("qobuz_connect_remote"), false);
+        assert_eq!(peer_seek_position_ms(0.5, row.id, &[row.clone()]), None);
+        row.duration_secs = u64::MAX;
+        assert_eq!(peer_seek_position_ms(1.0, row.id, &[row]), None);
+    }
+
+    #[test]
+    fn peer_seek_reanchors_the_peer_without_toggling_playback() {
+        for playing_state in [2, 3] {
+            let mut sync = peer_sync();
+            ensure_session_renderer_state(&mut sync, 2).playing_state = Some(playing_state);
+            assert!(project_peer_seek(&mut sync, 2, 0, 180_000, 200));
+            let peer = &sync.session_renderer_states[&2];
+            assert_eq!(peer.current_position_ms, Some(180_000));
+            assert_eq!(peer.updated_at_ms, 200);
+            assert_eq!(peer.current_queue_item_id, Some(0));
+            assert_eq!(peer.playing_state, Some(playing_state));
+        }
+    }
+
+    #[test]
+    fn peer_seek_does_not_project_into_a_successor_track_or_renderer() {
+        let mut sync = peer_sync();
+        assert!(!project_peer_seek(&mut sync, 2, 9, 180_000, 200));
+        sync.session.active_renderer_id = Some(3);
+        assert!(!project_peer_seek(&mut sync, 2, 0, 180_000, 200));
+        sync.session.active_renderer_id = Some(1);
+        assert!(!project_peer_seek(&mut sync, 1, 0, 180_000, 200));
+        assert_eq!(
+            sync.session_renderer_states[&2].current_position_ms,
+            Some(3_000)
+        );
+    }
+
+    #[test]
+    fn peer_mute_toggle_can_unmute_again_without_reanchoring_position() {
+        let mut sync = peer_sync();
+        for expected in [true, false, true] {
+            let target = !sync.session_renderer_states[&2].muted.unwrap_or(false);
+            assert_eq!(target, expected);
+            assert!(project_peer_mute(&mut sync, 2, target));
+            let peer = &sync.session_renderer_states[&2];
+            assert_eq!(peer.muted, Some(expected));
+            assert_eq!(peer.current_position_ms, Some(3_000));
+            assert_eq!(peer.updated_at_ms, 100);
+        }
+    }
+
+    #[test]
+    fn peer_mute_does_not_project_into_a_successor_or_the_local_renderer() {
+        let mut sync = peer_sync();
+        sync.session.active_renderer_id = Some(3);
+        assert!(!project_peer_mute(&mut sync, 2, true));
+        sync.session.active_renderer_id = Some(1);
+        assert!(!project_peer_mute(&mut sync, 1, true));
+        assert_eq!(sync.session_renderer_states[&2].muted, Some(false));
+        assert!(!sync.session_renderer_states.contains_key(&1));
     }
 
     #[test]

@@ -6794,3 +6794,6 @@ msgstr "お気に入りを置き換えました"
 
 msgid "The replacement was added, but the unavailable favorite could not be removed"
 msgstr "置き換えを追加しましたが、利用できないお気に入りを削除できませんでした"
+
+msgid "Failed to send playback to the selected device"
+msgstr "選択したデバイスに再生を転送できませんでした"

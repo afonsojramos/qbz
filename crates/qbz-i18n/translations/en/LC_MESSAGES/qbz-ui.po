@@ -2400,3 +2400,6 @@ msgstr "Favorite replaced"
 
 msgid "The replacement was added, but the unavailable favorite could not be removed"
 msgstr "The replacement was added, but the unavailable favorite could not be removed"
+
+msgid "Failed to send playback to the selected device"
+msgstr "Failed to send playback to the selected device"

@@ -6801,3 +6801,6 @@ msgstr "Favoriet vervangen"
 
 msgid "The replacement was added, but the unavailable favorite could not be removed"
 msgstr "De vervanging is toegevoegd, maar de niet-beschikbare favoriet kon niet worden verwijderd"
+
+msgid "Failed to send playback to the selected device"
+msgstr "Kon het afspelen niet naar het geselecteerde apparaat overdragen"

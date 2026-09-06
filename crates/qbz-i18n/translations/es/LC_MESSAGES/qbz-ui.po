@@ -6819,3 +6819,6 @@ msgstr "Favorito reemplazado"
 
 msgid "The replacement was added, but the unavailable favorite could not be removed"
 msgstr "Se agregó el reemplazo, pero no se pudo eliminar el favorito no disponible"
+
+msgid "Failed to send playback to the selected device"
+msgstr "No se pudo enviar la reproducción al dispositivo seleccionado"

@@ -6832,3 +6832,6 @@ msgstr "Избранное заменено"
 
 msgid "The replacement was added, but the unavailable favorite could not be removed"
 msgstr "Замена добавлена, но недоступный элемент не удалось удалить из избранного"
+
+msgid "Failed to send playback to the selected device"
+msgstr "Не удалось передать воспроизведение на выбранное устройство"

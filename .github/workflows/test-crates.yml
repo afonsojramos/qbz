@@ -8,7 +8,9 @@
 #               reasons and pause/clear rules), and the account-migration +
 #               portable-blacklist suite check (Settings > Import / Export:
 #               snapshot/plan/apply/ledger/local copy, additive blacklist
-#               merge). ~5 min cold.
+#               merge), plus QConnect controller handoff/read-vs-write,
+#               proto3-zero cursor, manual skip/loop/shuffle/autoplay and
+#               consecutive-log repetition regression checks. ~5 min cold.
 #   qt-gate   — the Qt frontend: the five static QML audits, `cargo test -p
 #               qbz-qt`, the Slint-free dep-graph gate, and an OFFSCREEN BOOT of
 #               the debug binary. This is the thing `cargo check` cannot give:

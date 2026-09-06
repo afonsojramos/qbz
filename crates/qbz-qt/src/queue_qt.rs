@@ -772,6 +772,26 @@ pub fn set_page(page: i32) {
     VIEW.lock().unwrap().page = page.max(0) as usize;
 }
 
+async fn play_upcoming_on_peer(upcoming_index: usize, track_id: u64) -> bool {
+    let Some(service) = crate::qconnect_qt::service() else {
+        return false;
+    };
+    match service
+        .play_remote_upcoming_if_active(upcoming_index, track_id)
+        .await
+    {
+        Ok(handled) => handled,
+        Err(error) => {
+            log::warn!("[qbz-qt] queue: remote upcoming selection failed: {error}");
+            crate::toast_qt::error(qbz_i18n::t(
+                "Failed to send playback to the selected device",
+            ));
+            // A peer owns playback. No local cursor mutation or audio fallback.
+            true
+        }
+    }
+}
+
 pub async fn play_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index: usize) {
     let Some(_owner_action) = crate::playback_qt::begin_owner_action() else {
         return;
@@ -784,6 +804,9 @@ pub async fn play_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index
     let Some(candidate) = state.upcoming.get(upcoming_index) else {
         return;
     };
+    if play_upcoming_on_peer(upcoming_index, candidate.id).await {
+        return;
+    }
     if crate::local_playback::preflight_queue_track(candidate)
         .await
         .is_err()
@@ -806,6 +829,9 @@ pub async fn play_upcoming_flat(runtime: &Arc<AppRuntime<LoggingAdapter>>, upcom
     };
     let state = runtime.core().get_queue_state_full().await;
     if let Some(candidate) = state.upcoming.get(upcoming_index) {
+        if play_upcoming_on_peer(upcoming_index, candidate.id).await {
+            return;
+        }
         if crate::local_playback::preflight_queue_track(candidate)
             .await
             .is_err()
@@ -845,15 +871,8 @@ async fn play_extended_upcoming(
         crate::qconnect_qt::toast_unresolvable_tracks(1);
         return;
     }
-    if let Some(service) = crate::qconnect_qt::service() {
-        match service.play_remote_renderer_track_if_active(track.id).await {
-            Ok(true) => return,
-            Ok(false) => {}
-            Err(error) => {
-                log::warn!("[qbz-qt] queue: extended remote play failed: {error}");
-                return;
-            }
-        }
+    if play_upcoming_on_peer(upcoming_index, track.id).await {
+        return;
     }
     if crate::local_playback::preflight_queue_track(&track)
         .await

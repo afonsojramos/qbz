@@ -3517,15 +3517,10 @@ pub async fn seek_frac(runtime: &Arc<AppRuntime<LoggingAdapter>>, frac: f32) {
             return;
         }
     }
-    // QConnect CONTROLLER mode (Slint main.rs:14334-14351): seek the REMOTE
-    // renderer. The remote API wants absolute position in MILLISECONDS; the
-    // bar gives a 0..1 fraction — derive ms from the locally-known duration
-    // (SECONDS here, hence the ×1000).
+    // The peer route resolves the current remote track's duration. The local
+    // player can still retain the duration from before takeover (or zero).
     if let Some(svc) = crate::qconnect_qt::service() {
-        let fraction = frac.clamp(0.0, 1.0);
-        let duration_secs = runtime.core().get_playback_state().duration;
-        let position_ms = (fraction as f64 * duration_secs as f64 * 1000.0).round() as i64;
-        match svc.set_position_if_remote(position_ms).await {
+        match svc.seek_fraction_if_remote(frac).await {
             Ok(true) => return,
             Ok(false) => {}
             Err(e) => {
@@ -3628,13 +3623,10 @@ pub async fn toggle_mute(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     let Some(_transport_action) = begin_transport_action() else {
         return;
     };
-    // QConnect FIRST (Slint main.rs:14455-14478 — the ONE dispatch that checks
-    // QConnect before cast; the reference has NO cast arm for mute). The
-    // remote API wants the target value; send the negation of the
-    // authoritative local MUTED flag.
+    // The peer route toggles the peer's reported/optimistic mute state; the
+    // local MUTED flag belongs to the owner and must survive handoff intact.
     if let Some(svc) = crate::qconnect_qt::service() {
-        let target = !MUTED.load(Ordering::Relaxed);
-        match svc.mute_if_remote(target).await {
+        match svc.toggle_mute_if_remote().await {
             Ok(true) => return,
             Ok(false) => {}
             Err(e) => {
@@ -4145,12 +4137,12 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         let mut last_peer_track_id: u64 = 0;
         // Dirty-guard for the per-tick peer UI pushes (playback.rs:5194-5204):
         // (track_id, position_ms, duration_secs, playing, volume f32 bits,
-        // shuffle, repeat_mode). Re-pushing identical values every second
+        // muted, shuffle, repeat_mode). Re-pushing identical values every second
         // dirties bindings and repaints even when fully idle. `track_id` is
         // load-bearing: it guarantees the push after a peer track change (the
         // meta refresh just reset the bar's position to 0). Reset to None
         // whenever another owner (local/cast poll) may have written the bar.
-        let mut last_remote_ui_push: Option<(u64, u64, u64, bool, u32, bool, i32)> = None;
+        let mut last_remote_ui_push: Option<(u64, u64, u64, bool, u32, bool, bool, i32)> = None;
         // Physical ALSA knob events update the Player's shared volume atomics.
         // Mirror only hardware-volume edges onto QML; ordinary local slider
         // writes already publish immediately at their command boundary.
@@ -4349,6 +4341,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                     duration_secs,
                     playing,
                     remote_volume.to_bits(),
+                    remote.muted,
                     shuffle_on,
                     repeat_mode,
                 );
@@ -4379,6 +4372,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                         true,
                     );
                     crate::now_playing::set_volume(remote_volume);
+                    crate::now_playing::set_muted(remote.muted);
                     crate::now_playing::set_shuffle(shuffle_on);
                     crate::now_playing::set_repeat_mode(repeat_mode);
                 }
@@ -4439,6 +4433,13 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // Not in controller mode (no peer / returned to local): reset the
             // peer-track edge var so re-entering the peer state refreshes meta
             // (playback.rs:5274-5277).
+            if last_remote_ui_push.is_some() {
+                if let Some(_owner_action) = begin_owner_action() {
+                    // The peer's mute was UI-only; returning to local restores
+                    // the owner's retained toggle without changing its volume.
+                    crate::now_playing::set_muted(MUTED.load(Ordering::Relaxed));
+                }
+            }
             last_peer_track_id = 0;
             last_remote_ui_push = None;
             // §11.1: deliberately NO lyrics anchor clear here (the Slint clears

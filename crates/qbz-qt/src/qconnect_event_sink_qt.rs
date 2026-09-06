@@ -469,13 +469,10 @@ impl QtQconnectEventSink {
             app.arm_renderer_watchdog(renderer_id, generation);
         }
 
-        // FIX #13: when QBZ transitions INTO controller mode (a PEER becomes the
-        // active renderer), the peer's periodic state-update frames carry
-        // `current_queue_item_id: null` (position-only), so on the transition the
-        // cursor/projection can't resolve the peer's CURRENT track and the bar/
-        // queue stay stale until the peer next changes track. Fetch the peer's
-        // FULL state once on the false->true edge so the existing align +
-        // projection + poll-loop refresh resolve the real current track now.
+        // Request the newly active peer's state once on controller entry, so
+        // projection does not have to wait for its next periodic update. An
+        // omitted scalar current_queue_item_id INSIDE player_state means 0
+        // (proto3), not "position-only"; the protocol decoder restores it.
         let peer_active_now = {
             let state = self.sync_state.lock().await;
             if !self.is_current() {
@@ -627,6 +624,11 @@ impl QconnectEventSink for QtQconnectEventSink {
                 // delegated-credential material.
                 if message_type == "MESSAGE_TYPE_SRVR_CTRL_RENDERER_STATE_UPDATED" {
                     log::debug!("[QConnect] Session management: {message_type}");
+                } else if message_type == "MESSAGE_TYPE_SRVR_CTRL_LOOP_MODE_SET" {
+                    // This allowlisted scalar makes an actual mode transition
+                    // break the consecutive-log run; never print the payload.
+                    let loop_mode = payload.get("loop_mode").and_then(Value::as_i64);
+                    log::info!("[QConnect] Session management: {message_type} loop_mode={loop_mode:?}");
                 } else {
                     log::info!("[QConnect] Session management: {message_type}");
                 }

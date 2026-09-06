@@ -78,6 +78,32 @@ n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-app --lib -- --list blac
 cargo test --manifest-path crates/Cargo.toml -p qbz-account-migration --lib
 cargo test --manifest-path crates/Cargo.toml -p qbz-app --lib -- blacklist_portable::
 
+say "gate: QConnect controller smoke and consecutive-log regressions present and green"
+# Do not silently lose the iOS handoff regression coverage: read queries must
+# not feed a resync loop or starve controls, while real queue writes serialize.
+# Wire-to-controller tests also cover proto3 item zero, takeback, seek and mute;
+# manual skip fixtures cover shuffle/loop/position/autoplay boundaries.
+n=$(cargo test --manifest-path crates/Cargo.toml -p qconnect-app --lib -- --list controller_smoke:: 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 13 )) || { echo "QConnect controller smoke suite has $n tests (expected >= 13)"; exit 1; }
+n=$(cargo test --manifest-path crates/Cargo.toml -p qconnect-app --lib -- --list controller_takeover:: 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 5 )) || { echo "QConnect takeover suite has $n tests (expected >= 5)"; exit 1; }
+n=$(cargo test --manifest-path crates/Cargo.toml -p qconnect-app --lib -- --list queue_resolution::tests::manual_skip 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 6 )) || { echo "QConnect manual skip suite has $n tests (expected >= 6)"; exit 1; }
+n=$(cargo test --manifest-path crates/Cargo.toml -p qconnect-protocol --lib -- --list decoder::tests::controller_ 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 3 )) || { echo "QConnect controller wire suite has $n tests (expected >= 3)"; exit 1; }
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-log --lib -- --list repeat::tests:: 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 8 )) || { echo "consecutive log suite has $n tests (expected >= 8)"; exit 1; }
+cargo test --manifest-path crates/Cargo.toml -p qconnect-app --lib -- controller_smoke::
+cargo test --manifest-path crates/Cargo.toml -p qconnect-app --lib -- controller_takeover::
+cargo test --manifest-path crates/Cargo.toml -p qconnect-app --lib -- queue_resolution::tests::manual_skip
+cargo test --manifest-path crates/Cargo.toml -p qconnect-protocol --lib -- decoder::tests::controller_
+cargo test --manifest-path crates/Cargo.toml -p qbz-log --lib -- repeat::tests::
+
 say "gate: qbzd resolves no Slint crate"
 hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbzd -e normal \
        | grep -E '\b(slint|qbz-ui|qbz-slint-common|qbz-dac-wizard) v' || true)
