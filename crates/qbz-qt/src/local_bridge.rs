@@ -2050,6 +2050,20 @@ pub(crate) fn open_album_by_id(id: String) {
 }
 
 pub(crate) fn open_album_by_id_filtered(id: String, filter_json: String) {
+    open_album_detail(id, filter_json, false);
+}
+
+pub(crate) fn restore_album(route: crate::local_restore_qt::AlbumRoute) {
+    open_album_detail(route.id, route.filter_json, true);
+}
+
+static ALBUM_LOAD_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn open_album_detail(id: String, filter_json: String, restoring: bool) {
+    use std::sync::atomic::Ordering;
+    let revision = ALBUM_LOAD_REVISION.fetch_add(1, Ordering::AcqRel) + 1;
+    let profile = crate::local_state::db_path();
+    crate::local_restore_qt::note_album_request(&id, &filter_json);
     ui(|mut b| {
         // Clear the previous local album with the loading flag — the same
         // stale-render the catalog album view had.
@@ -2065,9 +2079,21 @@ pub(crate) fn open_album_by_id_filtered(id: String, filter_json: String) {
         .flatten();
         let json = detail.map(|d| lib::to_json(&d)).unwrap_or_default();
         ui(move |mut b| {
+            // A slow restore cannot publish over a newer album request or
+            // redirect a different profile/page after the user moved on.
+            if ALBUM_LOAD_REVISION.load(Ordering::Acquire) != revision
+                || crate::local_state::db_path() != profile
+            {
+                return;
+            }
+            let missing = json.is_empty();
             b.as_mut()
                 .set_local_album_json(QString::from(json.as_str()));
             b.as_mut().set_local_album_loading(false);
+            if restoring && missing && crate::nav_qt::current_view() == "localalbum" {
+                log::info!("[qbz-qt] remembered local album unavailable; opening Local Library");
+                crate::navigate_to("local");
+            }
         });
     });
 }

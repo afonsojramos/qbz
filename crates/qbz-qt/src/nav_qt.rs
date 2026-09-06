@@ -189,8 +189,9 @@ fn with_history<R>(f: impl FnOnce(&mut NavHistory) -> R) -> R {
 /// owner's own prefs today read `last_view = "local-library"`, written by Slint.
 /// Unknown values in either direction resolve to Home rather than guessing.
 ///
-/// Detail views (album/artist/playlist/…) are never stored: they need an id and
-/// a restore could land on an entity that is gone. Search and Settings are
+/// This root-only fallback does not carry detail IDs. Local albums now have
+/// a separate per-profile context in local_restore_qt, restored at session
+/// entry with a missing-entity fallback. Other details, Search and Settings are
 /// excluded too — transient and config respectively, and reopening the app
 /// inside either is a surprise, not "where you left off".
 const VIEW_TO_PREF: &[(&str, &str)] = &[

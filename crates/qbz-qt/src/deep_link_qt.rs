@@ -125,6 +125,10 @@ pub(crate) fn take_pending() -> Option<String> {
     PENDING.lock().ok().and_then(|mut pending| pending.take())
 }
 
+pub(crate) fn has_pending() -> bool {
+    PENDING.lock().is_ok_and(|pending| pending.is_some())
+}
+
 /// Bind/unbind the only context in which a Qobuz route can be fetched.
 pub(crate) fn set_online_session(active: bool) {
     ONLINE_SESSION.store(active, Ordering::SeqCst);

@@ -806,7 +806,10 @@ fn on_session_entered() {
     // replay a remembered startup route that the offline entry skipped.
     let ordinary_entry = nav_qt::shell_entry_view();
     let logged_off = offline_fwd::engine().status().offline_session;
-    let entry_view = if logged_off {
+    let local_album = local_restore_qt::take_startup_album();
+    let entry_view = if local_album.is_some() {
+        "localalbum".to_string()
+    } else if logged_off {
         "local".to_string()
     } else {
         ordinary_entry
@@ -818,7 +821,9 @@ fn on_session_entered() {
     // connectivity is down. The selected tab is the first user-ordered Local
     // Library tab; kiosk takes the first surface it can render (Genres is a
     // desktop column browser).
-    if logged_off {
+    if let Some(route) = local_album {
+        local_bridge::restore_album(route);
+    } else if logged_off {
         let landing = settings_qt::local_landing_tab(kiosk_profile_qt::active());
         navigate_to_tab("local", &landing);
     }
@@ -4078,6 +4083,7 @@ fn main() {
         // the watchdog `_exit(0)`s the process. Idempotent — the quit paths
         // arm it earlier, at the moment quit was requested.
         arm_hard_exit_watchdog("event-loop exit");
+        local_restore_qt::save_session_on_exit();
         // Same reason as logout: leaving the app must stop every renderer.
         // QConnect goes first logically (its future withdraws LAN admission
         // before touching authority), while the independent notification and

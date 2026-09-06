@@ -4,10 +4,107 @@
 
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 static WRITE: Mutex<()> = Mutex::new(());
 const MAX_STATE_BYTES: usize = 64 * 1024;
+static STARTUP_CHECKED: AtomicBool = AtomicBool::new(false);
+static CURRENT_ALBUM: Mutex<Option<(PathBuf, AlbumRoute)>> = Mutex::new(None);
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AlbumRoute {
+    pub id: String,
+    #[serde(default)]
+    pub filter_json: String,
+}
+
+impl AlbumRoute {
+    fn valid(&self) -> bool {
+        !self.id.trim().is_empty()
+            && self.id.len() <= 8192
+            && self.filter_json.len() <= MAX_STATE_BYTES
+            && (self.filter_json.is_empty()
+                || serde_json::from_str::<Value>(&self.filter_json)
+                    .is_ok_and(|value| value.is_object()))
+    }
+}
+
+pub fn note_album_request(id: &str, filter_json: &str) {
+    let Some(path) = path() else { return };
+    let route = AlbumRoute {
+        id: id.into(),
+        filter_json: filter_json.into(),
+    };
+    if route.valid() {
+        *CURRENT_ALBUM.lock().unwrap_or_else(|e| e.into_inner()) = Some((path, route));
+    }
+}
+
+fn save_session_at(path: &Path, view: &str, route: Option<AlbumRoute>) {
+    let _guard = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut doc) = crate::settings_qt::read_json_object(path) else {
+        return;
+    };
+    let before = doc.get("album").cloned();
+    let route = route.filter(|route| view == "localalbum" && route.valid());
+    if let Some(route) = route {
+        doc.insert("album".into(), serde_json::json!(route));
+    } else {
+        doc.remove("album");
+    }
+    if before.as_ref() != doc.get("album") {
+        crate::settings_qt::write_json_object_atomic(path, &doc);
+    }
+}
+
+/// Capture the final route on clean exit, before the existing shutdown work.
+/// Visiting Home/Settings/another album afterwards must not leave an old
+/// local-album request masquerading as the last page. A login-only launch
+/// never replaces the saved session, and another account has a separate file.
+pub fn save_session_on_exit() {
+    if !STARTUP_CHECKED.load(Ordering::Acquire) {
+        return;
+    }
+    let Some(path) = path() else { return };
+    let route = CURRENT_ALBUM
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .filter(|(owner, _)| owner == &path)
+        .map(|(_, route)| route.clone());
+    save_session_at(&path, &crate::nav_qt::current_view(), route);
+}
+
+fn startup_album_at(
+    path: &Path,
+    remember: bool,
+    crash_level: u8,
+    link: bool,
+    kiosk: bool,
+) -> Option<AlbumRoute> {
+    if !remember || crash_level >= 2 || link || kiosk {
+        return None;
+    }
+    let doc = crate::settings_qt::read_json_object(path)?;
+    let route: AlbumRoute = serde_json::from_value(doc.get("album")?.clone()).ok()?;
+    route.valid().then_some(route)
+}
+
+/// Only the first session entry of this process can restore a detail. An
+/// explicit launcher link outranks remembered navigation, even while offline.
+pub fn take_startup_album() -> Option<AlbumRoute> {
+    if STARTUP_CHECKED.swap(true, Ordering::AcqRel) {
+        return None;
+    }
+    startup_album_at(
+        &path()?,
+        crate::settings_qt::pref_str("startup_page", "home") == "remember",
+        crate::nav_qt::crash_level(),
+        crate::deep_link_qt::has_pending(),
+        crate::kiosk_profile_qt::active(),
+    )
+}
 
 fn path() -> Option<PathBuf> {
     use qbz_app::user_data::UserDataPaths;
@@ -113,6 +210,61 @@ pub fn browser_json() -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn clean_exit_restores_the_album_but_a_later_home_exit_clears_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("users/1/local_navigation_qt.json");
+        let other = temp.path().join("users/2/local_navigation_qt.json");
+        let route = AlbumRoute {
+            id: "local:album with spaces".into(),
+            filter_json: r#"{"sources":["local"],"quality":["hires"]}"#.into(),
+        };
+        save_browser_at(
+            &file,
+            r#"{"activeTab":"albums","selectedGenreYears":{"2001":true}}"#,
+        );
+        save_session_at(&file, "localalbum", Some(route.clone()));
+        assert_eq!(
+            startup_album_at(&file, true, 1, false, false),
+            Some(route.clone())
+        );
+        assert!(startup_album_at(&other, true, 1, false, false).is_none());
+        for (remember, crash, link, kiosk) in [
+            (false, 1, false, false),
+            (true, 2, false, false),
+            (true, 1, true, false),
+            (true, 1, false, true),
+        ] {
+            assert!(startup_album_at(&file, remember, crash, link, kiosk).is_none());
+        }
+        assert_eq!(
+            startup_album_at(&file, true, 1, false, false),
+            Some(route.clone()),
+            "bypassing restore must preserve the saved file"
+        );
+        save_session_at(&file, "home", Some(route));
+        assert!(startup_album_at(&file, true, 1, false, false).is_none());
+        assert_eq!(
+            serde_json::from_str::<Value>(&browser_at(&file).unwrap()).unwrap()["activeTab"],
+            "albums"
+        );
+    }
+
+    #[test]
+    fn invalid_saved_album_context_falls_back_to_the_ordinary_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("local_navigation_qt.json");
+        for album in [
+            json!({"id":""}),
+            json!({"id":7}),
+            json!({"id":"local:a", "filter_json":"[1]"}),
+            json!({"id":"local:a", "filter_json":"bad"}),
+        ] {
+            std::fs::write(&file, json!({"album":album}).to_string()).unwrap();
+            assert!(startup_album_at(&file, true, 1, false, false).is_none());
+        }
+    }
 
     #[test]
     fn browser_choices_survive_reopen_and_stay_in_their_profile() {
