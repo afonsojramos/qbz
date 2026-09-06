@@ -777,25 +777,7 @@ fn load_history(generation: u64) {
                             || r.title.to_lowercase().contains(&needle)
                             || r.artist.to_lowercase().contains(&needle)
                     })
-                    .map(|r| HomeCard {
-                        is_pinned: crate::sidebar_qt::is_pinned("album", &r.album_id),
-                        // Heart, same seed as every other album card — this
-                        // page's rows are built here rather than through
-                        // `home_qt::map_*`, so it needs its own stamp.
-                        is_favorite: crate::fav_cache_qt::is_album_favorite(&r.album_id),
-                        id: r.album_id,
-                        title: r.title,
-                        artist: r.artist,
-                        artist_id: r.artist_id,
-                        year: r.year,
-                        quality_tier: r.quality_tier,
-                        quality_label: r.quality_label,
-                        art_url: r.artwork_url,
-                        // The 20px the 286px card is taller than every other
-                        // album card (AlbumCard.slint:508).
-                        plays: r.plays,
-                        ..HomeCard::default()
-                    })
+                    .map(crate::home_qt::map_played_album)
                     .collect::<Vec<_>>()
             } else {
                 crate::recently_qt::load_albums()

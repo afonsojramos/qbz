@@ -878,19 +878,7 @@ fn build_candidates(
     // (`album_play_history`, the shared per-app SQLite store). No network.
     let most_played: Vec<HomeCard> = qbz_app::settings::album_play_history::top_albums(20)
         .into_iter()
-        .map(|r| HomeCard {
-            is_pinned: crate::sidebar_qt::is_pinned("album", &r.album_id),
-            is_favorite: crate::fav_cache_qt::is_album_favorite(&r.album_id),
-            id: r.album_id,
-            title: r.title,
-            artist: r.artist,
-            artist_id: r.artist_id,
-            year: r.year,
-            quality_tier: r.quality_tier,
-            quality_label: r.quality_label,
-            art_url: r.artwork_url,
-            ..HomeCard::default()
-        })
+        .map(map_played_album)
         .collect();
     if !most_played.is_empty() {
         out.push(HomeSection {
@@ -2080,6 +2068,41 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
     }
 }
 
+/// History stores keep their raw routing source. Badge data uses the shared
+/// display vocabulary, including old rows, without requiring another play.
+fn history_source_badges(source: &str) -> Vec<String> {
+    if source.is_empty() {
+        return Vec::new(); // Legacy history means catalog, never inferred local.
+    }
+    vec![if source == "qobuz_purchase" {
+        source.to_string()
+    } else {
+        qbz_source::SourceBadge::from_word(Some(source))
+            .as_str()
+            .into()
+    }]
+}
+
+/// Shared by the Most Played carousel and its complete, filtered page.
+pub(crate) fn map_played_album(r: qbz_app::settings::album_play_history::AlbumPlayRow) -> HomeCard {
+    HomeCard {
+        is_pinned: crate::sidebar_qt::is_pinned("album", &r.album_id),
+        is_favorite: crate::fav_cache_qt::is_album_favorite(&r.album_id),
+        sources: history_source_badges(&r.source),
+        source: r.source,
+        id: r.album_id,
+        title: r.title,
+        artist: r.artist,
+        artist_id: r.artist_id,
+        year: r.year,
+        quality_tier: r.quality_tier,
+        quality_label: r.quality_label,
+        art_url: r.artwork_url,
+        plays: r.plays,
+        ..HomeCard::default()
+    }
+}
+
 /// Map one recently-played album (local history) onto a card. The stored ISO
 /// release date is localized here exactly as the discover cards do.
 pub(crate) fn map_recent_album(a: crate::recently_qt::RecentAlbum) -> HomeCard {
@@ -2099,6 +2122,7 @@ pub(crate) fn map_recent_album(a: crate::recently_qt::RecentAlbum) -> HomeCard {
         },
         quality_tier: a.quality_tier,
         quality_label: a.quality_label,
+        sources: history_source_badges(&a.source),
         source: a.source,
         art_url: a.artwork_url,
         ..HomeCard::default()
@@ -2382,6 +2406,32 @@ mod tests {
             name: name.to_string(),
             awarded_at: None,
         }
+    }
+
+    #[test]
+    fn old_most_played_rows_keep_their_source_on_both_card_surfaces() {
+        for (source, badge) in [
+            ("local", "local"),
+            ("plex", "plex"),
+            ("jellyfin", "jellyfin"),
+            ("navidrome", "subsonic"),
+            ("qobuz_download", "offline"),
+            ("qobuz_purchase", "qobuz_purchase"),
+            ("qobuz", "qobuz"),
+            ("qobuz_connect_remote", "qobuz"),
+        ] {
+            let card = map_played_album(qbz_app::settings::album_play_history::AlbumPlayRow {
+                album_id: "stored-before-source-badge-fix".into(),
+                source: source.into(),
+                plays: 23,
+                ..Default::default()
+            });
+            let wire = serde_json::to_value(card).unwrap();
+            assert_eq!(wire["source"], source);
+            assert_eq!(wire["sources"], serde_json::json!([badge]));
+            assert_eq!(wire["plays"], 23);
+        }
+        assert!(history_source_badges("").is_empty());
     }
 
     #[test]
