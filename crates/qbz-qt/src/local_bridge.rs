@@ -1051,6 +1051,7 @@ impl qbz_local::QbzLocal {
             filter_json.to_string(),
         ) {
             crate::local_bridge_ops::load_artists_legacy();
+            crate::local_bridge_ops::load_albums_legacy();
         }
     }
 

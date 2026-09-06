@@ -1174,7 +1174,9 @@ Rectangle {
     readonly property var artistAlbums: {
         if (selectedArtist === "") return []
         if (QbzLocal.localArtistsNativeActive) return []
-        var rows = albums   // binding dependency: re-derive on every republish
+        // The rail filters artist aggregates; the detail must also filter
+        // physical album copies, including when the selected artist stays.
+        var rows = applyFilter(albums, artistsFilter)
         var ids = {}
         try {
             var arr = JSON.parse(QbzLocal.artistAlbumIds(selectedArtist))

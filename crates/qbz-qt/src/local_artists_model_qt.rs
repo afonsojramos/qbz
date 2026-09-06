@@ -594,6 +594,9 @@ fn activate_artists(opened: OpenedArtists) {
         crate::local_bridge_ops::publish_counts();
     }
     ui(move |mut bridge| {
+        if QUERY_GENERATION.load(Ordering::Acquire) != generation {
+            return;
+        }
         cpp_artist_reset(generation, total, artist_total);
         let bytes = publish_artist_page_now(generation, 0, &wire);
         bridge.as_mut().set_local_artists_native_active(true);
@@ -1580,6 +1583,12 @@ fn fallback_detail(generation: u64, reason: &'static str) {
 }
 
 fn deactivate_for_legacy(reason: &'static str) {
+    // A filtered compatibility view must not be replaced by an older native
+    // response or an unfiltered retry when the catalog publishes an update.
+    next_generation(&QUERY_GENERATION);
+    *LAST_SEARCH
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = None;
     *SESSION.lock().unwrap_or_else(|error| error.into_inner()) = None;
     let detail_generation = next_generation(&DETAIL_GENERATION);
     *DETAIL_SESSION
@@ -1646,6 +1655,7 @@ fn next_generation(counter: &AtomicU64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    static QUERY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn artist_entry(index: usize) -> ArtistEntry {
         ArtistEntry {
@@ -1684,11 +1694,27 @@ mod tests {
 
     #[test]
     fn stale_artist_generation_is_not_current() {
+        let _guard = QUERY_TEST_LOCK.lock().unwrap();
         let old = next_generation(&QUERY_GENERATION);
         let new = next_generation(&QUERY_GENERATION);
         assert_ne!(old, new);
         assert_ne!(QUERY_GENERATION.load(Ordering::Acquire), old);
         assert_eq!(QUERY_GENERATION.load(Ordering::Acquire), new);
+    }
+
+    #[test]
+    fn filtered_artist_query_cancels_native_results_and_unfiltered_retry() {
+        let _guard = QUERY_TEST_LOCK.lock().unwrap();
+        *LAST_SEARCH.lock().unwrap() = Some("Led Zeppelin".into());
+        let generation = QUERY_GENERATION.load(Ordering::Acquire);
+        assert!(!reset(
+            "Led Zeppelin".into(),
+            "name-asc".into(),
+            r#"{"local":true}"#.into()
+        ));
+        assert!(QUERY_GENERATION.load(Ordering::Acquire) > generation);
+        assert!(LAST_SEARCH.lock().unwrap().is_none());
+        assert!(!retry_last());
     }
 
     #[test]
