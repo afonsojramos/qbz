@@ -336,7 +336,13 @@ struct QtGpuJson {
 unsafe extern "C" {
     fn qbz_qt_vulkan_devices_json() -> *const std::ffi::c_char;
     fn qbz_qt_vulkan_preflight_window() -> i32;
+    #[cfg(target_os = "linux")]
+    fn qbz_qt_auto_preflight_window() -> i32;
 }
+
+#[cfg(target_os = "linux")]
+#[path = "renderer_preflight_linux.rs"]
+pub mod auto_preflight;
 
 const GPU_PREFLIGHT_CHILD_ENV: &str = "QBZ_INTERNAL_GPU_PREFLIGHT_CHILD";
 const GPU_PREFLIGHT_IDENTITY_ENV: &str = "QBZ_INTERNAL_GPU_PREFLIGHT_IDENTITY";
@@ -700,26 +706,43 @@ fn approved_identity_from(output: &std::process::Output) -> Option<String> {
 fn spawn_gpu_preflight(name: &str, identity: &str) -> Result<(std::process::Output, bool), String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("cannot resolve current executable: {error}"))?;
-    let mut child = std::process::Command::new(executable)
+    let mut command = std::process::Command::new(executable);
+    command
         .env(GPU_PREFLIGHT_CHILD_ENV, "1")
         .env(GPU_PREFLIGHT_IDENTITY_ENV, identity)
-        .env(GPU_PREFLIGHT_NAME_ENV, name)
+        .env(GPU_PREFLIGHT_NAME_ENV, name);
+    run_preflight_child(&mut command, GPU_PREFLIGHT_PARENT_TIMEOUT)
+}
+
+/// Drain into anonymous temporary files rather than undrained pipes: verbose
+/// driver diagnostics must not block the child before it can report success.
+/// No worker survives cancellation; kill + wait reaps the one child we own.
+fn run_preflight_child(
+    command: &mut std::process::Command,
+    budget: std::time::Duration,
+) -> Result<(std::process::Output, bool), String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut stdout = tempfile::tempfile().map_err(|e| format!("child stdout: {e}"))?;
+    let mut stderr = tempfile::tempfile().map_err(|e| format!("child stderr: {e}"))?;
+    let out = stdout.try_clone().map_err(|e| e.to_string())?;
+    let err = stderr.try_clone().map_err(|e| e.to_string())?;
+    let started = std::time::Instant::now();
+    let mut child = command
         // An activation token is single-use. The invisible probe must never
         // consume the token intended to focus the real main window.
         .env_remove("XDG_ACTIVATION_TOKEN")
         .env_remove("DESKTOP_STARTUP_ID")
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stdout(out)
+        .stderr(err)
         .spawn()
         .map_err(|error| format!("cannot spawn child: {error}"))?;
 
-    let started = std::time::Instant::now();
     let mut timed_out = false;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
-            Ok(None) if started.elapsed() < GPU_PREFLIGHT_PARENT_TIMEOUT => {
+            Ok(None) if started.elapsed() < budget => {
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }
             Ok(None) => {
@@ -734,9 +757,24 @@ fn spawn_gpu_preflight(name: &str, identity: &str) -> Result<(std::process::Outp
             }
         }
     }
-    let output = child
-        .wait_with_output()
+    let status = child
+        .wait()
         .map_err(|error| format!("cannot collect child result: {error}"))?;
+    fn tail(file: &mut std::fs::File) -> Result<Vec<u8>, String> {
+        let length = file.metadata().map_err(|e| e.to_string())?.len();
+        file.seek(SeekFrom::Start(length.saturating_sub(65536)))
+            .map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        file.take(65536)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        Ok(bytes)
+    }
+    let output = std::process::Output {
+        status,
+        stdout: tail(&mut stdout)?,
+        stderr: tail(&mut stderr)?,
+    };
     Ok((output, timed_out))
 }
 
@@ -863,8 +901,9 @@ pub fn apply_gpu_preference() {
     // A GPU pick needs Vulkan (see below), so it cannot also honour an explicit
     // `software`/`opengl` choice — the more specific, explicitly-chosen
     // RENDERER wins and this says so rather than quietly overriding it.
-    if let Some(forced) =
-        std::env::var_os("QSG_RHI_BACKEND").or_else(|| std::env::var_os("QT_QUICK_BACKEND"))
+    if let Some(forced) = ["QSG_RHI_BACKEND", "QT_QUICK_BACKEND"]
+        .into_iter()
+        .find(|name| nonempty_env(name))
     {
         log::info!(
             "[qbz-qt] gpu: the renderer row already forced {forced:?}; a GPU pick needs \

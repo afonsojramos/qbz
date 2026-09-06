@@ -1167,6 +1167,12 @@ impl qbz_shell::QbzShell {
                 "Selected GPU is unavailable in this display session — using Auto",
             ));
         }
+        #[cfg(target_os = "linux")]
+        if crate::renderer_qt::auto_preflight::take_software_notice() {
+            crate::toast_qt::warning(qbz_i18n::t(
+                "Renderer switched automatically — the previous renderer failed to start",
+            ));
+        }
     }
 
     /// The renderer probe's one-shot report (see the declaration).

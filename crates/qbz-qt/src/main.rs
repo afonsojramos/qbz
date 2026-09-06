@@ -3548,6 +3548,15 @@ fn apply_renderer_preference() {
     // backend must be undone even when this one is being overridden by env.
     let reverted = renderer_qt::revert_if_previous_launch_died();
 
+    // Whitespace is not a backend choice. Qt itself does not trim every env
+    // entry; normalize these before either the child or parent constructs Qt.
+    #[cfg(target_os = "linux")]
+    for name in ["QSG_RHI_BACKEND", "QT_QUICK_BACKEND"] {
+        if std::env::var_os(name).is_some() && !qt_backend_env_overrides(name) {
+            std::env::remove_var(name);
+        }
+    }
+
     if qt_backend_env_overrides("QSG_RHI_BACKEND") || qt_backend_env_overrides("QT_QUICK_BACKEND") {
         log::info!("[renderer] explicit Qt backend env present; leaving the choice to it");
         return;
@@ -3766,6 +3775,14 @@ fn main() {
     // Before even the disposable GPU-preflight QGuiApplication. A child
     // spawned later inherits the resolved factor and takes the same path.
     apply_interface_scale_preference();
+    #[cfg(target_os = "linux")]
+    if renderer_qt::auto_preflight::child_requested() {
+        let app = QGuiApplication::new();
+        let result = renderer_qt::auto_preflight::run_child();
+        drop(app);
+        log::logger().flush();
+        std::process::exit(result);
+    }
     // Internal, disposable graphics child. It must branch before the normal
     // instance lock, navigation crash-chain, runtime and audio thread: a GPU
     // whose DMA-BUFs the active Wayland compositor rejects is expected to kill
@@ -3788,6 +3805,14 @@ fn main() {
     // user-visible. The child uses its own Wayland connection; fatal protocol
     // errors cannot take this parent down.
     renderer_qt::preflight_saved_gpu_at_boot();
+    #[cfg(target_os = "linux")]
+    apply_renderer_preference();
+    #[cfg(target_os = "linux")]
+    if let Err(reason) = renderer_qt::auto_preflight::at_boot() {
+        log::error!("[renderer] startup stopped before runtime/Qt: {reason}");
+        log::logger().flush();
+        std::process::exit(78);
+    }
     // Same decision, different primitive: a per-session named mutex arbitrates
     // and a named pipe carries the handoff. `acquire_or_raise` has already
     // forwarded this launch's deep link (or a bare PRESENT) by the time it
@@ -3905,6 +3930,7 @@ fn main() {
     // slot: QGuiApplication must first install the platform integration so we
     // can enumerate Qt's real QVulkanInstance, but the selection env must land
     // before the first QQuickWindow/QRhi is constructed.
+    #[cfg(not(target_os = "linux"))]
     apply_renderer_preference();
     apply_scroll_physics();
 

@@ -125,6 +125,7 @@ qbz-player = { path = "../qbz-player" }
 # (StreamExt over the response byte stream).
 uuid = { version = "1", features = ["v4"] }
 futures-util = { workspace = true }
+tempfile = "3"
 async-trait = "0.1"
 zeroize = "1"
 

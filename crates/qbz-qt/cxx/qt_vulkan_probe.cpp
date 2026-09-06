@@ -110,13 +110,13 @@ extern "C" const char *qbz_qt_vulkan_devices_json()
 // unsupported Intel-render -> NVIDIA/KWin path; the fatal failure only arrives
 // when Wayland imports the first DMA-BUF. If that protocol error kills this
 // process, the parent remains alive and falls back to Auto.
-extern "C" int qbz_qt_vulkan_preflight_window()
+static int presentationPreflight(bool autoBackend)
 {
     if (qobject_cast<QGuiApplication *>(QCoreApplication::instance()) == nullptr)
         return 71;
 
     QQuickWindow window;
-    window.setTitle(QStringLiteral("QBZ GPU preflight"));
+    window.setTitle(QStringLiteral("QBZ graphics preflight"));
     window.setFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
     window.resize(2, 2);
     window.setColor(Qt::transparent);
@@ -139,8 +139,14 @@ extern "C" int qbz_qt_vulkan_preflight_window()
     QObject::connect(&pulse, &QTimer::timeout, &window, &QQuickWindow::update);
     QObject::connect(&window, &QQuickWindow::frameSwapped, &loop, [&] {
         ++frames;
-        if (frames == 1)
+        if (autoBackend && frames >= 3) {
+            // Pump successive native presentations, not just context creation.
+            // Auto has no fixed grace sleep on the healthy startup path.
+            result = 0;
+            loop.quit();
+        } else if (!autoBackend && frames == 1) {
             settle.start(700);
+        }
         window.update();
     });
     QObject::connect(&window, &QQuickWindow::sceneGraphError, &loop,
@@ -172,4 +178,16 @@ extern "C" int qbz_qt_vulkan_preflight_window()
     window.releaseResources();
     QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
     return result;
+}
+
+extern "C" int qbz_qt_vulkan_preflight_window()
+{
+    return presentationPreflight(false);
+}
+
+// Uses Qt's actual default (OpenGL on Linux), or software selected BEFORE
+// QGuiApplication. No Vulkan inventory or multiple-adapter requirement.
+extern "C" int qbz_qt_auto_preflight_window()
+{
+    return presentationPreflight(true);
 }
