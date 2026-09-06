@@ -730,14 +730,17 @@ pub(crate) fn on_boot() {
         if let Err(e) = runtime.init().await {
             log::warn!("[qbz-qt] core init failed (continuing): {e}");
         }
-        match auth_qt::restore_saved_session(&runtime).await {
-            Ok(Some(session)) => enter_shell(session),
-            Ok(None) => session_bridge::ui(|mut b| b.as_mut().set_screen(QString::from("login"))),
-            Err(e) => session_bridge::ui(move |mut b| {
-                b.as_mut().set_restore_error(QString::from(e.as_str()));
-                b.as_mut().set_screen(QString::from("login"));
-            }),
-        }
+        auth_qt::finish_boot_restore(
+            auth_qt::restore_saved_session(&runtime).await,
+            enter_shell,
+            |error| {
+                session_bridge::ui(move |mut b| {
+                    b.as_mut()
+                        .set_restore_error(QString::from(error.as_deref().unwrap_or("")));
+                    b.as_mut().set_screen(QString::from("login"));
+                })
+            },
+        );
     });
 }
 

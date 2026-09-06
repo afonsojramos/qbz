@@ -21,6 +21,9 @@ use super::lyrics::{
 use qbz_models::*;
 use zeroize::Zeroizing;
 
+/// Only the token-restoration POST; shared streaming/download requests remain unbounded.
+const TOKEN_RESTORE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0";
 
 /// Return a bounded, content-free diagnostic for an unexpected response body.
@@ -611,8 +614,6 @@ impl QobuzClient {
     /// token was persisted. Calls POST /user/login with X-User-Auth-Token header.
     /// Returns an error if the token has expired.
     pub async fn login_with_token(&self, token: &str) -> Result<UserSession> {
-        use reqwest::header::{HeaderMap, HeaderValue};
-
         let tokens = self.tokens.read().await;
         let app_id = tokens
             .as_ref()
@@ -621,7 +622,23 @@ impl QobuzClient {
             .clone();
         drop(tokens);
 
-        let user_login_url = endpoints::build_url(endpoints::paths::USER_LOGIN);
+        let request = self.token_restore_request(
+            &endpoints::build_url(endpoints::paths::USER_LOGIN),
+            &app_id,
+            token,
+        )?;
+        self.complete_token_restore(request).await
+    }
+
+    /// Private request seam: tests substitute a loopback URL and override the
+    /// request's duration. Production always uses USER_LOGIN and 15 seconds.
+    fn token_restore_request(
+        &self,
+        url: &str,
+        app_id: &str,
+        token: &str,
+    ) -> Result<reqwest::RequestBuilder> {
+        use reqwest::header::{HeaderMap, HeaderValue};
         let mut headers = HeaderMap::new();
         headers.insert(
             "X-App-Id",
@@ -633,17 +650,25 @@ impl QobuzClient {
                 .map_err(|_| ApiError::AuthenticationError("Invalid token format".into()))?,
         );
 
-        log::info!("[OAuth] Restoring session from saved token");
-        // Auth exemption: raw client, bypasses the offline gate (sign-in is
-        // explicit user intent to reach Qobuz; the gate governs services).
-        let resp = self
+        // Reqwest carries this SAME deadline through headers AND body reads,
+        // including a body that keeps trickling bytes. No timeout surrounds
+        // session publication or the caller's subsequent store activation.
+        Ok(self
             .http
-            .post(&user_login_url)
+            .post(url)
             .headers(headers)
             .header("Content-Type", "text/plain;charset=UTF-8")
             .body("extra=partner")
-            .send()
-            .await?;
+            .timeout(TOKEN_RESTORE_TIMEOUT))
+    }
+
+    async fn complete_token_restore(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<UserSession> {
+        log::info!("[OAuth] Restoring session from saved token");
+        // Auth exemption: raw client bypasses the offline service gate.
+        let resp = request.send().await?;
 
         match resp.status() {
             StatusCode::OK => {
@@ -3738,3 +3763,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "saved_session_tests.rs"]
+mod saved_session_tests;

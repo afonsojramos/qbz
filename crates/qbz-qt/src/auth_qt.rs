@@ -288,6 +288,42 @@ fn is_auth_rejection(error: &qbz_core::CoreError) -> bool {
     )
 }
 
+/// Shared validation boundary, before any store/session activation. The
+/// callback is the only token-store write and only explicit auth rejection
+/// reaches it. Network errors reach the existing login/offline UI as errors.
+fn validated_saved_session(
+    result: Result<qbz_models::UserSession, qbz_core::CoreError>,
+    clear_token: impl FnOnce(),
+) -> Result<Option<qbz_models::UserSession>, String> {
+    match result {
+        Ok(session) => Ok(Some(session)),
+        Err(error) if is_auth_rejection(&error) => {
+            log::warn!("[qbz-qt] saved token rejected by Qobuz, clearing: {error}");
+            clear_token();
+            Ok(None)
+        }
+        Err(error) => {
+            log::warn!("[qbz-qt] session restore failed, keeping saved token: {error}");
+            Err(error.to_string())
+        }
+    }
+}
+
+/// The boot controller's single completion point. A finished restore always
+/// releases the splash; the login view already contains the offline action.
+/// Neither this controller nor the request timeout cancels store activation.
+pub(crate) fn finish_boot_restore(
+    result: Result<Option<SessionInfo>, String>,
+    enter_shell: impl FnOnce(SessionInfo),
+    show_login: impl FnOnce(Option<String>),
+) {
+    match result {
+        Ok(Some(session)) => enter_shell(session),
+        Ok(None) => show_login(None),
+        Err(error) => show_login(Some(error)),
+    }
+}
+
 /// Restore a previously saved session from the encrypted token store.
 ///
 /// Returns `Ok(Some(SessionInfo))` when a saved token is valid and the
@@ -315,8 +351,10 @@ where
     let core = runtime.core();
     ensure_api_initialized(core).await?;
 
-    match core.login_with_token(&token).await {
-        Ok(session) => {
+    match validated_saved_session(core.login_with_token(&token).await, || {
+        let _ = qbz_credentials::clear_oauth_token();
+    })? {
+        Some(session) => {
             let user_id = session.user_id;
             let display_name = session.display_name.clone();
             let subscription = session.subscription_label.clone();
@@ -356,18 +394,7 @@ where
                 subscription,
             }))
         }
-        Err(e) if is_auth_rejection(&e) => {
-            log::warn!("[qbz-qt] saved token rejected by Qobuz, clearing: {e}");
-            let _ = qbz_credentials::clear_oauth_token();
-            Ok(None)
-        }
-        Err(e) => {
-            // Network-class failure (offline boot, timeout, 5xx, ...): KEEP
-            // the token. The login screen shows with the session intact so
-            // "Start offline" / the D2 recovery banner can use it later.
-            log::warn!("[qbz-qt] session restore failed, keeping saved token: {e}");
-            Ok(None)
-        }
+        None => Ok(None),
     }
 }
 
@@ -572,6 +599,94 @@ fn gen_nonce() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn network_failure_preserves_token_and_releases_splash_to_login_offline() {
+        use std::cell::{Cell, RefCell};
+        qbz_app::ensure_crypto_provider();
+        // A real reqwest transport timeout, with no token/keyring/profile I/O.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let stalled = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 1024];
+            while socket.read(&mut buffer).await.unwrap_or(0) != 0 {}
+        });
+        let error = reqwest::Client::new()
+            .post(format!("http://{address}/restore"))
+            .timeout(Duration::from_millis(100))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(error.is_timeout());
+        let cleared = Cell::new(false);
+        let result = validated_saved_session(Err(qbz_core::CoreError::Api(error.into())), || {
+            cleared.set(true)
+        });
+        assert!(!cleared.get());
+        let screen = RefCell::new("splash");
+        let message = RefCell::new(None);
+        let activated = Cell::new(0);
+        finish_boot_restore(
+            result.map(|session| session.map(|_| unreachable!())),
+            |_| activated.set(activated.get() + 1),
+            |error| {
+                *screen.borrow_mut() = "login";
+                *message.borrow_mut() = error;
+            },
+        );
+        assert_eq!(*screen.borrow(), "login");
+        assert!(message
+            .borrow()
+            .as_ref()
+            .is_some_and(|text: &String| !text.is_empty()));
+        assert_eq!(activated.get(), 0);
+        tokio::time::timeout(Duration::from_secs(1), stalled)
+            .await
+            .unwrap()
+            .unwrap();
+        // LoginScreen is the existing route containing Start offline. This
+        // controller change neither creates a new mode nor hides that action.
+    }
+
+    #[test]
+    fn only_explicit_rejection_clears_token_and_valid_restore_enters_once() {
+        use std::cell::Cell;
+        for error in [
+            qbz_qobuz::ApiError::AuthenticationError("fixture 401".into()),
+            qbz_qobuz::ApiError::IneligibleUser,
+        ] {
+            let cleared = Cell::new(0);
+            let result = validated_saved_session(Err(qbz_core::CoreError::Api(error)), || {
+                cleared.set(cleared.get() + 1)
+            });
+            assert_eq!(cleared.get(), 1);
+            assert!(result.unwrap().is_none());
+        }
+        let session = qbz_qobuz::auth::parse_login_response(&serde_json::json!({
+            "user_auth_token": "fixture", "user": {"id": 42}
+        }))
+        .unwrap();
+        let result = validated_saved_session(Ok(session), || panic!("valid token cleared"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.user_id, 42);
+        let entries = Cell::new(0);
+        finish_boot_restore(
+            Ok(Some(SessionInfo {
+                display_name: "fixture".into(),
+                subscription: "Member".into(),
+            })),
+            |_| entries.set(entries.get() + 1),
+            |_| panic!("valid restore went to login"),
+        );
+        assert_eq!(entries.get(), 1);
+        finish_boot_restore(
+            Ok(None),
+            |_| panic!("absent token activated a session"),
+            |error| assert!(error.is_none()),
+        );
+    }
 
     #[test]
     fn query_param_extracts_and_decodes() {
