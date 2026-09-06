@@ -2,6 +2,8 @@ use std::path::Path;
 
 use cxx_qt_build::{CxxQtBuilder, QmlModule};
 
+mod build_support;
+
 /// Collect every file under `dir` (recursive), crate-root-relative — the
 /// baked icon variants (qml/assets/icons/<tint>/<name>.svg) are too many to
 /// list by hand.
@@ -177,6 +179,8 @@ fn find_qsb() -> Option<std::path::PathBuf> {
 ///
 /// Missing `qsb` is a WARNING, not an error: the committed `.qsb` are still
 /// in the tree and still load, so a box without Qt's shader tools can build.
+/// CI explicitly sets `QBZ_PREBUILT_SHADERS=1`: validate the committed packs
+/// without looking for qsb or rewriting them. A separate gate tests baking.
 ///
 /// THE BAKE MUST BE IDEMPOTENT, and that is not a nicety — it is the whole
 /// reason `up_to_date` exists. `qsb` REWRITES its output unconditionally:
@@ -190,25 +194,32 @@ fn find_qsb() -> Option<std::path::PathBuf> {
 /// 21e941bdf together with the bake itself, and it is why the tree started
 /// rebuilding on every run when nothing had changed.
 fn build_shaders() {
+    println!("cargo:rerun-if-env-changed=QBZ_PREBUILT_SHADERS");
+    println!("cargo:rerun-if-env-changed=QSB");
+    let prebuilt =
+        build_support::use_prebuilt_shaders(std::env::var("QBZ_PREBUILT_SHADERS").ok().as_deref())
+            .unwrap_or_else(|error| panic!("{error}"));
     let dir = Path::new("qml/assets/shaders");
-    if !dir.is_dir() {
-        return;
-    }
-    let Some(qsb) = find_qsb() else {
+    let qsb = if prebuilt { None } else { find_qsb() };
+    if !prebuilt && qsb.is_none() {
         println!(
             "cargo:warning=qsb not found — shaders keep their committed .qsb. \
              Set QSB=/path/to/qsb to re-bake them."
         );
-        return;
-    };
-    for entry in std::fs::read_dir(dir).expect("read shaders dir").flatten() {
-        let src = entry.path();
+    }
+    for entry in std::fs::read_dir(dir).expect("read shaders dir") {
+        let src = entry.expect("read shader entry").path();
         let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
         if !matches!(ext, "frag" | "vert") {
             continue;
         }
         println!("cargo:rerun-if-changed={}", src.display());
         let out = src.with_extension(format!("{ext}.qsb"));
+        let Some(qsb) = qsb.as_ref() else {
+            build_support::require_prebuilt_shader(&src).unwrap_or_else(|error| panic!("{error}"));
+            println!("cargo:rerun-if-changed={}", out.display());
+            continue;
+        };
         if up_to_date(&src, &out) {
             continue;
         }

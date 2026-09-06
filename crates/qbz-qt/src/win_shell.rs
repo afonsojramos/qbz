@@ -10,6 +10,7 @@ use std::ptr::NonNull;
 unsafe extern "C" {
     fn qbz_main_window_hwnd() -> *mut c_void;
     fn qbz_install_commit_data_handler(cb: extern "C" fn());
+    #[cfg(target_os = "windows")]
     fn qbz_install_hittest_filter();
 }
 

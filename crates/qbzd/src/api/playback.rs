@@ -108,7 +108,7 @@ pub fn play(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
 
 /// `POST /api/playback/pause` (02 §3.3.6). Never cold-starts; exit set is
 /// 0 · 1 · 3 (no 5, §2.2) so a `Player::pause` channel failure is
-/// [`runtime_error`], not [`device_error`].
+/// [`runtime_error`], not `audio_unavailable`.
 pub fn pause(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
     let _transport_lease = match transport_action_lease(state) {
         Ok(lease) => lease,
@@ -122,9 +122,10 @@ pub fn pause(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
 
 /// `POST /api/playback/toggle` (02 §3.3.7). Mirrors the desktop's
 /// `toggle_play_pause`: playing -> pause; paused-with-loaded-audio -> resume;
-/// nothing loaded -> cold-start (same gate as `play`). Exit 5 is reserved for
-/// the cold-start branch (`cold_start`'s own [`device_error`]) — the
-/// pause/resume branches use [`runtime_error`] like plain `pause`/`stop`.
+/// nothing loaded -> cold-start (same gate as `play`). The cold-start branch
+/// can return `audio_unavailable`; an accepted load reports later stream
+/// failures through daemon state. The pause/resume branches use
+/// [`runtime_error`] like plain `pause`/`stop`.
 pub fn toggle(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
     let transport_lease = match transport_action_lease(state) {
         Ok(lease) => lease,
@@ -532,18 +533,6 @@ fn auth_gate(state: &ApiState) -> Option<Response<Cursor<Vec<u8>>>> {
     } else {
         None
     }
-}
-
-/// 503 `audio_unavailable` — the frozen taxonomy's device/audio bucket
-/// (02 §3.1.3), exit 5. Reserved for GENUINE audio/device conditions: the
-/// DSD-direct guards (handled inline via `err_json`, not this helper) and
-/// cold-start's `play_track_resolved` failure (no device / stream resolve
-/// failed). Each route's documented exit set (02 §2.2) decides which one
-/// applies — `pause`/`stop`/plain `seek`/`volume`/`next`/`prev` never list
-/// exit 5, so their `Player`/`QbzCore` command failures use
-/// [`runtime_error`] instead.
-fn device_error(message: &str) -> Response<Cursor<Vec<u8>>> {
-    err_json(503, "audio_unavailable", message, "check: qbzd status")
 }
 
 /// A generic runtime failure, exit 1 (02 §1.3's catch-all) — e.g. the

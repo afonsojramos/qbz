@@ -74,6 +74,7 @@ fn select_link(args: &[String]) -> Option<String> {
 ///
 /// The single-instance server feeds it whatever arrived on the pipe, which is
 /// not argv and is not ours.
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn is_actionable(url: &str) -> bool {
     if !is_qobuz_link(url) && !url.starts_with("qbz://") {
         return false;

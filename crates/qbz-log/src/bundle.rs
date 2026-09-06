@@ -1,7 +1,7 @@
 //! GitHub-ready diagnostics bundle formatter.
 //!
-//! Produces a collapsible `<details>` markdown block (a bold field header + a fenced
-//! ```log block of the last N lines) suitable for pasting straight into a GitHub issue.
+//! Produces a collapsible `<details>` markdown block (a bold field header + a
+//! log-language fenced block of the last N lines) for pasting into a GitHub issue.
 //! Lines are redacted defensively even though the ring already holds redacted text.
 
 use crate::line::LogLine;
@@ -20,7 +20,7 @@ pub struct DiagFields<'a> {
 }
 
 /// Format a GitHub-ready diagnostics bundle: a `<details>` wrapper, a bold field header,
-/// and a fenced ```log block of the last `max_lines.min(last_lines.len())` lines.
+/// and a log-language fenced block of the last `max_lines.min(last_lines.len())` lines.
 pub fn format_diagnostics_bundle(
     f: &DiagFields,
     last_lines: &[LogLine],

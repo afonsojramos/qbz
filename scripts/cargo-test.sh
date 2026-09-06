@@ -45,6 +45,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 say() { printf '[cargo-test] %s\n' "$*"; }
 
+say "gate: all eight gettext catalogs"
+for locale in en es de fr pt ru ja nl; do
+  msgfmt --check --output-file=/dev/null "crates/qbz-i18n/translations/$locale/LC_MESSAGES/qbz-ui.po"
+done
+
 say "job test: cargo test --workspace --exclude qbz-qt (jobs=${CARGO_BUILD_JOBS:-all cores})"
 cargo test \
   --manifest-path crates/Cargo.toml \
@@ -125,10 +130,14 @@ hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbz-qt -e normal \
 [[ -z "$hits" ]] || { echo "qbz-qt graph resolves Slint crates:"; echo "$hits"; exit 1; }
 
 say "qt gate 4/5: cargo test -p qbz-qt (debug)"
+# Match qt-gate: shader_bake_gate above proves compilation independently;
+# the binary embeds the committed packs without mtime-driven rewrites.
+export QBZ_PREBUILT_SHADERS=1
 cargo test --manifest-path crates/Cargo.toml -p qbz-qt --no-fail-fast
 
 say "qt gate 5/5: offscreen boot of the debug binary"
 cargo build --manifest-path crates/Cargo.toml -p qbz-qt
+target_dir="${CARGO_TARGET_DIR:-$ROOT/crates/target}"
 log="$(mktemp "${TMPDIR:-/tmp}/qbz-test-smoke-XXXXXX")"
 # Isolated: its own XDG dirs (never the developer's config/session) and a
 # PRIVATE session bus — the single-instance lock is a D-Bus well-known name,
@@ -137,7 +146,7 @@ log="$(mktemp "${TMPDIR:-/tmp}/qbz-test-smoke-XXXXXX")"
 iso="$(mktemp -d "${TMPDIR:-/tmp}/qbz-test-xdg-XXXXXX")"
 bus=(); command -v dbus-run-session >/dev/null && bus=(dbus-run-session --)
 XDG_CONFIG_HOME="$iso/config" XDG_DATA_HOME="$iso/data" XDG_CACHE_HOME="$iso/cache" XDG_STATE_HOME="$iso/state" \
-  QT_QPA_PLATFORM=offscreen RUST_LOG=info "${bus[@]}" timeout 75 ./crates/target/debug/qbz > "$log" 2>&1 || true
+  QT_QPA_PLATFORM=offscreen RUST_LOG=info "${bus[@]}" timeout 75 "$target_dir/debug/qbz" > "$log" 2>&1 || true
 rm -rf "$iso"
 lines=$(wc -l < "$log")
 (( lines >= 10 )) || { cat "$log"; echo "smoke: the app did not start ($lines lines)"; exit 1; }

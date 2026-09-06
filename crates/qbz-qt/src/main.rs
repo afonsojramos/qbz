@@ -13,6 +13,9 @@
 //! async work; results hop back to Qt through the bridge's `CxxQtThread`.
 
 mod auth_qt;
+#[cfg(test)]
+#[path = "../build_support.rs"]
+mod build_support;
 mod deep_link_qt;
 mod listen_log_qt;
 #[cfg(target_os = "linux")]

@@ -1,7 +1,8 @@
 # CI for the crates/ workspace on the integration branch.
 #
 # Three jobs, three economies:
-#   test      — `cargo test` on every crate that needs no Qt (scripts/cargo-test.sh:
+#   test      — validate all eight gettext catalogs, then `cargo test` on
+#               every crate that needs no Qt (scripts/cargo-test.sh:
 #               excludes the frozen Slint crates and qbz-qt), then the named
 #               listen-log suite check (qbz-app::listen_log must exist and be
 #               green — the per-user listen store's schema, accumulator, end
@@ -74,7 +75,7 @@ jobs:
           # OpenSSL (reqwest).
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config \
+            build-essential pkg-config gettext \
             libasound2-dev libjack-jackd2-dev \
             libdbus-1-dev libssl-dev
 
@@ -135,13 +136,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config cmake clang libclang-dev nasm dbus \
+            build-essential pkg-config cmake clang libclang-dev lld nasm dbus \
             libasound2-dev libjack-jackd2-dev libdbus-1-dev libssl-dev \
             libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev libwayland-dev
+          # cxx-qt prefers LLD when present; without it, Ubuntu falls back to
+          # the deprecated gold linker. Do not add workspace-wide RUSTFLAGS.
+          ld.lld --version
 
       # No qtshadertools here ON PURPOSE: with qsb on PATH build.rs re-bakes
       # shaders by mtime, which makes a fresh checkout nondeterministic. The
-      # build ships the committed .qsb; shader health is the shader-gate job.
+      # build explicitly validates/uses committed .qsb; shader health is the
+      # shader-gate job, independent of tools accidentally present on PATH.
       - name: Install Qt ${{ env.QT_VERSION }}
         uses: jurplel/install-qt-action@v4
         with:
@@ -188,6 +193,7 @@ jobs:
         env:
           CARGO_TERM_COLOR: always
           QBZ_QT_QML_DIR: ${{ env.QT_ROOT_DIR }}/qml
+          QBZ_PREBUILT_SHADERS: '1'
         run: |
           set -euo pipefail
           hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbz-qt -e normal \
