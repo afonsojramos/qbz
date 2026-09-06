@@ -48,6 +48,9 @@ say() { printf '[cargo-test] %s\n' "$*"; }
 say "gate: native Qt SDK cache and crash-aware smoke regressions"
 python3 scripts/test_qt_build_gates.py
 
+say "gate: Windows app-local CRT import regressions"
+python3 scripts/packaging/test_windows_crt.py
+
 say "gate: all eight gettext catalogs"
 for locale in en es de fr pt ru ja nl; do
   msgfmt --check --output-file=/dev/null "crates/qbz-i18n/translations/$locale/LC_MESSAGES/qbz-ui.po"

@@ -39,6 +39,8 @@ on:
       - "scripts/qt-*.py"
       - "scripts/qt-*.sh"
       - "scripts/test_qt_build_gates.py"
+      - "scripts/packaging/windows_crt.py"
+      - "scripts/packaging/test_windows_crt.py"
       - "scripts/qml-audits/**"
       - ".github/workflows/test-crates.yml"
   push:
@@ -50,6 +52,8 @@ on:
       - "scripts/qt-*.py"
       - "scripts/qt-*.sh"
       - "scripts/test_qt_build_gates.py"
+      - "scripts/packaging/windows_crt.py"
+      - "scripts/packaging/test_windows_crt.py"
       - "scripts/qml-audits/**"
       - ".github/workflows/test-crates.yml"
   workflow_dispatch:
