@@ -2085,6 +2085,8 @@ fn history_source_badges(source: &str) -> Vec<String> {
 
 /// Shared by the Most Played carousel and its complete, filtered page.
 pub(crate) fn map_played_album(r: qbz_app::settings::album_play_history::AlbumPlayRow) -> HomeCard {
+    let (quality_tier, quality_label) =
+        crate::recently_qt::display_quality(r.quality_tier, r.quality_label);
     HomeCard {
         is_pinned: crate::sidebar_qt::is_pinned("album", &r.album_id),
         is_favorite: crate::fav_cache_qt::is_album_favorite(&r.album_id),
@@ -2095,8 +2097,9 @@ pub(crate) fn map_played_album(r: qbz_app::settings::album_play_history::AlbumPl
         artist: r.artist,
         artist_id: r.artist_id,
         year: r.year,
-        quality_tier: r.quality_tier,
-        quality_label: r.quality_label,
+        quality_tier,
+        quality_detail: quality_label.clone(),
+        quality_label,
         art_url: r.artwork_url,
         plays: r.plays,
         ..HomeCard::default()
@@ -2106,6 +2109,8 @@ pub(crate) fn map_played_album(r: qbz_app::settings::album_play_history::AlbumPl
 /// Map one recently-played album (local history) onto a card. The stored ISO
 /// release date is localized here exactly as the discover cards do.
 pub(crate) fn map_recent_album(a: crate::recently_qt::RecentAlbum) -> HomeCard {
+    let (quality_tier, quality_label) =
+        crate::recently_qt::display_quality(a.quality_tier, a.quality_label);
     let blacklist_album_id = a.id.clone();
     HomeCard {
         is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
@@ -2120,8 +2125,9 @@ pub(crate) fn map_recent_album(a: crate::recently_qt::RecentAlbum) -> HomeCard {
         } else {
             qbz_text_utils::dates::release_label(Some(a.release_date.as_str()))
         },
-        quality_tier: a.quality_tier,
-        quality_label: a.quality_label,
+        quality_tier,
+        quality_detail: quality_label.clone(),
+        quality_label,
         sources: history_source_badges(&a.source),
         source: a.source,
         art_url: a.artwork_url,

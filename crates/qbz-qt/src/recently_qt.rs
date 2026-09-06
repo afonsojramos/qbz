@@ -292,6 +292,41 @@ pub(crate) fn record_in_context(track: RecentTrack, context_kind: &str) {
     write_store(&store);
 }
 
+/// Quality captured by both history stores. QueueTrack's DSD rate is already
+/// in kHz, so it must reach the DSD classifier before generic PCM formatting.
+fn recorded_quality(bit_depth: Option<u32>, sample_rate: Option<f64>) -> (&'static str, String) {
+    if bit_depth == Some(1) {
+        return ("dsd", crate::quality_qt::dsd_multiple_label(sample_rate));
+    }
+    let tier = crate::home_qt::quality_tier_from_depth(bit_depth);
+    let detail = crate::home_qt::quality_detail_from_parts(bit_depth, sample_rate);
+    let label = if tier.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "{}: {detail}",
+            if tier == "hires" { "Hi-Res" } else { "CD" }
+        )
+    };
+    (tier, label)
+}
+
+/// Correct old one-bit snapshots at display time, without rewriting history.
+/// The former PCM formatter divided a kHz DSD rate a second time, producing
+/// e.g. `CD: 1-bit / 2.8224 kHz`; builds fed Hz stored `2822.4 kHz` instead.
+pub(crate) fn display_quality(tier: String, label: String) -> (String, String) {
+    let detail = label.trim().strip_prefix("CD: ").unwrap_or(label.trim());
+    let Some(rate_text) = detail.strip_prefix("1-bit / ") else {
+        return (tier, label);
+    };
+    let rate = rate_text
+        .strip_suffix(" kHz")
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|rate| rate.is_finite() && *rate > 0.0)
+        .map(|rate| if rate < 1000.0 { rate * 1000.0 } else { rate });
+    ("dsd".into(), crate::quality_qt::dsd_multiple_label(rate))
+}
+
 /// Record the current queue track into BOTH local play stores: the
 /// recently-played history (this module) and the album play-count history
 /// (`qbz_app::settings::album_play_history`, which ranks the "Most Played
@@ -338,16 +373,7 @@ pub(crate) fn record_queue_track(track: &qbz_models::QueueTrack) {
             crate::media_sync_qt::prioritize_jellyfin_quality(vec![item_id.clone()], true);
         }
     }
-    let tier = crate::home_qt::quality_tier_from_depth(track.bit_depth);
-    let detail = crate::home_qt::quality_detail_from_parts(track.bit_depth, track.sample_rate);
-    let quality_label = if tier.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "{}: {detail}",
-            if tier == "hires" { "Hi-Res" } else { "CD" }
-        )
-    };
+    let (tier, quality_label) = recorded_quality(track.bit_depth, track.sample_rate);
     let artwork = track.artwork_url.clone().unwrap_or_default();
     let album_id = track.album_id.clone().unwrap_or_default();
     let source = track.source.clone().unwrap_or_default();
@@ -407,6 +433,79 @@ pub(crate) fn record_queue_track(track: &qbz_models::QueueTrack) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_dsd_queue_metadata_records_the_multiple_in_both_histories() {
+        for (rate, expected) in [
+            (2_822_400.0, "DSD64"),
+            (5_644_800.0, "DSD128"),
+            (11_289_600.0, "DSD256"),
+            (22_579_200.0, "DSD512"),
+        ] {
+            let native = qbz_library::LocalTrack {
+                format: qbz_library::AudioFormat::Dsd,
+                bit_depth: Some(1),
+                sample_rate: rate,
+                ..Default::default()
+            };
+            let queued = crate::local_playback::local_queue_track(&native);
+            assert_eq!(
+                recorded_quality(queued.bit_depth, queued.sample_rate),
+                ("dsd", expected.into())
+            );
+            assert_eq!(
+                recorded_quality(Some(1), Some(rate)),
+                ("dsd", expected.into())
+            );
+        }
+        assert_eq!(
+            recorded_quality(Some(16), Some(44.1)),
+            ("cd", "CD: 16-bit / 44.1 kHz".into())
+        );
+        assert_eq!(
+            recorded_quality(Some(24), Some(96_000.0)),
+            ("hires", "Hi-Res: 24-bit / 96 kHz".into())
+        );
+    }
+
+    #[test]
+    fn legacy_one_bit_album_snapshots_render_as_dsd_without_a_replay() {
+        for (label, expected) in [
+            ("CD: 1-bit / 2.8224 kHz", "DSD64"),
+            ("CD: 1-bit / 2822.4 kHz", "DSD64"),
+            ("CD: 1-bit / 5.6448 kHz", "DSD128"),
+            ("CD: 1-bit / 11.2896 kHz", "DSD256"),
+            ("CD: 1-bit / 22.5792 kHz", "DSD512"),
+        ] {
+            let recent = crate::home_qt::map_recent_album(RecentAlbum {
+                quality_tier: "cd".into(),
+                quality_label: label.into(),
+                ..Default::default()
+            });
+            let played = crate::home_qt::map_played_album(
+                qbz_app::settings::album_play_history::AlbumPlayRow {
+                    quality_tier: "cd".into(),
+                    quality_label: label.into(),
+                    ..Default::default()
+                },
+            );
+            for card in [recent, played] {
+                assert_eq!(card.quality_tier, "dsd");
+                assert_eq!(card.quality_label, expected);
+                assert_eq!(card.quality_detail, expected);
+            }
+        }
+        for (tier, label) in [
+            ("hires", "Hi-Res: 24-bit / 192 kHz"),
+            ("cd", "CD: 16-bit / 44.1 kHz"),
+            ("dsd", "DSD128"),
+        ] {
+            assert_eq!(
+                display_quality(tier.into(), label.into()),
+                (tier.into(), label.into())
+            );
+        }
+    }
 
     #[test]
     fn legacy_bare_array_migrates_to_derived_albums() {
