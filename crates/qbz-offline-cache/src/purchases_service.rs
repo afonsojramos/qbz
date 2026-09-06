@@ -1602,6 +1602,10 @@ mod tests {
                 label: None,
                 genre: None,
                 artist: None,
+                version: None,
+                streamable: None,
+                streamable_at: None,
+                release_date_stream: None,
             }),
             ..Default::default()
         }
@@ -2029,6 +2033,10 @@ mod tests {
                 label: None,
                 genre: None,
                 artist: None,
+                version: None,
+                streamable: None,
+                streamable_at: None,
+                release_date_stream: None,
             }),
             ..Default::default()
         }
@@ -2967,6 +2975,10 @@ mod entitlement_index_tests {
                     label: None,
                     genre: None,
                     artist: None,
+                    version: None,
+                    streamable: None,
+                    streamable_at: None,
+                    release_date_stream: None,
                 }),
                 ..Default::default()
             }],
