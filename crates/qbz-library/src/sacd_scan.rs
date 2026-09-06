@@ -478,6 +478,88 @@ mod tests {
     }
 
     #[test]
+    fn raw_sacd_scan_imports_once_and_keeps_tracks_when_the_image_is_truncated() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("music");
+        std::fs::create_dir(&root).unwrap();
+        let image_path = root.join("physical.ISO");
+        let mut logical = vec![0u8; 640 * 2048];
+        let master = &mut logical[510 * 2048..511 * 2048];
+        master[..8].copy_from_slice(b"SACDMTOC");
+        master[8..10].copy_from_slice(&[1, 20]);
+        master[0x40..0x44].copy_from_slice(&544u32.to_be_bytes());
+        master[0x54..0x56].copy_from_slice(&3u16.to_be_bytes());
+        let toc = &mut logical[544 * 2048..547 * 2048];
+        toc[..8].copy_from_slice(b"TWOCHTOC");
+        toc[8..12].copy_from_slice(&[1, 20, 0, 3]);
+        toc[0x14] = 4;
+        toc[0x15] = 2;
+        toc[0x20] = 2;
+        toc[0x42] = 4;
+        toc[0x45] = 1;
+        toc[0x48..0x4c].copy_from_slice(&600u32.to_be_bytes());
+        toc[0x4c..0x50].copy_from_slice(&619u32.to_be_bytes());
+        toc[2048..2056].copy_from_slice(b"SACDTRL1");
+        toc[2056..2060].copy_from_slice(&600u32.to_be_bytes());
+        toc[3076..3080].copy_from_slice(&20u32.to_be_bytes());
+        toc[4096..4104].copy_from_slice(b"SACDTRL2");
+        toc[5126] = 4;
+        let mut file = std::fs::File::create(&image_path).unwrap();
+        for sector in logical.chunks_exact(2048) {
+            file.write_all(&[0xa5; 12]).unwrap();
+            file.write_all(sector).unwrap();
+            file.write_all(&[0x5a; 4]).unwrap();
+        }
+        drop(file);
+
+        // Manual open builds the same rows without requiring catalogue import.
+        let rows = super::build_image_rows(&image_path, &SacdLabels::default()).unwrap();
+        assert_eq!(rows.album, "physical");
+        assert_eq!(rows.tracks.len(), 1);
+        assert_eq!(
+            rows.tracks[0].file_path,
+            format!("sacd:{}#1", image_path.display())
+        );
+        let db = LibraryDatabase::open(&temp.path().join("library.db")).unwrap();
+        let root_id = db
+            .add_folder_with_network_info(&root.to_string_lossy(), false, None)
+            .unwrap();
+        let scan = |generation| {
+            scan_root_for_sacd(
+                &db,
+                root_id,
+                generation,
+                &root,
+                &SacdLabels::default(),
+                &AtomicBool::new(false),
+            )
+        };
+        let first = scan(1);
+        assert_eq!(first.imported, 1);
+        assert!(first.failed.is_empty());
+        let tracks = db.get_all_track_paths().unwrap();
+        assert_eq!(tracks.len(), 1);
+        let second = scan(2);
+        assert_eq!(second.unchanged, 1);
+        assert_eq!(second.imported, 0);
+        assert_eq!(db.get_all_track_paths().unwrap(), tracks);
+
+        // Even a missing physical trailer is a failed SACD read, not a file
+        // that may be silently ignored and have its known tracks pruned.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&image_path)
+            .unwrap()
+            .set_len(640 * 2064 - 4)
+            .unwrap();
+        let third = scan(3);
+        assert_eq!(third.failed.len(), 1);
+        assert_eq!(third.ignored, 0);
+        assert_eq!(third.removed, 0);
+        assert_eq!(db.get_all_track_paths().unwrap(), tracks);
+    }
+
+    #[test]
     fn cancel_stops_before_the_first_candidate() {
         let temp = TempDir::new().unwrap();
         let db = LibraryDatabase::open(&temp.path().join("library.db")).unwrap();

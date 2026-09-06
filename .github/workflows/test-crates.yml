@@ -11,7 +11,9 @@
 #               snapshot/plan/apply/ledger/local copy, additive blacklist
 #               merge), plus QConnect controller handoff/read-vs-write,
 #               proto3-zero cursor, manual skip/loop/shuffle/autoplay and
-#               consecutive-log repetition regression checks. ~5 min cold.
+#               consecutive-log repetition regression checks, plus SACD
+#               2048/2064-sector TOC/frame/seek equivalence and scanner import/
+#               failed-read preservation. ~5 min cold.
 #   qt-gate   — the Qt frontend: the five static QML audits, `cargo test -p
 #               qbz-qt`, the Slint-free dep-graph gate, and an OFFSCREEN BOOT of
 #               debug AND release binaries (including process liveness).

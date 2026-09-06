@@ -66,6 +66,16 @@ cargo test \
   --no-fail-fast \
   "$@"
 
+say "gate: SACD physical-sector and scanner regressions present"
+# Already executed by the workspace run: keep the container/seek equivalence
+# and failed-scan preservation checks from silently disappearing.
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-disc --lib -- --list raw_sector_tests:: 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 9 )) || { echo "SACD physical-sector suite has $n tests (expected >= 9)"; exit 1; }
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-library --lib -- --list raw_sacd_scan_ 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 1 )) || { echo "SACD raw scanner suite has $n tests (expected >= 1)"; exit 1; }
+
 say "gate: listen log suite present and green (qbz-app::listen_log)"
 # The workspace run above already executes these; this step exists so a
 # refactor that silently drops the module's tests (a renamed mod, a cfg gate)

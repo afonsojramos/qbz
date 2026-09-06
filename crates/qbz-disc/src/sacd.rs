@@ -11,6 +11,8 @@
 //! WHAT IS SUPPORTED: DSD64 stereo areas, either flat or DST-compressed, in
 //! raw Scarlet Book dumps and ISO/UDF hybrid images. Every pointer and audio
 //! extent is bounded by the image; nothing is inferred from an ISO 9660 layer.
+//! Images may store 2048-byte logical sectors directly or retain the 12-byte
+//! header and 4-byte trailer of each 2064-byte physical sector.
 
 use std::fs::{File, Metadata};
 use std::io::{Read, Seek, SeekFrom};
@@ -77,8 +79,10 @@ pub enum SacdError {
     MissingFrameStart { track: u8, lsn: u64 },
     #[error("{0} is not a regular file")]
     NotRegularFile(PathBuf),
-    #[error("SACD image length {0} is not a whole number of 2048-byte sectors")]
+    #[error("SACD image length {0} contains a partial sector in the detected layout")]
     InvalidImageLength(u64),
+    #[error("SACD image has Master TOC signatures in conflicting sector layouts")]
+    AmbiguousSectorLayout,
     #[error("SACD image changed while it was being read: {0}")]
     ImageChangedDuringRead(PathBuf),
 }
@@ -177,8 +181,32 @@ struct SectorImage {
     file: File,
     path: PathBuf,
     bytes: u64,
+    layout: SectorLayout,
+    master_signature_found: bool,
     stamp: ImageStamp,
     sectors_since_check: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SectorLayout {
+    Logical2048,
+    Physical2064,
+}
+
+impl SectorLayout {
+    fn stride(self) -> u64 {
+        match self {
+            Self::Logical2048 => SECTOR,
+            Self::Physical2064 => 2064,
+        }
+    }
+
+    fn payload_offset(self) -> u64 {
+        match self {
+            Self::Logical2048 => 0,
+            Self::Physical2064 => 12,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,17 +254,60 @@ impl SectorImage {
             return Err(SacdError::NotRegularFile(path.to_path_buf()));
         }
         let bytes = metadata.len();
-        Ok(Self {
+        let mut image = Self {
             file,
             path: path.to_path_buf(),
             bytes,
+            layout: SectorLayout::Logical2048,
+            master_signature_found: false,
             stamp: ImageStamp::from_metadata(&metadata),
             sectors_since_check: 0,
-        })
+        };
+        let layout = image.detect_layout()?;
+        image.master_signature_found = layout.is_some();
+        image.layout = layout.unwrap_or(SectorLayout::Logical2048);
+        image.verify_unchanged()?;
+        Ok(image)
+    }
+
+    /// File size alone cannot distinguish layouts: a 2064-byte dump with a
+    /// multiple of 128 sectors is also divisible by 2048. Probe all three
+    /// Master positions, including backups and signed but truncated images.
+    /// Full geometry validation remains the responsibility of the TOC parser.
+    fn detect_layout(&mut self) -> Result<Option<SectorLayout>, SacdError> {
+        let mut selected = None;
+        for layout in [SectorLayout::Logical2048, SectorLayout::Physical2064] {
+            for lsn in MASTER_TOC_COPIES {
+                let offset = lsn * layout.stride() + layout.payload_offset();
+                if offset + 8 > self.bytes {
+                    continue;
+                }
+                let mut signature = [0u8; 8];
+                self.file
+                    .seek(SeekFrom::Start(offset))
+                    .and_then(|_| self.file.read_exact(&mut signature))
+                    .map_err(|source| SacdError::Iso(IsoError::Read { lsn, source }))?;
+                if &signature == b"SACDMTOC" {
+                    if selected.is_some_and(|previous| previous != layout) {
+                        return Err(SacdError::AmbiguousSectorLayout);
+                    }
+                    selected = Some(layout);
+                    break;
+                }
+            }
+        }
+        Ok(selected)
+    }
+
+    fn validate_length(&self) -> Result<(), SacdError> {
+        if self.bytes % self.layout.stride() != 0 {
+            return Err(SacdError::InvalidImageLength(self.bytes));
+        }
+        Ok(())
     }
 
     fn sectors(&self) -> u64 {
-        self.bytes / SECTOR
+        self.bytes / self.layout.stride()
     }
 
     fn has_complete_sector(&self, lsn: u64) -> bool {
@@ -263,14 +334,24 @@ impl SectorImage {
                 ),
             }));
         }
+        let stride = self.layout.stride() as usize;
         let bytes = count
-            .checked_mul(SECTOR as usize)
+            .checked_mul(stride)
             .ok_or(SacdError::MalformedToc("byte count overflows"))?;
         let mut out = vec![0u8; bytes];
         self.file
-            .seek(SeekFrom::Start(lsn * SECTOR))
+            .seek(SeekFrom::Start(lsn * self.layout.stride()))
             .and_then(|_| self.file.read_exact(&mut out))
             .map_err(|source| SacdError::Iso(IsoError::Read { lsn, source }))?;
+        if self.layout == SectorLayout::Physical2064 {
+            // Read contiguous physical sectors once, then compact their payloads
+            // in place. Headers/trailers must never reach TOC or audio parsing.
+            for index in 0..count {
+                let from = index * stride + self.layout.payload_offset() as usize;
+                out.copy_within(from..from + SECTOR as usize, index * SECTOR as usize);
+            }
+            out.truncate(count * SECTOR as usize);
+        }
         self.sectors_since_check = self.sectors_since_check.saturating_add(count_u64);
         // A one-second cadence avoids a metadata syscall for every 1/75 s
         // audio frame while still detecting in-place writes and path swaps
@@ -421,28 +502,13 @@ pub enum SacdSniff {
 /// Master TOC, not the optional ISO 9660 compatibility layer.
 pub fn sniff_sacd_image(path: &Path) -> Result<SacdSniff, SacdError> {
     let mut image = SectorImage::open(path)?;
-    if !MASTER_TOC_COPIES
-        .into_iter()
-        .any(|lsn| image.has_complete_sector(lsn))
-    {
-        return Ok(SacdSniff::NotSacd);
-    }
-    if image.bytes % SECTOR != 0 {
-        // Preserve the useful distinction between an arbitrary odd-sized file
-        // and a signed SACD image with a truncated tail. Do this before the
-        // full Master parse so another malformed field cannot hide truncation.
-        for lsn in MASTER_TOC_COPIES {
-            if image.has_complete_sector(lsn) {
-                let first = image.read_sectors(lsn, 1)?;
-                if &first[..8] == b"SACDMTOC" {
-                    image.verify_unchanged()?;
-                    return Err(SacdError::InvalidImageLength(image.bytes));
-                }
-            }
-        }
+    if !image.master_signature_found {
         image.verify_unchanged()?;
         return Ok(SacdSniff::NotSacd);
     }
+    // A signed image with a truncated tail is an error, not an ordinary ISO
+    // to ignore/prune. This also covers a signature in a partial Master sector.
+    image.validate_length()?;
     let result = match select_master_toc(&mut image)? {
         Some(_) => SacdSniff::Sacd,
         None => SacdSniff::NotSacd,
@@ -459,9 +525,7 @@ pub fn is_sacd_image(path: &Path) -> bool {
 /// Read the stereo area's table of contents out of a disc image.
 pub fn read_area(path: &Path) -> Result<SacdArea, SacdError> {
     let mut image = SectorImage::open(path)?;
-    if image.bytes % SECTOR != 0 {
-        return Err(SacdError::InvalidImageLength(image.bytes));
-    }
+    image.validate_length()?;
     let master = select_master_toc(&mut image)?.ok_or(SacdError::MissingMasterToc)?;
 
     let mut stereo = None;
@@ -1017,6 +1081,7 @@ pub struct SacdFrameReader {
 impl SacdFrameReader {
     pub fn open(path: &Path, track: &SacdTrack) -> Result<Self, SacdError> {
         let image = SectorImage::open(path)?;
+        image.validate_length()?;
         let start_lsn = u64::from(track.start_lsn);
         let end_lsn = start_lsn
             .checked_add(u64::from(track.length_lsn))
@@ -1311,6 +1376,7 @@ impl SacdTrackReader {
     pub fn open_with(path: &Path, track: &SacdTrack, sync: FrameSync) -> Result<Self, SacdError> {
         let start_lsn = track.start_lsn as u64;
         let image = SectorImage::open(path)?;
+        image.validate_length()?;
         let end_lsn = start_lsn
             .checked_add(u64::from(track.length_lsn))
             .ok_or(SacdError::MalformedToc("track sector range overflows"))?;
@@ -1405,6 +1471,10 @@ impl SacdTrackReader {
         Ok(out.len())
     }
 }
+
+#[cfg(test)]
+#[path = "sacd_raw_tests.rs"]
+mod raw_sector_tests;
 
 #[cfg(test)]
 mod tests {
