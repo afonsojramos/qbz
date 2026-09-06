@@ -4522,6 +4522,7 @@ name = "qbz-qt"
 version = "2.1.0"
 dependencies = [
  "arboard",
+ "async-io",
  "async-trait",
  "cc",
  "cxx",

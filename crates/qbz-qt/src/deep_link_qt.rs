@@ -113,6 +113,14 @@ pub(crate) fn stash(url: String) {
     }
 }
 
+/// Return an unconfirmed handoff without replacing a newer launch intent.
+#[cfg(target_os = "linux")]
+pub(crate) fn restore_pending(url: String) {
+    if let Ok(mut pending) = PENDING.lock() {
+        pending.get_or_insert(url);
+    }
+}
+
 pub(crate) fn take_pending() -> Option<String> {
     PENDING.lock().ok().and_then(|mut pending| pending.take())
 }

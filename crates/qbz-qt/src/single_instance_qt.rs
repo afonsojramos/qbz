@@ -6,29 +6,34 @@
 //! blocked by a broken or absent session bus.
 #![cfg(target_os = "linux")]
 
+use std::cell::Cell;
+use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
-use zbus::blocking::fdo::DBusProxy;
-use zbus::blocking::Connection;
+use async_io::{Async, Timer};
+use futures_util::future::{select, Either};
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
-use zbus::names::WellKnownName;
+use zbus::Connection;
 
 const BUS_NAME: &str = "com.blitzfc.qbz";
 const OBJECT_PATH: &str = "/com/blitzfc/qbz";
 const IFACE_NAME: &str = "com.blitzfc.qbz.SingleInstance";
 
-static CONN: OnceLock<Connection> = OnceLock::new();
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+static CONN: OnceLock<SessionConnection> = OnceLock::new();
 static UI_READY: AtomicBool = AtomicBool::new(false);
 static PENDING_PRESENT: AtomicBool = AtomicBool::new(false);
 
 struct SingleInstanceIface;
 
 fn present_or_defer() {
-    if UI_READY.load(Ordering::SeqCst) {
+    PENDING_PRESENT.store(true, Ordering::SeqCst);
+    // Publishing the intent first closes the race with bind_ui's drain.
+    if UI_READY.load(Ordering::SeqCst) && PENDING_PRESENT.swap(false, Ordering::SeqCst) {
         crate::tray_qt::present();
-    } else {
-        PENDING_PRESENT.store(true, Ordering::SeqCst);
     }
 }
 
@@ -54,42 +59,130 @@ pub(crate) fn bind_ui() {
     }
 }
 
+/// Own the transport as well as zbus. Cancellation shuts down the socket
+/// synchronously, even if an executor task still holds a connection clone.
+/// Nothing can acquire a name or send another RPC after this guard is dropped.
+struct SessionConnection {
+    socket: Arc<Async<UnixStream>>,
+    connection: Option<Connection>,
+}
+
+impl Drop for SessionConnection {
+    fn drop(&mut self) {
+        let _ = self.socket.get_ref().shutdown(std::net::Shutdown::Both);
+    }
+}
+
 /// True when this process should continue as the primary instance.
+/// Uncertain IPC deliberately sacrifices uniqueness for availability. A link
+/// is consumed only after a successful OpenUrl reply; we never retry a timed
+/// out RPC. The remote may have acted before its reply was lost: exactly-once
+/// delivery cannot be promised when the bus fails mid-call.
 pub(crate) fn acquire_or_raise() -> bool {
-    match probe() {
-        Ok(primary) => primary,
-        Err(e) => {
-            log::warn!("[qbz-qt] single-instance probe failed ({e}); continuing");
+    let mut pending = crate::deep_link_qt::take_pending();
+    let result = zbus::Address::session()
+        .map_err(|error| format!("address: {error}"))
+        .and_then(|address| probe_at(&address, &mut pending, PROBE_TIMEOUT, SingleInstanceIface));
+    if let Some(url) = pending {
+        crate::deep_link_qt::restore_pending(url);
+    }
+    match result {
+        Ok(Some(conn)) => {
+            let _ = CONN.set(conn);
+            true
+        }
+        Ok(None) => false,
+        Err(error) => {
+            log::warn!("[qbz-qt] single-instance probe failed ({error}); continuing");
             true
         }
     }
 }
 
-fn probe() -> zbus::Result<bool> {
-    let conn = Connection::session()?;
-    conn.object_server().at(OBJECT_PATH, SingleInstanceIface)?;
-    let proxy = DBusProxy::new(&conn)?;
-    let name: WellKnownName<'_> = BUS_NAME.try_into().map_err(zbus::Error::from)?;
-    match proxy.request_name(name, RequestNameFlags::DoNotQueue.into())? {
-        RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => {
-            let _ = CONN.set(conn);
-            Ok(true)
+/// zbus's address connector uses a blocking worker for Unix connect. Use
+/// async-io directly so a full listen backlog cannot leave a worker behind.
+/// Native Linux session buses use filesystem or abstract Unix sockets. Other
+/// transports fail open immediately: this optional startup guard must not
+/// spawn an autolaunch/SSH command or uncancelable DNS lookup.
+fn socket_path(address: &zbus::Address) -> zbus::Result<std::path::PathBuf> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use zbus::address::transport::{Transport, UnixSocket};
+    match address.transport() {
+        Transport::Unix(unix) => match unix.path() {
+            UnixSocket::File(path) => Ok(path.clone()),
+            UnixSocket::Abstract(name) => {
+                let mut bytes = vec![0];
+                bytes.extend_from_slice(name.as_bytes());
+                // async-io interprets a leading NUL as an abstract name.
+                Ok(std::ffi::OsString::from_vec(bytes).into())
+            }
+            _ => Err(zbus::Error::Unsupported),
+        },
+        _ => Err(zbus::Error::Unsupported),
+    }
+}
+
+fn probe_at<I: zbus::object_server::Interface>(
+    address: &zbus::Address,
+    pending: &mut Option<String>,
+    budget: Duration,
+    interface: I,
+) -> Result<Option<SessionConnection>, String> {
+    let deadline = Instant::now() + budget;
+    let phase = Cell::new("connect");
+    let operation = async {
+        let socket = Arc::new(Async::<UnixStream>::connect(socket_path(address)?).await?);
+        let mut owned = SessionConnection {
+            socket,
+            connection: None,
+        };
+        phase.set("AUTH/Hello/object registration");
+        let conn = zbus::connection::Builder::socket(zbus::connection::socket::BoxedSplit::new(
+            Box::new(owned.socket.clone()),
+            Box::new(owned.socket.clone()),
+        ))
+        .serve_at(OBJECT_PATH, interface)?
+        .build()
+        .await?;
+        if address
+            .guid()
+            .is_some_and(|expected| *expected != **conn.server_guid())
+        {
+            return Err(zbus::Error::Handshake("session bus GUID mismatch".into()));
         }
-        RequestNameReply::Exists | RequestNameReply::InQueue => {
-            let forwarded = match crate::deep_link_qt::take_pending() {
-                Some(url) => conn
-                    .call_method(
+        owned.connection = Some(conn.clone());
+        phase.set("RequestName");
+        // Raw calls avoid proxy property subscriptions and detached cleanup
+        // RPCs. The sole timeout below includes every call and the handshake.
+        let reply = conn
+            .call_method(
+                Some("org.freedesktop.DBus"),
+                "/org/freedesktop/DBus",
+                Some("org.freedesktop.DBus"),
+                "RequestName",
+                &(BUS_NAME, RequestNameFlags::DoNotQueue as u32),
+            )
+            .await?;
+        match reply.body().deserialize::<RequestNameReply>()? {
+            RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(Some(owned)),
+            RequestNameReply::Exists | RequestNameReply::InQueue => {
+                if let Some(url) = pending.as_deref() {
+                    phase.set("OpenUrl");
+                    conn.call_method(
                         Some(BUS_NAME),
                         OBJECT_PATH,
                         Some(IFACE_NAME),
                         "OpenUrl",
                         &url,
                     )
-                    .is_ok(),
-                None => false,
-            };
-            let presented = forwarded
-                || conn
+                    .await?;
+                    // No await after confirmation: no late completion can
+                    // consume a link that the caller has already recovered.
+                    pending.take();
+                    return Ok(None);
+                }
+                phase.set("Present");
+                if conn
                     .call_method(
                         Some(BUS_NAME),
                         OBJECT_PATH,
@@ -97,17 +190,43 @@ fn probe() -> zbus::Result<bool> {
                         "Present",
                         &(),
                     )
-                    .is_ok();
-            if !presented {
-                let _ = conn.call_method(
+                    .await
+                    .is_ok()
+                {
+                    return Ok(None);
+                }
+                phase.set("MPRIS Raise");
+                conn.call_method(
                     Some("org.mpris.MediaPlayer2.com.blitzfc.qbz"),
                     "/org/mpris/MediaPlayer2",
                     Some("org.mpris.MediaPlayer2"),
                     "Raise",
                     &(),
-                );
+                )
+                .await?;
+                Ok(None)
             }
-            Ok(false)
         }
-    }
+    };
+    async_io::block_on(async {
+        // Timer is polled first, including when both futures become ready in
+        // the same turn. Dropping the losing future closes its socket guard.
+        match select(Box::pin(Timer::at(deadline)), Box::pin(operation)).await {
+            Either::Left((_, operation)) => {
+                drop(operation);
+                Err(format!(
+                    "{}: total deadline of {} ms expired",
+                    phase.get(),
+                    budget.as_millis()
+                ))
+            }
+            Either::Right((result, _)) => {
+                result.map_err(|error: zbus::Error| format!("{}: {error}", phase.get()))
+            }
+        }
+    })
 }
+
+#[cfg(test)]
+#[path = "single_instance_tests.rs"]
+mod tests;

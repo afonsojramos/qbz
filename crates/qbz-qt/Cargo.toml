@@ -151,6 +151,7 @@ rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 # Feature unification is per-crate-graph, not per-target: any dependency that
 # turns on zbus/tokio changes the whole binary.
 [target.'cfg(target_os = "linux")'.dependencies]
+async-io = "2"
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
 # Session-bus single-instance guard. Keep the same async-io executor as ksni;
 # enabling zbus/tokio would poison the graph-wide executor choice.
