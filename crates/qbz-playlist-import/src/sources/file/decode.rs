@@ -177,9 +177,9 @@ mod tests {
     #[test]
     fn windows_1252_accents_are_recovered() {
         // "Sigur Rós" in Windows-1252: ó is 0xF3, which is invalid UTF-8 alone.
-        let bytes = b"Sigur R\xF3s";
-        assert!(std::str::from_utf8(bytes).is_err());
-        assert_eq!(decode_text(bytes), "Sigur Rós");
+        let bytes = b"Sigur R\xF3s".to_vec();
+        assert!(std::str::from_utf8(&bytes).is_err());
+        assert_eq!(decode_text(&bytes), "Sigur Rós");
     }
 
     #[test]

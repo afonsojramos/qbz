@@ -1341,12 +1341,6 @@ impl QtQconnectService {
         self.enable_intent.current_token().is_some()
     }
 
-    /// Admit one complete owner-side mutation. The permit must stay alive
-    /// through every await and spawned continuation that can touch owner state.
-    pub fn try_owner_action_permit(&self) -> Option<AuthorityActionPermit> {
-        self.authority.try_owner_action_permit()
-    }
-
     /// Admit the owner observation that will produce an async playback
     /// snapshot, returning its exact authority generation with the permit.
     pub fn try_owner_action_permit_observed(
@@ -1359,14 +1353,6 @@ impl QtQconnectService {
     /// with the transient fence held while a candidate is still fallible.
     pub fn observe_owner_authority(&self) -> OwnerAuthorityObservation {
         self.authority.observe_owner_authority()
-    }
-
-    /// Re-admit only a continuation produced by the exact owner observation.
-    pub fn try_owner_action_permit_exact(
-        &self,
-        token: OwnerAuthorityToken,
-    ) -> Option<AuthorityActionPermit> {
-        self.authority.try_owner_action_permit_exact(token)
     }
 
     /// Preserve already-stamped owner work across a fallible candidate fence.

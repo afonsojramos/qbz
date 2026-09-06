@@ -384,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn the_fingerprint_identifies_the_MEDIUM_not_the_drive() {
+    fn the_fingerprint_identifies_the_medium_not_the_drive() {
         let a = fear_inoculum();
         let mut b = fear_inoculum();
         b.device = PathBuf::from("/dev/sr3");

@@ -429,6 +429,10 @@ mod tests {
             label: None,
             genre: None,
             artist: None,
+            version: None,
+            streamable: None,
+            streamable_at: None,
+            release_date_stream: None,
         }
     }
 
