@@ -1,4 +1,4 @@
-# 2.1.0 — __CODENAME__
+# 2.1.0 — Rebuild Q (You Can (Not) Redo)
 
 This one is a little unusual.
 
@@ -62,13 +62,13 @@ No more convincing macOS that yes, you really did mean to open the application.
 
 ## 4. The bad
 
-The **aarch64 native builds** have unfortunately left some older distributions behind because they don't provide versions of some packages QBZ now depends on.
+The **aarch64 desktop builds** have unfortunately left some older distributions behind. They now require glibc 2.39 or newer: Ubuntu 24.04+, Debian 13+ or equivalent.
 
-That includes Debian-based systems older than Bookworm.
+That excludes Debian 12 and Raspberry Pi OS Bookworm, which ship glibc 2.36.
 
 I haven't found a clean solution to this yet. If someone has one, I would genuinely love to hear it.
 
-This only affects the native `.deb` and AppImage builds. **Flatpak and Snap remain available** on those systems without this problem.
+This affects the aarch64 desktop `.deb`, `.rpm`, AppImage and tarball builds. **Flatpak and Snap are alternatives** where the host supports their runtimes. The headless `qbzd` packages still require only glibc 2.35 on both architectures.
 
 ---
 

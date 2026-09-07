@@ -69,7 +69,7 @@
     </screenshot>
   </screenshots>
   <releases>
-    <release version="2.1.0" date="2026-08-31">
+    <release version="2.1.0" date="2026-09-06">
       <description>
         <p>QBZ 2.1.0 brings the Qt frontend to its first minor release: QConnect grows official LAN pairing parity, casting gets a second hardening round, and playlists, hotkeys and the audio stack all move forward.</p>
         <ul>

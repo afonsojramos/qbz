@@ -19,16 +19,22 @@
 
 # QBZ
 
-QBZ is a free and open source high-fidelity music player for Linux and macOS
-with fully native playback. It is a single native Rust process with a Qt/QML
-interface — no browser engine, no webview — with DAC passthrough, per-track
-sample rate switching, exclusive mode and bit-perfect audio delivery.
+QBZ is a free and open source HiFi music player. Originally built only for
+Linux, it is now also available for macOS and Windows (experimental). The
+application started as a Qobuz client for paying subscribers who wanted to
+listen without the audio quality limits of web browsers. Its strengths were
+DAC passthrough, sending audio directly to the DAC or sound card, and switching
+sample rates for each track, all with a focus on bit-perfect audio delivery.
 
-It plays your Qobuz subscription, your own local files, and your Plex, Jellyfin
-or Subsonic/Navidrome server, through the same interface and the same audio
-pipeline.
+QBZ has always played both your Qobuz subscription and your local files.
+Local playback was initially an extra; it has since become just as capable.
+QBZ also supports self-hosted music through Plex, Jellyfin and
+Subsonic/Navidrome, all through the same interface and the same audio pipeline.
 
-No API keys needed. No telemetry. No tracking. Just music.
+The application requires no API keys, token extraction or anything like that.
+It has zero telemetry, with opt-in integrations for scrobbling, metadata
+enrichment and Discord Rich Presence. QBZ doesn't track you. It just plays
+your music.
 
 ## Contents
 
@@ -62,29 +68,37 @@ No API keys needed. No telemetry. No tracking. Just music.
 
 ## What QBZ is and what it is not
 
-QBZ exists as the player we wish a streaming company would give its users. It
-exists to fill the gap of an official client on Linux, because we don't like
-being second class citizens.
+QBZ exists to fill the gap left by the lack of an official Linux client.
+Although it is available on other platforms, QBZ will always be Linux first.
+I believe Linux users are not second-class citizens, and we deserve software
+that works, looks good and, every now and then, is easy to use.
 
-But it is just as important to understand what QBZ is not, and never will be.
-It is not a web wrapper; I did not just package the web player and "Linuxify"
-it. It is not a download tool, and it never will be. I built QBZ and not TDL,
-SPTFY or DZR because I believe music belongs to the artists, and Qobuz is, so
-far, the fairest option and the one with the best quality. That is why QBZ
-exists.
+But it is just as important to understand what QBZ is not. QBZ is not a
+stream-ripping tool. Its purchase downloader lets you download music you have
+bought on Qobuz, and only your purchases can be downloaded DRM-free. I built
+QBZ rather than TDL, SPTFY, DZR or PPLMSC out of love for music, because I
+believe it belongs to the artists who create it, and because Qobuz is perhaps
+the fairest platform for artists so far.
 
-It will never have a built-in equalizer or DSP, either. The point is to send
-audio to your DAC untouched, bit for bit, and any processing would break that.
-If you want an EQ or effects, add them at the system level, for example with
-EasyEffects on PipeWire or a JACK graph, which make it easy.
+You can keep tracks from the service for offline listening and access them
+through your library. These are protected with QBZ's own encryption and cannot
+be used outside the application. Offline listening remains subject to your
+subscription: if Qobuz reports that it is no longer valid, QBZ allows a 30-day
+grace period from that first invalid response, then removes the cached tracks
+unless the subscription has been validated again.
 
-You can download songs to listen to them offline, but they carry the same locks
-as the official client and the same usage window once your membership expires.
+QBZ will never be an all-in-one audio system with a built-in equalizer,
+spatial filters, DSP or similar processing. The point is to send audio to your
+DAC, or whichever output you prefer, untouched, bit for bit. Any processing
+would break that contract. Of course, you can configure your output so that
+once the music leaves QBZ, it goes wherever you want, including an EQ such as
+EasyEffects. PipeWire and JACK make that easy.
 
-On the technical side: browsers cap audio output at 48 kHz and resample
-everything through WebAudio. QBZ uses a native playback pipeline with direct
-device control, so your DAC receives the original resolution, up to
-24-bit / 192 kHz, with no forced resampling.
+Above all, I'm a software engineer, not an audio engineer. I can't ship
+something when I don't understand how it works. I can't take responsibility
+for an EQ copied from somewhere else or written by an AI model without being
+sure I can test it and verify that it works 100%. I already did that with
+another module, and it didn't go well.
 
 ## Legal and branding
 
@@ -92,11 +106,21 @@ device control, so your DAC receives the original resolution, up to
 - Qobuz is a trademark of Qobuz. QBZ is not affiliated with, endorsed by, or
   certified by Qobuz.
 - **Offline cache** is a temporary playback store for listening without an
-  internet connection while you have a valid subscription. If your subscription
-  becomes invalid, QBZ will remove all cached content after 3 days.
+  internet connection, protected with QBZ's own encryption. It is not a
+  DRM-free download of music from your subscription.
 - **Local library** is a "bring your own music" feature — play your own files
   with bit-perfect audio and the full QBZ interface, no streaming subscription
   required.
+- **SACD images** are user-supplied local files. QBZ does not provide disc
+  images or tools to bypass SACD copy protection.
+- **SACD / DST decoding** uses `dst-decoder` 0.1.2 solely to decode MPEG-4
+  Direct Stream Transfer audio. The crate declares Apache-2.0 and is based
+  on the MPEG-4 DST reference implementation. QBZ includes the
+  [Apache license](licenses/Apache-2.0-dst-decoder.txt),
+  [provenance notice](licenses/dst-decoder-NOTICE.md) and
+  [full upstream MPEG notice](licenses/dst-decoder-upstream-NOTICE.txt),
+  including its patent notice, with its third-party licenses. QBZ does not
+  claim worldwide patent clearance.
 - Qobuz Terms of Service: https://www.qobuz.com/us-en/legal/terms
 
 ## Installation
@@ -155,7 +179,9 @@ sudo apt update && sudo apt install qbz
 > **x86_64:** glibc 2.35+ (Ubuntu 22.04+, Debian 12+, Mint 21+).
 > **arm64 (desktop app):** glibc 2.39+ (Ubuntu 24.04+, Debian 13+) — the Qt
 > arm64 build needs it; Raspberry Pi OS *bookworm* is 2.36, so use `qbzd`
-> there (2.35+, see below). Older releases: Flatpak, Snap, or AppImage.
+> there (2.35+, see below). For older systems, check Flatpak or Snap runtime
+> support. The arm64 AppImage has the same glibc 2.39 minimum as the native
+> packages.
 
 ### RPM (Fedora / openSUSE)
 
