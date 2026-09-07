@@ -118,7 +118,14 @@ def main():
     env, version, fingerprint = cargo_environment(os.environ)
     print(f"[qt-cargo] Qt {version}, SDK {fingerprint}, qmake={env['QMAKE']}",
           file=sys.stderr, flush=True)
-    os.execvpe("cargo", ["cargo", *sys.argv[1:]], env)
+    # subprocess.run, NOT os.execvpe: on Windows os.exec* is emulated (spawn +
+    # terminate) and segfaulted here — the release-windows build died with
+    # "Segmentation fault ... exit code 139" right after this line on
+    # 2026-09-07, while the POSIX Linux/macOS builds using the SAME wrapper
+    # were fine. subprocess is portable and forwards cargo's exit code.
+    cargo = shutil.which("cargo", path=env.get("PATH")) or "cargo"
+    completed = subprocess.run([cargo, *sys.argv[1:]], env=env)
+    sys.exit(completed.returncode)
 
 
 if __name__ == "__main__":
