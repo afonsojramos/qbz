@@ -128,9 +128,22 @@ another module, and it didn't go well.
 
 ### Arch Linux (AUR)
 
+Install the prebuilt packages (recommended):
+
 ```bash
-yay -S qbz-bin    # or paru -S qbz-bin
+yay -S qbz-bin     # desktop player; or: paru -S qbz-bin
+yay -S qbzd-bin    # optional headless daemon; or: paru -S qbzd-bin
 ```
+
+To build from source instead:
+
+```bash
+yay -S qbz         # desktop player; or: paru -S qbz
+yay -S qbzd        # optional headless daemon; or: paru -S qbzd
+```
+
+Pick either the source or `-bin` variant in each pair; both variants provide
+the same package and therefore conflict with each other.
 
 ### Flatpak (Flathub)
 
@@ -186,8 +199,29 @@ sudo apt update && sudo apt install qbz
 
 ### RPM (Fedora / openSUSE)
 
-Download from [Releases](https://github.com/vicrodh/qbz/releases):
-`sudo dnf install ./qbz-*.rpm`
+Add the signed QBZ repository and install with DNF:
+
+```bash
+sudo curl --fail --location \
+  --output /etc/yum.repos.d/qbz.repo \
+  https://vicrodh.github.io/qbz-rpm/qbz.repo
+sudo dnf install qbz       # desktop player, including qbzd
+# or: sudo dnf install qbzd  # headless daemon only
+```
+
+On openSUSE, use the same repository definition with Zypper:
+
+```bash
+sudo curl --fail --location \
+  --output /etc/zypp/repos.d/qbz.repo \
+  https://vicrodh.github.io/qbz-rpm/qbz.repo
+sudo zypper refresh qbz
+sudo zypper install qbz    # or: sudo zypper install qbzd
+```
+
+The signing-key fingerprint is published on the
+[repository landing page](https://vicrodh.github.io/qbz-rpm/). Individual RPM
+files also remain available from [Releases](https://github.com/vicrodh/qbz/releases).
 
 > **x86_64:** glibc 2.35+ (Fedora 36+, openSUSE Leap 15.6+ / Tumbleweed).
 > **arm64 (desktop app):** glibc 2.39+ (Fedora 40+). `qbzd` packages stay at
@@ -202,6 +236,18 @@ emerge media-sound/qbz-bin    # prebuilt binary (recommended)
 # or
 emerge media-sound/qbz        # build from source
 ```
+
+For a headless installation, choose the matching daemon package:
+
+```bash
+emerge media-sound/qbzd-bin   # prebuilt binary (recommended)
+# or
+emerge media-sound/qbzd       # build from source
+```
+
+`qbzd` does not require systemd. The ebuild detects systemd, OpenRC or runit
+and prints the appropriate post-install command; the daemon can generate
+service definitions for all three init systems.
 
 ### NixOS / Nix
 
@@ -258,11 +304,13 @@ brew install --cask afonsojramos/qbz/qbz
 
 You can also download the Apple Silicon or Intel DMG from the
 [signed macOS releases](https://github.com/afonsojramos/qbz-macos/releases/latest).
-These are made from the upstream QBZ application without recompiling it; its
-signature metadata and DMG container are replaced, then notarized by
-[@afonsojramos](https://github.com/afonsojramos). They are not produced or
-endorsed by the upstream project. The mirror publishes the source commit,
-original checksums, and signed checksums for each release; see its
+These builds use the upstream QBZ application without recompiling it:
+[@afonsojramos](https://github.com/afonsojramos) replaces its ad-hoc signature
+and DMG container, then notarizes the result. This community-maintained signing
+and distribution is the recommended way to install QBZ on macOS, and the macOS
+version would likely not exist in its current form without Afonso's work. The
+mirror publishes the source commit, original checksums, and signed checksums
+for each release; see its
 [trust and provenance documentation](https://github.com/afonsojramos/qbz-macos#trust-and-provenance).
 
 **Official upstream alternative — ad-hoc signed, not notarized:** if you prefer
