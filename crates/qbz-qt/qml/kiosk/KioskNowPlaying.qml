@@ -454,12 +454,17 @@ Rectangle {
                 clip: true; cacheBuffer: 0; reuseItems: true; spacing: 2
                 boundsBehavior: Flickable.StopAtBounds
                 delegate: QueueRowLite {
-                    id: queueRow
+                    // id must differ from the upcoming delegate's `queueRow`:
+                    // two delegates sharing an id makes qmllint fail to resolve
+                    // the inline QueueRowLite type in the SECOND one (the
+                    // 2026-09-07 pre-release qmllint gate failure; qmlcachegen
+                    // and the runtime tolerate the collision, qmllint does not).
+                    id: queueRowHist
                     required property var modelData
                     required property int index
                     width: histFlick.width
                     item: modelData
-                    KioskCoverSource { id: cover; remote: queueRow.modelData.artUrl || ""; edge: 44 }
+                    KioskCoverSource { id: cover; remote: queueRowHist.modelData.artUrl || ""; edge: 44 }
                     artPath: cover.source
                     navFocused: root.itemFocused && root.focusedItem === index
                     onPlay: QbzQueue.queuePlayHistory(index)
