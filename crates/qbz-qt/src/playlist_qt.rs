@@ -329,25 +329,19 @@ pub async fn remove_sidecar_row(runtime: &Arc<AppRuntime<LoggingAdapter>>, row_i
     .flatten()
     .unwrap_or_default();
 
-    let removal = match source.as_str() {
-        "local" => match row_id.parse::<i64>() {
-            Ok(id) => SidecarRemoval::Local(id),
-            Err(_) => {
-                log::warn!("[qbz-qt] playlist remove: non-numeric local row id {row_id}");
-                return false;
-            }
-        },
-        "plex" => match crate::local_playlist_qt::local_picker_ref_for_row(row_id)
-            .and_then(|r| r.strip_prefix("plex:").map(str::to_string))
-        {
-            Some(key) => SidecarRemoval::Plex(key),
-            None => {
-                log::warn!("[qbz-qt] playlist remove: no plex key for row {row_id}");
-                return false;
-            }
-        },
-        // Not a sidecar row — the caller must fall through to the Qobuz arm.
-        _ => return false,
+    // Resolved rows carry their ref in the live queue (local_picker_ref_for_row);
+    // an UNAVAILABLE row is absent from the queue, but its display id already
+    // encodes the ref as "<source>:<reference>" (local_playlist_qt::row_to_display).
+    // sidecar_removal() falls back to that, so an unresolved Plex / Jellyfin /
+    // Subsonic sidecar row can still be removed — without the fallback
+    // "Remove from playlist" silently no-opped on a dead sidecar row
+    // (2026-09-07 release blocker: a mixed Qobuz playlist whose Plex track no
+    // longer resolves rendered "Unavailable track" and could not be deleted).
+    let queue_ref = crate::local_playlist_qt::local_picker_ref_for_row(row_id);
+    let Some(removal) = sidecar_removal(&source, row_id, queue_ref) else {
+        // Not a sidecar row (Qobuz) — the caller must fall through to the Qobuz
+        // arm; or a sidecar row whose ref could not be derived at all.
+        return false;
     };
 
     let _ = tokio::task::spawn_blocking(move || {
@@ -358,6 +352,9 @@ pub async fn remove_sidecar_row(runtime: &Arc<AppRuntime<LoggingAdapter>>, row_i
                 }
                 SidecarRemoval::Plex(key) => {
                     db.remove_plex_track_from_playlist(playlist_id, key)?
+                }
+                SidecarRemoval::Remote(source, item) => {
+                    db.remove_remote_track_from_playlist(playlist_id, source, item)?
                 }
             }
             Ok(())
@@ -374,6 +371,83 @@ pub async fn remove_sidecar_row(runtime: &Arc<AppRuntime<LoggingAdapter>>, row_i
 enum SidecarRemoval {
     Local(i64),
     Plex(String),
+    /// A Jellyfin / Subsonic sidecar row: (source, server item id).
+    Remote(String, String),
+}
+
+/// Resolve a mixed-playlist sidecar row to its removal target.
+///
+/// `queue_ref` is `local_picker_ref_for_row(row_id)` — present for a RESOLVED
+/// row (it has a live queue entry), `None` for an UNAVAILABLE one. The display
+/// `row_id` of an unavailable row already encodes the ref as
+/// "<source>:<reference>" (`local_playlist_qt::row_to_display`), so it is the
+/// fallback that lets a dead Plex/Jellyfin/Subsonic row be removed. Returns
+/// `None` for a Qobuz row (the caller falls through to the Qobuz arm) or when
+/// no ref can be derived.
+fn sidecar_removal(source: &str, row_id: &str, queue_ref: Option<String>) -> Option<SidecarRemoval> {
+    let strip = |prefix: &str| {
+        queue_ref
+            .as_deref()
+            .and_then(|r| r.strip_prefix(prefix))
+            .or_else(|| row_id.strip_prefix(prefix))
+            .map(str::to_string)
+    };
+    match source {
+        // A resolved local sidecar row's display id IS its library row id; an
+        // unresolved local ref never reaches the sidecar (the SQL JOIN drops
+        // it), so a non-numeric id here is genuinely not removable.
+        "local" => row_id.parse::<i64>().ok().map(SidecarRemoval::Local),
+        "plex" => strip("plex:").map(SidecarRemoval::Plex),
+        "jellyfin" => strip("jellyfin:").map(|i| SidecarRemoval::Remote("jellyfin".into(), i)),
+        "subsonic" => strip("subsonic:").map(|i| SidecarRemoval::Remote("subsonic".into(), i)),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod sidecar_removal_tests {
+    use super::{sidecar_removal, SidecarRemoval};
+
+    #[test]
+    fn resolved_plex_uses_the_queue_ref() {
+        assert!(matches!(
+            sidecar_removal("plex", "plex:RESOLVED", Some("plex:RESOLVED".into())),
+            Some(SidecarRemoval::Plex(k)) if k == "RESOLVED"
+        ));
+    }
+
+    #[test]
+    fn unavailable_plex_falls_back_to_the_display_id() {
+        // The 2026-09-07 blocker: no queue entry, but the row id carries the key.
+        assert!(matches!(
+            sidecar_removal("plex", "plex:71465", None),
+            Some(SidecarRemoval::Plex(k)) if k == "71465"
+        ));
+    }
+
+    #[test]
+    fn unavailable_remote_falls_back_to_the_display_id() {
+        assert!(matches!(
+            sidecar_removal("jellyfin", "jellyfin:abc", None),
+            Some(SidecarRemoval::Remote(s, i)) if s == "jellyfin" && i == "abc"
+        ));
+        assert!(matches!(
+            sidecar_removal("subsonic", "subsonic:xyz", None),
+            Some(SidecarRemoval::Remote(s, i)) if s == "subsonic" && i == "xyz"
+        ));
+    }
+
+    #[test]
+    fn local_sidecar_is_the_numeric_row_id() {
+        assert!(matches!(sidecar_removal("local", "4321", None), Some(SidecarRemoval::Local(4321))));
+        assert!(sidecar_removal("local", "local:nope", None).is_none());
+    }
+
+    #[test]
+    fn qobuz_row_is_not_a_sidecar() {
+        assert!(sidecar_removal("qobuz", "123", None).is_none());
+        assert!(sidecar_removal("", "123", None).is_none());
+    }
 }
 
 /// Tauri's absolute-slot interleave — the `displayTracks` contract. Port of
