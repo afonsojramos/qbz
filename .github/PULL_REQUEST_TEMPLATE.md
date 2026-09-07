@@ -11,9 +11,9 @@
 <!--
 Required disclosure: write "None" if no LLM was used. Otherwise list every
 provider + exact model/version available to you and what each model did
-(diagnosis, implementation, tests, review, etc.). Product/client names such as
-"Claude", "ChatGPT", "Codex" or "Copilot" alone are not specific enough.
-Prompt transcripts are not required.
+(diagnosis, implementation, tests, review, etc.). A product/client/provider
+name alone is not specific enough when your tool displays a model identifier.
+There is no predefined model list. Prompt transcripts are not required.
 -->
 
 - **Models:**

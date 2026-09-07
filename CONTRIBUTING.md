@@ -119,17 +119,18 @@ Prefer:
 
 LLM-assisted contributions are welcome. If you used one or more models, the
 PR body must identify each model as precisely as the tool exposes it and state
-what role it played. A product or client name alone — for example, "Claude",
-"ChatGPT", "Codex" or "Copilot" — is not enough when a model name or version
-is available.
+what role it played. A product, client or provider name alone is not enough
+when the tool shows a more specific model name or version. There is
+deliberately no predefined model list to keep current: report the identifier
+shown by the tool at the time of the contribution.
 
 List different models separately when they handled different stages, such as
-diagnosis, implementation, tests or review. For example:
+diagnosis, implementation, tests or review. Use one line per model:
 
 ```text
-- Anthropic Claude Sonnet: explored possible fixes
-- Fable 5.1: diagnosed the root cause
-- Anthropic Claude Opus: implemented and reviewed the patch
+- <provider and model/version shown by the tool>: diagnosis
+- <provider and model/version shown by the tool>: implementation and tests
+- <provider and model/version shown by the tool>: review
 ```
 
 If the exact model is not shown by the tool, say that instead of guessing.
