@@ -788,6 +788,15 @@ If QBZ fails to start, try `QBZ_RENDERER=software qbz` first.
   down to stereo (ITU-R BS.775, LFE dropped); 7.1 and above are not supported
   and the file will not load. SACD discs play their stereo area.
 
+## Supporting QBZ
+
+QBZ is deeply grateful for every sponsor and supporter. There is no premium
+edition and no sponsor-only functionality; your support helps sustain the
+project while the same complete app remains available to everyone. Starting
+with QBZ 2.1.0, public sponsors and supporters are thanked by name in the
+app's **About** dialog. Private or anonymous support remains unnamed — and is
+just as appreciated.
+
 ## Reporting a problem
 
 Having trouble with the app? Please report it in the
