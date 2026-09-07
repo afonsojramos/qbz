@@ -39,6 +39,7 @@ import "../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     // Transparent while the ambient background is active — the frosted content
     // panel shows through (HomeView.qml:53 and its siblings).
@@ -82,10 +83,10 @@ Rectangle {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: 92
+        height: root.kioskHost ? 64 : 92
         Text {
-            x: 32
-            y: 23
+            x: root.kioskHost ? 16 : 32
+            y: root.kioskHost ? 14 : 23
             text: QbzSession.tr("Library folders", QbzSession.trRev)
             color: theme.textPrimary
             font.pixelSize: theme.fontTitle
@@ -109,12 +110,13 @@ Rectangle {
 
             Column {
                 id: col
-                x: 32
+                x: root.kioskHost ? 16 : 32
                 y: 4
-                width: flick.width - 72
+                width: flick.width - (root.kioskHost ? 32 : 72)
                 spacing: 4
 
                 LibraryFolderTable {
+                    kioskHost: root.kioskHost
                     width: parent.width
                     lib: root.lib
                 }
@@ -135,5 +137,5 @@ Rectangle {
     // The per-folder settings modal. It must overlay the whole view, so it is
     // declared last and outside the Flickable — the same reasoning, and the
     // same mount, SettingsView.qml documents for its own copy.
-    LibFolderEditModal { doc: root.doc }
+    LibFolderEditModal { kioskHost: root.kioskHost; doc: root.doc }
 }

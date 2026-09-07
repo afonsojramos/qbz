@@ -52,10 +52,10 @@ ApplicationWindow {
     // Slint skips the clamp on exactly that condition instead of fighting the
     // WM over an impossible minimum. A screen we cannot resolve degrades to
     // "no clamp", like Slint's monitor query returning None.
-    width: window.bootScreenWidth >= QbzShell.windowMinWidth
+    width: window.bootScreenWidth >= window.minimumWidth
            ? Math.min(QbzShell.windowWidth, window.bootScreenWidth)
            : QbzShell.windowWidth
-    height: window.bootScreenHeight >= QbzShell.windowMinHeight
+    height: window.bootScreenHeight >= window.minimumHeight
             ? Math.min(QbzShell.windowHeight, window.bootScreenHeight)
             : QbzShell.windowHeight
     // Screen metrics for that clamp, read from `window.screen` (the window's
@@ -67,8 +67,8 @@ ApplicationWindow {
     // app.slint:52-53 (`min-width: 940px / UiScale.factor`), carried through the
     // bridge. The old 800x600 let the window go below Slint's floor, which is
     // exactly where the responsive tiers stop being comparable.
-    minimumWidth: QbzShell.windowMinWidth
-    minimumHeight: QbzShell.windowMinHeight
+    minimumWidth: QbzShell.kioskProfile ? 800 : QbzShell.windowMinWidth
+    minimumHeight: QbzShell.kioskProfile ? 480 : QbzShell.windowMinHeight
     visible: true
     // Last session's maximized state, applied DECLARATIVELY so it is part of
     // the first mapped frame: QQuickWindowQmlImpl defers the show until
@@ -1071,11 +1071,18 @@ ApplicationWindow {
         // is the documented failure mode for a missing route (nav_qt.rs:14-16)
         // and is what a missing KioskShell.qml would look like.
         source: QbzSession.screen === "login"
-                ? "LoginScreen.qml"
+                ? (QbzShell.kioskProfile ? "" : "LoginScreen.qml")
                 : (QbzSession.screen === "shell" ? "shell/AppShell.qml"
                    : (QbzSession.screen === "kiosk" ? "shell/KioskShell.qml" : ""))
         // Hand the host window down for drag/maximize/resize (custom chrome).
         onLoaded: if (screenLoader.item) screenLoader.item.hostWindow = window
+    }
+
+    // The appliance login opts into compact scrollable layout at construction.
+    Loader {
+        anchors.fill: parent
+        active: QbzSession.screen === "login" && QbzShell.kioskProfile
+        sourceComponent: LoginScreen { kioskHost: true; hostWindow: window }
     }
 
     // Compact per-track metadata editor. It lives above the routed shell so a

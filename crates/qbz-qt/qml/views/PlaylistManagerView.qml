@@ -50,6 +50,7 @@ import "playlistmanager"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     // Round to the AppShell content-frame bezel: QML clips are rectangular, so
     // the frame's rounding never reaches the view — the view's own fill must
@@ -104,8 +105,8 @@ Rectangle {
 
     // ---- geometry --------------------------------------------------------
     readonly property int contentW: Math.max(0, pmList.width - 64)
-    readonly property int gridCols: Math.max(1, Math.floor((root.contentW + 16) / 176))
-    readonly property int cardH: root.canReorder ? 250 : 220
+    readonly property int gridCols: Math.max(1, Math.floor((root.contentW + 16) / (root.kioskHost ? 216 : 176)))
+    readonly property int cardH: root.kioskHost ? (root.canReorder ? 320 : 270) : (root.canReorder ? 250 : 220)
     readonly property int rowsInBody:
         root.viewMode === "tree" ? root.tree.length : root.playlists.length
     readonly property int rowCount:
@@ -130,7 +131,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        height: 56
+        height: root.kioskHost ? 64 : 56
 
         // The reference paints this bar an opaque `surface-main` while the view
         // root goes transparent (`:1089`, `:1097`) — under the dynamic
@@ -153,6 +154,7 @@ Rectangle {
         // views/PlaylistBrowseView.qml:143 chose for the byte-identical Slint
         // header, so the port's two 56 px headers align.
         Text {
+            visible: !root.kioskHost
             x: 48
             y: 25 - height / 2
             width: Math.max(0, tools.x - 48 - 16)
@@ -163,8 +165,19 @@ Rectangle {
             elide: Text.ElideRight
         }
 
+        Row {
+            visible: root.kioskHost
+            x: 16
+            height: 64
+            spacing: 12
+            Text { width: 190; height: 64; text: QbzSession.tr("Playlist manager",QbzSession.trRev); color: theme.textPrimary; font.pixelSize: 20; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+            QbzLineEdit { kioskHost: true; width: Math.max(120,root.width-306); anchors.verticalCenter: parent.verticalCenter; searchMode: true; text: root.searchSeed; placeholder: QbzSession.tr("Search playlists…",QbzSession.trRev); onEdited: function(v) { QbzPlaylistManager.searchChanged(v) } }
+            SettingsButton { id: kioskActions; kioskHost: true; minWidth: 64; btnHeight: 64; text: "⋯"; onClicked: kioskMenu.openBelowRight(kioskActions) }
+        }
+
         PmToolbar {
             id: tools
+            visible: !root.kioskHost
             x: Math.max(0, parent.width - width - 32)
             y: 25 - height / 2
             searchSeed: root.searchSeed
@@ -173,6 +186,36 @@ Rectangle {
             sortAsc: root.sortAsc
             viewMode: root.viewMode
             folderMode: root.folderMode
+        }
+    }
+
+    CardMenu {
+        id: kioskMenu
+        kioskHost: root.kioskHost
+        menuWidth: Math.min(root.width-24,320)
+        entries: [
+            {label: QbzSession.tr("Import",QbzSession.trRev),action:"import"},
+            {label: QbzSession.tr("New folder",QbzSession.trRev),action:"new-folder"},
+            {label: QbzSession.tr("Folders",QbzSession.trRev),action:"folders"},
+            {label: QbzSession.tr("Grid",QbzSession.trRev),action:"view:grid"},
+            {label: QbzSession.tr("List",QbzSession.trRev),action:"view:list"},
+            {label: QbzSession.tr("Tree",QbzSession.trRev),action:"view:tree"},
+            {label: QbzSession.tr("All",QbzSession.trRev),action:"filter:all"},
+            {label: QbzSession.tr("Visible",QbzSession.trRev),action:"filter:visible"},
+            {label: QbzSession.tr("Hidden",QbzSession.trRev),action:"filter:hidden"},
+            {label: QbzSession.tr("Name",QbzSession.trRev),action:"sort:name"},
+            {label: QbzSession.tr("Tracks",QbzSession.trRev),action:"sort:tracks"},
+            {label: QbzSession.tr("Recent",QbzSession.trRev),action:"sort:recent"},
+            {label: QbzSession.tr("Play Count",QbzSession.trRev),action:"sort:playcount"},
+            {label: QbzSession.tr("Custom",QbzSession.trRev),action:"sort:custom"}
+        ]
+        onPicked: function(a) {
+            if(a==="import") QbzPlaylistImport.open()
+            else if(a==="new-folder") QbzFolderEdit.openNewFolder()
+            else if(a==="folders") QbzPlaylistManager.toggleFolderMode()
+            else if(a.indexOf("view:")===0) QbzPlaylistManager.setViewMode(a.slice(5))
+            else if(a.indexOf("filter:")===0) QbzPlaylistManager.setFilter(a.slice(7))
+            else if(a.indexOf("sort:")===0) QbzPlaylistManager.setSort(a.slice(5))
         }
     }
 
@@ -191,7 +234,7 @@ Rectangle {
             boundsBehavior: Flickable.StopAtBounds
             spacing: 0
             // ~2 grid rows of pre-instantiation past the viewport.
-            cacheBuffer: 400
+            cacheBuffer: root.kioskHost ? 128 : 400
             reuseItems: true
 
             // An INT model in all three modes: the delegates read
@@ -201,6 +244,8 @@ Rectangle {
             model: root.rowCount
 
             header: PmPageHead {
+                kioskHost: root.kioskHost
+                viewport: pmList
                 width: pmList.width
                 loading: QbzPlaylistManager.pmLoading
                 folders: root.folders
@@ -285,6 +330,7 @@ Rectangle {
                     model: cell.slice
 
                     delegate: PmGridCard {
+                        kioskHost: root.kioskHost
                         required property var modelData
                         required property int index
 
@@ -311,9 +357,10 @@ Rectangle {
             readonly property var entry: root.playlists[lrow.index] || ({})
 
             width: pmList.width
-            height: 68
+            height: root.kioskHost && root.canReorder ? 92 : 68
 
             PmListRow {
+                kioskHost: root.kioskHost
                 x: 32
                 width: root.contentW
                 item: lrow.entry
@@ -345,12 +392,12 @@ Rectangle {
             readonly property bool isFolder: trow.entry.kind === "folder"
 
             width: pmList.width
-            height: (trow.isFolder ? 44 : 40) + 2
+            height: (root.kioskHost ? 64 : (trow.isFolder ? 44 : 40)) + 2
 
             Loader {
                 x: 32
                 width: root.contentW
-                height: trow.isFolder ? 44 : 40
+                height: root.kioskHost ? 64 : (trow.isFolder ? 44 : 40)
                 sourceComponent: trow.isFolder ? treeFolderArm : treePlaylistArm
             }
 
@@ -358,6 +405,7 @@ Rectangle {
                 id: treeFolderArm
 
                 PmTreeFolderRow {
+                    kioskHost: root.kioskHost
                     folder: trow.entry.folder || ({})
                     expanded: trow.entry.expanded === true
                 }
@@ -366,6 +414,7 @@ Rectangle {
                 id: treePlaylistArm
 
                 PmTreePlaylistRow {
+                    kioskHost: root.kioskHost
                     item: trow.entry.playlist || ({})
                     indent: trow.entry.indent === true
                 }
@@ -379,6 +428,7 @@ Rectangle {
     // own Popup.
     PmFolderMenu {
         id: folderMenu
+        kioskHost: root.kioskHost
         folders: root.folders
     }
 }

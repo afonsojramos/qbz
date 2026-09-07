@@ -30,9 +30,11 @@ import com.blitzfc.qbz
 import "../cards"
 import "../controls"
 import "../theme"
+import "../assets/kiosk-art.js" as ArtPolicy
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     color: ambientOn ? "transparent" : theme.surfaceMain
     readonly property bool ambientOn: theme.ambientOn
@@ -51,8 +53,8 @@ Rectangle {
     readonly property var tags: doc.tags || []
     readonly property string selectedTag: doc.selectedTag || ""
     readonly property string query: doc.query || ""
-    readonly property string viewMode: doc.viewMode || "grid"
-    readonly property int headerH: tags.length > 0 ? 92 : 56
+    readonly property string viewMode: root.kioskHost ? "list" : (doc.viewMode || "grid")
+    readonly property int headerH: root.kioskHost ? (tags.length > 0 ? 108 : 64) : (tags.length > 0 ? 92 : 56)
 
     // The playlist collection is custom (mixed own-art / collage cards), so
     // it owns the same append-only fade AlbumCollection provides to album
@@ -135,7 +137,7 @@ Rectangle {
         signal clicked()
 
         width: frRow.width
-        height: 22
+        height: root.kioskHost ? 44 : 22
 
         Row {
             id: frRow
@@ -189,7 +191,7 @@ Rectangle {
         // --- Fixed 56px header -------------------------------------------
         Item {
             width: parent.width
-            height: 56
+            height: root.kioskHost ? 64 : 56
 
             Rectangle {
                 anchors.fill: parent
@@ -210,7 +212,7 @@ Rectangle {
 
             Text {
                 x: 48
-                y: 25 - height / 2
+                y: (root.kioskHost ? 32 : 25) - height / 2
                 width: Math.max(0, plTools.x - 48 - 16)
                 text: root.doc.title || ""
                 color: theme.textPrimary
@@ -222,10 +224,11 @@ Rectangle {
             Row {
                 id: plTools
                 x: parent.width - width - 32
-                y: 25 - height / 2
+                y: (root.kioskHost ? 32 : 25) - height / 2
                 spacing: 8
 
                 QbzLineEdit {
+                    kioskHost: root.kioskHost
                     searchMode: true
                     width: 200
                     placeholder: QbzSession.tr("Search…", QbzSession.trRev)
@@ -233,10 +236,12 @@ Rectangle {
                     onEdited: function (v) { QbzHome.playlistBrowseSearch(v) }
                 }
                 BrowseGenreButton {
+                    btnHeight: root.kioskHost ? 44 : 34
                     context: "discover"
                     onClicked: genrePopup.toggle()
                 }
                 ViewModeToggle {
+                    visible: !root.kioskHost
                     mode: root.viewMode
                     onSetMode: function (m) { QbzHome.playlistBrowseSetViewMode(m) }
                 }
@@ -247,7 +252,7 @@ Rectangle {
         Item {
             visible: root.tags.length > 0
             width: parent.width
-            height: visible ? 36 : 0
+            height: visible ? (root.kioskHost ? 44 : 36) : 0
 
             Rectangle {
                 anchors.fill: parent
@@ -263,7 +268,7 @@ Rectangle {
                 boundsBehavior: Flickable.StopAtBounds
                 Row {
                     id: tagRow
-                    y: 7
+                    y: root.kioskHost ? 0 : 7
                     spacing: 16
                     FilterRadio {
                         label: QbzSession.tr("All", QbzSession.trRev)
@@ -352,8 +357,9 @@ Rectangle {
                         // Repeater model is only the sampled slice. This avoids
                         // both the old card cost and one Loader shell per
                         // off-screen result. The list arm uses the same band.
-                        property int bandFirst: 0
-                        property int bandLast: 0
+                        property var band: ({first: 0, last: 0})
+                        readonly property int bandFirst: band.first
+                        readonly property int bandLast: band.last
                         function sampleBand() {
                             if (plGrid.columns <= 0 || !plGrid.visible)
                                 return
@@ -362,8 +368,8 @@ Rectangle {
                                                  : plGrid.cardH + plGrid.gap
                             var top = flick.contentY - plGrid.y
                             var h = flick.height
-                            plGrid.bandFirst = Math.max(0, Math.floor((top - 2 * h) / pitch))
-                            plGrid.bandLast = Math.max(0, Math.ceil((top + 3 * h) / pitch))
+                            plGrid.band = {first: Math.max(0, Math.floor((top - (root.kioskHost ? pitch : 2 * h)) / pitch)),
+                                last: Math.max(0, Math.ceil((top + (root.kioskHost ? h : 3 * h)) / pitch))}
                         }
 
                         function refreshBand() {
@@ -372,6 +378,7 @@ Rectangle {
                         }
 
                         function ensureBandCoverage() {
+                            if (root.kioskHost) { plGrid.refreshBand(); return }
                             if (!plGrid.visible || plGrid.columns <= 0)
                                 return
                             var listMode = root.viewMode === "list"
@@ -386,7 +393,7 @@ Rectangle {
                                 return
                             var visibleFirst = Math.max(0, Math.floor(top / pitch))
                             var visibleLast = Math.max(0, Math.ceil((top + h) / pitch))
-                            var innerRunway = Math.max(1, Math.ceil(h / pitch))
+                            var innerRunway = root.kioskHost ? 1 : Math.max(1, Math.ceil(h / pitch))
                             if (visibleFirst < plGrid.bandFirst
                                     || visibleLast > plGrid.bandLast
                                     || (visibleFirst > innerRunway
@@ -404,10 +411,14 @@ Rectangle {
                         // republish rebuilt every delegate on arrival.
                         property var artMap: ({})
                         readonly property var _artAsked: ({ seen: ({}) })
+                        function artKey(m) {
+                            var u = m.artUrl || ""
+                            return root.kioskHost ? ArtPolicy.sizedUrl(u, Math.ceil(44 * Screen.devicePixelRatio)) : u
+                        }
                         function artOf(m) {
                             if (!m)
                                 return ""
-                            var u = m.artUrl || ""
+                            var u = plGrid.artKey(m)
                             if (u !== "" && plGrid.artMap[u])
                                 return plGrid.artMap[u]
                             return m.artPath || ""
@@ -425,7 +436,7 @@ Rectangle {
                                 var it = root.items[i]
                                 if (!it)
                                     continue
-                                var u = it.artUrl || ""
+                                var u = plGrid.artKey(it)
                                 if (u === "" || (it.artPath || "") !== ""
                                     || plGrid.artMap[u] || asked[u] === true)
                                     continue
@@ -465,7 +476,7 @@ Rectangle {
                         readonly property int cardW: 200
                         readonly property int cardH: 246
                         readonly property int gap: 24
-                        readonly property int listH: 60
+                        readonly property int listH: root.kioskHost ? 64 : 60
                         readonly property int listGap: 2
                         readonly property int columns: Math.max(
                             1, Math.floor((width + gap) / (cardW + gap)))
@@ -528,8 +539,9 @@ Rectangle {
 
                         Repeater {
                             model: root.viewMode === "list"
-                                ? Math.max(0, plGrid.listTo - plGrid.listFrom) : 0
+                                ? Math.max(0, Math.min(root.items.length, plGrid.band.last + 1) - Math.min(root.items.length, plGrid.band.first)) : 0
                             delegate: PlaylistListRow {
+                                kioskHost: root.kioskHost
                                 required property int index
                                 readonly property int globalIndex: plGrid.listFrom + index
                                 readonly property var rowData: root.items[globalIndex] || ({})
@@ -555,7 +567,7 @@ Rectangle {
                         QbzLoadMore {
                             id: loadMore
                             width: parent.width
-                            buttonHeight: 32
+                            buttonHeight: root.kioskHost ? 64 : 32
                             busy: QbzHome.playlistBrowseLoadingMore
                             skeleton: root.viewMode === "list" ? "rows" : "cards"
                             // Playlist grid pitch: 200x246 + 24px gutter.

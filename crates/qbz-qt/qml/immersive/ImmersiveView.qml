@@ -791,4 +791,32 @@ Item {
         anchors.fill: parent
         accent: QbzShell.ambientAccent
     }
+    // Appliance exit never follows the auto-hiding chrome. The existing
+    // close path retains fullscreen and restores shell focus via preKiosk.
+    Rectangle {
+        visible: root.preKiosk
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.margins: 12
+        width: 64
+        height: 64
+        radius: 8
+        color: "#171717"
+        border.color: "#ffffff"
+        border.width: 2
+        z: 3001
+        activeFocusOnTab: visible
+        Accessible.role: Accessible.Button
+        Accessible.name: QbzSession.tr("Close", QbzSession.trRev)
+        Accessible.onPressAction: QbzImmersive.open = false
+        QbzIcon { anchors.centerIn: parent; width: 32; height: 32; name: "x"; tintName: "primary" }
+        Keys.onPressed: function (event) {
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
+                QbzImmersive.open = false
+                event.accepted = true
+            }
+        }
+        MouseArea { anchors.fill: parent; onClicked: QbzImmersive.open = false }
+    }
+
 }

@@ -1158,6 +1158,9 @@ fn apply_hero_mosaic(d: &mut DetailDoc, c: &MixtapeCollection) {
 /// Resolve every hero cell + row cover through the disk cache, returning the
 /// urls still missing (deduped, non-empty).
 fn attach_artwork() -> Vec<String> {
+    if crate::kiosk_profile_qt::active() {
+        return Vec::new();
+    }
     with_doc(|d| {
         // The custom cover was already resolved through `cached_path` in
         // `apply` (it is a local file, never a download).
@@ -1208,6 +1211,59 @@ fn attach_artwork() -> Vec<String> {
         }
         missing
     })
+}
+
+pub(crate) fn kiosk_detail_artwork(first: i32, last: i32, px: i32) {
+    if !crate::kiosk_profile_qt::active() || first < 0 || last < first {
+        return;
+    }
+    let (id, jobs) = with_doc(|d| {
+        (
+            d.id.clone(),
+            d.items
+                .iter()
+                .skip(first as usize)
+                .take((last - first + 1).min(128) as usize)
+                .filter(|r| !r.art_url.is_empty())
+                .map(|r| {
+                    (
+                        r.position,
+                        r.source_item_id.clone(),
+                        crate::myqbz_qt::kiosk_art_url(&r.art_url, px),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    });
+    crate::spawn(async move {
+        crate::artwork_qt::download_missing(jobs.iter().map(|j| j.2.clone()).collect()).await;
+        if !crate::kiosk_profile_qt::active() {
+            return;
+        }
+        let doc = with_doc(|d| {
+            if d.id != id {
+                return None;
+            }
+            let mut changed = false;
+            for (position, item_id, url) in jobs {
+                if let Some(row) = d
+                    .items
+                    .iter_mut()
+                    .find(|r| r.position == position && r.source_item_id == item_id)
+                {
+                    let path = crate::artwork_qt::cached_path(&url);
+                    if !path.is_empty() && row.art_path != path {
+                        row.art_path = path;
+                        changed = true;
+                    }
+                }
+            }
+            changed.then(|| d.clone())
+        });
+        if let Some(doc) = doc {
+            publish(&doc);
+        }
+    });
 }
 
 /// ONE background download pass, then ONE republish (T17 — never republish per
@@ -1636,7 +1692,7 @@ fn apply_resolved(item: &MixtapeCollectionItem, resolved: ResolvedItem, collecti
         (patches, backfill)
     });
     publish_rows(collection_id, patches);
-    if let Some(url) = backfill {
+    if let Some(url) = backfill.filter(|_| !crate::kiosk_profile_qt::active()) {
         crate::spawn(async move {
             crate::artwork_qt::download_missing(vec![url]).await;
             refresh_artwork_paths();
@@ -1695,8 +1751,7 @@ fn resolve_items(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 let resolved = match resolved {
                     Some(resolved) => resolved,
                     None => {
-                        let tracks =
-                            crate::myqbz_play_qt::fetch_item_tracks(&runtime, &item).await;
+                        let tracks = crate::myqbz_play_qt::fetch_item_tracks(&runtime, &item).await;
                         resolve_from_tracks(&item, &tracks)
                     }
                 };
@@ -1719,11 +1774,10 @@ fn resolve_items(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         }
         if !repairs.is_empty() {
             let id = collection_id.clone();
-            let repaired = tokio::task::spawn_blocking(move || {
-                backfill_resolved_artwork(&id, &repairs)
-            })
-            .await
-            .unwrap_or_default();
+            let repaired =
+                tokio::task::spawn_blocking(move || backfill_resolved_artwork(&id, &repairs))
+                    .await
+                    .unwrap_or_default();
             if repaired > 0 {
                 // The index cards keep item snapshots in their mosaic cache.
                 // One reload after the whole resolve wave makes the repair
@@ -2347,7 +2401,8 @@ pub(crate) fn bulk_action(id: String) {
             }
             crate::spawn(async move {
                 let runtime = crate::app();
-                let ids = crate::myqbz_play_qt::resolve_bulk_qobuz_track_ids(&runtime, &items).await;
+                let ids =
+                    crate::myqbz_play_qt::resolve_bulk_qobuz_track_ids(&runtime, &items).await;
                 if ids.is_empty() {
                     crate::toast_qt::error(qbz_i18n::t("No tracks to add"));
                     return;

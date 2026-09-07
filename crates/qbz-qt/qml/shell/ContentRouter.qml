@@ -1,47 +1,48 @@
-// Content router — the ONE view-mount chain, shared by BOTH shells
-// (2026-08-02 kiosk-port contract §4.2, divergence D3).
-//
-// The Slint kiosk's own content block is a VERBATIM copy of AppShell's, and
-// KioskShell.slint:10-17 declares that copy to be temporary debt whose named
-// follow-up is exactly this extraction. So the chain lives here once:
-// AppShell.qml mounts it with `kiosk: false`, KioskShell.qml with
-// `kiosk: true`, and the route -> file mapping is stated in a single place.
-//
-// This file MUST stay in qml/shell/: every `source` below is a relative path
-// resolved against this document's directory (`../views/…`, `../settings/…`,
-// `../kiosk/…`). Moving it silently breaks all of them.
-//
-// MOUNT PLUMBING ONLY (D3 guard). No view component is modified by the
-// existence of this file, and the desktop chain below is the AppShell chain it
-// replaced — same route ids, same files, same order, same comments.
-//
-// KIOSK OVERRIDES — EIGHT routes, and only these eight, resolve to a kiosk
-// view instead (KioskShell.slint:361-608 is the authority):
-//
-//     home       -> ../kiosk/KioskDiscover.qml       (:367)
-//     album      -> ../kiosk/KioskAlbum.qml          (:402)
-//     artist     -> ../kiosk/KioskArtist.qml         (:416)
-//     library    -> ../kiosk/KioskLibrary.qml        (:481, ContentView.favorites)
-//     local      -> ../kiosk/KioskLocalLibrary.qml   (:526, ContentView.local-library)
-//     mixtapes   -> ../kiosk/KioskMyQBZ.qml          (:512)
-//     collections-> ../kiosk/KioskMyQBZ.qml          (:517)
-//     search     -> ../kiosk/KioskSearch.qml         (:589)
-//     nowplaying -> ../kiosk/KioskNowPlaying.qml     (:598) — KIOSK-ONLY route
-//
-// Every OTHER route mounts the SAME desktop view in both shells — that is the
-// whole point of sharing the router, and KioskShell.slint:381-586 confirms the
-// kiosk re-hosts the desktop components for them.
+// Shared route-to-view mapping for Desktop and Kiosk.
+// Kiosk-specific views and explicit kioskHost initial properties implement
+// the 2026-09-07 hardening contract; Desktop retains its existing route files.
+// Keep this file in qml/shell: paths are relative to this directory.
 
 import QtQuick
 import QtQuick.Window
 import com.blitzfc.qbz
 import "../controls"
+import "../kiosk"
 
 Item {
     id: root
 
     // false = desktop shell (AppShell), true = kiosk shell (KioskShell).
     property bool kiosk: false
+    // Each shared view declares kioskHost:false; only this shell opts in.
+    readonly property var kioskHostRoutes: [
+        "settings", "metadataeditor", "purchases", "purchase-album",
+        "queue-view", "offlinemanager", "libraryfolders", "blacklist",
+        "recentalbums", "mostplayedalbums", "label", "labelreleases",
+        "artistreleases", "awardalbums", "discoverbrowse", "playlistbrowse",
+        "playlistmanager", "musician", "scene", "discobuilder",
+        "award", "mix"
+    ]
+
+
+    // Capture only the explicit live tab when switching into Kiosk. The
+    // ordinary desktop mount and navigation path do not consume this seam.
+    Connections {
+        target: QbzShell
+        function onKioskProfileChanged() {
+            if (!QbzShell.kioskProfile || root.kiosk || !viewLoader.item) return
+            var item = viewLoader.item
+            if (QbzShell.currentView === "search" && typeof item.tab === "number") {
+                QbzShell.reportNavState("search", JSON.stringify({
+                    activeTab: String(item.tab), query: item.query || ""
+                }))
+            } else if (typeof item.activeTab === "string") {
+                var state = typeof item.navigationStateJson === "string"
+                    ? item.navigationStateJson : JSON.stringify({activeTab: item.activeTab})
+                QbzShell.reportNavState(QbzShell.currentView, state)
+            }
+        }
+    }
 
     // The mounted view. The replacement for AppShell's four `viewLoader.item`
     // references (multi-select: the two Ctrl+A / Escape routers and the two
@@ -173,7 +174,7 @@ Item {
                 ? (root.kiosk ? "../kiosk/KioskLibrary.qml" : "../views/LibraryView.qml")
             : v === "local"
                 ? (root.kiosk ? "../kiosk/KioskLocalLibrary.qml" : "../views/LocalLibraryView.qml")
-            : v === "localalbum" ? "../views/LocalAlbumView.qml"
+            : v === "localalbum" ? (root.kiosk ? "../kiosk/KioskLocalAlbum.qml" : "../views/LocalAlbumView.qml")
             : v === "metadataeditor" ? "../controls/TagEditorModal.qml"
             : v === "album"
                 ? (root.kiosk ? "../kiosk/KioskAlbum.qml" : "../views/AlbumView.qml")
@@ -183,7 +184,7 @@ Item {
             : v === "search"
                 ? (root.kiosk ? "../kiosk/KioskSearch.qml" : "../views/SearchView.qml")
             : v === "queue-view" ? "../views/QueueView.qml"
-            : v === "playlist" ? "../views/PlaylistView.qml"
+            : v === "playlist" ? (root.kiosk ? "../kiosk/KioskPlaylist.qml" : "../views/PlaylistView.qml")
             : v === "discoverbrowse" ? "../views/DiscoverBrowseView.qml"
             : v === "playlistbrowse" ? "../views/PlaylistBrowseView.qml"
             : v === "recentalbums" ? "../views/PlayHistoryView.qml"
@@ -219,7 +220,7 @@ Item {
             // ONE component on both routes (KioskShell.slint:512,517).
             : (v === "mixtapes" || v === "collections")
                 ? (root.kiosk ? "../kiosk/KioskMyQBZ.qml" : "../views/myqbz/MyQbzGridView.qml")
-            : v === "mixtapedetail" ? "../views/myqbz/MyQbzDetailView.qml"
+            : v === "mixtapedetail" ? (root.kiosk ? "../kiosk/KioskMyQBZDetailLite.qml" : "../views/myqbz/MyQbzDetailView.qml")
             : v === "discobuilder" ? "../views/myqbz/DiscoBuilderView.qml"
             // Settings > Blacklist > Manage. Not reachable from the sidebar —
             // blacklist_qt::open_manager records the route.
@@ -303,6 +304,10 @@ Item {
         // `viewLoader.item` is still the view on its way out. Assign, then
         // disarm.
         root._loaderPath = root._wantedPath
+        if (root.kiosk) {
+            var properties = root.kioskHostRoutes.indexOf(QbzShell.currentView) >= 0 ? {kioskHost: true} : {}
+            viewLoader.setSource(root._loaderPath, properties)
+        }
         root._armed = false
     }
 
@@ -455,7 +460,8 @@ Item {
     Loader {
         id: viewLoader
         anchors.fill: parent
-        source: root._loaderPath
+        source: root.kiosk ? "" : root._loaderPath
+        visible: !root.kiosk || !root._armed
 
         onLoaded: {
             // The reveal starts in the same turn the view finished building,
@@ -482,6 +488,20 @@ Item {
                 console.info(navTiming, "[navtiming] " + view
                              + " to-idle=" + (Date.now() - t0) + "ms")
             })
+        }
+    }
+
+    // Kiosk acknowledges the route with cheap static geometry during the
+    // existing one-frame commit split. No remote model or image is mounted.
+    Loader {
+        anchors.fill: parent
+        active: root.kiosk && root._armed
+        sourceComponent: Component {
+            KioskSkeleton {
+                loading: true
+                kind: ["album", "localalbum", "nowplaying"].indexOf(QbzShell.currentView) >= 0
+                    ? "list" : "grid"
+            }
         }
     }
 

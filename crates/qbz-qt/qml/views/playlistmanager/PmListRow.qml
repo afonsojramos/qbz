@@ -26,12 +26,14 @@
 // wide. Same intent, correct arithmetic.
 
 import QtQuick
+import "../../kiosk"
 import com.blitzfc.qbz
 import "../../cards"
 import "../../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     /// One `PlaylistRow` (contract §4.3).
     property var item: ({})
@@ -48,9 +50,9 @@ Rectangle {
     readonly property string itemId: String(root.item.id || "")
     readonly property bool isLocal: root.item.isLocal === true
     /// Reorder column + its trailing 12 px gap, or nothing.
-    readonly property int reorderSlot: root.canReorder ? 32 : 0
+    readonly property int reorderSlot: root.canReorder ? (root.kioskHost ? 56 : 32) : 0
 
-    height: 64
+    height: root.kioskHost && root.canReorder ? 88 : 64
     radius: 6
     color: bodyArea.containsMouse ? theme.surfaceHover : theme.surfaceCard
     opacity: (root.item.isHidden === true) ? 0.6 : 1.0
@@ -65,29 +67,35 @@ Rectangle {
         PmActionButton {
             visible: !root.isLocal
             name: "chevron-up"
-            btnSize: 20
+            btnSize: root.kioskHost ? 44 : 20
             glyph: 13
             onClicked: QbzPlaylistManager.moveUp(root.itemId)
         }
         PmActionButton {
             visible: !root.isLocal
             name: "chevron-down"
-            btnSize: 20
+            btnSize: root.kioskHost ? 44 : 20
             glyph: 13
             onClicked: QbzPlaylistManager.moveDown(root.itemId)
         }
     }
 
     // ---- collage ----------------------------------------------------------
-    PlaylistCollage {
+    Loader {
         id: collage
         x: 10 + root.reorderSlot
         anchors.verticalCenter: parent.verticalCenter
         width: 48
         height: 48
-        layout: "pm"
-        urls: root.item.covers || []
-        radius: 6
+        sourceComponent: root.kioskHost ? kioskCover : desktopCover
+    }
+    Component {
+        id: kioskCover
+        KioskArtwork { source: (root.item.covers || [])[0] || ""; radius: 6 }
+    }
+    Component {
+        id: desktopCover
+        PlaylistCollage { anchors.fill: parent; layout: "pm"; urls: root.item.covers || []; radius: 6 }
     }
 
     // ---- name + meta ------------------------------------------------------
@@ -193,19 +201,23 @@ Rectangle {
         spacing: 0
 
         PmActionButton {
+            btnSize: root.kioskHost ? 44 : 26
             name: root.item.isFavorite === true ? "heart-filled" : "heart"
             filled: root.item.isFavorite === true
             onClicked: QbzPlaylistManager.toggleFavorite(root.itemId)
         }
         PmActionButton {
+            btnSize: root.kioskHost ? 44 : 26
             name: root.item.isHidden === true ? "eye-off" : "eye"
             onClicked: QbzPlaylistManager.toggleHidden(root.itemId)
         }
         PmActionButton {
+            btnSize: root.kioskHost ? 44 : 26
             name: "pen-line"
             onClicked: QbzPlaylistEdit.open(root.itemId)
         }
         PmActionButton {
+            btnSize: root.kioskHost ? 44 : 26
             visible: !root.isLocal
             name: "cassette-tape"
             onClicked: QbzMyQbzAdd.open(JSON.stringify([{
@@ -218,6 +230,7 @@ Rectangle {
         }
         PmActionButton {
             id: moreBtn
+            btnSize: root.kioskHost ? 44 : 26
             visible: root.foldersCount > 0
             name: "ellipsis"
             onClicked: root.folderMenuRequested(moreBtn)

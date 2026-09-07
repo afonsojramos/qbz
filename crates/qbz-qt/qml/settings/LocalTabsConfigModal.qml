@@ -8,6 +8,8 @@ import com.blitzfc.qbz
 import "../theme"
 
 Item {
+    property bool kioskHost: false
+
     id: root
 
     property bool _open: false
@@ -94,7 +96,7 @@ Item {
     Rectangle {
         id: panel
         width: Math.min(root.width - 80, 500)
-        height: panelCol.implicitHeight + 40
+        height: root.kioskHost ? Math.min(root.height - 16, panelCol.implicitHeight + 40) : panelCol.implicitHeight + 40
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         radius: theme.radiusMd
@@ -108,6 +110,13 @@ Item {
             onWheel: function (wheel) { wheel.accepted = true }
         }
 
+        Flickable {
+            anchors.fill: parent
+            clip: root.kioskHost
+            interactive: root.kioskHost
+            contentWidth: width
+            contentHeight: panelCol.implicitHeight + 44
+            boundsBehavior: Flickable.StopAtBounds
         Column {
             id: panelCol
             x: 20
@@ -117,21 +126,21 @@ Item {
 
             Item {
                 width: parent.width
-                height: 28
+                height: root.kioskHost ? 44 : 28
                 Text {
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
                     text: QbzSession.tr("Local Library tabs", QbzSession.trRev)
                     color: theme.textPrimary
-                    font.pixelSize: theme.fontHeading
+                    font.pixelSize: root.kioskHost ? (theme.fontHeading) * 1.2 : (theme.fontHeading)
                     font.weight: theme.weightSemibold
                 }
                 Rectangle {
                     id: closeButton
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 28
-                    height: 28
+                    width: root.kioskHost ? 44 : 28
+                    height: root.kioskHost ? 44 : 28
                     radius: 6
                     color: closeArea.containsMouse ? theme.surfaceHover : "transparent"
                     activeFocusOnTab: root.opened
@@ -171,7 +180,7 @@ Item {
                 width: parent.width
                 text: QbzSession.tr("Reorder the Local Library tabs. The first tab opens by default and is shown when starting without a Qobuz session.", QbzSession.trRev)
                 color: theme.textSecondary
-                font.pixelSize: theme.fontBody
+                font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                 wrapMode: Text.WordWrap
             }
 
@@ -211,11 +220,11 @@ Item {
                                 tintName: tabRow.index === 0 ? "accent" : "secondary"
                             }
                             Text {
-                                width: Math.max(0, parent.width - 17 - defaultPill.width - 56 - 4 * 10)
+                                width: Math.max(0, parent.width - 17 - defaultPill.width - (root.kioskHost ? 88 : 56) - 4 * 10)
                                 height: parent.height
                                 text: root.labelFor(tabRow.modelData)
                                 color: theme.textPrimary
-                                font.pixelSize: theme.fontBody
+                                font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                                 font.weight: theme.weightMedium
                                 verticalAlignment: Text.AlignVCenter
                                 elide: Text.ElideRight
@@ -234,7 +243,7 @@ Item {
                                     anchors.centerIn: parent
                                     text: QbzSession.tr("Default", QbzSession.trRev)
                                     color: theme.accent
-                                    font.pixelSize: theme.fontLegal
+                                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                                     font.weight: theme.weightSemibold
                                 }
                             }
@@ -258,7 +267,7 @@ Item {
             Rectangle {
                 id: resetButton
                 width: resetRow.width + 24
-                height: 34
+                height: root.kioskHost ? 44 : 34
                 radius: theme.radiusSm
                 color: resetArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
                 border.width: 1
@@ -295,7 +304,7 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         text: QbzSession.tr("Reset to defaults", QbzSession.trRev)
                         color: theme.textPrimary
-                        font.pixelSize: theme.fontBody
+                        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                     }
                 }
                 MouseArea {
@@ -308,6 +317,7 @@ Item {
                 }
             }
         }
+        }
     }
 
     component ReorderButton: Rectangle {
@@ -316,8 +326,8 @@ Item {
         property bool buttonEnabled: true
         signal clicked()
 
-        width: 28
-        height: 28
+        width: root.kioskHost ? 44 : 28
+        height: root.kioskHost ? 44 : 28
         radius: theme.radiusSm
         opacity: reorderRoot.buttonEnabled ? 1.0 : 0.3
         color: reorderRoot.buttonEnabled && reorderArea.containsMouse

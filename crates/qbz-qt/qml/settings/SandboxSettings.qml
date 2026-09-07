@@ -14,6 +14,8 @@ import "../controls"
 import "../theme"
 
 Column {
+    property bool kioskHost: false
+
     id: root
 
     property var doc: ({})
@@ -26,14 +28,14 @@ Column {
     component RowTitle: Text {
         width: parent ? parent.width : 0
         color: theme.textPrimary
-        font.pixelSize: theme.fontBody
+        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
         font.weight: theme.weightMedium
         wrapMode: Text.WordWrap
     }
     component RowNote: Text {
         width: parent ? parent.width : 0
         color: theme.textMuted
-        font.pixelSize: theme.fontLegal
+        font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
         wrapMode: Text.WordWrap
     }
     // A full-width shell-command block with copy feedback. `command` may hold
@@ -60,7 +62,7 @@ Column {
             text: block.command
             color: theme.textPrimary
             font.family: "monospace"
-            font.pixelSize: theme.fontLegal
+            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
             wrapMode: Text.WrapAnywhere
         }
         // Off-screen carrier: TextEdit.copy() is the only clipboard write QML
@@ -70,7 +72,7 @@ Column {
             visible: false
             text: block.command
         }
-        SettingsButton {
+        SettingsButton { kioskHost: root.kioskHost;
             id: copyBtn
             anchors.right: parent.right
             anchors.rightMargin: 10
@@ -99,7 +101,7 @@ Column {
         width: parent.width
         spacing: 4
 
-        GroupHeader { text: QbzSession.tr("FLATPAK SANDBOX", QbzSession.trRev) }
+        GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("FLATPAK SANDBOX", QbzSession.trRev) }
         RowNote {
             text: QbzSession.tr("QBZ is running inside a Flatpak sandbox. Some features need one-time permission grants — run the commands in a terminal, then restart QBZ. Grants persist across updates.", QbzSession.trRev)
         }
@@ -129,7 +131,7 @@ Column {
         width: parent.width
         spacing: 4
 
-        GroupHeader { text: QbzSession.tr("SNAP SANDBOX", QbzSession.trRev) }
+        GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("SNAP SANDBOX", QbzSession.trRev) }
         RowNote {
             text: QbzSession.tr("QBZ is running inside a Snap sandbox. Some audio interfaces need one-time connections — run these commands in a terminal, then restart QBZ.", QbzSession.trRev)
         }

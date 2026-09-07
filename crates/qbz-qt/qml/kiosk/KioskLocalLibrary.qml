@@ -1,40 +1,42 @@
-// KioskLocalLibrary — the lightweight kiosk Local Library.
-// QML port of crates/qbz-ui/ui/shell/KioskLocalLibrary.slint (234 lines).
+// KioskLocalLibrary — the kiosk Local Library host.
 //
-// Reads the SAME local documents the desktop LocalLibraryView reads (three
-// sources unified in Rust: local / offline / plex), rendered with the shared
-// kiosk cards. Tabs Albums / Artists / Folders / Tracks; a card tap drives
-// QbzLocal directly (openAlbum routes to the local-album view in Rust).
+// ── WHAT CHANGED AND WHY ──────────────────────────────────────────────────
+// The K0 audit found this view reading LEGACY JSON documents while Full UI had
+// already switched the same surfaces to the paged native models. That is not a
+// styling difference, it is why the panel showed empty Artists and Tracks tabs
+// on a machine whose library is fine: `local_albums_json` / `local_artists_json`
+// / `local_tracks_json` are published by the legacy readers only, and once
+// `albums/artists/tracks_native_active` is true (the production default) Rust
+// stops republishing them. It also mounted `Repeater`s over the whole document
+// with a Loader per row — 20 416 items and 10 053 Loaders on the Albums tab at
+// the 10 000-album fixture, 1.19 s to idle; 20 487 / 10 075 on Artists at
+// 1.87 s (evidence/runtime-baseline/partial-initial.jsonl).
 //
-// The reference's v1 shape, reproduced exactly (KioskLocalLibrary.slint:5-7):
-//   - the album artwork window is reported ONCE per tab entry and never on
-//     scroll, so only the first band of covers ever resolves — the Slint's
-//     ALBUMS_WINDOW stays at its initial (0, 59) because the kiosk grid never
-//     fires the window hook (qbz/src/local_library.rs:289);
-//   - the tracks tab shows the first page only; QbzLocal.tracksLoadMore is
-//     never called, exactly as the Slint kiosk never drives the load-more
-//     hook (the two frontends' page sizes differ — 200 in
-//     qbz/src/local_library.rs:980, 500 in src/local_state.rs:20);
-//   - Folders is the FLAT album-grid representation (localFoldersJson), never
-//     the tree — no rail, no folder detail pane.
+// This file is now only a HOST. It owns:
+//   1. the tab set, its default and its history;
+//   2. the four legacy documents (still the authority for Folders, Genres and
+//      as the automatic fallback when a catalog session fails);
+//   3. the artwork window REGISTRY — the one policy that cannot be split per
+//      surface, because eviction is only correct against every live surface at
+//      once (the desktop `_windows` finding, reproduced);
+//   4. the nav geometry it publishes into QbzKioskNav.
+// Every tab body is its own file, mounted behind `Loader.active`, and each one
+// consumes the authoritative reader for its surface.
 //
-// Track rows carry no artwork: the reference builds every local track row
-// with an empty image and spawns no per-row artwork job
-// (qbz/src/local_library.rs:976-978 and :1028), which is the same default the
-// desktop Qt tracks tab ships with. So the tracks tab reports no artwork
-// window and its 46px art tiles stay bare.
+// ── DEFAULT TAB ───────────────────────────────────────────────────────────
+// Albums, always — contract §2.2. A fresh mount, a NavRail entry and a
+// programmatic navigation with no tab all land on Albums, and the persisted
+// tab ORDER is deliberately not consulted for the default: it may put Tracks
+// first, and three different defaults in shell, settings and view is the
+// defect that rule exists to close. Back/Forward is the exception and the
+// point: a restored entry keeps the tab that entry actually recorded, Tracks
+// included — the past is not rewritten.
 //
-// Keyboard/gamepad nav: same model as KioskLibrary — the index space is the 4
-// tabs followed by the active tab's items as a uniform grid (tracks = a
-// 1-column list). This view PUBLISHES that geometry into QbzKioskNav; each
-// container mirrors the focus index (ring + scroll-into-view) and answers the
-// Enter pulse. contentY is only ever WRITTEN from a callback on a settled
-// layout, never read by a layout-feeding binding (the AlbumCollectionView
-// "Recursion detected" panic class).
-//
-// Blank is a state here. The reference reads no loading flag, no error and no
-// availability flag in this file, and has no empty-tab copy — so a loading,
-// failed, unavailable or empty tab renders the strip and nothing else.
+// ── HISTORY ───────────────────────────────────────────────────────────────
+// There is no second stack. `KioskNavigation` writes this view's opaque state
+// onto the ONE `QbzShell` history, records a tab destination through
+// `recordKioskTab` BEFORE the tab changes (so the entry that is pushed carries
+// the OUTGOING state) and restores it on the way back.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -45,53 +47,213 @@ Rectangle {
 
     color: "transparent"
 
-    // KioskLocalLibrary.slint:58.
-    property real pad: 16
-
     QbzTheme { id: theme }
 
-    function t(s) {
-        return QbzSession.tr(s, QbzSession.trRev)
+    function t(s) { return QbzSession.tr(s, QbzSession.trRev) }
+
+    /// Content inset. 16 keeps a card clear of the NavRail at 800px.
+    property real pad: 16
+
+
+    // =====================================================================
+    // Tabs
+    // =====================================================================
+    readonly property var knownTabs: ["genres", "albums", "artists", "folders", "tracks"]
+
+    /// The user's own tab order drives the STRIP. It deliberately does not
+    /// drive the DEFAULT (see the header).
+    readonly property var orderedTabs: {
+        var stored
+        try {
+            stored = JSON.parse(QbzBridge.settingsJson).localTabOrder
+        } catch (e) {
+            stored = null
+        }
+        var out = []
+        var i
+        if (Array.isArray(stored)) {
+            for (i = 0; i < stored.length; i++)
+                if (root.knownTabs.indexOf(stored[i]) >= 0 && out.indexOf(stored[i]) < 0)
+                    out.push(stored[i])
+        }
+        // Anything the stored order omits still has to be reachable.
+        for (i = 0; i < root.knownTabs.length; i++)
+            if (out.indexOf(root.knownTabs[i]) < 0)
+                out.push(root.knownTabs[i])
+        return out
     }
 
-    // ---------------------------- tab state -------------------------------
-    // The Slint tab is the global LocalLibraryState.active-tab; the Qt port
-    // holds it view-locally, exactly like the desktop LocalLibraryView
-    // (qml/views/LocalLibraryView.qml:63), and drives QbzLocal.loadTab on
-    // mount and on every switch (LocalLibraryView.qml:224, :229).
-    property string activeTab: "albums"
+    readonly property bool ephemeralActive: QbzLocal.localEphemeralActive
 
-    readonly property var tabIds: ["albums", "artists", "folders", "tracks"]
+    /// The strip's contents. The open session appends its own tab, exactly as
+    /// it does on the desktop, and it is the only tab that can VANISH while
+    /// the user is standing on it.
+    readonly property var visibleTabs: root.ephemeralActive
+        ? root.orderedTabs.concat(["ephemeral"]) : root.orderedTabs
 
     function tabLabel(id) {
-        if (id === "albums")
-            return root.t("Albums")
-        if (id === "artists")
-            return root.t("Artists")
-        if (id === "folders")
-            return root.t("Folders")
-        return root.t("Tracks")
+        if (id === "genres") return root.t("Genres")
+        if (id === "albums") return root.t("Albums")
+        if (id === "artists") return root.t("Artists")
+        if (id === "folders") return root.t("Folders")
+        if (id === "tracks") return root.t("Tracks")
+        // The open session names itself; Rust computes the label so this view
+        // and the nav flyout cannot call the same thing two different things.
+        return QbzLocal.localEphemeralLabel !== ""
+            ? QbzLocal.localEphemeralLabel : root.t("Open")
     }
 
-    function selectTab(id) {
-        root.activeTab = id
+    /// ALBUMS. Not `orderedTabs[0]`.
+    property string activeTab: "albums"
+
+    /// Opaque per-tab state carried on the shared history entry.
+    property string selectedArtist: ""
+    property string selectedGenre: ""
+
+    function tabAvailable(tab) {
+        if (tab === "ephemeral")
+            return root.ephemeralActive
+        return root.knownTabs.indexOf(tab) >= 0
     }
+
+    /// THE recording setter. Everything that represents a user destination —
+    /// the strip, the router handshake, `open ephemeral` — goes through it.
+    function activateTab(tab) {
+        if (!tab || tab === root.activeTab || !root.tabAvailable(tab))
+            return
+        // BEFORE the assignment: the entry that gets pushed has to carry the
+        // state of the tab being LEFT, which is what Back restores.
+        nav.recordTab(tab)
+        root.activeTab = tab
+    }
+
+    /// A tab change that is NOT a destination: the ephemeral fallback, and the
+    /// restoration of a history entry. Neither may push an entry.
+    function setTabSilently(tab) {
+        if (!tab || tab === root.activeTab)
+            return
+        root.activeTab = tab
+    }
+
+    // The router's ONE external tab seam (NavFlyout, the kiosk NavRail through
+    // `navigateToTab`, and `open ephemeral`). ContentRouter writes this
+    // property; `sequence` makes re-selecting the same tab re-apply.
+    property var tabNavigationRequest: ({})
+    onTabNavigationRequestChanged: {
+        if (root.tabNavigationRequest && root.tabNavigationRequest.tab)
+            root.activateTab(root.tabNavigationRequest.tab)
+    }
+
+    function selectArtist(name) { root.selectedArtist = name || "" }
+    function selectGenre(key) { root.selectedGenre = key || "" }
+
+    /// A local album card opens the routed local album page. Both halves are
+    /// required: `openAlbum` only LOADS the document — the old kiosk called it
+    /// alone, so a card tap loaded an album nobody ever navigated to and read
+    /// as a dead control.
+    function openAlbum(id) {
+        if (!id)
+            return
+        QbzLocal.openAlbum(id)
+        QbzShell.navigateTo("localalbum")
+    }
+
+    function loadActiveTab() { QbzLocal.loadTab(root.activeTab) }
 
     onActiveTabChanged: {
-        QbzLocal.loadTab(root.activeTab)
-        root.publishNav()
-        root.requestArtwork()
+        root.loadActiveTab()
+        root.publishNav(root._navColumns, 0)
+        root.artworkRefresh()
+    }
+
+    /// The open session is the one tab that can disappear under the user (the
+    /// disc is ejected, the folder is closed). Falling back to Albums is the
+    /// desktop lifecycle, and it is SILENT: closing a session is not a
+    /// navigation, and Back must not be able to resurrect it.
+    onEphemeralActiveChanged: {
+        if (!root.ephemeralActive && root.activeTab === "ephemeral")
+            root.setTabSilently("albums")
+        root.publishNav(root._navColumns, root._navItems)
     }
 
     Component.onCompleted: {
-        QbzLocal.loadTab(root.activeTab)
-        root.publishNav()
-        root.requestArtwork()
+        // KioskNavigation has already completed (children complete first), so
+        // a restored entry has set `activeTab` by now and this is its load.
+        root.loadActiveTab()
+        root.publishNav(1, 0)
     }
 
-    // ---------------------------- documents -------------------------------
-    // A raw JSON.parse in a binding throws on the pre-publish frame and takes
-    // the view down with it; every document goes through the guarded parse.
+    // =====================================================================
+    // History — one stack, this view's opaque state on it
+    // =====================================================================
+    KioskNavigation {
+        id: nav
+        route: "local"
+        snapshot: ({
+            "activeTab": root.activeTab,
+            "selectedArtist": root.selectedArtist,
+            "selectedGenre": root.selectedGenre
+        })
+        onRestore: function (saved) {
+            if (!saved)
+                return
+            var tab = typeof saved.activeTab === "string" ? saved.activeTab : root.activeTab
+            // NO RESURRECTION: an entry recorded while a session was open must
+            // not reopen a session that has since been closed.
+            if (!root.tabAvailable(tab))
+                tab = "albums"
+            root.activeTab = tab
+            root.selectedArtist = typeof saved.selectedArtist === "string"
+                ? saved.selectedArtist : ""
+            root.selectedGenre = typeof saved.selectedGenre === "string"
+                ? saved.selectedGenre : ""
+        }
+    }
+
+    // =====================================================================
+    // Nav geometry (QbzKioskNav)
+    // =====================================================================
+    // The mounted tab body is the only thing that knows its own column count
+    // and item count, so it publishes them through here. The leading `tabs`
+    // entries are the strip.
+    property int _navColumns: 1
+    property int _navItems: 0
+    function publishNav(columns, items) {
+        root._navColumns = Math.max(1, columns || 1)
+        root._navItems = Math.max(0, items || 0)
+        // `visibleTabs` is a derived binding, and an early publish (the
+        // ephemeral flag arriving during construction) can reach here before
+        // it has been evaluated. A geometry publish is not worth a TypeError.
+        var tabs = root.visibleTabs ? root.visibleTabs.length : 0
+        if (tabs === 0)
+            return
+        QbzKioskNav.publishNav(tabs, root._navColumns, tabs + root._navItems, false)
+    }
+
+    // Enter on a tab entry drives the same switch a tap does. The
+    // `index < tabs` test is what keeps this handler and the mounted body's
+    // disjoint: both see the same pulse.
+    Connections {
+        target: QbzKioskNav
+        function onActivateSeqChanged() {
+            if (!QbzKioskNav.navActive || QbzKioskNav.zone !== "content")
+                return
+            if (QbzKioskNav.index < 0 || QbzKioskNav.index >= QbzKioskNav.tabs)
+                return
+            var id = root.visibleTabs[QbzKioskNav.index]
+            if (id !== undefined)
+                root.activateTab(id)
+        }
+    }
+
+    // =====================================================================
+    // Legacy documents
+    // =====================================================================
+    // Still authoritative for Folders and for the Genres browser (whose
+    // `load_tab("genres")` arm deliberately routes to `load_albums_legacy`),
+    // and still the automatic fallback for Albums/Artists/Tracks when a
+    // catalog session fails. A tab body reads these ONLY when its native
+    // reader is inactive.
     function parseDoc(json, fallback) {
         if (json === "")
             return fallback
@@ -102,55 +264,53 @@ Rectangle {
             return fallback
         }
     }
+    readonly property var albums: ((root.activeTab === "albums" && !QbzLocal.localAlbumsNativeActive) || root.activeTab === "genres" || (root.activeTab === "artists" && !QbzLocal.localArtistsNativeActive)) ? root.parseDoc(QbzLocal.localAlbumsJson, []) : []
+    readonly property var artists: (root.activeTab === "artists" && !QbzLocal.localArtistsNativeActive) ? root.parseDoc(QbzLocal.localArtistsJson, []) : []
+    readonly property var folders: (root.activeTab === "folders") ? root.parseDoc(QbzLocal.localFoldersJson, []) : []
+    readonly property var tracks: (root.activeTab === "tracks" && !QbzLocal.localTracksNativeActive) ? root.parseDoc(QbzLocal.localTracksJson, []) : []
+    readonly property var ephemeral: (root.activeTab === "ephemeral") ? root.parseDoc(QbzLocal.localEphemeralJson, null) : null
 
-    readonly property var albums: root.parseDoc(QbzLocal.localAlbumsJson, [])
-    readonly property var artists: root.parseDoc(QbzLocal.localArtistsJson, [])
-    readonly property var folders: root.parseDoc(QbzLocal.localFoldersJson, [])
-    readonly property var tracks: root.parseDoc(QbzLocal.localTracksJson, [])
+    readonly property bool trackArtwork: QbzLocal.localTrackArtwork
 
-    onAlbumsChanged: root.requestArtwork()
-    onArtistsChanged: root.requestArtwork()
-    onFoldersChanged: root.requestArtwork()
-
-    // ---------------------------- artwork ---------------------------------
-    // Covers are id-keyed: the view reports the artKeys it wants and Rust
-    // answers one localArtworkReady per resolved key.
-    //
-    // The band is 60 because that is what the reference resolves: both
-    // windows are initialised to (0, 59) and the kiosk moves neither
-    // (qbz/src/favorites.rs:929, qbz/src/local_library.rs:289). Cards past it
-    // keep the bare surfaceElevated square, as they do on the panel today.
-    readonly property int coverBand: 60
-
+    // =====================================================================
+    // Artwork window registry
+    // =====================================================================
+    // Covers are id-keyed: a surface reports the artKeys of the rows it has
+    // MOUNTED, Rust answers one `localArtworkReady` per resolved key, and the
+    // union of every live window plus one window of margin is what survives
+    // eviction. It lives here rather than per tab because two cover surfaces
+    // can be alive at once (the Artists list and its drill-down grid), and a
+    // per-surface keep-set makes each one delete the other's covers.
     property var artMap: ({})
     property var _artInbox: ({})
+    property var _windows: ({})
+    property var _pending: ({})
+    // `real`, not `int`: Date.now() is ~1.7e12.
+    property real _lastReportMs: 0
 
-    function artPathOf(key) {
-        return root.artMap[key] || ""
-    }
+    signal artworkRefresh()
 
-    // Arrivals stream in one at a time. Unlike the desktop grids — whose
-    // cells bind an artSource per row and simply re-evaluate — the kiosk card
-    // takes its cover INSIDE the album object, so every rebind rebuilds the
-    // grid's model array and remounts its cards. Arrivals are therefore
-    // coalesced into one rebind per 120ms band instead of one per frame: the
-    // covers still appear progressively, at a fraction of the remount cost a
-    // Pi would otherwise pay during exactly the seconds the grid is filling.
+    function artPathOf(key) { return root.artMap[key] || "" }
+    function artWanted(key) { return (key || "") !== "" }
+
+    // Arrivals stream in one at a time. Rebinding `artMap` per arrival is
+    // quadratic in the window, so they are coalesced into one rebind per
+    // frame — the covers still appear progressively at 16ms granularity.
     Timer {
         id: artFlush
-        interval: 120
+        interval: 16
         repeat: false
         onTriggered: {
-            // A rebind needs a NEW object reference — a same-ref assignment
-            // is not a change in QML.
-            root.artMap = Object.assign({}, root.artMap, root._artInbox)
+            var next = Object.assign({}, root.artMap, root._artInbox)
             root._artInbox = ({})
+            // A rebind needs a NEW object reference: a same-ref assignment is
+            // not a change in QML.
+            root.artMap = next
         }
     }
 
     Connections {
         target: QbzLocal
-
         function onLocalArtworkReady(key, path) {
             root._artInbox[key] = path
             if (!artFlush.running)
@@ -158,171 +318,209 @@ Rectangle {
         }
     }
 
-    /// Report the active tab's artwork window. Called on mount, on every tab
-    /// switch and when the active document lands — never on scroll, which is
-    /// the whole of the "no album window" limit.
-    function requestArtwork() {
-        var rows = root.activeTab === "albums" ? root.albums : root.activeTab === "folders" ? root.folders : root.activeTab === "artists" ? root.artists : []
-        // Artist portraits are push-for-all in the reference (every merged
-        // row goes through the image pass, qbz/src/local_library.rs:3694),
-        // so the artists tab asks for its whole set; the two album grids ask
-        // for the first band only.
-        var cap = root.activeTab === "artists" ? rows.length : Math.min(rows.length, root.coverBand)
-        var keys = []
+    function applyWindow(key, rows, first, last) {
+        if (!rows || rows.length === 0) {
+            delete root._windows[key]
+            return
+        }
+        last = Math.min(last, rows.length - 1)
+        first = Math.max(0, first)
+        if (first > last) {
+            delete root._windows[key]
+            return
+        }
+        root._windows[key] = { "rows": rows, "first": first, "last": last }
+    }
+
+    /// A surface that unmounts, scrolls off or has nothing to show stops
+    /// holding its covers.
+    function releaseWindow(key) {
+        var k = key || "default"
+        if (root._windows[k] === undefined && root._pending[k] === undefined)
+            return
+        delete root._windows[k]
+        delete root._pending[k]
+        root.flushWindows()
+    }
+
+    /// Evict against the UNION of every live window, then request what is
+    /// still missing. A key already resolved is never re-sent: `artMap` IS the
+    /// resolved set and a re-request costs Rust a stat per key.
+    function flushWindows() {
+        var keep = ({})
+        var k, w, rows, i, ak, span, lo, hi
+        for (k in root._windows) {
+            w = root._windows[k]
+            rows = w.rows
+            span = w.last - w.first + 1
+            lo = Math.max(0, w.first - span)
+            hi = Math.min(rows.length - 1, w.last + span)
+            for (i = lo; i <= hi; i++) {
+                ak = rows[i] ? rows[i].artKey : ""
+                if (ak)
+                    keep[ak] = true
+            }
+        }
+        var map = root.artMap
+        var changed = false
+        for (k in map) {
+            if (!keep[k]) {
+                delete map[k]
+                changed = true
+            }
+        }
+        // Evict the not-yet-flushed arrivals too, or a cover that landed for a
+        // row we have just scrolled past would be re-added by the next flush.
+        for (k in root._artInbox)
+            if (!keep[k])
+                delete root._artInbox[k]
+        if (changed)
+            root.artMap = Object.assign({}, map)
+
+        var missing = []
         var seen = ({})
-        for (var i = 0; i < cap; i++) {
-            var k = rows[i] ? rows[i].artKey : ""
-            // A key already resolved (or already in flight) costs Rust a stat
-            // per re-request, so it is never sent twice.
-            if (!k || seen[k] || root.artMap[k] !== undefined || root._artInbox[k] !== undefined)
-                continue
-            seen[k] = true
-            keys.push(k)
+        for (k in root._windows) {
+            w = root._windows[k]
+            rows = w.rows
+            for (i = w.first; i <= w.last; i++) {
+                ak = rows[i] ? rows[i].artKey : ""
+                if (!ak || seen[ak])
+                    continue
+                seen[ak] = true
+                if (map[ak] !== undefined || root._artInbox[ak] !== undefined)
+                    continue
+                missing.push(ak)
+            }
         }
-        if (keys.length > 0)
-            QbzLocal.artworkWindow(JSON.stringify(keys))
+        if (missing.length > 0)
+            QbzLocal.artworkWindow(JSON.stringify(missing))
     }
 
-    /// AlbumRow (src/local_rows.rs:26) -> the KioskCard album object, with the
-    /// remote artKey already resolved to a local cover path.
-    function cardsFrom(rows) {
-        var out = []
-        for (var i = 0; i < rows.length; i++) {
-            var r = rows[i]
-            out.push({
-                "id": r.id,
-                "title": r.title,
-                "artist": r.artist,
-                "qualityTier": r.qualityTier,
-                "artwork": root.artPathOf(r.artKey)
-            })
+    // Rate-limited to one resolution pass per 180ms, but LEADING EDGE: the
+    // limiter exists so a flick cannot fire a pass per pixel, and a view that
+    // has just mounted is not flicking. Pending reports are keyed by SURFACE,
+    // so two surfaces reporting inside the same window both survive.
+    Timer {
+        id: windowDebounce
+        interval: 180
+        repeat: false
+        onTriggered: {
+            root._lastReportMs = Date.now()
+            var pending = root._pending
+            root._pending = ({})
+            var any = false
+            for (var k in pending) {
+                var w = pending[k]
+                root.applyWindow(k, w.rows, w.first, w.last)
+                any = true
+            }
+            if (any)
+                root.flushWindows()
         }
-        return out
     }
-
-    // Only the mounted tab's cards are materialised: the inactive arm stays
-    // an empty array so an artMap rebind cannot walk a list nobody shows.
-    readonly property var albumCards: root.activeTab === "albums" ? root.cardsFrom(root.albums) : []
-    readonly property var folderCards: root.activeTab === "folders" ? root.cardsFrom(root.folders) : []
-
-    // ---------------------------- nav publish -----------------------------
-    // KioskLocalLibrary.slint:61-78. The index clamp lives in the model
-    // (publishNav applies it), so this only carries the geometry.
-    function publishNav() {
-        var columns
-        var count
-        if (root.activeTab === "albums") {
-            columns = 6
-            count = 4 + root.albums.length
-        } else if (root.activeTab === "artists") {
-            columns = 7
-            count = 4 + root.artists.length
-        } else if (root.activeTab === "folders") {
-            columns = 6
-            count = 4 + root.folders.length
+    function queueWindowReport(rows, first, last, key) {
+        var k = key || "default"
+        if (!windowDebounce.running
+                && Date.now() - root._lastReportMs >= windowDebounce.interval) {
+            root._lastReportMs = Date.now()
+            root.applyWindow(k, rows, first, last)
+            root.flushWindows()
         } else {
-            columns = 1
-            count = 4 + root.tracks.length
-        }
-        QbzKioskNav.publishNav(4, columns, count, false)
-    }
-
-    // KioskLocalLibrary.slint:86-92 — ONE probe over the four lengths, not
-    // four handlers.
-    readonly property int navLenProbe: root.albums.length + root.artists.length + root.folders.length + root.tracks.length
-    onNavLenProbeChanged: root.publishNav()
-
-    // Enter on a tab → the same switch the tab taps drive
-    // (KioskLocalLibrary.slint:95-109). The `index < tabs` test is what keeps
-    // this handler and the mounted container's disjoint: both see the pulse.
-    Connections {
-        target: QbzKioskNav
-
-        function onActivateSeqChanged() {
-            if (!QbzKioskNav.navActive || QbzKioskNav.zone !== "content")
-                return
-            if (QbzKioskNav.index >= QbzKioskNav.tabs)
-                return
-            var id = root.tabIds[QbzKioskNav.index]
-            if (id !== undefined)
-                root.selectTab(id)
+            root._pending[k] = { "rows": rows, "first": first, "last": last }
+            if (!windowDebounce.running)
+                windowDebounce.start()
         }
     }
 
-    // ------------------------------ tab strip -----------------------------
+    // =====================================================================
+    // Tab strip
+    // =====================================================================
+    // 64px — the contract's primary touch target — and the whole cell is the
+    // hit area, not the text's bounding box. The strip scrolls horizontally so
+    // a six-tab set with a long session name stays reachable at 800px.
     Rectangle {
         id: tabStrip
 
         anchors.left: root.left
         anchors.right: root.right
         anchors.top: root.top
-        height: 48
+        height: 64
         color: theme.surfaceMain
 
-        Row {
-            id: tabsRow
-
-            anchors.left: tabStrip.left
+        Flickable {
+            id: tabScroll
+            anchors.fill: parent
             anchors.leftMargin: root.pad
-            anchors.top: tabStrip.top
-            anchors.bottom: tabStrip.bottom
-            spacing: 22
+            anchors.rightMargin: root.pad
+            contentWidth: tabsRow.width
+            contentHeight: height
+            clip: true
+            flickableDirection: Flickable.HorizontalFlick
+            boundsBehavior: Flickable.StopAtBounds
 
-            Repeater {
-                model: root.tabIds
+            Row {
+                id: tabsRow
+                height: tabScroll.height
+                spacing: 6
 
-                delegate: Rectangle {
-                    id: tab
+                // A FIXED tab list, never a data collection: at most the five
+                // ordered tabs plus the open session.
+                Repeater {
+                    model: root.visibleTabs
 
-                    required property string modelData
-                    required property int index
+                    delegate: Rectangle {
+                        id: tab
+                        required property string modelData
+                        required property int index
 
-                    readonly property bool active: root.activeTab === tab.modelData
-                    readonly property bool navFocused: QbzKioskNav.navActive && QbzKioskNav.zone === "content" && QbzKioskNav.index === tab.index
+                        readonly property bool active: root.activeTab === tab.modelData
+                        readonly property bool navFocused: QbzKioskNav.navActive
+                            && QbzKioskNav.zone === "content"
+                            && QbzKioskNav.index === tab.index
 
-                    width: tabText.implicitWidth + 4
-                    height: tabsRow.height
-                    color: "transparent"
-                    radius: theme.radiusSm
-                    border.width: tab.navFocused ? 2 : 0
-                    border.color: theme.accent
+                        width: Math.max(88, tabText.implicitWidth + 28)
+                        height: tabsRow.height
+                        color: tab.active
+                            ? Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b, 0.10)
+                            : "transparent"
+                        radius: theme.radiusSm
+                        border.width: tab.navFocused ? 2 : 0
+                        border.color: theme.accent
 
-                    Text {
-                        id: tabText
+                        Text {
+                            id: tabText
+                            anchors.centerIn: parent
+                            width: Math.min(implicitWidth, 220)
+                            text: root.tabLabel(tab.modelData)
+                            color: tab.active ? theme.textPrimary : theme.textMuted
+                            font.pixelSize: 16
+                            font.weight: theme.weightSemibold
+                            horizontalAlignment: Text.AlignHCenter
+                            elide: Text.ElideRight
+                            maximumLineCount: 1
+                        }
 
-                        x: 2
-                        anchors.top: tab.top
-                        anchors.bottom: underline.top
-                        text: root.tabLabel(tab.modelData)
-                        color: tab.active ? theme.textPrimary : theme.textMuted
-                        font.pixelSize: 15
-                        font.weight: theme.weightSemibold
-                        verticalAlignment: Text.AlignVCenter
-                    }
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
+                            anchors.bottom: parent.bottom
+                            anchors.bottomMargin: 6
+                            height: 3
+                            radius: 2
+                            color: tab.active ? theme.accent : "transparent"
+                        }
 
-                    Rectangle {
-                        id: underline
-
-                        anchors.left: tab.left
-                        anchors.leftMargin: 2
-                        anchors.right: tab.right
-                        anchors.rightMargin: 2
-                        anchors.bottom: tab.bottom
-                        height: 2
-                        radius: 2
-                        color: tab.active ? theme.accent : "transparent"
-                    }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: root.selectTab(tab.modelData)
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: root.activateTab(tab.modelData)
+                        }
                     }
                 }
             }
         }
 
-        // KioskLocalLibrary.slint:127-131 — full-width hairline on the last
-        // row of the strip.
         Rectangle {
             anchors.left: tabStrip.left
             anchors.right: tabStrip.right
@@ -332,7 +530,14 @@ Rectangle {
         }
     }
 
-    // ------------------------------- content ------------------------------
+    // =====================================================================
+    // Content — ONE tab exists at a time
+    // =====================================================================
+    // `Loader.active`, never `visible: false`: a hidden item still costs what
+    // it mounted, and the Tracks body is the one that makes that matter. This
+    // is also what keeps the Tracks model out of an Albums visit — nothing
+    // subscribes to its page misses and nothing queries it until its own tab
+    // is the mounted one.
     Item {
         id: content
 
@@ -342,225 +547,88 @@ Rectangle {
         anchors.bottom: root.bottom
         clip: true
 
-        Loader {
-            anchors.fill: parent
-            active: root.activeTab === "albums"
-            sourceComponent: albumsComponent
-        }
+        /// The open session renders with no indexed library at all — it is
+        /// content from OUTSIDE the index, so gating it on `localAvailable`
+        /// would hide the pane from exactly the people the feature is for.
+        readonly property bool ephemeralShowing:
+            root.activeTab === "ephemeral" && root.ephemeralActive
 
-        Loader {
+        KioskEmptyState {
             anchors.fill: parent
-            active: root.activeTab === "folders"
-            sourceComponent: foldersComponent
-        }
-
-        Loader {
-            anchors.fill: parent
-            active: root.activeTab === "artists"
-            sourceComponent: artistsComponent
+            visible: !QbzLocal.localAvailable && !content.ephemeralShowing
+            // An EXISTING msgid, present in all eight catalogues — this lane
+            // may not add translations, so no new msgid is introduced.
+            text: root.t("No folders yet. Add a folder to build your local library.")
         }
 
         Loader {
             anchors.fill: parent
-            active: root.activeTab === "tracks"
-            sourceComponent: tracksComponent
+            active: QbzLocal.localAvailable && root.activeTab === "genres"
+            sourceComponent: KioskLocalGenresTab { view: root }
         }
-    }
-
-    // KioskLocalLibrary.slint:138-143. The grid owns its own ring, its
-    // scroll-into-view and the Enter pulse for its cards.
-    Component {
-        id: albumsComponent
-
-        KioskAlbumGrid {
-            albums: root.albumCards
-            pad: root.pad
-            onOpen: function (id) {
-                QbzLocal.openAlbum(id)
-            }
+        Loader {
+            anchors.fill: parent
+            active: QbzLocal.localAvailable && root.activeTab === "albums"
+            sourceComponent: KioskLocalAlbumsTab { view: root }
         }
-    }
-
-    // KioskLocalLibrary.slint:145-150 — the SAME grid over the flat folder
-    // document, opening through the same album route.
-    Component {
-        id: foldersComponent
-
-        KioskAlbumGrid {
-            albums: root.folderCards
-            pad: root.pad
-            onOpen: function (id) {
-                QbzLocal.openAlbum(id)
-            }
+        Loader {
+            anchors.fill: parent
+            active: QbzLocal.localAvailable && root.activeTab === "artists"
+            sourceComponent: KioskLocalArtistsTab { view: root }
         }
-    }
+        Loader {
+            anchors.fill: parent
+            active: QbzLocal.localAvailable && root.activeTab === "folders"
+            sourceComponent: KioskLocalFoldersTab { view: root }
+        }
+        Loader {
+            anchors.fill: parent
+            active: QbzLocal.localAvailable && root.activeTab === "tracks"
+            sourceComponent: KioskLocalTracksTab { view: root }
+        }
+        Loader {
+            anchors.fill: parent
+            active: content.ephemeralShowing
+            sourceComponent: KioskLocalEphemeralTab { view: root }
+        }
 
-    // KioskLocalLibrary.slint:152-198 — absolute-positioned round cards in a
-    // vertical Flickable, 7 columns, 14px gap, a 26px name band under each
-    // avatar.
-    Component {
-        id: artistsComponent
+        // Retry. The kiosk primitive draws an error message and no action, and
+        // a route that can only say "it failed" is a route the user has to
+        // leave. One affordance for every retryable tab, mounted over the
+        // message, 64px tall.
+        readonly property string activeError: root.activeTab === "albums"
+                ? QbzLocal.localAlbumsError
+            : root.activeTab === "artists" && QbzLocal.localArtistsNativeActive ? QbzLocal.localArtistsNativeError
+            : root.activeTab === "tracks" && QbzLocal.localTracksNativeActive ? QbzLocal.localTracksNativeError
+            : root.activeTab === "genres" ? QbzLocal.localAlbumsError
+            : ""
 
-        Flickable {
-            id: arts
+        Rectangle {
+            id: retry
+            visible: content.activeError !== ""
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.verticalCenterOffset: 56
+            width: Math.max(140, retryText.implicitWidth + 44)
+            height: 64
+            radius: theme.radiusSm
+            color: theme.surfaceElevated
+            border.width: 1
+            border.color: theme.borderSubtle
 
-            readonly property int cols: 7
-            readonly property real gap: 14
-            readonly property real cell: (arts.width - 2 * root.pad - (arts.cols - 1) * arts.gap) / arts.cols
-            readonly property real itemH: arts.cell + 26
-            readonly property real pitch: arts.itemH + arts.gap
-
-            contentWidth: arts.width
-            contentHeight: Math.ceil(root.artists.length / arts.cols) * arts.pitch + root.pad
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-
-            readonly property int focusedItem: QbzKioskNav.index - QbzKioskNav.tabs
-            readonly property bool itemFocused: QbzKioskNav.navActive && QbzKioskNav.zone === "content" && arts.focusedItem >= 0 && arts.focusedItem < root.artists.length
-            readonly property real focusTop: root.pad + Math.floor(arts.focusedItem / arts.cols) * arts.pitch
-
-            // contentY is WRITTEN here on a settled layout (Qt.callLater
-            // defers it past the current binding pass), never read by a
-            // binding that feeds layout.
-            function scrollFocusIntoView() {
-                if (!arts.itemFocused)
-                    return
-                if (arts.focusTop < arts.contentY)
-                    arts.contentY = arts.focusTop - 8
-                else if (arts.focusTop + arts.itemH > arts.contentY + arts.height)
-                    arts.contentY = arts.focusTop + arts.itemH - arts.height + 8
+            Text {
+                id: retryText
+                anchors.centerIn: parent
+                text: root.t("Retry")
+                color: theme.textPrimary
+                font.pixelSize: 16
+                font.weight: theme.weightSemibold
             }
 
-            Connections {
-                target: QbzKioskNav
-
-                function onIndexChanged() {
-                    Qt.callLater(arts.scrollFocusIntoView)
-                }
-
-                // The tap path passes the artist NAME as the id, and so does
-                // this one — local rows have no catalog id.
-                function onActivateSeqChanged() {
-                    if (arts.itemFocused)
-                        QbzLocal.openArtistByName(root.artists[arts.focusedItem].name)
-                }
-            }
-
-            Item {
-                width: arts.contentWidth
-                height: arts.contentHeight
-
-                Repeater {
-                    model: root.artists
-
-                    // Same in-window mounting as KioskAlbumGrid
-                    // (qml/kiosk/KioskAlbumGrid.qml:6-12): cheap positioned
-                    // slots for every artist, the card itself only for the
-                    // band around the viewport. A local library reaches
-                    // thousands of artists, and mounting every avatar on
-                    // entry is the CPU spike the kiosk cards exist to avoid.
-                    delegate: Item {
-                        id: slot
-
-                        required property var modelData
-                        required property int index
-
-                        x: root.pad + (slot.index % arts.cols) * (arts.cell + arts.gap)
-                        y: root.pad + Math.floor(slot.index / arts.cols) * arts.pitch
-                        width: arts.cell
-                        height: arts.itemH
-
-                        readonly property bool inWindow: (slot.y + slot.height >= arts.contentY - 240) && (slot.y <= arts.contentY + arts.height + 240)
-
-                        Component {
-                            id: artistCardComponent
-
-                            // ArtistRow (src/local_rows.rs:91) carries a name
-                            // and no id — the reference's display-name has no
-                            // Qt counterpart, so the name is both the label
-                            // and the route key.
-                            KioskArtistCard {
-                                artSize: arts.cell
-                                artist: ({
-                                    "id": slot.modelData.name,
-                                    "name": slot.modelData.name,
-                                    "artwork": root.artPathOf(slot.modelData.artKey)
-                                })
-                                navFocused: arts.itemFocused && arts.focusedItem === slot.index
-                                onClicked: function (id) {
-                                    QbzLocal.openArtistByName(id)
-                                }
-                            }
-                        }
-
-                        Loader {
-                            active: slot.inWindow
-                            sourceComponent: artistCardComponent
-                        }
-                    }
-                }
+            MouseArea {
+                anchors.fill: parent
+                onClicked: root.loadActiveTab()
             }
         }
-    }
-
-    // KioskLocalLibrary.slint:200-231 — a windowing list of 62px rows.
-    Component {
-        id: tracksComponent
-
-        ListView {
-            id: tracksList
-
-            model: root.tracks
-            clip: true
-            spacing: 0
-            boundsBehavior: Flickable.StopAtBounds
-
-            readonly property int focusedItem: QbzKioskNav.index - QbzKioskNav.tabs
-            readonly property bool itemFocused: QbzKioskNav.navActive && QbzKioskNav.zone === "content" && tracksList.focusedItem >= 0 && tracksList.focusedItem < root.tracks.length
-
-            function scrollFocusIntoView() {
-                if (!tracksList.itemFocused)
-                    return
-                var top = tracksList.focusedItem * 62
-                if (top < tracksList.contentY)
-                    tracksList.contentY = top - 8
-                else if (top + 62 > tracksList.contentY + tracksList.height)
-                    tracksList.contentY = top + 62 - tracksList.height + 8
-            }
-
-            Connections {
-                target: QbzKioskNav
-
-                function onIndexChanged() {
-                    Qt.callLater(tracksList.scrollFocusIntoView)
-                }
-
-                function onActivateSeqChanged() {
-                    if (tracksList.itemFocused)
-                        root.playTrack(root.tracks[tracksList.focusedItem].id)
-                }
-            }
-
-            delegate: KioskTrackRow {
-                id: trackRow
-
-                required property var modelData
-                required property int index
-
-                width: tracksList.width
-                track: trackRow.modelData
-                navFocused: tracksList.itemFocused && tracksList.focusedItem === trackRow.index
-                onClicked: root.playTrack(trackRow.modelData.id)
-            }
-        }
-    }
-
-    /// The loaded page becomes the queue in render order, starting at the
-    /// clicked row — the Qt shape of the reference's track-action "play".
-    function playTrack(id) {
-        var ids = []
-        for (var i = 0; i < root.tracks.length; i++)
-            ids.push(root.tracks[i].id)
-        QbzLocal.playTracksVisible(JSON.stringify(ids), id)
     }
 }

@@ -30,6 +30,7 @@ import "../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     QbzTheme { id: theme }
 
@@ -60,7 +61,7 @@ Rectangle {
         // --- Fixed 56px header --------------------------------------------
         Item {
             width: parent.width
-            height: 56
+            height: root.kioskHost ? 64 : 56
 
             // Unconditional surface-main on BOTH pages (:43 / :34) — these
             // two never take the ambient bar alpha the browse pages do.
@@ -80,7 +81,7 @@ Rectangle {
 
             Text {
                 x: 48
-                y: 25 - height / 2
+                y: (root.kioskHost ? 32 : 25) - height / 2
                 width: Math.max(0, parent.width - 48 - 32 - (root.mostPlayed ? 240 + 16 : 0))
                 text: root.mostPlayed
                     ? QbzSession.tr("Most Played Albums", QbzSession.trRev)
@@ -96,9 +97,9 @@ Rectangle {
             Rectangle {
                 visible: root.mostPlayed
                 x: parent.width - width - 32
-                y: 25 - height / 2
+                y: (root.kioskHost ? 32 : 25) - height / 2
                 width: 240
-                height: 34
+                height: root.kioskHost ? 44 : 34
                 radius: 6
                 border.width: 1
                 border.color: theme.borderSubtle
@@ -153,7 +154,7 @@ Rectangle {
         // --- Scrolling grid ------------------------------------------------
         Item {
             width: parent.width
-            height: parent.height - 56
+            height: parent.height - (root.kioskHost ? 64 : 56)
 
             Flickable {
                 id: flick
@@ -199,6 +200,7 @@ Rectangle {
                     }
 
                     AlbumCollection {
+                kioskHost: root.kioskHost
                         visible: !QbzHome.playHistoryLoading
                         width: parent.width - 64
                         albums: root.items
@@ -209,7 +211,7 @@ Rectangle {
                         cardGap: 24
                         showPlays: root.mostPlayed
                         flick: flick
-                        contentOffset: 8
+                        contentOffset: root.kioskHost ? y : (8)
                     }
                 }
             }

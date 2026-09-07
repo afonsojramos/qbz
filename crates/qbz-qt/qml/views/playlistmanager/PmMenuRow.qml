@@ -24,6 +24,7 @@ import "../../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     property string label: ""
     property bool selected: false
@@ -41,7 +42,7 @@ Rectangle {
 
     QbzTheme { id: theme }
 
-    height: root.shown ? 30 : 0
+    height: root.shown ? (root.kioskHost ? 44 : 30) : 0
     visible: root.shown
     radius: 5
     color: rowArea.containsMouse ? theme.surfaceHover : "transparent"

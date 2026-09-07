@@ -6819,3 +6819,24 @@ msgstr "Der Ersatz wurde hinzugefügt, aber der nicht verfügbare Favorit konnte
 
 msgid "Failed to send playback to the selected device"
 msgstr "Die Wiedergabe konnte nicht an das ausgewählte Gerät übertragen werden"
+
+msgid "Move up"
+msgstr "Nach oben"
+
+msgid "Move down"
+msgstr "Nach unten"
+
+msgid "Download"
+msgstr "Herunterladen"
+
+msgid "Edit"
+msgstr "Bearbeiten"
+
+msgid "Grid"
+msgstr "Raster"
+
+msgid "List"
+msgstr "Liste"
+
+msgid "Tree"
+msgstr "Baum"

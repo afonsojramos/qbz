@@ -22,6 +22,7 @@ import "../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     readonly property bool ambientOn: theme.ambientOn
     color: root.ambientOn ? "transparent" : theme.surfaceMain
@@ -61,6 +62,7 @@ Rectangle {
 
             // ---- Search ------------------------------------------------------
             QbzLineEdit {
+                    kioskHost: root.kioskHost
                 width: 320
                 searchMode: true
                 placeholder: QbzSession.tr("Search albums & tracks…", QbzSession.trRev)
@@ -168,6 +170,7 @@ Rectangle {
             }
 
             AlbumCollection {
+                kioskHost: root.kioskHost
                 id: collection
                 visible: !root.loading && !root.loadError && root.albums.length > 0
                 width: parent.width
@@ -179,7 +182,7 @@ Rectangle {
                 cardHeight: 266
                 cardGap: 24
                 flick: page
-                contentOffset: collection.y
+                contentOffset: root.kioskHost ? y : (collection.y)
             }
 
             Item {
@@ -193,7 +196,7 @@ Rectangle {
                 QbzLoadMore {
                     id: loadMore
                     width: parent.width
-                    buttonHeight: 32
+                    buttonHeight: root.kioskHost ? 64 : 32
                     busy: root.doc.loadingMore === true
                     skeleton: "cards"
                     cellW: 224

@@ -27,6 +27,7 @@ import com.blitzfc.qbz
 import "../theme"
 
 Popup {
+    property bool kioskHost: false
     id: root
 
     parent: Overlay.overlay
@@ -54,7 +55,17 @@ Popup {
         border.width: 1
         border.color: theme.borderMuted
     }
-    contentItem: Column { id: col }
+    implicitHeight: col.implicitHeight + topPadding + bottomPadding
+    height: kioskHost && parent ? Math.min(implicitHeight, parent.height - 16) : implicitHeight
+    contentItem: Flickable {
+        implicitHeight: col.implicitHeight
+        contentWidth: width
+        contentHeight: col.implicitHeight
+        interactive: root.kioskHost
+        clip: root.kioskHost
+        boundsBehavior: Flickable.StopAtBounds
+        Column { id: col; width: parent.width }
+    }
 
     // Final placement is computed BEFORE open() — the popup's implicit
     // height is already known (static content), and `Window.window` is
@@ -62,7 +73,7 @@ Popup {
     function _place(gx, gy, win) {
         if (win) {
             x = Math.max(8, Math.min(gx, win.width - width - 8))
-            y = Math.max(8, Math.min(gy, win.height - implicitHeight - 8))
+            y = Math.max(8, Math.min(gy, win.height - (root.kioskHost ? height : implicitHeight) - 8))
         } else {
             x = gx
             y = gy

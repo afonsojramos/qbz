@@ -38,6 +38,7 @@ import "../theme"
 
 Item {
     id: root
+    property bool kioskHost: false
 
     property string title: ""
     property bool showViewAll: false
@@ -61,7 +62,7 @@ Item {
     QbzTheme { id: theme }
 
     width: parent ? parent.width : 0
-    height: 28
+    height: root.kioskHost ? 44 : 28
 
     Row {
         anchors.left: parent.left
@@ -80,8 +81,8 @@ Item {
         Rectangle {
             visible: root.collapsible
             anchors.verticalCenter: parent.verticalCenter
-            width: 22
-            height: 22
+            width: root.kioskHost ? 44 : 22
+            height: root.kioskHost ? 44 : 22
             radius: 4
             color: chevArea.containsMouse ? theme.surfaceHover : "transparent"
 
@@ -129,7 +130,7 @@ Item {
             visible: root.showViewAll
             anchors.verticalCenter: parent.verticalCenter
             width: vaText.implicitWidth + 16
-            height: 26
+            height: root.kioskHost ? 44 : 26
             radius: 4
             color: vaArea.containsMouse ? theme.surfaceHover : "transparent"
             Text {
@@ -171,6 +172,8 @@ Item {
         // The Playlist Manager's two headers are the first consumers that are
         // NOT carousels, and they say so with `showChevrons: false`.
         QbzNavButton {
+            width: root.kioskHost ? 44 : 28
+            height: root.kioskHost ? 44 : 28
             visible: root.showChevrons
             name: "chevron-left"
             ambient: true
@@ -178,6 +181,8 @@ Item {
             onClicked: root.pageLeft()
         }
         QbzNavButton {
+            width: root.kioskHost ? 44 : 28
+            height: root.kioskHost ? 44 : 28
             visible: root.showChevrons
             name: "chevron-right"
             ambient: true

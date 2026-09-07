@@ -39,6 +39,7 @@ import com.blitzfc.qbz
 import "../theme"
 
 Item {
+    property bool kioskHost: false
     id: root
 
     property string title: ""
@@ -141,7 +142,7 @@ Item {
 
     Rectangle {
         id: panel
-        width: Math.min(root.width - 80, 400)
+        width: Math.min(root.width - (root.kioskHost ? 24 : 80), root.kioskHost ? 640 : 400)
         // The Slint panel is `height: panel.preferred-height` over a
         // VerticalLayout with padding 24 -> content + 48.
         height: panelCol.implicitHeight + 48
@@ -171,7 +172,7 @@ Item {
                 width: parent.width
                 text: root.title
                 color: theme.textPrimary
-                font.pixelSize: theme.fontHeading
+                font.pixelSize: root.kioskHost ? (theme.fontHeading) * 1.2 : (theme.fontHeading)
                 font.weight: theme.weightSemibold
                 wrapMode: Text.WordWrap
             }
@@ -180,12 +181,12 @@ Item {
                 width: parent.width
                 text: root.body
                 color: theme.textSecondary
-                font.pixelSize: theme.fontBody
+                font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                 wrapMode: Text.WordWrap
             }
             Item {
                 width: parent.width
-                height: 36
+                height: root.kioskHost ? 44 : 36
                 Row {
                     anchors.right: parent.right
                     spacing: 10
@@ -193,7 +194,7 @@ Item {
                     Rectangle {
                         id: cancelButton
                         width: cancelLbl.implicitWidth + 32
-                        height: 36
+                        height: root.kioskHost ? 44 : 36
                         radius: theme.radiusSm
                         color: cancelArea.containsMouse ? theme.surfaceHover
                                                         : theme.surfaceElevated
@@ -219,7 +220,7 @@ Item {
                             anchors.centerIn: parent
                             text: root.cancelLabel
                             color: theme.textPrimary
-                            font.pixelSize: theme.fontBody
+                            font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                         }
                         MouseArea {
                             id: cancelArea
@@ -233,7 +234,7 @@ Item {
                     Rectangle {
                         id: confirmButton
                         width: confirmLbl.implicitWidth + 32
-                        height: 36
+                        height: root.kioskHost ? 44 : 36
                         radius: theme.radiusSm
                         color: root.danger
                             ? (confirmArea.containsMouse ? Qt.darker(theme.danger, 1.12)
@@ -267,7 +268,7 @@ Item {
                             // (QbzTheme.qml:314-317), which is the port's
                             // owner-approved WCAG deviation.
                             color: root.danger ? "#ffffff" : theme.accentGlyphColor
-                            font.pixelSize: theme.fontBody
+                            font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                             font.weight: theme.weightMedium
                         }
                         MouseArea {

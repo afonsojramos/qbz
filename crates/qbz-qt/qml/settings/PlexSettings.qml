@@ -26,6 +26,8 @@ import "../controls"
 import "../theme"
 
 Column {
+    property bool kioskHost: false
+
     id: root
 
     property var doc: ({})
@@ -115,7 +117,7 @@ Column {
                     anchors.verticalCenter: parent.verticalCenter
                     text: "Plex"
                     color: theme.textPrimary
-                    font.pixelSize: 14
+                    font.pixelSize: root.kioskHost ? (14) * 1.2 : (14)
                     font.weight: Font.DemiBold
                 }
             }
@@ -123,7 +125,7 @@ Column {
                 width: parent.width
                 text: QbzSession.tr("Connect a Plex Media Server on your local network.", QbzSession.trRev)
                 color: theme.textMuted
-                font.pixelSize: 12
+                font.pixelSize: root.kioskHost ? (12) * 1.2 : (12)
                 wrapMode: Text.WordWrap
             }
         }
@@ -135,8 +137,8 @@ Column {
             Rectangle {
                 id: collapseButton
                 visible: QbzLocal.plexEnabled
-                width: 28
-                height: 28
+                width: root.kioskHost ? 44 : 28
+                height: root.kioskHost ? 44 : 28
                 radius: theme.radiusSm
                 anchors.verticalCenter: parent.verticalCenter
                 color: chevArea.containsMouse ? theme.surfaceHover : "transparent"
@@ -175,7 +177,7 @@ Column {
                     onClicked: collapseButton.activate()
                 }
             }
-            QbzToggle {
+            QbzToggle { kioskHost: root.kioskHost;
                 anchors.verticalCenter: parent.verticalCenter
                 checked: QbzLocal.plexEnabled
                 onToggled: function (v) { QbzLocal.plexSetEnabled(v) }
@@ -191,10 +193,10 @@ Column {
 
         Item { width: 1; height: 10 }
 
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Server address", QbzSession.trRev)
             description: QbzSession.tr("Only local network servers are supported.", QbzSession.trRev)
-            QbzLineEdit {
+            QbzLineEdit { kioskHost: root.kioskHost;
                 id: urlField
                 width: 240
                 text: root.plex.serverUrl || ""
@@ -213,17 +215,17 @@ Column {
             width: parent.width
             text: QbzSession.tr("Only local network servers are supported.", QbzSession.trRev)
             color: "#e0564f"
-            font.pixelSize: theme.fontLegal
+            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
             wrapMode: Text.WordWrap
         }
         // --- Authorize (PIN) ---------------------------------------------
         // LocalLibrarySettings.slint:624-635. Gated on the same three things
         // as the reference: Plex enabled, a LAN address, and no request in
         // flight. Rust re-checks all three.
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Authorize", QbzSession.trRev)
             description: QbzSession.tr("Generate a code and sign in to Plex in your browser.", QbzSession.trRev)
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 text: QbzLocal.pinBusy
                     ? QbzSession.tr("Working...", QbzSession.trRev)
                     : QbzSession.tr("Generate code", QbzSession.trRev)
@@ -235,7 +237,7 @@ Column {
         // --- Code block, only while a code is outstanding -----------------
         // The reference mounts this with `if pin-code != ""`; `visible` is
         // the QML equivalent and the row collapses with it.
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             visible: (QbzLocal.pinCode || "") !== ""
             label: QbzSession.tr("Link code", QbzSession.trRev)
             description: QbzSession.tr("Enter this code at the Plex sign-in page.", QbzSession.trRev)
@@ -256,28 +258,28 @@ Column {
                         anchors.centerIn: parent
                         text: QbzLocal.pinCode
                         color: theme.textPrimary
-                        font.pixelSize: theme.fontBody
+                        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                         font.weight: theme.weightSemibold
                         font.letterSpacing: 1.5
                     }
                 }
-                SettingsButton {
+                SettingsButton { kioskHost: root.kioskHost;
                     text: QbzSession.tr("Copy code", QbzSession.trRev)
                     onClicked: QbzLocal.plexCopyCode()
                 }
-                SettingsButton {
+                SettingsButton { kioskHost: root.kioskHost;
                     text: QbzSession.tr("Open Plex sign-in", QbzSession.trRev)
                     onClicked: QbzLocal.plexOpenAuthUrl()
                 }
             }
         }
 
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Token", QbzSession.trRev)
             description: root.plex.hasToken === true
                 ? QbzSession.tr("A token is stored for this server.", QbzSession.trRev)
                 : QbzSession.tr("Use an existing X-Plex-Token.", QbzSession.trRev)
-            QbzLineEdit {
+            QbzLineEdit { kioskHost: root.kioskHost;
                 id: tokenField
                 width: 240
                 isPassword: true
@@ -289,10 +291,10 @@ Column {
         // Connect = persist the credentials + sync. `plex_connect` refuses a
         // non-LAN address BEFORE persisting (local_bridge.rs) — until
         // 2026-08-04 it did not, and the comment here claimed it did.
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Connect", QbzSession.trRev)
             description: QbzSession.tr("Saves the address and token, then fetches your libraries.", QbzSession.trRev)
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 text: QbzLocal.plexSyncing
                     ? QbzSession.tr("Working...", QbzSession.trRev)
                     : QbzSession.tr("Connect", QbzSession.trRev)
@@ -312,10 +314,10 @@ Column {
         // Ping the STORED server (not the typed field) and report what
         // answered. A successful ping is also the only thing that stamps the
         // machine id onto the cache — see plex_pin_qt::check_connection.
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Check connection", QbzSession.trRev)
             description: QbzSession.tr("Ping the saved server and report what answers.", QbzSession.trRev)
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 text: QbzLocal.plexSyncing
                     ? QbzSession.tr("Working...", QbzSession.trRev)
                     : QbzSession.tr("Check now", QbzSession.trRev)
@@ -326,10 +328,10 @@ Column {
 
         Item { width: 1; height: 14 }
 
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Libraries", QbzSession.trRev)
             description: QbzSession.tr("Fetch your Plex music libraries.", QbzSession.trRev)
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 text: QbzLocal.plexSyncing
                     ? QbzSession.tr("Working...", QbzSession.trRev)
                     : QbzSession.tr("Get libraries", QbzSession.trRev)
@@ -347,7 +349,7 @@ Column {
                 : QbzSession.tr("Synced {} tracks", QbzSession.trRev)
                     .replace("{}", QbzLocal.plexLastSyncTracks)
             color: QbzLocal.plexError !== "" ? theme.danger : theme.success
-            font.pixelSize: theme.fontLegal
+            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
             wrapMode: Text.WordWrap
         }
 
@@ -358,7 +360,7 @@ Column {
             visible: root.sections.length > 0
             width: parent.width
             spacing: 2
-            GroupHeader { text: QbzSession.tr("MUSIC LIBRARIES", QbzSession.trRev) }
+            GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("MUSIC LIBRARIES", QbzSession.trRev) }
             Item { width: 1; height: 4 }
             Repeater {
                 model: root.sections
@@ -392,7 +394,7 @@ Column {
                         anchors.leftMargin: 10
                         anchors.rightMargin: 12
                         spacing: 12
-                        QbzCheckbox {
+                        QbzCheckbox { kioskHost: root.kioskHost;
                             anchors.verticalCenter: parent.verticalCenter
                             checked: secRow.modelData.selected === true
                             onToggled: secRow.toggle()
@@ -402,7 +404,7 @@ Column {
                             height: parent.height
                             text: secRow.modelData.title || ""
                             color: theme.textPrimary
-                            font.pixelSize: theme.fontBody
+                            font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                             verticalAlignment: Text.AlignVCenter
                             elide: Text.ElideRight
                         }
@@ -413,10 +415,10 @@ Column {
         }
 
         // -------------------------- metadata write -------------------------
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Write metadata to Plex (experimental)", QbzSession.trRev)
             description: QbzSession.tr("Allow QBZ to write track metadata back to your Plex server.", QbzSession.trRev)
-            QbzToggle {
+            QbzToggle { kioskHost: root.kioskHost;
                 checked: root.plex.metadataWrite === true
                 onToggled: function (v) { QbzBridge.settingsBool("plex-metadata-write", v) }
             }
@@ -425,11 +427,11 @@ Column {
         Item { width: 1; height: 18 }
 
         // ------------------------- plex danger zone ------------------------
-        GroupHeader { text: QbzSession.tr("PLEX DANGER ZONE", QbzSession.trRev) }
-        SettingRow {
+        GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("PLEX DANGER ZONE", QbzSession.trRev) }
+        SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Disconnect", QbzSession.trRev)
             description: QbzSession.tr("Sign out of Plex and clear the local cache.", QbzSession.trRev)
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 danger: true
                 text: QbzSession.tr("Disconnect", QbzSession.trRev)
                 enabled: root.plex.hasToken === true
@@ -449,10 +451,10 @@ Column {
                 }
             }
         }
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Clear cache", QbzSession.trRev)
             description: QbzSession.tr("Remove cached Plex libraries and tracks. Your sign-in is kept.", QbzSession.trRev)
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 danger: true
                 text: QbzSession.tr("Clear cache", QbzSession.trRev)
                 enabled: root.plex.hasToken === true

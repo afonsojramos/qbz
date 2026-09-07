@@ -24,6 +24,8 @@ import com.blitzfc.qbz
 import "../controls"
 
 Item {
+    property bool kioskHost: false
+
     id: root
 
     anchors.fill: parent
@@ -60,6 +62,7 @@ Item {
     }
 
     QbzConfirmModal {
+        kioskHost: root.kioskHost
         id: step1
         anchors.fill: parent
         danger: true
@@ -90,6 +93,7 @@ Item {
     }
 
     QbzConfirmModal {
+        kioskHost: root.kioskHost
         id: step2
         anchors.fill: parent
         danger: true

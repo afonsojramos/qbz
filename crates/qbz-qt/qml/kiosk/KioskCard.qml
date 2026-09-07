@@ -15,6 +15,12 @@
 // Height is INTRINSIC (art + 7 + title line + 7 + artist line). The grid slot
 // allocates artSize + 46 and the column's top alignment leaves the slack at
 // the bottom, exactly as the Slint VerticalLayout's `alignment: start` does.
+//
+// ARTWORK: KioskArtwork, not theme/RoundedImage. The desktop path measures the
+// original before it can ask Rust for a derivative, i.e. it can decode a 600px
+// cover into a 96px kiosk cell first — the exact thing contract §5.2 says
+// "usa RoundedImage" does not close. KioskArtwork pins `sourceSize` to this
+// tile's physical box instead and mounts no probe. See its header.
 
 import QtQuick
 import "../theme"
@@ -33,6 +39,11 @@ Rectangle {
     /// 10-foot distance.
     property bool navFocused: false
     signal clicked(string id)
+
+    /// The cover is DECODED and on screen. A host that lays a KioskSkeleton
+    /// over a cell gates it on this, never on "the path is non-empty": the
+    /// path landing only means the decode has started.
+    readonly property bool artReady: art.ready
 
     QbzTheme { id: theme }
 
@@ -64,7 +75,8 @@ Rectangle {
             color: theme.surfaceElevated
             clip: true
 
-            RoundedImage {
+            KioskArtwork {
+                id: art
                 anchors.fill: parent
                 source: root._artwork
                 radius: artTile.radius

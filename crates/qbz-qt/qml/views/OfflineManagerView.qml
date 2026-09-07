@@ -49,6 +49,7 @@ import "../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     // Transparent while the ambient background is active — the frosted content
     // panel shows through (HomeView.qml:53 and its twelve siblings).
@@ -174,8 +175,8 @@ Rectangle {
         property string name: ""
         property string tint: "muted"
         signal clicked()
-        width: 30
-        height: 30
+        width: root.kioskHost ? 44 : 30
+        height: root.kioskHost ? 44 : 30
         radius: theme.radiusSm
         color: gbArea.containsMouse ? theme.surfaceElevated : "transparent"
         QbzIcon {
@@ -198,8 +199,8 @@ Rectangle {
 
     Column {
         anchors.fill: parent
-        anchors.margins: 24
-        spacing: 14
+        anchors.margins: root.kioskHost ? 8 : 24
+        spacing: root.kioskHost ? 6 : 14
 
         // ---- Header ------------------------------------------------------
         Text {
@@ -212,7 +213,8 @@ Rectangle {
         // ---- Stats bar ---------------------------------------------------
         Rectangle {
             width: parent.width
-            height: 76
+            visible: !root.kioskHost || root.selectedCount === 0
+            height: root.kioskHost ? 44 : 76
             radius: theme.radiusMd
             color: theme.surfaceElevated
 
@@ -236,7 +238,7 @@ Rectangle {
                 Text {
                     text: (root.doc.sizeText || "") + " " + (root.doc.limitText || "")
                     color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost ? theme.fontLegal * 1.2 : theme.fontLegal
                 }
             }
 
@@ -248,6 +250,7 @@ Rectangle {
                 spacing: 6
 
                 QbzLineEdit {
+                    kioskHost: root.kioskHost
                     id: limitField
                     anchors.verticalCenter: parent.verticalCenter
                     width: 58
@@ -262,7 +265,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     text: "GB"
                     color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost ? theme.fontLegal * 1.2 : theme.fontLegal
                 }
                 GhostBtn {
                     anchors.verticalCenter: parent.verticalCenter
@@ -303,10 +306,11 @@ Rectangle {
         // ---- Toolbar -----------------------------------------------------
         Row {
             width: parent.width
-            height: 32
+            height: root.kioskHost ? 44 : 32
             spacing: 12
 
             QbzSelect {
+                    kioskHost: root.kioskHost
                 anchors.verticalCenter: parent.verticalCenter
                 menuWidth: 160
                 sm: true
@@ -323,7 +327,7 @@ Rectangle {
             Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 width: failedLabel.implicitWidth + 28
-                height: 32
+                height: root.kioskHost ? 44 : 32
                 radius: theme.radiusSm
                 border.width: 1
                 border.color: root.doc.showOnlyFailed === true ? theme.accent : theme.borderSubtle
@@ -336,7 +340,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     text: QbzSession.tr("Failed only", QbzSession.trRev)
                     color: root.doc.showOnlyFailed === true ? theme.danger : theme.textSecondary
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost ? theme.fontLegal * 1.2 : theme.fontLegal
                 }
                 MouseArea {
                     id: failedArea
@@ -356,11 +360,11 @@ Rectangle {
             Row {
                 anchors.fill: parent
                 anchors.bottomMargin: root.selectedCount > 0 ? 58 : 0
-                spacing: 14
+                spacing: root.kioskHost ? 6 : 14
 
                 // Left A-Z artist rail.
                 Rectangle {
-                    width: 210
+                    width: root.kioskHost ? 160 : 210
                     height: parent.height
                     radius: theme.radiusMd
                     color: theme.surfaceCard
@@ -390,7 +394,7 @@ Rectangle {
                                 ? (root.doc.selectedArtist || "") === ""
                                 : (a !== null && a.selected === true)
                             width: railList.width
-                            height: 48
+                            height: root.kioskHost ? 64 : 48
                             radius: 8
                             color: railRow.active ? theme.surfaceElevated
                                 : (railArea.containsMouse ? theme.surfaceHover : "transparent")
@@ -407,7 +411,7 @@ Rectangle {
                                         ? QbzSession.tr("All artists", QbzSession.trRev)
                                         : railRow.a.name
                                     color: railRow.active ? theme.accent : theme.textPrimary
-                                    font.pixelSize: theme.fontLegal
+                                    font.pixelSize: root.kioskHost ? theme.fontLegal * 1.2 : theme.fontLegal
                                     font.weight: railRow.active
                                         ? theme.weightSemibold : theme.weightRegular
                                     elide: Text.ElideRight
@@ -418,7 +422,7 @@ Rectangle {
                                         ? (root.doc.tracksText || "")
                                         : railRow.a.meta
                                     color: theme.textMuted
-                                    font.pixelSize: 11
+                                    font.pixelSize: root.kioskHost ? 13 : 11
                                     elide: Text.ElideRight
                                 }
                             }
@@ -443,7 +447,7 @@ Rectangle {
                 // Right list — the three mutually-exclusive body branches, in
                 // the reference's order: loading · empty · the list.
                 Item {
-                    width: parent.width - 210 - 14
+                    width: parent.width - (root.kioskHost ? 160 + 6 : 210 + 14)
                     height: parent.height
 
                     QbzSpinner {
@@ -479,7 +483,7 @@ Rectangle {
                             readonly property bool checked:
                                 root.selected[modelData.trackId] === true
                             width: rowList.width
-                            height: isAlbum ? 60 : 44
+                            height: root.kioskHost ? 64 : (isAlbum ? 60 : 44)
                             radius: 8
                             color: isAlbum ? theme.surfaceCard
                                 : (rowArea.containsMouse ? theme.surfaceHover : "transparent")
@@ -502,9 +506,10 @@ Rectangle {
 
                                 // Checkbox (track rows) / spacer (albums).
                                 Item {
-                                    width: 16
+                                    width: root.kioskHost ? 44 : 16
                                     height: parent.height
                                     QbzCheckbox {
+                    kioskHost: root.kioskHost
                                         anchors.centerIn: parent
                                         visible: !rowItem.isAlbum
                                         checked: rowItem.checked
@@ -523,10 +528,19 @@ Rectangle {
                                         height: 40
                                         radius: 4
                                         color: theme.surfaceMain
+                                        Loader {
+                                            anchors.fill: parent
+                                            active: root.kioskHost && rowItem.isAlbum
+                                            source: active ? "../kiosk/KioskArtwork.qml" : ""
+                                            onLoaded: item.source = Qt.binding(function() {
+                                                return rowItem.modelData.cover ? "file://" + rowItem.modelData.cover : ""
+                                            })
+                                        }
                                         RoundedImage {
+                                            visible: !root.kioskHost
                                             anchors.fill: parent
                                             radius: 4
-                                            source: (rowItem.modelData.cover || "") !== ""
+                                            source: !root.kioskHost && (rowItem.modelData.cover || "") !== ""
                                                 ? "file://" + rowItem.modelData.cover : ""
                                         }
                                     }
@@ -541,8 +555,8 @@ Rectangle {
 
                                 // Title + subtitle.
                                 Column {
-                                    width: parent.width - 16 - 40 - metaText.width
-                                        - 30 * 2 - 18 - 12 * 6
+                                    width: parent.width - (root.kioskHost ? 44 : 16) - 40 - metaText.width
+                                        - (root.kioskHost ? 44 : 30) * 2 - 18 - 12 * 6
                                     anchors.verticalCenter: parent.verticalCenter
                                     spacing: 2
                                     Text {
@@ -559,7 +573,7 @@ Rectangle {
                                         width: parent.width
                                         text: rowItem.modelData.subtitle || ""
                                         color: theme.textMuted
-                                        font.pixelSize: theme.fontLegal
+                                        font.pixelSize: root.kioskHost ? theme.fontLegal * 1.2 : theme.fontLegal
                                         elide: Text.ElideRight
                                     }
                                 }
@@ -569,7 +583,7 @@ Rectangle {
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: rowItem.modelData.meta || ""
                                     color: theme.textMuted
-                                    font.pixelSize: theme.fontLegal
+                                    font.pixelSize: root.kioskHost ? theme.fontLegal * 1.2 : theme.fontLegal
                                     horizontalAlignment: Text.AlignRight
                                 }
 
@@ -611,6 +625,7 @@ Rectangle {
             // Bulk bar — the shared component, mounted the way every other
             // multi-select surface in this port mounts it.
             QbzMultiSelectBar {
+                    kioskHost: root.kioskHost
                 visible: root.selectedCount > 0
                 anchors.left: parent.left
                 anchors.right: parent.right
@@ -632,6 +647,7 @@ Rectangle {
     // does (SettingsConfirmHost). Purging the cache can be an hours-long
     // re-download and there is no undo.
     QbzConfirmModal {
+                    kioskHost: root.kioskHost
         id: clearConfirm
         // Fills the VIEW, like BlacklistManagerView.qml:523 — without it the
         // modal has no size and its scrim covers nothing.

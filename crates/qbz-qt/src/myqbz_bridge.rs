@@ -91,6 +91,18 @@ pub mod qbz_myqbz_bridge {
         #[qinvokable]
         fn grid_reset(self: Pin<&mut QbzMyQbz>, grid: QString);
 
+        /// Kiosk-only demand artwork; bounds are inclusive, pixels physical.
+        #[qinvokable]
+        fn kiosk_grid_artwork(
+            self: Pin<&mut QbzMyQbz>,
+            grid: QString,
+            first: i32,
+            last: i32,
+            px: i32,
+        );
+        #[qinvokable]
+        fn kiosk_detail_artwork(self: Pin<&mut QbzMyQbz>, first: i32, last: i32, px: i32);
+
         // --- Create modal ---------------------------------------------------
 
         /// "+ New Mixtape" / "+ New Collection" (`kind` ∈ mixtape | collection).
@@ -369,6 +381,14 @@ impl qbz_myqbz_bridge::QbzMyQbz {
 
     pub fn open_card(self: Pin<&mut Self>, id: QString) {
         crate::myqbz_detail_qt::open(id.to_string());
+    }
+
+    pub fn kiosk_grid_artwork(self: Pin<&mut Self>, grid: QString, first: i32, last: i32, px: i32) {
+        crate::myqbz_qt::kiosk_grid_artwork(&grid.to_string(), first, last, px);
+    }
+
+    pub fn kiosk_detail_artwork(self: Pin<&mut Self>, first: i32, last: i32, px: i32) {
+        crate::myqbz_detail_qt::kiosk_detail_artwork(first, last, px);
     }
 
     pub fn grid_search(self: Pin<&mut Self>, grid: QString, query: QString) {

@@ -53,6 +53,7 @@ import "../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     color: ambientOn ? "transparent" : theme.surfaceMain
     readonly property bool ambientOn: theme.ambientOn
@@ -112,7 +113,7 @@ Rectangle {
         Item {
             id: header
             width: parent.width
-            height: 56
+            height: root.kioskHost ? 64 : 56
 
             Rectangle {
                 anchors.fill: parent
@@ -137,7 +138,7 @@ Rectangle {
             // convention — 25, not 28, and it is the .slint's own value at :43.
             Column {
                 x: 48
-                y: 25 - height / 2
+                y: (root.kioskHost ? 32 : 25) - height / 2
                 spacing: 2
 
                 // The artist name. SERVER TEXT — never translated (.slint:54
@@ -175,9 +176,10 @@ Rectangle {
             // (QbzSelect.slint:88). Passing 190 "to get 150" is the exact
             // mistake that file's :42-50 note documents.
             QbzSelect {
+                        kioskHost: root.kioskHost
                 id: sortSel
                 x: parent.width - width - 32
-                y: 25 - height / 2
+                y: (root.kioskHost ? 32 : 25) - height / 2
                 sm: true
                 menuWidth: 150
                 options: root.sortLabels
@@ -191,7 +193,7 @@ Rectangle {
         // --- Scrolling grid ------------------------------------------------
         Item {
             width: parent.width
-            height: parent.height - 56
+            height: parent.height - (root.kioskHost ? 64 : 56)
 
             Flickable {
                 id: flick
@@ -290,6 +292,7 @@ Rectangle {
                     // `viewMode: "grid"` is HARD-WIRED, as in the reference
                     // (:207): this page has no toggle.
                     AlbumCollection {
+                kioskHost: root.kioskHost
                         id: collection
                         visible: root.doc.loading !== true && root.doc.loadError !== true
                         width: parent.width - 64
@@ -307,7 +310,7 @@ Rectangle {
                         // The page Column's padding-top. The loading / error
                         // branches are mutually exclusive with the grid, so
                         // nothing else sits above it (.slint:213-222).
-                        contentOffset: 8
+                        contentOffset: root.kioskHost ? y : (8)
                     }
 
                     Item {
@@ -318,7 +321,7 @@ Rectangle {
                         QbzLoadMore {
                             id: loadMore
                             width: parent.width
-                            buttonHeight: 32
+                            buttonHeight: root.kioskHost ? 64 : 32
                             busy: root.doc.loadMoreLoading === true
                             skeleton: "cards"
                             cellW: 224
@@ -335,7 +338,7 @@ Rectangle {
             }
 
             // Tracks only the scrolling grid — the header is a sibling above,
-            // which is the .slint's `y: 56px` / `height: parent.height - 56px`.
+            // which is the .slint's `y: 56px` / `height: parent.height - (root.kioskHost ? 64 : 56)px`.
             // Back/forward scroll memory (controls/ScrollMemory.qml): reports
             // this container's offset while it is the live page, and restores it
             // when a back/forward step arms this route.

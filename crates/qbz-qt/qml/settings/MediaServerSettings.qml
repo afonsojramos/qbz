@@ -37,6 +37,8 @@ import "../controls"
 import "../theme"
 
 Column {
+    property bool kioskHost: false
+
     id: root
 
     /// "jellyfin" | "subsonic" — the word every bridge call is keyed on.
@@ -105,7 +107,7 @@ Column {
                     anchors.verticalCenter: parent.verticalCenter
                     text: root.title
                     color: theme.textPrimary
-                    font.pixelSize: 14
+                    font.pixelSize: root.kioskHost ? (14) * 1.2 : (14)
                     font.weight: Font.DemiBold
                 }
                 // What the server called itself, once we have talked to it.
@@ -114,14 +116,14 @@ Column {
                     visible: (root.state.serverName || "") !== ""
                     text: "· " + (root.state.serverName || "")
                     color: theme.textMuted
-                    font.pixelSize: 12
+                    font.pixelSize: root.kioskHost ? (12) * 1.2 : (12)
                 }
             }
             Text {
                 width: parent.width
                 text: root.subtitle
                 color: theme.textMuted
-                font.pixelSize: 12
+                font.pixelSize: root.kioskHost ? (12) * 1.2 : (12)
                 wrapMode: Text.WordWrap
             }
         }
@@ -133,8 +135,8 @@ Column {
             Rectangle {
                 id: collapseButton
                 visible: root.state.enabled === true
-                width: 28
-                height: 28
+                width: root.kioskHost ? 44 : 28
+                height: root.kioskHost ? 44 : 28
                 radius: theme.radiusSm
                 anchors.verticalCenter: parent.verticalCenter
                 color: chevArea.containsMouse ? theme.surfaceHover : "transparent"
@@ -173,7 +175,7 @@ Column {
                     onClicked: collapseButton.activate()
                 }
             }
-            QbzToggle {
+            QbzToggle { kioskHost: root.kioskHost;
                 anchors.verticalCenter: parent.verticalCenter
                 checked: root.state.enabled === true
                 onToggled: function (v) { QbzLocal.mediaSetEnabled(root.server, v) }
@@ -189,12 +191,12 @@ Column {
 
         Item { width: 1; height: 10 }
 
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Server address", QbzSession.trRev)
             description: root.testHint
             Row {
                 spacing: 8
-                QbzLineEdit {
+                QbzLineEdit { kioskHost: root.kioskHost;
                     width: 240
                     text: root.state.serverUrl || ""
                     placeholder: root.urlPlaceholder
@@ -211,9 +213,9 @@ Column {
             }
         }
 
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Username", QbzSession.trRev)
-            QbzLineEdit {
+            QbzLineEdit { kioskHost: root.kioskHost;
                 width: 240
                 text: root.state.username || ""
                 placeholder: QbzSession.tr("Account name", QbzSession.trRev)
@@ -222,10 +224,10 @@ Column {
             }
         }
 
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Password", QbzSession.trRev)
             description: root.credentialNote
-            QbzLineEdit {
+            QbzLineEdit { kioskHost: root.kioskHost;
                 width: 240
                 // NEVER prefilled: the document does not carry it, and asking
                 // for it again is the honest cost of not shipping it to QML.
@@ -240,7 +242,7 @@ Column {
         }
 
         // --- Connect ------------------------------------------------------
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Connection", QbzSession.trRev)
             description: root.state.hasCredential === true
                 ? QbzSession.tr("Connected. Type a password to reconnect.", QbzSession.trRev)
@@ -255,7 +257,7 @@ Column {
         }
 
         // --- Library sweep ------------------------------------------------
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             visible: root.state.hasCredential === true
             label: QbzSession.tr("Library", QbzSession.trRev)
             // The count is what tells the user the sweep did anything; the cost
@@ -275,7 +277,7 @@ Column {
                         ? QbzSession.tr("Syncing…", QbzSession.trRev) + " " + QbzLocal.mediaSyncProgress
                         : QbzSession.tr("Syncing…", QbzSession.trRev)
                     color: theme.textSecondary
-                    font.pixelSize: 12
+                    font.pixelSize: root.kioskHost ? (12) * 1.2 : (12)
                 }
                 IconTextButton {
                     visible: !QbzLocal.mediaSyncing
@@ -297,7 +299,7 @@ Column {
         }
 
         // --- Danger zone --------------------------------------------------
-        SettingRow {
+        SettingRow { kioskHost: root.kioskHost;
             visible: root.state.hasCredential === true
             label: QbzSession.tr("Disconnect", QbzSession.trRev)
             description: QbzSession.tr(

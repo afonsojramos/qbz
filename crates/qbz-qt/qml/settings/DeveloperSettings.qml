@@ -20,6 +20,8 @@ import "../controls"
 import "../theme"
 
 Column {
+    property bool kioskHost: false
+
     id: root
 
     property var doc: ({})
@@ -30,11 +32,11 @@ Column {
     spacing: 4
 
     // ========================== QOBUZ CONNECT ============================
-    GroupHeader { text: QbzSession.tr("QOBUZ CONNECT", QbzSession.trRev) }
-    SettingRow {
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("QOBUZ CONNECT", QbzSession.trRev) }
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Connect diagnostics", QbzSession.trRev)
         description: QbzSession.tr("Live session topology and a rolling event log for debugging Qobuz Connect at runtime.", QbzSession.trRev)
-        SettingsButton {
+        SettingsButton { kioskHost: root.kioskHost;
             text: QbzSession.tr("Open diagnostics", QbzSession.trRev)
             onClicked: QbzQConnect.diagSetOpen(true)
         }
@@ -43,8 +45,8 @@ Column {
     SettingsSpacer { }
 
     // ============================== LOGS =================================
-    GroupHeader { text: QbzSession.tr("LOGS", QbzSession.trRev) }
-    SettingRow {
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("LOGS", QbzSession.trRev) }
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Application logs", QbzSession.trRev)
         description: (root.dev.logPath || "") !== ""
             ? root.dev.logPath
@@ -54,11 +56,11 @@ Column {
             // The description above has always promised "view the in-app log,
             // copy it (secrets redacted), or upload it" — until the viewer
             // landed, the only button here did none of those three.
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 text: QbzSession.tr("View logs", QbzSession.trRev)
                 onClicked: QbzShell.logOpen()
             }
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 text: QbzSession.tr("Open log file", QbzSession.trRev)
                 enabled: (root.dev.logPath || "") !== ""
                 onClicked: QbzBridge.settingsString("open-log-file", "")
@@ -71,7 +73,7 @@ Column {
         width: parent.width
         text: root.dev.status || ""
         color: theme.textMuted
-        font.pixelSize: theme.fontLegal
+        font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
         wrapMode: Text.WordWrap
     }
 
@@ -79,5 +81,5 @@ Column {
 
     // ========================== DIAGNOSTICS ==============================
     // Last child, 1:1 with DeveloperSettings.slint:92.
-    DiagnosticsPanel { }
+    DiagnosticsPanel { kioskHost: root.kioskHost; }
 }

@@ -18,9 +18,13 @@ import com.blitzfc.qbz
 import "../cards"
 import "../controls"
 import "../theme"
+import "../kiosk"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
+    property bool pinned: item.isPinned === true
+    Connections { target: QbzLibrary; function onPinChanged(key, value) { if (key === "playlist:" + (root.item.id || "")) root.pinned = value } }
 
     property var item: ({})
     /// Cover override for hosts whose rows carry no `artPath` of their own.
@@ -45,7 +49,7 @@ Rectangle {
         || moreArea.containsMouse
 
     width: parent ? parent.width : 0
-    height: 60
+    height: root.kioskHost ? 64 : 60
     radius: theme.radiusSm
     color: rowHovered ? theme.surfaceHover
          : (rowIndex % 2 === 1 ? theme.alphaTier(4) : "transparent")
@@ -68,17 +72,25 @@ Rectangle {
         id: rowMenuLoader
         active: false
         sourceComponent: CardMenu {
-            menuWidth: 196
+            kioskHost: root.kioskHost
+            menuWidth: root.kioskHost ? 252 : 196
             entries: [
                 { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
                 { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
                 { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
                 { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-            ]
+            ].concat(root.kioskHost ? [
+                {label: QbzSession.tr(root.pinned ? "Unpin" : "Pin", QbzSession.trRev), icon: "pin", action: "pin"},
+                {label: QbzSession.tr("Add to mixtape", QbzSession.trRev), icon: "cassette-tape", action: "mixtape"},
+                {label: QbzSession.tr("Make available offline", QbzSession.trRev), icon: "cloud-download", action: "cache"}
+            ] : [])
             onPicked: function (a) {
                 var id = root.item.id || ""
                 if (id === "") return
                 if (a === "play") QbzPlayer.playPlaylistById(id)
+                else if (a === "pin") QbzLibrary.togglePin("playlist", id, root.item.title || "", root.item.subtitle || "", root.item.artUrl || "")
+                else if (a === "cache") QbzOffline.cachePlaylist(String(id))
+                else if (a === "mixtape") QbzMyQbzAdd.open(JSON.stringify([{itemType: "playlist", source: "qobuz", sourceItemId: String(id), title: root.item.title || "", subtitle: root.item.subtitle || "", artworkUrl: root.item.artUrl || ""}]))
                 else QbzPlayer.enqueuePlaylistById(id, a)
             }
         }
@@ -111,10 +123,15 @@ Rectangle {
             // whose art is the playlist's own `image.rectangle` — 800x380.
             // `auto` pads that instead of cropping to the middle 47% of it,
             // and still crops the square `image.covers[0]` fallback.
+            KioskArtwork {
+                anchors.fill: parent
+                visible: root.kioskHost
+                source: root.kioskHost ? root.artResolved : ""
+            }
             RoundedImage {
                 anchors.fill: parent
-                visible: !rowCollage.visible
-                source: root.artResolved
+                visible: !root.kioskHost && !rowCollage.visible
+                source: root.kioskHost ? "" : root.artResolved
                 radius: 6
                 fit: "auto"
             }
@@ -136,7 +153,7 @@ Rectangle {
         }
 
         Column {
-            width: parent.width - 44 - 2 * 30 - 4 * 12
+            width: parent.width - 44 - 2 * (root.kioskHost ? 44 : 30) - 4 * 12
             anchors.verticalCenter: parent.verticalCenter
             spacing: 2
             Text {
@@ -157,7 +174,7 @@ Rectangle {
         }
 
         Item {
-            width: 30
+            width: root.kioskHost ? 44 : 30
             height: parent.height
             QbzIcon {
                 name: "play-fill"
@@ -175,7 +192,7 @@ Rectangle {
             }
         }
         Item {
-            width: 30
+            width: root.kioskHost ? 44 : 30
             height: parent.height
             QbzIcon {
                 name: "ellipsis"

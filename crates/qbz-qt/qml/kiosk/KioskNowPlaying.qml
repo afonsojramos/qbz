@@ -65,6 +65,22 @@ Rectangle {
     // (shell/QueuePanel.qml:32), so this view does the same. Leaving the view
     // therefore resets it to Up Next, which is the desktop panel's behaviour.
     property int queueTab: 0
+    function selectQueueTab(tab) {
+        if (tab === queueTab || tab < 0 || tab > 1) return
+        navigation.recordTab(String(tab))
+        queueTab = tab
+    }
+    KioskNavigation {
+        id: navigation
+        route: "nowplaying"
+        snapshot: ({ activeTab: String(root.queueTab), showLyrics: root.showLyrics, leftScroll: leftPanel.contentY, page: root.doc.page || 0 })
+        onRestore: function(saved) {
+            root.queueTab = Number(saved.activeTab) === 1 ? 1 : 0
+            root.showLyrics = !!saved.showLyrics
+            Qt.callLater(function() { leftPanel.contentY = saved.leftScroll || 0 })
+            if (saved.page !== undefined && saved.page !== root.doc.page) QbzQueue.queueSetPage(saved.page)
+        }
+    }
 
     // ---- Queue document --------------------------------------------------
     readonly property var doc: root.parseQueue()
@@ -142,14 +158,8 @@ Rectangle {
     // Scroll the focused row into view (:416-425 / :448-457). 60px pitch =
     // the 58px row + the 2px column spacing; ±8px of air at either edge.
     function scrollFocusIntoView() {
-        if (!root.itemFocused)
-            return
-        var flick = root.queueTab === 0 ? upFlick : histFlick
-        var top = root.focusedItem * 60
-        if (top < flick.contentY)
-            flick.contentY = top - 8
-        else if (top + 58 > flick.contentY + flick.height)
-            flick.contentY = top + 58 - flick.height + 8
+        if (root.itemFocused)
+            (root.queueTab === 0 ? upFlick : histFlick).positionViewAtIndex(root.focusedItem, ListView.Contain)
     }
 
     Connections {
@@ -158,6 +168,10 @@ Rectangle {
         function onIndexChanged() {
             Qt.callLater(root.scrollFocusIntoView)
         }
+        function onZoneChanged() {
+            if (QbzKioskNav.navActive && QbzKioskNav.zone === "player")
+                leftPanel.contentY = Math.max(0, leftPanel.contentHeight - leftPanel.height)
+        }
 
         // Enter pulse (:154-167): on a tab it switches tabs, on a row it plays
         // that row. The `- 2` is the source's literal, matching `tabs = 2`.
@@ -165,7 +179,7 @@ Rectangle {
             if (!QbzKioskNav.navActive || QbzKioskNav.zone !== "content")
                 return
             if (QbzKioskNav.index < QbzKioskNav.tabs) {
-                root.queueTab = QbzKioskNav.index
+                root.selectQueueTab(QbzKioskNav.index)
                 return
             }
             var i = QbzKioskNav.index - 2
@@ -176,75 +190,10 @@ Rectangle {
         }
     }
 
-    // ---- Queue-row covers (Qt-only plumbing) -----------------------------
-    // Slint's QueueItem carries a resolved `artwork` image the pipeline pushes
-    // into the shared model; the Qt QueueRow carries only the remote `artUrl`,
-    // so the urls are dispatched into the shared artwork pipeline and resolved
-    // out of `coverMap` when each row is built.
-    //
-    // Arrivals are coalesced into ONE rebind per frame (the ArtistView fix,
-    // repeated in kiosk/KioskArtist.qml): on a warm cache the whole disk-hit
-    // set lands in a single synchronous loop, and rebinding per arrival is
-    // quadratic in the page.
-    property var coverMap: ({})
-    property var _coverInbox: ({})
-    property var dispatchedCovers: ({})
-
-    Timer {
-        id: coverFlush
-        interval: 16
-        repeat: false
-        onTriggered: {
-            var m = Object.assign({}, root.coverMap, root._coverInbox)
-            root._coverInbox = ({})
-            // A rebind needs a NEW object reference (same-ref is not a change).
-            root.coverMap = m
-        }
-    }
-
-    Connections {
-        target: QbzLibrary
-        // `sidebarArtworkWindow` keys its replies by the REQUESTED url.
-        function onLibraryArtworkReady(key, path) {
-            root._coverInbox[key] = path
-            if (!coverFlush.running)
-                coverFlush.start()
-        }
-    }
-
-    // Re-derives the rows from `root.doc` rather than from `upcoming` /
-    // `historyRows`: called from onDocChanged those derived properties still
-    // hold the PREVIOUS document, so every request would be exactly one
-    // publish behind and the rows on screen would never have their cover asked
-    // for (the measured QueuePanel.qml:164-179 defect).
-    function dispatchCovers() {
-        var d = root.doc
-        var up = d.upcoming || []
-        var hist = d.history || []
-        var urls = []
-        var i
-        for (i = 0; i < up.length; i++)
-            if (up[i].artUrl && !root.dispatchedCovers[up[i].artUrl]) {
-                root.dispatchedCovers[up[i].artUrl] = true
-                urls.push(up[i].artUrl)
-            }
-        for (i = 0; i < hist.length; i++)
-            if (hist[i].artUrl && !root.dispatchedCovers[hist[i].artUrl]) {
-                root.dispatchedCovers[hist[i].artUrl] = true
-                urls.push(hist[i].artUrl)
-            }
-        if (urls.length > 0)
-            QbzShell.sidebarArtworkWindow(JSON.stringify(urls))
-    }
-
-    onDocChanged: root.dispatchCovers()
-
     // ---- Mount side effects (:169-175) -----------------------------------
     Component.onCompleted: {
         QbzQueue.queuePanelOpened()
-        root.showLyrics = false
         root.publishNav()
-        root.dispatchCovers()
     }
 
     // ---- Lyrics sync ------------------------------------------------------
@@ -442,7 +391,7 @@ Rectangle {
             id: queueTabsRow
             x: 18
             y: 18
-            height: 30
+            height: 44
             spacing: 20
 
             QueueTab {
@@ -452,7 +401,7 @@ Rectangle {
                 navFocused: QbzKioskNav.navActive
                     && QbzKioskNav.zone === "content"
                     && QbzKioskNav.index === 0
-                onPicked: root.queueTab = 0
+                onPicked: root.selectQueueTab(0)
             }
             QueueTab {
                 height: queueTabsRow.height
@@ -461,7 +410,7 @@ Rectangle {
                 navFocused: QbzKioskNav.navActive
                     && QbzKioskNav.zone === "content"
                     && QbzKioskNav.index === 1
-                onPicked: root.queueTab = 1
+                onPicked: root.selectQueueTab(1)
             }
         }
 
@@ -473,71 +422,69 @@ Rectangle {
             x: 18
             y: queueTabsRow.y + queueTabsRow.height + 12
             width: Math.max(0, rightPanel.width - 36)
-            height: Math.max(0, rightPanel.height - 18 - queueBody.y)
+            height: Math.max(0, rightPanel.height - 18 - queueBody.y - (pager.visible ? 52 : 0))
 
-            Flickable {
+            ListView {
                 id: upFlick
                 anchors.fill: queueBody
                 visible: root.queueTab === 0
-                contentWidth: upFlick.width
-                contentHeight: upColumn.height
-                clip: true
+                model: visible ? root.upcoming : []
+                clip: true; cacheBuffer: 0; reuseItems: true; spacing: 2
                 boundsBehavior: Flickable.StopAtBounds
-
-                Column {
-                    id: upColumn
+                delegate: QueueRowLite {
+                    id: queueRow
+                    required property var modelData
+                    required property int index
                     width: upFlick.width
-                    spacing: 2
-
-                    Repeater {
-                        // The hidden tab's rows are genuinely unmounted, which
-                        // is what the reference's `if` does — a history list is
-                        // unbounded and a Pi cannot afford it off-screen.
-                        model: root.queueTab === 0 ? root.upcoming : []
-
-                        delegate: QueueRowLite {
-                            required property var modelData
-                            required property int index
-
-                            width: upColumn.width
-                            item: modelData
-                            artPath: root.coverMap[modelData.artUrl] || ""
-                            navFocused: root.itemFocused && root.focusedItem === index
-                            onPlay: QbzQueue.queuePlayUpcoming(index)
-                        }
-                    }
+                    item: modelData
+                    KioskCoverSource { id: cover; remote: queueRow.modelData.artUrl || ""; edge: 44 }
+                    artPath: cover.source
+                    navFocused: root.itemFocused && root.focusedItem === index
+                    onPlay: QbzQueue.queuePlayUpcoming(index)
                 }
             }
 
-            Flickable {
+            ListView {
                 id: histFlick
                 anchors.fill: queueBody
                 visible: root.queueTab === 1
-                contentWidth: histFlick.width
-                contentHeight: histColumn.height
-                clip: true
+                model: visible ? root.historyRows : []
+                clip: true; cacheBuffer: 0; reuseItems: true; spacing: 2
                 boundsBehavior: Flickable.StopAtBounds
-
-                Column {
-                    id: histColumn
+                delegate: QueueRowLite {
+                    id: queueRow
+                    required property var modelData
+                    required property int index
                     width: histFlick.width
-                    spacing: 2
-
-                    Repeater {
-                        model: root.queueTab === 1 ? root.historyRows : []
-
-                        delegate: QueueRowLite {
-                            required property var modelData
-                            required property int index
-
-                            width: histColumn.width
-                            item: modelData
-                            artPath: root.coverMap[modelData.artUrl] || ""
-                            navFocused: root.itemFocused && root.focusedItem === index
-                            onPlay: QbzQueue.queuePlayHistory(index)
-                        }
-                    }
+                    item: modelData
+                    KioskCoverSource { id: cover; remote: queueRow.modelData.artUrl || ""; edge: 44 }
+                    artPath: cover.source
+                    navFocused: root.itemFocused && root.focusedItem === index
+                    onPlay: QbzQueue.queuePlayHistory(index)
                 }
+            }
+        }
+    }
+
+    ScrollMemory { target: upFlick; scope: "nowplaying:0" }
+    ScrollMemory { target: histFlick; scope: "nowplaying:1" }
+    KioskSkeleton { parent: queueBody; anchors.fill: parent; kind: "list"; empty: root.activeRows.length === 0 }
+    Row {
+        id: pager
+        parent: rightPanel
+        anchors.bottom: parent.bottom; anchors.bottomMargin: 8; anchors.horizontalCenter: parent.horizontalCenter
+        visible: root.queueTab === 0 && (root.doc.pageCount || 0) > 1
+        height: 44; spacing: 12
+        Repeater {
+            model: ["Previous", "Next"]
+            delegate: Rectangle {
+                required property string modelData
+                required property int index
+                width: Math.max(64, (rightPanel.width - 48) / 2); height: 44; radius: theme.radiusSm
+                enabled: index === 0 ? (root.doc.page || 0) > 0 : (root.doc.page || 0) + 1 < root.doc.pageCount
+                opacity: enabled ? 1 : 0.4; color: theme.surfaceElevated
+                Text { anchors.centerIn: parent; text: QbzSession.tr(modelData, QbzSession.trRev); color: theme.textPrimary; font.pixelSize: 14 }
+                MouseArea { anchors.fill: parent; onClicked: QbzQueue.queueSetPage((root.doc.page || 0) + (index === 0 ? -1 : 1)) }
             }
         }
     }
@@ -555,8 +502,12 @@ Rectangle {
     // =====================================================================
     // LEFT — the current track (:181-360). 18px padding, 12px spacing.
     // =====================================================================
-    Item {
+    Flickable {
         id: leftPanel
+        contentWidth: width
+        contentHeight: Math.max(height, bottomBlock.height + toggleRow.height + 112)
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
         anchors.left: root.left
         anchors.right: divider.left
         anchors.top: root.top
@@ -597,12 +548,14 @@ Rectangle {
 
             // CONTAIN, not crop (:233): the cover is as large as fits and
             // scales with the window without reading parent geometry.
-            RoundedImage {
+            Loader {
                 anchors.fill: artArea
-                visible: !root.showLyrics
-                source: QbzPlayer.npArtworkPath
-                radius: 0
-                fit: "contain"
+                active: !root.showLyrics
+                sourceComponent: KioskArtwork {
+                    source: QbzPlayer.npArtworkPath
+                    radius: 0
+                    fit: "contain"
+                }
             }
 
             Item {
@@ -633,7 +586,7 @@ Rectangle {
         Column {
             id: bottomBlock
             x: 18
-            y: leftPanel.height - 18 - bottomBlock.height
+            y: leftPanel.contentHeight - 18 - bottomBlock.height
             width: Math.max(0, leftPanel.width - 36)
             spacing: 8
 
@@ -653,7 +606,7 @@ Rectangle {
             Item {
                 id: artistRow
                 width: bottomBlock.width
-                height: 18
+                height: 44
 
                 Text {
                     id: artistLabel
@@ -748,7 +701,7 @@ Rectangle {
                         anchors.left: seekTrack.left
                         anchors.right: seekTrack.right
                         anchors.verticalCenter: seekTrack.verticalCenter
-                        height: 18
+                        height: 44
                         hoverEnabled: true
                         cursorShape: root.clamp01(seekArea.mouseX / seekArea.width) > QbzPlayer.npSeekableMax
                             ? Qt.ForbiddenCursor
@@ -775,9 +728,6 @@ Rectangle {
                                     Math.max(0, seekTrack.width - seekTip.width))
                         y: -seekTip.height - 11
                         opacity: seekArea.containsMouse ? 1.0 : 0.0
-                        Behavior on opacity {
-                            NumberAnimation { duration: 80 }
-                        }
 
                         // Shadow approximation — one offset rect, the port's
                         // stand-in for Slint's drop-shadow-blur (the same
@@ -845,7 +795,7 @@ Rectangle {
             Rectangle {
                 id: transportRow
                 width: bottomBlock.width
-                height: 46
+                height: transport.height + 24
                 radius: theme.radiusSm
                 // THE IN-PAGE PLAYER-ZONE RING (:333-338). 3px + an 0.08 tint,
                 // lighter than the 0.12 card ring. KioskShell hides both the
@@ -857,21 +807,26 @@ Rectangle {
                     ? Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b, 0.08)
                     : "transparent"
 
-                TransportControls {
+                Flow {
                     id: transport
-                    anchors.horizontalCenter: transportRow.horizontalCenter
-                    anchors.verticalCenter: transportRow.verticalCenter
-                    playCircle: true
-                    classicActions: true
-                    favorite: root.npFavorite
-                    onAddRequested: function (anchorItem) { addMenu.openBelowRight(anchorItem) }
-                    onTrackInfoRequested: root.openTrackInfo()
+                    x: 4; y: 4
+                    width: Math.max(0, transportRow.width - 8)
+                    height: childrenRect.height
+                    spacing: 2
+                    QbzIconButton { name: "shuffle"; btnSize: 44; iconSize: 20; active: QbzPlayer.npShuffle; btnEnabled: QbzPlayer.npHasTrack; onClicked: QbzPlayer.toggleShuffle() }
+                    QbzIconButton { name: "skip-back"; btnSize: 64; iconSize: 24; btnEnabled: QbzPlayer.npHasTrack; onClicked: QbzPlayer.previous() }
+                    QbzIconButton { name: QbzPlayer.npPlaying ? "pause" : "play-fill"; btnSize: 64; iconSize: 28; activeBackground: true; active: true; btnEnabled: QbzPlayer.npHasTrack || QbzQueue.hasPlayTarget; onClicked: QbzPlayer.togglePlay() }
+                    QbzIconButton { name: "skip-forward"; btnSize: 64; iconSize: 24; btnEnabled: QbzPlayer.npHasTrack; onClicked: QbzPlayer.next() }
+                    QbzIconButton { name: QbzPlayer.npRepeatMode === 2 ? "repeat-1" : "repeat"; btnSize: 44; iconSize: 20; active: QbzPlayer.npRepeatMode > 0; btnEnabled: QbzPlayer.npHasTrack; onClicked: QbzPlayer.cycleRepeat() }
+                    QbzIconButton { id: addButton; name: "plus"; btnSize: 44; iconSize: 20; btnEnabled: QbzPlayer.npHasTrack; onClicked: addMenu.openBelowRight(addButton) }
+                    QbzIconButton { name: root.npFavorite ? "heart-filled" : "heart"; btnSize: 44; iconSize: 20; active: root.npFavorite; btnEnabled: QbzPlayer.npHasTrack && root.npSource === "qobuz"; onClicked: QbzQueue.queueToggleFavorite("track", QbzPlayer.npTrackId) }
+                    QbzIconButton { name: "info"; btnSize: 44; iconSize: 20; btnEnabled: QbzPlayer.npHasTrack; onClicked: root.openTrackInfo() }
                 }
 
                 AudioStamp {
                     anchors.right: transportRow.right
                     anchors.rightMargin: 2
-                    anchors.verticalCenter: transportRow.verticalCenter
+                    anchors.bottom: transportRow.bottom
                 }
             }
         }
@@ -896,8 +851,8 @@ Rectangle {
         property bool navFocused: false
         signal picked()
 
-        implicitWidth: tabColumn.width + 4
-        implicitHeight: tabColumn.height
+        implicitWidth: Math.max(64, tabColumn.width + 16)
+        implicitHeight: 44
         color: "transparent"
         radius: theme.radiusSm
         border.width: tab.navFocused ? 2 : 0
@@ -907,8 +862,8 @@ Rectangle {
         // so the underlines of both panels line up across the divider.
         Column {
             id: tabColumn
-            x: 2
-            y: 0
+            x: (tab.width - width) / 2
+            y: (tab.height - height) / 2
             width: tabLabel.implicitWidth
             spacing: 4
 
@@ -951,7 +906,7 @@ Rectangle {
         readonly property string rowArtist: qrow.item && qrow.item.artist ? qrow.item.artist : ""
         readonly property string rowDuration: qrow.item && qrow.item.duration ? qrow.item.duration : ""
 
-        height: 58
+        height: 64
         radius: theme.radiusSm
         // Row ring family: 2px + an 0.18 tint.
         color: qrow.navFocused
@@ -986,7 +941,7 @@ Rectangle {
                     color: theme.surfaceElevated
                     clip: true
 
-                    RoundedImage {
+                    KioskArtwork {
                         anchors.fill: artTile
                         visible: qrow.artPath !== ""
                         source: qrow.artPath

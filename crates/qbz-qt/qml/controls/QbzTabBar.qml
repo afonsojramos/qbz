@@ -21,6 +21,12 @@ Rectangle {
     property bool counts: false
     property bool underline: false
     property bool compact: false
+    /// Explicit density opt-in for a Kiosk host; the DEFAULT is desktop and
+    /// every metric below falls back to the exact number it had before this
+    /// property existed. A tab is a primary destination, so the kiosk arm
+    /// takes the contract's 64px primary target (§2.6) rather than the 29px
+    /// the desktop padding produces.
+    property bool kioskHost: false
     signal selected(string id)
 
     QbzTheme { id: theme }
@@ -44,8 +50,9 @@ Rectangle {
                 readonly property bool active: modelData.id === root.activeId
                 readonly property int count: modelData.count || 0
 
-                width: segRow.implicitWidth
-                height: segRow.implicitHeight
+                width: root.kioskHost
+                    ? Math.max(96, segRow.implicitWidth) : segRow.implicitWidth
+                height: root.kioskHost ? 64 : segRow.implicitHeight
                 radius: 4
                 // The ACTIVE cell takes surface-main @ 0.5 — surface-MAIN, not
                 // elevated, and at the chrome alpha (SegmentedTabBar.slint:29).
@@ -55,15 +62,24 @@ Rectangle {
 
                 Row {
                     id: segRow
-                    leftPadding: root.compact ? 8 : 12
-                    rightPadding: (root.compact ? 8 : 12) - (root.counts && segRoot.count > 0 ? 4 : 0)
+                    // Desktop keeps `x/y = 0` and sizes the cell from its own
+                    // padding; the kiosk cell has an EXPLICIT 64px box, so the
+                    // content is centred inside it instead.
+                    anchors.horizontalCenter: root.kioskHost
+                        ? segRoot.horizontalCenter : undefined
+                    anchors.verticalCenter: root.kioskHost
+                        ? segRoot.verticalCenter : undefined
+                    leftPadding: root.kioskHost ? 18 : (root.compact ? 8 : 12)
+                    rightPadding: (root.kioskHost ? 18 : (root.compact ? 8 : 12))
+                        - (root.counts && segRoot.count > 0 ? 4 : 0)
                     topPadding: root.compact ? 4 : 6
                     bottomPadding: root.compact ? 4 : 6
                     spacing: 7
                     Text {
                         text: segRoot.modelData.label
                         color: segRoot.active ? theme.textPrimary : theme.textMuted
-                        font.pixelSize: root.compact ? 12 : theme.fontLegal
+                        font.pixelSize: root.kioskHost ? theme.fontLegal * 1.2
+                            : (root.compact ? 12 : theme.fontLegal)
                         font.weight: theme.weightMedium
                         anchors.verticalCenter: parent.verticalCenter
                     }

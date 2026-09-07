@@ -11,8 +11,10 @@ import QtQuick.Controls
 import com.blitzfc.qbz
 import "../../controls"
 import "../../theme"
+import "../../kiosk"
 
 Row {
+    property bool kioskHost: false
     id: root
 
     property var album: null
@@ -48,8 +50,8 @@ Row {
     property bool artistsExpanded: false
     onAlbumChanged: artistsExpanded = false
 
-    readonly property int coverPx: compact ? 112 : 224
-    spacing: compact ? 20 : 32
+    readonly property int coverPx: kioskHost ? 96 : (compact ? 112 : 224)
+    spacing: kioskHost ? 16 : (compact ? 20 : 32)
 
     Rectangle {
         width: root.coverPx
@@ -60,8 +62,13 @@ Row {
         RoundedImage {
             id: headerArt
             anchors.fill: parent
-            source: root.coverSource
+            source: root.kioskHost ? "" : root.coverSource
             radius: 12
+        }
+        Loader {
+            anchors.fill: parent
+            active: root.kioskHost
+            sourceComponent: KioskArtwork { source: root.coverSource }
         }
         // Per-item: hands over on the paint, not the path; settles out when
         // the album has none (local artwork drops keys with no cover).
@@ -69,7 +76,7 @@ Row {
             variant: "art"
             anchors.fill: parent
             blockRadius: 12
-            pending: root.coverPending
+            pending: !root.kioskHost && root.coverPending
             coverReady: headerArt.ready
             phase: root.skelPhase
             settleMs: root.artSettleMs
@@ -94,7 +101,7 @@ Row {
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.album ? (root.album.title || "") : ""
                 color: root.strongColor
-                font.pixelSize: theme.fontSection
+                font.pixelSize: root.kioskHost ? 22 : theme.fontSection
                 font.weight: theme.weightBold
                 elide: Text.ElideRight
             }
@@ -114,7 +121,7 @@ Row {
                                    Math.max(80, compactHeading.width * 0.62))
                     text: root.album ? (root.album.title || "") : ""
                     color: root.strongColor
-                    font.pixelSize: theme.fontSection
+                    font.pixelSize: root.kioskHost ? 22 : theme.fontSection
                     font.weight: theme.weightBold
                     elide: Text.ElideRight
                 }
@@ -123,7 +130,7 @@ Row {
                     visible: root.album && (root.album.artist || "") !== ""
                     text: "  •  "
                     color: root.bodyColor
-                    font.pixelSize: theme.fontSection
+                    font.pixelSize: root.kioskHost ? 22 : theme.fontSection
                     font.weight: theme.weightBold
                 }
                 Text {
@@ -132,7 +139,7 @@ Row {
                     text: root.album ? (root.album.artist || "") : ""
                     color: compactArtistArea.containsMouse
                         ? root.strongColor : root.bodyColor
-                    font.pixelSize: theme.fontSection
+                    font.pixelSize: root.kioskHost ? 22 : theme.fontSection
                     font.weight: theme.weightBold
                     elide: Text.ElideRight
                     MouseArea {
@@ -146,6 +153,7 @@ Row {
             }
             QbzIconButton {
                 id: localHeaderModeButton
+                visible: !root.kioskHost
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.topMargin: -4
@@ -199,16 +207,24 @@ Row {
                 }
             }
         }
+        QbzSelect {
+            visible: root.kioskHost && root.allArtists.length > 1
+            kioskHost: true
+            width: parent.width
+            options: root.allArtists
+            searchable: options.length > 8
+            onSelected: function(i) { root.openArtist(root.allArtists[i]) }
+        }
         // Expanded track-artist list — each entry routes to the Local
         // Library Artists tab (name-based).
         Column {
-            visible: !root.compact && root.artistsExpanded
+            visible: !root.kioskHost && !root.compact && root.artistsExpanded
                      && root.allArtists.length > 1
             width: parent.width
             topPadding: 6
             spacing: 0
             Repeater {
-                model: root.allArtists
+                model: root.kioskHost ? [] : root.allArtists
                 delegate: Text {
                     id: nameRow
                     required property string modelData
@@ -244,13 +260,13 @@ Row {
                 name: "play-fill"
                 primary: true
                 compactPrimary: root.compact
-                diameterOverride: root.compact ? 28 : 0
+                diameterOverride: root.kioskHost ? 44 : (root.compact ? 28 : 0)
                 overlay: root.overlay
                 onClicked: QbzLocal.albumSelectedAction("play", "")
             }
             QbzCircleAction {
                 name: "shuffle"
-                diameterOverride: root.compact ? 28 : 0
+                diameterOverride: root.kioskHost ? 44 : (root.compact ? 28 : 0)
                 overlay: root.overlay
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzLocal.albumSelectedAction("shuffle", "")
@@ -258,21 +274,21 @@ Row {
             // ASSET GAP: Slint uses `pencil`; the Qt set ships pen-line.
             QbzCircleAction {
                 name: "pen-line"
-                diameterOverride: root.compact ? 28 : 0
+                diameterOverride: root.kioskHost ? 44 : (root.compact ? 28 : 0)
                 overlay: root.overlay
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzLocal.albumEditTags(root.album.id)
             }
             QbzCircleAction {
                 name: "list-plus"
-                diameterOverride: root.compact ? 28 : 0
+                diameterOverride: root.kioskHost ? 44 : (root.compact ? 28 : 0)
                 overlay: root.overlay
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzLocal.albumAddToPlaylist(root.album.id)
             }
             QbzCircleAction {
                 name: "cassette-tape"
-                diameterOverride: root.compact ? 28 : 0
+                diameterOverride: root.kioskHost ? 44 : (root.compact ? 28 : 0)
                 overlay: root.overlay
                 anchors.verticalCenter: parent.verticalCenter
                 onClicked: QbzLocal.albumAddToMixtape(root.album.id)
@@ -295,7 +311,7 @@ Row {
                 color: root.bodyColor
                 font.pixelSize: theme.fontLegal
             }
-            VersionPicker {
+            VersionPicker { kioskHost: root.kioskHost;
                 anchors.verticalCenter: parent.verticalCenter
                 versions: root.versions
                 current: root.album ? (root.album.versionIndex || 0) : 0

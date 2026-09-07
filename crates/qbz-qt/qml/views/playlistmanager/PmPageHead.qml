@@ -34,6 +34,8 @@ import "../../theme"
 
 Item {
     id: root
+    property bool kioskHost: false
+    property Flickable viewport: null
 
     property bool loading: false
     /// `QbzPlaylistManager.foldersJson`, parsed (contract §4.1).
@@ -175,11 +177,35 @@ Item {
                 onToggled: QbzPlaylistManager.toggleFoldersCollapsed()
             }
 
+            Item {
+                id: kioskFolders
+                visible: root.kioskHost && !root.foldersCollapsed
+                width: parent.width
+                height: visible ? root.folders.length * 64 : 0
+                readonly property real viewTop: root.viewport ? root.viewport.contentY - mapToItem(root.viewport.contentItem,0,0).y : 0
+                readonly property int first: Math.max(0, Math.floor(viewTop / 64) - 1)
+                readonly property int last: Math.min(root.folders.length, Math.ceil((viewTop + (root.viewport ? root.viewport.height : 0)) / 64) + 1)
+                Repeater {
+                    model: kioskFolders.visible ? root.folders.slice(kioskFolders.first, Math.max(kioskFolders.first,kioskFolders.last)) : []
+                    delegate: Rectangle {
+                        required property var modelData
+                        required property int index
+                        width: kioskFolders.width
+                        height: 64
+                        y: (kioskFolders.first + index) * 64
+                        color: theme.surfaceElevated
+                        Text { x: 12; width: parent.width - 100; anchors.verticalCenter: parent.verticalCenter; text: parent.modelData.name || ""; color: theme.textPrimary; font.pixelSize: 18; elide: Text.ElideRight }
+                        MouseArea { anchors.fill: parent; anchors.rightMargin: 80; onClicked: QbzPlaylistManager.openFolder(String(parent.modelData.id || "")) }
+                        SettingsButton { anchors.right: parent.right; kioskHost: true; minWidth: 80; btnHeight: 64; text: QbzSession.tr("Edit",QbzSession.trRev); onClicked: QbzFolderEdit.openEditor(String(parent.modelData.id || "")) }
+                    }
+                }
+            }
+
             // GRID mode — the big folder cards, hand-wrapped (Slint has no
             // flex-wrap and neither does a plain QML positioner at fixed pitch).
             Item {
                 id: folderGrid
-                visible: !root.foldersCollapsed && root.viewMode === "grid"
+                visible: !root.kioskHost && !root.foldersCollapsed && root.viewMode === "grid"
                 width: parent.width
                 readonly property int cols: Math.max(1, Math.floor((width + 16) / 176))
                 readonly property int rows:
@@ -188,7 +214,7 @@ Item {
                     ? rows * 150 + Math.max(0, rows - 1) * 16 : 0
 
                 Repeater {
-                    model: root.folders || []
+                    model: root.kioskHost ? [] : (root.folders || [])
                     delegate: PmFolderCard {
                         required property var modelData
                         required property int index
@@ -204,7 +230,7 @@ Item {
             // LIST mode — the compact chips, uniform 184 px cells.
             Item {
                 id: folderChips
-                visible: !root.foldersCollapsed && root.viewMode === "list"
+                visible: !root.kioskHost && !root.foldersCollapsed && root.viewMode === "list"
                 width: parent.width
                 readonly property int cols: Math.max(1, Math.floor((width + 8) / 192))
                 readonly property int rows:
@@ -213,7 +239,7 @@ Item {
                     ? rows * 52 + Math.max(0, rows - 1) * 8 : 0
 
                 Repeater {
-                    model: root.folders || []
+                    model: root.kioskHost ? [] : (root.folders || [])
                     delegate: PmFolderChip {
                         required property var modelData
                         required property int index

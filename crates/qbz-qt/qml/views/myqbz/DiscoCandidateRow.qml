@@ -36,6 +36,7 @@ import "../local"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     /// One `DiscoCandidate` (spec 02 §5.8): key, source, sourceItemId, title,
     /// year, tracks, releaseType, isOverridden, qualityTier, qualityDetail,
@@ -62,7 +63,7 @@ Rectangle {
     // --- Column geometry (the matched pair — see the header note) ----------
     readonly property int padH: 8
     readonly property int colGap: 10
-    readonly property int colCheck: 28
+    readonly property int colCheck: root.kioskHost ? 60 : 28
     readonly property int colYear: 56
     readonly property int colType: 72
     readonly property int colTracks: 72
@@ -70,7 +71,7 @@ Rectangle {
     readonly property int colQuality: 156
     // 28 + 56 + 72 + 72 + 60 + 156 = 444 fixed, 6 gaps of 10 = 60.
     readonly property real titleWidth: Math.max(
-        0, root.width - 2 * root.padH - 444 - 6 * root.colGap)
+        0, root.width - 2 * root.padH - 444 - (root.kioskHost ? 32 : 0) - 6 * root.colGap)
 
     readonly property string releaseType: root.candidate.releaseType || ""
     readonly property bool isOverridden: root.candidate.isOverridden === true
@@ -101,7 +102,7 @@ Rectangle {
         ]
     }
 
-    height: 44
+    height: root.kioskHost ? 64 : 44
     radius: 6
     color: root.hovered ? theme.surfaceHover : "transparent"
     opacity: root.hovered ? 1.0 : root.restOpacity
@@ -148,6 +149,7 @@ Rectangle {
                     font.pixelSize: 12
                 }
                 SelectCheck {
+                    diameter: root.kioskHost ? 44 : 13
                     anchors.verticalCenter: parent.verticalCenter
                     on: root.candidate.checked === true
                     onToggled: QbzDisco.toggleChecked(root.groupKey,
@@ -253,7 +255,7 @@ Rectangle {
                         readonly property bool current:
                             root.releaseType === choiceRow.modelData.id
                         width: parent ? parent.width : 0
-                        height: 28
+                        height: root.kioskHost ? 44 : 28
                         radius: 4
                         color: choiceArea.containsMouse ? theme.surfaceHover : "transparent"
                         Row {
@@ -316,7 +318,7 @@ Rectangle {
                 Rectangle {
                     visible: root.isOverridden
                     width: parent ? parent.width : 0
-                    height: visible ? 28 : 0
+                    height: visible ? (root.kioskHost ? 44 : 28) : 0
                     radius: 4
                     color: resetArea.containsMouse ? theme.surfaceHover : "transparent"
                     Row {
@@ -426,7 +428,7 @@ Rectangle {
             Item {
                 anchors.centerIn: parent
                 width: 28
-                height: 28
+                height: root.kioskHost ? 44 : 28
                 SourceIcon {
                     anchors.centerIn: parent
                     kind: root.candidate.source || ""

@@ -48,7 +48,7 @@ QbzContextMenu {
             readonly property bool hot: cmiArea.containsMouse && rowEnabled
 
             width: parent ? parent.width : 0
-            height: isSep ? 7 : 33
+            height: isSep ? 7 : (cmRoot.kioskHost ? 44 : 33)
             radius: isSep ? 0 : 5
             color: hot ? theme.surfaceHover : "transparent"
             // ContextMenuItem.slint: `opacity: enabled ? 1.0 : 0.4`.
@@ -84,7 +84,7 @@ QbzContextMenu {
                     text: row.modelData.label || ""
                     color: row.isDanger ? theme.danger
                         : (row.hot ? theme.textPrimary : theme.textSecondary)
-                    font.pixelSize: 13
+                    font.pixelSize: cmRoot.kioskHost ? 16 : 13
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight
                 }

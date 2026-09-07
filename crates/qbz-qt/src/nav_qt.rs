@@ -132,6 +132,15 @@ fn live_state() -> (String, String) {
     (live.0.clone(), live.1.clone())
 }
 
+pub fn state_for_view(view: &str) -> String {
+    let (scope, state) = live_state();
+    if scope == view {
+        state
+    } else {
+        String::new()
+    }
+}
+
 fn reset_live_state() {
     let mut live = LIVE_STATE.lock().unwrap();
     live.0.clear();
@@ -323,7 +332,18 @@ pub fn record(view: &str) {
 /// though ContentRouter keeps the same page mounted. Called before QML changes
 /// the tab, so the outgoing filters, selection and scroll are still intact.
 pub fn record_local_tab(tab: &str, state: &str) {
-    if current_view() != "local" {
+    record_view_tab("local", tab, state);
+}
+
+/// Kiosk opts into tab destinations on the existing shared history.
+pub fn record_kiosk_tab(view: &str, tab: &str, state: &str) {
+    if crate::kiosk_profile_qt::active() {
+        record_view_tab(view, tab, state);
+    }
+}
+
+fn record_view_tab(view: &str, tab: &str, state: &str) {
+    if current_view() != view {
         return;
     }
     let Ok(mut next) = serde_json::from_str::<serde_json::Value>(state) else {
@@ -335,10 +355,10 @@ pub fn record_local_tab(tab: &str, state: &str) {
     if previous == tab || tab.is_empty() {
         return;
     }
-    set_live_state("local", state);
-    record_entry("local", true);
+    set_live_state(view, state);
+    record_entry(view, true);
     next["activeTab"] = serde_json::json!(tab);
-    set_live_state("local", &next.to_string());
+    set_live_state(view, &next.to_string());
 }
 
 fn record_entry(view: &str, force: bool) {
@@ -583,6 +603,38 @@ mod tests {
             before
         );
         assert!(super::with_history(|history| super::snapshot(history).1));
+    }
+
+    #[test]
+    fn kiosk_view_tabs_preserve_query_scroll_and_truncate_forward() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset();
+        super::record("library");
+        let albums = r#"{"activeTab":"albums","query":"live"}"#;
+        super::set_live_scroll("library:albums", 320.0);
+        super::record_view_tab("library", "artists", albums);
+        let artists = r#"{"activeTab":"artists","query":"live"}"#;
+        super::set_live_state("library", artists);
+        super::set_live_scroll("library:artists", 640.0);
+        super::back();
+        assert_eq!(super::live_state(), ("library".into(), albums.into()));
+        assert_eq!(super::live_scroll(), ("library:albums".into(), 320.0));
+        super::forward();
+        assert_eq!(super::live_state(), ("library".into(), artists.into()));
+        assert_eq!(super::live_scroll(), ("library:artists".into(), 640.0));
+        super::back();
+        let before = super::with_history(|h| (h.entries.len(), h.index));
+        super::record_view_tab("search", "tracks", albums);
+        super::record_view_tab("library", "albums", albums);
+        assert_eq!(super::with_history(|h| (h.entries.len(), h.index)), before);
+        super::record_view_tab("library", "tracks", albums);
+        assert!(!super::with_history(|h| super::snapshot(h).1));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&super::state_for_view("library")).unwrap()
+                ["activeTab"],
+            "tracks"
+        );
+        assert!(super::state_for_view("search").is_empty());
     }
 
     #[test]

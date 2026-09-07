@@ -107,6 +107,7 @@ import "scene"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     color: ambientOn ? "transparent" : theme.surfaceMain
     readonly property bool ambientOn: theme.ambientOn
@@ -615,7 +616,7 @@ Rectangle {
         readonly property int padR: 8
 
         // DV-15's replacement for the dropped `.top-bar`.
-        Item { id: topSpacer; y: 0; width: 1; height: 22 }
+        Item { id: topSpacer; y: 0; width: 1; height: root.kioskHost ? 0 : 22 }
 
         // ---- Compact sticky header (V:433-443, S:862-895) -----------------
         // It lives OUTSIDE the scroll container, so when it appears it pushes
@@ -687,7 +688,7 @@ Rectangle {
             x: page.padL
             y: compact.y + compact.height
             width: page.width - page.padL - page.padR
-            height: visible ? 48 : 0        // 36px controls + S:947 margin 12
+            height: visible ? (root.kioskHost ? 64 : 48) : 0        // 36px controls + S:947 margin 12
             visible: root.isReady && root.allArtists.length > 0
 
             // --- left: the results count (V:449-453, S:964-968) ------------
@@ -705,14 +706,14 @@ Rectangle {
                 color: theme.textMuted
                 font.pixelSize: 12
             }
-            Item { id: countAnchor; width: 1; height: 36 }
+            Item { id: countAnchor; width: 1; height: root.kioskHost ? 44 : 36 }
 
             // --- right: search · genre · view toggle · group (V:456-599) ---
             Row {
                 id: navRight
                 x: parent.width - width
                 spacing: 8                                    // S:960
-                height: 36
+                height: root.kioskHost ? 44 : 36
 
                 // (a) Search — QbzLineEdit's expandable arm IS this control:
                 // a magnifier slot that opens a right-anchored field growing
@@ -723,6 +724,7 @@ Rectangle {
                 // to not grow a second search box in this tree.
                 QbzLineEdit {
                     id: searchBox
+                    kioskHost: root.kioskHost
                     anchors.verticalCenter: parent.verticalCenter
                     expandable: true
                     openWidth: 240                            // S:997
@@ -735,8 +737,8 @@ Rectangle {
                 Rectangle {
                     id: genreBtn
                     visible: root.availableGenres.length > 1
-                    width: 36
-                    height: 36                                // S:1056-1062
+                    width: root.kioskHost ? 44 : 36
+                    height: root.kioskHost ? 44 : 36                                // S:1056-1062
                     radius: 8
                     color: genreArea.containsMouse ? theme.bgHover : theme.surfaceElevated
                     border.width: 1
@@ -805,8 +807,8 @@ Rectangle {
                 // (c) View toggle (V:554-571) ---------------------------------
                 Rectangle {
                     id: modeBtn
-                    width: 36
-                    height: 36
+                    width: root.kioskHost ? 44 : 36
+                    height: root.kioskHost ? 44 : 36
                     radius: 8
                     color: modeArea.containsMouse ? theme.bgHover : theme.surfaceElevated
                     border.width: 1
@@ -856,7 +858,7 @@ Rectangle {
                     id: groupBtn
                     visible: root.mode === "grid"
                     width: groupRow.width + 24                // S:1043 padding 8px 12px
-                    height: 36
+                    height: root.kioskHost ? 44 : 36
                     radius: 8
                     color: groupArea.containsMouse ? theme.bgHover : theme.surfaceElevated
                     border.width: 1
@@ -930,7 +932,7 @@ Rectangle {
                 Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
                     width: retryLabel.implicitWidth + 40
-                    height: retryLabel.implicitHeight + 16
+                    height: root.kioskHost ? 64 : retryLabel.implicitHeight + 16
                     radius: 8
                     color: retryArea.containsMouse ? theme.surfaceElevated : theme.surfaceCard
                     Behavior on color { ColorAnimation { duration: 150 } }
@@ -1146,6 +1148,7 @@ Rectangle {
                                 Repeater {
                                     model: del.isHeader ? [] : (del.modelData.artists || [])
                                     delegate: ArtistCard {
+                                        kioskHost: root.kioskHost
                                         // The row is published in the house
                                         // card shape by artist_scene_qt.rs
                                         // (id/title/subtitle/artUrl +
@@ -1201,7 +1204,7 @@ Rectangle {
                                         && root.doc.loadingMore !== true
                                     anchors.horizontalCenter: parent.horizontalCenter
                                     width: moreLabel.implicitWidth + 48
-                                    height: moreLabel.implicitHeight + 20
+                                    height: root.kioskHost ? 64 : moreLabel.implicitHeight + 20
                                     radius: 8
                                     color: moreArea.containsMouse
                                         ? theme.surfaceElevated : theme.surfaceCard
@@ -1465,7 +1468,7 @@ Rectangle {
         signal picked()
 
         width: parent ? parent.width : 0
-        height: 32                                     // padding 8px + 12px text
+        height: root.kioskHost ? 44 : 32                                     // padding 8px + 12px text
 
         Rectangle {
             anchors.fill: parent

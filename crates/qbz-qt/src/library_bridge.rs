@@ -70,6 +70,9 @@ pub mod qbz_library_bridge {
         #[qinvokable]
         fn library_artwork_window(self: Pin<&mut QbzLibrary>, keys_json: QString);
 
+        #[qinvokable]
+        fn kiosk_artwork_window(self: Pin<&mut QbzLibrary>, keys_json: QString, pixels: i32);
+
         /// Card heart: toggle favorite (Qobuz API or the local store,
         /// routed by id shape); the result arrives via
         /// `libraryFavoriteChanged`.
@@ -260,6 +263,12 @@ impl qbz_library_bridge::QbzLibrary {
 
     pub fn library_artwork_window(self: Pin<&mut Self>, keys_json: QString) {
         crate::library_artwork_window(keys_json.to_string());
+    }
+
+    pub fn kiosk_artwork_window(self: Pin<&mut Self>, keys_json: QString, pixels: i32) {
+        if crate::kiosk_profile_qt::active() {
+            crate::library_artwork_window_at_px(keys_json.to_string(), Some(pixels));
+        }
     }
 
     pub fn library_toggle_favorite(self: Pin<&mut Self>, kind: QString, id: QString) {

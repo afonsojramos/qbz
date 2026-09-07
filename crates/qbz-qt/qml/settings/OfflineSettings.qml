@@ -22,6 +22,8 @@ import "../controls"
 import "../theme"
 
 Column {
+    property bool kioskHost: false
+
     id: root
 
     property var doc: ({})
@@ -36,8 +38,8 @@ Column {
     spacing: 4
 
     // ========================== OFFLINE MODE =============================
-    GroupHeader { text: QbzSession.tr("OFFLINE MODE", QbzSession.trRev) }
-    SettingRow {
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("OFFLINE MODE", QbzSession.trRev) }
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Status", QbzSession.trRev)
         description: QbzSession.captivePortal
             ? QbzSession.tr("Captive portal detected — sign in to the network to get online.", QbzSession.trRev)
@@ -49,14 +51,14 @@ Column {
                 : QbzSession.tr("Online", QbzSession.trRev)
             color: QbzSession.offlineMode === 2 ? theme.accent
                 : QbzSession.offlineMode === 1 ? theme.warning : theme.success
-            font.pixelSize: theme.fontBody
+            font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
             font.weight: theme.weightMedium
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Enable Offline Mode", QbzSession.trRev)
         description: QbzSession.tr("Manually switch to offline mode even with internet.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.off.modeEnabled === true
             onToggled: function (v) { QbzBridge.settingsBool("offline-mode-enabled", v) }
         }
@@ -64,22 +66,22 @@ Column {
     // Restored from the Tauri offline settings. Immediate and accumulated
     // modes are mutually exclusive in SQLite, so one settings republish keeps
     // both toggles in lock-step even if the write originates elsewhere.
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         visible: root.off.modeEnabled === true
         label: QbzSession.tr("Immediate scrobbling", QbzSession.trRev)
         description: QbzSession.tr("Send scrobbles immediately while manual offline mode is enabled.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.off.allowImmediateScrobbling === true
             onToggled: function (v) {
                 QbzBridge.settingsBool("offline-scrobble-immediate", v)
             }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         visible: root.off.modeEnabled === true
         label: QbzSession.tr("Accumulated scrobbling", QbzSession.trRev)
         description: QbzSession.tr("Queue scrobbles while the network is unavailable and send them when it returns. Last.fm accepts scrobbles up to 2 weeks old.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.off.allowAccumulatedScrobbling === true
             onToggled: function (v) {
                 QbzBridge.settingsBool("offline-scrobble-accumulated", v)
@@ -89,10 +91,10 @@ Column {
     // Ask the connectivity actor for an immediate probe rather than waiting
     // for its next scheduled one. Disabled under MANUAL offline (mode 2),
     // where the answer is a user decision and not a network fact.
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Check connection", QbzSession.trRev)
         description: QbzSession.tr("Test the connection now instead of waiting for the next automatic check.", QbzSession.trRev)
-        SettingsButton {
+        SettingsButton { kioskHost: root.kioskHost;
             text: QbzSession.tr("Check now", QbzSession.trRev)
             enabled: QbzSession.offlineMode !== 2
             onClicked: QbzBridge.settingsString("offline-recheck", "")
@@ -109,27 +111,27 @@ Column {
     // "Open folder" and "Clear all" are the manager's own stats-bar buttons,
     // offered here too exactly as the reference offers them
     // (OfflineSettings.slint:135-167).
-    GroupHeader { text: QbzSession.tr("OFFLINE CACHE", QbzSession.trRev) }
-    SettingRow {
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("OFFLINE CACHE", QbzSession.trRev) }
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Manage offline cache", QbzSession.trRev)
         description: QbzSession.tr("Browse and manage your downloaded tracks and albums.", QbzSession.trRev)
-        SettingsButton {
+        SettingsButton { kioskHost: root.kioskHost;
             text: QbzSession.tr("Open manager", QbzSession.trRev)
             onClicked: QbzOffline.openManager()
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Cache folder", QbzSession.trRev)
         description: QbzSession.tr("Open the folder where offline tracks are stored on disk.", QbzSession.trRev)
-        SettingsButton {
+        SettingsButton { kioskHost: root.kioskHost;
             text: QbzSession.tr("Open folder", QbzSession.trRev)
             onClicked: QbzOffline.openFolder()
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Clear cache", QbzSession.trRev)
         description: QbzSession.tr("Frees up cached data. Your downloaded albums are kept — remove those from the offline manager above.", QbzSession.trRev)
-        SettingsButton {
+        SettingsButton { kioskHost: root.kioskHost;
             danger: true
             text: QbzSession.tr("Clear all", QbzSession.trRev)
             // ONE prompt before the purge. The reference fires straight from
@@ -154,8 +156,8 @@ Column {
     SettingsSpacer { }
 
     // ============================= LYRICS ================================
-    GroupHeader { text: QbzSession.tr("LYRICS", QbzSession.trRev) }
-    SettingRow {
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("LYRICS", QbzSession.trRev) }
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Clear lyrics cache", QbzSession.trRev)
         // "{} entries using {}" — the real per-user lyrics.db stats.
         description: root.off.lyricsLoaded === true
@@ -163,7 +165,7 @@ Column {
                 .replace("{}", root.off.lyricsEntries)
                 .replace("{}", root.off.lyricsSize)
             : ""
-        SettingsButton {
+        SettingsButton { kioskHost: root.kioskHost;
             danger: true
             text: QbzSession.tr("Clear", QbzSession.trRev)
             onClicked: QbzBridge.settingsString("lyrics-cache-clear", "")

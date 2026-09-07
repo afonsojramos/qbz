@@ -617,10 +617,7 @@ const CORTINILLA_CAP_PLAYLISTS: usize = 3;
 /// identity is already visible, replace the hero wholesale so artwork,
 /// quality and any future fields cannot drift independently.
 fn canonicalize_top_result(top: &mut Option<CortRow>, visible: &[&[CortRow]]) {
-    let Some((kind, id)) = top
-        .as_ref()
-        .map(|row| (row.kind.as_str(), row.id.as_str()))
-    else {
+    let Some((kind, id)) = top.as_ref().map(|row| (row.kind.as_str(), row.id.as_str())) else {
         return;
     };
     let replacement = visible
@@ -673,9 +670,7 @@ fn map_search_all_to_cortinilla(query: &str, results: &SearchAllResults) -> Cort
     };
     let to_track_row = |t: &Track| {
         let m = map_track(t);
-        let quality_detail = if t.maximum_bit_depth.is_some()
-            && t.maximum_sampling_rate.is_some()
-        {
+        let quality_detail = if t.maximum_bit_depth.is_some() && t.maximum_sampling_rate.is_some() {
             m.quality_detail.clone()
         } else {
             String::new()
@@ -1364,9 +1359,9 @@ pub fn row_menu_action(flat_index: i32, action: &str) {
                     });
                 }
                 "track" => play_local_row(&row.id),
-                other => log::warn!(
-                    "[qbz-qt] cortinilla menu play: local {other:?} is not playable"
-                ),
+                other => {
+                    log::warn!("[qbz-qt] cortinilla menu play: local {other:?} is not playable")
+                }
             }
             return;
         }
@@ -1396,9 +1391,9 @@ pub fn row_menu_action(flat_index: i32, action: &str) {
                 });
             }
             "track" => enqueue_local_cort_row(&row.id, mode),
-            other => log::warn!(
-                "[qbz-qt] cortinilla menu enqueue: local {other:?} is not queueable"
-            ),
+            other => {
+                log::warn!("[qbz-qt] cortinilla menu enqueue: local {other:?} is not queueable")
+            }
         }
         return;
     }
@@ -2367,15 +2362,46 @@ fn search_type_for_filter(index: i32) -> Option<String> {
 /// the section's tab (the Slint lands on the tab, the QML clears the header
 /// input itself).
 pub async fn submit(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str, tab: Option<i32>) {
+    submit_page(runtime, query, tab, true).await;
+}
+
+/// Rehydrate the query of a Kiosk history entry without navigating again.
+pub async fn restore_kiosk_page(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str, tab: i32) {
+    if crate::kiosk_profile_qt::active() && crate::nav_qt::current_view() == "search" {
+        submit_page(runtime, query, Some(tab), false).await;
+    }
+}
+
+async fn submit_page(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    query: &str,
+    tab: Option<i32>,
+    navigate: bool,
+) {
     let q = query.trim().to_string();
     if q.chars().count() < 2 {
         return;
     }
     let version = next_page_version();
-    crate::navigate_to("search");
+    if navigate {
+        crate::navigate_to("search");
+    }
     {
         let mut guard = PAGE.lock().unwrap();
         let doc = &mut guard.get_or_insert_with(PageState::default).doc;
+        if crate::kiosk_profile_qt::active() && doc.query != q {
+            // A different query must not expose the previous result set while loading.
+            doc.albums.clear();
+            doc.tracks.clear();
+            doc.artists.clear();
+            doc.artists_carousel.clear();
+            doc.playlists.clear();
+            doc.albums_total = 0;
+            doc.tracks_total = 0;
+            doc.artists_total = 0;
+            doc.playlists_total = 0;
+            doc.most_popular = MostPopularDoc::default();
+        }
         doc.query = q.clone();
         doc.tab = tab.unwrap_or(0);
         doc.loading = true;
@@ -2521,7 +2547,7 @@ pub async fn submit(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str, tab:
     };
     publish_page(&doc);
 
-    if !missing.is_empty() {
+    if !crate::kiosk_profile_qt::active() && !missing.is_empty() {
         crate::spawn(async move {
             crate::artwork_qt::download_missing(missing).await;
             if !is_current_page_version(version) {
@@ -2606,7 +2632,9 @@ const PAGE_SIZE: u32 = 20;
 /// its real local path. The QML grid can show individual window hits sooner,
 /// but this document refresh retires its loading placeholders definitively.
 async fn refresh_loaded_page_art(version: u64, mut missing: Vec<String>) {
-    if missing.is_empty() {
+    // Kiosk mounted cells request their physical-size bucket through the
+    // existing window/cache resolver; hidden tabs must not hydrate artwork.
+    if crate::kiosk_profile_qt::active() || missing.is_empty() {
         return;
     }
     missing.sort();

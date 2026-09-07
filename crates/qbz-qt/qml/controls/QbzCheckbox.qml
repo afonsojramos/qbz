@@ -9,6 +9,9 @@ import QtQuick
 import "../theme"
 
 Rectangle {
+    // Explicit density opt-in; desktop geometry remains the default.
+    property bool kioskHost: false
+
     id: root
 
     property bool checked: false
@@ -16,8 +19,8 @@ Rectangle {
 
     QbzTheme { id: theme }
 
-    width: 18
-    height: 18
+    width: kioskHost ? 44 : 18
+    height: kioskHost ? 44 : 18
     radius: 4
     color: root.checked ? theme.accent : "transparent"
     border.width: root.activeFocus ? 2 : (root.checked ? 0 : 2)

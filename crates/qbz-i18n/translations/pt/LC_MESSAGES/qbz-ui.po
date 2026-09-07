@@ -6817,3 +6817,24 @@ msgstr "A substituição foi adicionada, mas o favorito indisponível não pôde
 
 msgid "Failed to send playback to the selected device"
 msgstr "Não foi possível enviar a reprodução para o dispositivo selecionado"
+
+msgid "Move up"
+msgstr "Mover para cima"
+
+msgid "Move down"
+msgstr "Mover para baixo"
+
+msgid "Download"
+msgstr "Baixar"
+
+msgid "Edit"
+msgstr "Editar"
+
+msgid "Grid"
+msgstr "Grade"
+
+msgid "List"
+msgstr "Lista"
+
+msgid "Tree"
+msgstr "Árvore"

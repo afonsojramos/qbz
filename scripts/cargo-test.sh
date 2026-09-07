@@ -34,7 +34,7 @@
 #      QbzCore initialized, and process still alive at the deadline.
 #      Native Qt SDK content participates in the C++ dependency cache.
 #   6. release xcb boot against a private silent D-Bus (requires Xvfb).
-#   The shared runtime gate also executes Local Library QML logic with Node.
+#   The shared runtime gate also executes Local Library QML logic and Kiosk artwork/navigation with Node.
 #
 # Usage:
 #   ./scripts/cargo-test.sh                 # job `test`

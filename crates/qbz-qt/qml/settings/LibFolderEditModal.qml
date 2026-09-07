@@ -26,6 +26,8 @@ import "../controls"
 import "../theme"
 
 Item {
+    property bool kioskHost: false
+
     id: root
 
     property var doc: ({})
@@ -126,6 +128,13 @@ Item {
             onWheel: function (wheel) { wheel.accepted = true }
         }
 
+        Flickable {
+            anchors.fill: parent
+            clip: root.kioskHost
+            interactive: root.kioskHost
+            contentWidth: width
+            contentHeight: body.implicitHeight + 44
+            boundsBehavior: Flickable.StopAtBounds
         Column {
             id: body
             x: 22
@@ -136,21 +145,21 @@ Item {
             // --- Title + close ------------------------------------------
             Item {
                 width: parent.width
-                height: 28
+                height: root.kioskHost ? 44 : 28
                 Text {
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
                     text: QbzSession.tr("Folder settings", QbzSession.trRev)
                     color: theme.textPrimary
-                    font.pixelSize: theme.fontHeading
+                    font.pixelSize: root.kioskHost ? (theme.fontHeading) * 1.2 : (theme.fontHeading)
                     font.weight: theme.weightSemibold
                 }
                 Rectangle {
                     id: closeButton
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 28
-                    height: 28
+                    width: root.kioskHost ? 44 : 28
+                    height: root.kioskHost ? 44 : 28
                     radius: theme.radiusSm
                     color: closeArea.containsMouse ? theme.surfaceHover : "transparent"
                     activeFocusOnTab: root.visible
@@ -193,7 +202,7 @@ Item {
                 Text {
                     text: QbzSession.tr("Folder location", QbzSession.trRev)
                     color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                     font.weight: theme.weightSemibold
                 }
                 Item {
@@ -216,10 +225,10 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         text: root.st.path || ""
                         color: theme.textSecondary
-                        font.pixelSize: theme.fontBody
+                        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                         elide: Text.ElideMiddle
                     }
-                    SettingsButton {
+                    SettingsButton { kioskHost: root.kioskHost;
                         id: changeBtn
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
@@ -256,7 +265,7 @@ Item {
                                 ? QbzSession.tr("Folder is accessible", QbzSession.trRev)
                                 : QbzSession.tr("Folder is not accessible", QbzSession.trRev))
                         color: theme.textMuted
-                        font.pixelSize: theme.fontLegal
+                        font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                     }
                 }
             }
@@ -268,10 +277,10 @@ Item {
                 Text {
                     text: QbzSession.tr("Display name", QbzSession.trRev)
                     color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                     font.weight: theme.weightSemibold
                 }
-                QbzLineEdit {
+                QbzLineEdit { kioskHost: root.kioskHost;
                     id: aliasField
                     width: parent.width
                     placeholder: QbzSession.tr("Optional friendly name", QbzSession.trRev)
@@ -281,7 +290,7 @@ Item {
                 Text {
                     text: QbzSession.tr("Shown instead of the full path in the folder list.", QbzSession.trRev)
                     color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                 }
             }
 
@@ -298,17 +307,17 @@ Item {
                     Text {
                         text: QbzSession.tr("Enabled", QbzSession.trRev)
                         color: theme.textSecondary
-                        font.pixelSize: theme.fontBody
+                        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                     }
                     Text {
                         width: parent.width
                         text: QbzSession.tr("Disabled folders are skipped during scans.", QbzSession.trRev)
                         color: theme.textMuted
-                        font.pixelSize: theme.fontLegal
+                        font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                         wrapMode: Text.WordWrap
                     }
                 }
-                QbzToggle {
+                QbzToggle { kioskHost: root.kioskHost;
                     id: enabledToggle
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
@@ -332,17 +341,17 @@ Item {
                     Text {
                         text: QbzSession.tr("Network folder", QbzSession.trRev)
                         color: theme.textSecondary
-                        font.pixelSize: theme.fontBody
+                        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                     }
                     Text {
                         width: parent.width
                         text: QbzSession.tr("Mark this folder as a network share (excluded when offline).", QbzSession.trRev)
                         color: theme.textMuted
-                        font.pixelSize: theme.fontLegal
+                        font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                         wrapMode: Text.WordWrap
                     }
                 }
-                QbzToggle {
+                QbzToggle { kioskHost: root.kioskHost;
                     id: netToggle
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
@@ -362,10 +371,10 @@ Item {
                 Text {
                     text: QbzSession.tr("Network filesystem type", QbzSession.trRev)
                     color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                     font.weight: theme.weightSemibold
                 }
-                QbzSelect {
+                QbzSelect { kioskHost: root.kioskHost;
                     menuWidth: 200
                     options: [
                         QbzSession.tr("Auto-detect", QbzSession.trRev),
@@ -386,7 +395,7 @@ Item {
                     anchors.left: parent.left
                     text: QbzSession.tr("Last scanned", QbzSession.trRev)
                     color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                 }
                 Text {
                     anchors.right: parent.right
@@ -394,7 +403,7 @@ Item {
                         ? new Date((root.st.lastScan || 0) * 1000).toLocaleString(Qt.locale())
                         : QbzSession.tr("Never", QbzSession.trRev)
                     color: theme.textSecondary
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                 }
             }
 
@@ -410,7 +419,7 @@ Item {
                 height: 36
                 // Scan needs the folder to be both enabled AND reachable —
                 // scanning a disabled or dead folder is a guaranteed no-op.
-                SettingsButton {
+                SettingsButton { kioskHost: root.kioskHost;
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
                     iconName: "refresh-cw"
@@ -425,7 +434,7 @@ Item {
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 10
-                    SettingsButton {
+                    SettingsButton { kioskHost: root.kioskHost;
                         text: QbzSession.tr("Cancel", QbzSession.trRev)
                         onClicked: root.close()
                     }
@@ -462,7 +471,7 @@ Item {
                             anchors.centerIn: parent
                             text: QbzSession.tr("Save", QbzSession.trRev)
                             color: theme.accentGlyphColor
-                            font.pixelSize: theme.fontBody
+                            font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                             font.weight: theme.weightSemibold
                         }
                         MouseArea {
@@ -476,6 +485,7 @@ Item {
                     }
                 }
             }
+        }
         }
     }
 }

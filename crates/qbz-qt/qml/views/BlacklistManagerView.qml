@@ -50,6 +50,21 @@ import "../theme"
 Rectangle {
     id: root
 
+    // KIOSK HOST (2026-09-07, K6). Default FALSE = the desktop page, byte for
+    // byte: the chrome is a Column at x24/y24 and the body starts 14px under
+    // it, exactly the arithmetic this file has always had.
+    //
+    // The kiosk panel is 784x256 at the Pi floor. The desktop arithmetic
+    // leaves the body 0-39px against a 68px row pitch, so the manager can
+    // never draw ONE row (K0b finding #6). Two scroll axes are not an option
+    // (a ListView nested in a Flickable steals every vertical drag), so the
+    // kiosk arm folds the whole chrome into `rowList`'s ListView.header and
+    // its empty/loading/no-results states into its footer: ONE flickable, the
+    // header scrolls away, and the rows own the full panel. The chrome and
+    // the state block are declared ONCE, as Components, and mounted either in
+    // the desktop position or inside the list.
+    property bool kioskHost: false
+
     // Transparent while the ambient background is active — the frosted content
     // panel shows through (HomeView.qml:53 and its twelve siblings).
     color: root.ambientOn ? "transparent" : theme.surfaceMain
@@ -141,18 +156,24 @@ Rectangle {
         repeat: false
         onTriggered: root.reportCoverWindow()
     }
-    /// Row pitch is 64 + 4 spacing = 68. Computed arithmetically rather than
-    /// with indexAt(), which is what the port's other windowed lists do
+    /// Row pitch is 64 + 4 spacing = 68 on desktop, 76 + 4 = 80 in kiosk
+    /// (BlacklistRow.qml's own frame height). Computed arithmetically rather
+    /// than with indexAt(), which is what the port's other windowed lists do
     /// (LibraryView.qml:1474) — the rows are a fixed height, so the two agree.
+    readonly property int rowPitch: root.kioskHost ? 80 : 68
     function reportCoverWindow() {
         if (root.activeTab !== 1)
             return
         var m = root.listRows
         if (m.length === 0)
             return
-        var first = Math.max(0, Math.floor(rowList.contentY / 68) - 2)
+        // In kiosk the chrome rides in ListView.header, so contentY starts
+        // NEGATIVE of the header height; clamping at 0 keeps the first window
+        // anchored on row 0 instead of asking for a negative index.
+        var top = Math.max(0, rowList.contentY)
+        var first = Math.max(0, Math.floor(top / root.rowPitch) - 2)
         var last = Math.min(m.length - 1,
-                            Math.ceil((rowList.contentY + rowList.height) / 68) + 2)
+                            Math.ceil((top + rowList.height) / root.rowPitch) + 2)
         var urls = []
         for (var i = first; i <= last; i++) {
             var u = m[i].coverUrl || ""
@@ -169,12 +190,32 @@ Rectangle {
     // at vertical-stretch: 1. QML has no layout here (this port uses none), so
     // the fixed head is a Column and the body fills what is left.
 
-    Column {
+    // The desktop chrome host. Same x/y/width the Column had; a Loader with
+    // only its width set takes the item's implicitHeight, so `head.height` is
+    // still the Column's content height and the body arithmetic below is
+    // unchanged. `sourceComponent: null` in kiosk — the chrome is the list's
+    // header there and must exist exactly once.
+    Loader {
         id: head
         x: 24
         y: 24
         width: root.width - 48
+        sourceComponent: root.kioskHost ? null : chromeComponent
+    }
+
+    Component {
+    id: chromeComponent
+    Column {
+        id: chromeCol
+        // Desktop: the Loader sizes this to `head.width`. Kiosk: the item is
+        // ListView.header, which does NOT stretch its header, so it takes the
+        // view width itself.
+        width: chromeCol.ListView.view ? chromeCol.ListView.view.width : head.width
         spacing: 14
+        // Desktop = 0 on both, so the Column's implicitHeight — and therefore
+        // `head.height` — is exactly what it was.
+        topPadding: root.kioskHost ? 4 : 0
+        bottomPadding: root.kioskHost ? 12 : 0
 
         // ---- header (:357-378) -------------------------------------------
         Row {
@@ -201,6 +242,7 @@ Rectangle {
         // handler written for an index passes `undefined` to an i32 invokable
         // and every click is a runtime error `cargo check` cannot see.
         QbzTabBar {
+            kioskHost: root.kioskHost
             tabs: root.tabTabs(QbzSession.trRev)
             activeId: root.activeTab === 1 ? "albums"
                 : root.activeTab === 2 ? "reco" : "artists"
@@ -218,14 +260,14 @@ Rectangle {
                     ? QbzSession.tr("Blocked albums are hidden from search, discovery, and listings — even when their artist is allowed.", QbzSession.trRev)
                     : QbzSession.tr("Dismissed artists only leave your Recommendations — they still appear in search and everywhere else.", QbzSession.trRev)
             color: theme.textMuted
-            font.pixelSize: theme.fontBody
+            font.pixelSize: root.kioskHost ? theme.fontBody * 1.2 : theme.fontBody
             wrapMode: Text.WordWrap
         }
 
         // ---- controls row (:480-646) — spacing 12 ------------------------
         Item {
             width: parent.width
-            height: 34
+            height: root.kioskHost ? 44 : 34
 
             Row {
                 anchors.left: parent.left
@@ -236,8 +278,9 @@ Rectangle {
                 // in the feature — the Settings row deliberately has none
                 // (ContentFilteringSettings.slint:13-16).
                 Rectangle {
+                    id: toggleChip
                     width: toggleRow.implicitWidth + 28
-                    height: 34
+                    height: root.kioskHost ? 44 : 34
                     radius: theme.radiusSm
                     color: toggleArea.containsMouse ? theme.surfaceHover
                                                     : theme.surfaceElevated
@@ -259,7 +302,8 @@ Rectangle {
                                 ? QbzSession.tr("Enabled", QbzSession.trRev)
                                 : QbzSession.tr("Disabled", QbzSession.trRev)
                             color: root.filterEnabled ? theme.accent : theme.textMuted
-                            font.pixelSize: theme.fontLegal
+                            font.pixelSize: root.kioskHost
+                                ? theme.fontLegal * 1.2 : theme.fontLegal
                         }
                     }
                     MouseArea {
@@ -289,8 +333,19 @@ Rectangle {
                 QbzLineEdit {
                     id: searchField
                     anchors.verticalCenter: parent.verticalCenter
+                    kioskHost: root.kioskHost
                     searchMode: true
-                    width: 280
+                    // Desktop keeps the 280 override verbatim. In kiosk the
+                    // row shares a 760px panel with a taller toggle, the
+                    // Clear-All chip and the right-anchored count, so the
+                    // field takes the measured slack instead of a constant —
+                    // that is what keeps the count badge from overlapping it
+                    // at the 800x480 floor.
+                    width: root.kioskHost
+                        ? Math.max(140, chromeCol.width - toggleChip.width
+                            - (clearChip.visible ? clearChip.width + 12 : 0)
+                            - countBadge.width - 36)
+                        : 280
                     placeholder: ""
                     text: root.searchQuery
                     onEdited: function (v) { QbzBlacklist.searchChanged(v) }
@@ -308,10 +363,11 @@ Rectangle {
                 // 1px border and hovers to surfaceHover where this button is
                 // borderless and hovers to dangerBg.
                 Rectangle {
+                    id: clearChip
                     visible: root.activeTab === 0 ? root.artistCount > 0
                         : root.activeTab === 1 ? root.albumCount > 0 : false
                     width: clearRow.implicitWidth + 28
-                    height: 34
+                    height: root.kioskHost ? 44 : 34
                     radius: theme.radiusSm
                     color: clearArea.containsMouse ? theme.dangerBg
                                                    : theme.surfaceElevated
@@ -334,7 +390,8 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                             text: QbzSession.tr("Clear All", QbzSession.trRev)
                             color: theme.danger
-                            font.pixelSize: theme.fontLegal
+                            font.pixelSize: root.kioskHost
+                                ? theme.fontLegal * 1.2 : theme.fontLegal
                         }
                     }
                     MouseArea {
@@ -350,6 +407,7 @@ Rectangle {
             // (d) count badge (:629-645) — the FULL count, right-aligned. Tab 2
             // says "artists" too.
             Text {
+                id: countBadge
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.activeTab === 1
@@ -358,7 +416,8 @@ Rectangle {
                         .replace("{}", root.activeTab === 0 ? root.artistCount
                                                             : root.dismissedCount)
                 color: theme.textMuted
-                font.pixelSize: theme.fontLegal
+                font.pixelSize: root.kioskHost
+                    ? theme.fontLegal * 1.2 : theme.fontLegal
                 horizontalAlignment: Text.AlignRight
             }
         }
@@ -378,68 +437,93 @@ Rectangle {
             title: QbzSession.tr("Blacklist filtering is disabled. Blacklisted artists are shown everywhere until you re-enable it.", QbzSession.trRev)
         }
     }
+    }
+
+    // The three non-list body branches, declared ONCE. Desktop mounts this
+    // filling `bodyHost` (so every `anchors.centerIn: parent` centres on the
+    // body exactly as before); kiosk mounts it as `rowList`'s footer, where it
+    // takes the view width and a fixed band so it lands under the chrome
+    // instead of being centred behind it.
+    Component {
+        id: statesComponent
+        Item {
+            id: statesItem
+            width: statesItem.ListView.view
+                ? statesItem.ListView.view.width : (parent ? parent.width : 0)
+            height: statesItem.ListView.view
+                ? (root.bodyBranch === 4 ? 0 : 200)
+                : (parent ? parent.height : 0)
+
+            // 1) Loading. The Slint stacks the spinner and the label with no
+            // spacing (two centred HorizontalLayouts in a VerticalLayout).
+            Column {
+                visible: root.bodyBranch === 1
+                anchors.centerIn: parent
+                spacing: 0
+                QbzSpinner {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    // U+2026, not three dots — an exact-byte msgid.
+                    text: QbzSession.tr("Loading blacklist…", QbzSession.trRev)
+                    color: theme.textMuted
+                    font.pixelSize: theme.fontBody
+                }
+            }
+
+            // 2) Empty, per tab (:702-732, :801-831, :898-928). The shared
+            // control with its four optional metric props set to the Slint's
+            // numbers: 48px glyph at 0.3 opacity, a MUTED regular-weight title.
+            QbzEmptyState {
+                visible: root.bodyBranch === 2
+                anchors.centerIn: parent
+                iconName: root.activeTab === 2 ? "thumbs-down" : "blind-eye"
+                iconSize: 48
+                iconOpacity: 0.3
+                titleMuted: true
+                titleWeight: theme.weightRegular
+                title: root.activeTab === 0
+                    ? QbzSession.tr("No blacklisted artists", QbzSession.trRev)
+                    : root.activeTab === 1
+                        ? QbzSession.tr("No blocked albums", QbzSession.trRev)
+                        : QbzSession.tr("No dismissed artists", QbzSession.trRev)
+                body: root.activeTab === 0
+                    ? QbzSession.tr("To hide an artist, go to their page and use the menu.", QbzSession.trRev)
+                    : root.activeTab === 1
+                        ? QbzSession.tr("To block an album, open its menu and choose Block this album.", QbzSession.trRev)
+                        : QbzSession.tr("To stop seeing an artist in Recommendations, open its card menu and choose Not interested.", QbzSession.trRev)
+            }
+
+            // 3) No results — identical on all three tabs, and no body line
+            // (the control hides `body` when it is "").
+            QbzEmptyState {
+                visible: root.bodyBranch === 3
+                anchors.centerIn: parent
+                iconName: "search"
+                iconSize: 48
+                iconOpacity: 0.3
+                titleMuted: true
+                titleWeight: theme.weightRegular
+                title: QbzSession.tr("No results for \"{}\"", QbzSession.trRev)
+                    .replace("{}", root.searchQuery)
+            }
+        }
+    }
 
     // ============================== body ==================================
     Item {
         id: bodyHost
-        x: 24
-        y: head.y + head.height + 14
-        width: root.width - 48
-        height: Math.max(0, root.height - y - 24)
+        // Kiosk trades the desktop 24px page gutter for 12 — at 784x256 the
+        // gutters alone are 19% of the panel.
+        x: root.kioskHost ? 12 : 24
+        y: root.kioskHost ? 12 : head.y + head.height + 14
+        width: root.width - (root.kioskHost ? 24 : 48)
+        height: Math.max(0, root.height - y - (root.kioskHost ? 12 : 24))
 
-        // 1) Loading. The Slint stacks the spinner and the label with no
-        // spacing (two centred HorizontalLayouts in a VerticalLayout).
-        Column {
-            visible: root.bodyBranch === 1
-            anchors.centerIn: parent
-            spacing: 0
-            QbzSpinner {
-                anchors.horizontalCenter: parent.horizontalCenter
-            }
-            Text {
-                anchors.horizontalCenter: parent.horizontalCenter
-                // U+2026, not three dots — an exact-byte msgid.
-                text: QbzSession.tr("Loading blacklist…", QbzSession.trRev)
-                color: theme.textMuted
-                font.pixelSize: theme.fontBody
-            }
-        }
-
-        // 2) Empty, per tab (:702-732, :801-831, :898-928). The shared control
-        // with its four optional metric props set to the Slint's numbers:
-        // 48px glyph at 0.3 opacity, a MUTED regular-weight title.
-        QbzEmptyState {
-            visible: root.bodyBranch === 2
-            anchors.centerIn: parent
-            iconName: root.activeTab === 2 ? "thumbs-down" : "blind-eye"
-            iconSize: 48
-            iconOpacity: 0.3
-            titleMuted: true
-            titleWeight: theme.weightRegular
-            title: root.activeTab === 0
-                ? QbzSession.tr("No blacklisted artists", QbzSession.trRev)
-                : root.activeTab === 1
-                    ? QbzSession.tr("No blocked albums", QbzSession.trRev)
-                    : QbzSession.tr("No dismissed artists", QbzSession.trRev)
-            body: root.activeTab === 0
-                ? QbzSession.tr("To hide an artist, go to their page and use the menu.", QbzSession.trRev)
-                : root.activeTab === 1
-                    ? QbzSession.tr("To block an album, open its menu and choose Block this album.", QbzSession.trRev)
-                    : QbzSession.tr("To stop seeing an artist in Recommendations, open its card menu and choose Not interested.", QbzSession.trRev)
-        }
-
-        // 3) No results — identical on all three tabs, and no body line (the
-        // control hides `body` when it is "").
-        QbzEmptyState {
-            visible: root.bodyBranch === 3
-            anchors.centerIn: parent
-            iconName: "search"
-            iconSize: 48
-            iconOpacity: 0.3
-            titleMuted: true
-            titleWeight: theme.weightRegular
-            title: QbzSession.tr("No results for \"{}\"", QbzSession.trRev)
-                .replace("{}", root.searchQuery)
+        Loader {
+            anchors.fill: parent
+            sourceComponent: root.kioskHost ? null : statesComponent
         }
 
         // 4) The list. THREE-edge anchors + an explicit width, never
@@ -448,12 +532,20 @@ Rectangle {
         // Qt logs a `.qml:` warning the gate greps for.
         ListView {
             id: rowList
-            visible: root.bodyBranch === 4
+            // In kiosk the list is the ONLY scroller — it carries the chrome
+            // in its header and the loading/empty/no-results states in its
+            // footer, so it stays mounted on every branch. The model is
+            // emptied instead of the view being hidden, which also drops the
+            // stale rows a `loading` republish would otherwise leave under the
+            // spinner.
+            visible: root.kioskHost || root.bodyBranch === 4
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            width: parent.width - 18
-            model: root.listRows
+            width: parent.width - (root.kioskHost ? 0 : 18)
+            model: (root.kioskHost && root.bodyBranch !== 4) ? [] : root.listRows
+            header: root.kioskHost ? chromeComponent : null
+            footer: root.kioskHost ? statesComponent : null
             spacing: 4
             clip: true
             // ~2 rows of pre-instantiation past the viewport.
@@ -471,6 +563,7 @@ Rectangle {
             delegate: BlacklistRow {
                 required property var modelData
                 width: rowList.width
+                kioskHost: root.kioskHost
                 arm: root.activeTab === 0 ? "artist"
                     : root.activeTab === 1 ? "album" : "dismissed"
                 row: modelData
@@ -505,7 +598,7 @@ Rectangle {
             // here REPLACES that binding, so the overflow test has to be carried
             // over or a short list gets a full-height thumb on gutter hover
             // (Sidebar.qml:383 combines the two the same way).
-            visible: root.bodyBranch === 4
+            visible: (root.kioskHost || root.bodyBranch === 4)
                 && rowList.contentHeight > rowList.height
             target: rowList
             anchors.right: parent.right
@@ -523,6 +616,7 @@ Rectangle {
     QbzConfirmModal {
         id: clearConfirm
         anchors.fill: parent
+        kioskHost: root.kioskHost
         title: QbzSession.tr("Clear Blacklist?", QbzSession.trRev)
         body: root.activeTab === 0
             ? QbzSession.tr("This will remove all {} blacklisted artists. This cannot be undone.", QbzSession.trRev)

@@ -3119,6 +3119,10 @@ fn log_rss(mark: &str) {
 /// `libraryArtworkReady` per store (id-keyed — the wrong-cover race fix
 /// from the Slint round). Disk hits emit immediately.
 pub(crate) fn library_artwork_window(keys_json: String) {
+    library_artwork_window_at_px(keys_json, None);
+}
+
+pub(crate) fn library_artwork_window_at_px(keys_json: String, pixels: Option<i32>) {
     let keys: Vec<String> = serde_json::from_str(&keys_json).unwrap_or_default();
     log::debug!("[qbz-qt] artwork window: {} keys", keys.len());
     if keys.is_empty() {
@@ -3139,6 +3143,7 @@ pub(crate) fn library_artwork_window(keys_json: String) {
     };
     let mut missing: Vec<(String, String)> = Vec::new();
     for (key, url) in pairs {
+        let url = pixels.map_or_else(|| url.clone(), |px| myqbz_qt::kiosk_art_url(&url, px));
         let path = artwork_qt::cached_path(&url);
         if path.is_empty() {
             missing.push((key, url));
@@ -3436,7 +3441,7 @@ pub(crate) fn reload_home() {
                     count,
                     missing.len(),
                 );
-                if !missing.is_empty() {
+                if !kiosk_profile_qt::active() && !missing.is_empty() {
                     spawn(async move {
                         artwork_qt::download_missing(missing).await;
                         let mut sections = sections;

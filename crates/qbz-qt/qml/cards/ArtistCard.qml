@@ -37,12 +37,14 @@
 // ⋯ and a right press on the portrait or the name open the same menu.
 
 import QtQuick
+import "../kiosk"
 import com.blitzfc.qbz
 import "../controls"
 import "../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     property var item: ({})
     // Host-resolved artwork path (the AlbumCard artSource pattern).
@@ -179,10 +181,17 @@ Rectangle {
                     anchors.centerIn: parent
                     tintName: "muted"
                 }
-                RoundedImage {
+                Loader {
                     anchors.fill: parent
-                    source: root.artSource
-                    radius: 95
+                    sourceComponent: root.kioskHost ? kioskCover : desktopCover
+                    Component {
+                        id: kioskCover
+                        KioskArtwork { anchors.fill: parent; source: root.artSource; radius: 95 }
+                    }
+                    Component {
+                        id: desktopCover
+                        RoundedImage { anchors.fill: parent; source: root.artSource; radius: 95 }
+                    }
                 }
                 // Hover scrim (clipped to the circle by the parent's clip).
                 Rectangle {
@@ -209,10 +218,13 @@ Rectangle {
                 }
                 // Hover overlay — follow? / play / more (y=113).
                 CardOverlayRow {
-                    y: 113
+                    height: root.kioskHost ? 64 : 44
+                    y: root.kioskHost ? 104 : 113
                     width: parent.width
-                    shown: root.overlayOn
+                    shown: root.kioskHost || root.overlayOn
                     CardOverlayButton {
+                        width: root.kioskHost ? (primary ? 64 : 44) : (primary ? 44 : 36)
+                        height: width
                         id: agFollow
                         visible: root.showFollow
                         name: root.following ? "check" : "user-plus"
@@ -221,6 +233,8 @@ Rectangle {
                         onClicked: root.toggleFollow()
                     }
                     CardOverlayButton {
+                        width: root.kioskHost ? (primary ? 64 : 44) : (primary ? 44 : 36)
+                        height: width
                         id: agPlay
                         name: "play-fill"
                         primary: true
@@ -228,6 +242,8 @@ Rectangle {
                         onClicked: QbzPlayer.playArtistCard(root.item.id)
                     }
                     CardOverlayButton {
+                        width: root.kioskHost ? (primary ? 64 : 44) : (primary ? 44 : 36)
+                        height: width
                         id: agMore
                         name: "ellipsis"
                         anchors.verticalCenter: parent.verticalCenter
@@ -238,6 +254,7 @@ Rectangle {
                     id: agMenuLoader
                     active: false
                     sourceComponent: CardMenu {
+                        kioskHost: root.kioskHost
                         menuWidth: 196
                         entries: root.menuModel()
                         onPicked: function (a) { root.menuAction(a) }
@@ -249,11 +266,11 @@ Rectangle {
             Rectangle {
                 x: parent.width - width - 8
                 y: 8
-                width: 26
-                height: 26
+                width: root.kioskHost ? 44 : 26
+                height: root.kioskHost ? 44 : 26
                 radius: 13
                 color: pinArea.containsMouse ? "#cc000000" : "#99000000"
-                opacity: root.overlayOn ? 1.0 : 0.0
+                opacity: root.kioskHost || root.overlayOn ? 1.0 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 150 } }
                 QbzIcon {
                     name: root.isPinned ? "pin-filled" : "pin"

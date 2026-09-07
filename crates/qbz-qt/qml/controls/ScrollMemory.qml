@@ -110,6 +110,10 @@ Item {
     /// album page's three deferred rails on a slow connection; past that the
     /// page is not coming back to that height.
     property int settleMs: 2500
+    /// Virtualized Kiosk rows can move ListView.originY as delegates settle.
+    /// Store distance from that origin so a remount restores the same content.
+    /// Desktop retains its existing absolute-coordinate contract by default.
+    property bool relativeToOrigin: false
 
     // Zero-footprint: this is plumbing, never a visual.
     width: 0
@@ -127,6 +131,16 @@ Item {
     property bool _armed: false
     /// The offset that restore is heading for.
     property real _wanted: 0
+
+    function _origin() {
+        return root.relativeToOrigin && root.target !== null ? root.target.originY : 0
+    }
+    function _report() {
+        if (!root._live || root.scope === "")
+            return
+        QbzShell.reportScroll(root.scope,
+                              root._armed ? root._wanted : root.target.contentY - root._origin())
+    }
 
     /// Claim the arming if it is ours. Consumes the shared scope immediately
     /// (so a sibling container cannot also act on it) and moves the state into
@@ -159,11 +173,12 @@ Item {
             return
         if (root.target.contentHeight - root.target.height < root._wanted)
             return  // not tall enough yet — wait for the next growth
-        if (Math.abs(root.target.contentY - root._wanted) < 0.5)
+        var desiredY = root._origin() + root._wanted
+        if (Math.abs(root.target.contentY - desiredY) < 0.5)
             return  // already there
         console.info(srLog, "[scroll] " + root.scope + " apply y=" + root._wanted
                      + " was=" + root.target.contentY)
-        root.target.contentY = root._wanted
+        root.target.contentY = desiredY
     }
 
     function _disarm(why) {
@@ -183,7 +198,7 @@ Item {
         onTriggered: {
             if (root._armed && root.target !== null) {
                 var reach = Math.max(0, root.target.contentHeight - root.target.height)
-                var land = Math.min(root._wanted, reach)
+                var land = root._origin() + Math.min(root._wanted, reach)
                 if (Math.abs(root.target.contentY - land) > 0.5)
                     root.target.contentY = land
             }
@@ -205,14 +220,19 @@ Item {
             // be. A model swap knocks contentY to 0 mid-window, and reporting
             // that would stamp 0 onto this entry if the user navigated away
             // before the re-assert landed.
-            QbzShell.reportScroll(root.scope,
-                                  root._armed ? root._wanted : root.target.contentY)
+            root._report()
             // The model-reset case, caught directly: contentY moved and it was
             // not us. `_apply` is idempotent — its equality guard stops the
             // write below from recursing.
             root._apply()
         }
         function onContentHeightChanged() { root._apply() }
+        function onOriginYChanged() {
+            if (root.relativeToOrigin) {
+                root._report()
+                root._apply()
+            }
+        }
         function onCountChanged() { root._apply() }
         function onVisibleChanged() { root._apply() }
 

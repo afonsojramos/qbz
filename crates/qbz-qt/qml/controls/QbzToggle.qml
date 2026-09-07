@@ -8,6 +8,9 @@ import com.blitzfc.qbz
 import "../theme"
 
 Rectangle {
+    // Explicit density opt-in; desktop geometry remains the default.
+    property bool kioskHost: false
+
     id: root
 
     property bool checked: false
@@ -16,9 +19,9 @@ Rectangle {
 
     QbzTheme { id: theme }
 
-    width: 40
-    height: 22
-    radius: 11
+    width: kioskHost ? 64 : 40
+    height: kioskHost ? 44 : 22
+    radius: kioskHost ? 22 : 11
     color: checked ? theme.accent : theme.surfaceElevated
     opacity: enabled ? 1.0 : 0.4
     activeFocusOnTab: enabled
@@ -42,13 +45,13 @@ Rectangle {
     Accessible.onToggleAction: if (root.enabled) root.toggled(!root.checked)
 
     Rectangle {
-        width: 16
-        height: 16
-        radius: 8
+        width: root.kioskHost ? 32 : 16
+        height: width
+        radius: width / 2
         color: theme.textPrimary
-        y: 3
+        y: (parent.height - height) / 2
         x: parent.checked ? parent.width - width - 3 : 3
-        Behavior on x { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
+        Behavior on x { NumberAnimation { duration: root.kioskHost ? 0 : 120; easing.type: Easing.OutQuad } }
     }
     MouseArea {
         anchors.fill: parent

@@ -53,6 +53,7 @@ import "../../rows"
 import "../../theme"
 
 Item {
+    property bool kioskHost: false
     id: root
 
     property var item: ({})
@@ -79,7 +80,7 @@ Item {
 
     QbzTheme { id: theme }
 
-    height: 50
+    height: kioskHost ? 64 : 50
 
     // The shared TrackRow takes its artwork from `item.artPath`, and a LOCAL
     // track row publishes an empty one (local_rows.rs:284) — the cover comes
@@ -121,12 +122,12 @@ Item {
         color: (root.zebra && root.number % 2 === 0) ? "#07ffffff" : "transparent"
     }
 
-    TrackRow {
+    TrackRow { kioskHost: root.kioskHost;
         id: sharedRow
         // 26px source-glyph gutter + the 46px (32 cell + 14 gap) the shared
         // row would have spent on its own ⋯ — so every other column lands
         // exactly where it did before the menu moved out.
-        width: root.width - 26 - 46
+        width: root.width - 26 - (root.kioskHost ? 58 : 46)
         item: root.rowItem
         number: root.number
         showArtwork: root.showArtwork
@@ -173,9 +174,9 @@ Item {
     // action set behind it.
     Rectangle {
         id: moreBtn
-        x: root.width - 70
-        width: 32
-        height: 32
+        x: root.width - (root.kioskHost ? 82 : 70)
+        width: root.kioskHost ? 44 : 32
+        height: root.kioskHost ? 44 : 32
         radius: theme.radiusSm
         anchors.verticalCenter: parent.verticalCenter
         color: moreArea.containsMouse ? theme.surfaceElevated : "transparent"
@@ -250,7 +251,7 @@ Item {
     Loader {
         id: rowMenuLoader
         active: false
-        sourceComponent: CardMenu {
+        sourceComponent: CardMenu { kioskHost: root.kioskHost;
             menuWidth: 220
             entries: {
                 var m = [

@@ -100,9 +100,10 @@ QbzContextMenu {
     Item {
         visible: (menuRoot.folders || []).length >= 8
         width: menuRoot.rowW
-        height: visible ? 32 : 0
+        height: visible ? (menuRoot.kioskHost ? 44 : 32) : 0
 
         QbzLineEdit {
+            kioskHost: menuRoot.kioskHost
             anchors.verticalCenter: parent.verticalCenter
             // The plain arm is a FIXED width: 240 — a modal/menu must set it.
             width: menuRoot.rowW
@@ -112,7 +113,7 @@ QbzContextMenu {
             // is 1). The reference field is 28 inside a 32 px Rectangle
             // (`:828-830`); the sidebar row menu sets its own height the same
             // way (shell/SidebarRowMenu.qml:305).
-            height: 28
+            height: menuRoot.kioskHost ? 44 : 28
             searchMode: true
             elevated: false
             placeholder: QbzSession.tr("Search folders", QbzSession.trRev)
@@ -125,6 +126,7 @@ QbzContextMenu {
     // current folder's row is excluded, which makes the folder arm's selected
     // state dead by construction. Do not "fix" it.
     PmMenuRow {
+            kioskHost: menuRoot.kioskHost
         width: menuRoot.rowW
         label: QbzSession.tr("No folder", QbzSession.trRev)
         selected: menuRoot.currentFolderId === ""
@@ -152,6 +154,7 @@ QbzContextMenu {
         model: menuRoot.filteredFolders
 
         delegate: PmMenuRow {
+            kioskHost: menuRoot.kioskHost
             required property var modelData
             width: menuRoot.rowW
             // The current-folder exclusion, in the markup (D4).

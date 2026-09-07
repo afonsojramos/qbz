@@ -22,10 +22,31 @@
 import QtQuick
 import com.blitzfc.qbz
 import "../controls"
+import "../kiosk"
 import "../theme"
 
 Rectangle {
     id: root
+
+    /// Kiosk host opt-in (contract §2.6 / §5.2). DEFAULT FALSE IS DESKTOP and
+    /// every branch is `kioskHost ? … : <the old literal>`, so an unset host
+    /// is the row that shipped. Threaded from AlbumCollection, which is
+    /// itself only flagged by ContentRouter's kiosk `setSource` map.
+    ///
+    /// Three things change, and only these:
+    ///   * the 44px thumb is drawn by kiosk/KioskArtwork instead of
+    ///     theme/RoundedImage — the desktop path decodes the FULL original
+    ///     before it asks Rust for a derivative, which on a 7" panel is a
+    ///     600px decode for a 44px cell;
+    ///   * the ⋯ hit box grows 32 -> 44 (secondary-control floor) and a
+    ///     press-and-hold opens the same menu the desktop right-click does,
+    ///     because there is no right button on a panel;
+    ///   * the menu carries the album actions AlbumCard would have offered —
+    ///     see `menuEntries()`. Kiosk renders this row INSTEAD of that card,
+    ///     so dropping them would be losing functionality silently.
+    property bool kioskHost: false
+    property bool pinned: item.isPinned === true
+    Connections { target: QbzLibrary; function onPinChanged(key, value) { if (key === "album:" + (root.item.id || "")) root.pinned = value } }
 
     property var item: ({})
     /// Row index — drives the even/odd zebra (coherent with TrackRow).
@@ -54,9 +75,9 @@ Rectangle {
 
     // Same columns (and widths) as AlbumListHeader.qml.
     readonly property int colArt: 52
-    readonly property int colQuality: 150
-    readonly property int colYear: 64
-    readonly property int colOverflow: 36
+    readonly property int colQuality: root.kioskHost && width < 500 ? 0 : 150
+    readonly property int colYear: root.kioskHost && width < 500 ? 0 : 64
+    readonly property int colOverflow: root.kioskHost ? 44 : 36
     readonly property int colGap: 12
 
     readonly property bool rowHovered: rowArea.containsMouse || moreArea.containsMouse
@@ -87,6 +108,22 @@ Rectangle {
             if (root.selectMode) root.toggleSelect(mouse.modifiers)
             else if (!root.pulledDead) QbzAlbum.openAlbum(root.item.id || "")
         }
+        // Touch has no right button. Desktop-inert: `pressAndHold` never
+        // fires for a mouse press that is released normally, and the guard
+        // keeps even a stalled desktop press from opening a second menu.
+        onPressAndHold: function (mouse) {
+            if (root.kioskHost && !root.selectMode)
+                root.openMenu(rowArea, mouse.x, mouse.y)
+        }
+    }
+
+    /// The same "this id IS a Qobuz catalog album" rule the existing "Block
+    /// this album" gate uses (and AlbumCard's `catalogAffordances`): every
+    /// server source is in the same class as Plex, because the invokables
+    /// below all resolve a catalog id.
+    readonly property bool catalogRow: {
+        var src = root.item.source || ""
+        return src !== "local" && src !== "plex"
     }
 
     function menuEntries() {
@@ -99,9 +136,28 @@ Rectangle {
             m.push({ "label": t("Play next", r), "icon": "list-start", "action": "next" })
             m.push({ "label": t("Play later", r), "icon": "list-plus", "action": "later" })
             m.push({ "label": t("Add to queue", r), "icon": "list-end", "action": "queue" })
+            // KIOSK ONLY. On desktop these four live on AlbumCard's menu and a
+            // user who wants them flips the grid/list toggle back. Kiosk has no
+            // grid arm, so without this block forcing list mode would delete
+            // four working actions from six routes — the "sin perder acciones"
+            // half of the ask. Every msgid, icon and bridge call is lifted
+            // verbatim from cards/AlbumCard.qml::menuModel/menuAction: no new
+            // strings (the eight catalogues are untouched) and no new seam.
+            if (root.kioskHost && root.catalogRow) {
+                m.push({label: t("Quick view", r), icon: "eye", action: "quick"})
+                m.push({label: t(root.pinned ? "Unpin" : "Pin", r), icon: "pin", action: "pin"})
+                var fav = root.item.isFavorite === true
+                m.push({ "label": fav ? t("Remove from Library", r) : t("Add to Library", r),
+                         "icon": fav ? "heart-filled" : "heart", "action": "favorite" })
+                m.push({ "label": t("Add to playlist", r), "icon": "list-music", "action": "add-playlist" })
+                m.push({ "label": t("Add to mixtape", r), "icon": "cassette-tape", "action": "mixtape" })
+                m.push({ "label": root.cacheStatus === 3
+                            ? t("Refresh offline copy", r) : t("Make available offline", r),
+                         "icon": root.cacheStatus === 3 ? "refresh-cw" : "cloud-download",
+                         "action": "cache-album" })
+            }
         }
-        var src = root.item.source || ""
-        if (!root.pulledDead && src !== "local" && src !== "plex")
+        if (!root.pulledDead && root.catalogRow)
             m.push({ "label": t("Block this album", r), "icon": "blind-eye", "action": "block" })
         return m
     }
@@ -115,13 +171,23 @@ Rectangle {
         // and a file:// cache path is dead on any other machine.
         else if (a === "block") QbzBlacklist.blockAlbum(id, root.item.title || "",
             root.item.artist || "", root.item.artUrl || "")
+        // Kiosk tail (see menuEntries). Unreachable on desktop: no entry with
+        // one of these actions is ever built there.
+        else if (a === "quick") QbzAlbum.openQuickView(id)
+        else if (a === "pin") QbzLibrary.togglePin("album", id, root.item.title || "", root.item.artist || "", root.item.artUrl || "")
+        else if (a === "favorite") QbzLibrary.libraryToggleFavorite("album", id)
+        else if (a === "add-playlist") QbzPlaylistPicker.openForAlbum(id)
+        else if (a === "mixtape") QbzAlbum.addToMixtape(id)
+        else if (a === "cache-album") QbzAlbum.albumCacheOffline(id)
         else QbzPlayer.enqueueAlbum(id, a)
     }
     Loader {
         id: rowMenuLoader
         active: false
         sourceComponent: CardMenu {
-            menuWidth: 196
+            kioskHost: root.kioskHost
+            // The kiosk arm carries four more entries at 1.2x type.
+            menuWidth: root.kioskHost ? 252 : 196
             entries: root.menuEntries()
             onPicked: function (a) { root.menuAction(a) }
         }
@@ -174,9 +240,15 @@ Rectangle {
                 // One batch root per list row, for a scissor that never
                 // rounded anything.
                 RoundedImage {
+                    visible: !root.kioskHost
                     anchors.fill: parent
-                    source: root.artSource !== "" ? root.artSource : (root.item.artPath || "")
+                    source: root.kioskHost ? "" : (root.artSource !== "" ? root.artSource : (root.item.artPath || ""))
                     radius: 4
+                }
+                KioskArtwork {
+                    anchors.fill: parent
+                    visible: root.kioskHost
+                    source: root.kioskHost ? (root.artSource || root.item.artPath || "") : ""
                 }
                 Rectangle {
                     visible: root.pulledDead
@@ -215,7 +287,7 @@ Rectangle {
             Text {
                 id: artistText
                 width: parent.width
-                text: root.item.artist || ""
+                text: (root.item.artist || "") + (root.kioskHost && (root.item.plays || 0) > 0 ? " · " + QbzSession.tr("{} plays", QbzSession.trRev).replace("{}", root.item.plays) : "")
                 color: artistArea.containsMouse ? theme.textPrimary : theme.textMuted
                 font.pixelSize: 12
                 elide: Text.ElideRight
@@ -268,8 +340,8 @@ Rectangle {
             height: parent.height
             visible: !root.pulledDead
             Rectangle {
-                width: 32
-                height: 32
+                width: root.kioskHost ? 44 : 32
+                height: root.kioskHost ? 44 : 32
                 radius: 6
                 anchors.centerIn: parent
                 color: moreArea.containsMouse ? theme.surfaceElevated : "transparent"

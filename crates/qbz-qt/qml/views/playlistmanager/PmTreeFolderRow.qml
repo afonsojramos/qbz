@@ -22,6 +22,7 @@ import "../../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     /// `managerJson.tree[i].folder` — a folder object whose `count` is the
     /// post-filter member count (contract §4.2).
@@ -32,7 +33,7 @@ Rectangle {
 
     readonly property string folderId: String(root.folder.id || "")
 
-    height: 44
+    height: root.kioskHost ? 64 : 44
     radius: 8
     color: bodyArea.containsMouse ? theme.surfaceHover : "transparent"
     opacity: (root.folder.isHidden === true) ? 0.6 : 1.0
@@ -81,6 +82,7 @@ Rectangle {
 
     PmActionButton {
         id: pencil
+        btnSize: root.kioskHost ? 44 : 26
         x: root.width - 12 - width
         anchors.verticalCenter: parent.verticalCenter
         name: "pen-line"
@@ -93,7 +95,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: Math.max(0, parent.width - 40)
+        width: Math.max(0, parent.width - (root.kioskHost ? 56 : 40))
         z: -1
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor

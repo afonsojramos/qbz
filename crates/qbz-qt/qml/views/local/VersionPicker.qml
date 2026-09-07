@@ -13,6 +13,7 @@ import "../../controls"
 import "../../theme"
 
 Rectangle {
+    property bool kioskHost: false
     id: root
 
     /// [{ version, trackCount, quality, source }]
@@ -42,7 +43,7 @@ Rectangle {
         return parts.join(" · ")
     }
 
-    height: 30
+    height: root.kioskHost ? 44 : 30
     width: compact ? 28 : row.width
     radius: 6
     color: root.overlay
@@ -127,7 +128,7 @@ Rectangle {
     Loader {
         id: versionMenuLoader
         active: false
-        sourceComponent: QbzContextMenu {
+        sourceComponent: QbzContextMenu { kioskHost: root.kioskHost;
             id: versionMenu
             menuWidth: 380
             Repeater {
@@ -137,7 +138,7 @@ Rectangle {
                     required property var modelData
                     required property int index
                     width: parent ? parent.width : 0
-                    height: 30
+                    height: root.kioskHost ? 44 : 30
                     radius: 6
                     color: index === root.current ? theme.surfaceElevated
                          : optArea.containsMouse ? theme.surfaceHover : "transparent"

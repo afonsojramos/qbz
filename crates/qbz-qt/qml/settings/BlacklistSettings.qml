@@ -33,6 +33,8 @@ import "../controls"
 import "../theme"
 
 Column {
+    property bool kioskHost: false
+
     id: root
 
     property var doc: ({})
@@ -44,7 +46,7 @@ Column {
 
     Item {
         width: parent.width
-        height: 64
+        height: root.kioskHost ? 112 : 64
 
         Row {
             anchors.fill: parent
@@ -73,7 +75,7 @@ Column {
                         width: parent.width
                         text: QbzSession.tr("Blacklist", QbzSession.trRev)
                         color: theme.textPrimary
-                        font.pixelSize: theme.fontBody
+                        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                         font.weight: theme.weightMedium
                     }
                     Text {
@@ -86,13 +88,13 @@ Column {
                             .replace("{}", root.dev.blacklistArtists || 0)
                             .replace("{}", root.dev.blacklistAlbums || 0)
                         color: theme.textMuted
-                        font.pixelSize: 12
+                        font.pixelSize: root.kioskHost ? (12) * 1.2 : (12)
                         wrapMode: Text.WordWrap
                     }
                 }
             }
 
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 id: manageBtn
                 anchors.verticalCenter: parent.verticalCenter
                 text: QbzSession.tr("Manage", QbzSession.trRev)

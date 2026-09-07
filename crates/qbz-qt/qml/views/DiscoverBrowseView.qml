@@ -30,6 +30,7 @@ import "../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     color: ambientOn ? "transparent" : theme.surfaceMain
     readonly property bool ambientOn: theme.ambientOn
@@ -87,7 +88,7 @@ Rectangle {
         Item {
             id: header
             width: parent.width
-            height: 56
+            height: root.kioskHost ? 64 : 56
 
             Rectangle {
                 anchors.fill: parent
@@ -108,7 +109,7 @@ Rectangle {
 
             Text {
                 x: 48
-                y: 25 - height / 2
+                y: (root.kioskHost ? 32 : 25) - height / 2
                 width: Math.max(0, tools.x - 48 - 16)
                 text: root.doc.title || ""
                 color: theme.textPrimary
@@ -120,10 +121,11 @@ Rectangle {
             Row {
                 id: tools
                 x: parent.width - width - 32
-                y: 25 - height / 2
+                y: (root.kioskHost ? 32 : 25) - height / 2
                 spacing: 8
 
                 QbzLineEdit {
+                    kioskHost: root.kioskHost
                     searchMode: true
                     width: 200
                     placeholder: QbzSession.tr("Search…", QbzSession.trRev)
@@ -131,10 +133,12 @@ Rectangle {
                     onEdited: function (v) { QbzHome.discoverBrowseSearch(v) }
                 }
                 BrowseGenreButton {
+                    btnHeight: root.kioskHost ? 44 : 34
                     context: "discover"
                     onClicked: genrePopup.toggle()
                 }
                 ViewModeToggle {
+                    visible: !root.kioskHost
                     mode: root.viewMode
                     onSetMode: function (m) { QbzHome.discoverBrowseSetViewMode(m) }
                 }
@@ -144,7 +148,7 @@ Rectangle {
         // --- Scrolling list ----------------------------------------------
         Item {
             width: parent.width
-            height: parent.height - 56
+            height: parent.height - (root.kioskHost ? 64 : 56)
 
             Flickable {
                 id: flick
@@ -180,6 +184,7 @@ Rectangle {
                     }
 
                     AlbumCollection {
+                kioskHost: root.kioskHost
                         id: collection
                         visible: !QbzHome.discoverBrowseLoading
                         width: parent.width - 64
@@ -191,7 +196,7 @@ Rectangle {
                         cardGap: 24
                         listRowGap: 4
                         flick: flick
-                        contentOffset: 8
+                        contentOffset: root.kioskHost ? y : (8)
                     }
 
                     Item {
@@ -205,7 +210,7 @@ Rectangle {
                         QbzLoadMore {
                             id: loadMore
                             width: parent.width
-                            buttonHeight: 32
+                            buttonHeight: root.kioskHost ? 64 : 32
                             busy: QbzHome.discoverBrowseLoadingMore
                             skeleton: root.viewMode === "list" ? "rows" : "cards"
                             // AlbumCollection pitch: 200x266 + 24px gutter.

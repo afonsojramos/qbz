@@ -42,9 +42,11 @@ import "../cards"
 import "../controls"
 import "../rows"
 import "../theme"
+import "../kiosk"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     color: ambientOn ? "transparent" : theme.surfaceMain
     readonly property bool ambientOn: theme.ambientOn
@@ -183,6 +185,7 @@ Rectangle {
         readonly property real maxScroll: Math.max(0, crList.contentWidth - crList.width)
 
         QbzSectionHeader {
+            kioskHost: root.kioskHost
             title: cr.title
             leftEnabled: crList.contentX > 1
             rightEnabled: crList.contentX < cr.maxScroll - 1
@@ -193,7 +196,7 @@ Rectangle {
         }
         Item {
             width: parent.width
-            height: 246
+            height: root.kioskHost && (cr.kind === "album" || cr.kind === "playlist") ? 64 : 246
             ListView {
                 id: crList
                 anchors.fill: parent
@@ -201,13 +204,17 @@ Rectangle {
                 spacing: 32
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
-                model: cr.items
+                cacheBuffer: 0
+                model: !root.kioskHost || (cr.mapToItem(page, 0, 0).y < flick.contentY + flick.height && cr.mapToItem(page, 0, cr.height).y > flick.contentY) ? cr.items : []
                 delegate: Item {
                     id: crCell
                     required property var modelData
-                    width: 200
-                    height: 246
+                    width: root.kioskHost ? 340 : 200
+                    height: root.kioskHost && (cr.kind === "album" || cr.kind === "playlist") ? 64 : 246
 
+                    KioskCoverSource { id: cellArt; remote: root.kioskHost ? (crCell.modelData.artUrl || "") : ""; local: crCell.modelData.artPath || ""; edge: 44 }
+                    Component { id: crKioskAlbum; AlbumListRow { kioskHost: true; item: crCell.modelData; artSource: root.kioskHost ? cellArt.source : (crCell.modelData.artPath || "") } }
+                    Component { id: crKioskPlaylist; PlaylistListRow { kioskHost: true; item: crCell.modelData; artSource: root.kioskHost ? cellArt.source : (crCell.modelData.artPath || "") } }
                     Component {
                         id: crAlbum
                         AlbumCard {
@@ -221,7 +228,7 @@ Rectangle {
                             qualityDetail: crCell.modelData.qualityDetail || ""
                             ribbon: crCell.modelData.ribbon || ""
                             ribbonKind: crCell.modelData.ribbonKind || ""
-                            artSource: crCell.modelData.artPath || ""
+                            artSource: root.kioskHost ? cellArt.source : (crCell.modelData.artPath || "")
                             isPinned: crCell.modelData.isPinned === true
                             // The pin payload's display snapshot — the REMOTE
                             // url (artPath is the local cache path). Without
@@ -239,7 +246,7 @@ Rectangle {
                             // artworkUrl defaults to `item.artUrl` (the card's
                             // own arm), so only the pin state is handed over.
                             item: crCell.modelData
-                            artSource: crCell.modelData.artPath || ""
+                            artSource: root.kioskHost ? cellArt.source : (crCell.modelData.artPath || "")
                             isPinned: crCell.modelData.isPinned === true
                         }
                     }
@@ -247,7 +254,7 @@ Rectangle {
                         id: crArtist
                         ArtistCard {
                             item: crCell.modelData
-                            artSource: crCell.modelData.artPath || ""
+                            artSource: root.kioskHost ? cellArt.source : (crCell.modelData.artPath || "")
                             isPinned: crCell.modelData.isPinned === true
                             artworkUrl: crCell.modelData.artUrl || ""
                             // LabelPageView.slint:524 passes card-follow-mode
@@ -263,12 +270,14 @@ Rectangle {
                         id: crLabel
                         LabelCard {
                             item: crCell.modelData
-                            artSource: crCell.modelData.artPath || ""
+                            artSource: root.kioskHost ? cellArt.source : (crCell.modelData.artPath || "")
                         }
                     }
                     Loader {
                         anchors.fill: parent
-                        sourceComponent: cr.kind === "playlist" ? crPlaylist
+                        sourceComponent: root.kioskHost && cr.kind === "album" ? crKioskAlbum
+                            : root.kioskHost && cr.kind === "playlist" ? crKioskPlaylist
+                            : cr.kind === "playlist" ? crPlaylist
                             : cr.kind === "artist" ? crArtist
                             : cr.kind === "label" ? crLabel : crAlbum
                     }
@@ -582,16 +591,27 @@ Rectangle {
 
                     Item { width: 1; height: 10 }
 
+                    Item {
+                        id: trackWindow
+                        width: parent.width
+                        readonly property int total: Math.min(root.previewCount, root.topTracks.length)
+                        readonly property int pitch: root.kioskHost ? 64 : 50
+                        readonly property real viewportTop: flick.contentY - mapToItem(page, 0, 0).y
+                        readonly property int first: root.kioskHost ? Math.min(total, Math.max(0, Math.floor(viewportTop / pitch) - 1)) : 0
+                        readonly property int last: root.kioskHost ? Math.min(total, Math.max(first, Math.ceil((viewportTop + flick.height) / pitch) + 1)) : total
+                        height: total * pitch
                     Repeater {
                         // Numeric growth preserves the five existing delegates
                         // and creates only the newly revealed rows. The old
                         // full-array model built up to 50 TrackRows at first
                         // paint and merely gave 45 of them height zero.
-                        model: Math.min(root.previewCount, root.topTracks.length)
+                        model: trackWindow.last - trackWindow.first
                         delegate: TrackRow {
                             required property int index
                             width: parent ? parent.width : 0
-                            height: 50
+                            height: root.kioskHost ? 64 : 50
+                            kioskHost: root.kioskHost
+                            y: (trackWindow.first + index) * trackWindow.pitch
                             // SMOOTH REVEAL (owner, 2026-08-02: "que la
                             // aparicion de lo que se cargue, sea smooth").
                             // This site is CLIENT-SIDE. Numeric model growth
@@ -612,8 +632,8 @@ Rectangle {
                                 NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
                             }
                             Component.onCompleted: revealed = true
-                            item: root.topTracks[index] || ({})
-                            number: index + 1
+                            item: root.topTracks[trackWindow.first + index] || ({})
+                            number: trackWindow.first + index + 1
                             showArtwork: true
                             showAlbum: true
                             selectMode: root.multiSelect
@@ -646,6 +666,7 @@ Rectangle {
                         }
                     }
 
+                    }
                     // Reveal control: 5 -> 20 -> 50, then back to 5
                     // (LabelPageView.slint:439-466). This was the fifth
                     // hand-rolled copy of the plain Load-more shape; it is
@@ -664,7 +685,7 @@ Rectangle {
                     QbzLoadMore {
                         visible: root.topTracks.length > 5
                         width: parent.width
-                        buttonHeight: 28
+                        buttonHeight: root.kioskHost ? 64 : 28
                         skeleton: "none"
                         busy: false
                         // The label ternary is verbatim from the copy this

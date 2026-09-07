@@ -521,7 +521,11 @@ pub mod qbz_shell {
         #[qinvokable]
         fn record_local_tab(self: Pin<&mut QbzShell>, tab: QString, state: QString);
         #[qinvokable]
+        fn record_kiosk_tab(self: Pin<&mut QbzShell>, view: QString, tab: QString, state: QString);
+        #[qinvokable]
         fn local_navigation_state(self: &QbzShell) -> QString;
+        #[qinvokable]
+        fn navigation_state(self: &QbzShell, view: QString) -> QString;
 
         /// Sidebar navigation: record a content view ("home" | "library")
         /// and lazy-load its data on first visit.
@@ -1300,9 +1304,13 @@ impl qbz_shell::QbzShell {
         let scope = scope.to_string();
         let state = state.to_string();
         crate::nav_qt::set_live_state(&scope, &state);
-        if scope == "local" {
+        if scope == "local" && !crate::kiosk_profile_qt::active() {
             crate::local_restore_qt::save_browser(&state);
         }
+    }
+
+    pub fn navigation_state(&self, view: QString) -> QString {
+        QString::from(crate::nav_qt::state_for_view(&view.to_string()))
     }
 
     pub fn local_navigation_state(&self) -> QString {
@@ -1311,6 +1319,10 @@ impl qbz_shell::QbzShell {
 
     pub fn record_local_tab(self: Pin<&mut Self>, tab: QString, state: QString) {
         crate::nav_qt::record_local_tab(&tab.to_string(), &state.to_string());
+    }
+
+    pub fn record_kiosk_tab(self: Pin<&mut Self>, view: QString, tab: QString, state: QString) {
+        crate::nav_qt::record_kiosk_tab(&view.to_string(), &tab.to_string(), &state.to_string());
     }
 
     pub fn navigate_to(self: Pin<&mut Self>, view: QString) {

@@ -45,6 +45,8 @@ import "../controls"
 import "../theme"
 
 Item {
+    property bool kioskHost: false
+
     id: root
 
     QbzTheme { id: theme }
@@ -64,6 +66,18 @@ Item {
     // assignment destroys the binding it lands on, so a single surviving
     // `root.section = n` would work once and then re-introduce the bug one
     // navigation later, in a way that looks fixed under casual testing.
+    readonly property var kioskSections: [
+        { label: QbzSession.tr("Audio", QbzSession.trRev), section: 0 },
+        { label: QbzSession.tr("Playback", QbzSession.trRev), section: 1 },
+        { label: QbzSession.tr("Appearance", QbzSession.trRev), section: 2 },
+        { label: QbzSession.tr("Offline", QbzSession.trRev), section: 3 },
+        { label: QbzSession.tr("Local Library", QbzSession.trRev), section: 4 },
+        { label: QbzSession.tr("Blacklist", QbzSession.trRev), section: 5 },
+        { label: QbzSession.tr("Integrations", QbzSession.trRev), section: 6 },
+        { label: QbzSession.tr("Import / Export", QbzSession.trRev), section: 9 },
+        { label: QbzSession.tr("Developer", QbzSession.trRev), section: 7 }
+    ].concat(root.sandboxed ? [{ label: (doc.dev || ({})).installMethod === "snap"
+        ? QbzSession.tr("Snap", QbzSession.trRev) : QbzSession.tr("Flatpak", QbzSession.trRev), section: 8 }] : [])
     readonly property int section: QbzBridge.settingsSection
     readonly property bool migrationRunning:
         (doc.importExport || ({})).migrationRunning === true
@@ -98,27 +112,55 @@ Item {
         // --- Header (92px; NavButtons is a 0px placeholder in this port) --
         Item {
             width: parent.width
-            height: 92
+            height: root.kioskHost ? 64 : 92
             Text {
-                x: 32
+                x: root.kioskHost ? 16 : 32
                 // padding-top 11 + 12px gap below the (0px) NavButtons row.
-                y: 23
+                y: root.kioskHost ? (64 - height) / 2 : 23
                 text: QbzSession.tr("Settings", QbzSession.trRev)
                 color: theme.textPrimary
-                font.pixelSize: theme.fontTitle
+                font.pixelSize: root.kioskHost ? (theme.fontTitle) * 1.2 : (theme.fontTitle)
                 font.weight: theme.weightBold
+            }
+            QbzSelect {
+                visible: root.kioskHost
+                kioskHost: true
+                anchors.right: logsButton.left
+                anchors.rightMargin: 8
+                anchors.verticalCenter: parent.verticalCenter
+                menuWidth: Math.max(180, Math.min(300, parent.width - 270))
+                searchable: options.length > 8
+                options: root.kioskSections.map(function (s) { return s.label })
+                currentIndex: root.kioskSections.findIndex(function (s) { return s.section === root.section })
+                onSelected: function (i) {
+                    QbzBridge.settingsSetSection(root.kioskSections[i].section)
+                    flick.contentY = 0
+                }
+            }
+            SettingsButton {
+                id: logsButton
+                visible: root.kioskHost
+                kioskHost: true
+                anchors.right: parent.right
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                minWidth: 44
+                iconName: "cloud-upload"
+                onClicked: QbzShell.logOpen()
+                Accessible.name: QbzSession.tr("Share logs", QbzSession.trRev)
             }
         }
 
         // --- Sub-nav + active panel ---------------------------------------
         Row {
             width: parent.width
-            height: parent.height - 92
+            height: parent.height - (root.kioskHost ? 64 : 92)
 
             // Left sub-navigation (232px).
             Item {
                 id: subNav
-                width: 232
+                visible: !root.kioskHost
+                width: root.kioskHost ? 0 : 232
                 height: parent.height
 
                 component SubNavItem: Rectangle {
@@ -168,7 +210,7 @@ Item {
                             height: parent.height
                             text: parent.parent.label
                             color: parent.parent.active ? theme.textPrimary : theme.textSecondary
-                            font.pixelSize: theme.fontBody
+                            font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                             font.weight: parent.parent.active ? theme.weightSemibold : theme.weightRegular
                             verticalAlignment: Text.AlignVCenter
                         }
@@ -284,7 +326,7 @@ Item {
             // Active panel — a raw Flickable (touch-drag scroll on the Pi
             // kiosk, per the Slint comment) + a ListScrollbar replica.
             Item {
-                width: parent.width - 232
+                width: parent.width - subNav.width
                 height: parent.height
 
                 Flickable {
@@ -328,9 +370,9 @@ Item {
 
                     Column {
                         id: panelCol
-                        x: 20
+                        x: root.kioskHost ? 16 : 20
                         y: 4
-                        width: flick.width - 60 // 20 left + 40 right padding
+                        width: flick.width - (root.kioskHost ? 32 : 60) // 20 left + 40 right padding
                         spacing: 4
 
                         // ── ONE PANEL IS BUILT, NOT NINE ──────────────
@@ -368,7 +410,7 @@ Item {
                         Panel {
                             panelIndex: 0
                             sourceComponent: Component {
-                                AudioSettings {
+                                AudioSettings { kioskHost: root.kioskHost;
                                     width: parent.width
                                     doc: root.doc
                                 }
@@ -377,7 +419,7 @@ Item {
                         Panel {
                             panelIndex: 1
                             sourceComponent: Component {
-                                PlaybackSettings {
+                                PlaybackSettings { kioskHost: root.kioskHost;
                                     width: parent.width
                                     doc: root.doc
                                 }
@@ -386,7 +428,7 @@ Item {
                         Panel {
                             panelIndex: 2
                             sourceComponent: Component {
-                                AppearanceSettings {
+                                AppearanceSettings { kioskHost: root.kioskHost;
                                     width: parent.width
                                     doc: root.doc
                                 }
@@ -395,7 +437,7 @@ Item {
                         Panel {
                             panelIndex: 3
                             sourceComponent: Component {
-                                OfflineSettings {
+                                OfflineSettings { kioskHost: root.kioskHost;
                                     width: parent.width
                                     doc: root.doc
                                     confirmHost: settingsConfirmHost
@@ -405,7 +447,7 @@ Item {
                         Panel {
                             panelIndex: 4
                             sourceComponent: Component {
-                                LocalLibrarySettings {
+                                LocalLibrarySettings { kioskHost: root.kioskHost;
                                     width: parent.width
                                     doc: root.doc
                                     confirmHost: settingsConfirmHost
@@ -416,7 +458,7 @@ Item {
                         Panel {
                             panelIndex: 5
                             sourceComponent: Component {
-                                BlacklistSettings {
+                                BlacklistSettings { kioskHost: root.kioskHost;
                                     width: parent.width
                                     doc: root.doc
                                 }
@@ -425,7 +467,7 @@ Item {
                         Panel {
                             panelIndex: 6
                             sourceComponent: Component {
-                                IntegrationsSettings {
+                                IntegrationsSettings { kioskHost: root.kioskHost;
                                     width: parent.width
                                     doc: root.doc
                                     confirmHost: settingsConfirmHost
@@ -435,7 +477,7 @@ Item {
                         Panel {
                             panelIndex: 9
                             sourceComponent: Component {
-                                ImportExportSettings {
+                                ImportExportSettings { kioskHost: root.kioskHost;
                                     width: parent.width
                                     doc: root.doc
                                     migrationSetupModal: migrationSetupOverlay
@@ -445,7 +487,7 @@ Item {
                         Panel {
                             panelIndex: 7
                             sourceComponent: Component {
-                                DeveloperSettings {
+                                DeveloperSettings { kioskHost: root.kioskHost;
                                     width: parent.width
                                     doc: root.doc
                                 }
@@ -455,7 +497,7 @@ Item {
                             panelIndex: 8
                             active: root.section === 8 && root.sandboxed
                             sourceComponent: Component {
-                                SandboxSettings {
+                                SandboxSettings { kioskHost: root.kioskHost;
                                     width: parent.width
                                     doc: root.doc
                                 }
@@ -483,11 +525,11 @@ Item {
     // declaration order alone puts it over every panel and the sub-nav.
     // Panels that need it are handed the reference (see LocalLibrarySettings
     // / PlexSettings `confirmHost`).
-    SettingsConfirmHost { id: settingsConfirmHost }
+    SettingsConfirmHost { kioskHost: root.kioskHost; id: settingsConfirmHost }
 
     // App-wide Local Library order. Mounted at the view root so its scrim
     // covers the sub-navigation and the scrolled panel alike.
-    LocalTabsConfigModal {
+    LocalTabsConfigModal { kioskHost: root.kioskHost;
         id: localTabsConfigModal
         anchors.fill: parent
     }
@@ -496,7 +538,7 @@ Item {
     // must overlay the whole view, so it cannot live inside the scrolled
     // panel that opens it. The reference mounts its counterpart at the
     // AppShell root for exactly the same reason (LibFolderEditModal.slint:5-8).
-    LibFolderEditModal { doc: root.doc }
+    LibFolderEditModal { kioskHost: root.kioskHost; doc: root.doc }
 
     // The HiFi Wizard, opened from Settings > Audio. Mounted here for the same
     // reason as the two above — a modal inside the scrolled panel would be
@@ -506,9 +548,9 @@ Item {
     // It fills the view rather than the window: Settings is the full content
     // area, and the reference is an overlay inside the app shell too, not a
     // separate window (DacWizardModal.slint:8-9).
-    DacWizardModal { }
+    DacWizardModal { kioskHost: root.kioskHost; }
 
-    MigrationSetupModal {
+    MigrationSetupModal { kioskHost: root.kioskHost;
         id: migrationSetupOverlay
         anchors.fill: parent
         doc: root.doc
@@ -517,7 +559,7 @@ Item {
 
     // Mounted last so a long account migration has one unmistakable progress
     // surface over every Settings section. Closing it never cancels the task.
-    MigrationProgressModal {
+    MigrationProgressModal { kioskHost: root.kioskHost;
         anchors.fill: parent
         doc: root.doc
     }

@@ -25,15 +25,23 @@
 // because a delayed sampler can leave the viewport outside the mounted slice
 // for one or more completely blank frames during a fast wheel/touchpad jump.
 // The wider outer runway means the slice still changes roughly once per
-// viewport, not once per scroll frame. Grouped sections remain eager — the
-// same call the .slint makes (:265-277).
+// viewport, not once per scroll frame. Grouped sections remain eager on
+// DESKTOP — the same call the .slint makes (:265-277); under `kioskHost` they
+// are windowed too, against a pixel band, because a label grouped by artist
+// otherwise mounts every card of every section (contract §3.3).
+//
+// KIOSK (`kioskHost`, default false): the flag forces the LIST arm, tightens
+// the overscan and asks the artwork bridge for the smallest provider bucket
+// that covers the 44px thumb. See the property's own block below.
 //
 // TAIL FADE (opt-in via armTailFade(), see the block below): the arrival half
 // of the Load-more round. OFF unless a host arms it, so the two hosts that do
 // not (Discover Browse, Play History) are bit-for-bit unchanged.
 
 import QtQuick
+import QtQuick.Window
 import com.blitzfc.qbz
+import "../assets/kiosk-art.js" as ArtPolicy
 import "../cards"
 import "../controls"
 import "../theme"
@@ -65,35 +73,80 @@ Column {
     /// .slint's `content-offset`.
     property real contentOffset: 0
 
+    // --- Kiosk host arm (contract §2.6 / §3.3 / §5.1 / §5.2) --------------
+    //
+    // DEFAULT FALSE IS DESKTOP, and every branch below is `kioskHost ? … : <the
+    // old literal>`, so an unset host is bit-for-bit the file that shipped.
+    // Only ContentRouter's kiosk `setSource` map ever sets it.
+    //
+    // What the flag buys, and why the LIST arm rather than a smaller card:
+    // the kiosk content pane is 784 x 256 at the 800x480 Pi floor, and a card
+    // is 200 x 266 — one card does not fit VERTICALLY, at any column count.
+    // The list arm is already windowed on AlbumListRow (64px rows, a 44px
+    // thumb, a 346px title column at this width), already meets the 64px
+    // primary touch target, and keeps its ⋯ menu permanently visible instead
+    // of behind AlbumCard's hover scrim. So kiosk forces list mode instead of
+    // reflowing a card this file does not own.
+    property bool kioskHost: false
+    /// The mode every arm below reads. `viewMode` stays the HOST's property
+    /// (the toolbar toggle still writes it, and Back/Forward still restores
+    /// it) — kiosk only overrides what is rendered from it.
+    readonly property string _mode: root.kioskHost ? "list" : root.viewMode
+    /// Overscan, in viewports, before/after the visible band. Desktop keeps
+    /// its 2/3 runway; kiosk uses one row before/after the viewport — contract §5.1 asks for
+    /// "viewport + up to two rows" and a 256px viewport under a 5-viewport
+    /// runway mounts ~15 rows to show 3.
+    readonly property int _overscanBack: root.kioskHost ? 1 : 2
+    readonly property int _overscanFwd: root.kioskHost ? 2 : 3
+    /// The list arm's row pitch, in one place (AlbumListRow is 64 tall).
+    readonly property int _rowPitch: 64 + root.listRowGap
+
     QbzTheme { id: theme }
 
     width: parent ? parent.width : 0
     spacing: 0
 
     // --- Windowing band (row indices) ------------------------------------
-    property int bandFirst: 0
+    property var band: ({first: 0, last: 0})
+    readonly property int bandFirst: band.first
     // Start bounded too: the first model publish may precede
     // Component.onCompleted, and an eager sentinel would briefly instantiate
     // the entire result set before the first sample replaces it.
-    property int bandLast: 0
-    readonly property bool windowed: flick !== null && !root.isGrouped
+    readonly property int bandLast: band.last
+    // Grouped mode used to be EXEMPT from windowing here ("Grouped sections
+    // remain eager — the same call the .slint makes"), which on a label
+    // grouped by artist mounts every card of every section. Kiosk cannot
+    // afford that (contract §3.3), so under `kioskHost` the grouped arm gets
+    // its own pixel band below and joins the windowed set. Desktop keeps the
+    // eager sections it always had.
+    readonly property bool windowed: flick !== null
+        && (!root.isGrouped || root.kioskHost)
 
     function sampleBand() {
         if (!root.windowed)
             return
-        var listMode = root.viewMode === "list"
-        var pitch = listMode ? 64 + root.listRowGap
+        if (root.isGrouped) {
+            // kioskHost-only by `windowed` above.
+            root.sampleGroupBand()
+            return
+        }
+        var listMode = root._mode === "list"
+        var pitch = listMode ? root._rowPitch
                              : root.cardHeight + root.cardGap
         // The list rows begin after their 32px column header. The grid starts
         // at the collection origin.
         var rowsTop = root.contentOffset + (listMode ? 32 : 0)
         var top = root.flick.contentY - rowsTop
         var h = root.flick.height
-        // Two viewports on each side. ensureBandCoverage() refreshes when the
-        // viewport enters the inner half, leaving a full viewport mounted even
-        // after the refresh edge and enough lead for image incubation.
-        root.bandFirst = Math.max(0, Math.floor((top - 2 * h) / pitch))
-        root.bandLast = Math.max(0, Math.ceil((top + 3 * h) / pitch))
+        if (root.kioskHost && (top + h <= 0 || top >= root.albums.length * pitch)) {
+            root.band = {first: 0, last: -1}; return
+        }
+        // Two viewports on each side (one, forward two, in kiosk).
+        // ensureBandCoverage() refreshes when the viewport enters the inner
+        // half, leaving a full viewport mounted even after the refresh edge
+        // and enough lead for image incubation.
+        root.band = {first: Math.max(0, Math.floor((top - (root.kioskHost ? pitch : root._overscanBack * h)) / pitch)),
+            last: Math.max(0, Math.ceil((top + (root.kioskHost ? h : root._overscanFwd * h)) / pitch))}
     }
 
     function refreshBand() {
@@ -104,10 +157,15 @@ Column {
     }
 
     function ensureBandCoverage() {
+        if (root.kioskHost) { root.refreshBand(); return }
         if (!root.windowed || !root.visible)
             return
-        var listMode = root.viewMode === "list"
-        var pitch = listMode ? 64 + root.listRowGap
+        if (root.isGrouped) {
+            root.ensureGroupCoverage()
+            return
+        }
+        var listMode = root._mode === "list"
+        var pitch = listMode ? root._rowPitch
                              : root.cardHeight + root.cardGap
         var rowsTop = root.contentOffset + (listMode ? 32 : 0)
         var top = root.flick.contentY - rowsTop
@@ -119,7 +177,7 @@ Column {
             return
         var visibleFirst = Math.max(0, Math.floor(top / pitch))
         var visibleLast = Math.max(0, Math.ceil((top + h) / pitch))
-        var innerRunway = Math.max(1, Math.ceil(h / pitch))
+        var innerRunway = root.kioskHost ? 1 : Math.max(1, Math.ceil(h / pitch))
         // A scrollbar seek may jump across the whole slice in one signal;
         // normal wheel motion reaches an inner edge about once per viewport.
         if (visibleFirst < root.bandFirst || visibleLast > root.bandLast
@@ -128,6 +186,94 @@ Column {
                 || (visibleLast < totalRows - innerRunway
                     && root.bandLast - visibleLast < innerRunway))
             root.refreshBand()
+    }
+
+    // --- Grouped windowing (kiosk) ---------------------------------------
+    //
+    // Sections have UNEQUAL heights, so there is no single row pitch to index
+    // by the way the flat arms do. The band is therefore kept in PIXELS, and
+    // `_groupPlan` precomputes one record per section — O(sections), no object
+    // per album. Both the sections and, inside each mounted section, its rows
+    // are then windowed against that band, so neither a 900-artist grouping
+    // nor a 900-album section can mount more than the runway.
+    //
+    // Sorting, section titles and per-row actions are untouched: this changes
+    // WHICH delegates exist, never the model the host derived.
+    property var groupBand: ({top: 0, bottom: 0})
+    readonly property real groupTop: groupBand.top
+    readonly property real groupBottom: groupBand.bottom
+    /// Section rows start below the one shared AlbumListHeader (32px).
+    readonly property real _groupRowsTop: root.contentOffset + 32
+    readonly property int _sectionTitleH: 34
+    readonly property int _sectionGap: 20
+
+    function sampleGroupBand() {
+        var h = Math.max(1, root.flick.height)
+        var top = root.flick.contentY - root._groupRowsTop
+        root.groupBand = {top: top - root._rowPitch, bottom: top + h + root._rowPitch}
+    }
+
+    function ensureGroupCoverage() {
+        var h = Math.max(1, root.flick.height)
+        var top = root.flick.contentY - root._groupRowsTop
+        // Same inner-runway rule as the flat arm, expressed in pixels. At rest
+        // it is self-consistent (a freshly sampled band satisfies neither
+        // clause), so this cannot loop on a stationary viewport.
+        if (top < root.groupTop + root._rowPitch || top + h > root.groupBottom - root._rowPitch)
+            root.refreshBand()
+    }
+
+    /// [{ index, title, y, rowsY, count, h }] in the collection's own
+    /// coordinates, below the column header. Empty on desktop and whenever the
+    /// page is not grouped — the binding then costs one comparison.
+    readonly property var _groupPlan: {
+        if (!root.kioskHost || !root.isGrouped)
+            return []
+        var pitch = root._rowPitch
+        var out = []
+        var y = 0
+        for (var i = 0; i < root.grouped.length; i++) {
+            var g = root.grouped[i] || ({})
+            var n = (g.albums || []).length
+            var body = n > 0 ? n * pitch - root.listRowGap : 0
+            out.push({ "index": i, "title": g.title || "", "y": y,
+                       "rowsY": root._sectionTitleH, "count": n,
+                       "h": root._sectionTitleH + body })
+            y += root._sectionTitleH + body + root._sectionGap
+        }
+        return out
+    }
+    readonly property real _groupHeight: {
+        var p = root._groupPlan
+        if (p.length === 0)
+            return 0
+        var last = p[p.length - 1]
+        return last.y + last.h
+    }
+
+    /// The sections that intersect the band, each with the row slice of its
+    /// own list that does. One pass over the plan, no album touched.
+    readonly property var _mountedSections: {
+        var plan = root._groupPlan
+        var out = []
+        if (plan.length === 0)
+            return out
+        var pitch = root._rowPitch
+        var lo = root.groupBand.top
+        var hi = root.groupBand.bottom
+        for (var i = 0; i < plan.length; i++) {
+            var s = plan[i]
+            if (s.y + s.h < lo || s.y > hi)
+                continue
+            var base = s.y + s.rowsY
+            var from = Math.max(0, Math.min(s.count,
+                Math.floor((lo - base) / pitch)))
+            var to = Math.max(from, Math.min(s.count,
+                Math.ceil((hi - base) / pitch) + 1))
+            out.push({ "index": s.index, "title": s.title, "y": s.y,
+                       "rowsY": s.rowsY, "from": from, "to": to })
+        }
+        return out
     }
 
     Connections {
@@ -166,38 +312,72 @@ Column {
     /// lands, and none should dispatch the same unresolved cover twice.
     readonly property var _artAsked: ({ seen: ({}) })
 
+    /// The KEY this collection asks the bridge for, and the key `artMap` is
+    /// indexed by. Desktop is the raw `artUrl` — unchanged. Kiosk rewrites it
+    /// to the smallest provider bucket that covers the 44px thumb (contract
+    /// §5.2: "Kiosk solicita el bucket más pequeño que cubra el cuadro
+    /// físico"), through the SAME policy KioskArtwork and KioskCoverSource
+    /// use, so the three agree on one cache entry. A non-Qobuz or local url
+    /// falls through `sizedUrl` untouched.
+    readonly property real _dpr: Screen.devicePixelRatio > 0 ? Screen.devicePixelRatio : 1
+    readonly property int _artPx: root.kioskHost ? Math.ceil(44 * root._dpr) : 0
+    function _artKey(m) {
+        var u = m && m.artUrl ? m.artUrl : ""
+        if (u === "" || !root.kioskHost)
+            return u
+        return ArtPolicy.sizedUrl(u, root._artPx)
+    }
+
     function artOf(m) {
         if (!m)
             return ""
-        var u = m.artUrl || ""
-        if (u !== "" && root.artMap[u])
-            return root.artMap[u]
+        var key = root._artKey(m)
+        if (key !== "" && root.artMap[key])
+            return root.artMap[key]
         return m.artPath || ""
+    }
+
+    /// One album -> at most one pending key. Shared by the flat and grouped
+    /// passes so they cannot drift.
+    function _collectArt(a, pending, asked) {
+        if (!a)
+            return
+        // Already on disk at publish time, already resolved, or already asked
+        // for — all three mean there is nothing to request.
+        if ((a.artUrl || "") === "" || (a.artPath || "") !== "")
+            return
+        var key = root._artKey(a)
+        if (key === "" || root.artMap[key] || asked[key] === true)
+            return
+        asked[key] = true
+        pending.push(key)
     }
 
     function reportArtWindow() {
         if (!root.windowed)
             return
-        var listMode = root.viewMode === "list"
-        var cols = listMode ? 1 : flatGrid.columns
-        if (cols <= 0)
-            return
-        var lo = Math.max(0, root.bandFirst * cols)
-        var hi = Math.min(root.albums.length - 1,
-                          (root.bandLast + 1) * cols - 1)
         var pending = []
         var asked = root._artAsked.seen
-        for (var i = lo; i <= hi; i++) {
-            var a = root.albums[i]
-            if (!a)
-                continue
-            var u = a.artUrl || ""
-            // Already on disk at publish time, already resolved, or already
-            // asked for — all three mean there is nothing to request.
-            if (u === "" || (a.artPath || "") !== "" || root.artMap[u] || asked[u] === true)
-                continue
-            asked[u] = true
-            pending.push(u)
+        var s, r, list
+        if (root.isGrouped) {
+            // kioskHost-only (see `windowed`): the mounted slice of each
+            // mounted section, and nothing else.
+            var ms = root._mountedSections || []
+            for (s = 0; s < ms.length; s++) {
+                list = (root.grouped[ms[s].index] || ({})).albums || []
+                for (r = ms[s].from; r < ms[s].to; r++)
+                    root._collectArt(list[r], pending, asked)
+            }
+        } else {
+            var listMode = root._mode === "list"
+            var cols = listMode ? 1 : flatGrid.columns
+            if (cols <= 0)
+                return
+            var lo = Math.max(0, root.bandFirst * cols)
+            var hi = Math.min(root.albums.length - 1,
+                              (root.bandLast + 1) * cols - 1)
+            for (var i = lo; i <= hi; i++)
+                root._collectArt(root.albums[i], pending, asked)
         }
         if (pending.length > 0)
             QbzShell.sidebarArtworkWindow(JSON.stringify(pending))
@@ -325,7 +505,13 @@ Column {
         // `onAlbumsChanged` is a hard qmlcachegen error.
         root.refreshBand()
     }
-    onGroupedChanged: root._maybeStartTailFade()
+    onGroupedChanged: {
+        root._maybeStartTailFade()
+        // Grouped is windowed under `kioskHost` (see `windowed`), so a
+        // republished grouping has to re-sample before its covers are asked
+        // for — the same reason `onAlbumsChanged` does.
+        root.refreshBand()
+    }
 
     NumberAnimation {
         id: tailFade
@@ -409,17 +595,20 @@ Column {
         }
     }
 
-    // --- Grouped sections -------------------------------------------------
+    // --- Grouped sections (desktop: EAGER, as the .slint is) --------------
     Column {
-        visible: root.isGrouped && root.grouped.length > 0
+        visible: !root.kioskHost && root.isGrouped && root.grouped.length > 0
         width: parent.width
         spacing: 0
 
         // In list mode the column header sits ONCE above all sections.
-        AlbumListHeader { visible: root.viewMode === "list" }
+        AlbumListHeader { visible: root._mode === "list" }
 
         Repeater {
-            model: root.isGrouped ? root.grouped : []
+            // `visible: false` is not lazy mounting (contract §3.3): the model
+            // itself has to go empty, or the kiosk host pays for every section
+            // of a grouping it never draws.
+            model: root.isGrouped && !root.kioskHost ? root.grouped : []
             delegate: Column {
                 id: sectionCol
                 required property var modelData
@@ -436,11 +625,11 @@ Column {
                 }
                 // List arm.
                 Column {
-                    visible: root.viewMode === "list"
+                    visible: root._mode === "list"
                     width: parent.width
                     spacing: root.listRowGap
                     Repeater {
-                        model: root.viewMode === "list" ? (sectionCol.modelData.albums || []) : []
+                        model: root._mode === "list" ? (sectionCol.modelData.albums || []) : []
                         delegate: AlbumListRow {
                             required property var modelData
                             required property int index
@@ -458,7 +647,7 @@ Column {
                 }
                 // Grid arm.
                 SectionGrid {
-                    visible: root.viewMode !== "list"
+                    visible: root._mode !== "list"
                     items: sectionCol.modelData.albums || []
                     seenIds: root._tailSeen
                     reveal: root._tailReveal
@@ -467,18 +656,80 @@ Column {
         }
     }
 
+    // --- Grouped sections (kiosk: WINDOWED) -------------------------------
+    // Same data, same section titles, same per-row menu — only the mounted
+    // set differs. Positions come from `_groupPlan`, so the footprint (and
+    // therefore the host's scroll geometry) is stable whatever is mounted.
+    Item {
+        id: groupedKiosk
+        visible: root.kioskHost && root.isGrouped && root.grouped.length > 0
+        width: parent.width
+        height: groupedKiosk.visible
+            ? groupedKioskHeader.height + root._groupHeight : 0
+
+        AlbumListHeader { id: groupedKioskHeader }
+
+        Repeater {
+            model: groupedKiosk.visible ? root._mountedSections.length : 0
+            delegate: Item {
+                id: gsec
+                required property int index
+                readonly property var plan: root._mountedSections[gsec.index] || ({})
+                readonly property var rows: (root.grouped[gsec.plan.index] || ({})).albums || []
+
+                x: 0
+                y: groupedKioskHeader.height + (gsec.plan.y || 0)
+                width: groupedKiosk.width
+                height: root._sectionTitleH + (gsec.rows.length > 0
+                    ? gsec.rows.length * root._rowPitch - root.listRowGap : 0)
+
+                Text {
+                    width: parent.width
+                    height: root._sectionTitleH
+                    verticalAlignment: Text.AlignVCenter
+                    text: gsec.plan.title || ""
+                    color: theme.textPrimary
+                    font.pixelSize: theme.fontHeading
+                    font.weight: theme.weightSemibold
+                    elide: Text.ElideRight
+                }
+
+                Repeater {
+                    model: Math.max(0, (gsec.plan.to || 0) - (gsec.plan.from || 0))
+                    delegate: AlbumListRow {
+                        required property int index
+                        readonly property int globalRow: (gsec.plan.from || 0) + index
+                        readonly property var cardData: gsec.rows[globalRow] || ({})
+                        x: 0
+                        y: (gsec.plan.rowsY || 0) + globalRow * root._rowPitch
+                        width: gsec.width
+                        kioskHost: root.kioskHost
+                        item: cardData
+                        artSource: root.artOf(cardData)
+                        rowIndex: globalRow
+                        // Plain Component, file scope — `root` resolves here,
+                        // unlike inside SectionGrid.
+                        opacity: root.tailOpacity(cardData.id || "")
+                    }
+                }
+            }
+        }
+    }
+
     // --- Flat list (windowed) ---------------------------------------------
     Item {
         id: flatList
-        visible: !root.isGrouped && root.viewMode === "list" && root.albums.length > 0
+        visible: !root.isGrouped && root._mode === "list" && root.albums.length > 0
         width: parent.width
-        readonly property int rowPitch: 64 + root.listRowGap
+        readonly property int rowPitch: root._rowPitch
         readonly property int mountedFrom: root.windowed
             ? Math.min(root.albums.length, Math.max(0, root.bandFirst)) : 0
         readonly property int mountedTo: root.windowed
             ? Math.min(root.albums.length, Math.max(mountedFrom, root.bandLast + 1))
             : root.albums.length
-        readonly property int mountedCount: Math.max(0, mountedTo - mountedFrom)
+        readonly property int mountedCount: root.kioskHost && root.windowed
+            ? Math.max(0, Math.min(root.albums.length, root.band.last + 1) - Math.min(root.albums.length, root.band.first))
+            : Math.max(0, mountedTo - mountedFrom)
         height: 32 + (root.albums.length > 0
             ? root.albums.length * 64 + (root.albums.length - 1) * root.listRowGap
             : 0)
@@ -493,6 +744,7 @@ Column {
                 x: 0
                 y: flatListHeader.height + globalIndex * flatList.rowPitch
                 width: flatList.width
+                kioskHost: root.kioskHost
                 item: cardData
                 artSource: root.artOf(cardData)
                 rowIndex: globalIndex
@@ -504,7 +756,7 @@ Column {
     // --- Flat grid (windowed) --------------------------------------------
     Item {
         id: flatGrid
-        visible: !root.isGrouped && root.viewMode !== "list" && root.albums.length > 0
+        visible: !root.isGrouped && root._mode !== "list" && root.albums.length > 0
         width: parent.width
         readonly property int columns: Math.max(
             1, Math.floor((width + root.cardGap) / (root.cardWidth + root.cardGap)))
@@ -517,7 +769,9 @@ Column {
                        Math.max(mountedFrom,
                                 (root.bandLast + 1) * flatGrid.columns))
             : root.albums.length
-        readonly property int mountedCount: Math.max(0, mountedTo - mountedFrom)
+        readonly property int mountedCount: root.kioskHost && root.windowed
+            ? Math.max(0, Math.min(root.albums.length, root.band.last + 1) - Math.min(root.albums.length, root.band.first))
+            : Math.max(0, mountedTo - mountedFrom)
         height: flatGrid.rows > 0
             ? flatGrid.rows * root.cardHeight + (flatGrid.rows - 1) * root.cardGap
             : 0

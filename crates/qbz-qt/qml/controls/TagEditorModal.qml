@@ -13,6 +13,7 @@ Item {
     visible: true
     enabled: true
 
+    property bool kioskHost: false
     property bool trackMode: false
     property bool leaveOnDestruction: true
 
@@ -310,10 +311,20 @@ Item {
             onWheel: function (wheel) { wheel.accepted = true }
         }
 
+        Flickable {
+            id: workspaceViewport
+            width: parent.width
+            height: parent.height - footer.height
+            contentWidth: width
+            contentHeight: root.kioskHost ? Math.max(height, 560) : height
+            interactive: root.kioskHost
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+
         Item {
             id: header
             width: parent.width
-            height: 70
+            height: root.kioskHost ? 44 : 70
             Column {
                 anchors.left: parent.left
                 anchors.leftMargin: 24
@@ -331,6 +342,7 @@ Item {
                     elide: Text.ElideRight
                 }
                 Text {
+                    visible: !root.kioskHost
                     width: parent.width
                     text: root.remoteSidecarOnly
                         ? root.tr("Editing a local metadata sidecar")
@@ -385,6 +397,8 @@ Item {
                     onClicked: root.selectedTrackIndex++
                 }
                 QbzIconButton {
+                    width: root.kioskHost ? 44 : 32
+                    height: root.kioskHost ? 44 : 32
                     name: "x"
                     tooltipText: root.tr("Close without saving")
                     btnEnabled: !QbzTagEditor.editorSaving
@@ -398,7 +412,7 @@ Item {
             id: body
             y: header.height + 1
             width: parent.width
-            height: parent.height - header.height - footer.height - 2
+            height: workspaceViewport.contentHeight - header.height - 2
 
             QbzSpinner {
                 anchors.centerIn: parent
@@ -408,29 +422,34 @@ Item {
 
             TagEditorWorkspace {
                 anchors.fill: parent
-                anchors.margins: 16
+                anchors.margins: root.kioskHost ? 8 : 16
                 visible: root.seeded && !QbzTagEditor.editorLoading
                 editor: root
             }
 
         }
 
-        Rectangle { y: body.y + body.height; width: parent.width; height: 1; color: theme.borderSubtle }
+        } // workspaceViewport: Kiosk scrolls the complete usable editor surface.
+
+        Rectangle { y: root.kioskHost ? footer.y : body.y + body.height; width: parent.width; height: 1; color: theme.borderSubtle }
         Item {
             id: footer
             anchors.bottom: parent.bottom
             width: parent.width
-            height: 78
+            height: root.kioskHost ? (root.persistence === "direct" ? 144 : 72) : 78
 
             Row {
                 anchors.left: parent.left
                 anchors.leftMargin: 20
-                anchors.verticalCenter: parent.verticalCenter
+                anchors.verticalCenter: root.kioskHost && root.persistence === "direct" ? undefined : parent.verticalCenter
+                anchors.top: root.kioskHost && root.persistence === "direct" ? parent.top : undefined
+                anchors.topMargin: 6
                 spacing: 12
                 Column {
                     spacing: 4
                     Text { text: root.tr("Save changes to"); color: theme.textMuted; font.pixelSize: theme.fontLegal }
                     QbzSelect {
+                        kioskHost: root.kioskHost
                         menuWidth: 210
                         options: root.canDirectWrite
                             ? [root.tr("Sidecar file (recommended)"), root.tr("Write to audio files")]
@@ -449,6 +468,7 @@ Item {
                     spacing: 4
                     Text { text: root.tr("ID3 writing"); color: theme.textMuted; font.pixelSize: theme.fontLegal }
                     QbzSelect {
+                        kioskHost: root.kioskHost
                         menuWidth: 130
                         options: ["ID3v2.4", "ID3v2.3"]
                         currentIndex: root.id3Version === "2.3" ? 1 : 0
@@ -490,7 +510,9 @@ Item {
             Row {
                 anchors.right: parent.right
                 anchors.rightMargin: 20
-                anchors.verticalCenter: parent.verticalCenter
+                anchors.verticalCenter: root.kioskHost && root.persistence === "direct" ? undefined : parent.verticalCenter
+                anchors.bottom: root.kioskHost && root.persistence === "direct" ? parent.bottom : undefined
+                anchors.bottomMargin: 4
                 spacing: 10
                 Text {
                     visible: QbzTagEditor.editorSaving
@@ -502,6 +524,8 @@ Item {
                     font.pixelSize: theme.fontLegal
                 }
                 SettingsButton {
+                    kioskHost: root.kioskHost
+                    btnHeight: root.kioskHost ? 64 : 34
                     text: root.tr("Cancel")
                     minWidth: 0
                     enabled: !QbzTagEditor.editorSaving
@@ -509,7 +533,7 @@ Item {
                 }
                 QbzPrimaryButton {
                     label: QbzTagEditor.editorSaving ? root.tr("Saving…") : root.tr("Save")
-                    btnHeight: 36
+                    btnHeight: root.kioskHost ? 64 : 36
                     labelSize: theme.fontBody
                     btnEnabled: root.seeded && !QbzTagEditor.editorSaving
                     onClicked: root.requestSave()

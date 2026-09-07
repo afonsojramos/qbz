@@ -25,12 +25,14 @@
 // counter row says so in words ("Use the arrows to reorder playlists").
 
 import QtQuick
+import "../../kiosk"
 import com.blitzfc.qbz
 import "../../cards"
 import "../../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     /// One `PlaylistRow` (contract §4.3).
     property var item: ({})
@@ -45,8 +47,8 @@ Rectangle {
     readonly property string itemId: String(root.item.id || "")
     readonly property bool isLocal: root.item.isLocal === true
 
-    width: 160
-    height: root.canReorder ? 250 : 220
+    width: root.kioskHost ? 200 : 160
+    height: root.kioskHost ? (root.canReorder ? 320 : 270) : (root.canReorder ? 250 : 220)
     radius: 8
     color: bodyArea.containsMouse ? theme.surfaceHover : theme.surfaceCard
     opacity: (root.item.isHidden === true) ? 0.6 : 1.0
@@ -54,21 +56,21 @@ Rectangle {
     Column {
         x: 10
         y: 10
-        width: 140
+        width: root.kioskHost ? 180 : 140
         spacing: 8
 
         // Reorder header — the SLOT is reserved whenever `canReorder`, the
         // controls only render on a Qobuz row (D29).
         Item {
             visible: root.canReorder
-            width: 140
-            height: 22
+            width: root.kioskHost ? 180 : 140
+            height: root.kioskHost ? 44 : 22
 
             PmActionButton {
                 visible: !root.isLocal
                 anchors.left: parent.left
                 name: "chevron-up"
-                btnSize: 22
+                btnSize: root.kioskHost ? 44 : 22
                 glyph: 14
                 onClicked: QbzPlaylistManager.moveUp(root.itemId)
             }
@@ -84,7 +86,7 @@ Rectangle {
                 visible: !root.isLocal
                 anchors.right: parent.right
                 name: "chevron-down"
-                btnSize: 22
+                btnSize: root.kioskHost ? 44 : 22
                 glyph: 14
                 onClicked: QbzPlaylistManager.moveDown(root.itemId)
             }
@@ -92,16 +94,29 @@ Rectangle {
 
         // Artwork + availability badge.
         Item {
-            width: 140
-            height: 140
+            width: root.kioskHost ? 180 : 140
+            height: root.kioskHost ? 180 : 140
 
-            PlaylistCollage {
+            Loader {
                 anchors.fill: parent
-                // The manager's collage law: 1-3 covers collapse to ONE
-                // full-bleed tile, 4+ go to a 2×2 with a 1 px seam.
-                layout: "pm"
-                urls: root.item.covers || []
-                radius: 8
+                sourceComponent: root.kioskHost ? kioskCover : desktopCover
+                Component {
+                    id: kioskCover
+                    KioskArtwork {
+                        anchors.fill: parent
+                        source: (root.item.covers || [])[0] || ""
+                        radius: 8
+                    }
+                }
+                Component {
+                    id: desktopCover
+                    PlaylistCollage {
+                        anchors.fill: parent
+                        layout: "pm"
+                        urls: root.item.covers || []
+                        radius: 8
+                    }
+                }
             }
             PmLocalBadge {
                 x: parent.width - width - 6
@@ -113,7 +128,7 @@ Rectangle {
         }
 
         Text {
-            width: 140
+            width: root.kioskHost ? 180 : 140
             height: 18
             text: root.item.name || ""
             color: theme.textPrimary
@@ -125,8 +140,8 @@ Rectangle {
 
         // Footer: meta on the left, the action strip on the right.
         Item {
-            width: 140
-            height: 22
+            width: root.kioskHost ? 180 : 140
+            height: root.kioskHost ? 44 : 22
 
             Text {
                 anchors.left: parent.left
@@ -147,19 +162,19 @@ Rectangle {
                 PmActionButton {
                     name: root.item.isFavorite === true ? "heart-filled" : "heart"
                     filled: root.item.isFavorite === true
-                    btnSize: 24
+                    btnSize: root.kioskHost ? 44 : 24
                     glyph: 14
                     onClicked: QbzPlaylistManager.toggleFavorite(root.itemId)
                 }
                 PmActionButton {
                     name: root.item.isHidden === true ? "eye-off" : "eye"
-                    btnSize: 24
+                    btnSize: root.kioskHost ? 44 : 24
                     glyph: 14
                     onClicked: QbzPlaylistManager.toggleHidden(root.itemId)
                 }
                 PmActionButton {
                     name: "pen-line"
-                    btnSize: 24
+                    btnSize: root.kioskHost ? 44 : 24
                     glyph: 14
                     // The SHARED editor singleton (contract D2/D20) — the id
                     // lives in Rust from here on, so a republish can never make
@@ -169,7 +184,7 @@ Rectangle {
                 PmActionButton {
                     visible: !root.isLocal
                     name: "cassette-tape"
-                    btnSize: 24
+                    btnSize: root.kioskHost ? 44 : 24
                     glyph: 14
                     // The payload is assembled AT THE CALL SITE (D3) — the same
                     // seam every other surface uses. `source` is always "qobuz"
@@ -191,9 +206,9 @@ Rectangle {
     // their own clicks (`:605-617`).
     MouseArea {
         id: bodyArea
-        y: root.canReorder ? 30 : 0
+        y: root.canReorder ? (root.kioskHost ? 52 : 30) : 0
         width: parent.width
-        height: 176
+        height: root.kioskHost ? 216 : 176
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
         // Routes `local:` ids to the local loader and works OFFLINE

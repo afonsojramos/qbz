@@ -33,6 +33,7 @@ import "../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     /// [{ id, label, icon, danger, needsSelection }] — `id` is what `action`
     /// publishes; `label` is the tooltip text and must arrive ALREADY
@@ -75,8 +76,8 @@ Rectangle {
                     required property var modelData
                     readonly property bool armed: !modelData.needsSelection
                         || root.selectedCount > 0
-                    width: 34
-                    height: 30
+                    width: root.kioskHost ? 44 : 34
+                    height: root.kioskHost ? 44 : 30
                     anchors.verticalCenter: parent.verticalCenter
                     radius: theme.radiusSm
                     opacity: armed ? 1.0 : 0.4

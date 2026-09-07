@@ -39,6 +39,8 @@ import "../theme"
 import "../views/local"
 
 Item {
+    property bool kioskHost: false
+
     id: root
 
     // An unopened overlay is an invisible, non-interactive Item and costs
@@ -125,7 +127,7 @@ Item {
         signal toggled()
 
         width: parent ? parent.width : 0
-        height: 28
+        height: root.kioskHost ? 44 : 28
         activeFocusOnTab: visible && enabled
         Accessible.role: Accessible.CheckBox
         Accessible.name: label
@@ -148,7 +150,7 @@ Item {
             border.color: theme.accent
         }
 
-        QbzCheckbox {
+        QbzCheckbox { kioskHost: root.kioskHost;
             id: box
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
@@ -168,7 +170,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             text: checkRow.label
             color: theme.textSecondary
-            font.pixelSize: theme.fontBody
+            font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
             elide: Text.ElideRight
         }
         MouseArea {
@@ -183,7 +185,7 @@ Item {
     component StepTitle: Text {
         width: parent ? parent.width : 0
         color: theme.textPrimary
-        font.pixelSize: theme.fontHeading
+        font.pixelSize: root.kioskHost ? (theme.fontHeading) * 1.2 : (theme.fontHeading)
         font.weight: theme.weightSemibold
         wrapMode: Text.WordWrap
     }
@@ -253,7 +255,7 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 text: QbzSession.tr("HiFi Wizard — DAC Setup", QbzSession.trRev)
                 color: theme.textPrimary
-                font.pixelSize: theme.fontSection
+                font.pixelSize: root.kioskHost ? (theme.fontSection) * 1.2 : (theme.fontSection)
                 font.weight: theme.weightSemibold
                 elide: Text.ElideRight
             }
@@ -262,8 +264,8 @@ Item {
                 anchors.right: parent.right
                 anchors.rightMargin: 24
                 anchors.verticalCenter: parent.verticalCenter
-                width: 28
-                height: 28
+                width: root.kioskHost ? 44 : 28
+                height: root.kioskHost ? 44 : 28
                 activeFocusOnTab: root.visible
                 Accessible.role: Accessible.Button
                 Accessible.name: QbzSession.tr("Close", QbzSession.trRev)
@@ -345,7 +347,7 @@ Item {
                         text: modelData
                         color: index === root.step ? theme.textPrimary
                             : (index < root.step ? theme.textSecondary : theme.textMuted)
-                        font.pixelSize: theme.fontLegal
+                        font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                         font.weight: index === root.step ? theme.weightSemibold : theme.weightRegular
                         elide: Text.ElideRight
                     }
@@ -391,14 +393,14 @@ Item {
                         width: parent.width
                         text: QbzSession.tr("This wizard helps you configure your DAC for bit-perfect playback on Linux. QBZ never changes your system automatically — it auto-detects your DACs, shows you the exact commands and config to copy, and lets you test playback right here.", QbzSession.trRev)
                         color: theme.textSecondary
-                        font.pixelSize: theme.fontBody
+                        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                         wrapMode: Text.WordWrap
                     }
                     Text {
                         width: parent.width
                         text: QbzSession.tr("You are responsible for your own backups. This is a helper, not a system recovery tool.", QbzSession.trRev)
                         color: theme.textMuted
-                        font.pixelSize: theme.fontLegal
+                        font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                         wrapMode: Text.WordWrap
                     }
                     WarningBanner {
@@ -449,10 +451,10 @@ Item {
                         Text {
                             text: QbzSession.tr("Your distribution", QbzSession.trRev)
                             color: theme.textSecondary
-                            font.pixelSize: theme.fontLegal
+                            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                             font.weight: theme.weightMedium
                         }
-                        QbzSelect {
+                        QbzSelect { kioskHost: root.kioskHost;
                             menuWidth: 360
                             options: root.doc.distroOptions || []
                             currentIndex: root.doc.distroIndex || 0
@@ -467,10 +469,10 @@ Item {
                         Text {
                             text: QbzSession.tr("Init system (service commands)", QbzSession.trRev)
                             color: theme.textSecondary
-                            font.pixelSize: theme.fontLegal
+                            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                             font.weight: theme.weightMedium
                         }
-                        QbzSelect {
+                        QbzSelect { kioskHost: root.kioskHost;
                             menuWidth: 240
                             options: root.doc.initOptions || []
                             currentIndex: root.doc.initIndex || 0
@@ -503,7 +505,7 @@ Item {
                         width: parent.width
                         text: QbzSession.tr("Detecting your DACs…", QbzSession.trRev)
                         color: theme.textMuted
-                        font.pixelSize: theme.fontBody
+                        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                     }
 
                     // Enumerated candidates — circular multi-select.
@@ -541,7 +543,7 @@ Item {
                                     width: parent.width
                                     text: candRow.modelData.description || ""
                                     color: theme.textPrimary
-                                    font.pixelSize: theme.fontBody
+                                    font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                                     font.weight: theme.weightMedium
                                     elide: Text.ElideRight
                                 }
@@ -562,7 +564,7 @@ Item {
                                             anchors.centerIn: parent
                                             text: candRow.modelData.bus || ""
                                             color: theme.textMuted
-                                            font.pixelSize: 10
+                                            font.pixelSize: root.kioskHost ? (10) * 1.2 : (10)
                                             font.weight: theme.weightSemibold
                                         }
                                     }
@@ -571,14 +573,14 @@ Item {
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: QbzSession.tr("default", QbzSession.trRev)
                                         color: theme.success
-                                        font.pixelSize: theme.fontLegal
+                                        font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                                     }
                                     Text {
                                         visible: (candRow.modelData.ratesLabel || "") !== ""
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: candRow.modelData.ratesLabel || ""
                                         color: theme.textMuted
-                                        font.pixelSize: theme.fontLegal
+                                        font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                                         elide: Text.ElideRight
                                     }
                                 }
@@ -623,7 +625,7 @@ Item {
                                 ? QbzSession.tr("Hide manual entry", QbzSession.trRev)
                                 : QbzSession.tr("Can't see your DAC?", QbzSession.trRev)
                             color: theme.accent
-                            font.pixelSize: theme.fontLegal
+                            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                         }
                         MouseArea {
                             anchors.left: parent.left
@@ -646,7 +648,7 @@ Item {
                             width: parent.width
                             text: QbzSession.tr("Find your DAC's PipeWire node name and paste it here:", QbzSession.trRev)
                             color: theme.textSecondary
-                            font.pixelSize: theme.fontLegal
+                            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                             wrapMode: Text.WordWrap
                         }
                         CommandBlock {
@@ -673,7 +675,7 @@ Item {
                                 verticalAlignment: TextInput.AlignVCenter
                                 clip: true
                                 color: theme.textPrimary
-                                font.pixelSize: theme.fontLink
+                                font.pixelSize: root.kioskHost ? (theme.fontLink) * 1.2 : (theme.fontLink)
                                 selectByMouse: true
                                 // No hotkey-guard call here on purpose: this
                                 // port computes the guard at the DISPATCHER
@@ -694,7 +696,7 @@ Item {
                                 visible: manualInput.text === ""
                                 text: "alsa_output.usb-..."
                                 color: theme.textMuted
-                                font.pixelSize: theme.fontLink
+                                font.pixelSize: root.kioskHost ? (theme.fontLink) * 1.2 : (theme.fontLink)
                             }
                         }
                         Text {
@@ -704,7 +706,7 @@ Item {
                                 ? QbzSession.tr("Valid node name", QbzSession.trRev)
                                 : QbzSession.tr("Invalid — should contain alsa_output or alsa_input", QbzSession.trRev)
                             color: root.doc.manualValid === true ? theme.success : theme.danger
-                            font.pixelSize: theme.fontLegal
+                            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                             wrapMode: Text.WordWrap
                         }
                     }
@@ -785,7 +787,7 @@ Item {
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: cfgCol.modelData.name || ""
                                     color: theme.textPrimary
-                                    font.pixelSize: theme.fontBody
+                                    font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                                     font.weight: theme.weightMedium
                                     elide: Text.ElideRight
                                 }
@@ -849,7 +851,7 @@ Item {
                         width: parent.width
                         text: QbzSession.tr("Plays four tracks at different bit-depths and sample rates through the selected DAC. Watch your DAC's display switch rates — and confirm it below.", QbzSession.trRev)
                         color: theme.textSecondary
-                        font.pixelSize: theme.fontBody
+                        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                         wrapMode: Text.WordWrap
                     }
 
@@ -903,7 +905,7 @@ Item {
                                     text: (trackTa.containsMouse && testStep.playing) ? "▶" : "♪"
                                     color: (trackTa.containsMouse && testStep.playing)
                                         ? theme.accent : theme.textMuted
-                                    font.pixelSize: theme.fontLegal
+                                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                                 }
                                 Text {
                                     anchors.left: trackGlyph.right
@@ -913,7 +915,7 @@ Item {
                                     anchors.verticalCenter: parent.verticalCenter
                                     text: trackRow.modelData
                                     color: theme.textSecondary
-                                    font.pixelSize: theme.fontLegal
+                                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                                     elide: Text.ElideRight
                                 }
                                 MouseArea {
@@ -1034,7 +1036,7 @@ Item {
                         // curated tracks. minWidth 0 — this is a modal footer
                         // button, not a Settings row's, and the 160px floor
                         // would push the transport buttons off the row.
-                        SettingsButton {
+                        SettingsButton { kioskHost: root.kioskHost;
                             visible: !testStep.playing
                             minWidth: 0
                             text: QbzSession.tr("Use my current queue", QbzSession.trRev)
@@ -1064,7 +1066,7 @@ Item {
                                 width: parent.width
                                 text: root.doc.testRequestedLabel || ""
                                 color: theme.textPrimary
-                                font.pixelSize: theme.fontBody
+                                font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                                 font.weight: theme.weightMedium
                                 wrapMode: Text.WordWrap
                             }
@@ -1075,7 +1077,7 @@ Item {
                                     visible: root.doc.testRateMatched === true
                                     text: "✓"
                                     color: theme.success
-                                    font.pixelSize: theme.fontBody
+                                    font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                                     font.weight: theme.weightBold
                                 }
                                 Text {
@@ -1083,7 +1085,7 @@ Item {
                                     text: root.doc.testNegotiatedLabel || ""
                                     color: root.doc.testRateMatched === true
                                         ? theme.success : theme.textSecondary
-                                    font.pixelSize: theme.fontBody
+                                    font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                                 }
                             }
                         }
@@ -1122,7 +1124,7 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             text: QbzSession.tr("All set", QbzSession.trRev)
                             color: theme.textPrimary
-                            font.pixelSize: theme.fontHeading
+                            font.pixelSize: root.kioskHost ? (theme.fontHeading) * 1.2 : (theme.fontHeading)
                             font.weight: theme.weightSemibold
                         }
                     }
@@ -1130,7 +1132,7 @@ Item {
                         width: parent.width
                         text: QbzSession.tr("Your DAC is ready for bit-perfect playback. If you applied the config files, restart the audio services (or log out and back in) for them to take effect.", QbzSession.trRev)
                         color: theme.textSecondary
-                        font.pixelSize: theme.fontBody
+                        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                         wrapMode: Text.WordWrap
                     }
                     Column {
@@ -1140,7 +1142,7 @@ Item {
                         Text {
                             text: QbzSession.tr("Config files you can create:", QbzSession.trRev)
                             color: theme.textSecondary
-                            font.pixelSize: theme.fontLegal
+                            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                             font.weight: theme.weightMedium
                         }
                         Repeater {
@@ -1150,7 +1152,7 @@ Item {
                                 width: card.contentWidth
                                 text: modelData
                                 color: theme.textMuted
-                                font.pixelSize: theme.fontLegal
+                                font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                                 font.family: "monospace"
                                 elide: Text.ElideRight
                             }
@@ -1190,7 +1192,7 @@ Item {
             // modal footer buttons (the MyQBZ modals' convention), and the
             // Settings row's 160px floor would make a three-button footer
             // wider than the card.
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 anchors.left: parent.left
                 anchors.leftMargin: 24
                 anchors.verticalCenter: parent.verticalCenter
@@ -1199,7 +1201,7 @@ Item {
                 text: QbzSession.tr("Back", QbzSession.trRev)
                 onClicked: root.step -= 1
             }
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 id: footerClose
                 anchors.right: primaryBtn.left
                 anchors.rightMargin: 12

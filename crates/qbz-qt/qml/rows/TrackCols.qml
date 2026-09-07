@@ -44,10 +44,12 @@
 import QtQuick
 
 QtObject {
+    property bool kioskHost: false
+
     /// Row-body horizontal padding (TrackRow.slint:265-266).
     readonly property int padH: 12
     /// Inter-column gap (TrackRow.slint:267).
-    readonly property int gap: 14
+    readonly property int gap: kioskHost ? 8 : 14
 
     /// Reorder gutter — the up/down chevron stack at the LEADING edge of a
     /// custom-order row (TrackRow.slint:272-280, `width: 22px`). Drawn only
@@ -56,9 +58,9 @@ QtObject {
     /// Slint header does NOT reserve. It is reserved here, because a header
     /// that ignores a column the row draws slides every label after it by
     /// width + gap — the exact drift this file exists to prevent.
-    readonly property int colReorder: 22
+    readonly property int colReorder: kioskHost ? 44 : 22
     /// Number / play-cell (TrackRow.slint:344 `number-width: 32px`).
-    readonly property int colNumber: 32
+    readonly property int colNumber: kioskHost ? 44 : 32
     /// Artwork thumbnail (TrackRow.slint:336, show-artwork arm).
     readonly property int colArt: 36
     /// Origin mark for mixed/offline playlist rows.
@@ -66,15 +68,15 @@ QtObject {
     /// Album link column (TrackRow.slint:540, show-album arm).
     readonly property int colAlbum: 220
     /// Duration (TrackRow.slint:569).
-    readonly property int colDuration: 70
+    readonly property int colDuration: kioskHost ? 60 : 70
     /// Quality badge cell (TrackRow.slint:581).
     readonly property int colQuality: 92
     /// Heart (TrackRow.slint:600, show-favorite arm).
-    readonly property int colFavorite: 28
+    readonly property int colFavorite: kioskHost ? 44 : 28
     /// Offline/cloud slot (TrackRow.slint:650, show-download arm).
-    readonly property int colDownload: 28
+    readonly property int colDownload: kioskHost ? 44 : 28
     /// ⋯ context menu (TrackRow.slint:740, show-menu arm).
-    readonly property int colMenu: 32
+    readonly property int colMenu: kioskHost ? 44 : 32
 
     /// Sum of every FIXED cell that is actually drawn for these arms.
     ///

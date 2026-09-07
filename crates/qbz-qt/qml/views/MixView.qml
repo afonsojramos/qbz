@@ -58,6 +58,7 @@ import "../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     color: ambientOn ? "transparent" : theme.surfaceMain
     readonly property bool ambientOn: theme.ambientOn
@@ -130,7 +131,7 @@ Rectangle {
                 // at 224px with no badge and a 34px name.
                 MixArtwork {
                     kind: root.kind
-                    size: 224
+                    size: root.kioskHost ? 112 : 224
                     titleSize: 34
                     cornerRadius: theme.radiusMd
                     showBadge: false
@@ -138,7 +139,7 @@ Rectangle {
                 }
 
                 Column {
-                    width: parent.width - 224 - 32
+                    width: parent.width - (root.kioskHost ? 112 : 224) - 32
                     anchors.top: parent.top
                     anchors.topMargin: 4
                     spacing: 0
@@ -183,6 +184,7 @@ Rectangle {
                     Row {
                         spacing: 12
                         QbzCircleAction {
+                            diameterOverride: root.kioskHost ? 64 : 0
                             name: "play-fill"
                             primary: true
                             btnEnabled: root.tracks.length > 0
@@ -190,6 +192,7 @@ Rectangle {
                             onClicked: QbzHome.mixPlayAll()
                         }
                         QbzCircleAction {
+                            diameterOverride: root.kioskHost ? 64 : 0
                             name: "shuffle"
                             btnEnabled: root.tracks.length > 0
                             anchors.verticalCenter: parent.verticalCenter
@@ -198,17 +201,20 @@ Rectangle {
                         // Add-to-playlist: inert in the .slint too (no
                         // `clicked` there) — see the header note.
                         QbzCircleAction {
+                            diameterOverride: root.kioskHost ? 64 : 0
                             name: "list-plus"
                             btnEnabled: false
                             anchors.verticalCenter: parent.verticalCenter
                         }
                         // Multi-select: DIMMED and inert (see the header note).
                         QbzCircleAction {
+                            diameterOverride: root.kioskHost ? 64 : 0
                             name: "square-check-big"
                             btnEnabled: false
                             anchors.verticalCenter: parent.verticalCenter
                         }
                         QbzCircleAction {
+                            diameterOverride: root.kioskHost ? 64 : 0
                             name: "home-gear"
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: QbzHome.mixRefresh()
@@ -246,6 +252,7 @@ Rectangle {
             // below) — the header component's contract is that it is exactly
             // as wide as the rows it labels.
             TrackListHeader {
+                kioskHost: root.kioskHost
                 visible: root.tracks.length > 0
                 width: parent.width - 64
                 showArtwork: true
@@ -266,7 +273,7 @@ Rectangle {
             // Flickable, exactly like LabelView's Popular Tracks. The 2000-row
             // case that forces windowing does not arise here.
             Repeater {
-                model: root.tracks
+                model: root.kioskHost ? [] : root.tracks
                 delegate: TrackRow {
                     required property var modelData
                     required property int index
@@ -312,6 +319,65 @@ Rectangle {
                     }]))
                 }
             }
+            Item {
+                id: mixWindow
+                visible: root.kioskHost
+                width: parent.width - 64
+                height: visible ? root.tracks.length * 64 : 0
+                readonly property real viewTop: { var h=flick.contentHeight; return flick.contentY-mapToItem(flick.contentItem,0,0).y }
+                readonly property int first: Math.max(0, Math.floor(viewTop/64)-1)
+                readonly property int last: Math.max(first,Math.min(root.tracks.length,Math.ceil((viewTop+flick.height)/64)+1))
+                Repeater {
+                    model: root.kioskHost ? root.tracks.slice(mixWindow.first,mixWindow.last) : []
+                delegate: TrackRow {
+                    kioskHost: true
+                    y: (mixWindow.first + index) * 64
+                    required property var modelData
+                    required property int index
+                    // `parent` is the padded page Column (the LabelView
+                    // guard: it is momentarily null while the delegate is
+                    // being reparented).
+                    width: mixWindow.width
+                    item: modelData
+                    number: mixWindow.first + index + 1
+                    showArtwork: true
+                    showAlbum: true
+                    showFavorite: true
+                    // The mix list is not reorderable and is not a drag
+                    // source for playlists (flat catalog rows, no container).
+                    onPlayRequested: QbzHome.mixPlayTrack(modelData.id)
+                    onEnqueueRequested: function (mode) {
+                        QbzHome.mixEnqueueTrack(modelData.id, mode)
+                    }
+                    // MyQBZ "Add to mixtape" — the HOST builds the AddItem
+                    // array (TrackRow does not know itemType/source).
+                    //
+                    // SOURCE: these rows carry no source field, and they do
+                    // not need one — every one of the four mixes is built
+                    // from `qbz_models::Track` values that came back from the
+                    // Qobuz API (foryou_qt.rs:855-873: dynamic/suggest for
+                    // daily+weekly, `get_favorites("tracks")` for fav,
+                    // `get_playlist` for top), and the DailyQ/WeeklyQ seed
+                    // explicitly drops local / Plex / ephemeral recents
+                    // (foryou_qt.rs:774-776). `modelData.id` is therefore a
+                    // Qobuz catalog id by construction of the document, not
+                    // by assumption at this call site.
+                    onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
+                        "itemType": "track", "source": "qobuz",
+                        "sourceItemId": modelData.id,
+                        "title": modelData.title || "",
+                        "subtitle": modelData.artist || "",
+                        // artworkUrl STAYS EMPTY here, deliberately: the mix row carries no remote art url.
+                        // A file:// cache path must NOT be stored — the collection's
+                        // artwork_url is a snapshot other machines read — so this needs a
+                        // remote-url field on the document first. The five sister sites
+                        // that HAD one were stamped 2026-08-22.
+                        "artworkUrl": "", "year": null, "trackCount": null
+                    }]))
+                }
+                }
+            }
+
         }
     }
 

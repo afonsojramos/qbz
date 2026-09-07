@@ -86,6 +86,9 @@ pub mod qbz_search {
         /// Enter with the cortinilla closed: full results page (All tab).
         #[qinvokable]
         fn search_submit(self: Pin<&mut QbzSearch>, query: QString);
+        /// Restore a Kiosk history query without recording another route.
+        #[qinvokable]
+        fn kiosk_restore_search(self: Pin<&mut QbzSearch>, query: QString, tab: i32);
         /// Cortinilla: Esc / click-outside / idle-close / page change.
         #[qinvokable]
         fn cortinilla_dismiss(self: Pin<&mut QbzSearch>);
@@ -99,11 +102,7 @@ pub mod qbz_search {
         /// index. Rust resolves it against the same guarded snapshot as a
         /// normal click, including local-library ids.
         #[qinvokable]
-        fn cortinilla_menu_action(
-            self: Pin<&mut QbzSearch>,
-            index: i32,
-            action: QString,
-        );
+        fn cortinilla_menu_action(self: Pin<&mut QbzSearch>, index: i32, action: QString);
         /// Section "View more" (kind: album | track | artist | playlist).
         #[qinvokable]
         fn cortinilla_view_more(self: Pin<&mut QbzSearch>, kind: QString);
@@ -212,6 +211,17 @@ impl qbz_search::QbzSearch {
         crate::search_live(query.to_string());
     }
 
+    pub fn kiosk_restore_search(self: Pin<&mut Self>, query: QString, tab: i32) {
+        if !crate::kiosk_profile_qt::active() {
+            return;
+        }
+        let query = query.to_string();
+        let runtime = crate::app();
+        crate::spawn(async move {
+            crate::search_qt::restore_kiosk_page(&runtime, &query, tab.clamp(0, 4)).await;
+        });
+    }
+
     pub fn search_submit(self: Pin<&mut Self>, query: QString) {
         crate::search_submit(query.to_string());
     }
@@ -228,11 +238,7 @@ impl qbz_search::QbzSearch {
         crate::search_qt::row_clicked(index);
     }
 
-    pub fn cortinilla_menu_action(
-        self: Pin<&mut Self>,
-        index: i32,
-        action: QString,
-    ) {
+    pub fn cortinilla_menu_action(self: Pin<&mut Self>, index: i32, action: QString) {
         crate::search_qt::row_menu_action(index, &action.to_string());
     }
 

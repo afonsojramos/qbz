@@ -77,12 +77,14 @@
 // line of muted text, which happens to also be the cheapest possible answer.
 
 import QtQuick
+import "../kiosk"
 import com.blitzfc.qbz
 import "../controls"
 import "../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     color: ambientOn ? "transparent" : theme.surfaceMain
     readonly property bool ambientOn: theme.ambientOn
@@ -175,7 +177,7 @@ Rectangle {
         Item {
             id: header
             width: parent.width
-            height: 97
+            height: root.kioskHost ? 72 : 97
 
             Rectangle {
                 anchors.fill: parent
@@ -207,7 +209,7 @@ Rectangle {
                         anchors.centerIn: parent
                         name: "user"
                         width: 32
-                        height: 32
+                        height: root.kioskHost ? 44 : 32
                         tintName: "muted"
                     }
                 }
@@ -294,11 +296,12 @@ Rectangle {
 
                         // .bands-grid — flex-wrap, gap 10.
                         Flow {
+                            visible: !root.kioskHost
                             width: parent.width
                             spacing: 10
 
                             Repeater {
-                                model: root.bands
+                                model: root.kioskHost ? [] : root.bands
                                 delegate: Item {
                                     id: bandCell
                                     required property var modelData
@@ -376,6 +379,30 @@ Rectangle {
                                 }
                             }
                         }
+                        Item {
+                            id: kioskBands
+                            visible: root.kioskHost
+                            width: parent.width
+                            height: visible ? root.bands.length*64 : 0
+                            readonly property real viewTop: { var h=flick.contentHeight; return flick.contentY-mapToItem(flick.contentItem,0,0).y }
+                            readonly property int first: Math.max(0,Math.floor(viewTop/64)-1)
+                            readonly property int last: Math.max(first,Math.min(root.bands.length,Math.ceil((viewTop+flick.height)/64)+1))
+                            Repeater {
+                                model: root.kioskHost ? root.bands.slice(kioskBands.first,kioskBands.last) : []
+                                delegate: SettingsButton {
+                                    required property var modelData
+                                    required property int index
+                                    kioskHost: true
+                                    y: (kioskBands.first+index)*64
+                                    width: kioskBands.width
+                                    btnHeight: 64
+                                    text: modelData.name || ""
+                                    enabled: (modelData.mbid || "") !== ""
+                                    onClicked: QbzMusician.openBand(modelData.mbid)
+                                }
+                            }
+                        }
+
                     }
 
                     // ======== Section 2 — Appears On (:135-205) ============
@@ -473,7 +500,7 @@ Rectangle {
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 name: "disc"
                                 width: 32
-                                height: 32
+                                height: root.kioskHost ? 44 : 32
                                 tintName: "muted"
                             }
                             Text {
@@ -492,7 +519,7 @@ Rectangle {
                         // one of the port's fixed-pitch card grids.
                         Grid {
                             id: grid
-                            visible: !root.isLoading && !root.isError
+                            visible: !root.kioskHost && !root.isLoading && !root.isError
                                      && root.appearances.length > 0
                             width: parent.width
                             spacing: 20
@@ -502,7 +529,7 @@ Rectangle {
                                 (width - (columns - 1) * spacing) / columns
 
                             Repeater {
-                                model: root.appearances
+                                model: root.kioskHost ? [] : root.appearances
                                 delegate: Item {
                                     id: cell
                                     required property var modelData
@@ -665,6 +692,185 @@ Rectangle {
                                 }
                             }
                         }
+                        Item {
+                            id: kioskAppearances
+                            visible: root.kioskHost && !root.isLoading && !root.isError && root.appearances.length>0
+                            width: parent.width
+                            readonly property int columns: Math.max(1,Math.floor((width+20)/180))
+                            readonly property real cellW: (width-(columns-1)*20)/columns
+                            readonly property real pitch: cellW+132
+                            height: visible ? Math.ceil(root.appearances.length/columns)*pitch : 0
+                            readonly property real viewTop: { var h=flick.contentHeight; return flick.contentY-mapToItem(flick.contentItem,0,0).y }
+                            readonly property int first: Math.max(0,Math.floor(viewTop/pitch)-1)*columns
+                            readonly property int last: Math.max(first,Math.min(root.appearances.length,(Math.ceil((viewTop+flick.height)/pitch)+1)*columns))
+                            Repeater {
+                                model: root.kioskHost ? root.appearances.slice(kioskAppearances.first,kioskAppearances.last) : []
+                                delegate: Item {
+                                    id: cell
+                                    required property var modelData
+                                    required property int index
+                                    x: ((kioskAppearances.first+index)%kioskAppearances.columns)*(kioskAppearances.cellW+20)
+                                    y: Math.floor((kioskAppearances.first+index)/kioskAppearances.columns)*kioskAppearances.pitch
+
+                                    width: kioskAppearances.cellW
+                                    height: cardCol.implicitHeight
+                                    activeFocusOnTab: true
+                                    Keys.onPressed: function (event) {
+                                        if (event.key === Qt.Key_Return
+                                            || event.key === Qt.Key_Enter
+                                            || event.key === Qt.Key_Space) {
+                                            cell.open()
+                                            event.accepted = true
+                                        }
+                                    }
+                                    function open() {
+                                        var id = cell.modelData.albumId || ""
+                                        if (id !== "")
+                                            QbzMusician.openAlbum(id)
+                                    }
+
+                                    // .album-card — column, gap 12, hover
+                                    // translateY(-4px) over 150ms. A Behavior
+                                    // bounded by a pointer gesture is the
+                                    // allowed class under the pulse law; the
+                                    // lift is on the CONTENT, not on the cell,
+                                    // because the Grid owns the cell's y.
+                                    Column {
+                                        id: cardCol
+                                        width: parent.width
+                                        y: cardArea.containsMouse ? -4 : 0
+                                        spacing: 12
+
+                                        Behavior on y {
+                                            NumberAnimation { duration: 150 }
+                                        }
+
+                                        // .album-artwork — 1:1, radius 8, on a
+                                        // surface-elevated bed. NO shadow.
+                                        Rectangle {
+                                            width: parent.width
+                                            height: width
+                                            radius: theme.radiusSm
+                                            color: theme.surfaceElevated
+                                            clip: true
+
+                                            // `artPath`, NOT `artworkUrl`.
+                                            // The remote url is a Rust-side
+                                            // key; the cover that exists on
+                                            // disk is what an Image can draw,
+                                            // and musician_qt.rs:100-109 says
+                                            // in as many words that a delegate
+                                            // binding `artworkUrl` into a
+                                            // source "draws nothing". The
+                                            // field is ADDITIVE to the frozen
+                                            // §13.2 shape and its two-pass
+                                            // fill needs no QML plumbing.
+                                            KioskArtwork {
+                                                id: cover
+                                                anchors.fill: parent
+                                                source: cell.modelData.artPath || ""
+                                                radius: theme.radiusSm
+                                            }
+                                            // The placeholder branch is LIVE,
+                                            // not defensive: album_artwork is
+                                            // `.unwrap_or_default()`, so an
+                                            // empty cover is an expected value.
+                                            // It doubles as the pre-download
+                                            // state, which is what Tauri's
+                                            // `<img loading="lazy">` shows
+                                            // there anyway. `ready` is the
+                                            // shared handover signal — true
+                                            // only once THIS source is on
+                                            // screen (RoundedImage.qml:247-259).
+                                            QbzIcon {
+                                                anchors.centerIn: parent
+                                                visible: !cover.ready
+                                                name: "disc"
+                                                width: 24
+                                                height: 24
+                                                tintName: "muted"
+                                            }
+                                        }
+
+                                        // .album-info — column, gap 4.
+                                        Column {
+                                            width: parent.width
+                                            spacing: 4
+
+                                            Text {
+                                                width: parent.width
+                                                text: cell.modelData.title || ""
+                                                color: theme.textPrimary
+                                                font.pixelSize: 14
+                                                font.weight: theme.weightMedium
+                                                elide: Text.ElideRight
+                                            }
+                                            Text {
+                                                width: parent.width
+                                                text: cell.modelData.artistName || ""
+                                                color: theme.textMuted
+                                                font.pixelSize: 12
+                                                elide: Text.ElideRight
+                                            }
+
+                                            // .album-meta — row, gap 8,
+                                            // margin-top 4.
+                                            Row {
+                                                width: parent.width
+                                                topPadding: 4
+                                                spacing: 8
+
+                                                // The FULL ISO date, verbatim
+                                                // (§5.4). Not a year.
+                                                Text {
+                                                    visible: (cell.modelData.releaseDate || "") !== ""
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    text: cell.modelData.releaseDate || ""
+                                                    color: theme.textMuted
+                                                    font.pixelSize: 11
+                                                }
+
+                                                // .role-badge — ALWAYS drawn,
+                                                // 10px on 2/8 padding. Tauri's
+                                                // radius 10 -> Radius.sm
+                                                // (DV-19). Same string on every
+                                                // card by design.
+                                                Rectangle {
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    width: badgeLbl.implicitWidth + 16
+                                                    height: badgeLbl.implicitHeight + 4
+                                                    radius: theme.radiusSm
+                                                    color: theme.surfaceElevated
+
+                                                    Text {
+                                                        id: badgeLbl
+                                                        anchors.centerIn: parent
+                                                        text: root._capitalize(
+                                                            cell.modelData.roleOnAlbum || "")
+                                                        color: theme.textSecondary
+                                                        font.pixelSize: 10
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: cardArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: cell.open()
+                                    }
+
+                                    FocusRing {
+                                        host: cell
+                                        radius: theme.radiusSm + 3
+                                    }
+                                }
+                            }
+                        }
+
 
                         // --- Load more (:193-203) ------------------------
                         // Only when hasMore. Disabled while a page is in
@@ -694,7 +900,7 @@ Rectangle {
                                 Rectangle {
                                     id: moreBtn
                                     width: moreLbl.implicitWidth + 48
-                                    height: moreLbl.implicitHeight + 20
+                                    height: root.kioskHost ? 64 : moreLbl.implicitHeight + 20
                                     radius: theme.radiusSm
                                     opacity: root.doc.loadingMore === true ? 0.6 : 1.0
                                     color: moreArea.containsMouse

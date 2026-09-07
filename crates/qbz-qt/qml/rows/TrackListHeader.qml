@@ -31,6 +31,8 @@ import com.blitzfc.qbz
 import "../theme"
 
 Item {
+    property bool kioskHost: false
+
     id: root
 
     // --- Arms: MIRROR the TrackRow arms of the list underneath ----------
@@ -70,7 +72,7 @@ Item {
     /// Width the ROW draws outside the shared TrackRow (LocalTrackRow only).
     property int trailingReserve: 0
 
-    TrackCols { id: cols }
+    TrackCols { id: cols; kioskHost: root.kioskHost }
     QbzTheme { id: theme }
 
     width: parent ? parent.width : 0

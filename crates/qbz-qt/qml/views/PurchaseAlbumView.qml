@@ -54,13 +54,17 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../controls"
 import "../rows"
 import "../theme"
+import "../kiosk"
+import "../assets/kiosk-art.js" as KioskArt
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     // Transparent while the ambient background is active — AlbumView's rule.
     color: ambientOn ? "transparent" : theme.surfaceMain
@@ -72,6 +76,17 @@ Rectangle {
     QbzTheme { id: theme }
 
     function t(s) { return QbzSession.tr(s, QbzSession.trRev) }
+
+    readonly property var kioskTrackRows: {
+        if (!root.kioskHost) return []
+        var result = []
+        root.discs.forEach(function(d, discIndex) {
+            var tracks = (d.tracks || []).filter(root.matches)
+            if (root.multiDisc && tracks.length) result.push({kind: "disc", number: d.number || discIndex + 1})
+            tracks.forEach(function(track, i) { result.push({kind: "track", track: track, ordinal: i}) })
+        })
+        return result
+    }
 
     // ---- The document (§G.3) --------------------------------------------
     // `rev` is a binding dependency ONLY: it is bumped on every publish so a
@@ -297,10 +312,11 @@ Rectangle {
     // The url-keyed pipeline every other view uses: the url goes out on
     // QbzShell.sidebarArtworkWindow and the decoded path comes back on
     // QbzLibrary.libraryArtworkReady, keyed by that same url.
+    readonly property string coverUrl: root.kioskHost ? KioskArt.sizedUrl(root.doc.artworkUrl || "", Math.ceil(112 * Screen.devicePixelRatio)) : (root.doc.artworkUrl || "")
     property var coverMap: ({})
     property string dispatchedCover: ""
     function dispatchCover() {
-        var url = doc.artworkUrl || ""
+        var url = root.coverUrl
         if (url === "" || url === root.dispatchedCover) return
         root.dispatchedCover = url
         QbzShell.sidebarArtworkWindow(JSON.stringify([url]))
@@ -315,6 +331,7 @@ Rectangle {
     }
     Component.onCompleted: root.dispatchCover()
     onDocChanged: root.dispatchCover()
+    onCoverUrlChanged: root.dispatchCover()
 
     // ======================== the page ====================================
     Flickable {
@@ -410,18 +427,19 @@ Rectangle {
                 spacing: 32
 
                 Rectangle {
-                    width: 224
-                    height: 224
+                    width: root.kioskHost ? 112 : 224
+                    height: width
                     radius: 12
                     color: theme.surfaceElevated
                     // No clip: RoundedImage confines itself on both arms, and
                     // a clip is an unconditional batch root.
-                    RoundedImage {
-                        visible: root.downloadable
+                    Loader {
                         anchors.fill: parent
-                        source: root.coverMap[root.doc.artworkUrl || ""] || ""
-                        radius: 12
+                        active: root.downloadable
+                        sourceComponent: root.kioskHost ? kioskCover : desktopCover
                     }
+                    Component { id: kioskCover; KioskArtwork { source: root.coverMap[root.coverUrl] || ""; radius: 12 } }
+                    Component { id: desktopCover; RoundedImage { source: root.coverMap[root.coverUrl] || ""; radius: 12 } }
                     // An album the account cannot download shows the warning
                     // in place of the cover (recon §B.2.2-3) — the one place
                     // this screen says "unavailable", and it says it about the
@@ -447,7 +465,7 @@ Rectangle {
                 }
 
                 Column {
-                    width: parent.width - 224 - 32
+                    width: parent.width - (root.kioskHost ? 112 : 224) - 32
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 0
 
@@ -531,7 +549,7 @@ Rectangle {
                     // but an existing local copy remains playable/manageable
                     // if that catalog edition later becomes unavailable.
                     Row {
-                        visible: root.downloadable || root.copies.length > 0
+                        visible: !root.kioskHost && (root.downloadable || root.copies.length > 0)
                         width: parent.width
                         spacing: 12
 
@@ -646,6 +664,137 @@ Rectangle {
                                 text: root.t("Downloading {}/{}...")
                                           .replace("{}", goodieCount.gp.completed || 0)
                                           .replace("{}", goodieCount.gp.total || 0)
+                                color: theme.textMuted
+                                font.pixelSize: theme.fontLegal
+                            }
+                        }
+                    }
+
+                    // --- Action row --------------------------------------
+                    // Remote download actions follow the current entitlement,
+                    // but an existing local copy remains playable/manageable
+                    // if that catalog edition later becomes unavailable.
+                    Flow {
+                        visible: root.kioskHost && (root.downloadable || root.copies.length > 0)
+                        width: parent.width
+                        spacing: 12
+
+                        // On THIS screen the download is the point and Play
+                        // is the convenience, so the accent goes to the
+                        // cloud and both share one intermediate size — the
+                        // 44px primary Play of the catalog album page read as
+                        // the main event here (smoke 2026-09-02).
+                        QbzCircleAction {
+                            visible: root.anyPlayable
+                            primary: false
+                            diameterOverride: 64
+                            name: "play-fill"
+                            anchors.verticalCenter: undefined
+                            onClicked: QbzPurchases.playAlbum()
+                        }
+                        IconTextButton {
+                            height: 64
+                            visible: root.downloadable
+                            label: root.t("Download another copy")
+                            iconName: "cloud-download"
+                            btnEnabled: !(root.progress.active === true)
+                                        && root.formats.length > 0
+                            anchors.verticalCenter: undefined
+                            onClicked: {
+                                if (root.progress.active !== true && root.formats.length > 0)
+                                    QbzPurchases.downloadAlbum()
+                            }
+                        }
+                        IconTextButton {
+                            height: 64
+                            visible: root.copies.length > 0
+                            label: root.t("Local purchase copies") + " (" + root.copies.length + ")"
+                            iconName: "hard-drive"
+                            anchors.verticalCenter: undefined
+                            onClicked: copiesModal.open()
+                        }
+                        // THE FORMAT DROPDOWN. Options in document order —
+                        // that order IS the dropdown order and index 0 is the
+                        // default. Choosing one re-scopes every downloaded
+                        // mark, the progress section and Add-to-Library; none
+                        // of that is computed here, it arrives in the next
+                        // republish.
+                        QbzSelect {
+                            kioskHost: true
+                            visible: root.downloadable && root.formats.length > 0
+                            anchors.verticalCenter: undefined
+                            menuWidth: 200
+                            options: root.formatLabels
+                            currentIndex: root.formatIndex
+                            enabled: !(root.progress.active === true)
+                            onSelected: function (i) {
+                                if (i >= 0 && i < root.formats.length)
+                                    QbzPurchases.setFormat(root.formats[i].id)
+                            }
+                        }
+                        Text {
+                            visible: root.downloadable && root.formats.length === 0
+                            anchors.verticalCenter: undefined
+                            text: root.t("No downloadable formats available")
+                            color: theme.textMuted
+                            font.pixelSize: theme.fontLegal
+                        }
+                        // The album is ALREADY in the Local Library: jump to
+                        // it. `localAlbumId` is the download folder the
+                        // library indexed (purchases_qt::resolve_local_album),
+                        // which is exactly the id the local album page opens.
+                        IconTextButton {
+                            height: 64
+                            visible: (root.doc.localAlbumId || "") !== ""
+                            anchors.verticalCenter: undefined
+                            label: root.t("Open in Local Library")
+                            iconName: "hard-drive"
+                            onClicked: {
+                                QbzLocal.openAlbum(root.doc.localAlbumId)
+                                QbzShell.navigateTo("localalbum")
+                            }
+                        }
+                        // GOODIES — album-level only, never per-track, and
+                        // completely absent when the list is empty (§14.3).
+                        // Not disabled, not an empty state: the owner's
+                        // account will never populate this, so a wrong empty
+                        // state would be a permanent wrong nobody can see.
+                        IconTextButton {
+                            height: 64
+                            visible: root.downloadable
+                                     && root.goodies.length > 0
+                                     && !kioskGoodieCount.visible
+                            anchors.verticalCenter: undefined
+                            label: root.t("Download goodies")
+                            iconName: "cloud-download"
+                            btnEnabled: !(root.progress.active === true)
+                            onClicked: QbzPurchases.downloadGoodies()
+                        }
+                        // Goodies are counted SEPARATELY from tracks (§14.3), so
+                        // they get their own readout rather than a slot in the
+                        // track bar. Without it a multi-item booklet download is
+                        // indistinguishable from a click that did nothing until
+                        // the final toast lands, and the natural reaction is to
+                        // click again.
+                        Row {
+                            id: kioskGoodieCount
+                            readonly property var gp: root.doc.goodiesProgress || ({})
+                            visible: kioskGoodieCount.gp.active === true
+                            anchors.verticalCenter: undefined
+                            spacing: 6
+                            QbzIcon {
+                                anchors.verticalCenter: undefined
+                                name: "loader-circle"
+                                width: 14
+                                height: 14
+                                tintName: "accent"
+                                rotation: root.spinDeg
+                            }
+                            Text {
+                                anchors.verticalCenter: undefined
+                                text: root.t("Downloading {}/{}...")
+                                          .replace("{}", kioskGoodieCount.gp.completed || 0)
+                                          .replace("{}", kioskGoodieCount.gp.total || 0)
                                 color: theme.textMuted
                                 font.pixelSize: theme.fontLegal
                             }
@@ -844,6 +993,7 @@ Rectangle {
                     height: visible ? 44 : 0
                     QbzLineEdit {
                         id: trackFilter
+                        kioskHost: root.kioskHost
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         width: 260
@@ -876,6 +1026,7 @@ Rectangle {
                     width: parent.width
                     height: visible ? 40 : 0
                     TrackListHeader {
+                        kioskHost: root.kioskHost
                         anchors.fill: parent
                         bandHeight: 40
                         labelSpacing: 0.5
@@ -894,11 +1045,66 @@ Rectangle {
                     }
                 }
 
+                Item {
+                    id: kioskTracks
+                    visible: root.kioskHost
+                    width: parent.width
+                    height: root.kioskHost ? root.kioskTrackRows.length * 64 : 0
+                    readonly property real viewTop: {
+                        var probe = pageFlick.contentHeight
+                        return pageFlick.contentY - kioskTracks.mapToItem(pageFlick.contentItem, 0, 0).y
+                    }
+                    readonly property int first: Math.max(0, Math.floor(viewTop / 64) - 1)
+                    readonly property int last: Math.min(root.kioskTrackRows.length, Math.ceil((viewTop + pageFlick.height) / 64) + 1)
+                    Repeater {
+                        model: root.kioskHost ? root.kioskTrackRows.slice(kioskTracks.first, Math.max(kioskTracks.first, kioskTracks.last)) : []
+                        delegate: Item {
+                            id: purchaseRow
+                            required property var modelData
+                            required property int index
+                            x: 0
+                            y: (kioskTracks.first + index) * 64
+                            width: kioskTracks.width
+                            height: 64
+                            readonly property var track: modelData.track || ({})
+                            readonly property int status: track.status || (track.downloaded ? 3 : 0)
+                            Text { visible: purchaseRow.modelData.kind === "disc"; anchors.verticalCenter: parent.verticalCenter; text: root.t("Disc") + " " + purchaseRow.modelData.number; color: theme.textMuted; font.pixelSize: 18 }
+                            Loader {
+                                anchors.fill: parent
+                                active: purchaseRow.modelData.kind === "track"
+                                sourceComponent: Component {
+                                    Item {
+                                        TrackRow {
+                                            kioskHost: true
+                                            width: parent.width - rowDownload.width - 8
+                                            item: ({id: purchaseRow.track.id || "", title: root.formatTrackTitle(purchaseRow.track.title, purchaseRow.track.version), artist: purchaseRow.track.artist || "", duration: root.fmtTrackDuration(purchaseRow.track.duration), qualityTier: purchaseRow.track.qualityTier || "", qualityDetail: purchaseRow.track.qualityDetail || ""})
+                                            number: purchaseRow.track.trackNumber || (purchaseRow.modelData.ordinal + 1)
+                                            showFavorite: false; showDownload: false; showMenu: false; draggable: false
+                                            clickPlays: purchaseRow.track.streamable === true
+                                            onPlayRequested: { if (purchaseRow.track.streamable) QbzPlayer.playAlbumFrom(root.doc.id || "", purchaseRow.track.id || "") }
+                                        }
+                                        SettingsButton {
+                                            id: rowDownload
+                                            anchors.right: parent.right
+                                            kioskHost: true
+                                            btnHeight: 64
+                                            minWidth: 96
+                                            text: purchaseRow.status === 4 ? root.t("Retry") : purchaseRow.status === 3 ? "✓" : purchaseRow.status === 1 || purchaseRow.status === 2 ? "…" : root.t("Download")
+                                            enabled: root.downloadable && root.formats.length > 0 && purchaseRow.status !== 1 && purchaseRow.status !== 2
+                                            onClicked: { if (purchaseRow.status === 4) QbzPurchases.retryTrack(purchaseRow.track.id || ""); else QbzPurchases.downloadTrack(purchaseRow.track.id || "") }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Discs. The document is ALREADY grouped (§G.3), in the order
                 // the reference's first-seen bucketing produces, so nothing is
                 // regrouped or re-sorted here.
                 Repeater {
-                    model: root.discs
+                    model: root.kioskHost ? [] : root.discs
                     delegate: Column {
                         id: discBlock
                         required property var modelData

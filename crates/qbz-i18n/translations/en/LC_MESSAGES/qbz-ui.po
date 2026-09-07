@@ -2406,3 +2406,24 @@ msgstr "The replacement was added, but the unavailable favorite could not be rem
 
 msgid "Failed to send playback to the selected device"
 msgstr "Failed to send playback to the selected device"
+
+msgid "Move up"
+msgstr "Move up"
+
+msgid "Move down"
+msgstr "Move down"
+
+msgid "Download"
+msgstr "Download"
+
+msgid "Edit"
+msgstr "Edit"
+
+msgid "Grid"
+msgstr "Grid"
+
+msgid "List"
+msgstr "List"
+
+msgid "Tree"
+msgstr "Tree"

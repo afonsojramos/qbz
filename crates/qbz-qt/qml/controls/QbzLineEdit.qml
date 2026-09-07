@@ -23,6 +23,9 @@ import com.blitzfc.qbz
 import "../theme"
 
 Rectangle {
+    // Explicit density opt-in; desktop geometry remains the default.
+    property bool kioskHost: false
+
     id: root
 
     // --- plain arm (API unchanged) ---------------------------------------
@@ -60,7 +63,7 @@ Rectangle {
     // The ROOT keeps the closed footprint; only the inner field animates, so
     // a positioner never reflows while the search opens.
     width: expandable ? collapsedSize : 240
-    height: (searchMode || expandable) ? collapsedSize : 34
+    height: kioskHost ? 44 : ((searchMode || expandable) ? collapsedSize : 34)
     color: "transparent"
     activeFocusOnTab: root.enabled && root.expandable && !root.open
 
@@ -220,7 +223,7 @@ Rectangle {
                     id: input
                     anchors.fill: parent
                     color: theme.textPrimary
-                    font.pixelSize: root.searchMode ? 12 : theme.fontBody
+                    font.pixelSize: root.kioskHost ? (root.searchMode ? 12 : theme.fontBody) * 1.2 : (root.searchMode ? 12 : theme.fontBody)
                     verticalAlignment: Text.AlignVCenter
                     clip: true
                     selectByMouse: true
@@ -275,7 +278,7 @@ Rectangle {
                     anchors.fill: parent
                     text: root.placeholder
                     color: theme.textMuted
-                    font.pixelSize: root.searchMode ? 12 : theme.fontBody
+                    font.pixelSize: root.kioskHost ? (root.searchMode ? 12 : theme.fontBody) * 1.2 : (root.searchMode ? 12 : theme.fontBody)
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight
                 }

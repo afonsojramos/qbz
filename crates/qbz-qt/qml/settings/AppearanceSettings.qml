@@ -45,6 +45,8 @@ import "../controls"
 import "../theme"
 
 Column {
+    property bool kioskHost: false
+
     id: root
 
     property var doc: ({})
@@ -85,18 +87,18 @@ Column {
     readonly property bool tbLocked: doc.hideTitleBar === true || doc.useSystemTitleBar === true
 
     // ============================ THEME ==================================
-    GroupHeader { text: QbzSession.tr("THEME", QbzSession.trRev) }
-    SettingRow {
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("THEME", QbzSession.trRev) }
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Theme", QbzSession.trRev)
         Row {
             spacing: 8
             // Theme list filter cycle (All / Dark / Light).
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 iconName: QbzShell.themeFilter === 1 ? "moon"
                     : QbzShell.themeFilter === 2 ? "sun" : "sun-moon"
                 onClicked: QbzShell.themeSetFilter((QbzShell.themeFilter + 1) % 3)
             }
-            QbzSelect {
+            QbzSelect { kioskHost: root.kioskHost;
                 menuWidth: 220
                 // 36 registered themes — a name filter (Slint parity).
                 searchable: true
@@ -109,26 +111,26 @@ Column {
             }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Album header gradient", QbzSession.trRev)
         description: QbzSession.tr("Use artwork-derived blur as a backdrop in album and artist detail views.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.albumHeaderGradient === true
             onToggled: function (v) { QbzBridge.settingsBool("album-header-gradient", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Compact header", QbzSession.trRev)
         description: QbzSession.tr("Show less data in album headers.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.compactAlbumHeader === true
             onToggled: function (v) { QbzBridge.settingsBool("compact-album-header", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Dynamic background", QbzSession.trRev)
         description: QbzSession.tr("Animated album-art background behind the whole app. High resource use — GPU accelerated.", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 200
             options: root.doc.appBackgroundModes || []
             currentIndex: root.doc.appBackgroundIndex || 0
@@ -136,11 +138,11 @@ Column {
         }
     }
     // Auto-theme rows (the "auto" theme only).
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         visible: QbzShell.themeSlug === "auto"
         label: QbzSession.tr("Source", QbzSession.trRev)
         description: QbzSession.tr("Generate a color theme from your system wallpaper or a custom image", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 200
             options: root.doc.autoThemeSources || []
             currentIndex: root.doc.autoThemeSourceIndex || 0
@@ -151,13 +153,13 @@ Column {
     // The row's LABEL is the picked path, which is how the reference shows
     // what is currently in use; with nothing picked it repeats the button's
     // text. Both strings already exist in the catalogs.
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         visible: QbzShell.themeSlug === "auto"
             && (root.doc.autoThemeSourceIndex || 0) === 2
         label: (root.doc.autoThemeImagePath || "") !== ""
             ? root.doc.autoThemeImagePath
             : QbzSession.tr("Select Image...", QbzSession.trRev)
-        SettingsButton {
+        SettingsButton { kioskHost: root.kioskHost;
             text: QbzSession.tr("Select Image...", QbzSession.trRev)
             // The action seam for button rows is settingsString with an empty
             // payload — the `library-pick-folder` precedent
@@ -168,17 +170,17 @@ Column {
     // The detected desktop, with the experimental caveat under it
     // (`:294-297`). Hint only — no control, and it hides when the shared
     // detector cannot name a desktop.
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         visible: QbzShell.themeSlug === "auto"
             && (root.doc.autoThemeDetectedDe || "") !== ""
         label: QbzSession.tr("Detected: ", QbzSession.trRev)
             + (root.doc.autoThemeDetectedDe || "")
         description: QbzSession.tr("Experimental: theme may not match your system exactly.", QbzSession.trRev)
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         visible: QbzShell.themeSlug === "auto"
         label: QbzSession.tr("Regenerate", QbzSession.trRev)
-        SettingsButton {
+        SettingsButton { kioskHost: root.kioskHost;
             text: QbzSession.tr("Regenerate", QbzSession.trRev)
             onClicked: QbzShell.themeSet(QbzShell.themeSlug)
         }
@@ -193,11 +195,11 @@ Column {
     // There is deliberately NO save / save-as, NO delete, NO named-theme list
     // and NO import/export: the model is ONE implicit custom theme that
     // autosaves, and the reference has none of those affordances either.
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         visible: QbzShell.themeSlug === "custom"
         label: QbzSession.tr("Start from current theme", QbzSession.trRev)
         description: QbzSession.tr("Copy the colors of the currently applied theme into the editor as a starting point.", QbzSession.trRev)
-        SettingsButton {
+        SettingsButton { kioskHost: root.kioskHost;
             text: QbzSession.tr("Use current colors", QbzSession.trRev)
             onClicked: {
                 QbzShell.customSeedFromCurrent()
@@ -205,11 +207,11 @@ Column {
             }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         visible: QbzShell.themeSlug === "custom"
         label: QbzSession.tr("Dark theme", QbzSession.trRev)
         description: QbzSession.tr("Set the overall light or dark polarity. Affects derived shades, borders and overlays.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: customThemeEditor.isDark
             onToggled: function (v) { QbzShell.customToggleDark(v) }
         }
@@ -217,7 +219,7 @@ Column {
     // NOT inside a SettingRow: that control hardcodes 52/64px and centres one
     // child, which would clip the ~250px picker. The reference keeps the grid
     // outside its own rows for the same reason.
-    CustomThemeEditor {
+    CustomThemeEditor { kioskHost: root.kioskHost;
         id: customThemeEditor
         visible: QbzShell.themeSlug === "custom"
     }
@@ -227,20 +229,20 @@ Column {
     SettingsSpacer { }
 
     // ===================== TYPOGRAPHY & LANGUAGE =========================
-    GroupHeader { text: QbzSession.tr("TYPOGRAPHY & LANGUAGE", QbzSession.trRev) }
-    SettingRow {
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("TYPOGRAPHY & LANGUAGE", QbzSession.trRev) }
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Language", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 200
             options: root.doc.languages || []
             currentIndex: root.doc.languageIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("language", i) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Interface size", QbzSession.trRev)
         description: QbzSession.tr("Scales the whole interface, like browser zoom. Small fits more content on screen, Large and Extra large improve readability (requires restart)", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 200
             options: root.doc.uiScales || []
             currentIndex: root.doc.uiScaleIndex || 0
@@ -250,10 +252,10 @@ Column {
     // The app-wide typeface. The four named families are bundled — the same
     // set the lyrics panel offers (shell/LyricsControlsFlyout.qml) — while
     // "System" deliberately leaves Qt's operating-system default untouched.
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Font", QbzSession.trRev)
         description: QbzSession.tr("The typeface used across the app. System follows your operating system; the other choices are bundled with QBZ (requires restart)", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 200
             options: root.doc.appFonts || []
             currentIndex: root.doc.appFontIndex || 0
@@ -266,77 +268,77 @@ Column {
     SettingsSpacer { }
 
     // ============================ NAVIGATION ============================
-    GroupHeader { text: QbzSession.tr("NAVIGATION", QbzSession.trRev) }
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("NAVIGATION", QbzSession.trRev) }
 
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Show navigation in sidebar", QbzSession.trRev)
         description: QbzSession.tr("Move the Discover, Library, Local Library and My QBZ sections out of the header and into the sidebar.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.navInSidebar === true
             onToggled: function (v) { QbzBridge.settingsBool("nav-in-sidebar", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         // ADR-010: only mounted when navigation is NOT in the sidebar.
         visible: root.doc.navInSidebar !== true
         label: QbzSession.tr("Compact header navigation", QbzSession.trRev)
         description: QbzSession.tr("Use the icon-only section navigation in the header even while the sidebar is open.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.navHeaderCompact === true
             onToggled: function (v) { QbzBridge.settingsBool("nav-header-compact", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("My QBZ", QbzSession.trRev)
         description: QbzSession.tr("Rename the My QBZ hub. Leave the name blank (or hit reset) to restore the default.", QbzSession.trRev)
         Row {
             spacing: 8
-            QbzLineEdit {
+            QbzLineEdit { kioskHost: root.kioskHost;
                 width: 150
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.doc.myQbzLabel || ""
                 placeholder: QbzSession.tr("My QBZ", QbzSession.trRev)
                 onCommitted: function (v) { QbzBridge.settingsString("myqbz-label", v) }
             }
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 anchors.verticalCenter: parent.verticalCenter
                 iconName: "rotate-ccw"
                 onClicked: QbzBridge.settingsString("myqbz-label", "")
             }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Invert swipe navigation direction", QbzSession.trRev)
         description: QbzSession.tr("Swap the two-finger touchpad swipe: left goes back, right goes forward.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.invertSwipeNavigation === true
             onToggled: function (v) { QbzBridge.settingsBool("invert-swipe-navigation", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Click on menu item navigates to first tab", QbzSession.trRev)
         description: QbzSession.tr("Clicking a section in the sidebar or title bar opens its first tab — including your chosen Local Library default — instead of only showing its menu", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.navClickFirstTab === true
             onToggled: function (v) { QbzBridge.settingsBool("nav-click-first-tab", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Show Purchases", QbzSession.trRev)
         description: QbzSession.tr("Show the Purchases section in the sidebar for browsing and downloading your purchased music", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.showPurchases === true
             onToggled: function (v) { QbzBridge.settingsBool("show-purchases", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         // Nothing to place while the section itself is off (owner
         // 2026-08-21) — absent rather than rendered-and-inert.
         visible: root.doc.showPurchases === true
         label: QbzSession.tr("Purchases in title bar", QbzSession.trRev)
         description: QbzSession.tr("Place the Purchases entry in the custom title bar instead of the sidebar", QbzSession.trRev)
         rowEnabled: !root.tbLocked
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             enabled: !root.tbLocked
             checked: root.doc.navTbPurchases === true
             onToggled: function (v) { QbzBridge.settingsBool("nav-tb-purchases", v) }
@@ -348,20 +350,20 @@ Column {
     SettingsSpacer { }
 
     // ============================== SEARCH ==============================
-    GroupHeader { text: QbzSession.tr("SEARCH", QbzSession.trRev) }
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("SEARCH", QbzSession.trRev) }
 
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Intelligent Search", QbzSession.trRev)
         description: QbzSession.tr("Smart search cache, ranking, and the search preview dropdown. On by default.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.intelligentSearch === true
             onToggled: function (v) { QbzBridge.settingsBool("intelligent-search", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Immersive search", QbzSession.trRev)
         description: QbzSession.tr("What selecting a result in the Immersive search does. Disabled turns the in-immersive search off.", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 200
             options: root.doc.immersiveSearchActions || []
             currentIndex: root.doc.immersiveSearchActionIndex || 0
@@ -374,92 +376,92 @@ Column {
     SettingsSpacer { }
 
     // ========================= PLAYER & VISUALS =========================
-    GroupHeader { text: QbzSession.tr("PLAYER & VISUALS", QbzSession.trRev) }
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("PLAYER & VISUALS", QbzSession.trRev) }
 
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Show volume +/- buttons", QbzSession.trRev)
         description: QbzSession.tr("Add discrete plus and minus buttons next to the volume slider in the player bar.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.showVolumeSteppers === true
             onToggled: function (v) { QbzBridge.settingsBool("show-volume-steppers", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Startup page", QbzSession.trRev)
         description: QbzSession.tr("Choose which page to show when the app starts", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 200
             options: root.doc.startupPages || []
             currentIndex: root.doc.startupPageIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("startup-page", i) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Immersive default view", QbzSession.trRev)
         description: QbzSession.tr("Which immersive view opens by default. 'Remember last' restores your last view.", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 200
             options: root.doc.immersiveDefaultViews || []
             currentIndex: root.doc.immersiveDefaultViewIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("immersive-default-view", i) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Mini player default view", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 200
             options: root.doc.miniDefaultViews || []
             currentIndex: root.doc.miniDefaultViewIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("mini-default-view", i) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Play indicator animation", QbzSession.trRev)
         description: QbzSession.tr("Animate the now-playing row with equalizer bars. Off (default) shows a static pause icon with an accent edge mark — lighter on CPU.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.playIndicatorAnimation === true
             onToggled: function (v) { QbzBridge.settingsBool("play-indicator-animation", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         // Parked for a later visual pass. Keep the preference wiring intact so
         // restoring the experiment does not require a settings migration.
         visible: false
         label: QbzSession.tr("Track waveform", QbzSession.trRev)
         description: QbzSession.tr("Show the full-track waveform in the player seek bar.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.seekbarWaveform === true
             onToggled: function (v) { QbzBridge.settingsBool("seekbar-waveform", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Show playlist cover collages in sidebar", QbzSession.trRev)
         description: QbzSession.tr("Render a 2×2 thumbnail of track covers next to each playlist. Disable on low-end machines to skip the extra images.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.sidebarPlaylistCollage === true
             onToggled: function (v) { QbzBridge.settingsBool("sidebar-playlist-collage", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Show album artwork in Queue track list", QbzSession.trRev)
         description: QbzSession.tr("Replace queue track numbers with album cover thumbnails. Off by default.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.queueTrackArtwork === true
             onToggled: function (v) { QbzBridge.settingsBool("queue-track-artwork", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Show album artwork in Library track list", QbzSession.trRev)
         description: QbzSession.tr("Display the album cover thumbnail between the track number and title. Off by default.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.libraryTrackArtwork === true
             onToggled: function (v) { QbzBridge.settingsBool("library-track-artwork", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Show album artwork in Local Library track list", QbzSession.trRev)
         description: QbzSession.tr("Display the album cover thumbnail next to each track in the Tracks and Folders views. Off by default — large libraries pay a per-row image-decode cost.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.localLibraryTrackArtwork === true
             onToggled: function (v) { QbzBridge.settingsBool("local-library-track-artwork", v) }
         }
@@ -490,17 +492,17 @@ Column {
     // CONTROLS) are ONE group as of 2026-08-21: they are all answers to
     // "what does the window frame look like", and split three ways each held
     // one or two rows.
-    GroupHeader { text: QbzSession.tr("WINDOW", QbzSession.trRev) }
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("WINDOW", QbzSession.trRev) }
 
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Use system title bar", QbzSession.trRev)
         description: QbzSession.tr("Keep your system's native window decorations. Turn off to use the QBZ header as the title bar, with its own window controls and drag support. Takes effect after restarting QBZ.", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.useSystemTitleBar === true
             onToggled: function (v) { QbzBridge.settingsBool("use-system-title-bar", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         // ABSENT, not disabled, while the system title bar is in charge:
         // there is no QBZ-drawn cluster to place then, so the row cannot do
         // anything (owner 2026-08-21). `rowEnabled` still covers the OTHER
@@ -510,7 +512,7 @@ Column {
         label: QbzSession.tr("Window controls position", QbzSession.trRev)
         description: QbzSession.tr("Place the window control buttons on the left or right side of the title bar", QbzSession.trRev)
         rowEnabled: !root.tbLocked
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             enabled: !root.tbLocked
             menuWidth: 160
             options: root.doc.wcPositions || []
@@ -518,7 +520,7 @@ Column {
             onSelected: function (i) { QbzBridge.settingsSelect("wc-position", i) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         // Also hidden on macOS (owner, 2026-08-05, after seeing it there):
         // it gates the DRAWN cluster, which macOS never draws, and its own
         // description offers a window-manager rationale that has no meaning
@@ -527,26 +529,26 @@ Column {
         label: QbzSession.tr("Show window controls", QbzSession.trRev)
         description: QbzSession.tr("Show minimize, maximize, and close buttons in the title bar. Disable if your window manager handles these.", QbzSession.trRev)
         rowEnabled: !root.tbLocked
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             enabled: !root.tbLocked
             checked: root.doc.showWindowControls === true
             onToggled: function (v) { QbzBridge.settingsBool("show-window-controls", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         visible: !QbzShell.isMacos
         label: QbzSession.tr("Hide title bar", QbzSession.trRev)
         description: QbzSession.tr("Frameless window without window controls or header drag (for tiling window manager users)", QbzSession.trRev)
         rowEnabled: root.doc.useSystemTitleBar !== true
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             enabled: root.doc.useSystemTitleBar !== true
             checked: root.doc.hideTitleBar === true
             onToggled: function (v) { QbzBridge.settingsBool("hide-title-bar", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Show track in window title", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.windowTitleShow === true
             onToggled: function (v) { QbzBridge.settingsBool("window-title-show", v) }
         }
@@ -560,26 +562,26 @@ Column {
     // NOTIFICATIONS and SYSTEM TRAY merged 2026-08-21: both are "how QBZ
     // shows up in the rest of the desktop". The tray rows keep their own
     // platform wording (macOS calls it the menu bar).
-    GroupHeader { text: QbzSession.tr("SYSTEM INTEGRATION", QbzSession.trRev) }
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("SYSTEM INTEGRATION", QbzSession.trRev) }
 
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("In-app toasts notifications", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.inAppToasts === true
             onToggled: function (v) { QbzBridge.settingsBool("in-app-toasts", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("System Notifications", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.systemNotifications === true
             onToggled: function (v) { QbzBridge.settingsBool("system-notifications", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Enable tray icon", QbzSession.trRev)
         description: QbzSession.tr("Show icon in system tray (requires restart)", QbzSession.trRev)
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.trayEnable === true
             onToggled: function (v) { QbzBridge.settingsBool("tray-enable", v) }
         }
@@ -592,7 +594,7 @@ Column {
     // tray". The setting still round-trips through the store (the
     // "tray-minimize-to-tray" write arm, src/settings_qt.rs) so a Qt session
     // cannot drop a value the Slint build wrote.
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Close to tray", QbzSession.trRev)
         // macOS says "menu bar"; the LABEL stays "Close to tray" on both
         // platforms (AppearanceSettings.slint:905-908).
@@ -603,7 +605,7 @@ Column {
         // 2026-08-21). The value still round-trips through the store, so
         // turning the tray back on restores the answer the user gave.
         visible: root.doc.trayEnable === true
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.trayCloseToTray === true
             onToggled: function (v) { QbzBridge.settingsBool("tray-close-to-tray", v) }
         }
@@ -615,18 +617,18 @@ Column {
     // enable condition is DOUBLED on the row and on the toggle because
     // SettingRow's `rowEnabled` only dims its own label column
     // (controls/SettingRow.qml:26); it does not reach the control.
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         visible: root.doc.isMacos === true
         label: QbzSession.tr("Hide Dock icon when closed to menu bar", QbzSession.trRev)
         description: QbzSession.tr("Run as a menu-bar-only app while the window is closed. Off keeps the Dock icon (like Spotify)", QbzSession.trRev)
         rowEnabled: root.doc.trayEnable === true && root.doc.trayCloseToTray === true
-        QbzToggle {
+        QbzToggle { kioskHost: root.kioskHost;
             enabled: root.doc.trayEnable === true && root.doc.trayCloseToTray === true
             checked: root.doc.trayMacHideDock === true
             onToggled: function (v) { QbzBridge.settingsBool("tray-mac-hide-dock", v) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         // Absent while the tray is off — there is no icon to give a
         // variant to (owner 2026-08-21).
         //
@@ -637,7 +639,7 @@ Column {
         visible: root.doc.trayEnable === true && QbzShell.isWindows !== true
         label: QbzSession.tr("Tray icon variant", QbzSession.trRev)
         description: QbzSession.tr("Pick a mono glyph to match your panel (Plasma, GNOME's permanently dark top bar) or the full colour vinyl logo", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 160
             options: root.doc.trayIconThemes || []
             currentIndex: root.doc.trayIconThemeIndex || 0
@@ -659,22 +661,22 @@ Column {
     // `cfg!(target_os = "linux")`. macOS is always Skia/Metal and Windows
     // negotiates its own backend, so off Linux the selector offered choices
     // that changed nothing (AppearanceSettings.slint:1011-1043).
-    GroupHeader {
+    GroupHeader { kioskHost: root.kioskHost;
         visible: QbzShell.isLinux
         text: QbzSession.tr("RENDERER", QbzSession.trRev)
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         visible: QbzShell.isLinux
         label: QbzSession.tr("Rendering backend", QbzSession.trRev)
         description: QbzSession.tr("Auto picks the best renderer for your graphics hardware. Only change this if the app feels slow or renders incorrectly (requires restart)", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 200
             options: root.doc.renderers || []
             currentIndex: root.doc.rendererIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("renderer", i) }
         }
     }
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         // `gpuSelectable`, not `isLinux`: same answer today, but it comes from
         // the SAME place as the code that applies the choice
         // (`renderer_qt::gpu_selectable`), so the row cannot outlive the
@@ -689,7 +691,7 @@ Column {
         // not spring. Vulkan is the only Qt backend that can select a device —
         // measured, see src/renderer_qt.rs.
         description: QbzSession.tr("Which GPU renders the app. Only the GPUs actually present are listed. Choosing one other than the default also switches the renderer to Vulkan — the only backend Qt can select a GPU on (requires restart)", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 260
             options: root.doc.gpuPowers || []
             currentIndex: root.doc.gpuPowerIndex || 0

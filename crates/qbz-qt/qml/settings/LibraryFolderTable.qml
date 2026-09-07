@@ -15,6 +15,8 @@ import "../controls"
 import "../theme"
 
 Column {
+    property bool kioskHost: false
+
     id: root
 
     /// The `library` sub-document of the settings snapshot.
@@ -51,15 +53,15 @@ Column {
     }
     // Shared column geometry (header + rows MUST agree):
     // checkbox 20 · folder (rest) · last-scan 120 · status 84 · actions 110.
-    readonly property int actionsW: 110
+    readonly property int actionsW: root.kioskHost ? 200 : 110
     function folderColW(rowWidth) {
-        return Math.max(60, rowWidth - 20 - 120 - 84 - actionsW - 4 * 12)
+        return Math.max(60, rowWidth - (root.kioskHost ? 44 : 20) - 120 - 84 - actionsW - 4 * 12)
     }
 
     Item {
         width: parent.width
-        height: 34
-        GroupHeader {
+        height: root.kioskHost ? 44 : 34
+        GroupHeader { kioskHost: root.kioskHost;
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             text: QbzSession.tr("LIBRARY FOLDERS", QbzSession.trRev)
@@ -69,13 +71,13 @@ Column {
             anchors.verticalCenter: parent.verticalCenter
             spacing: 8
             // Scan every enabled folder.
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 iconName: "refresh-cw"
                 enabled: root.lib.scanning !== true
                 onClicked: QbzBridge.settingsString("library-scan", "")
             }
             // Remove the selected folders (their indexed tracks go with them).
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 iconName: "trash-2"
                 danger: true
                 enabled: root.selectedIds.length > 0
@@ -88,12 +90,12 @@ Column {
         }
     }
 
-    SettingRow {
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Add folder", QbzSession.trRev)
         description: QbzSession.tr("Browse for a music folder, or type the full path.", QbzSession.trRev)
         Row {
             spacing: 8
-            QbzLineEdit {
+            QbzLineEdit { kioskHost: root.kioskHost;
                 id: pathField
                 width: 190
                 anchors.verticalCenter: parent.verticalCenter
@@ -105,12 +107,12 @@ Column {
             // It adds the folder itself, so there is nothing to clear here —
             // the typed field is the OTHER route to the same insert, kept
             // because pasting a path is faster for network mounts.
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 iconName: "folder"
                 text: QbzSession.tr("Browse...", QbzSession.trRev)
                 onClicked: QbzBridge.settingsString("library-pick-folder", "")
             }
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 iconName: "folder-plus"
                 text: QbzSession.tr("Add", QbzSession.trRev)
                 enabled: root.pendingPath !== ""
@@ -127,15 +129,15 @@ Column {
         width: parent.width
         text: root.lib.status || ""
         color: theme.danger
-        font.pixelSize: theme.fontLegal
+        font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
         wrapMode: Text.WordWrap
     }
 
     // Filter.
     Item {
         width: parent.width
-        height: 38
-        QbzLineEdit {
+        height: root.kioskHost ? 44 : 38
+        QbzLineEdit { kioskHost: root.kioskHost;
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             width: 220
@@ -154,7 +156,7 @@ Column {
             ? QbzSession.tr("No folders yet. Add a folder to build your local library.", QbzSession.trRev)
             : QbzSession.tr("No folders match your filter.", QbzSession.trRev)
         color: theme.textMuted
-        font.pixelSize: theme.fontBody
+        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
         wrapMode: Text.WordWrap
     }
 
@@ -168,13 +170,13 @@ Column {
             anchors.leftMargin: 10
             anchors.rightMargin: 12
             spacing: 12
-            Item { width: 20; height: 1 }
+            Item { width: root.kioskHost ? 44 : 20; height: 1 }
             Text {
                 width: root.folderColW(parent.width)
                 height: parent.height
                 text: QbzSession.tr("FOLDER", QbzSession.trRev)
                 color: theme.textMuted
-                font.pixelSize: theme.fontLegal
+                font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                 font.letterSpacing: 0.5
                 verticalAlignment: Text.AlignVCenter
             }
@@ -183,7 +185,7 @@ Column {
                 height: parent.height
                 text: QbzSession.tr("LAST SCAN", QbzSession.trRev)
                 color: theme.textMuted
-                font.pixelSize: theme.fontLegal
+                font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                 font.letterSpacing: 0.5
                 verticalAlignment: Text.AlignVCenter
             }
@@ -192,7 +194,7 @@ Column {
                 height: parent.height
                 text: QbzSession.tr("STATUS", QbzSession.trRev)
                 color: theme.textMuted
-                font.pixelSize: theme.fontLegal
+                font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                 font.letterSpacing: 0.5
                 verticalAlignment: Text.AlignVCenter
             }
@@ -213,7 +215,7 @@ Column {
             required property var modelData
 
             width: root.width
-            height: 40
+            height: root.kioskHost ? 64 : 40
             radius: theme.radiusSm
             color: root.isSelected(modelData.id) ? theme.surfaceElevated
                 : rowArea.containsMouse ? theme.surfaceHover : "transparent"
@@ -234,8 +236,8 @@ Column {
                 anchors.rightMargin: 12
                 spacing: 12
 
-                QbzCheckbox {
-                    width: 20
+                QbzCheckbox { kioskHost: root.kioskHost;
+                    width: root.kioskHost ? 44 : 20
                     anchors.verticalCenter: parent.verticalCenter
                     checked: root.isSelected(folderRow.modelData.id)
                     onToggled: root.toggleSelected(folderRow.modelData.id)
@@ -261,7 +263,7 @@ Column {
                         height: parent.height
                         text: folderRow.modelData.displayName || folderRow.modelData.path
                         color: folderRow.modelData.enabled ? theme.textPrimary : theme.textMuted
-                        font.pixelSize: theme.fontBody
+                        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                         verticalAlignment: Text.AlignVCenter
                         elide: Text.ElideRight
                     }
@@ -271,7 +273,7 @@ Column {
                     height: parent.height
                     text: root.scanLabel(folderRow.modelData.lastScan)
                     color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight
                 }
@@ -286,7 +288,7 @@ Column {
                             : QbzSession.tr("Active", QbzSession.trRev)
                     color: (folderRow.modelData.isNetwork && !folderRow.modelData.accessible
                         && folderRow.modelData.enabled) ? theme.danger : theme.textMuted
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                     font.weight: theme.weightMedium
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight
@@ -300,20 +302,20 @@ Column {
                     height: parent.height
                     spacing: 4
                     layoutDirection: Qt.RightToLeft
-                    SettingsButton {
+                    SettingsButton { kioskHost: root.kioskHost;
                         anchors.verticalCenter: parent.verticalCenter
                         iconName: "trash-2"
                         onClicked: QbzBridge.settingsString("library-remove-folders",
                             JSON.stringify([folderRow.modelData.id]))
                     }
-                    SettingsButton {
+                    SettingsButton { kioskHost: root.kioskHost;
                         anchors.verticalCenter: parent.verticalCenter
                         iconName: "refresh-cw"
                         enabled: folderRow.modelData.enabled && root.lib.scanning !== true
                         onClicked: QbzBridge.settingsString("library-scan",
                             String(folderRow.modelData.id))
                     }
-                    SettingsButton {
+                    SettingsButton { kioskHost: root.kioskHost;
                         anchors.verticalCenter: parent.verticalCenter
                         iconName: folderRow.modelData.enabled ? "eye" : "eye-off"
                         onClicked: QbzBridge.settingsString("library-folder-enabled",
@@ -323,7 +325,7 @@ Column {
                     // + fs type, change path). The reference reaches it from
                     // the same place; this port had no affordance at all
                     // until the modal landed.
-                    SettingsButton {
+                    SettingsButton { kioskHost: root.kioskHost;
                         anchors.verticalCenter: parent.verticalCenter
                         iconName: "settings-2"
                         onClicked: QbzBridge.settingsString("library-folder-edit-open",
@@ -338,24 +340,24 @@ Column {
     Item {
         visible: root.lib.scanning === true
         width: parent.width
-        height: visible ? 76 : 0
+        height: visible ? (root.kioskHost ? 90 : 76) : 0
         Column {
             anchors.fill: parent
             anchors.topMargin: 14
             spacing: 8
             Item {
                 width: parent.width
-                height: 30
+                height: root.kioskHost ? 44 : 30
                 Text {
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
                     text: QbzSession.tr("Scanning", QbzSession.trRev) + ": "
                         + (root.lib.processed || 0) + " / " + (root.lib.total || 0)
                     color: theme.textSecondary
-                    font.pixelSize: theme.fontBody
+                    font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                     font.weight: theme.weightMedium
                 }
-                SettingsButton {
+                SettingsButton { kioskHost: root.kioskHost;
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     danger: true
@@ -383,7 +385,7 @@ Column {
                 width: parent.width
                 text: root.lib.file || ""
                 color: theme.textMuted
-                font.pixelSize: theme.fontLegal
+                font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                 elide: Text.ElideRight
             }
         }

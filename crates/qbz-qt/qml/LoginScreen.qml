@@ -18,6 +18,7 @@ import "theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
     color: theme.surfaceMain
     // Square window corners (phase 12: opaque window; the compositor owns
     // any rounding).
@@ -29,6 +30,17 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    Flickable {
+        id: loginScroll
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: root.kioskHost ? Math.max(height, card.height + 32) : height
+        interactive: root.kioskHost
+        clip: root.kioskHost
+        boundsBehavior: Flickable.StopAtBounds
+        Item {
+            width: loginScroll.width
+            height: loginScroll.contentHeight
     // Faked drop shadow (blur 32, offset-y 8, #00000066): a translucent
     // black rounded rect behind the card.
     // SUPERSEDED (2026-07-29): the justification was "Qt5Compat DropShadow is
@@ -52,7 +64,7 @@ Rectangle {
     Rectangle {
         id: card
         anchors.centerIn: parent
-        width: 720
+        width: root.kioskHost ? Math.min(720, root.width - 32) : 720
         height: cardColumn.implicitHeight + 2 * theme.cardPadding
         color: theme.surfaceCard
         radius: theme.radiusLg
@@ -69,8 +81,8 @@ Rectangle {
             Image {
                 anchors.horizontalCenter: parent.horizontalCenter
                 source: "assets/qbz-logo.png"
-                width: 140
-                height: 140
+                width: root.kioskHost ? 64 : 140
+                height: root.kioskHost ? 64 : 140
                 fillMode: Image.PreserveAspectFit
             }
             Item { width: 1; height: theme.spacingSm }
@@ -91,7 +103,7 @@ Rectangle {
                 font.letterSpacing: 4
             }
 
-            Item { width: 1; height: theme.spacingXl }
+            Item { width: 1; height: root.kioskHost ? 12 : theme.spacingXl }
 
             // --- Terms of Service row --------------------------------
             Row {
@@ -100,8 +112,8 @@ Rectangle {
                 // Minimal dark checkbox (Slint QbzCheckbox equivalent).
                 Rectangle {
                     id: tosCheckbox
-                    width: 18
-                    height: 18
+                    width: root.kioskHost ? 44 : 18
+                    height: root.kioskHost ? 44 : 18
                     anchors.verticalCenter: parent.verticalCenter
                     radius: 4
                     color: root.tosAccepted ? theme.accent : "transparent"
@@ -151,12 +163,13 @@ Rectangle {
                 }
             }
 
-            Item { width: 1; height: theme.spacingLg }
+            Item { width: 1; height: root.kioskHost ? 12 : theme.spacingLg }
 
             // --- Sign in ---------------------------------------------
             // Opens the user's default web browser (no embedded webview).
             QbzPrimaryButton {
                 id: signInButton
+                btnHeight: root.kioskHost ? 64 : 48
                 width: parent.width
                 property bool canSignIn: root.tosAccepted && QbzSession.loginPhase === 0
                 label: QbzSession.tr("Sign in with your browser", QbzSession.trRev)
@@ -379,7 +392,7 @@ Rectangle {
                 id: offlineButton
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: offlineText.implicitWidth
-                height: offlineText.implicitHeight + 3
+                height: root.kioskHost ? 64 : offlineText.implicitHeight + 3
                 activeFocusOnTab: true
                 Accessible.role: Accessible.Button
                 Accessible.name: offlineText.text
@@ -417,7 +430,7 @@ Rectangle {
                 }
             }
 
-            Item { width: 1; height: theme.spacingXl }
+            Item { width: 1; height: root.kioskHost ? 12 : theme.spacingXl }
 
             // --- Legal disclaimer ------------------------------------
             Text {
@@ -434,6 +447,8 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
             }
+        }
+    }
         }
     }
 }

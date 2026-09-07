@@ -30,6 +30,7 @@
 // footer's surfaceMain matches it (AppShell's bezel nubs own the corners).
 
 import QtQuick
+import "../../kiosk"
 import com.blitzfc.qbz
 import "../../controls"
 import "../../theme"
@@ -37,6 +38,7 @@ import "../local"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
     color: "transparent"
 
     QbzTheme { id: theme }
@@ -191,12 +193,20 @@ Rectangle {
                     radius: 36
                     color: theme.surfaceElevated
                     clip: true
-                    RoundedImage {
+                    Loader { anchors.fill: parent; sourceComponent: root.kioskHost ? kioskImage9049 : desktopImage9049
+ Component { id: kioskImage9049; KioskArtwork {
                         anchors.fill: parent
                         visible: (root.doc.artistAvatarUrl || "") !== ""
                         source: root.doc.artistAvatarPath || ""
                         radius: 36
-                    }
+                    } }
+ Component { id: desktopImage9049; RoundedImage {
+                        anchors.fill: parent
+                        visible: (root.doc.artistAvatarUrl || "") !== ""
+                        source: root.doc.artistAvatarPath || ""
+                        radius: 36
+                    } }
+ }
                 }
                 Column {
                     width: Math.max(0, parent.width - 72 - 20)
@@ -242,7 +252,7 @@ Rectangle {
                 // shared control for it.
                 Rectangle {
                     width: 540
-                    height: 40
+                    height: root.kioskHost ? 44 : 40
                     color: theme.surfaceCard
                     radius: 8
                     border.width: 1
@@ -292,6 +302,7 @@ Rectangle {
                 // one-off Rectangle did not set a fill, so Qt's default white
                 // leaked through instead of the theme well.
                 QbzTabBar {
+                    kioskHost: root.kioskHost
                     anchors.verticalCenter: parent.verticalCenter
                     tabs: root.orderSegments(QbzSession.trRev)
                     activeId: root.orderBy
@@ -341,7 +352,7 @@ Rectangle {
                 id: colHead
                 width: parent.width
                 visible: root.populated
-                height: visible ? 36 : 0
+                height: visible ? (root.kioskHost ? 44 : 36) : 0
                 readonly property real titleW: Math.max(
                     0, colHead.width - 16 - 444 - 60)
 
@@ -361,9 +372,10 @@ Rectangle {
                     // renders minus.svg inside the same accent disc (the
                     // SelectCheck/TreeRow idiom), never a hand-drawn dash.
                     Item {
-                        width: 28
+                        width: root.kioskHost ? 60 : 28
                         height: parent.height
                         SelectCheck {
+                            diameter: root.kioskHost ? 44 : 13
                             anchors.left: parent.left
                             anchors.verticalCenter: parent.verticalCenter
                             on: root.doc.allChecked === true
@@ -415,7 +427,7 @@ Rectangle {
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         // spec 01 §8.9: 44 * 10.
-        cacheBuffer: 440
+        cacheBuffer: root.kioskHost ? 128 : 440
         model: root.populated ? root.rows : []
         header: pageHead
         footer: bottomPad
@@ -425,6 +437,7 @@ Rectangle {
         // precomputed there (primary = isCompilation ? 0.65 : 1.0, alternate =
         // 0.72 unconditionally), so it is never re-derived here.
         delegate: DiscoCandidateRow {
+            kioskHost: root.kioskHost
             required property var modelData
             width: rowList.width
             candidate: modelData.candidate || ({})
@@ -459,7 +472,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: 60
+        height: root.kioskHost ? 72 : 60
         color: theme.surfaceMain
 
         Rectangle {
@@ -482,19 +495,19 @@ Rectangle {
             id: actionRow
             // Asymmetric right padding (:739) — 88 clears the back-to-top FAB.
             anchors.right: parent.right
-            anchors.rightMargin: 88
+            anchors.rightMargin: root.kioskHost ? 16 : 88
             anchors.verticalCenter: parent.verticalCenter
             spacing: 8
             SettingsButton {
                 text: root.t("Cancel")
-                btnHeight: 36
+                btnHeight: root.kioskHost ? 64 : 36
                 minWidth: 0
                 onClicked: QbzDisco.back()
             }
             QbzPrimaryButton {
                 label: root.creating
                     ? root.t("Loading...") : root.t("Create Collection")
-                btnHeight: 36
+                btnHeight: root.kioskHost ? 64 : 36
                 btnEnabled: !(root.creating || root.selectedCount === 0
                     || root.nameTrimmedEmpty)
                 onClicked: QbzDisco.create(root.collectionName)

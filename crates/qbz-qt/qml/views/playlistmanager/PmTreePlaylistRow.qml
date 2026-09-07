@@ -26,12 +26,14 @@
 // would sit at the root gutter and the tree would read flat.
 
 import QtQuick
+import "../../kiosk"
 import com.blitzfc.qbz
 import "../../cards"
 import "../../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     /// `managerJson.tree[i].playlist` — one `PlaylistRow` (contract §4.3).
     property var item: ({})
@@ -43,22 +45,32 @@ Rectangle {
     readonly property string itemId: String(root.item.id || "")
     readonly property bool isLocal: root.item.isLocal === true
 
-    height: 40
+    height: root.kioskHost ? 64 : 40
     radius: 6
     color: bodyArea.containsMouse ? theme.surfaceHover : "transparent"
     opacity: (root.item.isHidden === true) ? 0.6 : 1.0
 
     HoverHandler { id: rowHover }
 
-    PlaylistCollage {
+    Loader {
         id: collage
         x: root.indent ? 36 : 10
+        anchors.verticalCenter: parent.verticalCenter
+        width: 28; height: 28
+        sourceComponent: root.kioskHost ? kioskCover : desktopCover
+    }
+    Component { id: kioskCover; KioskArtwork { source: (root.item.covers || [])[0] || ""; radius: 5 } }
+    Component { id: desktopCover;
+    PlaylistCollage {
+        id: desktopCollage
+        x: 0
         anchors.verticalCenter: parent.verticalCenter
         width: 28
         height: 28
         layout: "pm"
         urls: root.item.covers || []
         radius: 5
+    }
     }
 
     Row {
@@ -100,14 +112,18 @@ Rectangle {
         x: root.width - 12 - width
         anchors.verticalCenter: parent.verticalCenter
         spacing: 0
-        opacity: rowHover.hovered ? 1.0 : 0.0
+        opacity: root.kioskHost || rowHover.hovered ? 1.0 : 0.0
 
         PmActionButton {
+            width: root.kioskHost ? 44 : 26
+            height: root.kioskHost ? 44 : 26
             name: root.item.isFavorite === true ? "heart-filled" : "heart"
             filled: root.item.isFavorite === true
             onClicked: QbzPlaylistManager.toggleFavorite(root.itemId)
         }
         PmActionButton {
+            width: root.kioskHost ? 44 : 26
+            height: root.kioskHost ? 44 : 26
             name: "pen-line"
             onClicked: QbzPlaylistEdit.open(root.itemId)
         }

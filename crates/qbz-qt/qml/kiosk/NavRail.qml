@@ -83,7 +83,7 @@ Rectangle {
     // tw = (width - 16 - 36) / 7 and th = height - 18 (62px at the shell's
     // 80px rail).
     readonly property real tw: (root.width - 16 - 6 * 6) / 7
-    readonly property real th: root.height - 18
+    readonly property real th: root.height - 16
 
     // The alpha ramp is empty on the pre-publish frame, where alphaTier()
     // silently returns "transparent" — the tree's required guard idiom

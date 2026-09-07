@@ -28,6 +28,8 @@ import "../controls"
 import "../theme"
 
 Column {
+    property bool kioskHost: false
+
     id: root
 
     property var doc: ({})
@@ -63,7 +65,7 @@ Column {
     // text-muted LITERAL 12px status), and a right-aligned Manage button.
     Item {
         width: parent.width
-        height: 64
+        height: root.kioskHost ? 112 : 64
 
         Row {
             anchors.fill: parent
@@ -90,7 +92,7 @@ Column {
                         width: parent.width
                         text: QbzSession.tr("Library folders", QbzSession.trRev)
                         color: theme.textPrimary
-                        font.pixelSize: theme.fontBody
+                        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                         font.weight: theme.weightMedium
                     }
                     Text {
@@ -103,13 +105,13 @@ Column {
                             : QbzSession.tr("{} folders", QbzSession.trRev)
                                 .replace("{}", (root.lib.folders || []).length)
                         color: theme.textMuted
-                        font.pixelSize: 12
+                        font.pixelSize: root.kioskHost ? (12) * 1.2 : (12)
                         wrapMode: Text.WordWrap
                     }
                 }
             }
 
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 id: foldersManageBtn
                 anchors.verticalCenter: parent.verticalCenter
                 text: QbzSession.tr("Manage", QbzSession.trRev)
@@ -122,11 +124,11 @@ Column {
     Item { width: 1; height: 22 }
 
     // ============================ TAB ORDER ==============================
-    GroupHeader { text: QbzSession.tr("LIBRARY TABS", QbzSession.trRev) }
-    SettingRow {
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("LIBRARY TABS", QbzSession.trRev) }
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Tab order and default", QbzSession.trRev)
         description: QbzSession.tr("Choose the order of Local Library tabs. The first one opens by default, including when QBZ starts without a Qobuz session.", QbzSession.trRev)
-        SettingsButton {
+        SettingsButton { kioskHost: root.kioskHost;
             text: QbzSession.tr("Customize", QbzSession.trRev)
             trailingIconName: "chevron-right"
             onClicked: if (root.tabOrderModal) root.tabOrderModal.open()
@@ -136,11 +138,11 @@ Column {
     Item { width: 1; height: 22 }
 
     // =========================== GENRES VIEW ============================
-    GroupHeader { text: QbzSession.tr("GENRES VIEW", QbzSession.trRev) }
-    SettingRow {
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("GENRES VIEW", QbzSession.trRev) }
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Genre filters position", QbzSession.trRev)
         description: QbzSession.tr("Place the chained genre filters above, beside or below the album results.", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 170
             options: [
                 QbzSession.tr("Top", QbzSession.trRev),
@@ -162,11 +164,11 @@ Column {
     Item { width: 1; height: 22 }
 
     // ============================ ALBUMS VIEW ============================
-    GroupHeader { text: QbzSession.tr("ALBUMS VIEW", QbzSession.trRev) }
-    SettingRow {
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("ALBUMS VIEW", QbzSession.trRev) }
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Album grouping", QbzSession.trRev)
         description: QbzSession.tr("Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags.", QbzSession.trRev)
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 210
             options: [
                 QbzSession.tr("Albums by folder", QbzSession.trRev),
@@ -191,15 +193,15 @@ Column {
     // carries it. Changing the scope re-navigates in the reference
     // (`main.rs:22570`); here the equivalent is reloadLibrary(), because the
     // feed is built once and cached.
-    GroupHeader { text: QbzSession.tr("LIBRARY › ALL", QbzSession.trRev) }
-    SettingRow {
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("LIBRARY › ALL", QbzSession.trRev) }
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Local items in Library All", QbzSession.trRev)
         description: QbzSession.tr("Favorited items only: what you hearted. Entire local library: every folder and Plex album, artist and track.", QbzSession.trRev)
         // NO `sm:` — this row used to be the ONE select in Settings drawn at
         // the small size, which read as a rendering bug next to its
         // neighbours (owner 2026-08-21). The control-alignment standard
         // (qbz-nix-docs/guides/native-ui/) has one size for a settings row.
-        QbzSelect {
+        QbzSelect { kioskHost: root.kioskHost;
             menuWidth: 210
             options: [
                 QbzSession.tr("Favorited items only", QbzSession.trRev),
@@ -224,13 +226,13 @@ Column {
     Item { width: 1; height: 22 }
 
     // ============================ MAINTENANCE ============================
-    GroupHeader { text: QbzSession.tr("MAINTENANCE", QbzSession.trRev) }
-    SettingRow {
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("MAINTENANCE", QbzSession.trRev) }
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Cleanup missing files", QbzSession.trRev)
         description: QbzSession.tr("Remove tracks whose files no longer exist on disk.", QbzSession.trRev)
         Column {
             spacing: 4
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 text: root.lib.cleaning === true
                     ? QbzSession.tr("Cleaning up...", QbzSession.trRev)
                     : QbzSession.tr("Cleanup", QbzSession.trRev)
@@ -243,7 +245,7 @@ Column {
                 horizontalAlignment: Text.AlignRight
                 text: root.lib.cleanupStatus || ""
                 color: theme.textMuted
-                font.pixelSize: theme.fontLegal
+                font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
             }
         }
     }
@@ -251,11 +253,11 @@ Column {
     Item { width: 1; height: 22 }
 
     // ============================ DANGER ZONE ============================
-    GroupHeader { text: QbzSession.tr("DANGER ZONE", QbzSession.trRev) }
-    SettingRow {
+    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("DANGER ZONE", QbzSession.trRev) }
+    SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Clear library database", QbzSession.trRev)
         description: QbzSession.tr("Remove all indexed tracks. Your audio files are not deleted.", QbzSession.trRev)
-        SettingsButton {
+        SettingsButton { kioskHost: root.kioskHost;
             danger: true
             text: root.lib.clearing === true
                 ? QbzSession.tr("Clearing...", QbzSession.trRev)
@@ -288,7 +290,7 @@ Column {
     // one whose cache has not folded into the shared mirror yet, so the two
     // newer ones lead. One component twice — every difference between the
     // protocols is a property here rather than a second file.
-    MediaServerSettings {
+    MediaServerSettings { kioskHost: root.kioskHost;
         width: parent.width
         confirmHost: root.confirmHost
         server: "jellyfin"
@@ -302,7 +304,7 @@ Column {
         syncCost: QbzSession.tr("A first sync takes about a minute per 5,000 tracks.", QbzSession.trRev)
     }
 
-    MediaServerSettings {
+    MediaServerSettings { kioskHost: root.kioskHost;
         width: parent.width
         confirmHost: root.confirmHost
         server: "subsonic"
@@ -316,7 +318,7 @@ Column {
         syncCost: QbzSession.tr("Syncing is fast — a few seconds for a large library.", QbzSession.trRev)
     }
 
-    PlexSettings {
+    PlexSettings { kioskHost: root.kioskHost;
         width: parent.width
         doc: root.doc
         confirmHost: root.confirmHost

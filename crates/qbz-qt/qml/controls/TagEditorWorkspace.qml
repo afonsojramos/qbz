@@ -10,6 +10,7 @@ import "../theme"
 Item {
     id: workspace
     required property var editor
+    readonly property bool kioskHost: editor.kioskHost === true
 
     property string compactPane: "tracks"
     property bool advancedOpen: false
@@ -22,7 +23,7 @@ Item {
     Row {
         id: compactSwitch
         visible: !workspace.wide
-        height: visible ? 34 : 0
+        height: visible ? (workspace.kioskHost ? 44 : 34) : 0
         spacing: 6
         anchors.horizontalCenter: parent.horizontalCenter
 
@@ -35,7 +36,7 @@ Item {
                 id: paneChoice
                 required property var modelData
                 width: 128
-                height: 32
+                height: workspace.kioskHost ? 44 : 32
                 radius: theme.radiusSm
                 color: workspace.compactPane === modelData.id
                     ? theme.surfaceElevated
@@ -98,7 +99,8 @@ Item {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: parent.top
-                height: 44
+                height: workspace.kioskHost ? 0 : 44
+                visible: !workspace.kioskHost
                 Text {
                     anchors.left: parent.left
                     anchors.leftMargin: 12
@@ -186,7 +188,7 @@ Item {
                     required property var modelData
                     required property int index
                     width: trackList.width
-                    height: 32
+                    height: workspace.kioskHost ? 44 : 32
                     readonly property bool selected:
                         workspace.editor.selectedTrackIndex === trackDelegate.index
                     color: selected ? theme.alphaTier(12)

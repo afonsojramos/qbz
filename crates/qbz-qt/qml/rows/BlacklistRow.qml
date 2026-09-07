@@ -48,8 +48,18 @@
 // blind-eye fallback sits UNDER it and is never hidden, exactly the Slint
 // layering, so there is no placeholder to gate on `ready` here.
 
+// KIOSK ARM (2026-09-07, K6): `kioskHost` defaults to FALSE and every metric
+// below falls back to the desktop number it had before the property existed —
+// 64px frame, 36px remove button, fontBody/fontLegal, RoundedImage. The kiosk
+// arm raises the frame to the contract's 76px (§2.6: the whole row IS the
+// primary target, and it must clear 64), the remove button to 44, the type to
+// 1.2x, and swaps the cover for kiosk/KioskArtwork through an explicitly
+// conditional Loader — RoundedImage has NO sourceSize by construction
+// (theme/RoundedImage.qml:402) so a 48px tile decodes the full original.
+
 import QtQuick
 import com.blitzfc.qbz
+import "../kiosk"
 import "../theme"
 
 Rectangle {
@@ -61,6 +71,8 @@ Rectangle {
     property var row: ({})
     /// Resolved cover path for the album arm ("" = show the blind-eye only).
     property string coverSource: ""
+    /// Explicit density opt-in. Default = desktop, unchanged.
+    property bool kioskHost: false
 
     signal selectRequested()
     signal removeRequested()
@@ -71,7 +83,7 @@ Rectangle {
     readonly property bool isAlbum: root.arm === "album"
     readonly property int leadSize: root.isAlbum ? 48 : 44
 
-    height: 64
+    height: root.kioskHost ? 76 : 64
     radius: theme.radiusMd
     color: root.hovered ? theme.surfaceElevated : theme.surfaceCard
 
@@ -119,11 +131,25 @@ Rectangle {
                         height: 20
                         tintName: "muted"
                     }
+                    // Desktop keeps RoundedImage VERBATIM — same object, same
+                    // `visible` binding, same fade. Kiosk adds the
+                    // decode-sized primitive behind a Loader that is inert
+                    // (`active: false`) on every desktop mount.
                     RoundedImage {
                         visible: root.isAlbum && root.coverSource !== ""
+                            && !root.kioskHost
                         anchors.fill: parent
-                        source: root.coverSource
+                        source: root.kioskHost ? "" : root.coverSource
                         radius: theme.radiusSm
+                    }
+                    Loader {
+                        anchors.fill: parent
+                        active: root.isAlbum && root.coverSource !== ""
+                            && root.kioskHost
+                        sourceComponent: KioskArtwork {
+                            source: root.coverSource
+                            radius: theme.radiusSm
+                        }
                     }
                 }
             }
@@ -140,7 +166,8 @@ Rectangle {
                     width: parent.width
                     text: root.isAlbum ? (root.row.title || "") : (root.row.name || "")
                     color: theme.textPrimary
-                    font.pixelSize: theme.fontBody
+                    font.pixelSize: root.kioskHost
+                        ? theme.fontBody * 1.2 : theme.fontBody
                     font.weight: theme.weightMedium
                     elide: Text.ElideRight
                 }
@@ -150,7 +177,8 @@ Rectangle {
                     width: parent.width
                     text: root.row.artist || ""
                     color: theme.textSecondary
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost
+                        ? theme.fontLegal * 1.2 : theme.fontLegal
                     elide: Text.ElideRight
                 }
                 // The dismissal store carries no timestamp, so this line has no
@@ -161,7 +189,8 @@ Rectangle {
                     text: QbzSession.tr("Added {}", QbzSession.trRev)
                         .replace("{}", root.row.addedDisplay || "")
                     color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost
+                        ? theme.fontLegal * 1.2 : theme.fontLegal
                     elide: Text.ElideRight
                 }
                 // Notes render on the ARTIST rows only. The album row carries
@@ -183,8 +212,9 @@ Rectangle {
     // ---- remove / undo (optimistic, no confirm) ---------------------------
     Item {
         id: removeSlot
-        width: 36
-        height: 36
+        // Secondary control: the contract's 44px floor in kiosk (§2.6).
+        width: root.kioskHost ? 44 : 36
+        height: root.kioskHost ? 44 : 36
         anchors.right: parent.right
         anchors.rightMargin: 8
         anchors.verticalCenter: parent.verticalCenter

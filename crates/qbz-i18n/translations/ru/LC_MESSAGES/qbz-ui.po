@@ -6838,3 +6838,24 @@ msgstr "Замена добавлена, но недоступный элеме�
 
 msgid "Failed to send playback to the selected device"
 msgstr "Не удалось передать воспроизведение на выбранное устройство"
+
+msgid "Move up"
+msgstr "Переместить вверх"
+
+msgid "Move down"
+msgstr "Переместить вниз"
+
+msgid "Download"
+msgstr "Скачать"
+
+msgid "Edit"
+msgstr "Редактировать"
+
+msgid "Grid"
+msgstr "Сетка"
+
+msgid "List"
+msgstr "Список"
+
+msgid "Tree"
+msgstr "Дерево"

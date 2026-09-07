@@ -28,6 +28,8 @@ import "../controls"
 import "../theme"
 
 Column {
+    property bool kioskHost: false
+
     id: root
 
     QbzTheme { id: theme }
@@ -75,7 +77,7 @@ Column {
     // A small muted sub-group label (AppearanceSettings.slint:33-38).
     component TokenGroupLabel: Text {
         color: theme.textMuted
-        font.pixelSize: 10
+        font.pixelSize: root.kioskHost ? (10) * 1.2 : (10)
         font.letterSpacing: 1
         font.weight: theme.weightSemibold
     }
@@ -127,7 +129,7 @@ Column {
             width: 56
             text: cell.label
             color: cell.open ? theme.textPrimary : theme.textMuted
-            font.pixelSize: theme.fontLegal
+            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
             horizontalAlignment: Text.AlignHCenter
             elide: Text.ElideRight
         }

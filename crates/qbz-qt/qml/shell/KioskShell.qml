@@ -54,6 +54,7 @@ Rectangle {
 
     // KioskShell.slint:204 — the NavRail is a fat touch target.
     readonly property int navRailHeight: 80
+    readonly property int transportHeight: 64
 
     // The chrome hover fill (Theme.alpha-8, KioskShell.slint:255,273). The
     // ramp is empty on the pre-publish frame, where alphaTier() silently
@@ -70,24 +71,9 @@ Rectangle {
     // Library, local album, My QBZ, Settings, Now Playing, the manager
     // views) keep mounting offline and are deliberately absent below.
     //
-    // Two arms of the reference's predicate have no counterpart here:
-    //   - award / award-albums / location are ABSENT-BY-RULING (contract R1) —
-    //     there is no Qt view and no Qt route id for them, so they can never be
-    //     `currentView`.
-    //     (This list USED to include musician and the two purchases routes. It
-    //     was wrong about both by the time anyone read it: ContentRouter mounts
-    //     `musician`, `purchases` and `purchase-album`, and nav_qt.rs lists all
-    //     three ids. Corrected 2026-08-16 — a stale absence claim is the kind of
-    //     comment that gets cited as authority later.)
-    //     Purchases needs no arm here regardless: it is gated OFF while offline
-    //     at both of its entry points (Sidebar's `purchasesVisible` and
-    //     HeaderBar's `purchasesInHeader` both require `!QbzSession.offline`),
-    //     so a kiosk session cannot reach it in the first place.
-    //   - PlaylistState.offline-subset (the D11.a "mixed Qobuz playlist
-    //     rendered from its local sidecar rows" flag, state.slint:2183) has
-    //     NO Qt member: playlist_qt.rs's PlaylistDoc carries isLocalPlaylist
-    //     (:175) and offlineOnly (:181) and nothing else. The arm below is
-    //     therefore the reference's minus that one disjunct.
+    // A live Desktop -> Kiosk switch retains the current route. Offline
+    // gating therefore belongs here as well as at navigation entry points.
+    // Local playlists continue to mount their available sidecar tracks.
     readonly property var playlistDoc: root.parsePlaylistDoc()
     function parsePlaylistDoc() {
         try {
@@ -99,6 +85,7 @@ Rectangle {
     readonly property bool qobuzViewBlocked: QbzSession.offline && (
            QbzShell.currentView === "home"
         || QbzShell.currentView === "discoverbrowse"
+        || QbzShell.currentView === "playlistbrowse"
         || QbzShell.currentView === "search"
         || QbzShell.currentView === "library"
         || QbzShell.currentView === "album"
@@ -122,53 +109,13 @@ Rectangle {
     // land, stamp it on the mounted view. The view is reached through
     // ContentRouter's public `currentItem` rather than NavFlyout's depth-
     // capped tree walk, which the kiosk's deeper mount chain would outrun.
-    property string pendingTab: ""
-    property string pendingView: ""
-
     function navigateWithTab(view, tab) {
-        if (QbzShell.currentView === view) {
-            // Already mounted — no currentViewChanged will fire.
-            root.applyTab(tab)
-            return
-        }
-        root.pendingTab = tab
-        root.pendingView = view
-        QbzShell.navigateTo(view)
-    }
-
-    // Duck-typed exactly like NavFlyout.qml:320-321: only the tabbed views
-    // expose `activeTab`, and a view without one is simply left alone.
-    function applyTab(tab) {
-        if (!tab || tab === "")
-            return
-        var mounted = contentLoader.item !== null ? contentLoader.item.currentItem : null
-        if (mounted !== null && typeof mounted.activeTab === "string")
-            mounted.activeTab = tab
+        QbzShell.navigateToTab(view, tab)
     }
 
     Connections {
         target: QbzShell
-        function onCurrentViewChanged() {
-            // KioskShell.slint:194-200 — every route change parks the focus
-            // ring on the new view's first item. nav_active is NOT reset: the
-            // latch is a session-level thing (kiosk_nav_qt.rs:233-242).
-            QbzKioskNav.resetForView()
-
-            if (root.pendingTab === "")
-                return
-            var wanted = root.pendingView
-            var tab = root.pendingTab
-            root.pendingTab = ""
-            root.pendingView = ""
-            // A navigation somewhere else beat us to it — drop the request
-            // instead of stamping a stale tab later.
-            if (QbzShell.currentView !== wanted)
-                return
-            // The router instantiates the view from its own binding on the
-            // same property; binding order between it and this handler is
-            // undefined, so apply after the current pass.
-            Qt.callLater(function () { root.applyTab(tab) })
-        }
+        function onCurrentViewChanged() { QbzKioskNav.resetForView() }
     }
 
     // =====================================================================
@@ -186,7 +133,7 @@ Rectangle {
         Rectangle {
             id: backBar
             width: shellColumn.width
-            height: theme.headerHeight
+            height: 72
             color: theme.surfaceCard
 
             // The kiosk carries no HeaderBar, so it owns the window chrome
@@ -224,7 +171,7 @@ Rectangle {
                 // opacity-only port leaves a clickable ghost.
                 Rectangle {
                     id: backBtn
-                    width: 44
+                    width: 64
                     height: backBarRow.height
                     radius: theme.radiusSm
                     color: (backArea.containsMouse && QbzShell.canBack)
@@ -255,7 +202,7 @@ Rectangle {
                 // KioskShell.slint:270-287.
                 Rectangle {
                     id: fwdBtn
-                    width: 44
+                    width: 64
                     height: backBarRow.height
                     radius: theme.radiusSm
                     color: (fwdArea.containsMouse && QbzShell.canForward)
@@ -419,8 +366,8 @@ Rectangle {
         Rectangle {
             id: contentFrame
             width: shellColumn.width
-            height: root.height - theme.headerHeight
-                    - (QbzShell.currentView === "nowplaying" ? 0 : theme.headerHeight)
+            height: root.height - backBar.height
+                    - (QbzShell.currentView === "nowplaying" ? 0 : root.transportHeight)
                     - root.navRailHeight
             color: theme.surfaceCard
 
@@ -476,7 +423,7 @@ Rectangle {
         Loader {
             id: transport
             width: shellColumn.width
-            height: transport.active ? theme.headerHeight : 0
+            height: transport.active ? root.transportHeight : 0
             active: QbzShell.currentView !== "nowplaying"
             visible: transport.active
             sourceComponent: transportBar
@@ -489,7 +436,7 @@ Rectangle {
             height: root.navRailHeight
 
             onDiscover: root.navigateWithTab("home", "home")
-            onLibrary: root.navigateWithTab("library", "tracks")
+            onLibrary: root.navigateWithTab("library", "albums")
             onLocalLibrary: root.navigateWithTab("local", "albums")
             onMyqbz: QbzShell.navigateTo("mixtapes")
             // The reference assigns NavState.view directly here (:650), so it
@@ -517,9 +464,9 @@ Rectangle {
                  && QbzKioskNav.navActive
                  && QbzKioskNav.zone === "player"
         x: 0
-        y: root.height - root.navRailHeight - theme.headerHeight
+        y: root.height - root.navRailHeight - root.transportHeight
         width: root.width
-        height: theme.headerHeight
+        height: root.transportHeight
         border.width: 3
         border.color: theme.accent
         radius: theme.radiusSm
@@ -639,6 +586,6 @@ Rectangle {
     }
     Component {
         id: transportBar
-        NowPlayingBarSmall { }
+        KioskNowPlayingBar { }
     }
 }

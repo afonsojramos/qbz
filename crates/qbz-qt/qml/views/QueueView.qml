@@ -10,9 +10,11 @@ import com.blitzfc.qbz
 import "../controls"
 import "../rows"
 import "../theme"
+import "../assets/kiosk-art.js" as KioskArt
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     QbzTheme { id: theme }
 
@@ -36,7 +38,7 @@ Rectangle {
         ? root.rows[root.doc.currentIndex] : null
     readonly property bool hasPlayingRow: root.doc.currentIndex >= 0
         && root.doc.currentIndex < root.rows.length
-    readonly property int actionRailWidth: 52
+    readonly property int actionRailWidth: kioskHost ? 72 : 52
 
     // Timing for the chronological projection currently on screen. History is
     // fully elapsed, the current row contributes the player's live position,
@@ -181,7 +183,7 @@ Rectangle {
         var urls = []
         var wanted = ({})
         for (var i = first; i <= last; i++) {
-            var url = root.rows[i].artUrl || ""
+            var url = root.artUrl(root.rows[i])
             if (url !== "" && !root.coverMap[url] && wanted[url] !== true) {
                 wanted[url] = true
                 urls.push(url)
@@ -218,8 +220,12 @@ Rectangle {
     // generic url-keyed artwork echo settles. This matters for adjacent tracks
     // from one album: a missed/late echo otherwise leaves all of them as dark
     // tiles even though the NPB is visibly rendering the same cached file.
-    function coverPath(row) {
+    function artUrl(row) {
         var url = row ? (row.artUrl || "") : ""
+        return root.kioskHost ? KioskArt.sizedUrl(url, Math.ceil(44 * Screen.devicePixelRatio)) : url
+    }
+    function coverPath(row) {
+        var url = root.artUrl(row)
         var resolved = root.coverMap[url] || ""
         if (resolved !== "")
             return resolved
@@ -282,6 +288,10 @@ Rectangle {
                              "icon": row.isFavorite === true ? "heart-filled" : "heart",
                              "action": "favorite" })
         }
+        if (root.kioskHost && !root.searchActive && row.phase !== "current" && !root.rowBlocked(row)) {
+            items.push({label: t("Move up", r), action: "kiosk-up", external: true})
+            items.push({label: t("Move down", r), action: "kiosk-down", external: true})
+        }
         return items
     }
 
@@ -295,6 +305,8 @@ Rectangle {
     }
 
     function menuAction(row, action) {
+        if (action === "kiosk-up") { root.moveQueueRow(row, -1); return }
+        if (action === "kiosk-down") { root.moveQueueRow(row, 1); return }
         if (action === "remove")
             QbzQueue.queueRemoveUpcomingFlat(row.phaseIndex)
         else if (action === "remove-after")
@@ -474,6 +486,32 @@ Rectangle {
         }
     }
 
+    CardMenu {
+        id: kioskMenu
+        kioskHost: root.kioskHost
+        menuWidth: Math.min(root.width - 24, 340)
+        entries: [
+            {label: QbzSession.tr("Clear", QbzSession.trRev), action: "clear", enabled: root.rows.length > 0},
+            {label: QbzSession.tr("Add to Playlist", QbzSession.trRev), action: "save", enabled: root.rows.length > 0 && !(root.currentRow && root.currentRow.isEphemeral)},
+            {label: QbzSession.tr("Continuous playback", QbzSession.trRev), action: "infinite"},
+            {label: QbzSession.tr("30 min", QbzSession.trRev), action: "30"},
+            {label: QbzSession.tr("1 hr", QbzSession.trRev), action: "60"},
+            {label: QbzSession.tr("2 hr", QbzSession.trRev), action: "120"},
+            {label: QbzSession.tr("3 hr", QbzSession.trRev), action: "180"},
+            {label: QbzSession.tr("5 hr", QbzSession.trRev), action: "300"},
+            {label: QbzSession.tr("Custom…", QbzSession.trRev), action: "custom"},
+            {label: QbzSession.tr("Cancel Timer", QbzSession.trRev), action: "cancel", enabled: QbzQueue.sleepActive}
+        ]
+        onPicked: function(action) {
+            if (action === "clear") QbzQueue.queueClear()
+            else if (action === "save") QbzQueue.queueSaveAsPlaylist()
+            else if (action === "infinite") QbzQueue.queueToggleInfinitePlay()
+            else if (action === "cancel") QbzQueue.sleepTimerCancel()
+            else if (action === "custom") customSleep.open()
+            else QbzQueue.sleepTimerSet(parseInt(action, 10))
+        }
+    }
+
     // ------------------------------- UI ---------------------------------
 
     Column {
@@ -482,12 +520,23 @@ Rectangle {
 
         Rectangle {
             width: parent.width
-            height: 54
+            height: root.kioskHost ? 64 : 54
             topLeftRadius: theme.radiusMd
             topRightRadius: theme.radiusMd
             color: theme.ambientOn ? theme.surfaceMainA30 : theme.surfaceMain
 
             Row {
+                visible: root.kioskHost
+                x: 16
+                height: 64
+                spacing: 12
+                Text { width: 140; height: 64; text: QbzSession.tr("Listen list", QbzSession.trRev); color: theme.textPrimary; font.pixelSize: 20; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+                QbzLineEdit { kioskHost: root.kioskHost; anchors.verticalCenter: parent.verticalCenter; width: Math.max(120, root.width - 256); searchMode: true; text: root.doc.searchQuery || ""; placeholder: QbzSession.tr("Search queue", QbzSession.trRev); onEdited: function(value) { QbzQueue.queueSetSearch(value) } }
+                SettingsButton { id: kioskQueueActions; kioskHost: root.kioskHost; btnHeight: 64; minWidth: 64; text: "⋯"; onClicked: kioskMenu.openBelowRight(kioskQueueActions) }
+            }
+
+            Row {
+                visible: !root.kioskHost
                 anchors.left: parent.left
                 anchors.leftMargin: theme.spacingMd
                 anchors.verticalCenter: parent.verticalCenter
@@ -528,6 +577,7 @@ Rectangle {
             }
 
             Row {
+                visible: !root.kioskHost
                 anchors.right: parent.right
                 anchors.rightMargin: theme.spacingMd
                 anchors.verticalCenter: parent.verticalCenter
@@ -612,8 +662,9 @@ Rectangle {
                     }
                     Popup {
                         id: customSleep
-                        x: -184
-                        y: sleepButton.height + 6
+                        parent: root.kioskHost ? root : sleepButton
+                        x: root.kioskHost ? Math.max(8, root.width - width - 16) : -184
+                        y: root.kioskHost ? 64 : sleepButton.height + 6
                         width: 216
                         padding: 12
                         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -634,7 +685,7 @@ Rectangle {
                                 spacing: 8
                                 Rectangle {
                                     width: 116
-                                    height: 32
+                                    height: root.kioskHost ? 44 : 32
                                     radius: theme.radiusSm
                                     color: theme.surfaceElevated
                                     border.width: 1
@@ -656,7 +707,7 @@ Rectangle {
                                 }
                                 Rectangle {
                                     width: 64
-                                    height: 32
+                                    height: root.kioskHost ? 44 : 32
                                     radius: theme.radiusSm
                                     color: setSleepArea.containsMouse ? theme.accentHover : theme.accent
                                     Text {
@@ -690,7 +741,7 @@ Rectangle {
         Item {
             id: listHost
             width: parent.width
-            height: parent.height - 55
+            height: parent.height - (root.kioskHost ? 65 : 55)
 
             ListView {
                 id: queueList
@@ -729,7 +780,7 @@ Rectangle {
                         && root.dragPhaseIndex === modelData.phaseIndex
 
                     width: queueList.width
-                    height: (heading !== "" ? 24 : 0) + 50
+                    height: (heading !== "" ? 24 : 0) + trackRow.height
                     ListView.onPooled: {
                         trackRow.recycleActive = false
                         trackRow.releaseForReuse()
@@ -752,6 +803,7 @@ Rectangle {
 
                     TrackRow {
                         id: trackRow
+                        kioskHost: root.kioskHost
                         anchors.left: parent.left
                         anchors.right: parent.right
                         anchors.bottom: parent.bottom
@@ -762,7 +814,7 @@ Rectangle {
                         showFavorite: false
                         showDownload: false
                         showMenu: true
-                        showReorder: !root.searchActive
+                        showReorder: !root.kioskHost && !root.searchActive
                             && (rowHost.modelData.phase === "upcoming"
                                 || rowHost.modelData.phase === "history")
                             && !root.rowBlocked(rowHost.modelData)
@@ -829,8 +881,8 @@ Rectangle {
                 spacing: 8
 
                 Rectangle {
-                    width: 36
-                    height: 36
+                    width: root.kioskHost ? 64 : 36
+                    height: root.kioskHost ? 64 : 36
                     radius: theme.radiusSm
                     color: theme.surfaceCard
                     border.width: 1
@@ -838,7 +890,7 @@ Rectangle {
                                                      : theme.borderSubtle
                     QbzIconButton {
                         anchors.centerIn: parent
-                        btnSize: 34
+                        btnSize: root.kioskHost ? 64 : 34
                         iconSize: 16
                         name: "disc-3"
                         active: root.followPlaying
@@ -852,15 +904,15 @@ Rectangle {
                 }
 
                 Rectangle {
-                    width: 36
-                    height: 36
+                    width: root.kioskHost ? 64 : 36
+                    height: root.kioskHost ? 64 : 36
                     radius: theme.radiusSm
                     color: theme.surfaceCard
                     border.width: 1
                     border.color: theme.borderSubtle
                     QbzIconButton {
                         anchors.centerIn: parent
-                        btnSize: 34
+                        btnSize: root.kioskHost ? 64 : 34
                         iconSize: 16
                         name: "chevron-up"
                         btnEnabled: root.rows.length > 0

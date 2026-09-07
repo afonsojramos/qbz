@@ -11,6 +11,10 @@
 // the remote url.
 //
 // The CARD corner is 8px even though the avatar inside is a full circle.
+//
+// ARTWORK: KioskArtwork, for the reason its header gives — the avatar asks for
+// the smallest provider bucket that covers its physical circle instead of
+// decoding an original to find out how big it was.
 
 import QtQuick
 import "../theme"
@@ -23,6 +27,9 @@ Rectangle {
     /// Keyboard/gamepad nav — same ring idiom as KioskCard.
     property bool navFocused: false
     signal clicked(string id)
+
+    /// The avatar is DECODED and on screen — the KioskCard.artReady contract.
+    readonly property bool artReady: art.ready
 
     QbzTheme { id: theme }
 
@@ -57,7 +64,8 @@ Rectangle {
             color: theme.surfaceElevated
             clip: true
 
-            RoundedImage {
+            KioskArtwork {
+                id: art
                 anchors.fill: parent
                 source: root._avatar
                 radius: avatarTile.radius

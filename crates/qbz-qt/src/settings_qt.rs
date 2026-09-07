@@ -1360,17 +1360,18 @@ pub(crate) fn local_tab_order() -> Vec<String> {
     normalize_local_tab_order(value.as_ref())
 }
 
-/// First tab that the active shell can actually render. Desktop supports the
-/// full order; kiosk has no Genres column browser, so it takes the first of the
-/// remaining four instead of mounting a blank surface.
+/// Fresh Kiosk entries always land on Albums. Explicit history/landing tabs
+/// bypass this resolver; desktop continues to respect the user's order.
 pub(crate) fn local_landing_tab(kiosk: bool) -> String {
     local_landing_tab_from(&local_tab_order(), kiosk)
 }
 
 fn local_landing_tab_from(order: &[String], kiosk: bool) -> String {
+    if kiosk {
+        return "albums".to_string();
+    }
     order
-        .into_iter()
-        .find(|id| !kiosk || id.as_str() != "genres")
+        .first()
         .cloned()
         .unwrap_or_else(|| "albums".to_string())
 }
@@ -4456,7 +4457,10 @@ mod local_tab_order_tests {
             "genres", "folders", "albums", "artists", "tracks"
         ])));
         assert_eq!(local_landing_tab_from(&normalized, false), "genres");
-        assert_eq!(local_landing_tab_from(&normalized, true), "folders");
+        assert_eq!(local_landing_tab_from(&normalized, true), "albums");
+        let tracks_first = vec!["tracks".to_string(), "albums".to_string()];
+        assert_eq!(local_landing_tab_from(&tracks_first, true), "albums");
+        assert_eq!(local_landing_tab_from(&tracks_first, false), "tracks");
     }
 
     #[test]

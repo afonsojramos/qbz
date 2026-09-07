@@ -23,12 +23,14 @@
 // the control is new, the data is not.
 
 import QtQuick
+import "../kiosk"
 import com.blitzfc.qbz
 import "../controls"
 import "../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     readonly property bool ambientOn: theme.ambientOn
     color: root.ambientOn ? "transparent" : theme.surfaceMain
@@ -74,12 +76,20 @@ Rectangle {
                     height: 56
                     tintName: theme.accentGlyphTint
                 }
-                RoundedImage {
+                Loader { anchors.fill: parent; sourceComponent: root.kioskHost ? kioskImage3265 : desktopImage3265
+ Component { id: kioskImage3265; KioskArtwork {
                     anchors.fill: parent
                     visible: (railCard.entry.imageUrl || "") !== ""
                     radius: 70
                     source: railCard.entry.imageUrl || ""
-                }
+                } }
+ Component { id: desktopImage3265; RoundedImage {
+                    anchors.fill: parent
+                    visible: (railCard.entry.imageUrl || "") !== ""
+                    radius: 70
+                    source: railCard.entry.imageUrl || ""
+                } }
+ }
             }
             Text {
                 width: 140
@@ -157,8 +167,8 @@ Rectangle {
                 spacing: 32
 
                 Rectangle {
-                    width: 180
-                    height: 180
+                    width: root.kioskHost ? 112 : 180
+                    height: root.kioskHost ? 112 : 180
                     radius: 90
                     clip: true
                     gradient: Gradient {
@@ -176,16 +186,24 @@ Rectangle {
                         // on-accent case the tint selector exists for.
                         tintName: theme.accentGlyphTint
                     }
-                    RoundedImage {
+                    Loader { anchors.fill: parent; sourceComponent: root.kioskHost ? kioskImage7419 : desktopImage7419
+ Component { id: kioskImage7419; KioskArtwork {
                         anchors.fill: parent
                         visible: (root.doc.imageUrl || "") !== ""
                         radius: 90
                         source: root.doc.imageUrl || ""
-                    }
+                    } }
+ Component { id: desktopImage7419; RoundedImage {
+                        anchors.fill: parent
+                        visible: (root.doc.imageUrl || "") !== ""
+                        radius: 90
+                        source: root.doc.imageUrl || ""
+                    } }
+ }
                 }
 
                 Column {
-                    width: parent.width - 180 - 32
+                    width: parent.width - (root.kioskHost ? 112 : 180) - 32
                     spacing: 0
 
                     Item { width: 1; height: 8 }
@@ -223,6 +241,7 @@ Rectangle {
                     Item { width: 1; height: 18 }
 
                     QbzCircleAction {
+                        diameterOverride: root.kioskHost ? 64 : 0
                         name: root.doc.isFollowing === true ? "heart-filled" : "heart"
                         active: root.doc.isFollowing === true
                         btnEnabled: root.doc.followToggling !== true
@@ -353,6 +372,7 @@ Rectangle {
 
             AlbumCollection {
                 id: collection
+                kioskHost: root.kioskHost
                 visible: !root.loading && !root.loadError && root.albums.length > 0
                 width: parent.width
                 // Identity of the catalog on screen — navigating to ANOTHER
@@ -362,8 +382,8 @@ Rectangle {
                 albums: root.albums
                 viewMode: "grid"
                 isGrouped: false
-                cardWidth: 200
-                cardHeight: 266
+                cardWidth: root.kioskHost ? 144 : 200
+                cardHeight: root.kioskHost ? 210 : 266
                 cardGap: 24
                 flick: page
                 contentOffset: collection.y
@@ -406,19 +426,23 @@ Rectangle {
                     font.weight: theme.weightSemibold
                 }
                 Flickable {
+                    id: awardRailViewport
+                    readonly property int first: root.kioskHost ? Math.max(0,Math.floor(contentX/176)-1) : 0
+                    readonly property int last: root.kioskHost ? Math.min(root.otherAwards.length,Math.ceil((contentX+width)/176)+1) : root.otherAwards.length
                     width: parent.width
                     height: 210
-                    contentWidth: rail.width
+                    contentWidth: root.kioskHost ? root.otherAwards.length*176 : rail.width
                     contentHeight: height
                     flickableDirection: Flickable.HorizontalFlick
                     boundsBehavior: Flickable.StopAtBounds
                     clip: true
                     Row {
                         id: rail
+                        x: root.kioskHost ? awardRailViewport.first*176 : 0
                         height: parent.height
                         spacing: 16
                         Repeater {
-                            model: root.otherAwards
+                            model: root.kioskHost ? root.otherAwards.slice(awardRailViewport.first,awardRailViewport.last) : root.otherAwards
                             delegate: AwardRailCard {
                                 required property var modelData
                                 entry: modelData
@@ -461,7 +485,7 @@ Rectangle {
         id: navBar
         x: 0
         width: root.width
-        height: 44
+        height: root.kioskHost ? 64 : 44
         y: Math.max(page.y + navSlot.y - page.contentY, 0)
         z: 5
         color: root.ambientOn ? theme.surfaceMainA30 : theme.surfaceMain
@@ -489,6 +513,7 @@ Rectangle {
             // Filters the loaded set. Shares the LISTING's query — one award,
             // one filter — so it is still in force behind "See all".
             QbzLineEdit {
+                kioskHost: root.kioskHost
                 anchors.verticalCenter: parent.verticalCenter
                 width: 220
                 searchMode: true
@@ -503,6 +528,8 @@ Rectangle {
             // from, and reaching for it would put a blocking fetch behind a
             // button that should feel instant.
             QbzToolButton {
+                width: root.kioskHost ? 64 : implicitWidth
+                height: root.kioskHost ? 64 : 30
                 anchors.verticalCenter: parent.verticalCenter
                 visible: root.albums.length > 0
                 name: "shuffle"
@@ -521,6 +548,7 @@ Rectangle {
             // the selection with you instead of stranding it on the award you
             // came from.
             QbzSelect {
+                kioskHost: root.kioskHost
                 id: awardPicker
                 anchors.verticalCenter: parent.verticalCenter
                 visible: root.catalog.length > 1

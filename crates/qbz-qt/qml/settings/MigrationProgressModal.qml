@@ -8,6 +8,8 @@ import "../controls"
 import "../theme"
 
 Item {
+    property bool kioskHost: false
+
     id: root
 
     property var doc: ({})
@@ -126,7 +128,7 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 text: QbzSession.tr("ACCOUNT MIGRATION", QbzSession.trRev)
                 color: theme.textPrimary
-                font.pixelSize: theme.fontSection
+                font.pixelSize: root.kioskHost ? (theme.fontSection) * 1.2 : (theme.fontSection)
                 font.weight: theme.weightSemibold
                 elide: Text.ElideRight
             }
@@ -156,7 +158,7 @@ Item {
             anchors.bottom: parent.bottom
             height: 70
 
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 id: closeButton
                 anchors.right: parent.right
                 anchors.rightMargin: 24
@@ -201,7 +203,7 @@ Item {
                     width: parent.width
                     text: QbzSession.tr("You can close this panel; the migration will continue in the background.", QbzSession.trRev)
                     color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                     wrapMode: Text.WordWrap
                 }
 
@@ -225,7 +227,7 @@ Item {
                             text: QbzSession.tr("From", QbzSession.trRev)
                                 + ": " + (root.ie.migrationSource || "—")
                             color: theme.textSecondary
-                            font.pixelSize: theme.fontBody
+                            font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                             wrapMode: Text.WordWrap
                         }
                         Text {
@@ -233,7 +235,7 @@ Item {
                             text: QbzSession.tr("To", QbzSession.trRev)
                                 + ": " + (root.ie.migrationTarget || "—")
                             color: theme.textPrimary
-                            font.pixelSize: theme.fontBody
+                            font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                             font.weight: theme.weightSemibold
                             wrapMode: Text.WordWrap
                         }
@@ -255,7 +257,7 @@ Item {
                                 .replace("{}", root.currentStep)
                                 .replace("{}", root.stepTotal)
                             color: theme.textPrimary
-                            font.pixelSize: theme.fontBody
+                            font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                             font.weight: theme.weightSemibold
                         }
                         Text {
@@ -264,7 +266,7 @@ Item {
                             text: QbzSession.tr("Elapsed: {}", QbzSession.trRev)
                                 .replace("{}", root.elapsedLabel())
                             color: theme.textMuted
-                            font.pixelSize: theme.fontLegal
+                            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                         }
                     }
                     Rectangle {
@@ -284,7 +286,7 @@ Item {
                         width: parent.width
                         text: root.ie.migrationStatus || root.stepLabel(root.currentStep)
                         color: theme.textSecondary
-                        font.pixelSize: theme.fontBody
+                        font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                         wrapMode: Text.WordWrap
                     }
                 }
@@ -322,7 +324,7 @@ Item {
                                     text: stepDot.parent.complete ? "✓" : stepDot.parent.number
                                     color: stepDot.parent.complete || stepDot.parent.active
                                         ? theme.onAccent : theme.textMuted
-                                    font.pixelSize: theme.fontLegal
+                                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                                     font.weight: theme.weightSemibold
                                 }
                             }
@@ -333,7 +335,7 @@ Item {
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: root.stepLabel(parent.number)
                                 color: parent.active ? theme.textPrimary : theme.textSecondary
-                                font.pixelSize: theme.fontBody
+                                font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                                 font.weight: parent.active
                                     ? theme.weightSemibold : theme.weightRegular
                                 elide: Text.ElideRight

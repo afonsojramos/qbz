@@ -74,6 +74,8 @@ import "../shell"
 import "../theme"
 
 Rectangle {
+    property bool kioskHost: false
+
     id: root
 
     property var item: ({})
@@ -450,7 +452,7 @@ Rectangle {
         ? theme.alphaTier(10) : (theme.isDark ? "#1affffff" : "#1a000000")
 
     width: parent ? parent.width : 0
-    height: 50
+    height: kioskHost ? (showReorder ? 88 : 64) : 50
     radius: 8
     // Hover fill is OFF on a dead row (views/purchases/PurchaseListRow.qml
     // does the same on its unavailable rows): a row that lights up under the
@@ -523,7 +525,7 @@ Rectangle {
     // these rows lines up with them by construction. The title column's
     // arithmetic lives there too (`titleWidth`) — the header asks the same
     // function the same question and gets the same answer.
-    TrackCols { id: cols }
+    TrackCols { id: cols; kioskHost: root.kioskHost }
 
     /// One chevron of the reorder gutter. Declared at the file's top level
     /// (an inline component must be — the same rule TrackListHeader's
@@ -626,6 +628,7 @@ Rectangle {
                 spacing: 0
                 ReorderChevron {
                     id: chevUp
+                    height: root.kioskHost ? 44 : 18
                     width: cols.colReorder
                     glyph: "chevron-up"
                     armed: root.canMoveUp
@@ -633,6 +636,7 @@ Rectangle {
                 }
                 ReorderChevron {
                     id: chevDown
+                    height: root.kioskHost ? 44 : 18
                     width: cols.colReorder
                     glyph: "chevron-down"
                     armed: root.canMoveDown
@@ -894,7 +898,7 @@ Rectangle {
                     // to stop reading as live content.
                     color: (root.pulledDead || root.playBlocked)
                         ? theme.textMuted : theme.textPrimary
-                    font.pixelSize: 14
+                    font.pixelSize: root.kioskHost ? 16 : 14
                     font.weight: theme.weightMedium
                     elide: Text.ElideRight
                     width: Math.min(implicitWidth, parent.parent.width
@@ -1192,7 +1196,7 @@ Rectangle {
     Loader {
         id: rowMenuLoader
         active: false
-        sourceComponent: CardMenu {
+        sourceComponent: CardMenu { kioskHost: root.kioskHost;
             menuWidth: 224
             entries: root.menuModel()
             onPicked: function (a) { root.menuAction(a) }

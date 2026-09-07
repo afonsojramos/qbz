@@ -42,6 +42,8 @@ import "../controls"
 import "../theme"
 
 Column {
+    property bool kioskHost: false
+
     id: root
 
     QbzTheme { id: theme }
@@ -73,7 +75,7 @@ Column {
             width: rowView.width * 0.38
             text: rowView.model.label || ""
             color: theme.textMuted
-            font.pixelSize: theme.fontLegal
+            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
             elide: Text.ElideRight
         }
         Text {
@@ -83,7 +85,7 @@ Column {
             width: rowView.showSaved ? rowView.width * 0.26 : 0
             text: rowView.model.saved || ""
             color: theme.textSecondary
-            font.pixelSize: theme.fontLegal
+            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
             elide: Text.ElideRight
         }
         Text {
@@ -91,7 +93,7 @@ Column {
             width: rowView.width - x - 20
             text: rowView.model.runtime || ""
             color: theme.textPrimary
-            font.pixelSize: theme.fontLegal
+            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
             elide: Text.ElideRight
         }
         // 1 = agrees, 2 = disagrees, anything else = not applicable.
@@ -103,7 +105,7 @@ Column {
                 : (rowView.model.status === 2 ? "✗" : "·")
             color: rowView.model.status === 1 ? "#4caf50"
                 : (rowView.model.status === 2 ? "#f44336" : theme.textMuted)
-            font.pixelSize: theme.fontLegal
+            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
         }
     }
 
@@ -147,7 +149,7 @@ Column {
                 anchors.verticalCenter: parent.verticalCenter
                 text: section.title
                 color: theme.textPrimary
-                font.pixelSize: theme.fontLegal
+                font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                 font.weight: theme.weightSemibold
             }
             QbzIcon {
@@ -174,19 +176,19 @@ Column {
                 width: parent.width * 0.38
                 text: root.t("Setting")
                 color: theme.textDisabled
-                font.pixelSize: theme.fontLegal
+                font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
             }
             Text {
                 x: parent.width * 0.38
                 text: root.t("Saved")
                 color: theme.textDisabled
-                font.pixelSize: theme.fontLegal
+                font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
             }
             Text {
                 x: parent.width * 0.64
                 text: root.t("Runtime")
                 color: theme.textDisabled
-                font.pixelSize: theme.fontLegal
+                font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
             }
         }
         Repeater {
@@ -237,13 +239,13 @@ Column {
             Text {
                 text: root.t("Diagnostics")
                 color: theme.textPrimary
-                font.pixelSize: theme.fontBody
+                font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                 font.weight: theme.weightMedium
             }
             Text {
                 text: root.t("Runtime vs saved configuration snapshot.")
                 color: theme.textMuted
-                font.pixelSize: theme.fontLegal
+                font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
             }
         }
         QbzIcon {
@@ -274,12 +276,12 @@ Column {
 
         Row {
             spacing: 8
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 text: root.doc.loading === true ? root.t("Scanning…") : root.t("Refresh")
                 enabled: root.doc.loading !== true
                 onClicked: QbzShell.diagRefresh()
             }
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 text: root.doc.copied === true ? root.t("Exported") : root.t("Export to clipboard")
                 enabled: root.doc.loaded === true
                 onClicked: QbzShell.diagExportClipboard()
@@ -291,14 +293,14 @@ Column {
             width: parent.width
             text: root.doc.error || ""
             color: "#f44336"
-            font.pixelSize: theme.fontLegal
+            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
             wrapMode: Text.WordWrap
         }
 
         Text {
             text: "QBZ v" + (root.doc.appVersion || "")
             color: theme.textMuted
-            font.pixelSize: theme.fontLegal
+            font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
         }
 
         Item { width: 1; height: 4 }
@@ -328,11 +330,11 @@ Column {
                     anchors.verticalCenter: parent.verticalCenter
                     text: root.t("Cast Discovery")
                     color: theme.textPrimary
-                    font.pixelSize: theme.fontLegal
+                    font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                     font.weight: theme.weightSemibold
                 }
             }
-            SettingsButton {
+            SettingsButton { kioskHost: root.kioskHost;
                 text: root.doc.castScanning === true
                     ? root.t("Scanning…")
                     : root.t("Scan for devices")

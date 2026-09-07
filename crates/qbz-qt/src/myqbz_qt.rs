@@ -125,9 +125,7 @@ impl OfflineAvailability {
 }
 
 /// Build the offline availability snapshot for a set of collection items.
-pub(crate) async fn offline_availability(
-    items: &[&MixtapeCollectionItem],
-) -> OfflineAvailability {
+pub(crate) async fn offline_availability(items: &[&MixtapeCollectionItem]) -> OfflineAvailability {
     let (cached_track_ids, cached_album_ids) = match crate::offline_qt::get().await {
         Some(offline) => {
             let guard = offline.db.lock().await;
@@ -136,10 +134,7 @@ pub(crate) async fn offline_availability(
                     let mut ids = HashSet::new();
                     let mut albums = HashSet::new();
                     for track in tracks {
-                        if matches!(
-                            track.status,
-                            qbz_offline_cache::OfflineCacheStatus::Ready
-                        ) {
+                        if matches!(track.status, qbz_offline_cache::OfflineCacheStatus::Ready) {
                             ids.insert(track.track_id);
                             if let Some(album_id) = track.album_id {
                                 albums.insert(album_id);
@@ -193,8 +188,10 @@ pub(crate) async fn offline_availability(
 pub(crate) async fn retain_available_offline(
     rows: Vec<MixtapeCollection>,
 ) -> Vec<MixtapeCollection> {
-    let items: Vec<&MixtapeCollectionItem> =
-        rows.iter().flat_map(|collection| collection.items.iter()).collect();
+    let items: Vec<&MixtapeCollectionItem> = rows
+        .iter()
+        .flat_map(|collection| collection.items.iter())
+        .collect();
     let availability = offline_availability(&items).await;
     drop(items);
     rows.into_iter()
@@ -256,6 +253,8 @@ pub struct GridDoc {
     /// "mixtapes" | "collections".
     pub grid: String,
     pub loading: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub error: String,
     pub search: String,
     /// "position" | "name" | "items" | "updated".
     pub sort: String,
@@ -275,6 +274,7 @@ impl GridDoc {
         Self {
             grid: grid.id().to_string(),
             loading: false,
+            error: String::new(),
             search: String::new(),
             sort: "position".to_string(),
             sort_dir: "asc".to_string(),
@@ -442,6 +442,16 @@ pub(crate) fn list_collections(kind: Option<CollectionKind>) -> Vec<MixtapeColle
         }))
     })
     .unwrap_or_default()
+}
+
+/// Kiosk needs to distinguish a failed query from a successful empty library.
+fn list_collections_kiosk(kind: Option<CollectionKind>) -> Result<Vec<MixtapeCollection>, String> {
+    crate::library_db_qt::with_db(false, |db| {
+        Ok(db.with_connection(|conn| {
+            qbz_mixtape::repo::list_collections(conn, kind).map_err(|e| e.to_string())
+        }))
+    })
+    .ok_or_else(|| "MyQBZ database unavailable".to_string())?
 }
 
 /// Create a new manual collection of `kind` named `name` and return the created
@@ -657,7 +667,12 @@ fn passes_search(c: &MixtapeCollection, query: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 fn set_loading(grid: Grid, loading: bool) {
-    with_grid(grid, |g| g.doc.loading = loading);
+    with_grid(grid, |g| {
+        g.doc.loading = loading;
+        if loading {
+            g.doc.error.clear();
+        }
+    });
     publish(grid);
 }
 
@@ -729,9 +744,73 @@ fn missing_cell_urls(grid: Grid) -> Vec<String> {
     })
 }
 
+/// Shared cache and provider bucket selection; no parallel network pipeline.
+pub(crate) fn kiosk_art_url(url: &str, px: i32) -> String {
+    if !crate::cover_artwork_qt::override_for_url(url).is_empty() {
+        return url.to_string();
+    }
+    qbz_models::qobuz_cover_at_px(url, px.clamp(1, 1200) as u32).unwrap_or_else(|| url.to_string())
+}
+
+pub(crate) fn kiosk_grid_artwork(grid: &str, first: i32, last: i32, px: i32) {
+    if !crate::kiosk_profile_qt::active() || first < 0 || last < first {
+        return;
+    }
+    let grid = grid_from_str(grid);
+    let jobs = with_grid(grid, |g| {
+        g.doc
+            .cards
+            .iter()
+            .skip(first as usize)
+            .take((last - first + 1).min(128) as usize)
+            .filter(|c| !c.has_custom_cover)
+            .filter_map(|c| {
+                c.cell_urls
+                    .first()
+                    .filter(|u| !u.is_empty())
+                    .map(|url| (c.id.clone(), url.clone(), kiosk_art_url(url, px)))
+            })
+            .collect::<Vec<_>>()
+    });
+    crate::spawn(async move {
+        crate::artwork_qt::download_missing(jobs.iter().map(|j| j.2.clone()).collect()).await;
+        if !crate::kiosk_profile_qt::active() {
+            return;
+        }
+        let changed = with_grid(grid, |g| {
+            let mut changed = false;
+            for (id, original, url) in jobs {
+                if let Some(c) = g
+                    .doc
+                    .cards
+                    .iter_mut()
+                    .find(|c| c.id == id && c.cell_urls.first() == Some(&original))
+                {
+                    let path = crate::artwork_qt::cached_path(&url);
+                    if !path.is_empty() && c.cell_paths.first() != Some(&path) {
+                        if c.cell_paths.is_empty() {
+                            c.cell_paths.push(path);
+                        } else {
+                            c.cell_paths[0] = path;
+                        }
+                        changed = true;
+                    }
+                }
+            }
+            changed
+        });
+        if changed {
+            publish(grid);
+        }
+    });
+}
+
 /// ONE download pass per load, then ONE republish (spec 02 §7 T17 — never
 /// republish per cover).
 async fn artwork_pass(grid: Grid) {
+    if crate::kiosk_profile_qt::active() {
+        return;
+    }
     let missing = missing_cell_urls(grid);
     if missing.is_empty() {
         return;
@@ -780,9 +859,25 @@ pub(crate) fn load_grid(grid: Grid) {
             Grid::Mixtapes => Some(CollectionKind::Mixtape),
             Grid::Collections => None,
         };
-        let rows = tokio::task::spawn_blocking(move || list_collections(kind_arg))
-            .await
-            .unwrap_or_default();
+        let rows = if crate::kiosk_profile_qt::active() {
+            match tokio::task::spawn_blocking(move || list_collections_kiosk(kind_arg)).await {
+                Ok(Ok(rows)) => rows,
+                result => {
+                    log::warn!("[qbz-qt] kiosk MyQBZ grid read failed: {result:?}");
+                    with_grid(grid, |g| {
+                        g.doc.loading = false;
+                        g.doc.error = qbz_i18n::t("Error");
+                        g.doc.cards.clear();
+                    });
+                    publish(grid);
+                    return;
+                }
+            }
+        } else {
+            tokio::task::spawn_blocking(move || list_collections(kind_arg))
+                .await
+                .unwrap_or_default()
+        };
         let mut rows: Vec<MixtapeCollection> = match grid {
             Grid::Mixtapes => rows,
             Grid::Collections => rows

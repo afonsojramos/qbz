@@ -8,6 +8,8 @@ import "../controls"
 import "../theme"
 
 Item {
+    property bool kioskHost: false
+
     id: root
 
     property var doc: ({})
@@ -127,7 +129,7 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 text: QbzSession.tr("Migrate account data", QbzSession.trRev)
                 color: theme.textPrimary
-                font.pixelSize: theme.fontHeading
+                font.pixelSize: root.kioskHost ? (theme.fontHeading) * 1.2 : (theme.fontHeading)
                 font.weight: theme.weightSemibold
             }
         }
@@ -151,13 +153,13 @@ Item {
                 anchors.rightMargin: 24
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 10
-                SettingsButton {
+                SettingsButton { kioskHost: root.kioskHost;
                     id: closeButton
                     minWidth: 100
                     text: QbzSession.tr("Cancel", QbzSession.trRev)
                     onClicked: root.close()
                 }
-                SettingsButton {
+                SettingsButton { kioskHost: root.kioskHost;
                     minWidth: 160
                     text: QbzSession.tr("Start migration", QbzSession.trRev)
                     enabled: root.selectedProfile !== null && !root.ie.migrationBusy
@@ -199,14 +201,14 @@ Item {
                     body: QbzSession.tr("It is a one-time bundle created from the source account. It preserves that account's Qobuz favorites and playlists so they can be added to the account signed in now. Optional local data is copied directly from the old QBZ profile on this computer. Deleting the bundle does not delete the old profile or either account's data.", QbzSession.trRev)
                 }
 
-                GroupHeader { text: QbzSession.tr("SAVED SOURCE PROFILES", QbzSession.trRev) }
+                GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("SAVED SOURCE PROFILES", QbzSession.trRev) }
 
                 Text {
                     visible: root.profiles.length === 0
                     width: parent.width
                     text: QbzSession.tr("No saved migration profiles are available.", QbzSession.trRev)
                     color: theme.textMuted
-                    font.pixelSize: theme.fontBody
+                    font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                     wrapMode: Text.WordWrap
                 }
 
@@ -234,7 +236,7 @@ Item {
                                 width: parent.width
                                 text: modelData.label
                                 color: theme.textPrimary
-                                font.pixelSize: theme.fontBody
+                                font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                                 font.weight: theme.weightMedium
                                 elide: Text.ElideRight
                             }
@@ -248,7 +250,7 @@ Item {
                                         ? " · " + QbzSession.tr("this account", QbzSession.trRev)
                                         : "")
                                 color: theme.textMuted
-                                font.pixelSize: theme.fontLegal
+                                font.pixelSize: root.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                                 elide: Text.ElideRight
                             }
                         }
@@ -258,7 +260,7 @@ Item {
                             anchors.rightMargin: 12
                             anchors.verticalCenter: parent.verticalCenter
                             spacing: 8
-                            SettingsButton {
+                            SettingsButton { kioskHost: root.kioskHost;
                                 minWidth: 92
                                 text: parent.parent.selected
                                     ? QbzSession.tr("Selected", QbzSession.trRev)
@@ -267,7 +269,7 @@ Item {
                                     && !root.ie.migrationBusy
                                 onClicked: root.selectedPath = modelData.path
                             }
-                            SettingsButton {
+                            SettingsButton { kioskHost: root.kioskHost;
                                 minWidth: 92
                                 text: QbzSession.tr("Delete…", QbzSession.trRev)
                                 danger: true
@@ -278,7 +280,7 @@ Item {
                     }
                 }
 
-                GroupHeader { text: QbzSession.tr("MIGRATION DIRECTION", QbzSession.trRev) }
+                GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("MIGRATION DIRECTION", QbzSession.trRev) }
                 Rectangle {
                     width: parent.width
                     height: direction.implicitHeight + 24
@@ -299,7 +301,7 @@ Item {
                                     ? root.selectedProfile.sourceIdentity
                                     : QbzSession.tr("Select a source profile above", QbzSession.trRev))
                             color: theme.textSecondary
-                            font.pixelSize: theme.fontBody
+                            font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                             wrapMode: Text.WordWrap
                         }
                         Text {
@@ -308,47 +310,47 @@ Item {
                                 + QbzSession.tr("Signed-in Qobuz account · ID {}", QbzSession.trRev)
                                     .replace("{}", root.ie.currentUserId || "—")
                             color: theme.textPrimary
-                            font.pixelSize: theme.fontBody
+                            font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                             font.weight: theme.weightSemibold
                             wrapMode: Text.WordWrap
                         }
                     }
                 }
 
-                GroupHeader { text: QbzSession.tr("WHAT TO COPY", QbzSession.trRev) }
-                SettingRow {
+                GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("WHAT TO COPY", QbzSession.trRev) }
+                SettingRow { kioskHost: root.kioskHost;
                     label: QbzSession.tr("Also copy the local profile", QbzSession.trRev)
                     description: QbzSession.tr("Library folders, playlist folders and order, pinned items, blacklist and preferences of the old account's QBZ profile on this computer.", QbzSession.trRev)
-                    QbzToggle {
+                    QbzToggle { kioskHost: root.kioskHost;
                         checked: root.copyLocalProfile
                         onToggled: function (value) { root.copyLocalProfile = value }
                     }
                 }
-                SettingRow {
+                SettingRow { kioskHost: root.kioskHost;
                     rowEnabled: root.copyLocalProfile
                     label: QbzSession.tr("Media server connections", QbzSession.trRev)
                     description: QbzSession.tr("Plex, Jellyfin and Subsonic settings, including their credentials.", QbzSession.trRev)
-                    QbzToggle {
+                    QbzToggle { kioskHost: root.kioskHost;
                         checked: root.copyMediaServers
                         enabled: root.copyLocalProfile
                         onToggled: function (value) { root.copyMediaServers = value }
                     }
                 }
-                SettingRow {
+                SettingRow { kioskHost: root.kioskHost;
                     rowEnabled: root.copyLocalProfile
                     label: QbzSession.tr("Scrobbler accounts", QbzSession.trRev)
                     description: QbzSession.tr("Last.fm and ListenBrainz settings, including their credentials.", QbzSession.trRev)
-                    QbzToggle {
+                    QbzToggle { kioskHost: root.kioskHost;
                         checked: root.copyScrobblers
                         enabled: root.copyLocalProfile
                         onToggled: function (value) { root.copyScrobblers = value }
                     }
                 }
-                SettingRow {
+                SettingRow { kioskHost: root.kioskHost;
                     rowEnabled: root.copyLocalProfile
                     label: QbzSession.tr("Listening history", QbzSession.trRev)
                     description: QbzSession.tr("The listen log and the events behind offline recommendations.", QbzSession.trRev)
-                    QbzToggle {
+                    QbzToggle { kioskHost: root.kioskHost;
                         checked: root.copyListeningHistory
                         enabled: root.copyLocalProfile
                         onToggled: function (value) { root.copyListeningHistory = value }

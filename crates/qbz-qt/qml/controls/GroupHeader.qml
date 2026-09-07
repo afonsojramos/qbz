@@ -7,10 +7,13 @@ import com.blitzfc.qbz
 import "../theme"
 
 Text {
+    // Explicit density opt-in; desktop geometry remains the default.
+    property bool kioskHost: false
+
     QbzTheme { id: theme }
 
     color: theme.textMuted
-    font.pixelSize: 11
+    font.pixelSize: kioskHost ? 13.2 : 11
     font.letterSpacing: 1.5
     font.weight: theme.weightSemibold
 }

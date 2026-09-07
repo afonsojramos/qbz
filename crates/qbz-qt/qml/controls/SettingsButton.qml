@@ -8,6 +8,9 @@ import com.blitzfc.qbz
 import "../theme"
 
 Rectangle {
+    // Explicit density opt-in; desktop geometry remains the default.
+    property bool kioskHost: false
+
     id: root
 
     property string text: ""
@@ -29,7 +32,7 @@ Rectangle {
     QbzTheme { id: theme }
 
     width: Math.max(iconName !== "" && text === "" ? 34 : minWidth, row.implicitWidth + 24)
-    height: btnHeight
+    height: kioskHost ? Math.max(44, btnHeight) : btnHeight
     radius: theme.radiusSm
     border.width: root.activeFocus ? 2 : 1
     border.color: root.activeFocus ? theme.accent
@@ -67,7 +70,7 @@ Rectangle {
             visible: text !== ""
             text: parent.parent.text
             color: parent.parent.danger ? theme.danger : theme.textPrimary
-            font.pixelSize: theme.fontBody
+            font.pixelSize: root.kioskHost ? theme.fontBody * 1.2 : theme.fontBody
             font.weight: theme.weightMedium
             verticalAlignment: Text.AlignVCenter
         }

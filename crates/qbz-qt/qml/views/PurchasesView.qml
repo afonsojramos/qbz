@@ -47,6 +47,7 @@ import "purchases"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     // Round to the AppShell content-frame bezel (the literal in all painting
     // view roots — QML clips are rectangular, so the frame's rounding never
@@ -304,7 +305,7 @@ Rectangle {
             Item {
                 id: navRow
                 width: page.contentW
-                height: 34
+                height: root.kioskHost ? 64 : 34
                 // Above the toolbar and the body, which scroll UNDER it.
                 z: 5
 
@@ -329,6 +330,7 @@ Rectangle {
                 }
 
                 QbzTabBar {
+                    visible: !root.kioskHost
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
                     counts: true
@@ -343,11 +345,30 @@ Rectangle {
                     onSelected: function (id) { QbzPurchases.setTab(id) }
                 }
 
+                Row {
+                    visible: root.kioskHost
+                    height: 64
+                    spacing: 8
+                    Repeater {
+                        model: root.kioskHost ? [{id: "albums", label: root.t("Albums")}, {id: "tracks", label: root.t("Tracks")}] : []
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: Math.max(96, kioskTabLabel.implicitWidth + 24)
+                            height: 64
+                            color: root.tab === modelData.id ? theme.surfaceElevated : "transparent"
+                            Text { id: kioskTabLabel; anchors.centerIn: parent; text: parent.modelData.label; color: theme.textPrimary; font.pixelSize: 18 }
+                            MouseArea { anchors.fill: parent; onClicked: QbzPurchases.setTab(parent.modelData.id) }
+                        }
+                    }
+                }
+
                 QbzLineEdit {
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     searchMode: true
-                    expandable: true
+                    kioskHost: root.kioskHost
+                    expandable: !root.kioskHost
+                    width: root.kioskHost ? Math.min(280, navRow.width * 0.42) : collapsedSize
                     openWidth: 220
                     // Bound, never assigned: the control's own clear latch
                     // depends on the host re-seeding through this binding.
@@ -362,6 +383,7 @@ Rectangle {
 
             // ── 4. Toolbar ────────────────────────────────────────────────
             PurchasesToolbar {
+                kioskHost: root.kioskHost
                 width: page.contentW
                 tab: root.tab
                 toolbar: root.toolbarDoc

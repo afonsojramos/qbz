@@ -10,10 +10,14 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../theme"
 
 Rectangle {
+    // Explicit density opt-in; desktop geometry remains the default.
+    property bool kioskHost: false
+
     property var options: []
     property int currentIndex: 0
     property int menuWidth: 240
@@ -36,7 +40,7 @@ Rectangle {
 
     id: selectRoot
     width: sm ? Math.max(0, menuWidth - 40) : menuWidth
-    height: sm ? 30 : 34
+    height: kioskHost ? 44 : (sm ? 30 : 34)
     radius: sm ? 6 : theme.radiusSm
     border.width: selectRoot.activeFocus ? 2 : (sm ? 0 : 1)
     border.color: selectRoot.activeFocus ? theme.accent : theme.borderSubtle
@@ -86,10 +90,10 @@ Rectangle {
     // LyricsControlsFlyout 178) are all non-`sm`, where width === menuWidth and
     // popupWidth wins anyway, so none of them moves.
     readonly property int listWidth: Math.max(popupWidth, selectRoot.width)
-    readonly property int rowHeight: 32
+    readonly property int rowHeight: kioskHost ? 44 : 32
     readonly property int headerHeight: 24
-    readonly property int searchHeight: searchable ? 42 : 0
-    readonly property int maxListHeight: 360
+    readonly property int searchHeight: searchable ? (kioskHost ? 44 : 42) : 0
+    readonly property int maxListHeight: kioskHost ? Math.max(44, Math.min(360, (selectRoot.Window.window ? selectRoot.Window.window.height : 480) - searchHeight - 100)) : 360
     property string filter: ""
 
     function optLabel(i) {
@@ -170,7 +174,7 @@ Rectangle {
             text: selectRoot.currentIndex >= 0 && selectRoot.currentIndex < selectRoot.options.length
                 ? selectRoot.optLabel(selectRoot.currentIndex) : ""
             color: theme.textPrimary
-            font.pixelSize: selectRoot.sm ? 12 : theme.fontBody
+            font.pixelSize: selectRoot.kioskHost ? (selectRoot.sm ? 12 : theme.fontBody) * 1.2 : (selectRoot.sm ? 12 : theme.fontBody)
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
         }
@@ -186,7 +190,7 @@ Rectangle {
                 anchors.centerIn: parent
                 text: "BP"
                 color: theme.accent
-                font.pixelSize: theme.fontLegal
+                font.pixelSize: selectRoot.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                 font.weight: theme.weightSemibold
                 font.letterSpacing: 0.5
             }
@@ -277,7 +281,7 @@ Rectangle {
                             id: searchInput
                             anchors.fill: parent
                             color: theme.textPrimary
-                            font.pixelSize: theme.fontBody
+                            font.pixelSize: selectRoot.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                             verticalAlignment: Text.AlignVCenter
                             clip: true
                             text: selectRoot.filter
@@ -311,7 +315,7 @@ Rectangle {
                             anchors.fill: parent
                             text: QbzSession.tr("Search…", QbzSession.trRev)
                             color: theme.textMuted
-                            font.pixelSize: theme.fontBody
+                            font.pixelSize: selectRoot.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                             verticalAlignment: Text.AlignVCenter
                         }
                     }
@@ -356,7 +360,7 @@ Rectangle {
                             height: parent.height - 4
                             text: selectRoot.optGroup(optRow.index)
                             color: theme.textMuted
-                            font.pixelSize: theme.fontLegal
+                            font.pixelSize: selectRoot.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                             font.weight: theme.weightSemibold
                             font.letterSpacing: 0.5
                             verticalAlignment: Text.AlignVCenter
@@ -387,7 +391,7 @@ Rectangle {
                                         ? theme.textMuted
                                         : (optRow.index === selectRoot.currentIndex
                                             ? theme.accent : theme.textSecondary)
-                                    font.pixelSize: selectRoot.sm ? 12 : theme.fontBody
+                                    font.pixelSize: selectRoot.kioskHost ? (selectRoot.sm ? 12 : theme.fontBody) * 1.2 : (selectRoot.sm ? 12 : theme.fontBody)
                                     verticalAlignment: Text.AlignVCenter
                                     elide: Text.ElideRight
                                 }
@@ -397,7 +401,7 @@ Rectangle {
                                     height: visible ? 18 : 0
                                     text: selectRoot.optDetail(optRow.index)
                                     color: theme.textMuted
-                                    font.pixelSize: theme.fontLegal
+                                    font.pixelSize: selectRoot.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                                     verticalAlignment: Text.AlignVCenter
                                     elide: Text.ElideRight
                                 }
@@ -412,7 +416,7 @@ Rectangle {
                                     anchors.centerIn: parent
                                     text: "BP"
                                     color: theme.accent
-                                    font.pixelSize: theme.fontLegal
+                                    font.pixelSize: selectRoot.kioskHost ? (theme.fontLegal) * 1.2 : (theme.fontLegal)
                                     font.weight: theme.weightSemibold
                                     font.letterSpacing: 0.5
                                 }

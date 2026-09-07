@@ -29,6 +29,7 @@ import "../../theme"
 
 Item {
     id: root
+    property bool kioskHost: false
 
     /// "albums" | "tracks".
     property string tab: "albums"
@@ -83,16 +84,17 @@ Item {
     }
 
     width: parent ? parent.width : 0
-    height: 30
+    height: root.kioskHost ? 64 : 30
 
     // ── One toolbar dropdown trigger (.slint `ToolbarButton`, :37-70) ──────
     component ToolbarButton: Rectangle {
         id: tb
+        property bool kioskHost: false
         property string label: ""
         property bool active: false
         signal clicked()
-        width: tbRow.width
-        height: 30
+        width: tb.kioskHost ? Math.max(64, tbRow.width) : tbRow.width
+        height: tb.kioskHost ? 64 : 30
         radius: 6
         color: tbArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
         Row {
@@ -270,6 +272,7 @@ Item {
         // --- Group ---------------------------------------------------------
         ToolbarButton {
             id: groupBtn
+            kioskHost: root.kioskHost
             anchors.verticalCenter: parent.verticalCenter
             label: root.tab === "tracks"
                 ? (root.group === "album" ? root.t("Group: Album")
@@ -322,6 +325,7 @@ Item {
         // --- Sort (ALBUMS ONLY) --------------------------------------------
         ToolbarButton {
             id: sortBtn
+            kioskHost: root.kioskHost
             // A Row skips an invisible child AND its spacing, so the Tracks bar
             // closes up on its own — no width dance is needed here.
             visible: root.tab !== "tracks"
@@ -389,8 +393,8 @@ Item {
         Rectangle {
             id: filterBtn
             anchors.verticalCenter: parent.verticalCenter
-            width: 30
-            height: 30
+            width: root.kioskHost ? 64 : 30
+            height: root.kioskHost ? 64 : 30
             radius: 6
             color: filterArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
             QbzIcon {
@@ -571,8 +575,8 @@ Item {
         Rectangle {
             id: viewBtn
             visible: root.tab !== "tracks"
-            width: 30
-            height: 30
+            width: root.kioskHost ? 64 : 30
+            height: root.kioskHost ? 64 : 30
             radius: 6
             anchors.verticalCenter: parent.verticalCenter
             color: viewArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated

@@ -8,6 +8,9 @@ import com.blitzfc.qbz
 import "../theme"
 
 Item {
+    // Explicit density opt-in; desktop geometry remains the default.
+    property bool kioskHost: false
+
     id: root
 
     property int minimum: 0
@@ -25,7 +28,7 @@ Item {
     QbzTheme { id: theme }
 
     width: 200
-    height: 22
+    height: kioskHost ? 44 : 22
     // Disabled = inert (the bit-perfect ALSA direct path locks volume).
     // `enabled` already disarms the MouseArea; this is the matching dim.
     opacity: enabled ? 1.0 : 0.3

@@ -6800,3 +6800,24 @@ msgstr "置き換えを追加しましたが、利用できないお気に入り
 
 msgid "Failed to send playback to the selected device"
 msgstr "選択したデバイスに再生を転送できませんでした"
+
+msgid "Move up"
+msgstr "上に移動"
+
+msgid "Move down"
+msgstr "下に移動"
+
+msgid "Download"
+msgstr "ダウンロード"
+
+msgid "Edit"
+msgstr "編集"
+
+msgid "Grid"
+msgstr "グリッド"
+
+msgid "List"
+msgstr "リスト"
+
+msgid "Tree"
+msgstr "ツリー"

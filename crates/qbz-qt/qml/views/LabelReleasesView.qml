@@ -30,6 +30,7 @@ import "../theme"
 
 Rectangle {
     id: root
+    property bool kioskHost: false
 
     color: ambientOn ? "transparent" : theme.surfaceMain
     readonly property bool ambientOn: theme.ambientOn
@@ -186,6 +187,7 @@ Rectangle {
                     spacing: 8
 
                     QbzLineEdit {
+                    kioskHost: root.kioskHost
                         searchMode: true
                         expandable: true
                         anchors.verticalCenter: parent.verticalCenter
@@ -193,18 +195,23 @@ Rectangle {
                         onEdited: function (v) { QbzHome.labelReleasesSearch(v) }
                     }
                     QbzToggleButton {
+                        width: root.kioskHost ? 44 : (sm ? 30 : 34)
+                        height: root.kioskHost ? 44 : (sm ? 30 : 34)
                         name: "user"
                         active: root.groupBy
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzHome.labelReleasesSetGroup(!root.groupBy)
                     }
                     QbzToggleButton {
+                        width: root.kioskHost ? 44 : (sm ? 30 : 34)
+                        height: root.kioskHost ? 44 : (sm ? 30 : 34)
                         name: "list-filter"
                         active: root.doc.filterHires === true
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzHome.labelReleasesSetHires(root.doc.filterHires !== true)
                     }
                     QbzSelect {
+                        kioskHost: root.kioskHost
                         anchors.verticalCenter: parent.verticalCenter
                         menuWidth: 168
                         options: root.sortLabels
@@ -212,6 +219,7 @@ Rectangle {
                         onSelected: function (i) { QbzHome.labelReleasesSetSort(root.sortKeys[i]) }
                     }
                     ViewModeToggle {
+                    visible: !root.kioskHost
                         anchors.verticalCenter: parent.verticalCenter
                         mode: root.viewMode
                         onSetMode: function (m) { root.viewMode = m }
@@ -251,6 +259,7 @@ Rectangle {
 
             // --- Album collection -----------------------------------------
             AlbumCollection {
+                kioskHost: root.kioskHost
                 id: collection
                 width: parent.width - 64
                 // Identity of the catalog on screen. Navigating to ANOTHER
@@ -269,7 +278,7 @@ Rectangle {
                 flick: flick
                 // .slint:280 — 11 padding-top + 22 spacer + 180 header + 24
                 // + ~42 toolbar + 24 ~= 303.
-                contentOffset: 303
+                contentOffset: root.kioskHost ? y : (303)
             }
 
             // --- Load more (gated on hasMore, NEVER on total) -------------
@@ -299,7 +308,7 @@ Rectangle {
                     width: parent.width
                     // 32 here, not the 28 of the plain sites — this block was
                     // always a 32-tall box.
-                    buttonHeight: 32
+                    buttonHeight: root.kioskHost ? 64 : 32
                     busy: root.doc.loadMoreLoading === true
                     // The placeholder must be the shape of what will land, and
                     // this page has both arms: `viewMode` is the UI-only grid /
