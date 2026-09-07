@@ -41,7 +41,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use cxx_qt_lib::QString;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::about_bridge::ui;
 
@@ -129,67 +129,23 @@ const CONTRIBUTORS: &[&str] = &[
     "LuckyTheCoder",
 ];
 
-/// Public GitHub sponsors of the author (`sponsorshipsAsMaintainer`,
-/// `includePrivate: false` — ONLY logins GitHub itself shows publicly).
-/// Hand-maintained, like [`CONTRIBUTORS`].
-const GITHUB_SPONSORS: &[&str] = &[
-    "damienalexandre",
-    "ejrichards",
-    "nkopas",
-    "Eirikr70",
-    "Xameon42",
-];
+/// Release-time snapshot from `data/about-sponsors.json`. GitHub contains the
+/// cumulative public sponsor history (`includePrivate: false`,
+/// `activeOnly: false`); ending a recurring sponsorship does not retract its
+/// thank-you. Ko-fi contains the public display name from its "From" field —
+/// never emails or payment data. Anonymous defaults are omitted; the modal
+/// thanks them as a group. This file is deliberately local and embedded: no
+/// sponsor service is contacted by the running app.
+#[derive(Deserialize)]
+struct SponsorCredits {
+    github: Vec<String>,
+    ko_fi: Vec<String>,
+}
 
-/// Ko-fi supporters, by the PUBLIC display name each typed into Ko-fi's
-/// "From" field — never emails, never payment columns. The anonymous
-/// defaults ("Supporter", "Ko-fi Supporter") are excluded here; they are what
-/// the modal's "And all those anonymous sponsors..." line is for.
-const KOFI_SPONSORS: &[&str] = &[
-    "voytrekk",
-    "Peppe",
-    "Bennytek",
-    "Aboto",
-    "turboapapera",
-    "voxit",
-    "Tom",
-    "Bopi",
-    "Sylvain Van Hoof",
-    "Torbi",
-    "Chris Heino",
-    "Pep",
-    "Roger",
-    "Norin",
-    "Niko",
-    "Mauzify",
-    "Max",
-    "forte_hunter",
-    "Anthony Philibert",
-    "Zeitfalle",
-    "Ben",
-    "silverbeetles",
-    "Mat",
-    "CB",
-    "Salty Pringles",
-    "oujou",
-    "Darktime ahead",
-    "Nebu",
-    "Otto",
-    "Hyrbii",
-    "Guillaume Michaud",
-    "Thomas",
-    "James",
-    "lollopolve",
-    "Julien",
-    "@adavid",
-    "Carlo",
-    "M.Rodorodette",
-    "C.H.",
-    "CraigMyers",
-    "Mal",
-    "Wouter Eerdekens",
-    "Ian B",
-    "valfaun",
-];
+static SPONSOR_CREDITS: LazyLock<SponsorCredits> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../data/about-sponsors.json"))
+        .expect("bundled About sponsor data must be valid JSON")
+});
 
 /// How many contributor chips per wrap row (`about.rs:76`). Slint has no
 /// flex-wrap and needs the pre-grouping; QML uses `Flow` and flattens these
@@ -255,6 +211,7 @@ fn avatar_of(handle: &str) -> String {
 
 fn snapshot_doc() -> Doc {
     let version = app_version();
+    let sponsors = &*SPONSOR_CREDITS;
     Doc {
         open: OPEN.load(Ordering::SeqCst),
         version,
@@ -279,15 +236,16 @@ fn snapshot_doc() -> Doc {
                     .collect()
             })
             .collect(),
-        sponsors: GITHUB_SPONSORS
+        sponsors: sponsors
+            .github
             .iter()
             .map(|handle| Chip {
-                name: (*handle).to_string(),
+                name: handle.clone(),
                 url: profile_url(handle),
                 avatar: String::new(),
             })
-            .chain(KOFI_SPONSORS.iter().map(|name| Chip {
-                name: (*name).to_string(),
+            .chain(sponsors.ko_fi.iter().map(|name| Chip {
+                name: name.clone(),
                 url: String::new(),
                 avatar: String::new(),
             }))
@@ -435,17 +393,45 @@ mod tests {
     #[test]
     fn sponsors_are_github_then_kofi_and_only_github_links() {
         let doc = snapshot_doc();
+        let sponsors = &*SPONSOR_CREDITS;
         assert_eq!(
             doc.sponsors.len(),
-            GITHUB_SPONSORS.len() + KOFI_SPONSORS.len()
+            sponsors.github.len() + sponsors.ko_fi.len()
         );
-        for (chip, handle) in doc.sponsors.iter().zip(GITHUB_SPONSORS) {
+        for (chip, handle) in doc.sponsors.iter().zip(&sponsors.github) {
             assert_eq!(chip.name, *handle);
             assert_eq!(chip.url, profile_url(handle));
         }
-        assert!(doc.sponsors[GITHUB_SPONSORS.len()..]
+        assert!(doc.sponsors[sponsors.github.len()..]
             .iter()
             .all(|chip| chip.url.is_empty()));
+    }
+
+    #[test]
+    fn bundled_sponsor_data_is_public_display_data_without_duplicates() {
+        use std::collections::HashSet;
+
+        let sponsors = &*SPONSOR_CREDITS;
+        assert!(!sponsors.github.is_empty());
+        assert!(!sponsors.ko_fi.is_empty());
+        assert_eq!(
+            sponsors.github.iter().collect::<HashSet<_>>().len(),
+            sponsors.github.len()
+        );
+        assert_eq!(
+            sponsors.ko_fi.iter().collect::<HashSet<_>>().len(),
+            sponsors.ko_fi.len()
+        );
+        assert!(sponsors.github.iter().all(|name| {
+            !name.is_empty()
+                && name.len() <= 39
+                && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        }));
+        assert!(sponsors.ko_fi.iter().all(|name| {
+            !name.trim().is_empty()
+                && name.chars().count() <= 80
+                && !name.chars().any(char::is_control)
+        }));
     }
 
     #[test]
