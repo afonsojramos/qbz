@@ -1,6 +1,5 @@
 name: Feature request
 description: Suggest an idea or improvement
-title: "[Feature] "
 labels: ["enhancement"]
 body:
   - type: dropdown
@@ -12,6 +11,7 @@ body:
         - All platforms
         - Linux
         - macOS
+        - Windows
     validations:
       required: true
 
