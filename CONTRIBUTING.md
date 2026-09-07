@@ -5,16 +5,20 @@ This project is actively evolving. Contributions are welcome, but we have a few 
 ## Where the code lives
 
 The live app is the Rust workspace under `crates/` — a single native process
-with a Slint UI. UI code is in `crates/qbz-ui` (`.slint` + generated bindings)
-and `crates/qbz` (the binary). The old Svelte `src/` and Tauri `src-tauri/`
-trees were **deleted in 2.0.2**; they survive only at the git tag
-`legacy-tauri-svelte` for reference. PRs against those paths cannot be merged —
-port the change to `crates/` instead.
+with a Qt/QML interface. UI code and the desktop binary live in
+`crates/qbz-qt`; shared behavior belongs in the relevant core crate.
+
+The Slint crates (`crates/qbz-ui`, `crates/qbz`, `crates/qbz-slint-common` and
+`crates/qbz-dac-wizard`) are frozen historical references. The old Svelte
+`src/` and Tauri `src-tauri/` trees were deleted in 2.0.2 and survive only at
+the git tag `legacy-tauri-svelte`. PRs against these retired paths cannot be
+merged — port the change to the live Qt/Rust tree instead.
 
 ## Quick rules
 
 - Write clear, concise English (no emojis in code, comments, or commit messages).
 - Keep PRs focused and small when possible.
+- Disclose every LLM model used and its role in the PR body; see below.
 - Do not change app branding or legal disclaimers without discussing it first.
 - Do not modify protected audio-backend behavior unless explicitly requested by the maintainer.
 
@@ -72,9 +76,11 @@ PRs targeting `main` will be closed and asked to retarget to `pre-release`.
    - `git checkout pre-release`
    - `git merge --no-ff <type>/external/<topic>`
 5. **Run checks**
-   - Build/validate a touched core crate: `cargo check -p <crate>` (run from
-     `crates/`). The full UI (`qbz`/`qbz-ui`) is a ~20–30 GB compile — see the
-     README "Building from Source" section before attempting it.
+   - Test or check each touched core crate from `crates/`.
+   - For Qt/QML changes, run the relevant QML audits and use
+     `./scripts/qt-run.sh` from the repository root when your platform can
+     build the desktop application.
+   - Never build the frozen Slint crates as validation for a live change.
 6. **Push pre-release**
    - `git push origin pre-release`
 7. **Close the PR with a comment** explaining it was merged to `pre-release`.
@@ -105,7 +111,32 @@ Prefer:
 
 - A short description of the problem and solution.
 - Screenshots for UI changes when possible.
+- The checks or manual tests you ran.
+- The LLM disclosure described below, or `None` if no LLM was used.
 - Notes about any breaking changes or migrations.
+
+## AI / LLM-assisted contributions
+
+LLM-assisted contributions are welcome. If you used one or more models, the
+PR body must identify each model as precisely as the tool exposes it and state
+what role it played. A product or client name alone — for example, "Claude",
+"ChatGPT", "Codex" or "Copilot" — is not enough when a model name or version
+is available.
+
+List different models separately when they handled different stages, such as
+diagnosis, implementation, tests or review. For example:
+
+```text
+- Anthropic Claude Sonnet: explored possible fixes
+- Fable 5.1: diagnosed the root cause
+- Anthropic Claude Opus: implemented and reviewed the patch
+```
+
+If the exact model is not shown by the tool, say that instead of guessing.
+Prompt transcripts and private conversations are not required. This disclosure
+helps the maintainer choose an appropriate review strategy; it is not grounds
+for rejecting a contribution. The contributor remains responsible for reading
+the resulting diff and reporting how it was verified.
 
 ## What not to include
 
@@ -119,16 +150,16 @@ Prefer:
 QBZ ships 8 locales (`en es de fr pt ru ja nl`) as gettext `.po` files, bundled
 via the `qbz-i18n` crate. Rules:
 
-- **No hardcoded UI strings in `.slint`** — every string goes through
-  `@tr("...")`.
+- **No hardcoded UI strings in QML** — use
+  `QbzSession.tr("…", QbzSession.trRev)` so live language changes update the
+  binding. Rust uses `qbz_i18n::t()` or `qbz_i18n::tf()`.
 - Adding or changing a string means updating **all** locale `.po` files, not
   just English.
-- `@tr` property defaults are not reactive — re-seed from Rust on language
-  change (see `crates/qbz-i18n` and `select_bundled_translation()`, called
-  after `AppWindow::new()`).
+- The English text is the gettext `msgid`; do not introduce dotted keys.
 
 ### Checklist for PRs with UI Text
 
-- [ ] No hardcoded strings in `.slint` — all text via `@tr`
+- [ ] No hardcoded strings in QML — all text uses `QbzSession.tr()` with
+      `trRev`
 - [ ] Every new/changed string updated across all 8 `.po` locales
 - [ ] Reused an existing string where one already fit
