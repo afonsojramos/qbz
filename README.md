@@ -11,6 +11,7 @@
   <a href="https://github.com/vicrodh/qbz"><img src="https://img.shields.io/github/license/vicrodh/qbz?style=flat-square" alt="License" /></a>
   <a href="https://github.com/vicrodh/qbz"><img src="https://img.shields.io/badge/platform-Linux-0b0b0b?style=flat-square&logo=linux" alt="Platform" /></a>
   <a href="https://github.com/vicrodh/qbz"><img src="https://img.shields.io/badge/macOS-stable-0b0b0b?style=flat-square&logo=apple" alt="macOS (stable)" /></a>
+  <a href="https://github.com/vicrodh/qbz/releases"><img src="https://img.shields.io/badge/Windows-experimental-0b0b0b?style=flat-square" alt="Windows (experimental)" /></a>
 </p>
 
 <p align="center">
@@ -525,11 +526,11 @@ crate is `qbz-qt`, which builds a binary called `qbz`.
 - **Rust stable.** No nightly, no `mold`, no custom `RUSTFLAGS` — the build
   needs none of them, and setting any of them invalidates the whole build cache
   for no gain.
-- **Qt 6.8 or newer**, including its development headers *and* the private
-  headers (`<rhi/qrhi.h>` lives in Qt's private tree and the custom scene-graph
-  items need it).
+- **Qt 6.8 or newer** (6.9+ on Windows), including its development headers
+  *and* the private headers (`<rhi/qrhi.h>` lives in Qt's private tree and the
+  custom scene-graph items need it).
 - **Python 3**, for the Qt SDK cache guard and QML audits.
-- Linux or macOS with audio support.
+- Linux, macOS or Windows x64 (experimental), with audio support.
 - No Node.js/npm required.
 
 ### System dependencies
@@ -548,7 +549,56 @@ sudo apt install build-essential pkg-config cmake clang libclang-dev nasm python
 `.qsb` files are committed, so a build without `qsb` simply keeps them (the
 build prints a warning). You need it if you intend to modify a shader.
 
-**Fedora, Arch, Gentoo and other distros:** package names differ; look for the
+**Arch Linux:**
+
+```bash
+sudo pacman -Syu --needed base-devel git rust pkgconf cmake clang nasm python \
+  qt6-base qt6-declarative qt6-svg qt6-wayland alsa-lib dbus openssl
+```
+
+If you manage Rust with rustup, omit `rust` from that command.
+Also install a JACK development provider: `pipewire-jack` if you use PipeWire's
+JACK support, or `jack2` for JACK itself. Keep the provider your system already
+uses. Both supply the headers and `jack.pc`. Arch's Qt packages include the
+private headers; use `QMAKE=/usr/bin/qmake6` if another Qt version is selected.
+For shader editing, add `qt6-shadertools`.
+
+**Gentoo:**
+
+With the standard Gentoo compiler toolchain and a stable Rust toolchain
+installed (`dev-lang/rust`, `dev-lang/rust-bin` or rustup):
+
+```bash
+sudo emerge --ask dev-vcs/git dev-build/cmake dev-lang/nasm dev-lang/python \
+  virtual/pkgconfig '>=dev-qt/qtbase-6.8:6[gui,network,opengl]' \
+  '>=dev-qt/qtdeclarative-6.8:6[network,opengl]' \
+  '>=dev-qt/qtsvg-6.8:6' '>=dev-qt/qtwayland-6.8:6' \
+  media-libs/alsa-lib virtual/jack sys-apps/dbus dev-libs/openssl
+```
+
+Keep the Qt modules on the same version and enable the USE flags for your
+display session (`X` or `wayland`). The Qt packages include their private
+headers. If `qmake6` is not on PATH, set `QMAKE` to the Qt 6 executable, usually
+`/usr/lib64/qt6/bin/qmake`. For shader editing, add `dev-qt/qtshadertools:6`.
+
+**NixOS / Nix:**
+
+Use a development shell with a nixpkgs revision that provides Qt 6.8 or newer.
+For a manual checkout, the build dependencies can be loaded without installing
+QBZ or adding development libraries to the system configuration:
+
+```bash
+nix-shell -p rustc cargo python3 pkg-config cmake nasm \
+  qt6.qmake qt6.wrapQtAppsHook qt6.qtbase qt6.qtdeclarative \
+  qt6.qtsvg qt6.qtwayland alsa-lib libjack2 dbus openssl
+```
+
+The Qt setup hooks select `qmake` and expose the development headers. For
+shader editing, add `qt6.qtshadertools`. When packaging the application, keep
+`qt6.wrapQtAppsHook` so the installed binary can find its Qt plugins and QML
+modules; see the [Nixpkgs Qt documentation](https://nixos.org/manual/nixpkgs/unstable/#sec-language-qt).
+
+**Fedora and other Linux distributions:** package names differ; look for the
 equivalents of the list above — a C/C++ compiler plus clang/libclang, cmake,
 nasm, the Qt 6 Base and Declarative modules with their development *and*
 private headers, Qt Shader Tools, and ALSA, JACK, D-Bus and OpenSSL development
@@ -559,7 +609,39 @@ toolchain, and Qt 6 — Homebrew's `qt` is what the build is tested against
 (`brew install qt`); the build script finds it at `/opt/homebrew/opt/qt`
 without any `PATH` fiddling.
 
+**Windows x64 (experimental):**
+
+To compile and run against an installed Qt SDK instead of using the QBZ bundle,
+install:
+
+- Visual Studio 2022 Build Tools with **Desktop development with C++**,
+  including the MSVC v143 x64 toolchain and a Windows 10 or 11 SDK.
+- Rust stable for `x86_64-pc-windows-msvc`, Git, Python 3, CMake and NASM.
+- Qt **6.9 or newer**, using the **MSVC 2022 64-bit** kit, with Qt Base,
+  Declarative/Quick, SVG and the private headers. CI currently uses **6.9.3**.
+  Qt Shader Tools is optional unless you are editing shaders.
+
+Use Qt's installer or an existing SDK with that kit. QBZ's Windows build uses
+MSVC throughout; select the matching [Qt for Windows kit](https://doc.qt.io/archives/qt-6.9/windows.html).
+Open an **x64 Native Tools Command Prompt for VS 2022**, then start PowerShell
+from it. In the repository root, adjust the SDK path and run:
+
+```powershell
+$env:QT_ROOT_DIR = 'C:\Qt\6.9.3\msvc2022_64'
+$env:QMAKE = "$env:QT_ROOT_DIR\bin\qmake.exe"
+$env:CMAKE_PREFIX_PATH = $env:QT_ROOT_DIR
+$env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
+$env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER = "$env:VCToolsInstallDir\bin\Hostx64\x64\link.exe"
+python scripts/qt-cargo.py build --release --manifest-path crates/Cargo.toml -p qbz-qt --target x86_64-pc-windows-msvc
+.\crates\target\x86_64-pc-windows-msvc\release\qbz.exe
+```
+
+Keep the SDK's `bin` directory on PATH when running this build so Qt's DLLs
+can be found. WiX and .NET are only needed to build the MSI installer.
+
 ### Build and run
+
+On Linux and macOS:
 
 ```bash
 git clone https://github.com/vicrodh/qbz.git && cd qbz
@@ -700,6 +782,10 @@ or test it properly.
 
 I know we all want a lot of things. But keeping this app from turning into
 [The Homer](https://tenor.com/IeFy.gif) is real work.
+
+Almost all of the documentation, except this README, is AI slop. Seriously,
+help writing or improving it is welcome. I hate writing documentation, and
+who doesn't?
 
 If you have a problem using software built with AI tools, this software is
 probably not for you.
