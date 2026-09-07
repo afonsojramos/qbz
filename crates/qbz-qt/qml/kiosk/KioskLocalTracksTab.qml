@@ -4,14 +4,12 @@
 // `QbzLocalTracks` surface is active (the production default since the native
 // model shipped).
 //
-// It issues NO query of its own. `QbzLocal.loadTab("tracks")` — which the host
-// already calls on mount and on every tab switch — is the whole activation,
-// and it reuses the user's PERSISTED funnel, sort and grouping.
-//
-// That is deliberate and load-bearing: `tracksSetFilterJson` is the desktop
-// tab's entry point, and it WRITES the funnel through to `ui_prefs`. A kiosk
-// that called it with a neutral descriptor would silently erase the Full UI's
-// saved Tracks filter — a Full UI regression caused from a kiosk-only file.
+// It issues NO query of its own. The host's `loadActiveTab` — called on mount
+// and on every tab switch — installs the SHARED funnel through
+// `tracksSetFilterJson`, exactly as the desktop view does
+// (LocalLibraryView.qml:700-707), and that setter is the load. The kiosk never
+// hands it a neutral descriptor: the value is the same persisted funnel the
+// Full UI reads, so nothing saved from the desktop is erased here.
 //
 // Everything else is KioskLocalTrackList.
 

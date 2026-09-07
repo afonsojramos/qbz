@@ -168,7 +168,9 @@ Item {
         cursorShape: (root.Window.window !== null
                       && root.Window.window.visibility === Window.FullScreen
                       && !root.chromeVisible) ? Qt.BlankCursor : Qt.ArrowCursor
-        onPressed: function (mouse) { mouse.accepted = true }
+        // A press on the backdrop WAKES the chrome: touch panels have no
+        // hover, so this is the only way a kiosk finger brings the exit back.
+        onPressed: function (mouse) { mouse.accepted = true; root.wake() }
         onReleased: function (mouse) { mouse.accepted = true }
         onClicked: function (mouse) { mouse.accepted = true }
         onDoubleClicked: function (mouse) { mouse.accepted = true }
@@ -791,25 +793,37 @@ Item {
         anchors.fill: parent
         accent: QbzShell.ambientAccent
     }
-    // Appliance exit never follows the auto-hiding chrome. The existing
-    // close path retains fullscreen and restores shell focus via preKiosk.
+    // Appliance exit. It FOLLOWS the auto-hiding chrome now (owner feedback
+    // 2026-09-07: an always-on 64px white-bordered box was too loud on the
+    // art) — same `chromeVisible` state as the header and the player bar,
+    // hit-enabled only while shown, and it comes back on any pointer move,
+    // key or tap (the backdrop press below wakes the chrome for touch). The
+    // close path is unchanged: it retains fullscreen and restores shell
+    // focus via preKiosk. Quiet chrome: translucent fill, hairline border.
     Rectangle {
         visible: root.preKiosk
-        anchors.top: parent.top
+        opacity: root.chromeVisible ? 1 : 0
+        enabled: root.chromeVisible
+        // BOTTOM-right (owner feedback 2026-09-07): at the top it collided
+        // with the immersive's own window controls. The player bar is
+        // horizontally centred at y=height-114, so the right corner is clear;
+        // this sits in it, clear of both the controls and the bar.
+        anchors.bottom: parent.bottom
         anchors.right: parent.right
-        anchors.margins: 12
-        width: 64
-        height: 64
+        anchors.bottomMargin: 24
+        anchors.rightMargin: 16
+        width: 52
+        height: 52
         radius: 8
-        color: "#171717"
-        border.color: "#ffffff"
-        border.width: 2
+        color: "#99171717"
+        border.color: "#59ffffff"
+        border.width: 1
         z: 3001
-        activeFocusOnTab: visible
+        activeFocusOnTab: visible && root.chromeVisible
         Accessible.role: Accessible.Button
         Accessible.name: QbzSession.tr("Close", QbzSession.trRev)
         Accessible.onPressAction: QbzImmersive.open = false
-        QbzIcon { anchors.centerIn: parent; width: 32; height: 32; name: "x"; tintName: "primary" }
+        QbzIcon { anchors.centerIn: parent; width: 24; height: 24; name: "x"; tintName: "primary" }
         Keys.onPressed: function (event) {
             if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
                 QbzImmersive.open = false

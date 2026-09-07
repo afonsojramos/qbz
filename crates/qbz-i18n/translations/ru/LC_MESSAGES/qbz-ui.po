@@ -6859,3 +6859,6 @@ msgstr "Список"
 
 msgid "Tree"
 msgstr "Дерево"
+
+msgid "Forward"
+msgstr "Вперёд"

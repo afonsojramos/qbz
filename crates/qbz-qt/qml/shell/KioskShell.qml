@@ -52,6 +52,42 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    /// The back bar's one button form: 44x36, radius-sm hover fill, a 20px
+    /// glyph. `available` dims the glyph and disarms the area (Back/Forward
+    /// with no history); `active` lights the glyph accent (Cast connected).
+    /// Connect keeps its own golden arm below because its active state is a
+    /// gold tint + border the shared form cannot express.
+    component ChromeButton: Rectangle {
+        id: cb
+        property string name: ""
+        property bool available: true
+        property bool active: false
+        property string label: ""
+        signal clicked()
+        width: 44
+        height: 36
+        radius: theme.radiusSm
+        color: (cbArea.containsMouse && cb.available) ? root.chromeHoverBg : "transparent"
+        Accessible.role: Accessible.Button
+        Accessible.name: cb.label
+        QbzIcon {
+            opacity: cb.available ? 1.0 : 0.32
+            name: cb.name
+            width: 20
+            height: 20
+            anchors.centerIn: cb
+            tintName: cb.active ? "accent" : "secondary"
+        }
+        MouseArea {
+            id: cbArea
+            anchors.fill: cb
+            enabled: cb.available
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: cb.clicked()
+        }
+    }
+
     // KioskShell.slint:204 — the NavRail is a fat touch target.
     readonly property int navRailHeight: 80
     readonly property int transportHeight: 64
@@ -133,8 +169,39 @@ Rectangle {
         Rectangle {
             id: backBar
             width: shellColumn.width
-            height: 72
+            // 44px — owner feedback 2026-09-07 asked for ~60% of the previous
+            // 72px bar. The four chrome buttons (Back, Forward, Connect,
+            // Cast) share ONE 44x36 / 20px-glyph form (ChromeButton below).
+            height: 44
             color: theme.surfaceCard
+
+            // Custom-chrome drag surface, the HeaderBar.qml:132-152 pattern
+            // verbatim: declared FIRST so every control above wins
+            // hit-testing; the system move starts only after a real
+            // movement so taps still land; double-click toggles maximize.
+            // Inert under the system title bar (native chrome owns it). A
+            // kiosk on a NUC with a desktop monitor is a windowed app like
+            // any other, and a bar that could not be dragged was reported
+            // as a defect on 2026-09-07.
+            MouseArea {
+                anchors.fill: parent
+                enabled: !QbzShell.systemTitleBar
+                property bool dragStarted: false
+                onPressed: dragStarted = false
+                onPositionChanged: {
+                    if (pressed && !dragStarted && root.hostWindow) {
+                        dragStarted = true
+                        root.hostWindow.startSystemMove()
+                    }
+                }
+                onDoubleClicked: {
+                    if (root.hostWindow) {
+                        root.hostWindow.visibility =
+                            root.hostWindow.visibility === Window.Maximized
+                            ? Window.Windowed : Window.Maximized
+                    }
+                }
+            }
 
             // The kiosk carries no HeaderBar, so it owns the window chrome
             // too (KioskShell.slint:240-245): macOS overlay leaves the native
@@ -153,7 +220,7 @@ Rectangle {
                 Qt.platform.os !== "osx" && !QbzShell.systemTitleBar
 
             // padding-left 6 + macInset, padding-right 118 (controls) or 8,
-            // padding-top/bottom 4, spacing 6 -> a 34px content row.
+            // padding-top/bottom 4, spacing 6 -> a 36px content row.
             // The 118 is not a round number: WindowControls is 34*3 + 2*2 =
             // 106 wide, pinned 8px from the right edge, leaving 4px of
             // clearance to the search field.
@@ -163,71 +230,28 @@ Rectangle {
                 y: 4
                 width: backBar.width - (6 + backBar.macInset)
                        - (backBar.linChrome ? 118 : 8)
+                       - sessionCluster.width - 6
                 height: backBar.height - 8
                 spacing: 6
 
-                // KioskShell.slint:252-269. The disabled state is expressed
-                // THREE times — dimmed, un-hoverable and un-clickable; an
-                // opacity-only port leaves a clickable ghost.
-                Rectangle {
+                // KioskShell.slint:252-269 / 270-287. Disabled = dimmed,
+                // un-hoverable and un-clickable, all three (an opacity-only
+                // port leaves a clickable ghost).
+                ChromeButton {
                     id: backBtn
-                    width: 64
-                    height: backBarRow.height
-                    radius: theme.radiusSm
-                    color: (backArea.containsMouse && QbzShell.canBack)
-                           ? root.chromeHoverBg : "transparent"
-                    QbzIcon {
-                        // Opacity on the LEAF, not on the button: the
-                        // Rectangle resolves to "transparent" in every
-                        // disabled frame (hover requires canBack), so the
-                        // group node only ever dimmed this glyph — and an
-                        // always-on opacity group is its own batch.
-                        opacity: QbzShell.canBack ? 1.0 : 0.32
-                        name: "chevron-left"
-                        width: 22
-                        height: 22
-                        anchors.centerIn: backBtn
-                        tintName: "secondary"
-                    }
-                    MouseArea {
-                        id: backArea
-                        anchors.fill: backBtn
-                        enabled: QbzShell.canBack
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: QbzShell.navigateBack()
-                    }
+                    name: "chevron-left"
+                    label: QbzSession.tr("Back", QbzSession.trRev)
+                    available: QbzShell.canBack
+                    anchors.verticalCenter: parent.verticalCenter
+                    onClicked: QbzShell.navigateBack()
                 }
-
-                // KioskShell.slint:270-287.
-                Rectangle {
+                ChromeButton {
                     id: fwdBtn
-                    width: 64
-                    height: backBarRow.height
-                    radius: theme.radiusSm
-                    color: (fwdArea.containsMouse && QbzShell.canForward)
-                           ? root.chromeHoverBg : "transparent"
-                    QbzIcon {
-                        // Opacity on the LEAF, not on the button: the
-                        // Rectangle resolves to "transparent" in every
-                        // disabled frame (hover requires canForward), so the
-                        // group node only ever dimmed this glyph — and an
-                        // always-on opacity group is its own batch.
-                        opacity: QbzShell.canForward ? 1.0 : 0.32
-                        name: "chevron-right"
-                        width: 22
-                        height: 22
-                        anchors.centerIn: fwdBtn
-                        tintName: "secondary"
-                    }
-                    MouseArea {
-                        id: fwdArea
-                        anchors.fill: fwdBtn
-                        enabled: QbzShell.canForward
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: QbzShell.navigateForward()
-                    }
+                    name: "chevron-right"
+                    label: QbzSession.tr("Forward", QbzSession.trRev)
+                    available: QbzShell.canForward
+                    anchors.verticalCenter: parent.verticalCenter
+                    onClicked: QbzShell.navigateForward()
                 }
 
                 // KioskShell.slint:288-312. Submit-only: there is NO live /
@@ -253,6 +277,77 @@ Rectangle {
                         QbzSearch.searchSubmit(value)
                         root.forceActiveFocus()
                     }
+                }
+            }
+
+            // Session cluster — Qobuz Connect + Cast, always visible, right
+            // of the search field and before the window controls. Owner
+            // feedback 2026-09-07: both are fundamental on a kiosk (Connect
+            // especially — the panel is a renderer other devices drive), so
+            // they left the hidden "more" menu of the transport bar for a
+            // permanent home in the chrome. A 1px pipe separates the
+            // cluster from its neighbours on either side. Connect is the
+            // PlayerBar.qml:537-575 golden button at touch size; Cast is the
+            // shared icon button lit while a renderer is connected.
+            Row {
+                id: sessionCluster
+                x: backBar.width - (backBar.linChrome ? 118 : 8) - width
+                y: 4
+                height: backBar.height - 8
+                spacing: 6
+
+                Rectangle {
+                    width: 1
+                    height: 20
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: theme.borderSubtle
+                }
+
+                Rectangle {
+                    id: kioskQconnectBtn
+                    readonly property bool qcActive: QbzQConnect.qconnectConnected
+                    readonly property color gold: "#e0b341"
+                    width: 44
+                    height: 36
+                    anchors.verticalCenter: parent.verticalCenter
+                    radius: theme.radiusSm
+                    color: qcActive ? Qt.rgba(gold.r, gold.g, gold.b, 0.16)
+                        : (kioskQcArea.containsMouse ? root.chromeHoverBg : "transparent")
+                    border.width: qcActive ? 1 : 0
+                    border.color: Qt.rgba(gold.r, gold.g, gold.b, 0.45)
+                    Accessible.role: Accessible.Button
+                    Accessible.name: QbzSession.tr("Qobuz Connect", QbzSession.trRev)
+                    QbzIcon {
+                        name: "monitor-speaker"
+                        width: 20
+                        height: 20
+                        anchors.centerIn: parent
+                        tintName: kioskQconnectBtn.qcActive ? "amber"
+                            : kioskQcArea.containsMouse ? "textPrimary" : "secondary"
+                    }
+                    MouseArea {
+                        id: kioskQcArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: connectFlyout.openBelowRight(kioskQconnectBtn)
+                    }
+                }
+
+                ChromeButton {
+                    name: "cast"
+                    label: QbzSession.tr("Cast", QbzSession.trRev)
+                    active: QbzPlayer.npCastActive
+                    anchors.verticalCenter: parent.verticalCenter
+                    onClicked: QbzCast.openPicker()
+                }
+
+                Rectangle {
+                    visible: backBar.linChrome
+                    width: 1
+                    height: 20
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: theme.borderSubtle
                 }
             }
 
@@ -563,6 +658,12 @@ Rectangle {
     // QConnect bootstrap conflicts are global and can also originate from the
     // compact player bar used by kiosk mode.
     QconnectPlaybackConflictModal { }
+
+    // The Connect flyout and the Cast picker are shell-level: their triggers
+    // live in the back bar above, which is mounted on every route (the
+    // transport bar that used to host them is unmounted on Now Playing).
+    QconnectFlyout { id: connectFlyout }
+    CastPicker { }
 
     // =====================================================================
     // 4. The kiosk's OWN Immersive mount (KioskShell.slint:737-747)

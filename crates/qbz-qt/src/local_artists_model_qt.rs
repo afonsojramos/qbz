@@ -394,7 +394,17 @@ pub(crate) fn request_page(page: i32, generation: i32) {
 }
 
 pub(crate) fn select_artist(name: String, columns: i32) {
+    // Every exit of the detail query used to be silent except success and
+    // fallback; a kiosk drill-down that showed "0 albums" for an artist the
+    // desktop lists left nothing in the log to reason from (2026-09-07). One
+    // line per tap, and one per silent exit.
+    log::info!(
+        "[local-catalog] phase=artist-select name={name:?} columns={columns} requested={} album_mode={}",
+        requested(),
+        crate::local_library_qt::album_mode()
+    );
     if !requested() || crate::local_library_qt::album_mode() != "folder" {
+        log::info!("[local-catalog] phase=artist-select-skip reason=not-native-or-metadata-mode");
         return;
     }
     let generation = next_generation(&DETAIL_GENERATION);
@@ -411,6 +421,7 @@ pub(crate) fn select_artist(name: String, columns: i32) {
         bridge.as_mut().set_local_artist_albums_loading(true);
     });
     if artist_key.is_empty() {
+        log::info!("[local-catalog] phase=artist-select-skip generation={generation} reason=empty-artist-key");
         ui(move |mut bridge| {
             cpp_detail_reset(generation, 0, 0);
             bridge.as_mut().set_local_artist_albums_native_total(0);
@@ -423,8 +434,13 @@ pub(crate) fn select_artist(name: String, columns: i32) {
             tokio::task::spawn_blocking(move || open_detail(generation, artist_key, columns)).await;
         match result {
             Ok(Ok(opened)) => activate_detail(opened),
-            Ok(Err("superseded")) => {}
-            Ok(Err(reason)) => fallback_detail(generation, reason),
+            Ok(Err("superseded")) => {
+                log::info!("[local-catalog] phase=artist-select-skip generation={generation} reason=superseded");
+            }
+            Ok(Err(reason)) => {
+                log::info!("[local-catalog] phase=artist-select-fallback generation={generation} reason={reason}");
+                fallback_detail(generation, reason)
+            }
             Err(_) => fallback_detail(generation, "detail-worker-join"),
         }
     });
@@ -909,6 +925,7 @@ fn open_detail(
     let (catalog, catalog_generation) = open_active()?;
     let (sources, none_enabled) = enabled_sources(&catalog)?;
     if none_enabled {
+        log::info!("[local-catalog] phase=artist-select-skip generation={generation} reason=no-enabled-sources");
         return Ok(OpenedDetail {
             generation,
             catalog_generation,
@@ -958,6 +975,10 @@ fn open_detail(
 
 fn activate_detail(opened: OpenedDetail) {
     if DETAIL_GENERATION.load(Ordering::Acquire) != opened.generation {
+        log::info!(
+            "[local-catalog] phase=artist-select-skip generation={} reason=stale-before-activate",
+            opened.generation
+        );
         return;
     }
     let wire = Arc::new(opened.loaded.wire.clone());

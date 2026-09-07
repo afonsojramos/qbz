@@ -6821,3 +6821,6 @@ msgstr "リスト"
 
 msgid "Tree"
 msgstr "ツリー"
+
+msgid "Forward"
+msgstr "進む"

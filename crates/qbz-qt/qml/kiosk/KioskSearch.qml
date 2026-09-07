@@ -178,41 +178,64 @@ Rectangle {
             delegate: Column {
                 id: section
                 required property var modelData
+                // GUARDED, STABLE section data. The preview Components below are
+                // instantiated by a Loader, and at that instant the delegate's
+                // `modelData` is briefly undefined; a Component that read
+                // `section.modelData.rows` DIRECTLY threw "Cannot read property
+                // 'rows' of undefined", which killed the binding for good and
+                // left every dashboard shelf empty (the 2026-09-07 "search is
+                // broken" regression from the hardening's dashboard rewrite —
+                // reproduced in a bare `qml` scene; the guarded read below is
+                // what stops the throw, NOT disabling reuse, which still threw).
+                readonly property string sTitle: section.modelData && section.modelData.title ? section.modelData.title : ""
+                readonly property string sKind: section.modelData && section.modelData.kind ? section.modelData.kind : "album"
+                readonly property var sRows: section.modelData && section.modelData.rows ? section.modelData.rows : []
+                readonly property int sTab: section.modelData && section.modelData.tab !== undefined ? section.modelData.tab : -1
                 width: dashboardList.width - 32; spacing: 8
                 Item {
                     width: parent.width; height: 44
-                    Text { anchors.left: parent.left; anchors.right: viewAll.left; height: parent.height; text: QbzSession.tr(section.modelData.title, QbzSession.trRev); color: theme.textPrimary; font.pixelSize: 18; font.weight: theme.weightSemibold; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
+                    Text { anchors.left: parent.left; anchors.right: viewAll.left; height: parent.height; text: QbzSession.tr(section.sTitle, QbzSession.trRev); color: theme.textPrimary; font.pixelSize: 18; font.weight: theme.weightSemibold; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
                     Rectangle {
                         id: viewAll
                         anchors.right: parent.right; width: 100; height: 44
-                        visible: section.modelData.tab >= 0; color: "transparent"
+                        visible: section.sTab >= 0; color: "transparent"
                         Text { anchors.centerIn: parent; text: QbzSession.tr("View all", QbzSession.trRev); color: theme.textSecondary; font.pixelSize: 14 }
-                        MouseArea { anchors.fill: parent; onClicked: root.selectTab(section.modelData.tab) }
+                        MouseArea { anchors.fill: parent; onClicked: root.selectTab(section.sTab) }
                     }
                 }
-                Loader {
+                // The preview is a DIRECT child of the delegate, NOT a
+                // Component behind a Loader. The Loader form (a Component
+                // defined in the delegate, reading `section.modelData`/`section`)
+                // is what emptied every shelf on 2026-09-07: the Component's
+                // bindings to the delegate resolved against an undefined
+                // `section` at instantiation and never recovered. KioskDiscover
+                // mounts its shelf as a direct child for exactly this reason;
+                // this matches it. The two kinds are two direct children gated
+                // by `visible`; the track preview is a bounded Repeater (<=3),
+                // never a nested ListView.
+                KioskShelf {
+                    visible: section.sKind !== "track"
                     width: parent.width
-                    sourceComponent: section.modelData.kind === "track" ? previewTracks : previewShelf
+                    kind: section.sKind
+                    rows: section.sKind !== "track" ? section.sRows : []
+                    restoreX: root.shelfPositions[(root.doc.query || "") + ":" + section.sTitle] || 0
+                    onScrollSettled: function(x) { root.saveShelf((root.doc.query || "") + ":" + section.sTitle, x) }
+                    onOpen: function(id) { root.open(section.sKind, id) }
                 }
-                Component {
-                    id: previewShelf
-                    KioskShelf { width: section.width; kind: section.modelData.kind; rows: section.modelData.rows; restoreX: root.shelfPositions[(root.doc.query || "") + ":" + section.modelData.title] || 0; onScrollSettled: function(x) { root.saveShelf((root.doc.query || "") + ":" + section.modelData.title, x) }; onOpen: function(id) { root.open(section.modelData.kind, id) } }
-                }
-                Component {
-                    id: previewTracks
-                    ListView {
-                        id: previewList
-                        width: section.width; height: Math.min(3, count) * 64
-                        clip: true; cacheBuffer: 0; reuseItems: true
-                        model: section.modelData.rows
-                        boundsBehavior: Flickable.StopAtBounds
+                Column {
+                    visible: section.sKind === "track"
+                    width: parent.width
+                    spacing: 0
+                    Repeater {
+                        model: section.sKind === "track" ? section.sRows.slice(0, 3) : []
                         delegate: KioskTrackRow {
                             id: previewRow
                             required property var modelData
-                            width: previewList.width; height: 64
+                            required property int index
+                            width: parent.width; height: 64
                             KioskCoverSource { id: cover; remote: previewRow.modelData.artUrl || ""; local: previewRow.modelData.artPath || ""; edge: 46 }
                             track: ({ id: modelData.id || "", title: modelData.title || "", artist: modelData.artist || "", duration: modelData.duration || "", artwork: cover.source })
-                            onClicked: root.open("track", modelData.id || "")
+                            onClicked: root.open("track", previewRow.modelData.id || "")
                         }
                     }
                 }

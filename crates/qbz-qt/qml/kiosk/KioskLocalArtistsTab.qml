@@ -50,6 +50,24 @@ Item {
     readonly property real rowH: 72
     readonly property real headerH: 26
 
+    // Grid sizing for the round-card rail (owner feedback 2026-09-07:
+    // homologate the single-column rail to Library > Artists' round-card grid).
+    // Mirrors KioskLibrary's feedGrid roundCells math: ~5 columns at 800px,
+    // ~9 at 1280px.
+    readonly property real gridPad: root.view ? root.view.pad : 16
+    readonly property real gridGap: 14
+    readonly property real gridMinCell: 132
+    readonly property real gridLabelH: 46
+    readonly property real gridAvailRow: Math.max(0, width - 2 * gridPad + gridGap)
+    readonly property int gridColumns: width > 0
+        ? Math.max(2, Math.floor(gridAvailRow / (gridMinCell + gridGap)))
+        : 0
+    readonly property real gridRightPad: Math.max(0, gridPad - gridGap)
+    readonly property real gridAvail: Math.max(0, width - gridPad - gridRightPad)
+    readonly property real gridCellW: gridColumns > 0 ? Math.max(1, Math.floor(gridAvail / gridColumns)) : 1
+    readonly property real gridCardW: Math.max(0, gridCellW - gridGap)
+    readonly property real gridCellH: Math.max(1, gridCardW + gridLabelH + gridGap)
+
     // ---------------------------------------------------------------------
     // Readers
     // ---------------------------------------------------------------------
@@ -94,8 +112,14 @@ Item {
     // ---------------------------------------------------------------------
     // Native queries
     // ---------------------------------------------------------------------
-    // `artists_native_reset` REFUSES a non-default sort or funnel, so the
-    // kiosk — which exposes neither control — passes the neutral descriptor.
+    // `artists_native_reset` REFUSES a non-default sort or funnel: a filtered
+    // descriptor makes Rust drop the native reader (`deactivate_for_legacy`)
+    // WITHOUT publishing the legacy document, which would leave this rail
+    // empty. So the rail keeps the neutral descriptor and lists every artist;
+    // the host's funnel (KioskLocalLibrary.qml) applies to the LEGACY reader
+    // (rail and drill-down) and to the Albums, Genres and Tracks tabs. The
+    // native drill-down (`artistsNativeSelect`) carries no funnel either —
+    // a Rust seam this kiosk-only round does not add.
     Timer {
         id: railQuery
         interval: 0
@@ -107,9 +131,19 @@ Item {
         interval: 0
         repeat: false
         onTriggered: {
-            if (!root.nativeActive || !root.drilled || albumGrid.columns <= 0)
+            if (root.selectedArtist === "")
                 return
-            QbzLocal.artistsNativeSelect(root.selectedArtist, albumGrid.columns)
+            // NO `nativeActive` gate and no geometry gate. The native flag
+            // can be false at the instant this fires (a fresh mount issues
+            // the rail reset in the same tick; a restored drill-down mounts
+            // before activation) and the query was silently dropped — the
+            // "0 albums" drill-down of 2026-09-07. Rust refuses the call
+            // itself when the native reader is not in play (`select_artist`
+            // checks `requested()` and the album mode), so an unconditional
+            // call costs nothing there, and the legacy drill-down keeps
+            // reading `legacyArtistAlbums` regardless. Rust also clamps
+            // columns to >= 1; `onColumnsChanged` re-issues once settled.
+            QbzLocal.artistsNativeSelect(root.selectedArtist, Math.max(1, albumGrid.columns))
         }
     }
     Component.onCompleted: {
@@ -118,11 +152,25 @@ Item {
             detailQuery.restart()
         root.publishNav()
     }
-    onSelectedArtistChanged: {
-        if (root.drilled)
-            detailQuery.restart()
-        root.publishNav()
-        Qt.callLater(root.reportSoon)
+    // THE 2026-09-07 "0 albums" DEFECT. This used to be a root
+    // `onSelectedArtistChanged` handler guarded by `if (root.drilled)`. Inside
+    // that handler the DERIVED readonly `drilled` is still the previous value
+    // (the alias has changed, its dependents have not been re-evaluated yet —
+    // verified with a bare `qml` scene: handler sees drilled=false while the
+    // alias already reads "A-ha"), so the detail query was never issued and
+    // every kiosk drill-down showed "0 albums" with nothing in the log. The
+    // desktop tab reacts through a Connections on the HOST's signal
+    // (views/local/LocalArtistsTab.qml:89), where every derived value is
+    // fresh; this is that pattern, and the guards below read the SOURCE
+    // rather than a derived property.
+    Connections {
+        target: root.view
+        function onSelectedArtistChanged() {
+            if (root.view.selectedArtist !== "")
+                detailQuery.restart()
+            root.publishNav()
+            Qt.callLater(root.reportSoon)
+        }
     }
     Connections {
         target: albumGrid
@@ -141,7 +189,7 @@ Item {
         if (root.drilled)
             root.view.publishNav(Math.max(1, albumGrid.columns), root.artistAlbumTotal)
         else
-            root.view.publishNav(1, root.entryCount)
+            root.view.publishNav(Math.max(1, root.gridColumns), root.entryCount)
     }
     onEntryCountChanged: root.publishNav()
     onArtistAlbumTotalChanged: root.publishNav()
@@ -206,7 +254,7 @@ Item {
         function onIndexChanged() {
             if (root.itemFocused)
                 Qt.callLater(function () {
-                    rail.positionViewAtIndex(root.focusedItem, ListView.Contain)
+                    rail.positionViewAtIndex(root.focusedItem, GridView.Contain)
                 })
         }
         function onActivateSeqChanged() {
@@ -234,14 +282,14 @@ Item {
             root.view.releaseWindow("artists")
             return
         }
-        var first = rail.indexAt(4, rail.contentY + 1)
-        var last = rail.indexAt(4, rail.contentY + Math.max(1, rail.height) - 1)
-        if (first < 0)
-            first = Math.max(0, Math.floor((rail.contentY - rail.originY) / root.rowH))
-        if (last < 0)
-            last = Math.min(root.entryCount - 1, first + Math.ceil(rail.height / root.rowH))
-        first = Math.max(0, first - 1)
-        last = Math.min(root.entryCount - 1, last + 1)
+        // Grid window: one row of overscan on each side, in ENTRY units
+        // (each cell is one entry — bands included).
+        var cols = Math.max(1, root.gridColumns)
+        var ch = Math.max(1, root.gridCellH)
+        var firstRow = Math.max(0, Math.floor((rail.contentY - rail.originY) / ch) - 1)
+        var lastRow = Math.floor((rail.contentY - rail.originY + Math.max(1, rail.height)) / ch) + 1
+        var first = Math.max(0, firstRow * cols)
+        var last = Math.min(root.entryCount - 1, (lastRow + 1) * cols - 1)
 
         var resident = []
         for (var i = first; i <= last; i++) {
@@ -274,16 +322,20 @@ Item {
     // =====================================================================
     // The artist list
     // =====================================================================
-    ListView {
+    GridView {
         id: rail
         anchors.fill: parent
         visible: !root.drilled && !QbzLocal.localArtistsLoading
             && root.nativeError === ""
             && root.artistTotal > 0
         clip: true
-        topMargin: 8
-        bottomMargin: 8
-        cacheBuffer: Math.min(root.rowH, Math.max(0, rail.height / 2))
+        leftMargin: root.gridPad
+        rightMargin: root.gridRightPad
+        topMargin: root.gridPad
+        bottomMargin: root.gridPad
+        cellWidth: root.gridCellW
+        cellHeight: root.gridCellH
+        cacheBuffer: Math.max(0, Math.ceil(root.gridCellH))
         boundsBehavior: Flickable.StopAtBounds
         reuseItems: true
         model: rail.visible ? (root.nativeActive ? root.nativeModel : root.legacyEntries) : []
@@ -298,6 +350,9 @@ Item {
                 root.view.releaseWindow("artists")
         }
 
+        // Uniform cell. Bands (t:0) become a centered letter tile — Library >
+        // Artists has no bands, but keeping them as inline letter tiles marks
+        // the A-Z groups without breaking the grid's uniform geometry.
         delegate: Item {
             id: entrySlot
             required property var modelData
@@ -310,107 +365,51 @@ Item {
             readonly property var item: entrySlot.modelData
                 ? entrySlot.modelData.item : null
 
-            width: rail.width
-            height: entrySlot.band ? root.headerH : root.rowH
+            width: root.gridCellW
+            height: root.gridCellH
 
-            // A-Z band.
+            // A-Z band letter, centered in the cell's art box.
             Text {
-                anchors.fill: parent
-                anchors.leftMargin: root.view ? root.view.pad : 16
+                width: root.gridCardW
+                height: root.gridCardW
+                x: (root.gridCellW - width) / 2
                 visible: entrySlot.band
+                horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 text: entrySlot.band ? entrySlot.modelData.label : ""
                 color: theme.textSecondary
-                font.pixelSize: theme.fontLegal
-                font.weight: theme.weightSemibold
+                font.pixelSize: 34
+                font.weight: theme.weightBold
             }
 
-            // Page not resident: a static tile, no avatar request.
+            // Page not resident: a static circular tile, no avatar request.
             Rectangle {
-                anchors.fill: parent
-                anchors.margins: 6
+                width: root.gridCardW
+                height: root.gridCardW
+                x: (root.gridCellW - width) / 2
                 visible: entrySlot.entryLoading
-                radius: theme.radiusSm
+                radius: width / 2
                 color: theme.surfaceElevated
                 opacity: 0.55
             }
 
-            // The artist row. 72px, the whole row is the tap target.
-            Rectangle {
-                id: artistRow
-                anchors.fill: parent
-                anchors.leftMargin: root.view ? root.view.pad : 16
-                anchors.rightMargin: root.view ? root.view.pad : 16
+            // The artist — a round card (title + album count), the whole tile
+            // is the tap target; tapping drills into that artist's albums.
+            KioskCard {
                 visible: !entrySlot.band && !entrySlot.entryLoading
-                radius: theme.radiusSm
-                color: root.itemFocused && root.focusedItem === entrySlot.index
-                    ? Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b, 0.18)
-                    : "transparent"
-                border.width: root.itemFocused && root.focusedItem === entrySlot.index ? 2 : 0
-                border.color: theme.accent
-
-                Row {
-                    anchors.left: parent.left
-                    anchors.leftMargin: 8
-                    anchors.right: parent.right
-                    anchors.rightMargin: 12
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 14
-
-                    Rectangle {
-                        id: avatar
-                        width: 52
-                        height: 52
-                        radius: 26
-                        color: theme.surfaceElevated
-                        clip: true
-
-                        KioskArtwork {
-                            anchors.fill: parent
-                            radius: 26
-                            fit: "crop"
-                            source: entrySlot.item
-                                ? (entrySlot.item.artPath
-                                   || (root.view ? root.view.artPathOf(entrySlot.item.artKey) : ""))
-                                : ""
-                        }
-                    }
-
-                    Column {
-                        width: parent.width - 52 - 14
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 3
-
-                        Text {
-                            width: parent.width
-                            text: entrySlot.item ? (entrySlot.item.name || "") : ""
-                            color: theme.textPrimary
-                            font.pixelSize: 16
-                            font.weight: theme.weightSemibold
-                            elide: Text.ElideRight
-                            maximumLineCount: 1
-                        }
-                        Text {
-                            width: parent.width
-                            text: entrySlot.item
-                                ? ((entrySlot.item.albumCount || 0) + " "
-                                   + root.t("albums"))
-                                : ""
-                            color: theme.textMuted
-                            font.pixelSize: 13
-                            elide: Text.ElideRight
-                            maximumLineCount: 1
-                        }
-                    }
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: {
-                        if (entrySlot.item)
-                            root.select(entrySlot.item.name)
-                    }
-                }
+                round: true
+                artSize: root.gridCardW
+                navFocused: root.itemFocused && root.focusedItem === entrySlot.index
+                album: ({
+                    "id": entrySlot.item ? (entrySlot.item.name || "") : "",
+                    "title": entrySlot.item ? (entrySlot.item.name || "") : "",
+                    "artist": entrySlot.item
+                        ? ((entrySlot.item.albumCount || 0) + " " + root.t("albums")) : "",
+                    "artwork": entrySlot.item
+                        ? (entrySlot.item.artPath
+                           || (root.view ? root.view.artPathOf(entrySlot.item.artKey) : "")) : ""
+                })
+                onClicked: function (name) { if (name !== "") root.select(name) }
             }
         }
     }

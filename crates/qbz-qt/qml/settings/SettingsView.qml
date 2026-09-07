@@ -122,11 +122,15 @@ Item {
                 font.pixelSize: root.kioskHost ? (theme.fontTitle) * 1.2 : (theme.fontTitle)
                 font.weight: theme.weightBold
             }
+            // The kiosk section selector. The "Share logs" icon button that
+            // used to sit to its right is gone: it called QbzShell.logOpen(),
+            // whose viewer modal is mounted by the desktop AppShell only, so
+            // on the kiosk it was a dead control (owner report 2026-09-07).
             QbzSelect {
                 visible: root.kioskHost
                 kioskHost: true
-                anchors.right: logsButton.left
-                anchors.rightMargin: 8
+                anchors.right: parent.right
+                anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
                 menuWidth: Math.max(180, Math.min(300, parent.width - 270))
                 searchable: options.length > 8
@@ -136,18 +140,6 @@ Item {
                     QbzBridge.settingsSetSection(root.kioskSections[i].section)
                     flick.contentY = 0
                 }
-            }
-            SettingsButton {
-                id: logsButton
-                visible: root.kioskHost
-                kioskHost: true
-                anchors.right: parent.right
-                anchors.rightMargin: 12
-                anchors.verticalCenter: parent.verticalCenter
-                minWidth: 44
-                iconName: "cloud-upload"
-                onClicked: QbzShell.logOpen()
-                Accessible.name: QbzSession.tr("Share logs", QbzSession.trRev)
             }
         }
 

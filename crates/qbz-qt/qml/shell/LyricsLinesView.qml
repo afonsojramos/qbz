@@ -48,6 +48,10 @@ Item {
     property int dimmingMode: 2
     property bool autoFollow: true
     property bool uppercase: false
+    /// Opt-in centered lines (kiosk Now Playing). Desktop leaves it false, so
+    /// its left-aligned lyrics are unchanged. LyricsLineRow already implements
+    /// the centered layout AND the centered word-sync highlight offset.
+    property bool centered: false
     // 0 System · 1 LINE Seed JP · 2 Montserrat · 3 Noto Sans · 4 Source Sans 3
     property int fontIndex: 0
     property color activeColor: theme.accent
@@ -199,6 +203,7 @@ Item {
                         inactiveColor: view.inactiveColor
                         liteFill: view.liteFill
                         showTranslation: view.showTranslation
+                        centered: view.centered
                     }
 
                     // Click-to-seek on stamped lines. NOT in the Slint

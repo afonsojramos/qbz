@@ -6840,3 +6840,6 @@ msgstr "Liste"
 
 msgid "Tree"
 msgstr "Baum"
+
+msgid "Forward"
+msgstr "Vorwärts"

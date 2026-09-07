@@ -79,25 +79,34 @@ Rectangle {
                     Text { anchors.fill: parent; verticalAlignment: Text.AlignVCenter; text: root.header.artist || ""; color: theme.textSecondary; font.pixelSize: 17; elide: Text.ElideRight }
                     MouseArea { anchors.fill: parent; onClicked: QbzArtist.openArtist(root.header.artistId || "") }
                 }
-                Text { width: parent.width; text: root.header.qualityDetail || ""; color: theme.textMuted; font.pixelSize: 13; elide: Text.ElideRight }
-                Row {
-                    spacing: 10
-                    Repeater {
-                        model: ["Play", "Shuffle"]
-                        delegate: Rectangle {
-                            required property string modelData
-                            required property int index
-                            width: Math.max(64, Math.min(132, (headerInfo.width - 10) / 2)); height: 64
-                            radius: theme.radiusSm; color: index === 0 ? theme.accent : theme.surfaceElevated
-                            Text { anchors.centerIn: parent; text: QbzSession.tr(modelData, QbzSession.trRev); color: index === 0 ? theme.accentText : theme.textPrimary; font.pixelSize: 16 }
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: {
-                                    if (index === 0) QbzPlayer.playAlbum(root.header.id || "")
-                                    else QbzPlayer.playAlbumShuffled(root.header.id || "")
-                                }
-                            }
-                        }
+                // Action row (owner feedback 2026-09-07): icon buttons, not
+                // text; Play/Shuffle plus the three queue insertions
+                // (play next / play later / add to queue), all the SAME height;
+                // and the quality badge floats inline at the right of the same
+                // row instead of owning a line above it.
+                Item {
+                    width: parent.width
+                    height: 48
+                    Row {
+                        id: albumActions
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 8
+                        QbzIconButton { name: "play-fill"; btnSize: 48; iconSize: 22; activeBackground: true; active: true; onClicked: QbzPlayer.playAlbum(root.header.id || "") }
+                        QbzIconButton { name: "shuffle"; btnSize: 48; iconSize: 20; active: QbzPlayer.npShuffle; onClicked: QbzPlayer.playAlbumShuffled(root.header.id || "") }
+                        QbzIconButton { name: "list-start"; btnSize: 48; iconSize: 20; onClicked: QbzPlayer.enqueueAlbum(root.header.id || "", "next") }
+                        QbzIconButton { name: "list-plus"; btnSize: 48; iconSize: 20; onClicked: QbzPlayer.enqueueAlbum(root.header.id || "", "later") }
+                        QbzIconButton { name: "list-end"; btnSize: 48; iconSize: 20; onClicked: QbzPlayer.enqueueAlbum(root.header.id || "", "queue") }
+                    }
+                    QualityBadgeFull {
+                        readonly property string rawTier: root.header.qualityTier || ""
+                        visible: tier !== "" || detail !== ""
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        tier: rawTier === "max" ? "hires" : rawTier === "lossy" ? "mp3" : rawTier
+                        detail: root.header.qualityDetail || ""
+                        showIcon: true
+                        scaleFactor: 1.15
                     }
                 }
             }
@@ -109,7 +118,12 @@ Rectangle {
             width: list.width - 32; height: 64; radius: theme.radiusSm
             readonly property bool current: QbzPlayer.npTrackId === (modelData.id || "")
             readonly property bool navFocused: root.contentFocus && QbzKioskNav.index === index
-            color: navFocused ? Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b, 0.18) : current ? theme.surfaceElevated : "transparent"
+            // Zebra striping (owner feedback 2026-09-07): odd rows carry a faint
+            // fill so a long tracklist reads as banded rows. Current/nav/focus
+            // states win over the stripe.
+            color: navFocused ? Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b, 0.18)
+                : current ? theme.surfaceElevated
+                : (index % 2 === 1 ? theme.surfaceHover : "transparent")
             border.width: navFocused ? 2 : 0; border.color: theme.accent
             Text { id: number; x: 8; width: 34; height: parent.height; text: modelData.number || (index + 1); color: theme.textMuted; font.pixelSize: 14; verticalAlignment: Text.AlignVCenter; horizontalAlignment: Text.AlignRight }
             Text { id: duration; anchors.right: parent.right; anchors.rightMargin: 12; height: parent.height; text: modelData.duration || ""; color: theme.textMuted; font.pixelSize: 13; verticalAlignment: Text.AlignVCenter }

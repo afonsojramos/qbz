@@ -221,6 +221,8 @@ Rectangle {
         LyricsLinesView {
             lines: root.lyricsLines
             synced: root.lyricsSynced
+            // Owner feedback 2026-09-07: the kiosk Now Playing lyrics are centered.
+            centered: true
             // Slint's row reads LyricsState.show-translation itself
             // (LyricsLinesView.slint:271); the Qt view takes it from the host.
             showTranslation: QbzLyrics.showTranslation
@@ -807,23 +809,34 @@ Rectangle {
                     ? Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b, 0.08)
                     : "transparent"
 
-                Flow {
+                // ONE row, the desktop New bar's arrangement (shell/
+                // TransportControls.qml): the three transport buttons in the
+                // middle, the modifiers flanking them — info and shuffle to
+                // the left, repeat, add and favorite to the right. Every
+                // button is CENTRED on the row's axis: the previous Flow
+                // top-aligned a mix of 44px and 64px buttons, which is the
+                // misalignment reported on 2026-09-07. The cluster sits on
+                // the panel's centre and gives way to the quality stamp only
+                // when the panel is too narrow for both.
+                Row {
                     id: transport
-                    x: 4; y: 4
-                    width: Math.max(0, transportRow.width - 8)
-                    height: childrenRect.height
+                    x: Math.max(4, Math.min((transportRow.width - width) / 2,
+                                            transportRow.width - width - qualityStamp.width - 12))
+                    y: 4
+                    height: 64
                     spacing: 2
-                    QbzIconButton { name: "shuffle"; btnSize: 44; iconSize: 20; active: QbzPlayer.npShuffle; btnEnabled: QbzPlayer.npHasTrack; onClicked: QbzPlayer.toggleShuffle() }
-                    QbzIconButton { name: "skip-back"; btnSize: 64; iconSize: 24; btnEnabled: QbzPlayer.npHasTrack; onClicked: QbzPlayer.previous() }
-                    QbzIconButton { name: QbzPlayer.npPlaying ? "pause" : "play-fill"; btnSize: 64; iconSize: 28; activeBackground: true; active: true; btnEnabled: QbzPlayer.npHasTrack || QbzQueue.hasPlayTarget; onClicked: QbzPlayer.togglePlay() }
-                    QbzIconButton { name: "skip-forward"; btnSize: 64; iconSize: 24; btnEnabled: QbzPlayer.npHasTrack; onClicked: QbzPlayer.next() }
-                    QbzIconButton { name: QbzPlayer.npRepeatMode === 2 ? "repeat-1" : "repeat"; btnSize: 44; iconSize: 20; active: QbzPlayer.npRepeatMode > 0; btnEnabled: QbzPlayer.npHasTrack; onClicked: QbzPlayer.cycleRepeat() }
-                    QbzIconButton { id: addButton; name: "plus"; btnSize: 44; iconSize: 20; btnEnabled: QbzPlayer.npHasTrack; onClicked: addMenu.openBelowRight(addButton) }
-                    QbzIconButton { name: root.npFavorite ? "heart-filled" : "heart"; btnSize: 44; iconSize: 20; active: root.npFavorite; btnEnabled: QbzPlayer.npHasTrack && root.npSource === "qobuz"; onClicked: QbzQueue.queueToggleFavorite("track", QbzPlayer.npTrackId) }
-                    QbzIconButton { name: "info"; btnSize: 44; iconSize: 20; btnEnabled: QbzPlayer.npHasTrack; onClicked: root.openTrackInfo() }
+                    QbzIconButton { name: "info"; btnSize: 44; iconSize: 20; anchors.verticalCenter: parent.verticalCenter; btnEnabled: QbzPlayer.npHasTrack; onClicked: root.openTrackInfo() }
+                    QbzIconButton { name: "shuffle"; btnSize: 44; iconSize: 20; anchors.verticalCenter: parent.verticalCenter; active: QbzPlayer.npShuffle; btnEnabled: QbzPlayer.npHasTrack; onClicked: QbzPlayer.toggleShuffle() }
+                    QbzIconButton { name: "skip-back"; btnSize: 64; iconSize: 24; anchors.verticalCenter: parent.verticalCenter; btnEnabled: QbzPlayer.npHasTrack; onClicked: QbzPlayer.previous() }
+                    QbzIconButton { name: QbzPlayer.npPlaying ? "pause" : "play-fill"; btnSize: 64; iconSize: 28; anchors.verticalCenter: parent.verticalCenter; activeBackground: true; active: true; btnEnabled: QbzPlayer.npHasTrack || QbzQueue.hasPlayTarget; onClicked: QbzPlayer.togglePlay() }
+                    QbzIconButton { name: "skip-forward"; btnSize: 64; iconSize: 24; anchors.verticalCenter: parent.verticalCenter; btnEnabled: QbzPlayer.npHasTrack; onClicked: QbzPlayer.next() }
+                    QbzIconButton { name: QbzPlayer.npRepeatMode === 2 ? "repeat-1" : "repeat"; btnSize: 44; iconSize: 20; anchors.verticalCenter: parent.verticalCenter; active: QbzPlayer.npRepeatMode > 0; btnEnabled: QbzPlayer.npHasTrack; onClicked: QbzPlayer.cycleRepeat() }
+                    QbzIconButton { id: addButton; name: "plus"; btnSize: 44; iconSize: 20; anchors.verticalCenter: parent.verticalCenter; btnEnabled: QbzPlayer.npHasTrack; onClicked: addMenu.openBelowRight(addButton) }
+                    QbzIconButton { name: root.npFavorite ? "heart-filled" : "heart"; btnSize: 44; iconSize: 20; anchors.verticalCenter: parent.verticalCenter; active: root.npFavorite; btnEnabled: QbzPlayer.npHasTrack && root.npSource === "qobuz"; onClicked: QbzQueue.queueToggleFavorite("track", QbzPlayer.npTrackId) }
                 }
 
                 AudioStamp {
+                    id: qualityStamp
                     anchors.right: transportRow.right
                     anchors.rightMargin: 2
                     anchors.bottom: transportRow.bottom

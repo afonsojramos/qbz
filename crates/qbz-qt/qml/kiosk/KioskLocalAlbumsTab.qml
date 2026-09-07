@@ -27,7 +27,10 @@ Item {
 
     property var view: null
 
+    // The native reader knows no favorites (LocalLibraryView.qml:341-344):
+    // under "Favorites only" the host loads the legacy document instead.
     readonly property bool nativeActive: QbzLocal.localAlbumsNativeActive
+        && !(root.view && root.view.favoriteOnly)
     readonly property var nativeModel: QbzLocalAlbums
     readonly property int albumTotal: root.nativeActive
         ? (QbzLocal.localAlbumsNativeTotal || 0)
@@ -49,7 +52,8 @@ Item {
     function resetNativeQuery() {
         if (grid.columns <= 0)
             return
-        QbzLocal.albumsNativeReset("", "artist-asc", "off", "{}", grid.columns)
+        QbzLocal.albumsNativeReset("", "artist-asc", "off",
+                                   root.view ? root.view.filterJson : "{}", grid.columns)
     }
     Component.onCompleted: {
         queryCoalescer.restart()
@@ -76,6 +80,12 @@ Item {
         // Album identity is a query, not a filter: flipping it invalidates the
         // descriptor exactly as it does on the desktop tab.
         function onLocalAlbumModeChanged() { queryCoalescer.restart() }
+    }
+    // The funnel IS part of the descriptor: a chip toggled in the host's
+    // sheet re-issues the native query.
+    Connections {
+        target: root.view
+        function onFilterJsonChanged() { queryCoalescer.restart() }
     }
 
     // The model only asks for a page when this signal has a receiver

@@ -6828,3 +6828,6 @@ msgstr "Lijst"
 
 msgid "Tree"
 msgstr "Boomstructuur"
+
+msgid "Forward"
+msgstr "Vooruit"

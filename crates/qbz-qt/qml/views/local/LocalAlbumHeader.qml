@@ -251,6 +251,25 @@ Row {
             font.pixelSize: theme.fontBody
             elide: Text.ElideRight
         }
+        // Kiosk-only album quality badge (owner feedback 2026-09-07: on the
+        // panel the quality was unknown until a track played). The album row
+        // carries the same tier/detail the cards badge; Rust's "max"/"lossy"
+        // spellings fold into the four names the badge draws, as
+        // controls/QualityBadge.qml does. Desktop keeps its layout untouched.
+        Item {
+            visible: root.kioskHost && kioskQuality.tier !== ""
+            width: parent.width
+            height: visible ? kioskQuality.implicitHeight + 8 : 0
+            QualityBadgeFull {
+                id: kioskQuality
+                readonly property string rawTier: root.album ? (root.album.qualityTier || "") : ""
+                tier: rawTier === "max" ? "hires" : rawTier === "lossy" ? "mp3" : rawTier
+                detail: root.album ? (root.album.qualityDetail || "") : ""
+                showIcon: true
+                scaleFactor: 1.15
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
         Item { width: 1; height: root.compact ? 10 : 20 }
 
         // ---- Local action row ----

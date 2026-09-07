@@ -6838,3 +6838,6 @@ msgstr "Liste"
 
 msgid "Tree"
 msgstr "Arborescence"
+
+msgid "Forward"
+msgstr "Suivant"

@@ -1,11 +1,11 @@
 // Touch transport: shared bridge state/actions, a single 64px footprint.
-// Detailed queue, seek and secondary actions live in the Now Playing route.
+// Detailed queue, seek and secondary actions live in the Now Playing route;
+// Qobuz Connect and Cast live in the back bar (KioskShell.qml).
 import QtQuick
 import QtQuick.Controls
 import com.blitzfc.qbz
 import "../controls"
 import "../theme"
-import "../shell"
 
 Rectangle {
     id: root
@@ -97,6 +97,14 @@ Rectangle {
             }
         }
     }
+    // The transport cluster. Owner feedback 2026-09-07: the hidden "more"
+    // menu is gone — Connect and Cast moved to the back bar (KioskShell),
+    // Settings has its NavRail tile, Immersive has the Visualizer tile — so
+    // every remaining control is a permanent 64px button: shuffle/repeat
+    // (wide panels only; Now Playing carries them everywhere), the three
+    // transport buttons, an always-visible Volume button whose slider opens
+    // VERTICALLY above the bar, the Now Playing shortcut and the way back
+    // to Desktop mode.
     Row {
         id: transport
         anchors.right: parent.right
@@ -132,87 +140,93 @@ Rectangle {
             onClicked: QbzPlayer.cycleRepeat()
         }
         TouchButton {
+            id: volumeButton
+            name: QbzPlayer.npMuted ? "volume-x" : "volume-2"
+            label: QbzSession.tr("Volume", QbzSession.trRev)
+            active: volumePopup.opened
+            onClicked: root.openVolume()
+        }
+        TouchButton {
             name: "list-music"; label: QbzSession.tr("Now Playing", QbzSession.trRev)
             onClicked: QbzShell.navigateTo("nowplaying")
         }
         TouchButton {
-            name: "maximize-2"; label: QbzSession.tr("Immersive", QbzSession.trRev)
-            onClicked: QbzImmersive.open = true
-        }
-        TouchButton {
-            id: moreButton
-            name: "ellipsis"; label: QbzSession.tr("More options", QbzSession.trRev)
-            onClicked: moreMenu.open()
+            name: "monitor"; label: QbzSession.tr("Desktop mode", QbzSession.trRev)
+            onClicked: QbzSession.toggleProfile()
         }
     }
+
+    // Volume lock, both halves (PlayerBar.qml:86-96): the ALSA-Direct
+    // hardware derivation while local, and the peer's "no remote volume".
+    readonly property bool volumeLocked:
+        (QbzPlayer.npVolumeLocked && !QbzPlayer.npIsRemote) || QbzPlayer.npRemoteVolumeLocked
+
+    /// Opens the vertical volume sheet ABOVE its button, horizontally centred
+    /// on it and clamped 8px inside the window on every side. The sheet's
+    /// length is derived from the window height, so it can never be taller
+    /// than the space above the bar — on a 480px panel the slider shortens
+    /// rather than the window eating it.
+    function openVolume() {
+        if (volumePopup.opened) {
+            volumePopup.close()
+            return
+        }
+        var win = volumePopup.parent
+        var g = volumeButton.mapToItem(null, volumeButton.width / 2, 0)
+        volumePopup.x = Math.max(8, Math.min(g.x - volumePopup.width / 2,
+                                             win.width - volumePopup.width - 8))
+        volumePopup.y = Math.max(8, g.y - volumePopup.height - 8)
+        volumePopup.open()
+    }
+
     Popup {
-        id: moreMenu
+        id: volumePopup
         parent: Overlay.overlay
-        width: Math.min(380, parent ? parent.width - 24 : 380)
-        height: menuColumn.height + 24
-        x: parent ? parent.width - width - 12 : 0
-        y: parent ? Math.max(12, parent.height - root.barHeight - height - 8) : 0
+        // Slider travel: whatever fits between the bar and the top of the
+        // window, between 120 and 260px.
+        readonly property real sliderLength: Math.max(120, Math.min(260,
+            (parent ? parent.height : 480) - root.barHeight - 64 - 24 - 32))
+        width: 64 + 24
+        height: sliderLength + 8 + 64 + 24
         padding: 12
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
         background: Rectangle { color: theme.surfaceCard; radius: 8; border.color: theme.borderSubtle; border.width: 1 }
+        onOpened: volumeControl.forceActiveFocus()
         Column {
-            id: menuColumn
-            width: parent.width
+            width: 64
             spacing: 8
-            Row {
-                spacing: 4
-                TouchButton {
-                    name: "shuffle"; label: QbzSession.tr("Shuffle", QbzSession.trRev)
-                    available: QbzPlayer.npHasTrack; active: QbzPlayer.npShuffle
-                    onClicked: QbzPlayer.toggleShuffle()
-                }
-                TouchButton {
-                    name: QbzPlayer.npRepeatMode === 2 ? "repeat-1" : "repeat"
-                    label: QbzSession.tr("Repeat", QbzSession.trRev)
-                    available: QbzPlayer.npHasTrack; active: QbzPlayer.npRepeatMode > 0
-                    onClicked: QbzPlayer.cycleRepeat()
-                }
-                TouchButton {
-                    name: QbzPlayer.npMuted ? "volume-x" : "volume-2"
-                    label: QbzSession.tr("Mute", QbzSession.trRev)
-                    available: volumeControl.enabled
-                    active: QbzPlayer.npMuted
-                    onClicked: QbzPlayer.toggleMute()
-                }
-                TouchButton {
-                    name: "settings-2"; label: QbzSession.tr("Settings", QbzSession.trRev)
-                    onClicked: { moreMenu.close(); QbzShell.navigateTo("settings") }
+            // The shared horizontal slider, turned on its side: a 64px-tall
+            // slider of `sliderLength` width rotated a quarter turn
+            // counter-clockwise occupies a 64 x sliderLength box centred on
+            // the same point, and its +x (louder) axis now points UP. Qt
+            // maps pointer events through the transform, so the drag math
+            // in QbzSlider is untouched.
+            Item {
+                width: 64
+                height: volumePopup.sliderLength
+                QbzSlider {
+                    id: volumeControl
+                    kioskHost: true
+                    width: parent.height
+                    height: 44
+                    anchors.centerIn: parent
+                    rotation: -90
+                    minimum: 0; maximum: 1000
+                    enabled: !root.volumeLocked
+                    value: Math.round(QbzPlayer.npVolume * 1000)
+                    onChanged: function (v) { QbzPlayer.setVolume(v / 1000.0) }
+                    onReleased: function (v) { QbzPlayer.persistVolume(v / 1000.0) }
                 }
             }
-            QbzSlider {
-                id: volumeControl
-                kioskHost: true
-                width: parent.width
-                minimum: 0; maximum: 1000
-                enabled: !((QbzPlayer.npVolumeLocked && !QbzPlayer.npIsRemote) || QbzPlayer.npRemoteVolumeLocked)
-                value: Math.round(QbzPlayer.npVolume * 1000)
-                onChanged: function (v) { QbzPlayer.setVolume(v / 1000.0) }
-                onReleased: function (v) { QbzPlayer.persistVolume(v / 1000.0) }
-            }
-            SettingsButton {
-                width: parent.width; kioskHost: true
-                text: QbzSession.tr("Qobuz Connect", QbzSession.trRev)
-                onClicked: { moreMenu.close(); connectMenu.openAboveRight(moreButton) }
-            }
-            SettingsButton {
-                width: parent.width; kioskHost: true
-                text: QbzSession.tr("Cast", QbzSession.trRev)
-                onClicked: { moreMenu.close(); QbzCast.openPicker() }
-            }
-            SettingsButton {
-                width: parent.width; kioskHost: true
-                text: QbzSession.tr("Desktop mode", QbzSession.trRev)
-                onClicked: { moreMenu.close(); QbzSession.toggleProfile() }
+            TouchButton {
+                name: QbzPlayer.npMuted ? "volume-x" : "volume-2"
+                label: QbzSession.tr("Mute", QbzSession.trRev)
+                available: !root.volumeLocked
+                active: QbzPlayer.npMuted
+                onClicked: QbzPlayer.toggleMute()
             }
         }
     }
-    QconnectFlyout { id: connectMenu }
-    CastPicker { }
     Rectangle {
         width: parent.width; height: 2
         color: theme.surfaceElevated

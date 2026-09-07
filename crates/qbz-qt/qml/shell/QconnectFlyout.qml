@@ -94,6 +94,13 @@ Popup {
         _place(g.x, g.y, sourceItem.Window.window)
     }
 
+    // Top-bar placement (the kiosk back bar): below the trigger, right edges
+    // aligned, then the same 8px window clamp.
+    function openBelowRight(sourceItem) {
+        var g = sourceItem.mapToItem(null, sourceItem.width - width, sourceItem.height + 4)
+        _place(g.x, g.y, sourceItem.Window.window)
+    }
+
     // The Slint chrome: surface-main, Radius.sm, 1px border-muted.
     background: Rectangle {
         color: theme.surfaceMain
