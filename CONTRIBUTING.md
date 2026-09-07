@@ -110,6 +110,10 @@ Prefer:
 ## What to include in PRs
 
 - A short description of the problem and solution.
+- For a bug fix: the observed behavior, the root cause or best-supported
+  diagnosis, and why the proposed change addresses it.
+- For a feature: the user need, the existing flow or components you inspected,
+  and the constraints the design preserves.
 - Screenshots for UI changes when possible.
 - The checks or manual tests you ran.
 - The LLM disclosure described below, or `None` if no LLM was used.
@@ -125,13 +129,20 @@ deliberately no predefined model list to keep current: report the identifier
 shown by the tool at the time of the contribution.
 
 List different models separately when they handled different stages, such as
-diagnosis, implementation, tests or review. Use one line per model:
+repository/context mapping, problem definition, root-cause analysis,
+plan/contract/dependency graph, implementation, tests or code review. Include
+only the stages that apply and use one line per model:
 
 ```text
-- <provider and model/version shown by the tool>: diagnosis
-- <provider and model/version shown by the tool>: implementation and tests
-- <provider and model/version shown by the tool>: review
+- <provider and model/version shown by the tool>: repository mapping, diagnosis
+- <provider and model/version shown by the tool>: plan/contract, implementation
+- <provider and model/version shown by the tool>: tests, code review
 ```
+
+Saying only that a change was "prompted" or "AI-generated" does not describe
+the engineering process. The PR should make it possible to see how the problem,
+existing code, constraints and proposed solution were understood before the
+change was submitted.
 
 If the exact model is not shown by the tool, say that instead of guessing.
 Prompt transcripts and private conversations are not required. This disclosure
