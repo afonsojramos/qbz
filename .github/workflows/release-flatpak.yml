@@ -150,7 +150,7 @@ jobs:
       - name: Install flatpak tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder
+          sudo apt-get install -y flatpak flatpak-builder dbus-daemon
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 
       - name: Install runtimes
@@ -175,20 +175,24 @@ jobs:
           echo "bundle_name=${BUNDLE_NAME}" >> "$GITHUB_OUTPUT"
           ls -la dist
 
-      # The bundle must boot on the KDE runtime's Qt: same offscreen gate as
-      # the Linux AppDir, run inside the sandbox.
+      # Observe flatpak run until the deadline, with a fresh sandbox profile
+      # and private bus. A crash/early exit after core init must still fail.
       - name: Offscreen smoke (inside the sandbox)
         run: |
-          set -uo pipefail
+          set -euo pipefail
           flatpak install --user -y --noninteractive --bundle "dist/${{ steps.build_flatpak.outputs.bundle_name }}" || \
             flatpak install --user -y --noninteractive "dist/${{ steps.build_flatpak.outputs.bundle_name }}"
-          timeout 60 flatpak run --env=QT_QPA_PLATFORM=offscreen --env=RUST_LOG=info com.blitzfc.qbz > smoke.log 2>&1 || true
-          lines=$(wc -l < smoke.log); echo "smoke log: $lines lines"
-          if (( lines < 10 )); then cat smoke.log; echo "::error::the app did not start"; exit 1; fi
-          errs=$(grep -av 'propertyCache' smoke.log | grep -aciE 'is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed' || true)
-          if (( errs > 0 )); then grep -av 'propertyCache' smoke.log | grep -aiE 'is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed' | head -20; echo "::error::$errs QML complaint(s)"; exit 1; fi
-          grep -aq 'QbzCore initialized' smoke.log || { tail -20 smoke.log; echo "::error::never reached QbzCore init"; exit 1; }
-          echo "smoke OK"
+          python3 scripts/packaging/smoke_release.py com.blitzfc.qbz \
+            --flatpak --seconds 60 --log smoke.log
+
+      - name: Upload deployed startup evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qbz-flatpak-smoke
+          path: smoke.log*
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload Flatpak bundle
         uses: actions/upload-artifact@v7

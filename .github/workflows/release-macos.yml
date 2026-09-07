@@ -263,30 +263,25 @@ jobs:
           cp "$QT_ROOT_DIR/plugins/platforms/libqoffscreen.dylib" "$APP/Contents/PlugIns/platforms/"
           du -sh "$APP"
 
-      # THE gate: the bundle boots without the Qt install. Pass = >= 10 log
-      # lines, zero QML complaints, core initialized (login screen reached;
-      # `home published` needs a session CI does not have).
+      # The bundle must initialize AND survive without the Qt SDK. The helper
+      # uses a private native macOS home (XDG alone is ineffective), restores
+      # the SDK on failure/cancellation and reaps the observed process group.
       - name: Offscreen smoke (the bundle that ships)
         run: |
-          set -uo pipefail
+          set -euo pipefail
           APP="dist/QBZ.app"
-          mv "$QT_ROOT_DIR" "${QT_ROOT_DIR}.hidden"
-          ( env -u DYLD_LIBRARY_PATH -u DYLD_FRAMEWORK_PATH -u QT_PLUGIN_PATH -u QML_IMPORT_PATH -u QML2_IMPORT_PATH \
-              QT_QPA_PLATFORM=offscreen RUST_LOG=info "$APP/Contents/MacOS/qbz" > smoke.log 2>&1 & echo $! > smoke.pid )
-          sleep 45; kill "$(cat smoke.pid)" 2>/dev/null || true; sleep 1
-          mv "${QT_ROOT_DIR}.hidden" "$QT_ROOT_DIR"
-          lines=$(wc -l < smoke.log | tr -d ' ')
-          echo "smoke log: $lines lines"
-          if (( lines < 10 )); then cat smoke.log; echo "::error::the app did not start"; exit 1; fi
-          errs=$(grep -av 'propertyCache' smoke.log \
-            | grep -aciE 'is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed|Library not loaded|dyld' || true)
-          if (( errs > 0 )); then
-            grep -av 'propertyCache' smoke.log | grep -aiE 'is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed|Library not loaded|dyld' | head -20
-            echo "::error::$errs QML/loader complaint(s) in the smoke log"; exit 1
-          fi
-          grep -aq 'QbzCore initialized' smoke.log || { tail -20 smoke.log; echo "::error::never reached QbzCore init"; exit 1; }
+          python3 scripts/packaging/smoke_release.py "$APP/Contents/MacOS/qbz" \
+            --hide-qt "$QT_ROOT_DIR" --seconds 45 --log smoke.log
           rm -f "$APP/Contents/PlugIns/platforms/libqoffscreen.dylib"
-          echo "smoke OK (0 QML complaints, core initialized)"
+
+      - name: Upload deployed startup evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qbz-macos-smoke-${{ matrix.arch }}
+          path: smoke.log*
+          if-no-files-found: ignore
+          retention-days: 14
 
       # Ad-hoc signature: required for arm64 Macs to launch at all. AFTER
       # macdeployqt (it rewrites install names) and after the smoke plugin

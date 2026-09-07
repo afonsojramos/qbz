@@ -114,7 +114,7 @@ jobs:
             libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 \
             libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-xfixes0 libxcb-glx0 \
             libwayland-client0 libwayland-egl1 libwayland-cursor0 libegl1 libgl1 \
-            patchelf file binutils
+            patchelf file binutils dbus-daemon
 
       # Official Qt binaries — WITHOUT qtshadertools: with qsb on PATH build.rs
       # re-bakes shaders by mtime and a fresh checkout is nondeterministic.
@@ -239,29 +239,22 @@ jobs:
           test -f AppDir/usr/share/licenses/qbz/third-party/Apache-2.0-dst-decoder.txt
           du -sh AppDir
 
-      # THE gate. Runs the AppDir with the Qt install removed from the
-      # environment so a missing plugin/module cannot be masked by the build
-      # box. Pass = the app booted (>= 10 log lines), reached core init, and
-      # the QML engine logged no complaint. `home published` is NOT required:
-      # it needs a logged-in session and CI has none — the boot stops at the
-      # login screen, which is the point this gate proves reachable.
+      # The shipped AppDir must initialize AND survive the observation window.
+      # Hide the SDK and use a fresh profile/private bus; early exit (even 0)
+      # fails. The helper reaps the launcher and its private process group.
       - name: Offscreen smoke (the AppDir that ships)
         run: |
-          set -uo pipefail
-          env -u LD_LIBRARY_PATH -u QT_PLUGIN_PATH -u QML_IMPORT_PATH -u QML2_IMPORT_PATH \
-            QT_QPA_PLATFORM=offscreen RUST_LOG=info \
-            timeout 60 ./AppDir/AppRun > smoke.log 2>&1 || true
-          lines=$(wc -l < smoke.log)
-          echo "smoke log: $lines lines"
-          if (( lines < 10 )); then cat smoke.log; echo "::error::the app did not start"; exit 1; fi
-          errs=$(grep -av 'propertyCache' smoke.log \
-            | grep -aciE 'is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed' || true)
-          if (( errs > 0 )); then
-            grep -av 'propertyCache' smoke.log | grep -aiE 'is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed' | head -20
-            echo "::error::$errs QML complaint(s) in the smoke log"; exit 1
-          fi
-          grep -aq 'QbzCore initialized' smoke.log || { tail -20 smoke.log; echo "::error::never reached QbzCore init"; exit 1; }
-          echo "smoke OK (0 QML complaints, core initialized)"
+          python3 scripts/packaging/smoke_release.py ./AppDir/AppRun \
+            --hide-qt "$QT_ROOT_DIR" --seconds 60 --log smoke.log
+
+      - name: Upload deployed startup evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qbz-appdir-smoke-${{ inputs.arch }}
+          path: smoke.log*
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload bare binary
         uses: actions/upload-artifact@v7

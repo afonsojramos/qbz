@@ -45,6 +45,8 @@ on:
       - "scripts/test_qt_build_gates.py"
       - "scripts/packaging/windows_crt.py"
       - "scripts/packaging/test_windows_crt.py"
+      - "scripts/packaging/smoke_release.py"
+      - "scripts/packaging/test_smoke_release.py"
       - "scripts/qml-audits/**"
       - ".github/workflows/test-crates.yml"
   push:
@@ -58,6 +60,8 @@ on:
       - "scripts/test_qt_build_gates.py"
       - "scripts/packaging/windows_crt.py"
       - "scripts/packaging/test_windows_crt.py"
+      - "scripts/packaging/smoke_release.py"
+      - "scripts/packaging/test_smoke_release.py"
       - "scripts/qml-audits/**"
       - ".github/workflows/test-crates.yml"
   workflow_dispatch:
