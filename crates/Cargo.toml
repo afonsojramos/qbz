@@ -124,6 +124,8 @@ strsim = "0.11"
 # contract. Drop this patch once a rust_cast release carries the fix upstream.
 [patch.crates-io]
 rust_cast = { path = "vendor/rust_cast" }
+# Narrow UPnP endpoint compatibility; retain current http for every consumer.
+rupnp = { path = "../third-party/rupnp" }
 
 [profile.release]
 # Strip symbol tables from release binaries. Measured on 2026-07-02:

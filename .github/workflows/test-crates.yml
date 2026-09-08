@@ -15,7 +15,8 @@
 #               2048/2064-sector TOC/frame/seek equivalence and scanner import/
 #               failed-read preservation, plus the DLNA device-description
 #               tolerance suite (empty and relative SCPDURL/controlURL must
-#               still parse — the guard on qbz-cast's http =1.4.0 pin, #745).
+#               still parse with current http — local rupnp patch, #745).
+#               Normal-renderer v1/v3 transport/volume SOAP is also gated.
 #               ~5 min cold.
 #   qt-gate   — the Qt frontend: the five static QML audits, `cargo test -p
 #               qbz-qt`, the Slint-free dep-graph gate, and an OFFSCREEN BOOT of

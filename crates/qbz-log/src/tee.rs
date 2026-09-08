@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use log::{Log, Metadata, Record};
 
@@ -26,40 +26,6 @@ pub struct TeeLogger {
 struct Output {
     file: Option<BufWriter<File>>,
     consecutive: ConsecutiveRecords,
-    file_flush: FileFlush,
-}
-
-/// How stale the on-disk log may be. The file sink is a `BufWriter`, so
-/// without a bound a process KILLED while wedged loses up to 8 KiB of the
-/// most interesting lines — and "I had to force-kill it" is the state every
-/// hang report is filed from (#749). Flushing per line instead would turn a
-/// burst (CMAF segment progress, discovery chatter) into one write syscall
-/// per record, so the file is allowed to lag by at most this much.
-const FILE_FLUSH_INTERVAL: Duration = Duration::from_millis(200);
-
-/// When the file sink must reach the disk. Split out so the policy is
-/// testable without touching a file.
-struct FileFlush {
-    last: Instant,
-    interval: Duration,
-}
-
-impl FileFlush {
-    fn new(now: Instant, interval: Duration) -> Self {
-        Self {
-            last: now,
-            interval,
-        }
-    }
-
-    /// `urgent` — a warning/error or a repeat summary — never waits.
-    fn due(&mut self, now: Instant, urgent: bool) -> bool {
-        if urgent || now.duration_since(self.last) >= self.interval {
-            self.last = now;
-            return true;
-        }
-        false
-    }
 }
 
 impl TeeLogger {
@@ -69,7 +35,6 @@ impl TeeLogger {
             output: Mutex::new(Output {
                 file,
                 consecutive: ConsecutiveRecords::default(),
-                file_flush: FileFlush::new(Instant::now(), FILE_FLUSH_INTERVAL),
             }),
         }
     }
@@ -124,20 +89,14 @@ impl Log for TeeLogger {
         };
         let now = Instant::now();
         let [summary, first] = output.consecutive.push(line, now);
-        let summarized = summary.is_some();
         for line in [summary, first].into_iter().flatten() {
             output.write(line);
         }
-        // Compaction may no longer fill BufWriter for minutes, and a wedged
-        // process is killed rather than exiting: make periodic summaries,
-        // anything at WARN or worse, and otherwise the last
-        // FILE_FLUSH_INTERVAL of ordinary records visible to a live file tail
-        // and survivable across a SIGKILL.
-        let urgent = summarized || record.level() <= log::Level::Warn;
-        if output.file_flush.due(now, urgent) {
-            if let Some(writer) = &mut output.file {
-                let _ = writer.flush();
-            }
+        // Flush each emitted batch before returning, including the last INFO
+        // before a hang. A time check on the next record cannot bound an idle
+        // buffer. Duplicate compaction still avoids writes for repeated lines.
+        if let Some(writer) = &mut output.file {
+            let _ = writer.flush();
         }
     }
 
@@ -159,29 +118,41 @@ mod tests {
     use super::*;
     use log::Level;
 
-    /// A wedged process is force-killed, so the file sink may never lag by
-    /// more than the interval, and a warning must never sit in the buffer.
     #[test]
-    fn file_flush_is_bounded_and_urgent_records_never_wait() {
-        let start = Instant::now();
-        let mut policy = FileFlush::new(start, Duration::from_millis(200));
-
-        assert!(
-            !policy.due(start + Duration::from_millis(10), false),
-            "an ordinary record inside the window stays buffered"
+    fn last_info_is_visible_without_another_record_or_explicit_flush() {
+        // The real logger writes to the process-global ring. Isolate this
+        // exercise from the ring unit test, which checks exact FIFO contents.
+        const MARKER: &str = "QBZ_LOG_LAST_INFO_TEST_CHILD";
+        if std::env::var_os(MARKER).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "tee::tests::last_info_is_visible_without_another_record_or_explicit_flush",
+                    "--exact",
+                ])
+                .env(MARKER, "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        let path = std::env::temp_dir().join(format!("qbz-log-last-info-{}", std::process::id()));
+        let file = File::create(&path).unwrap();
+        let inner = env_logger::Builder::new()
+            .filter_level(log::LevelFilter::Info)
+            .build();
+        let logger = TeeLogger::new(inner, Some(BufWriter::new(file)));
+        logger.log(
+            &Record::builder()
+                .level(Level::Info)
+                .target("test")
+                .args(format_args!("last startup message"))
+                .build(),
         );
-        assert!(
-            policy.due(start + Duration::from_millis(20), true),
-            "a warning or a summary flushes immediately"
-        );
-        assert!(
-            !policy.due(start + Duration::from_millis(100), false),
-            "the urgent flush restarts the window"
-        );
-        assert!(
-            policy.due(start + Duration::from_millis(220), false),
-            "an ordinary record past the window flushes"
-        );
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("last startup message"));
+        drop(logger);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

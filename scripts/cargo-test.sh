@@ -17,7 +17,7 @@
 #     paused writes nothing, clear + VACUUM, is_play/is_skip bounds).
 #   + the DLNA device-description tolerance suite (qbz-cast): a renderer whose
 #     SCPDURL/controlURL/eventSubURL is empty or relative must still parse.
-#     It is the guard on qbz-cast's `http = "=1.4.0"` pin (#745).
+#     The local rupnp compatibility patch must preserve current http (#745).
 #   + the fatal-signal reporter check (qbz-log): a real child process is
 #     segfaulted on purpose; the handler must name the signal and the process
 #     must still die OF that signal.
@@ -137,15 +137,14 @@ cargo test --manifest-path crates/Cargo.toml -p qconnect-protocol --lib -- decod
 cargo test --manifest-path crates/Cargo.toml -p qbz-log --lib -- repeat::tests::
 
 say "gate: DLNA device-description tolerance present and green (#745)"
-# rupnp parses SCPDURL/controlURL/eventSubURL as http::uri::PathAndQuery, and
-# http 1.5.0 started rejecting empty and non-slash-prefixed values that 1.4.0
-# accepted -- which silently dropped every renderer with that firmware shape
-# (KEF LSX gen 1, "Visible Renderers: 0" in 2.1.0). qbz-cast pins http to
-# =1.4.0; this suite is the guard that notices if the pin is ever lifted.
+# The local rupnp patch accepts legacy service URLs without downgrading http.
+# Invalid/oversized URLs must remain rejected.
 n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-cast --test dlna_description_tolerance -- --list 2>/dev/null \
     | grep -c ': test$' || true)
-(( n >= 2 )) || { echo "DLNA description tolerance suite has $n tests (expected >= 2)"; exit 1; }
+(( n >= 4 )) || { echo "DLNA description tolerance suite has $n tests (expected >= 4)"; exit 1; }
 cargo test --manifest-path crates/Cargo.toml -p qbz-cast --test dlna_description_tolerance
+# Normal v1/v3 renderers must retain the same transport/volume SOAP contract.
+cargo test --manifest-path crates/Cargo.toml -p qbz-cast --test dlna_wire_compatibility
 
 say "gate: a fatal signal reports itself (#749 / packaged-AppDir SIGSEGV)"
 # The intermittent startup segfault in the shipped AppDir left nothing but

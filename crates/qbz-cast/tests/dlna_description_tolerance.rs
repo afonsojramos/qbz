@@ -1,14 +1,14 @@
 //! Regression gate for #745 — DLNA renderers vanished in 2.1.0.
 //!
-//! A KEF LSX (gen 1) answered the SSDP M-SEARCH but was dropped with
-//! `Invalid response: empty string` while fetching its device description.
-//! The cause is not the network: `rupnp` parses `SCPDURL` / `controlURL` /
-//! `eventSubURL` as `http::uri::PathAndQuery`, and `http` 1.5.0 started
+//! A report of a missing KEF LSX (gen 1) included discovery failures with
+//! `Invalid response: empty string`; the failing device XML was not attached.
+//! A reproduced cause consistent with that error: `rupnp` parses service
+//! URLs as `http::uri::PathAndQuery`, and `http` 1.5.0 started
 //! rejecting inputs that 1.4.0 accepted — an empty element, and any relative
-//! URL without a leading slash. Both shapes are common in old UPnP firmware.
+//! URL without a leading slash. These fixtures are synthetic, not captured KEF XML.
 //!
-//! These tests serve a description locally and assert the device still parses.
-//! They fail with `http` 1.5.0 and pass with 1.4.0.
+//! The tolerance cases fail with upstream rupnp + http 1.5.0. The local
+//! rupnp patch restores them while keeping http 1.5.0 for the whole workspace.
 
 use std::net::SocketAddr;
 use std::thread::JoinHandle;
@@ -83,7 +83,7 @@ fn serve_once(body: &'static str) -> (SocketAddr, JoinHandle<()>) {
         .expect("loopback listener has an ip");
 
     let handle = std::thread::spawn(move || {
-        if let Ok(request) = server.recv() {
+        if let Ok(Some(request)) = server.recv_timeout(std::time::Duration::from_secs(5)) {
             let response = tiny_http::Response::from_string(body).with_header(
                 tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/xml"[..])
                     .expect("static header"),
@@ -131,4 +131,40 @@ async fn description_with_relative_service_urls_still_parses() {
     assert_eq!(device.friendly_name(), "Legacy Renderer");
     assert!(has_service(&device, ":service:AVTransport:"));
     assert!(has_service(&device, ":service:RenderingControl:"));
+}
+
+#[tokio::test]
+async fn empty_http_body_is_an_xml_error_not_empty_uri() {
+    let (addr, handle) = serve_once("");
+    let result =
+        rupnp::Device::from_url(format!("http://{addr}/description.xml").parse().unwrap()).await;
+    handle.join().unwrap();
+    assert!(
+        matches!(result, Err(rupnp::Error::XmlError(_))),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn malformed_and_oversized_service_urls_remain_rejected() {
+    for invalid in [
+        "bad path".to_string(),
+        "/bad path".to_string(),
+        "x".repeat(70_000),
+    ] {
+        let body: &'static str = Box::leak(
+            EMPTY_SERVICE_URLS
+                .replace("/AVTransport/control", &invalid)
+                .into_boxed_str(),
+        );
+        let (addr, handle) = serve_once(body);
+        let result =
+            rupnp::Device::from_url(format!("http://{addr}/description.xml").parse().unwrap())
+                .await;
+        handle.join().unwrap();
+        assert!(
+            matches!(result, Err(rupnp::Error::InvalidResponse(_))),
+            "{result:?}"
+        );
+    }
 }
