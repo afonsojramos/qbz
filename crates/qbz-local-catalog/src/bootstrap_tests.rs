@@ -348,15 +348,16 @@ fn remote_collection_art_fills_missing_covers_without_replacing_track_art() {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(
                 "ALTER TABLE remote_cache_tracks ADD COLUMN collection_artwork_token TEXT;
+                 ALTER TABLE remote_cache_tracks ADD COLUMN album_id TEXT;
                  DELETE FROM remote_cache_tracks;",
             )
             .unwrap();
             conn.execute(
                 "INSERT INTO remote_cache_tracks
                  (id,source,item_id,server_id,title,artist,album_artist,album,
-                  duration_ms,artwork_token,collection_artwork_token,updated_at)
+                  duration_ms,artwork_token,collection_artwork_token,updated_at,album_id)
                  VALUES (1,?1,'track','server','Track','Artist','Artist','Album',
-                         180000,?2,?3,1)",
+                         180000,?2,?3,1,'album-id')",
                 rusqlite::params![source, item_art, collection_art],
             )
             .unwrap();
