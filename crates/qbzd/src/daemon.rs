@@ -42,6 +42,10 @@ pub struct BootedRuntime {
 pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Result<i32, String> {
     // 1. argv parse happened in main(). 2. logging:
     qbz_log::install(&cfg.log.level);
+    // A headless daemon that dies of a signal leaves even less behind than
+    // the GUI does: no window, no user watching. Same reporter, same reason
+    // (qbz-log/src/fatal.rs).
+    qbz_log::install_fatal_signal_reporter();
     // 2b. Host memory profile (issue #660: qbzd OOM-killed on a 1 GB Pi 3B):
     //     one-shot Normal/LowMemory detection, pushed into the player as the
     //     initial-buffer cap, the L1 cache budget and the low-memory class

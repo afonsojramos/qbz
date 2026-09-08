@@ -18,6 +18,9 @@
 #   + the DLNA device-description tolerance suite (qbz-cast): a renderer whose
 #     SCPDURL/controlURL/eventSubURL is empty or relative must still parse.
 #     It is the guard on qbz-cast's `http = "=1.4.0"` pin (#745).
+#   + the fatal-signal reporter check (qbz-log): a real child process is
+#     segfaulted on purpose; the handler must name the signal and the process
+#     must still die OF that signal.
 #   --workspace today = the 42 members of crates/Cargo.toml minus qbz-qt: the
 #   audio/player/cache/DSD/disc/rip core, qbz-app/core/models/theme/i18n,
 #   the Qobuz client and the source seam, Plex/Jellyfin/Subsonic + media
@@ -143,6 +146,12 @@ n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-cast --test dlna_descrip
     | grep -c ': test$' || true)
 (( n >= 2 )) || { echo "DLNA description tolerance suite has $n tests (expected >= 2)"; exit 1; }
 cargo test --manifest-path crates/Cargo.toml -p qbz-cast --test dlna_description_tolerance
+
+say "gate: a fatal signal reports itself (#749 / packaged-AppDir SIGSEGV)"
+# The intermittent startup segfault in the shipped AppDir left nothing but
+# `status -11`. The reporter must keep naming the signal AND must keep the wait
+# status a signal, so CI, the smoke harness and core dumps still see a crash.
+cargo test --manifest-path crates/Cargo.toml -p qbz-log --test fatal_signal
 
 say "gate: qbzd resolves no Slint crate"
 hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbzd -e normal \

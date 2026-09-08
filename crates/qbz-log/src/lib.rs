@@ -16,6 +16,7 @@
 //! This crate is network-free and UI-free: no `reqwest`, no `tokio`, no `slint`.
 
 pub mod bundle;
+pub mod fatal;
 pub mod install;
 pub mod line;
 pub mod redact;
@@ -24,6 +25,7 @@ pub mod ring;
 pub mod tee;
 
 pub use bundle::{format_diagnostics_bundle, DiagFields};
+pub use fatal::install as install_fatal_signal_reporter;
 pub use install::{install, install_without_file_sink, set_level};
 pub use line::LogLine;
 pub use redact::{redact, register_secret};

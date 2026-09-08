@@ -3795,6 +3795,10 @@ fn main() {
     } else {
         qbz_log::install("info");
     }
+    // Immediately after the logger, so every later frame is covered — the Qt
+    // and QML construction window included. See qbz-log/src/fatal.rs for the
+    // intermittent packaged-AppDir SIGSEGV this exists to name.
+    qbz_log::install_fatal_signal_reporter();
     // Declared first so normal/early returns flush after all later destructors,
     // including the final summary of a consecutive logging burst.
     struct FlushLogsOnExit;
