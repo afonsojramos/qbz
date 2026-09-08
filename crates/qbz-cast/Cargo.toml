@@ -18,6 +18,19 @@ tiny_http = "0.12"
 rupnp = { version = "3", features = ["full_device_spec"] }
 futures-util = "0.3"
 
+# PINNED, do not bump without reading this (#745, 2.1.0 regression):
+# rupnp parses a device description's SCPDURL / controlURL / eventSubURL as
+# `http::uri::PathAndQuery`. http 1.5.0 rewrote that parser and now REJECTS
+# two shapes 1.4.0 accepted -- an empty element (ErrorKind::Empty, printed as
+# "empty string") and any relative URL without a leading slash
+# (PathDoesNotStartWithSlash). Both are common in old UPnP firmware, so the
+# bump made rupnp drop those renderers entirely: a KEF LSX gen 1 that worked
+# in 2.0.2 (http 1.4.0) reported "Visible Renderers: 0" in 2.1.0. The pin is
+# workspace-wide by unification and is guarded by
+# tests/dlna_description_tolerance.rs -- if that suite fails, this pin was
+# lifted. Drop it only once rupnp stops using PathAndQuery for relative URLs.
+http = "=1.4.0"
+
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -33,3 +46,6 @@ getrandom = "0.4"
 
 # Async runtime (for DLNA)
 tokio = { version = "1", features = ["rt", "sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

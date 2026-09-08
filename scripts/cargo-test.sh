@@ -15,6 +15,9 @@
 #     and pass (schema migration, accumulator: paused/seek/stall deltas add
 #     nothing, natural/skip/stop/shutdown closes, orphan close on reopen,
 #     paused writes nothing, clear + VACUUM, is_play/is_skip bounds).
+#   + the DLNA device-description tolerance suite (qbz-cast): a renderer whose
+#     SCPDURL/controlURL/eventSubURL is empty or relative must still parse.
+#     It is the guard on qbz-cast's `http = "=1.4.0"` pin (#745).
 #   --workspace today = the 42 members of crates/Cargo.toml minus qbz-qt: the
 #   audio/player/cache/DSD/disc/rip core, qbz-app/core/models/theme/i18n,
 #   the Qobuz client and the source seam, Plex/Jellyfin/Subsonic + media
@@ -129,6 +132,17 @@ cargo test --manifest-path crates/Cargo.toml -p qconnect-app --lib -- controller
 cargo test --manifest-path crates/Cargo.toml -p qconnect-app --lib -- queue_resolution::tests::manual_skip
 cargo test --manifest-path crates/Cargo.toml -p qconnect-protocol --lib -- decoder::tests::controller_
 cargo test --manifest-path crates/Cargo.toml -p qbz-log --lib -- repeat::tests::
+
+say "gate: DLNA device-description tolerance present and green (#745)"
+# rupnp parses SCPDURL/controlURL/eventSubURL as http::uri::PathAndQuery, and
+# http 1.5.0 started rejecting empty and non-slash-prefixed values that 1.4.0
+# accepted -- which silently dropped every renderer with that firmware shape
+# (KEF LSX gen 1, "Visible Renderers: 0" in 2.1.0). qbz-cast pins http to
+# =1.4.0; this suite is the guard that notices if the pin is ever lifted.
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-cast --test dlna_description_tolerance -- --list 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 2 )) || { echo "DLNA description tolerance suite has $n tests (expected >= 2)"; exit 1; }
+cargo test --manifest-path crates/Cargo.toml -p qbz-cast --test dlna_description_tolerance
 
 say "gate: qbzd resolves no Slint crate"
 hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbzd -e normal \

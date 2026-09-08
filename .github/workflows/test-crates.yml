@@ -13,7 +13,10 @@
 #               proto3-zero cursor, manual skip/loop/shuffle/autoplay and
 #               consecutive-log repetition regression checks, plus SACD
 #               2048/2064-sector TOC/frame/seek equivalence and scanner import/
-#               failed-read preservation. ~5 min cold.
+#               failed-read preservation, plus the DLNA device-description
+#               tolerance suite (empty and relative SCPDURL/controlURL must
+#               still parse — the guard on qbz-cast's http =1.4.0 pin, #745).
+#               ~5 min cold.
 #   qt-gate   — the Qt frontend: the five static QML audits, `cargo test -p
 #               qbz-qt`, the Slint-free dep-graph gate, and an OFFSCREEN BOOT of
 #               debug AND release binaries (including process liveness).
