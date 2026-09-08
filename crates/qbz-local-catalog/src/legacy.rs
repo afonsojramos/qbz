@@ -913,6 +913,13 @@ fn read_remote(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result
         ],
         "remote_cache_tracks",
     )?;
+    // The remote cache stores item and collection artwork separately. Jellyfin
+    // audio items often have no own image even when their album does. Match the
+    // Plex projection: retain disc/track art and use collection art only as a
+    // fallback. Older caches without the collection column remain readable.
+    let item_art = optional_column(&columns, "artwork_token", "NULL");
+    let collection_art = optional_column(&columns, "collection_artwork_token", "NULL");
+    let effective_art = format!("COALESCE(NULLIF({item_art},''),NULLIF({collection_art},''))");
     let sql = format!(
         "SELECT id, item_id, title, artist, album, duration_ms, {year}, {disc}, {track},
                 {format}, {depth}, {rate}, {art}, {updated}, album_artist, {album_id},
@@ -928,7 +935,7 @@ fn read_remote(conn: &Connection, spec: &LegacySourceSpec, after: i64) -> Result
         format = format_expression(&columns),
         depth = optional_column(&columns, "bit_depth", "NULL"),
         rate = optional_column(&columns, "sample_rate_hz", "NULL"),
-        art = optional_column(&columns, "artwork_token", "NULL"),
+        art = effective_art,
         updated = optional_column(&columns, "updated_at", "0"),
         album_id = optional_column(&columns, "album_id", "NULL"),
         isrc = optional_column(&columns, "isrc", "NULL"),
