@@ -19,7 +19,7 @@
         qbzVersion = "2.1.0";
         qbzRev     = "v${qbzVersion}";
         # POST-RELEASE: replace from the published v2.1.0 tag.
-        srcHash    = pkgs.lib.fakeHash;
+        srcHash    = "sha256-Yc5f7DjAFAjYgTnT2yv7zjIxmXPJ8ZdLaoPnHJoFRX0=";
 
         # Libraries opened by name at runtime rather than linked into qbz.
         # Qt's own graphics/plugin closure is handled by wrapQtAppsHook.
