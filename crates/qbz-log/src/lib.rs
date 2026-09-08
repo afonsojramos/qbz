@@ -24,6 +24,6 @@ pub mod ring;
 pub mod tee;
 
 pub use bundle::{format_diagnostics_bundle, DiagFields};
-pub use install::{install, set_level};
+pub use install::{install, install_without_file_sink, set_level};
 pub use line::LogLine;
 pub use redact::{redact, register_secret};

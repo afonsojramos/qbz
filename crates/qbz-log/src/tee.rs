@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use log::{Log, Metadata, Record};
 
@@ -26,6 +26,40 @@ pub struct TeeLogger {
 struct Output {
     file: Option<BufWriter<File>>,
     consecutive: ConsecutiveRecords,
+    file_flush: FileFlush,
+}
+
+/// How stale the on-disk log may be. The file sink is a `BufWriter`, so
+/// without a bound a process KILLED while wedged loses up to 8 KiB of the
+/// most interesting lines — and "I had to force-kill it" is the state every
+/// hang report is filed from (#749). Flushing per line instead would turn a
+/// burst (CMAF segment progress, discovery chatter) into one write syscall
+/// per record, so the file is allowed to lag by at most this much.
+const FILE_FLUSH_INTERVAL: Duration = Duration::from_millis(200);
+
+/// When the file sink must reach the disk. Split out so the policy is
+/// testable without touching a file.
+struct FileFlush {
+    last: Instant,
+    interval: Duration,
+}
+
+impl FileFlush {
+    fn new(now: Instant, interval: Duration) -> Self {
+        Self {
+            last: now,
+            interval,
+        }
+    }
+
+    /// `urgent` — a warning/error or a repeat summary — never waits.
+    fn due(&mut self, now: Instant, urgent: bool) -> bool {
+        if urgent || now.duration_since(self.last) >= self.interval {
+            self.last = now;
+            return true;
+        }
+        false
+    }
 }
 
 impl TeeLogger {
@@ -35,6 +69,7 @@ impl TeeLogger {
             output: Mutex::new(Output {
                 file,
                 consecutive: ConsecutiveRecords::default(),
+                file_flush: FileFlush::new(Instant::now(), FILE_FLUSH_INTERVAL),
             }),
         }
     }
@@ -87,14 +122,19 @@ impl Log for TeeLogger {
             target: record.target().to_owned(),
             message: msg,
         };
-        let [summary, first] = output.consecutive.push(line, Instant::now());
+        let now = Instant::now();
+        let [summary, first] = output.consecutive.push(line, now);
         let summarized = summary.is_some();
         for line in [summary, first].into_iter().flatten() {
             output.write(line);
         }
-        // Compaction may no longer fill BufWriter for minutes. Make periodic
-        // summaries visible to a live file tail as well as stderr/the ring.
-        if summarized {
+        // Compaction may no longer fill BufWriter for minutes, and a wedged
+        // process is killed rather than exiting: make periodic summaries,
+        // anything at WARN or worse, and otherwise the last
+        // FILE_FLUSH_INTERVAL of ordinary records visible to a live file tail
+        // and survivable across a SIGKILL.
+        let urgent = summarized || record.level() <= log::Level::Warn;
+        if output.file_flush.due(now, urgent) {
             if let Some(writer) = &mut output.file {
                 let _ = writer.flush();
             }
@@ -118,6 +158,31 @@ impl Log for TeeLogger {
 mod tests {
     use super::*;
     use log::Level;
+
+    /// A wedged process is force-killed, so the file sink may never lag by
+    /// more than the interval, and a warning must never sit in the buffer.
+    #[test]
+    fn file_flush_is_bounded_and_urgent_records_never_wait() {
+        let start = Instant::now();
+        let mut policy = FileFlush::new(start, Duration::from_millis(200));
+
+        assert!(
+            !policy.due(start + Duration::from_millis(10), false),
+            "an ordinary record inside the window stays buffered"
+        );
+        assert!(
+            policy.due(start + Duration::from_millis(20), true),
+            "a warning or a summary flushes immediately"
+        );
+        assert!(
+            !policy.due(start + Duration::from_millis(100), false),
+            "the urgent flush restarts the window"
+        );
+        assert!(
+            policy.due(start + Duration::from_millis(220), false),
+            "an ordinary record past the window flushes"
+        );
+    }
 
     #[test]
     fn format_line_includes_redacted_message_not_raw() {

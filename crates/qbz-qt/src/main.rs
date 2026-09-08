@@ -3771,8 +3771,30 @@ pub(crate) fn arm_hard_exit_watchdog(source: &'static str) {
         });
 }
 
+/// Is THIS process one of the internal, disposable child processes that
+/// re-enter `main` (presentation preflight, GPU preflight)?
+///
+/// Read before the logger is installed, from env markers only, so a child
+/// never opens the on-disk log: `qbz_log::install` rotates `qbz.log` to
+/// `qbz.log.prev` and starts an empty one, which mid-run renames the LIVE log
+/// away from the parent. That is #749's second finding — the reporter's
+/// `qbz.log` held two lines on every run (the child's own first two, since it
+/// inherits the QT_SCALE_FACTOR the parent just set) while the parent's whole
+/// log sat unread in `qbz.log.prev`.
+fn is_internal_child_process() -> bool {
+    #[cfg(target_os = "linux")]
+    if renderer_qt::auto_preflight::child_requested() {
+        return true;
+    }
+    renderer_qt::gpu_preflight_child_requested()
+}
+
 fn main() {
-    qbz_log::install("info");
+    if is_internal_child_process() {
+        qbz_log::install_without_file_sink("info");
+    } else {
+        qbz_log::install("info");
+    }
     // Declared first so normal/early returns flush after all later destructors,
     // including the final summary of a consecutive logging burst.
     struct FlushLogsOnExit;
