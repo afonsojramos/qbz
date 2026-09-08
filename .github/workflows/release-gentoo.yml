@@ -203,6 +203,10 @@ jobs:
       - name: Validate generated overlay metadata
         run: |
           set -euo pipefail
+          # xmllint ships in libxml2-utils, not on the runner by default.
+          if ! command -v xmllint >/dev/null; then
+            sudo apt-get update && sudo apt-get install -y libxml2-utils
+          fi
           for package in qbz-bin qbz qbzd-bin qbzd; do
             directory="/tmp/qbz-overlay/media-sound/${package}"
             bash -n "${directory}"/*.ebuild
