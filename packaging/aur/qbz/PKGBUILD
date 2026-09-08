@@ -9,7 +9,7 @@ license=('MIT')
 depends=('qt6-base>=6.8' 'qt6-declarative>=6.8' 'qt6-svg>=6.8' 'qt6-wayland' 'alsa-lib' 'xdg-utils')
 makedepends=('rust' 'cmake' 'nasm' 'jack2')
 # makepkg's GCC LTO objects cannot be consumed from Rust rlibs by rustc's lld.
-options=('!lto')
+options=('!lto' '!debug')
 optdepends=(
     'alsa-utils: ALSA diagnostics and device inspection'
     'pipewire: PipeWire device discovery and sample-rate control'

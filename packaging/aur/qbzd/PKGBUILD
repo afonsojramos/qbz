@@ -9,7 +9,7 @@ license=('MIT')
 depends=('alsa-lib')
 makedepends=('rust' 'cmake' 'nasm' 'jack2')
 # makepkg's GCC LTO objects cannot be consumed from Rust rlibs by rustc's lld.
-options=('!lto')
+options=('!lto' '!debug')
 install=qbzd.install
 optdepends=(
     'pipewire: PipeWire device discovery and sample-rate control'
