@@ -1,15 +1,53 @@
-# 2.1.0 — Feature inventory (input for the Discussions post)
-
-> Working list, feature-level. Only things that did **not exist before 2.1.0**
-> or that got a **major revamp** — independent of the Slint→Qt swap. One or
-> two lines each, written to be lifted into the announcement draft.
-> Not rendered anywhere; safe to edit freely.
+# 2.1.0 — Feature inventory 
 
 ## New platforms
 
 - **Windows support** — QBZ now ships a native Windows build (MSI installer):
   same UI, same Rust core, WASAPI exclusive mode with rate probing, media
-  keys, deep links, single instance.
+  keys, deep links, single instance. This is deployed with a disclaimer: **Maintainer wanted**. 
+
+## Purchases
+
+>Purchases has been integrated—not from the very beginning, but since one of the early versions of QBZ. Its presence in the menu is **opt-in** (So, you need to enable it on Settings > Appeareance), because some users don’t buy albums and only use streaming. Strictly speaking, purchases are limited by region; in Mexico, for example, they’re disabled. I couldn’t buy anything, so all development in that area had been done “blind.” A user helped me, but it was very complicated; certainly, rolling out a feature I couldn’t verify was something I don’t plan to do again. 
+During my vacation, I was able to create an account without the region lock, and this opened the door to properly implementing a feature: 
+
+- **Download What You Bought**  — The previous method was completely wrong; it downloaded files that were supposed to be for streaming. Now, the files served with the intention of being downloaded are downloaded—that is, exactly the file you purchased. 
+- **Downloads in the purchased quality levels**  — From MP3 to DSD, you can download your DRM-free purchases from QBZ and save them wherever you want, all from the same app.
+- **Download history and direct integration with your local library**  — You can now keep track of what you’ve already downloaded if you’ve added it to your local library.
+- **Integration with the Albums page**  — Purchases have been integrated with the Albums view; you can choose to play either the streaming version or the version you purchased. If you’ve already bought a DSD file, why listen to a FLAC? 
+
+## Playlists & queue
+
+- **Add to playlist, redesigned** (revamp) — the picker shows which playlists
+  already contain the track ("Already in"), pins your last-used playlist,
+  handles multi-track adds, and accepts local and media-server tracks.
+- **Album Quick View** (revamp) — peek into any album straight from its card,
+  wherever you are, without leaving the page.
+- **Play later, for real** — album-level "later" now queues after the current
+  block instead of appending at the end; "Play all later" on artist pages.
+- **Extended queue view** — the queue got a full-page view, drag-and-drop
+  insert at position, reorderable history, and playback history that
+  survives restarts.
+- **Playlist importer expansion** (revamp) — import from playlist files,
+  JSON, ListenBrainz and Last.fm.
+
+## Qobuz Connect
+
+- **LAN pairing like the official apps** — QBZ announces itself on your local
+  network so official Qobuz clients can discover and pair with it directly.
+- **Connect hardening** (revamp) — shuffle order, volume, buffering states
+  and handoffs now match official-client behavior exactly, verified against
+  the iOS app and the Web Player.
+
+## Casting
+
+- **Casting round two** (revamp) — progressive serving, clean shutdown, and
+  Plex/Jellyfin/Subsonic tracks cast through a local proxy.
+- **Visualizers while casting** — a shadow decoder keeps the scopes and
+  spectrum alive while audio renders on the cast device.
+- **Older Chromecasts fixed** — devices with X.509 v1 certificates can cast
+  again (#730).
+
 
 ## New sources & library
 
@@ -47,37 +85,7 @@
 - **Listening history (listen log)** — a private, local log of what you
   actually listened to, with its own toggle and clear; the foundation for
   offline recommendations.
-## Playlists & queue
-
-- **Add to playlist, redesigned** (revamp) — the picker shows which playlists
-  already contain the track ("Already in"), pins your last-used playlist,
-  handles multi-track adds, and accepts local and media-server tracks.
-- **Album Quick View** (revamp) — peek into any album straight from its card,
-  wherever you are, without leaving the page.
-- **Play later, for real** — album-level "later" now queues after the current
-  block instead of appending at the end; "Play all later" on artist pages.
-- **Extended queue view** — the queue got a full-page view, drag-and-drop
-  insert at position, reorderable history, and playback history that
-  survives restarts.
-- **Playlist importer expansion** (revamp) — import from playlist files,
-  JSON, ListenBrainz and Last.fm.
-
-## Qobuz Connect
-
-- **LAN pairing like the official apps** — QBZ announces itself on your local
-  network so official Qobuz clients can discover and pair with it directly.
-- **Connect hardening** (revamp) — shuffle order, volume, buffering states
-  and handoffs now match official-client behavior exactly, verified against
-  the iOS app and the Web Player.
-
-## Casting
-
-- **Casting round two** (revamp) — progressive serving, clean shutdown, and
-  Plex/Jellyfin/Subsonic tracks cast through a local proxy.
-- **Visualizers while casting** — a shadow decoder keeps the scopes and
-  spectrum alive while audio renders on the cast device.
-- **Older Chromecasts fixed** — devices with X.509 v1 certificates can cast
-  again (#730).
+  
 
 ## qbzd (headless daemon)
 

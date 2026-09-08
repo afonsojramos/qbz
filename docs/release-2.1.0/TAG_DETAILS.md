@@ -4,7 +4,7 @@ This one is a little unusual.
 
 After 2.0.x, I honestly thought we had settled down: Slint, no WebView, a fully native UI, and everything seemed to be in the right place.
 
-Naturally, I decided to migrate the UI again.
+Naturally, I decided to migrate the UI again. *insert developer move meme*
 
 QBZ is now Qt.
 
@@ -84,6 +84,8 @@ There is a rather explicit disclaimer attached to the Windows build, and I stron
 
 **Windows is not currently a supported QBZ platform. The build is provided as-is.**
 
+Not missunderstand me, it's not like the Windows version of QBZ is incomplete or it is okey if it breaks, I mean it have all the features, bug fixes and improvements like all the others, but if something in particular for Windows especific dont work as intended or fails, it could take considerably more time to get fixed and not in the next release or releases after the issue is detected. 
+
 I'll also be transparent about why. I hated using Windows while testing the port — from installing and configuring the box to dealing with its audio setup — and I don't want to spend more time than absolutely necessary inside Redmond's OS for every release.
 
 Sorry. Long-time Gentoo Linux user. Some biases are too old to fix.
@@ -98,7 +100,7 @@ That's the short version.
 
 I made a GitHub Discussion with screenshots and a more human tour through 2.1.0 if you want to see what actually changed:
 
-[Read the 2.1.0 Discussion →](https://github.com/vicrodh/qbz/discussions)
+[Read the 2.1.0 Discussion →](https://github.com/vicrodh/qbz/discussions/743)
 
 If implementation details, fixes and issue numbers are more your thing, there is a changelog for that:
 
