@@ -6831,3 +6831,9 @@ msgstr "Boomstructuur"
 
 msgid "Forward"
 msgstr "Vooruit"
+
+msgid "SACD images use sidecar metadata."
+msgstr "SACD-images gebruiken metadata in een sidecarbestand."
+
+msgid "SACD track numbers cannot be changed."
+msgstr "SACD-tracknummers kunnen niet worden gewijzigd."

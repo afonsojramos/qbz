@@ -146,9 +146,7 @@ pub fn build_image_rows(path: &Path, labels: &SacdLabels) -> Result<SacdImageRow
         None => area.artist.clone().filter(|artist| !artist.is_empty()),
     };
 
-    let artwork = MetadataExtractor::find_folder_artwork(path, Some(&album)).and_then(|found| {
-        MetadataExtractor::cache_artwork_file(Path::new(&found), &crate::get_artwork_cache_dir())
-    });
+    let artwork = image_sidecar_or_folder_artwork(path, Some(&album));
     match artwork.as_deref() {
         Some(_) => log::info!("[sacd] cover cached"),
         None => log::info!("[sacd] no cover beside the image"),
@@ -156,7 +154,7 @@ pub fn build_image_rows(path: &Path, labels: &SacdLabels) -> Result<SacdImageRow
 
     let facts = image_facts(path);
     let indexed_at = unix_now_secs();
-    let tracks: Vec<LocalTrack> = area
+    let mut tracks: Vec<LocalTrack> = area
         .tracks
         .iter()
         .enumerate()
@@ -233,6 +231,25 @@ pub fn build_image_rows(path: &Path, labels: &SacdLabels) -> Result<SacdImageRow
         },
     );
 
+    if let Ok(Some(sidecar)) = crate::read_sacd_sidecar(path) {
+        for track in &mut tracks {
+            // The physical track number is part of the SACD reference, never
+            // mutable metadata. The editor enforces the same restriction.
+            let number = track.track_number;
+            crate::apply_sidecar_to_track(track, &sidecar);
+            track.track_number = number;
+            track.artwork_path = artwork.clone();
+        }
+    }
+
+    let album = tracks
+        .first()
+        .map(|track| track.album.clone())
+        .unwrap_or(album);
+    let artist = tracks
+        .first()
+        .and_then(|track| track.album_artist.clone())
+        .or(artist);
     let import = SacdImageImport {
         fingerprint: fingerprint.clone(),
         image_path: path.to_string_lossy().into_owned(),
@@ -250,6 +267,26 @@ pub fn build_image_rows(path: &Path, labels: &SacdLabels) -> Result<SacdImageRow
         tracks,
         import,
     })
+}
+
+/// Artwork is external to the audio image. Resolve an explicit image sidecar
+/// before the normal folder heuristics; a missing cached sidecar image can
+/// still fall back to a cover placed beside the ISO.
+fn image_sidecar_or_folder_artwork(path: &Path, album: Option<&str>) -> Option<String> {
+    crate::read_sacd_sidecar(path)
+        .ok()
+        .flatten()
+        .and_then(|sidecar| sidecar.extended_album)
+        .and_then(|album| album.artwork_path)
+        .filter(|art| Path::new(art).is_file())
+        .or_else(|| {
+            MetadataExtractor::find_folder_artwork(path, album).and_then(|found| {
+                MetadataExtractor::cache_artwork_file(
+                    Path::new(&found),
+                    &crate::get_artwork_cache_dir(),
+                )
+            })
+        })
 }
 
 /// What one root's SACD pass did.
@@ -314,7 +351,7 @@ pub fn scan_root_for_sacd(
         let path = entry.path();
         let path_string = path.to_string_lossy().into_owned();
 
-        // Known and unchanged: no file I/O at all.
+        // Unchanged audio avoids parsing; auxiliary artwork can still change.
         let facts = image_facts(path);
         match db.observe_sacd_image(
             root_id,
@@ -325,6 +362,22 @@ pub fn scan_root_for_sacd(
             SACD_PARSER_REVISION,
         ) {
             Ok(true) => {
+                // Covers can arrive after the initial scan without changing
+                // the ISO's size or mtime. Refresh that separate input while
+                // keeping the fast path free of SACD parsing/audio reads.
+                if db.sacd_image_needs_artwork(&path_string).unwrap_or(false) {
+                    if let Some(artwork) = image_sidecar_or_folder_artwork(path, None) {
+                        match db.fill_missing_sacd_artwork(&path_string, &artwork) {
+                            Ok(0) => {}
+                            Ok(count) => {
+                                log::info!("[sacd] filled missing artwork for {count} tracks")
+                            }
+                            Err(error) => summary
+                                .failed
+                                .push((path_string.clone(), error.to_string())),
+                        }
+                    }
+                }
                 summary.unchanged = summary.unchanged.saturating_add(1);
                 continue;
             }
@@ -544,6 +597,47 @@ mod tests {
         assert_eq!(second.imported, 0);
         assert_eq!(db.get_all_track_paths().unwrap(), tracks);
 
+        // A cover added after the audio scan must be discovered without
+        // reimporting or changing the virtual track ids / ISO bytes.
+        let iso_before = std::fs::read(&image_path).unwrap();
+        image::DynamicImage::new_rgb8(4, 4)
+            .save(root.join("cover.jpg"))
+            .unwrap();
+        let artwork_refresh = scan(3);
+        assert_eq!(artwork_refresh.unchanged, 1);
+        assert_eq!(artwork_refresh.imported, 0);
+        assert!(artwork_refresh.failed.is_empty());
+        assert!(!db
+            .sacd_image_needs_artwork(&image_path.to_string_lossy())
+            .unwrap());
+        assert_eq!(std::fs::read(&image_path).unwrap(), iso_before);
+        assert_eq!(db.get_all_track_paths().unwrap(), tracks);
+
+        let mut sidecar = crate::AlbumTagSidecar::new(
+            crate::AlbumMetadataOverride {
+                album_title: Some("Sidecar title".into()),
+                ..Default::default()
+            },
+            vec![crate::TrackMetadataOverride {
+                file_path: format!("sacd:{}#1", image_path.display()),
+                cue_start_secs: None,
+                title: Some("Sidecar track".into()),
+                disc_number: Some(1),
+                track_number: Some(99),
+            }],
+        );
+        sidecar.extended_album = Some(crate::AlbumExtendedMetadataOverride {
+            artwork_path: Some(root.join("cover.jpg").to_string_lossy().into_owned()),
+            ..Default::default()
+        });
+        crate::write_sacd_sidecar(&image_path, &sidecar).unwrap();
+        let edited = super::build_image_rows(&image_path, &SacdLabels::default()).unwrap();
+        assert_eq!(edited.album, "Sidecar title");
+        assert_eq!(edited.tracks[0].title, "Sidecar track");
+        assert_eq!(edited.tracks[0].track_number, Some(1));
+        assert!(edited.tracks[0].artwork_path.is_some());
+        assert_eq!(std::fs::read(&image_path).unwrap(), iso_before);
+
         // Even a missing physical trailer is a failed SACD read, not a file
         // that may be silently ignored and have its known tracks pruned.
         std::fs::OpenOptions::new()
@@ -552,11 +646,34 @@ mod tests {
             .unwrap()
             .set_len(640 * 2064 - 4)
             .unwrap();
-        let third = scan(3);
+        let third = scan(4);
         assert_eq!(third.failed.len(), 1);
         assert_eq!(third.ignored, 0);
         assert_eq!(third.removed, 0);
         assert_eq!(db.get_all_track_paths().unwrap(), tracks);
+    }
+
+    #[test]
+    #[ignore = "requires QBZ_TEST_SACD_IMAGE pointing to a real image with external artwork"]
+    fn real_sacd_image_artwork_probe() {
+        let path =
+            std::path::PathBuf::from(std::env::var_os("QBZ_TEST_SACD_IMAGE").expect("image path"));
+        let before = std::fs::metadata(&path).unwrap();
+        let rows = super::build_image_rows(&path, &SacdLabels::default()).unwrap();
+        assert!(!rows.tracks.is_empty());
+        let cover = rows.tracks[0]
+            .artwork_path
+            .as_ref()
+            .expect("external cover resolved");
+        assert!(std::path::Path::new(cover).is_file());
+        let after = std::fs::metadata(&path).unwrap();
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        println!(
+            "SACD probe: album={} tracks={} cover={cover}",
+            rows.album,
+            rows.tracks.len()
+        );
     }
 
     #[test]

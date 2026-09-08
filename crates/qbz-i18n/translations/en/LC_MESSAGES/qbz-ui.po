@@ -2427,3 +2427,9 @@ msgstr "List"
 
 msgid "Tree"
 msgstr "Tree"
+
+msgid "SACD images use sidecar metadata."
+msgstr "SACD images use sidecar metadata."
+
+msgid "SACD track numbers cannot be changed."
+msgstr "SACD track numbers cannot be changed."

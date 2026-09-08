@@ -6843,3 +6843,9 @@ msgstr "Baum"
 
 msgid "Forward"
 msgstr "Vorwärts"
+
+msgid "SACD images use sidecar metadata."
+msgstr "SACD-Abbilder verwenden Metadaten in einer Sidecar-Datei."
+
+msgid "SACD track numbers cannot be changed."
+msgstr "SACD-Titelnummern können nicht geändert werden."
