@@ -4,17 +4,17 @@
 # Rewritten 2026-08-25 for the Slint -> Qt frontend switch. Pattern is still
 # build once, package many — but the build is the shared build-qt-linux.yml
 # (workflow_call) and it yields TWO payloads:
-#   * the bare binary  -> qbz_${VERSION}_arm64.tar.gz (AUR / Gentoo / Flathub
+#   * the bare binary  -> qbz_${VERSION}_aarch64.tar.gz (AUR / Gentoo / Flathub
 #     repack: ecosystems that provide Qt >= 6.8 themselves)
 #   * the AppDir (Qt bundled, self-contained) -> deb / rpm / AppImage, so
 #     distros without a usable Qt (Ubuntu 24.04 = Qt 6.4) keep working.
 #
 # CONTRACT (do not break): the release must keep publishing
-#   qbz_${VERSION}_arm64.tar.gz   (dir qbz_${VERSION}_arm64/{qbz, qbzd, LICENSE, licenses/, qbz.desktop,
+#   qbz_${VERSION}_aarch64.tar.gz (dir qbz_${VERSION}_aarch64/{qbz, qbzd, LICENSE, licenses/, qbz.desktop,
 #                                  com.blitzfc.qbz.metainfo.xml, qbzd.service,
 #                                  completions/, icons/hicolor/...})
 #   QBZ_${VERSION}_arm64.deb / QBZ-${VERSION}-1.aarch64.rpm / QBZ_${VERSION}_arm64.AppImage
-#   qbzd_${VERSION}_arm64.deb / qbzd-${VERSION}-1.aarch64.rpm / qbzd-${VERSION}-linux-arm64.tar.gz
+#   qbzd_${VERSION}_arm64.deb / qbzd-${VERSION}-1.aarch64.rpm / qbzd-${VERSION}-linux-aarch64.tar.gz
 # — release-aur.yml, release-gentoo.yml, qbz-apt, qbz-rpm, the updater
 # manifest and the website consume these names.
 #
@@ -277,7 +277,7 @@ jobs:
         run: |
           # CONTRACT: release-aur.yml, the Gentoo binary ebuild, qbz-apt and
           # the website hard-code this name and internal layout.
-          TARBALL_DIR="qbz_${VERSION}_${DEB_ARCH}"
+          TARBALL_DIR="qbz_${VERSION}_${ARCH}"
           mkdir -p "tarball-staging/${TARBALL_DIR}/icons/hicolor"/{32x32,48x48,64x64,128x128,256x256,512x512}/apps
           cp qbz "tarball-staging/${TARBALL_DIR}/qbz"
           chmod +x "tarball-staging/${TARBALL_DIR}/qbz"
@@ -298,12 +298,12 @@ jobs:
           cp qbzd.bash "tarball-staging/${TARBALL_DIR}/completions/qbzd.bash"
           cp qbzd.zsh  "tarball-staging/${TARBALL_DIR}/completions/qbzd.zsh"
           cp qbzd.fish "tarball-staging/${TARBALL_DIR}/completions/qbzd.fish"
-          tar -czvf "dist/qbz_${VERSION}_${DEB_ARCH}.tar.gz" -C tarball-staging "${TARBALL_DIR}"
+          tar -czvf "dist/qbz_${VERSION}_${ARCH}.tar.gz" -C tarball-staging "${TARBALL_DIR}"
           ls -la dist
 
       - name: qbzd-tarball
         run: |
-          QBZD_DIR="qbzd-${VERSION}-linux-${DEB_ARCH}"
+          QBZD_DIR="qbzd-${VERSION}-linux-${ARCH}"
           mkdir -p "qbzd-tarball-staging/${QBZD_DIR}/completions"
           cp qbzd "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
           chmod +x "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
@@ -314,7 +314,7 @@ jobs:
           cp packaging/linux/qbzd-standalone-README.md "qbzd-tarball-staging/${QBZD_DIR}/README.md"
           cp LICENSE "qbzd-tarball-staging/${QBZD_DIR}/LICENSE"
           cp -r licenses "qbzd-tarball-staging/${QBZD_DIR}/licenses"
-          tar -czvf "dist/qbzd-${VERSION}-linux-${DEB_ARCH}.tar.gz" -C qbzd-tarball-staging "${QBZD_DIR}"
+          tar -czvf "dist/qbzd-${VERSION}-linux-${ARCH}.tar.gz" -C qbzd-tarball-staging "${QBZD_DIR}"
           ls -la dist
 
       - name: Upload artifacts
