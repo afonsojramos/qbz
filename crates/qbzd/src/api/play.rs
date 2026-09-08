@@ -29,13 +29,16 @@ use qbz_qobuz::link_resolver::{resolve_link, ResolvedLink};
 use crate::state::AuthState;
 
 use super::queue::track_to_queue_track;
-use super::{err_json, json, ApiState};
+use super::{err_json, json, owner_action_gate, owner_action_lease, ApiState};
 
 /// Top-tracks cap when playing a whole artist — a sane "play this artist" set,
 /// not their entire catalogue.
 const ARTIST_TOP_LIMIT: u32 = 50;
 
 pub fn play(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
+    if let Some(resp) = owner_action_gate(state) {
+        return resp;
+    }
     if let Some(resp) = auth_gate(state) {
         return resp;
     }
@@ -65,6 +68,9 @@ pub(crate) fn start_resolved(
     context: Option<(&'static str, String)>,
     start_index: Option<u64>,
 ) -> Response<Cursor<Vec<u8>>> {
+    if let Some(resp) = owner_action_gate(state) {
+        return resp;
+    }
     if tracks.is_empty() {
         return err_json(404, "not_found", "nothing to play", "check the id: qbzd search <QUERY>");
     }
@@ -82,6 +88,14 @@ pub(crate) fn start_resolved(
     let start_track_id = queue_tracks[start].id;
     let start_summary = summary(&queue_tracks[start]);
 
+    // `play` and `radio` both perform owner catalog I/O before reaching this
+    // point. A handoff may commit during that I/O, so fence again immediately
+    // before replacing the queue.
+    let owner_lease = match owner_action_lease(state) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
+
     state
         .rt
         .block_on(state.runtime.core().set_queue(queue_tracks, Some(start)));
@@ -94,6 +108,7 @@ pub(crate) fn start_resolved(
     let runtime = std::sync::Arc::clone(&state.runtime);
     let shared = std::sync::Arc::clone(&state.shared);
     state.rt.spawn(async move {
+        let _owner_lease = owner_lease;
         let played = runtime
             .core()
             .play_track_resolved(start_track_id, quality, None, None, 0)

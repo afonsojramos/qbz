@@ -18,6 +18,7 @@ use ebur128::{EbuR128, Mode};
 use super::analyzer_tap::AnalyzerMessage;
 use super::loudness::db_to_linear;
 use super::loudness_cache::LoudnessCache;
+use super::seek_waveform::{SeekWaveformAccumulator, SeekWaveformCache};
 
 /// Maximum gain boost in dB (conservative clipping prevention)
 const MAX_GAIN_DB: f32 = 6.0;
@@ -44,6 +45,11 @@ impl LoudnessAnalyzer {
 
     fn run(rx: Receiver<AnalyzerMessage>, cache: Arc<LoudnessCache>) {
         let mut state: Option<AnalyzerState> = None;
+        // Default-off really is idle: do not touch the waveform database
+        // until the preference is enabled for an audible track.
+        let mut waveform_cache = None;
+        let mut waveform: Option<SeekWaveformAccumulator> = None;
+        let mut current_track = None;
 
         loop {
             let msg = match rx.recv() {
@@ -55,49 +61,75 @@ impl LoudnessAnalyzer {
             };
 
             match msg {
-                AnalyzerMessage::NewTrack {
-                    track_id,
-                    sample_rate,
-                    channels,
-                    target_lufs,
-                    gain_atomic,
-                } => {
-                    log::info!(
-                        "[LoudnessAnalyzer] New track {} ({}Hz, {}ch, target {:.1} LUFS)",
-                        track_id,
-                        sample_rate,
-                        channels,
-                        target_lufs
-                    );
-
-                    // Check cache first
-                    if let Some(cached) = cache.get(track_id) {
-                        let gain = compute_gain_capped(cached.gain_db);
-                        log::info!(
-                            "[LoudnessAnalyzer] Cache hit for track {}: {:.2} dB (source: {}), gain {:.4}",
-                            track_id, cached.gain_db, cached.source, gain
-                        );
-
-                        // Set gain immediately via the atomic
-                        gain_atomic.store(gain.to_bits(), Ordering::Relaxed);
-
-                        // Create state marked as cached — still accept samples for refinement
-                        let mut s =
-                            AnalyzerState::new(track_id, sample_rate, channels, target_lufs);
-                        s.gain_atomic = Some(gain_atomic);
-                        s.initial_done = true;
-                        state = Some(s);
-                        continue;
-                    }
-
-                    // No cache — start fresh analysis
-                    let mut s = AnalyzerState::new(track_id, sample_rate, channels, target_lufs);
-                    s.gain_atomic = Some(gain_atomic);
-                    state = Some(s);
+                AnalyzerMessage::NewTrack(track) => {
+                    state = match (track.target_lufs, track.gain_atomic.clone()) {
+                        (Some(target_lufs), Some(gain_atomic)) => {
+                            log::info!(
+                                "[LoudnessAnalyzer] New track {} ({}Hz, {}ch, target {:.1} LUFS)",
+                                track.track_id,
+                                track.sample_rate,
+                                track.channels,
+                                target_lufs
+                            );
+                            let mut analyzer = AnalyzerState::new(
+                                track.track_id,
+                                track.sample_rate,
+                                track.channels,
+                                target_lufs,
+                            );
+                            if let Some(cached) = cache.get(track.track_id) {
+                                let gain = compute_gain_capped(cached.gain_db);
+                                gain_atomic.store(gain.to_bits(), Ordering::Relaxed);
+                                analyzer.initial_done = true;
+                                log::info!(
+                                    "[LoudnessAnalyzer] Cache hit for track {}: {:.2} dB (source: {}), gain {:.4}",
+                                    track.track_id, cached.gain_db, cached.source, gain
+                                );
+                            }
+                            analyzer.gain_atomic = Some(gain_atomic);
+                            Some(analyzer)
+                        }
+                        _ => None,
+                    };
+                    waveform = if super::seek_waveform::seek_waveform_enabled() {
+                        ensure_waveform_cache(&mut waveform_cache);
+                        Some(SeekWaveformAccumulator::begin(
+                            track.track_id,
+                            track.sample_rate,
+                            track.channels,
+                            track.duration_secs,
+                            waveform_cache.as_ref(),
+                        ))
+                    } else {
+                        None
+                    };
+                    current_track = Some(track);
                 }
-                AnalyzerMessage::Samples(samples) => {
+                AnalyzerMessage::Samples {
+                    start_frame,
+                    samples,
+                } => {
                     if let Some(ref mut s) = state {
                         s.feed_samples(&samples, &cache);
+                    }
+                    if super::seek_waveform::seek_waveform_enabled() {
+                        ensure_waveform_cache(&mut waveform_cache);
+                        if waveform.is_none() {
+                            waveform = current_track.as_ref().map(|track| {
+                                SeekWaveformAccumulator::begin(
+                                    track.track_id,
+                                    track.sample_rate,
+                                    track.channels,
+                                    track.duration_secs,
+                                    waveform_cache.as_ref(),
+                                )
+                            });
+                        }
+                        if let Some(ref mut accumulator) = waveform {
+                            accumulator.feed(start_frame, &samples, waveform_cache.as_ref());
+                        }
+                    } else {
+                        waveform = None;
                     }
                 }
                 AnalyzerMessage::Reset => {
@@ -112,6 +144,14 @@ impl LoudnessAnalyzer {
                 }
             }
         }
+    }
+}
+
+fn ensure_waveform_cache(cache: &mut Option<SeekWaveformCache>) {
+    if cache.is_none() {
+        *cache = SeekWaveformCache::open()
+            .map_err(|error| log::warn!("[SeekWaveform] {error}"))
+            .ok();
     }
 }
 

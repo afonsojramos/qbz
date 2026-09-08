@@ -152,9 +152,30 @@ impl PipeWireBackend {
     }
 
     /// Query the current PipeWire graph sample rate via pw-metadata.
+    /// The rate the PipeWire graph is ACTUALLY running at.
+    ///
+    /// `clock.force-rate` is the key this backend writes and the one that
+    /// drives the graph; `clock.rate` is the graph's NOMINAL default and does
+    /// not move when a rate is forced. Verifying the former by reading the
+    /// latter is how this check spent releases reporting "Audio may play at
+    /// wrong speed" over perfectly correct output — measured on a Fosi ZH3:
+    /// `clock.force-rate` = 96000 and `clock.rate` = 48000 at the same instant,
+    /// with the DAC's own display reading 96 kHz. The retry did not help
+    /// because the delay was never the problem.
+    ///
+    /// Falls back to `clock.rate` when nothing is forced (`force-rate` then
+    /// reads 0 or is absent), which is the honest answer in that case.
     fn get_pipewire_current_rate() -> Option<u32> {
+        Self::read_pw_setting("clock.force-rate")
+            .filter(|rate| *rate > 0)
+            .or_else(|| Self::read_pw_setting("clock.rate"))
+    }
+
+    /// One `pw-metadata` settings read, parsed. Split out so the two keys above
+    /// cannot drift apart.
+    fn read_pw_setting(key: &str) -> Option<u32> {
         let output = Command::new("pw-metadata")
-            .args(["-n", "settings", "0", "clock.rate"])
+            .args(["-n", "settings", "0", key])
             .output()
             .ok()?;
         if !output.status.success() {
@@ -162,8 +183,12 @@ impl PipeWireBackend {
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
         // pw-metadata output: "Found "settings" metadata 0\nupdate: id:0 key:'clock.rate' value:'96000' type:''"
+        // EXACT key match: `clock.rate` is a SUBSTRING of `clock.force-rate`, so
+        // a `contains(key)` would happily read the forced rate while asked for
+        // the nominal one. pw-metadata prints `key:'<name>'`.
+        let needle = format!("key:'{key}'");
         for line in stdout.lines() {
-            if line.contains("clock.rate") && line.contains("value:") {
+            if line.contains(&needle) && line.contains("value:") {
                 // Extract value between single quotes after "value:"
                 if let Some(start) = line.find("value:'") {
                     let after = &line[start + 7..];
@@ -354,7 +379,12 @@ impl PipeWireBackend {
         for (idx, dev) in devices.iter().enumerate() {
             log::info!(
                 "  [{}] {} (id: {}, bus: {:?}, hw: {}, default: {})",
-                idx, dev.name, dev.id, dev.device_bus, dev.is_hardware, dev.is_default
+                idx,
+                dev.name,
+                dev.id,
+                dev.device_bus,
+                dev.is_hardware,
+                dev.is_default
             );
         }
         Some(devices)
@@ -925,10 +955,7 @@ impl AudioBackend for PipeWireBackend {
                         }
                     }
                 } else {
-                    log::info!(
-                        "[PipeWire Backend] Rate verified: {}Hz",
-                        actual_rate
-                    );
+                    log::info!("[PipeWire Backend] Rate verified: {}Hz", actual_rate);
                 }
             }
         }
@@ -947,7 +974,10 @@ impl AudioBackend for PipeWireBackend {
         // Subprocess probes are time-bounded so a wedged daemon can never
         // stall stream init on the audio thread.
         if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-            if std::path::Path::new(&runtime_dir).join("pipewire-0").exists() {
+            if std::path::Path::new(&runtime_dir)
+                .join("pipewire-0")
+                .exists()
+            {
                 return true;
             }
         }
@@ -1021,7 +1051,11 @@ mod pw_dump_tests {
     fn parses_sinks_only_with_node_names_bus_and_default() {
         let devs = parse_pw_dump_sinks(FIXTURE);
         // The Audio/Source must be excluded.
-        assert_eq!(devs.len(), 2, "should parse exactly the two Audio/Sink nodes");
+        assert_eq!(
+            devs.len(),
+            2,
+            "should parse exactly the two Audio/Sink nodes"
+        );
 
         let usb = devs
             .iter()
@@ -1031,7 +1065,10 @@ mod pw_dump_tests {
         assert_eq!(usb.device_bus.as_deref(), Some("usb")); // read from node props
         assert!(usb.is_hardware);
         assert!(usb.is_default, "usb sink is the default per Metadata");
-        assert!(usb.max_sample_rate.is_none(), "rate comes from the capability probe, not pw-dump");
+        assert!(
+            usb.max_sample_rate.is_none(),
+            "rate comes from the capability probe, not pw-dump"
+        );
 
         let pci = devs
             .iter()

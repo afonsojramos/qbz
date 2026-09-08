@@ -736,6 +736,7 @@ fn plan_audio(
                     | "output_device"
                     | "alsa_plugin"
                     | "alsa_hardware_volume"
+                    | "alsa_hardware_volume_controls"
                     | "dsd_mode"
             )
             || k.eq_ignore_ascii_case("volume");
@@ -922,15 +923,22 @@ fn plan_audio_machine(
         }
     }
 
-    // alsa_plugin / alsa_hardware_volume — apply only with a validated ALSA device.
+    // ALSA plugin / hardware-volume flag / exact route map — apply only with
+    // a validated ALSA device. Imported identities are data only; the active
+    // route is probed again before any mixer write.
     let resolved_backend_alsa = resolved_backend_is_alsa(map, current, fallback, forced_device);
-    for key in ["alsa_plugin", "alsa_hardware_volume"] {
+    for key in [
+        "alsa_plugin",
+        "alsa_hardware_volume",
+        "alsa_hardware_volume_controls",
+    ] {
         let Some(v) = map.get(key) else { continue };
         let no_change = alsa_field_no_change(current, key, v);
         if no_change {
             applied_line(plan, &format!("audio.{key}"), v, "");
         } else if device_survives && resolved_backend_alsa {
             applied_line(plan, &format!("audio.{key}"), v, "rides the ALSA device");
+            plan.routing_critical_changed = true;
         } else {
             plan.skipped.push(skip_line(
                 &format!("audio.{key}"),
@@ -978,6 +986,7 @@ fn backend_name(b: AudioBackendType) -> &'static str {
         AudioBackendType::Alsa => "Alsa",
         AudioBackendType::Pulse => "Pulse",
         AudioBackendType::Jack => "Jack",
+        AudioBackendType::WasapiExclusive => "WasapiExclusive",
         AudioBackendType::SystemDefault => "SystemDefault",
     }
 }
@@ -996,6 +1005,12 @@ fn intent_flag_current(current: &AudioSettings, flag: &str) -> bool {
 fn alsa_field_no_change(current: &AudioSettings, key: &str, v: &Value) -> bool {
     match key {
         "alsa_hardware_volume" => v.as_bool() == Some(current.alsa_hardware_volume),
+        "alsa_hardware_volume_controls" => {
+            serde_json::to_value(&current.alsa_hardware_volume_controls)
+                .ok()
+                .as_ref()
+                == Some(v)
+        }
         "alsa_plugin" => {
             let cur = serde_json::to_value(current.alsa_plugin).unwrap_or(Value::Null);
             *v == cur
@@ -1165,6 +1180,11 @@ fn apply_audio_writes(data_root: &Path, writes: &[(&str, &Value)]) -> Result<(),
                 store.set_alsa_plugin(p)?;
             }
             "alsa_hardware_volume" => store.set_alsa_hardware_volume(as_bool(value))?,
+            "alsa_hardware_volume_controls" => {
+                let controls = serde_json::from_value((*value).clone())
+                    .map_err(|e| format!("alsa_hardware_volume_controls: {e}"))?;
+                store.set_alsa_hardware_volume_controls(controls)?;
+            }
             "exclusive_mode" => store.set_exclusive_mode(as_bool(value))?,
             "dac_passthrough" => store.set_dac_passthrough(as_bool(value))?,
             "pw_force_bitperfect" => store.set_pw_force_bitperfect(as_bool(value))?,
@@ -1425,7 +1445,7 @@ fn qconnect_kv_read(db: &Path, key: &str) -> Option<String> {
 
 fn qconnect_kv_write(db: &Path, key: &str, value: Option<&str>) -> Result<(), String> {
     let conn = rusqlite::Connection::open(db).map_err(|e| e.to_string())?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
         .map_err(|e| e.to_string())?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
@@ -1512,17 +1532,63 @@ fn desktop_paths() -> ProfilePaths {
     }
 }
 
-fn hostname() -> String {
-    std::env::var("HOSTNAME")
-        .ok()
-        .filter(|h| !h.trim().is_empty())
-        .or_else(|| {
-            std::fs::read_to_string("/etc/hostname")
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        })
-        .unwrap_or_else(|| "unknown".to_string())
+/// The machine's name, for user-facing device labels.
+///
+/// `HOSTNAME` is a SHELL variable rather than an environment one on most Linux
+/// setups, hence the file fallback. Windows exports `COMPUTERNAME` and has no
+/// `/etc/hostname`, so every Windows install used to land on the same
+/// "unknown" and collide on Qobuz Connect.
+///
+/// The single implementation: `qbz-qt` and `qbzd` both call it and keep only
+/// their own last-resort word, which differ on purpose.
+pub fn hostname() -> String {
+    for var in ["HOSTNAME", "COMPUTERNAME"] {
+        if let Ok(h) = std::env::var(var) {
+            let h = h.trim();
+            if !h.is_empty() {
+                return h.to_string();
+            }
+        }
+    }
+    if let Ok(h) = std::fs::read_to_string("/etc/hostname") {
+        let h = h.trim();
+        if !h.is_empty() {
+            return h.to_string();
+        }
+    }
+    "unknown".to_string()
+}
+
+#[cfg(test)]
+mod hostname_tests {
+    /// ONE test, not two: the environment is process-global and cargo runs
+    /// tests on parallel threads, so a sibling that sets HOSTNAME races a
+    /// sibling that clears it. Splitting these failed exactly that way.
+    #[test]
+    fn computername_is_the_windows_source_and_hostname_still_wins() {
+        let saved_host = std::env::var("HOSTNAME").ok();
+        let saved_computer = std::env::var("COMPUTERNAME").ok();
+
+        std::env::remove_var("HOSTNAME");
+        std::env::set_var("COMPUTERNAME", "WINBOX");
+        assert_eq!(super::hostname(), "WINBOX", "Windows has only COMPUTERNAME");
+
+        std::env::set_var("HOSTNAME", "gentoo-box");
+        assert_eq!(
+            super::hostname(),
+            "gentoo-box",
+            "HOSTNAME keeps precedence, so Linux behaviour does not move"
+        );
+
+        match saved_host {
+            Some(v) => std::env::set_var("HOSTNAME", v),
+            None => std::env::remove_var("HOSTNAME"),
+        }
+        match saved_computer {
+            Some(v) => std::env::set_var("COMPUTERNAME", v),
+            None => std::env::remove_var("COMPUTERNAME"),
+        }
+    }
 }
 
 fn now_rfc3339() -> String {

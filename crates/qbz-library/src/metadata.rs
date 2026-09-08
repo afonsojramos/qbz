@@ -1,5 +1,6 @@
 //! Metadata extraction for audio files
 
+use lofty::config::ParseOptions;
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
@@ -42,11 +43,28 @@ impl MetadataExtractor {
     /// First non-empty string for `key` across all of the file's tags
     /// (primary first). When several tags disagree, the primary tag wins —
     /// deterministic, and matches what other players show.
-    fn string_across_tags(
-        tagged_file: &lofty::file::TaggedFile,
-        key: &ItemKey,
-    ) -> Option<String> {
+    fn string_across_tags(tagged_file: &lofty::file::TaggedFile, key: &ItemKey) -> Option<String> {
         Self::string_from_tags(Self::tags_primary_first(tagged_file), key)
+    }
+
+    /// Every non-empty value for `key` across all tags, preserving primary-tag
+    /// order and deduplicating case-insensitively. This is intentionally
+    /// separate from the first-value fallback used by scalar metadata.
+    fn strings_across_tags(tagged_file: &lofty::file::TaggedFile, key: &ItemKey) -> Vec<String> {
+        let mut values = Vec::<String>::new();
+        for tag in Self::tags_primary_first(tagged_file) {
+            for value in tag.get_strings(key.clone()) {
+                let value = value.trim();
+                if !value.is_empty()
+                    && !values
+                        .iter()
+                        .any(|existing| existing.eq_ignore_ascii_case(value))
+                {
+                    values.push(value.to_string());
+                }
+            }
+        }
+        values
     }
 
     /// Pure core of [`Self::string_across_tags`]: first non-empty, trimmed
@@ -177,6 +195,92 @@ impl MetadataExtractor {
     }
 
     fn is_disc_folder(name: &str) -> bool {
+        Self::is_bare_disc_folder(name) || Self::is_titled_disc_folder(name)
+    }
+
+    /// `Disc 01 - TV Series Soundtrack #01`, `CD2 – Bonus Material`: a disc
+    /// folder that also names the disc. Box sets are shipped this way, and
+    /// without this arm every disc becomes its own album, because
+    /// `album_root_dir` only climbs past folders this predicate accepts.
+    ///
+    /// Disjoint from the #147 false positives by construction. Those are album
+    /// titles that END with a disc token (`Now 75 - CD1`,
+    /// `100 Popular Classics, Disc 1`, `Relaxation Disc1`); here the
+    /// designator must be the FIRST thing in the name. The separator must have
+    /// whitespace on one side, so `CD-Rom Favourites` is not a disc folder
+    /// either — an accidental merge of two albums is worse than the split this
+    /// fixes, so the rule stays narrow.
+    /// `strip_disc_suffix` for callers outside this crate — the disc-suffix
+    /// rule is the one that decides whether a tag NAMES a disc or merely
+    /// NUMBERS it, and a second copy of it elsewhere would drift.
+    pub fn strip_disc_suffix_public(title: &str) -> String {
+        Self::strip_disc_suffix(title)
+    }
+
+    /// The TITLE half of a titled disc folder — "Disc 1 - Rheingold" -> "Rheingold".
+    ///
+    /// `is_titled_disc_folder` already computes this split and throws the tail
+    /// away; this returns it. PURELY ADDITIVE: nothing about grouping changes.
+    /// In particular `strip_disc_suffix` and `album_root_dir` are untouched —
+    /// they are what make a box set fold into ONE album, there is a regression
+    /// test pinning that, and a per-disc LABEL must not be bought by breaking
+    /// it.
+    pub fn disc_title_from_name(name: &str) -> Option<String> {
+        let trimmed = name.trim();
+        let bytes = trimmed.as_bytes();
+
+        let mut split = None;
+        for (idx, ch) in trimmed.char_indices() {
+            if !matches!(ch, '-' | '\u{2013}' | '\u{2014}' | ':') {
+                continue;
+            }
+            let space_before = idx > 0 && bytes[idx - 1].is_ascii_whitespace();
+            let after = idx + ch.len_utf8();
+            let space_after = trimmed[after..].starts_with(char::is_whitespace);
+            if space_before || space_after {
+                split = Some((idx, after));
+                break;
+            }
+        }
+        let (head_end, tail_start) = split?;
+        let head = trimmed[..head_end].trim();
+        let tail = trimmed[tail_start..].trim();
+        if tail.is_empty() || !Self::is_bare_disc_folder(head) {
+            return None;
+        }
+        Some(tail.to_string())
+    }
+
+    fn is_titled_disc_folder(name: &str) -> bool {
+        let trimmed = name.trim();
+        let bytes = trimmed.as_bytes();
+
+        let mut split = None;
+        for (idx, ch) in trimmed.char_indices() {
+            if !matches!(ch, '-' | '\u{2013}' | '\u{2014}' | ':') {
+                continue;
+            }
+            let space_before = idx > 0 && bytes[idx - 1].is_ascii_whitespace();
+            let after = idx + ch.len_utf8();
+            let space_after = trimmed[after..].starts_with(char::is_whitespace);
+            if space_before || space_after {
+                split = Some((idx, after));
+                break;
+            }
+        }
+
+        let Some((head_end, tail_start)) = split else {
+            return false;
+        };
+
+        let head = trimmed[..head_end].trim();
+        let tail = trimmed[tail_start..].trim();
+
+        // `Disc 1 -` with nothing after it is already the bare form.
+        !tail.is_empty() && Self::is_bare_disc_folder(head)
+    }
+
+    fn is_bare_disc_folder(name: &str) -> bool {
         let lower = name.to_lowercase();
         let tokens: Vec<&str> = lower
             .split(|c: char| !c.is_ascii_alphanumeric())
@@ -496,7 +600,7 @@ impl MetadataExtractor {
         file_path: &Path,
         library_roots: &[PathBuf],
     ) -> Result<LocalTrack, LibraryError> {
-        log::debug!("Extracting metadata from: {}", file_path.display());
+        log::debug!("Extracting audio metadata");
 
         // DSD containers aren't lofty-readable: qbz-dsd demuxes them (tech
         // props + embedded ID3v2 for DSF; trailing ID3 for DFF when present).
@@ -504,9 +608,26 @@ impl MetadataExtractor {
             return Self::extract_dsd(file_path, library_roots);
         }
 
-        // Probe the file
+        // Probe the file — WITHOUT pulling the embedded cover art.
+        //
+        // MEASURED 2026-08-22 on a 247-file box set on a NAS: reading tags
+        // took 9.27 s of a 9.30 s open, while everything else — artwork
+        // caching, ids, grouping, sorting — took 29 ms. And parallelising the
+        // reads across 8 threads had bought only 1.6x, which is the signature
+        // of a bandwidth wall rather than a latency one.
+        //
+        // A FLAC's cover art lives INSIDE the tag, so `read()` was pulling
+        // multiple megabytes of picture data per file across the network to
+        // recover a title and a track number. The pictures are not wanted
+        // here: this function fills a row, and the cover is resolved
+        // separately by `extract_artwork` / `find_folder_artwork` for ONE file
+        // per album (13 of 247 in that box).
+        //
+        // `read_properties` stays on — duration, bit depth and sample rate
+        // come from the header and are cheap.
         let tagged_file = Probe::open(file_path)
             .map_err(|e| LibraryError::Metadata(format!("Failed to open file: {}", e)))?
+            .options(ParseOptions::new().read_cover_art(false))
             .read()
             .map_err(|e| LibraryError::Metadata(format!("Failed to read file: {}", e)))?;
 
@@ -571,6 +692,7 @@ impl MetadataExtractor {
                 .unwrap_or_else(|| "Unknown Album".to_string());
             let (album_group_key, album_group_title) =
                 Self::album_group_info(file_path, Some(album_title.as_str()));
+            let genres = Self::strings_across_tags(&tagged_file, &ItemKey::Genre);
 
             LocalTrack {
                 id: 0,
@@ -590,7 +712,8 @@ impl MetadataExtractor {
                     .and_then(|d| if d > 0 { Some(d) } else { None })
                     .or(inferred_disc),
                 year: Self::year_across_tags(&tagged_file),
-                genre: Self::string_across_tags(&tagged_file, &ItemKey::Genre),
+                genre: genres.first().cloned(),
+                genres,
                 catalog_number: Self::string_across_tags(&tagged_file, &ItemKey::CatalogNumber),
                 duration_secs,
                 format,
@@ -602,6 +725,7 @@ impl MetadataExtractor {
                 cue_start_secs: None,
                 cue_end_secs: None,
                 artwork_path: None,
+                collection_artwork_path: None,
                 last_modified,
                 indexed_at: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -609,6 +733,31 @@ impl MetadataExtractor {
                     .unwrap_or(0),
                 source: None,
                 qobuz_track_id: None,
+                // Identity tags as Picard writes them (lofty maps
+                // MUSICBRAINZ_TRACKID -> MusicBrainzRecordingId and
+                // MUSICBRAINZ_RELEASETRACKID -> MusicBrainzTrackId; ISRC/TSRC
+                // -> Isrc). Same cross-tag fallback as every other field.
+                isrc: Self::string_across_tags(&tagged_file, &ItemKey::Isrc),
+                musicbrainz_recording_id: Self::string_across_tags(
+                    &tagged_file,
+                    &ItemKey::MusicBrainzRecordingId,
+                ),
+                musicbrainz_track_id: Self::string_across_tags(
+                    &tagged_file,
+                    &ItemKey::MusicBrainzTrackId,
+                ),
+                musicbrainz_release_id: Self::string_across_tags(
+                    &tagged_file,
+                    &ItemKey::MusicBrainzReleaseId,
+                ),
+                musicbrainz_release_group_id: Self::string_across_tags(
+                    &tagged_file,
+                    &ItemKey::MusicBrainzReleaseGroupId,
+                ),
+                musicbrainz_artist_id: Self::string_across_tags(
+                    &tagged_file,
+                    &ItemKey::MusicBrainzArtistId,
+                ),
                 is_network_mount: false,
             }
         } else {
@@ -632,6 +781,7 @@ impl MetadataExtractor {
                 disc_number: inferred_disc,
                 year: None,
                 genre: None,
+                genres: Vec::new(),
                 catalog_number: None,
                 duration_secs,
                 format,
@@ -643,6 +793,7 @@ impl MetadataExtractor {
                 cue_start_secs: None,
                 cue_end_secs: None,
                 artwork_path: None,
+                collection_artwork_path: None,
                 last_modified,
                 indexed_at: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -650,6 +801,12 @@ impl MetadataExtractor {
                     .unwrap_or(0),
                 source: None,
                 qobuz_track_id: None,
+                isrc: None,
+                musicbrainz_recording_id: None,
+                musicbrainz_track_id: None,
+                musicbrainz_release_id: None,
+                musicbrainz_release_group_id: None,
+                musicbrainz_artist_id: None,
                 is_network_mount: false,
             }
         };
@@ -691,6 +848,7 @@ impl MetadataExtractor {
             .unwrap_or_else(|| "Unknown Album".to_string());
         let (album_group_key, album_group_title) =
             Self::album_group_info(file_path, Some(album_title.as_str()));
+        let genres = tags.genre.iter().cloned().collect();
 
         Ok(LocalTrack {
             id: 0,
@@ -709,6 +867,7 @@ impl MetadataExtractor {
             disc_number: tags.disc_number.filter(|d| *d > 0).or(inferred_disc),
             year: tags.year.and_then(|y| u32::try_from(y).ok()),
             genre: tags.genre.clone(),
+            genres,
             catalog_number: None,
             duration_secs: info.duration_secs(),
             format: AudioFormat::Dsd,
@@ -722,6 +881,7 @@ impl MetadataExtractor {
             cue_start_secs: None,
             cue_end_secs: None,
             artwork_path: None,
+            collection_artwork_path: None,
             last_modified,
             indexed_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -729,6 +889,12 @@ impl MetadataExtractor {
                 .unwrap_or(0),
             source: None,
             qobuz_track_id: None,
+            isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_track_id: None,
+            musicbrainz_release_id: None,
+            musicbrainz_release_group_id: None,
+            musicbrainz_artist_id: None,
             is_network_mount: false,
         })
     }
@@ -747,8 +913,11 @@ impl MetadataExtractor {
             });
         }
 
+        // Properties only — the embedded cover is megabytes of pure waste on
+        // this path (see the note in `extract_with_roots`).
         let tagged_file = Probe::open(file_path)
             .map_err(|e| LibraryError::Metadata(format!("Failed to open file: {}", e)))?
+            .options(ParseOptions::new().read_cover_art(false))
             .read()
             .map_err(|e| LibraryError::Metadata(format!("Failed to read file: {}", e)))?;
 
@@ -790,7 +959,7 @@ impl MetadataExtractor {
             return match generate_thumbnail_from_bytes(&art, &cache_key) {
                 Ok(thumbnail_path) => Some(thumbnail_path.to_string_lossy().to_string()),
                 Err(e) => {
-                    log::warn!("Failed to generate DSD thumbnail for {:?}: {}", file_path, e);
+                    log::warn!("Failed to generate DSD thumbnail: {}", e);
                     None
                 }
             };
@@ -808,10 +977,31 @@ impl MetadataExtractor {
         match generate_thumbnail_from_bytes(picture.data(), &cache_key) {
             Ok(thumbnail_path) => Some(thumbnail_path.to_string_lossy().to_string()),
             Err(e) => {
-                log::warn!("Failed to generate thumbnail for {:?}: {}", file_path, e);
+                log::warn!("Failed to generate embedded-art thumbnail: {}", e);
                 None
             }
         }
+    }
+
+    /// The RAW embedded picture bytes of an audio file (first picture, the
+    /// same pick `extract_artwork` makes), WITHOUT the 500px thumbnail
+    /// encode. This is the re-open-the-source seam for the on-demand large
+    /// art tier (contract `2026-08-15-immersive-completion` 04 §5): the DB
+    /// keeps only the 500px thumb path, so a big slot re-derives its bounded
+    /// 1600px JPEG from these bytes. DSD containers are opened through
+    /// `qbz_dsd` exactly like `extract_artwork`.
+    pub fn extract_artwork_bytes(file_path: &Path) -> Option<Vec<u8>> {
+        if qbz_dsd::is_dsd_path(file_path) {
+            let demux = qbz_dsd::open_dsd(file_path).ok()?;
+            return demux.info().tags.artwork.clone();
+        }
+
+        let tagged_file = Probe::open(file_path).ok()?.read().ok()?;
+        let tag = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag())?;
+
+        tag.pictures().first().map(|p| p.data().to_vec())
     }
 
     /// Generate thumbnail from an existing artwork file
@@ -823,13 +1013,90 @@ impl MetadataExtractor {
         match generate_thumbnail(artwork_path) {
             Ok(thumbnail_path) => Some(thumbnail_path.to_string_lossy().to_string()),
             Err(e) => {
-                log::warn!("Failed to generate thumbnail for {:?}: {}", artwork_path, e);
+                log::warn!("Failed to generate folder-art thumbnail: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Generate a stable thumbnail for artwork bytes whose source may be a
+    /// temporary editor staging file. The content hash is part of the cache
+    /// key, so replacing an album cover cannot reuse the thumbnail generated
+    /// for the previous image at the same audio or folder path.
+    pub fn cache_artwork_bytes(bytes: &[u8]) -> Option<String> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        let cache_key = format!("metadata-editor-artwork-{:016x}", hasher.finish());
+        match generate_thumbnail_from_bytes(bytes, &cache_key) {
+            Ok(thumbnail_path) => Some(thumbnail_path.to_string_lossy().to_string()),
+            Err(error) => {
+                log::warn!("Failed to generate edited-art thumbnail: {}", error);
                 None
             }
         }
     }
 
     /// Look for folder artwork by file name heuristics
+    /// A cover living in THIS directory, ignoring the album root.
+    ///
+    /// `find_folder_artwork` deliberately PREFERS the album root — it gives
+    /// index 0 a `dir_bonus` of 5 and compares with a strict `>`, so
+    /// `Box/cover.jpg` (105) beats `Box/Disc 01 - Name/cover.jpg` (100) on
+    /// every track of every disc. That is right for the album's own cover and
+    /// exactly wrong for a per-DISC one: it is why a box set whose discs each
+    /// ship their own art still resolved to one shared image on all of them.
+    ///
+    /// So this is the un-biased sibling, used only where the caller already
+    /// knows it is asking about one disc's folder. It does NOT touch the scan
+    /// path and changes no stored value.
+    pub fn folder_artwork_in_dir(dir: &Path) -> Option<String> {
+        let mut best: Option<(u32, PathBuf)> = None;
+        let mut candidates = Vec::new();
+        for entry in std::fs::read_dir(dir).ok()?.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .unwrap_or_default();
+            if !Self::is_supported_artwork_ext(&ext) {
+                continue;
+            }
+            candidates.push(path.clone());
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+            // Same vocabulary the scanner scores with, simplified: an exact
+            // well-known name wins and a name containing one is a fallback.
+            const EXACT: &[&str] = &["cover", "folder", "front", "album", "artwork", "art"];
+            let score = if EXACT.contains(&stem.as_str()) {
+                2
+            } else if EXACT.iter().any(|k| stem.contains(k)) {
+                1
+            } else {
+                continue;
+            };
+            if best.as_ref().map(|(s, _)| score > *s).unwrap_or(true) {
+                best = Some((score, path));
+            }
+        }
+        best.map(|(_, p)| p.to_string_lossy().to_string())
+            .or_else(|| {
+                // A single image in a disc directory is unambiguous even when
+                // it is named after the movement rather than `cover.jpg`.
+                (candidates.len() == 1)
+                    .then(|| candidates[0].to_string_lossy().to_string())
+            })
+    }
+
     pub fn find_folder_artwork(
         audio_file_path: &Path,
         album_title: Option<&str>,
@@ -1195,6 +1462,70 @@ mod tests {
         assert!(!MetadataExtractor::is_disc_folder("20 Blues Greats"));
         assert!(!MetadataExtractor::is_disc_folder("The Beatles"));
         assert!(!MetadataExtractor::is_disc_folder("Abbey Road"));
+    }
+
+    #[test]
+    fn test_is_disc_folder_titled() {
+        // Box sets name the disc after the designator. Every one of these used
+        // to become its own album, in the DEFAULT (folder) grouping mode.
+        assert!(MetadataExtractor::is_disc_folder(
+            "Disc 01 - TV Series Soundtrack #01"
+        ));
+        assert!(MetadataExtractor::is_disc_folder("CD1 - Bonus Material"));
+        assert!(MetadataExtractor::is_disc_folder("Disc 2 \u{2013} Live"));
+        assert!(MetadataExtractor::is_disc_folder("Disc 3: The Remixes"));
+        assert!(MetadataExtractor::is_disc_folder(
+            "Bonus Disc - Rarities 1994-1999"
+        ));
+        assert!(MetadataExtractor::is_disc_folder("cd 04 - instrumentals"));
+    }
+
+    #[test]
+    fn test_is_disc_folder_titled_stays_narrow() {
+        // The designator must LEAD. These are the issue #147 shapes with a
+        // separator in them, and they must stay album titles.
+        assert!(!MetadataExtractor::is_disc_folder("Now 75 - CD1"));
+        assert!(!MetadataExtractor::is_disc_folder(
+            "Match of the Day - The Album CD1"
+        ));
+        assert!(!MetadataExtractor::is_disc_folder(
+            "Greatest Hits - Disc 1 of 2 Collection"
+        ));
+        // No whitespace beside the separator: a hyphenated word, not a title.
+        assert!(!MetadataExtractor::is_disc_folder("CD-Rom Favourites"));
+        // A leading disc word with no separator at all.
+        assert!(!MetadataExtractor::is_disc_folder("Disc Jockey Anthems"));
+        // Nothing after the separator is the bare form, not the titled one.
+        assert!(!MetadataExtractor::is_titled_disc_folder("Disc 1 -"));
+    }
+
+    #[test]
+    fn test_album_root_dir_titled_disc_folders_group_as_one() {
+        // A 13-disc box set: every disc directory must resolve to the SAME
+        // album root, or the library shows 13 albums.
+        let box_root = Path::new("/music/Seiji Yokoyama/Saint Seiya Eternal CD-Box");
+        let first = MetadataExtractor::album_root_dir(Path::new(
+            "/music/Seiji Yokoyama/Saint Seiya Eternal CD-Box/Disc 01 - TV Series Soundtrack #01/01. Pegasus Fantasy.flac",
+        ))
+        .unwrap();
+        let last = MetadataExtractor::album_root_dir(Path::new(
+            "/music/Seiji Yokoyama/Saint Seiya Eternal CD-Box/Disc 13 - Complete Song Collection 3/07. Blue Forever.flac",
+        ))
+        .unwrap();
+        assert_eq!(first, box_root);
+        assert_eq!(last, box_root);
+    }
+
+    #[test]
+    fn test_disc_number_recovered_from_titled_disc_folder() {
+        assert_eq!(
+            MetadataExtractor::disc_number_from_name("Disc 01 - TV Series Soundtrack #01"),
+            Some(1)
+        );
+        assert_eq!(
+            MetadataExtractor::disc_number_from_name("CD13 - Complete Song Collection 3"),
+            Some(13)
+        );
     }
 
     #[test]

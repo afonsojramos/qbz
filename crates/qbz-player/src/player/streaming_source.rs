@@ -38,6 +38,8 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::default::{get_codecs, get_probe};
 
+use super::{PlaybackBufferReporter, PlaybackBufferState};
+
 /// Configuration for the streaming buffer
 #[derive(Debug, Clone)]
 pub struct StreamingConfig {
@@ -169,6 +171,23 @@ pub fn max_initial_buffer_bytes() -> usize {
     MAX_INITIAL_BUFFER_BYTES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Absolute ceiling for the up-front buffer reservation: 1 GiB. Guards
+/// against absurd Content-Length values reserving more RAM than any real
+/// track needs.
+const MAX_PREALLOC_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Pure decision for the up-front reservation in [`BufferedMediaSource::new`]:
+/// `Some(capacity)` when `total_size` is known and non-zero (capped at
+/// [`MAX_PREALLOC_BYTES`]), `None` when the caller should fall back to the
+/// config's initial-buffer capacity.
+fn prealloc_capacity(total_size: Option<u64>) -> Option<usize> {
+    let total = total_size?;
+    if total == 0 {
+        return None;
+    }
+    Some(total.min(MAX_PREALLOC_BYTES) as usize)
+}
+
 /// Internal state shared between reader and writer
 struct BufferState {
     /// Accumulated data from HTTP response
@@ -199,9 +218,30 @@ impl BufferedMediaSource {
     /// Returns the source and a writer for pushing downloaded chunks.
     /// The writer should be used from the async download task.
     pub fn new(config: StreamingConfig, total_size: Option<u64>) -> (Self, BufferWriter) {
+        // When the total track size is known, reserve it up front: the
+        // buffer ends up holding the whole track either way, so this skips
+        // the ~8 doubling reallocs (and their memcpy) a 60-400 MB download
+        // would otherwise pay. Falls back to the initial-buffer capacity
+        // when the reservation fails (e.g. a 424 MB track on 32-bit, where
+        // the contiguous range may not exist) or the size is unknown.
+        let data = match prealloc_capacity(total_size) {
+            Some(cap) => {
+                let mut v = Vec::new();
+                if v.try_reserve_exact(cap).is_err() {
+                    log::warn!(
+                        "Stream buffer: could not reserve {} bytes up front; growing dynamically",
+                        cap
+                    );
+                    v = Vec::with_capacity(config.initial_buffer_bytes);
+                }
+                v
+            }
+            None => Vec::with_capacity(config.initial_buffer_bytes),
+        };
+
         let state = Arc::new((
             Mutex::new(BufferState {
-                data: Vec::with_capacity(config.initial_buffer_bytes),
+                data,
                 download_complete: false,
                 download_error: None,
                 total_size,
@@ -550,6 +590,30 @@ impl BufferWriter {
             0
         }
     }
+
+    /// Copy the buffered bytes into `out` in bounded chunks, re-taking the
+    /// state lock per chunk instead of holding it for the whole transfer,
+    /// so live readers are starved for at most one chunk's write instead of
+    /// a full-track copy. Used by the low-memory oversized-track path to
+    /// persist the finished track to the L2 disk cache straight from the
+    /// playback buffer — no second full in-RAM copy. Returns bytes written.
+    pub fn write_buffered_to<W: std::io::Write>(&self, out: &mut W) -> IoResult<usize> {
+        const CHUNK: usize = 1024 * 1024;
+        let (lock, _) = &*self.state;
+        let mut offset = 0usize;
+        loop {
+            let state = lock
+                .lock()
+                .map_err(|_| IoError::new(ErrorKind::Other, "Failed to acquire buffer lock"))?;
+            if offset >= state.data.len() {
+                break;
+            }
+            let end = (offset + CHUNK).min(state.data.len());
+            out.write_all(&state.data[offset..end])?;
+            offset = end;
+        }
+        Ok(offset)
+    }
 }
 
 // =============================================================================
@@ -587,6 +651,8 @@ pub struct IncrementalStreamingSource {
     stalled: bool,
     /// Reference to the buffered source (for cache retrieval after playback)
     buffered_source: Arc<BufferedMediaSource>,
+    /// Optional generation-safe side channel into the player's buffer state.
+    buffer_reporter: Option<PlaybackBufferReporter>,
 }
 
 impl IncrementalStreamingSource {
@@ -597,6 +663,20 @@ impl IncrementalStreamingSource {
     ///
     /// Returns the source along with detected sample_rate and channels.
     pub fn new(buffered_source: Arc<BufferedMediaSource>) -> Result<Self, String> {
+        Self::new_inner(buffered_source, None)
+    }
+
+    pub(super) fn new_for_play(
+        buffered_source: Arc<BufferedMediaSource>,
+        buffer_reporter: PlaybackBufferReporter,
+    ) -> Result<Self, String> {
+        Self::new_inner(buffered_source, Some(buffer_reporter))
+    }
+
+    fn new_inner(
+        buffered_source: Arc<BufferedMediaSource>,
+        buffer_reporter: Option<PlaybackBufferReporter>,
+    ) -> Result<Self, String> {
         // Create a reader from the buffered source
         let reader = buffered_source.create_reader();
         let media_source = Box::new(reader) as Box<dyn MediaSource>;
@@ -650,6 +730,7 @@ impl IncrementalStreamingSource {
             packets_decoded: 0,
             stalled: false,
             buffered_source,
+            buffer_reporter,
         })
     }
 
@@ -720,6 +801,9 @@ impl IncrementalStreamingSource {
                         // mode so the live stream gets the pipe to itself (#591).
                         self.stalled = true;
                         qbz_audio::network_throttle::state().record_underrun();
+                        if let Some(reporter) = &self.buffer_reporter {
+                            reporter.report(PlaybackBufferState::Underrun);
+                        }
                     }
                     std::thread::sleep(Duration::from_millis(5));
                     continue;
@@ -731,11 +815,19 @@ impl IncrementalStreamingSource {
                         self.packets_decoded
                     );
                     self.finished = true;
+                    if self.buffered_source.download_error().is_some() {
+                        if let Some(reporter) = &self.buffer_reporter {
+                            reporter.report(PlaybackBufferState::Error);
+                        }
+                    }
                     return;
                 }
                 Err(err) => {
                     log::error!("Symphonia read error in stream: {}", err);
                     self.finished = true;
+                    if let Some(reporter) = &self.buffer_reporter {
+                        reporter.report(PlaybackBufferState::Error);
+                    }
                     return;
                 }
             };
@@ -746,6 +838,12 @@ impl IncrementalStreamingSource {
 
             match self.decoder.decode(&packet) {
                 Ok(audio_buf) => {
+                    // Vorbis/Opus setup, comment, and padding packets can decode to zero frames.
+                    // Passing one to copy_interleaved_ref panics on the CPAL output thread,
+                    // tearing down audio output and closing its command channel for the session.
+                    if audio_buf.frames() == 0 {
+                        continue;
+                    }
                     let spec = *audio_buf.spec();
                     let mut sample_buf = SampleBuffer::<f32>::new(audio_buf.frames() as u64, spec);
                     sample_buf.copy_interleaved_ref(audio_buf);
@@ -753,10 +851,16 @@ impl IncrementalStreamingSource {
                     // Add samples to queue
                     self.sample_queue
                         .extend(sample_buf.samples().iter().copied());
+                    let ready_edge = should_report_ready(self.packets_decoded, self.stalled);
                     self.packets_decoded += 1;
                     // Successful decode ends any stall episode; the next
                     // WouldBlock streak records a fresh underrun.
                     self.stalled = false;
+                    if ready_edge {
+                        if let Some(reporter) = &self.buffer_reporter {
+                            reporter.report(PlaybackBufferState::Ready);
+                        }
+                    }
                 }
                 Err(SymphoniaError::DecodeError(e)) => {
                     log::warn!("Decode error (skipping packet): {}", e);
@@ -769,11 +873,18 @@ impl IncrementalStreamingSource {
                 Err(err) => {
                     log::error!("Symphonia decode error: {}", err);
                     self.finished = true;
+                    if let Some(reporter) = &self.buffer_reporter {
+                        reporter.report(PlaybackBufferState::Error);
+                    }
                     return;
                 }
             }
         }
     }
+}
+
+const fn should_report_ready(packets_decoded: u64, stalled: bool) -> bool {
+    packets_decoded == 0 || stalled
 }
 
 impl Source for IncrementalStreamingSource {
@@ -812,17 +923,28 @@ impl Iterator for IncrementalStreamingSource {
     }
 }
 
+/// Shared, immutable audio bytes: lets several readers (the player, the cast
+/// media server, the cast visualizer's shadow decoder) sit on ONE copy of a
+/// 100 MB track instead of cloning it per consumer.
+pub struct SharedBytes(pub Arc<Vec<u8>>);
+
+impl AsRef<[u8]> for SharedBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
 /// Cursor-backed MediaSource for in-memory audio data.
 struct InMemoryMediaSource {
-    inner: Cursor<Vec<u8>>,
+    inner: Cursor<SharedBytes>,
     len: u64,
 }
 
 impl InMemoryMediaSource {
-    fn new(data: Vec<u8>) -> Self {
+    fn shared(data: Arc<Vec<u8>>) -> Self {
         let len = data.len() as u64;
         Self {
-            inner: Cursor::new(data),
+            inner: Cursor::new(SharedBytes(data)),
             len,
         }
     }
@@ -876,7 +998,12 @@ pub struct InMemorySource {
 
 impl InMemorySource {
     pub fn new(data: Vec<u8>) -> Result<Self, String> {
-        let source = Box::new(InMemoryMediaSource::new(data)) as Box<dyn MediaSource>;
+        Self::from_shared(Arc::new(data))
+    }
+
+    /// Decode bytes that another consumer keeps alive too (no copy).
+    pub fn from_shared(data: Arc<Vec<u8>>) -> Result<Self, String> {
+        let source = Box::new(InMemoryMediaSource::shared(data)) as Box<dyn MediaSource>;
         let mss = MediaSourceStream::new(source, Default::default());
 
         let hint = Hint::new();
@@ -917,6 +1044,14 @@ impl InMemorySource {
             track_id,
             finished: false,
         })
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    pub fn channels(&self) -> u16 {
+        self.channels
     }
 
     pub fn seek_to(&mut self, time: Duration) -> Result<(), String> {
@@ -960,6 +1095,12 @@ impl InMemorySource {
 
             match self.decoder.decode(&packet) {
                 Ok(audio_buf) => {
+                    // Vorbis/Opus setup, comment, and padding packets can decode to zero frames.
+                    // Passing one to copy_interleaved_ref panics on the CPAL output thread,
+                    // tearing down audio output and closing its command channel for the session.
+                    if audio_buf.frames() == 0 {
+                        continue;
+                    }
                     let spec = *audio_buf.spec();
                     let mut sample_buf = SampleBuffer::<f32>::new(audio_buf.frames() as u64, spec);
                     sample_buf.copy_interleaved_ref(audio_buf);
@@ -1019,6 +1160,15 @@ mod tests {
     use super::*;
     use std::thread;
     use std::time::Duration;
+
+    #[test]
+    fn ready_reports_only_on_first_decode_and_stall_recovery() {
+        assert!(should_report_ready(0, false));
+        assert!(!should_report_ready(1, false));
+        assert!(!should_report_ready(400, false));
+        assert!(should_report_ready(1, true));
+        assert!(should_report_ready(400, true));
+    }
 
     #[test]
     fn first_error_wins_over_later_generic_abort() {
@@ -1098,6 +1248,67 @@ mod tests {
         // module default; we are only clamping the initial fill target.
         let cfg = StreamingConfig::from_speed_mbps_with_cap(0.5, 64 * 1024);
         assert_eq!(cfg.max_buffer_bytes, 100 * 1024 * 1024);
+    }
+
+    #[test]
+    fn prealloc_capacity_decision() {
+        // Unknown or zero size: no reservation, caller uses the initial
+        // buffer capacity instead.
+        assert_eq!(prealloc_capacity(None), None);
+        assert_eq!(prealloc_capacity(Some(0)), None);
+        // Known size reserves exactly that (no doubling slack).
+        assert_eq!(prealloc_capacity(Some(60 * 1024 * 1024)), Some(60 * 1024 * 1024));
+        assert_eq!(prealloc_capacity(Some(1)), Some(1));
+        // Absurd sizes are capped at 1 GiB.
+        assert_eq!(
+            prealloc_capacity(Some(8 * 1024 * 1024 * 1024)),
+            Some(MAX_PREALLOC_BYTES as usize)
+        );
+    }
+
+    #[test]
+    fn new_source_preallocates_known_total_size() {
+        let config = StreamingConfig {
+            initial_buffer_bytes: 16,
+            max_buffer_bytes: 100,
+        };
+        let (_source, writer) = BufferedMediaSource::new(config, Some(4096));
+        // The writer's buffer should have reserved the full track up front.
+        // (No public capacity accessor — push the full size and ensure the
+        // data lands intact, which is the observable contract.)
+        let payload = vec![0xABu8; 4096];
+        writer.push_chunk(&payload).unwrap();
+        writer.complete().unwrap();
+        assert_eq!(writer.buffer_size(), 4096);
+    }
+
+    #[test]
+    fn write_buffered_to_copies_full_contents() {
+        let config = StreamingConfig {
+            initial_buffer_bytes: 4,
+            max_buffer_bytes: 100,
+        };
+        let (_source, writer) = BufferedMediaSource::new(config, None);
+        writer.push_chunk(b"Hello, ").unwrap();
+        writer.push_chunk(b"world!").unwrap();
+        writer.complete().unwrap();
+
+        let mut out: Vec<u8> = Vec::new();
+        let written = writer.write_buffered_to(&mut out).unwrap();
+        assert_eq!(written, 13);
+        assert_eq!(&out, b"Hello, world!");
+    }
+
+    #[test]
+    fn write_buffered_to_handles_empty_buffer() {
+        let config = StreamingConfig {
+            initial_buffer_bytes: 4,
+            max_buffer_bytes: 100,
+        };
+        let (_source, writer) = BufferedMediaSource::new(config, None);
+        let mut out: Vec<u8> = Vec::new();
+        assert_eq!(writer.write_buffered_to(&mut out).unwrap(), 0);
+        assert!(out.is_empty());
     }
 
     #[test]

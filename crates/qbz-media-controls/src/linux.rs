@@ -20,7 +20,7 @@ use std::sync::{
 use mpris_server::zbus::{self, fdo};
 use mpris_server::{
     LoopStatus, Metadata, PlaybackRate, PlaybackStatus as MprisStatus, PlayerInterface, Property,
-    RootInterface, Server, Time, TrackId, Volume,
+    RootInterface, Server, Signal, Time, TrackId, Volume,
 };
 
 use crate::inhibit::SleepInhibitor;
@@ -43,7 +43,16 @@ struct State {
     metadata: Metadata,
     status: MprisStatus,
     volume: Volume,
+    /// The last position we were TOLD, and when we were told it.
+    ///
+    /// MPRIS `Position` is read on demand, so what matters is the answer at
+    /// READ time, not at push time. Storing the instant alongside lets the
+    /// getter extrapolate — `position + (now - stamped)` while Playing — which
+    /// is exact to the microsecond no matter how often the app pushes. Without
+    /// it the answer is only as fresh as the last push, and the app would have
+    /// to choose between a stale clock and a faster poll it does not want.
     position: Time,
+    stamped: std::time::Instant,
 }
 
 /// Update commands sent from the app to the server thread.
@@ -54,6 +63,15 @@ enum Update {
         position: Option<Time>,
     },
     Volume(Volume),
+    /// Position ONLY — stores, emits nothing. MPRIS excludes `Position` from
+    /// `PropertiesChanged` by design, so there is no signal to send; the point
+    /// is purely that the next on-demand read is not stale.
+    Position(Time),
+    /// A DISCONTINUOUS jump. Stores like `Position` and additionally emits the
+    /// `Seeked` signal, which is the ONE thing that tells an already-open
+    /// client to stop extrapolating and re-read. Without it a widget keeps
+    /// counting from wherever it was until it happens to poll again.
+    Seeked(Time),
 }
 
 /// The cloneable handle returned to the app. Pushing state is a non-blocking
@@ -76,6 +94,18 @@ impl MediaIntegration for LinuxHandle {
 
     fn set_volume(&self, vol: f64) {
         let _ = self.tx.try_send(Update::Volume(vol.clamp(0.0, 1.0)));
+    }
+
+    fn set_position(&self, position: std::time::Duration) {
+        let _ = self
+            .tx
+            .try_send(Update::Position(Time::from_micros(position.as_micros() as i64)));
+    }
+
+    fn seeked(&self, position: std::time::Duration) {
+        let _ = self
+            .tx
+            .try_send(Update::Seeked(Time::from_micros(position.as_micros() as i64)));
     }
 }
 
@@ -104,6 +134,9 @@ fn build_metadata(meta: &TrackMeta) -> Metadata {
     }
     if let Some(url) = &meta.art_url {
         b = b.art_url(url.clone());
+    }
+    if let Some(url) = &meta.url {
+        b = b.url(url.clone());
     }
     b.build()
 }
@@ -231,7 +264,15 @@ impl PlayerInterface for QbzMpris {
         Ok(())
     }
     async fn position(&self) -> fdo::Result<Time> {
-        Ok(self.state.lock().unwrap().position)
+        let st = self.state.lock().unwrap();
+        // Extrapolate while playing; a paused or stopped player has not moved
+        // since it was stamped.
+        if st.status == MprisStatus::Playing {
+            let elapsed = st.stamped.elapsed().as_micros() as i64;
+            Ok(Time::from_micros(st.position.as_micros() + elapsed))
+        } else {
+            Ok(st.position)
+        }
     }
     async fn minimum_rate(&self) -> fdo::Result<PlaybackRate> {
         Ok(1.0)
@@ -271,6 +312,19 @@ async fn apply(server: &Server<QbzMpris>, state: &Arc<Mutex<State>>, update: Upd
                 st.status = status;
                 if let Some(p) = position {
                     st.position = p;
+                    st.stamped = std::time::Instant::now();
+                } else {
+                    // A status change with no position still re-anchors: the
+                    // extrapolation base must not keep running across a pause.
+                    st.position = Time::from_micros(
+                        st.position.as_micros()
+                            + if st.status == MprisStatus::Playing {
+                                st.stamped.elapsed().as_micros() as i64
+                            } else {
+                                0
+                            },
+                    );
+                    st.stamped = std::time::Instant::now();
                 }
             }
             let _ = server
@@ -280,6 +334,19 @@ async fn apply(server: &Server<QbzMpris>, state: &Arc<Mutex<State>>, update: Upd
         Update::Volume(v) => {
             state.lock().unwrap().volume = v;
             let _ = server.properties_changed([Property::Volume(v)]).await;
+        }
+        Update::Position(p) => {
+            let mut st = state.lock().unwrap();
+            st.position = p;
+            st.stamped = std::time::Instant::now();
+        }
+        Update::Seeked(p) => {
+            {
+                let mut st = state.lock().unwrap();
+                st.position = p;
+                st.stamped = std::time::Instant::now();
+            }
+            let _ = server.emit(Signal::Seeked { position: p }).await;
         }
     }
 }
@@ -309,6 +376,7 @@ pub fn spawn(on_event: EventCb) -> Option<LinuxHandle> {
                     status: MprisStatus::Stopped,
                     volume: 1.0,
                     position: Time::ZERO,
+                    stamped: std::time::Instant::now(),
                 }));
                 let imp = QbzMpris {
                     on_event,

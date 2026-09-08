@@ -244,6 +244,83 @@ impl PlaybackCache {
         }
     }
 
+    /// Insert a track whose bytes are streamed in by `fill` rather than
+    /// passed as an already-materialized slice. Used by the low-memory
+    /// oversized-track path, where a second full in-RAM copy of the track
+    /// just to hand `insert` a `&[u8]` is exactly what we're avoiding —
+    /// `fill` typically chunked-copies straight out of the playback buffer.
+    ///
+    /// `size_hint` is the expected byte count: it drives the too-large
+    /// rejection and pre-write eviction; the entry records the actual bytes
+    /// written.
+    pub fn insert_from<F>(&self, track_id: u64, size_hint: u64, fill: F)
+    where
+        F: FnOnce(&mut fs::File) -> std::io::Result<usize>,
+    {
+        // Don't cache if larger than max size
+        if size_hint > self.max_size_bytes {
+            log::debug!(
+                "Track {} too large for playback cache ({} MB > {} MB)",
+                track_id,
+                size_hint / (1024 * 1024),
+                self.max_size_bytes / (1024 * 1024)
+            );
+            return;
+        }
+
+        // Evict old entries if needed
+        self.evict_if_needed(size_hint);
+
+        let path = self.track_path(track_id);
+
+        match fs::File::create(&path) {
+            Ok(mut file) => match fill(&mut file) {
+                Ok(written) => {
+                    let size = written as u64;
+                    let mut state = self.state.lock().unwrap();
+
+                    // Remove old entry if exists
+                    if let Some(old) = state.entries.remove(&track_id) {
+                        state.current_size = state.current_size.saturating_sub(old.size_bytes);
+                    }
+
+                    state.entries.insert(
+                        track_id,
+                        CacheEntry {
+                            track_id,
+                            size_bytes: size,
+                            last_accessed: SystemTime::now(),
+                        },
+                    );
+                    state.current_size += size;
+
+                    log::info!(
+                        "Saved track {} to playback cache ({} KB). Total: {} MB / {} MB",
+                        track_id,
+                        size / 1024,
+                        state.current_size / (1024 * 1024),
+                        self.max_size_bytes / (1024 * 1024)
+                    );
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to stream playback cache file for track {}: {}",
+                        track_id,
+                        e
+                    );
+                    let _ = fs::remove_file(&path);
+                }
+            },
+            Err(e) => {
+                log::warn!(
+                    "Failed to create playback cache file for track {}: {}",
+                    track_id,
+                    e
+                );
+            }
+        }
+    }
+
     /// Evict oldest entries to make room for new data
     fn evict_if_needed(&self, needed_bytes: u64) {
         let mut state = self.state.lock().unwrap();

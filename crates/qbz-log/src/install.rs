@@ -4,7 +4,6 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
 
 use crate::tee::TeeLogger;
 
@@ -29,15 +28,16 @@ pub fn install(default_level: &str) {
     // in #555 logs) — and each suppressed record now costs nothing, since
     // `log!` checks the filter before formatting. An explicit RUST_LOG still
     // replaces the whole default, so full zbus tracing stays one env var away.
-    let inner = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(
-        format!("{default_level},zbus=warn,tracing=warn"),
-    ))
+    let inner = env_logger::Builder::from_env(
+        env_logger::Env::default()
+            .default_filter_or(format!("{default_level},zbus=warn,tracing=warn")),
+    )
     .build();
     let level = inner.filter();
     let file = open_log_file();
 
     // Ignore the Err if a logger was somehow already set elsewhere.
-    if log::set_boxed_logger(Box::new(TeeLogger { inner, file })).is_ok() {
+    if log::set_boxed_logger(Box::new(TeeLogger::new(inner, file))).is_ok() {
         log::set_max_level(level);
     }
 }
@@ -54,7 +54,7 @@ pub fn log_file_path() -> Option<PathBuf> {
 
 /// Open the log file for this run, rotating any previous one to `qbz.log.prev`.
 /// Returns `None` (file sink disabled, gracefully) on any filesystem error.
-fn open_log_file() -> Option<Mutex<BufWriter<File>>> {
+fn open_log_file() -> Option<BufWriter<File>> {
     let path = log_file_path()?;
     let dir = path.parent()?;
     std::fs::create_dir_all(dir).ok()?;
@@ -66,5 +66,5 @@ fn open_log_file() -> Option<Mutex<BufWriter<File>>> {
     }
 
     let file = File::create(&path).ok()?;
-    Some(Mutex::new(BufWriter::new(file)))
+    Some(BufWriter::new(file))
 }

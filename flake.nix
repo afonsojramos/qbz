@@ -12,27 +12,24 @@
         pkgs = import nixpkgs { inherit system; };
 
         # ──────────────────────────────────────────────
-        # VERSION BUMP: update version, rev, and srcHash
-        # when tagging a new release. (npmHash is gone —
-        # v2.0+ is the Slint crates/ workspace, no node.)
+        # VERSION BUMP: update version, rev, and srcHash when tagging a new
+        # release. QBZ builds from the Qt crates/ workspace; there is no Node
+        # dependency graph.
         # ──────────────────────────────────────────────
-        qbzVersion = "2.0.2";
+        qbzVersion = "2.1.0";
         qbzRev     = "v${qbzVersion}";
-        srcHash    = "sha256-zseGL7IcH/fdc4TDVwU3Tml1X6wCvSaYCji5D5RxAuA=";
+        # POST-RELEASE: replace from the published v2.1.0 tag.
+        srcHash    = pkgs.lib.fakeHash;
 
-        # Runtime libraries winit/wgpu/glutin dlopen at runtime — a Nix
-        # binary cannot find system copies, so the installed program is
-        # wrapped with this library path.
+        # Libraries opened by name at runtime rather than linked into qbz.
+        # Qt's own graphics/plugin closure is handled by wrapQtAppsHook.
         runtimeLibs = with pkgs; [
-          wayland
-          libxkbcommon
-          libglvnd
-          vulkan-loader
-          # X11 session support: winit dlopens these when not on Wayland
-          # (review fix — without them the app is Wayland-only on Nix).
-          xorg.libX11
-          xorg.libXcursor
-          xorg.libXi
+          libjack2
+        ];
+        runtimeBins = with pkgs; [
+          pipewire
+          pulseaudio
+          xdg-utils
         ];
       in
       {
@@ -50,44 +47,55 @@
           cargoRoot = "crates";
           buildAndTestSubdir = cargoRoot;
           # Build only the app binary, not every workspace member's tests.
-          cargoBuildFlags = [ "-p" "qbz" ];
+          cargoBuildFlags = [ "-p" "qbz-qt" ];
 
           cargoLock = {
             lockFile = "${src}/crates/Cargo.lock";
           };
 
-          env.LIBCLANG_PATH = "${pkgs.lib.getLib pkgs.llvmPackages.libclang}/lib";
-
+          # cxx-qt needs qtbase + qtdeclarative with their private headers (the
+          # RHI items include <rhi/qrhi.h>). qsb is deliberately absent: the
+          # audited, committed shaders ship unchanged. qtwayland provides the
+          # Wayland platform plugin and qtsvg the SVG image plugin.
+          # wrapQtAppsHook sets the plugin/QML paths the binary needs at run
+          # time. The Qt 6 package set is above QBZ's 6.8 floor.
           nativeBuildInputs = with pkgs; [
-            clang
             pkg-config
             cmake
             nasm
-            makeWrapper
+            qt6.qmake
+            qt6.wrapQtAppsHook
           ];
 
           buildInputs = with pkgs; [
             alsa-lib
-            fontconfig
-            freetype
             libjack2
+            qt6.qtbase
+            qt6.qtdeclarative
+            qt6.qtsvg
+            qt6.qtwayland
           ];
 
-          # The qbz_ui rustc alone peaks ~30 GB; running the test profile on
-          # top of the build doubles the wall time and memory exposure for
-          # no packaging value. Engine crates are tested in the repo's CI.
+          # Tests need an offscreen QPA + D-Bus the sandbox does not have;
+          # the crates are tested in the repo's CI (test-crates.yml).
           doCheck = false;
 
           postInstall = ''
-            wrapProgram $out/bin/qbz \
-              --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath runtimeLibs}
+            # wrapQtAppsHook wraps $out/bin/qbz. Add only runtime helpers and
+            # libraries that QBZ itself opens by name.
+            qtWrapperArgs+=(--prefix PATH : ${pkgs.lib.makeBinPath runtimeBins})
+            qtWrapperArgs+=(--prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath runtimeLibs})
 
             install -Dm644 $src/packaging/linux/qbz.desktop \
-              $out/share/applications/qbz.desktop
+              $out/share/applications/com.blitzfc.qbz.desktop
+            install -Dm644 $src/packaging/flatpak/com.blitzfc.qbz.metainfo.xml \
+              $out/share/metainfo/com.blitzfc.qbz.metainfo.xml
             for size in 32 48 64 128 256 512; do
               install -Dm644 $src/packaging/icons/"$size"x"$size".png \
                 $out/share/icons/hicolor/"$size"x"$size"/apps/qbz.png
             done
+            install -Dm644 $src/LICENSE $out/share/licenses/qbz/LICENSE
+            cp -r $src/licenses $out/share/licenses/qbz/third-party
           '';
 
           meta = with pkgs.lib; {
@@ -103,11 +111,6 @@
         devShells.default = pkgs.mkShell {
           inputsFrom = [ self.packages.${system}.default ];
 
-          # `inputsFrom` pulls in buildInputs/nativeBuildInputs from the
-          # package but does NOT propagate `env.*` attributes, so we must
-          # re-export LIBCLANG_PATH here for bindgen.
-          LIBCLANG_PATH = "${pkgs.lib.getLib pkgs.llvmPackages.libclang}/lib";
-
           packages = with pkgs; [
             rust-analyzer
             rustfmt
@@ -115,9 +118,9 @@
           ];
 
           # The package's `postInstall` wraps the installed binary with
-          # LD_LIBRARY_PATH for the dlopen'd display/GPU stack. Inside
-          # `nix develop` we run `crates/target/debug/qbz` directly, with
-          # no wrapper, so replicate it here.
+          # LD_LIBRARY_PATH for the dlopen'd JACK backend. Inside `nix develop`
+          # we run `crates/target/debug/qbz` directly, with no wrapper, so
+          # replicate it here.
           shellHook = ''
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath runtimeLibs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           '';

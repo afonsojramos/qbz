@@ -1,9 +1,15 @@
 //! SQLite database layer for library persistence
 
 use rusqlite::{params, Connection, OptionalExtension};
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 
-use crate::{AudioFormat, FolderTreeEntry, LibraryError, LocalAlbum, LocalArtist, LocalTrack};
+use crate::{
+    reachability::{probe_default, Reach},
+    AudioFormat, FolderTreeEntry, LibraryError, LocalAlbum, LocalArtist, LocalTrack,
+};
 
 #[derive(Debug, Clone)]
 pub struct AlbumTrackUpdate {
@@ -33,13 +39,53 @@ pub struct LibraryDatabase {
     conn: Connection,
 }
 
+/// Qt creates several library-backed singletons and starts the folder scanner
+/// during the same startup turn. Each owns a separate SQLite connection, but
+/// schema discovery plus `ALTER TABLE` is a check-then-act sequence and must
+/// not run concurrently inside this process.
+static SCHEMA_INIT_LOCK: Mutex<()> = Mutex::new(());
+
+/// Scope reconciliation walks every indexed SACD against every registered
+/// root. One pass per database and process is enough: runtime folder changes
+/// update ownership directly, while the next process start repairs legacy or
+/// externally modified state again.
+static SACD_SCOPE_RECONCILED: LazyLock<Mutex<HashSet<PathBuf>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// A SQL predicate restricting the shared remote mirror to the sources the user
+/// has enabled.
+///
+/// The words are VALIDATED, not escaped: only `[a-z]` survives, and anything
+/// else drops the entry. They arrive from `SourceId::as_str`, so they are
+/// already a closed set — but this string is interpolated into SQL, and a
+/// validator that cannot be bypassed beats an escape that can be forgotten.
+/// An all-invalid list yields `0`, which shows nothing rather than everything.
+fn remote_source_filter(sources: &[&str]) -> String {
+    let clean: Vec<String> = sources
+        .iter()
+        .filter(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase()))
+        .map(|w| format!("'{w}'"))
+        .collect();
+    if clean.is_empty() {
+        "0".to_string()
+    } else {
+        format!("source IN ({})", clean.join(", "))
+    }
+}
+
 impl LibraryDatabase {
     /// Open or create database at path
     pub fn open(db_path: &Path) -> Result<Self, LibraryError> {
-        log::info!("Opening library database at: {}", db_path.display());
+        log::info!("Opening library database");
 
         let conn = Connection::open(db_path)
             .map_err(|e| LibraryError::Database(format!("Failed to open database: {}", e)))?;
+        conn.busy_timeout(Duration::from_millis(2_500))
+            .map_err(|e| LibraryError::Database(format!("Failed to set busy timeout: {}", e)))?;
+
+        let schema_guard = SCHEMA_INIT_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Enable WAL mode for better concurrent access
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
@@ -48,14 +94,28 @@ impl LibraryDatabase {
         let db = Self { conn };
         db.init_schema()?;
         db.run_migrations()?;
+        let needs_sacd_scope_reconcile = SACD_SCOPE_RECONCILED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(db_path)
+            .is_none();
+        if needs_sacd_scope_reconcile {
+            db.reconcile_sacd_catalog_scope()?;
+            SACD_SCOPE_RECONCILED
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(db_path.to_path_buf());
+        }
         // First-class LOCAL playlists (offline-mode D7) — separate module,
         // same database file. Idempotent CREATE IF NOT EXISTS.
         crate::local_playlists::init_schema(&db.conn)
             .map_err(|e| LibraryError::Database(format!("local_playlists schema: {}", e)))?;
         // Qobuz playlist snapshot (offline-mode B7/B8) — names + membership
         // captured opportunistically while online. Idempotent.
-        crate::qobuz_playlist_snapshot::init_schema(&db.conn)
-            .map_err(|e| LibraryError::Database(format!("qobuz_playlist_snapshot schema: {}", e)))?;
+        crate::qobuz_playlist_snapshot::init_schema(&db.conn).map_err(|e| {
+            LibraryError::Database(format!("qobuz_playlist_snapshot schema: {}", e))
+        })?;
+        drop(schema_guard);
         Ok(db)
     }
 
@@ -82,6 +142,7 @@ impl LibraryDatabase {
                 disc_number INTEGER,
                 year INTEGER,
                 genre TEXT,
+                genres_json TEXT NOT NULL DEFAULT '[]',
                 duration_secs INTEGER NOT NULL,
                 format TEXT NOT NULL,
                 bit_depth INTEGER,
@@ -107,6 +168,84 @@ impl LibraryDatabase {
             CREATE INDEX IF NOT EXISTS idx_tracks_title ON local_tracks(title);
             CREATE INDEX IF NOT EXISTS idx_local_tracks_album_lookup
                 ON local_tracks(album, album_artist, artist);
+
+            -- A SACD image is one physical file but exposes several virtual
+            -- `sacd:/path/image.iso#N` local tracks. Keep that relationship
+            -- outside `local_tracks`: the latter remains the authoritative
+            -- playback row, while the disc fingerprint lets a successful
+            -- re-import update those rows in place after the image moves.
+            CREATE TABLE IF NOT EXISTS local_sacd_images (
+                fingerprint TEXT PRIMARY KEY,
+                image_path TEXT NOT NULL UNIQUE,
+                image_size_bytes INTEGER NOT NULL,
+                image_modified_ns INTEGER NOT NULL,
+                observed_at INTEGER NOT NULL,
+                parser_revision INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS local_sacd_tracks (
+                fingerprint TEXT NOT NULL,
+                track_number INTEGER NOT NULL CHECK(track_number BETWEEN 1 AND 255),
+                local_track_id INTEGER NOT NULL UNIQUE,
+                PRIMARY KEY(fingerprint, track_number)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_local_sacd_tracks_local_id
+                ON local_sacd_tracks(local_track_id);
+
+            -- A registered Local Library root owns an indexed SACD. Keeping
+            -- this separate from the image allows overlapping roots without
+            -- making a manually opened image persistent.
+            CREATE TABLE IF NOT EXISTS local_sacd_roots (
+                root_id INTEGER NOT NULL,
+                fingerprint TEXT NOT NULL,
+                observed_generation INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(root_id, fingerprint)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_local_sacd_roots_fingerprint
+                ON local_sacd_roots(fingerprint);
+
+            -- Incremental scanner state. `local_tracks` remains authoritative;
+            -- these tables only remember what each root observed and whether
+            -- a completed generation is allowed to prune stale rows.
+            CREATE TABLE IF NOT EXISTS local_scan_roots (
+                root_id INTEGER PRIMARY KEY,
+                generation INTEGER NOT NULL DEFAULT 0,
+                phase TEXT NOT NULL DEFAULT 'idle',
+                checkpoint_path TEXT NOT NULL DEFAULT '',
+                discovered INTEGER NOT NULL DEFAULT 0,
+                processed INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'idle',
+                prune_authorized INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS local_scan_files (
+                root_id INTEGER NOT NULL,
+                file_path TEXT NOT NULL,
+                file_kind TEXT NOT NULL CHECK (file_kind IN ('audio','cue')),
+                file_id TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL,
+                dependency_fingerprint TEXT NOT NULL DEFAULT '',
+                cue_audio_path TEXT,
+                extraction_ok INTEGER NOT NULL DEFAULT 1,
+                observed_generation INTEGER NOT NULL,
+                PRIMARY KEY (root_id, file_path, file_kind)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_local_scan_files_generation
+                ON local_scan_files(root_id, observed_generation, file_kind, file_path);
+
+            -- CUE references are generation-scoped and disk-backed so a pass
+            -- never needs a HashSet containing every referenced audio path.
+            CREATE TABLE IF NOT EXISTS local_scan_cue_refs (
+                root_id INTEGER NOT NULL,
+                generation INTEGER NOT NULL,
+                audio_path TEXT NOT NULL,
+                PRIMARY KEY (root_id, generation, audio_path)
+            );
 
             -- Playlist folders (local organization for Qobuz playlists)
             CREATE TABLE IF NOT EXISTS playlist_folders (
@@ -174,6 +313,11 @@ impl LibraryDatabase {
             CREATE INDEX IF NOT EXISTS idx_playlist_local_tracks_playlist
                 ON playlist_local_tracks(qobuz_playlist_id);
 
+            -- The Add-to-Playlist picker asks the inverse question — "which
+            -- playlists hold this track" (playlist_membership.rs).
+            CREATE INDEX IF NOT EXISTS idx_playlist_local_tracks_track
+                ON playlist_local_tracks(local_track_id, qobuz_playlist_id);
+
             -- Plex tracks added to playlists. Kept in its own table because
             -- Plex tracks live on a remote server and have a TEXT rating key,
             -- not the i64 filesystem id used by local_tracks. No foreign key
@@ -191,6 +335,30 @@ impl LibraryDatabase {
 
             CREATE INDEX IF NOT EXISTS idx_playlist_plex_tracks_playlist
                 ON playlist_plex_tracks(qobuz_playlist_id);
+
+            CREATE INDEX IF NOT EXISTS idx_playlist_plex_tracks_key
+                ON playlist_plex_tracks(plex_rating_key, qobuz_playlist_id);
+
+            -- Jellyfin/Subsonic tracks added to playlists (2026-08-30). Their
+            -- library rows are media-cache projections with no local_tracks
+            -- rowid, so they get their own sidecar keyed by the server item
+            -- id — the plex_rating_key pattern, source-qualified because two
+            -- protocols share the table.
+            CREATE TABLE IF NOT EXISTS playlist_remote_tracks (
+                id INTEGER PRIMARY KEY,
+                qobuz_playlist_id INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                added_at INTEGER NOT NULL,
+                UNIQUE(qobuz_playlist_id, source, item_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_playlist_remote_tracks_playlist
+                ON playlist_remote_tracks(qobuz_playlist_id);
+
+            CREATE INDEX IF NOT EXISTS idx_playlist_remote_tracks_item
+                ON playlist_remote_tracks(source, item_id, qobuz_playlist_id);
 
             -- Custom track order per playlist (user-defined arrangement)
             CREATE TABLE IF NOT EXISTS playlist_track_custom_order (
@@ -257,6 +425,8 @@ impl LibraryDatabase {
             )
             .map_err(|e| LibraryError::Database(format!("Failed to create schema: {}", e)))?;
 
+        crate::purchase_copies::init_schema(&self.conn)?;
+
         Ok(())
     }
 
@@ -287,6 +457,42 @@ impl LibraryDatabase {
 
     /// Run schema migrations for existing databases
     fn run_migrations(&self) -> Result<(), LibraryError> {
+        let has_sacd_parser_revision: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('local_sacd_images') WHERE name = 'parser_revision'",
+                [],
+                |row| row.get::<_, i32>(0),
+            )
+            .map(|count| count > 0)
+            .unwrap_or(false);
+        if !has_sacd_parser_revision {
+            log::info!("Running migration: adding parser_revision to local_sacd_images");
+            if let Err(error) = self.conn.execute_batch(
+                "ALTER TABLE local_sacd_images ADD COLUMN parser_revision INTEGER NOT NULL DEFAULT 0;",
+            ) {
+                // The in-process lock handles QBZ's startup fan-out. This
+                // second check also covers two QBZ processes migrating the
+                // same profile: accept the losing ALTER only if the intended
+                // schema is now observable, never by matching error text.
+                let installed_by_peer = self
+                    .conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM pragma_table_info('local_sacd_images') WHERE name = 'parser_revision'",
+                        [],
+                        |row| row.get::<_, i32>(0),
+                    )
+                    .map(|count| count > 0)
+                    .unwrap_or(false);
+                if !installed_by_peer {
+                    return Err(LibraryError::Database(format!(
+                        "SACD parser revision migration failed: {error}"
+                    )));
+                }
+                log::debug!("SACD parser revision migration completed by another process");
+            }
+        }
+
         // Migration: Add qobuz download tracking fields
         let has_source: bool = self
             .conn
@@ -551,6 +757,10 @@ impl LibraryDatabase {
                 .map_err(|e| LibraryError::Database(format!("Migration failed: {}", e)))?;
         }
 
+        // Migration: cross-source identity tags (ISRC + MusicBrainz ids).
+        // Additive; NULL until the next scan re-reads the file's tags.
+        self.ensure_identity_columns()?;
+
         // Migration: Change sample_rate from INTEGER to REAL for decimal precision (44.1kHz, 88.2kHz, etc.)
         // Check if sample_rate is currently INTEGER
         let sample_rate_type: String = self
@@ -701,6 +911,8 @@ impl LibraryDatabase {
                         LibraryError::Database(format!("Failed to re-add catalog_number: {}", e))
                     })?;
             }
+            // Same for the identity columns (they post-date the rebuild too).
+            self.ensure_identity_columns()?;
 
             log::info!("Migration completed: sample_rate is now REAL");
         }
@@ -722,6 +934,26 @@ impl LibraryDatabase {
             self.conn
                 .execute_batch(
                     "ALTER TABLE local_tracks ADD COLUMN is_network_mount INTEGER NOT NULL DEFAULT 0;",
+                )
+                .map_err(|e| LibraryError::Database(format!("Migration failed: {}", e)))?;
+        }
+
+        // Multi-genre metadata is additive: old rows keep their singular
+        // `genre`, and readers use it whenever this JSON array is empty.
+        let has_genres_json: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('local_tracks') WHERE name = 'genres_json'",
+                [],
+                |row| row.get::<_, i32>(0),
+            )
+            .map(|count| count > 0)
+            .unwrap_or(false);
+        if !has_genres_json {
+            log::info!("Running migration: adding genres_json to local_tracks");
+            self.conn
+                .execute_batch(
+                    "ALTER TABLE local_tracks ADD COLUMN genres_json TEXT NOT NULL DEFAULT '[]';",
                 )
                 .map_err(|e| LibraryError::Database(format!("Migration failed: {}", e)))?;
         }
@@ -826,6 +1058,8 @@ impl LibraryDatabase {
                 })?;
         }
 
+        crate::purchase_copies::migrate_legacy_registry(&self.conn)?;
+
         Ok(())
     }
 
@@ -895,6 +1129,40 @@ impl LibraryDatabase {
 
     /// Remove a folder from the library
     pub fn remove_folder(&self, path: &str) -> Result<(), LibraryError> {
+        let root_id = self
+            .conn
+            .query_row(
+                "SELECT id FROM library_folders WHERE path = ?",
+                params![path],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        if let Some(root_id) = root_id {
+            // A newly registered overlapping root may not have scanned yet.
+            // Materialize every path-based owner before dropping this one so
+            // removing the outer folder cannot orphan a still-owned image.
+            self.reconcile_sacd_catalog_scope()?;
+            self.remove_sacd_root(root_id)?;
+            self.conn
+                .execute(
+                    "DELETE FROM local_scan_files WHERE root_id = ?",
+                    params![root_id],
+                )
+                .map_err(|e| LibraryError::Database(e.to_string()))?;
+            self.conn
+                .execute(
+                    "DELETE FROM local_scan_cue_refs WHERE root_id = ?",
+                    params![root_id],
+                )
+                .map_err(|e| LibraryError::Database(e.to_string()))?;
+            self.conn
+                .execute(
+                    "DELETE FROM local_scan_roots WHERE root_id = ?",
+                    params![root_id],
+                )
+                .map_err(|e| LibraryError::Database(e.to_string()))?;
+        }
         self.conn
             .execute("DELETE FROM library_folders WHERE path = ?", params![path])
             .map_err(|e| LibraryError::Database(e.to_string()))?;
@@ -1065,6 +1333,25 @@ impl LibraryDatabase {
                 params![new_path, id],
             )
             .map_err(|e| LibraryError::Database(e.to_string()))?;
+        self.conn
+            .execute(
+                "DELETE FROM local_scan_files WHERE root_id = ?",
+                params![id],
+            )
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        self.conn
+            .execute(
+                "DELETE FROM local_scan_cue_refs WHERE root_id = ?",
+                params![id],
+            )
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        self.conn
+            .execute(
+                "DELETE FROM local_scan_roots WHERE root_id = ?",
+                params![id],
+            )
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        self.reconcile_sacd_catalog_scope()?;
         Ok(())
     }
 
@@ -1085,6 +1372,25 @@ impl LibraryDatabase {
 
     /// Insert or update a track (skips if file is already a Qobuz cached track)
     pub fn insert_track(&self, track: &LocalTrack) -> Result<i64, LibraryError> {
+        let is_network_mount = crate::mount_info::is_network_path(Path::new(&track.file_path));
+        self.insert_track_with_mount_hint(track, is_network_mount)
+    }
+
+    /// Scanner-only insert path. Mount classification is a property of the
+    /// root and is computed once before enumeration, not once per track.
+    pub(crate) fn insert_scanned_track(
+        &self,
+        track: &LocalTrack,
+        is_network_mount: bool,
+    ) -> Result<i64, LibraryError> {
+        self.insert_track_with_mount_hint(track, is_network_mount)
+    }
+
+    fn insert_track_with_mount_hint(
+        &self,
+        track: &LocalTrack,
+        is_network_mount: bool,
+    ) -> Result<i64, LibraryError> {
         // Don't overwrite Qobuz cached tracks with scanned data
         if self.is_qobuz_cached_track_by_path(&track.file_path)? {
             log::debug!(
@@ -1118,25 +1424,110 @@ impl LibraryDatabase {
         } else {
             "user"
         };
+        let genres_json = Self::track_genres_json(track);
 
-        // Detect whether the audio file sits on a network-backed
-        // filesystem. Done per-insert instead of per-scan-start because
-        // mount topology can change between folder scans; the cost is
-        // negligible (one /proc/mounts read, cached by the kernel
-        // page cache).
-        let is_network_mount = crate::mount_info::is_network_path(
-            std::path::Path::new(&track.file_path),
-        );
+        // Re-indexing an already-known file must KEEP ITS ROWID.
+        //
+        // `INSERT OR REPLACE` resolves a conflict by DELETING the old row and
+        // inserting a new one, which hands out a fresh rowid. `local_tracks.id`
+        // is a foreign key elsewhere — `playlist_local_tracks.local_track_id`
+        // (a local file added to a Qobuz playlist) — and SQLite's foreign keys
+        // are OFF here (the only pragmas set are journal_mode and synchronous),
+        // so the cascade never fires and the playlist row survives pointing at
+        // an id that no longer exists. The INNER JOIN that reads it then
+        // returns nothing: the track silently vanishes from the playlist. The
+        // scan re-inserts EVERY file (there is no mtime skip), so this happened
+        // on every rescan. Verified against a scratch database.
+        //
+        // First-class LOCAL playlists are unaffected — `local_playlist_tracks`
+        // stores `local_path`, not an id.
+        //
+        // Two identities, because there are two unique constraints: the table's
+        // `UNIQUE(file_path, cue_start_secs)`, and the partial index
+        // `idx_tracks_file_nocue ON local_tracks(file_path) WHERE cue_file_path
+        // IS NULL` (NULL `cue_start_secs` values do not collide under the
+        // former, so the latter is what actually catches an ordinary track).
+        let existing_id: Option<i64> = if track.cue_file_path.is_none() {
+            self.conn
+                .query_row(
+                    "SELECT id FROM local_tracks WHERE file_path = ?1 AND cue_file_path IS NULL",
+                    params![track.file_path],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| LibraryError::Database(e.to_string()))?
+        } else {
+            self.conn
+                .query_row(
+                    "SELECT id FROM local_tracks
+                     WHERE file_path = ?1
+                       AND cue_start_secs IS ?2",
+                    params![track.file_path, track.cue_start_secs],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| LibraryError::Database(e.to_string()))?
+        };
+
+        if let Some(id) = existing_id {
+            self.conn
+                .execute(
+                    r#"UPDATE local_tracks SET
+                        title = ?1, artist = ?2, album = ?3, album_artist = ?4,
+                        track_number = ?5, disc_number = ?6, year = ?7, genre = ?8,
+                        genres_json = ?9, catalog_number = ?10, duration_secs = ?11, format = ?12,
+                        bit_depth = ?13, sample_rate = ?14, channels = ?15,
+                        file_size_bytes = ?16, cue_file_path = ?17, cue_start_secs = ?18,
+                        cue_end_secs = ?19, artwork_path = ?20, last_modified = ?21,
+                        indexed_at = ?22, album_group_key = ?23, album_group_title = ?24,
+                        source = ?25, is_network_mount = ?26
+                       WHERE id = ?27"#,
+                    params![
+                        track.title,
+                        track.artist,
+                        track.album,
+                        track.album_artist,
+                        track.track_number,
+                        track.disc_number,
+                        track.year,
+                        track.genre,
+                        genres_json,
+                        track.catalog_number,
+                        track.duration_secs as i64,
+                        track.format.to_string(),
+                        track.bit_depth,
+                        track.sample_rate,
+                        track.channels,
+                        track.file_size_bytes as i64,
+                        track.cue_file_path,
+                        track.cue_start_secs,
+                        track.cue_end_secs,
+                        track.artwork_path,
+                        track.last_modified,
+                        track.indexed_at,
+                        track.album_group_key,
+                        track.album_group_title,
+                        source,
+                        is_network_mount as i64,
+                        id,
+                    ],
+                )
+                .map_err(|e| LibraryError::Database(e.to_string()))?;
+            return Ok(id);
+        }
 
         self.conn
             .execute(
                 r#"INSERT OR REPLACE INTO local_tracks
                (file_path, title, artist, album, album_artist, track_number,
-                disc_number, year, genre, catalog_number, duration_secs, format, bit_depth,
+                disc_number, year, genre, genres_json, catalog_number, duration_secs, format, bit_depth,
                 sample_rate, channels, file_size_bytes, cue_file_path,
                 cue_start_secs, cue_end_secs, artwork_path, last_modified, indexed_at,
-                album_group_key, album_group_title, source, is_network_mount)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                album_group_key, album_group_title, source, is_network_mount,
+                isrc, musicbrainz_recording_id, musicbrainz_track_id,
+                musicbrainz_release_id, musicbrainz_release_group_id, musicbrainz_artist_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?, ?)"#,
                 params![
                     track.file_path,
                     track.title,
@@ -1147,13 +1538,14 @@ impl LibraryDatabase {
                     track.disc_number,
                     track.year,
                     track.genre,
+                    genres_json,
                     track.catalog_number,
-                    track.duration_secs,
+                    track.duration_secs as i64,
                     track.format.to_string(),
                     track.bit_depth,
                     track.sample_rate,
                     track.channels,
-                    track.file_size_bytes,
+                    track.file_size_bytes as i64,
                     track.cue_file_path,
                     track.cue_start_secs,
                     track.cue_end_secs,
@@ -1164,11 +1556,51 @@ impl LibraryDatabase {
                     track.album_group_title,
                     source,
                     is_network_mount as i64,
+                    track.isrc,
+                    track.musicbrainz_recording_id,
+                    track.musicbrainz_track_id,
+                    track.musicbrainz_release_id,
+                    track.musicbrainz_release_group_id,
+                    track.musicbrainz_artist_id,
                 ],
             )
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Add the ISRC + MusicBrainz id columns when absent (idempotent, cheap:
+    /// one `pragma_table_info` probe). Called from the migration chain AND
+    /// after the sample_rate table rebuild, which recreates `local_tracks`
+    /// without any column added by a later ALTER.
+    fn ensure_identity_columns(&self) -> Result<(), LibraryError> {
+        let has_isrc: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('local_tracks') WHERE name = 'isrc'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .unwrap_or(false);
+        if !has_isrc {
+            log::info!(
+                "Running migration: adding identity columns (isrc, musicbrainz_*) to local_tracks"
+            );
+            self.conn
+                .execute_batch(
+                    "ALTER TABLE local_tracks ADD COLUMN isrc TEXT;
+                     ALTER TABLE local_tracks ADD COLUMN musicbrainz_recording_id TEXT;
+                     ALTER TABLE local_tracks ADD COLUMN musicbrainz_track_id TEXT;
+                     ALTER TABLE local_tracks ADD COLUMN musicbrainz_release_id TEXT;
+                     ALTER TABLE local_tracks ADD COLUMN musicbrainz_release_group_id TEXT;
+                     ALTER TABLE local_tracks ADD COLUMN musicbrainz_artist_id TEXT;
+                     CREATE INDEX IF NOT EXISTS idx_tracks_isrc ON local_tracks(isrc);
+                     CREATE INDEX IF NOT EXISTS idx_tracks_mb_recording ON local_tracks(musicbrainz_recording_id);",
+                )
+                .map_err(|e| LibraryError::Database(format!("Migration failed: {}", e)))?;
+        }
+        Ok(())
     }
 
     /// Get a track by ID
@@ -1265,9 +1697,17 @@ impl LibraryDatabase {
     /// Clear all LOCAL library tracks (preserves Qobuz downloads)
     pub fn clear_all_tracks(&self) -> Result<(), LibraryError> {
         self.conn
-            .execute(
-                "DELETE FROM local_tracks WHERE source IS NULL OR source != 'qobuz_download'",
-                [],
+            .execute_batch(
+                "BEGIN IMMEDIATE;
+                 DELETE FROM local_tracks WHERE source IS NULL OR source != 'qobuz_download';
+                 DELETE FROM local_sacd_tracks;
+                 DELETE FROM local_sacd_roots;
+                 DELETE FROM local_sacd_images;
+                 DELETE FROM local_scan_files;
+                 DELETE FROM local_scan_cue_refs;
+                 DELETE FROM local_scan_roots;
+                 UPDATE library_folders SET last_scan=NULL;
+                 COMMIT;",
             )
             .map_err(|e| LibraryError::Database(e.to_string()))?;
         Ok(())
@@ -1376,6 +1816,7 @@ impl LibraryDatabase {
                 MAX(format) as format,
                 MAX(bit_depth) as bit_depth,
                 MAX(sample_rate) as sample_rate,
+                json_group_array(json(genres_json)) as genre_sets,
                 MAX(group_key) as directory_path,
                 MAX(source) as source
             FROM (
@@ -1390,6 +1831,11 @@ impl LibraryDatabase {
                     format,
                     bit_depth,
                     sample_rate,
+                    COALESCE(
+                        NULLIF(genres_json, '[]'),
+                        CASE WHEN genre IS NULL OR TRIM(genre) = ''
+                             THEN '[]' ELSE json_array(TRIM(genre)) END
+                    ) AS genres_json,
                     COALESCE(source, 'user') as source
                 FROM local_tracks
                 WHERE 1=1 {} {}
@@ -1418,6 +1864,7 @@ impl LibraryDatabase {
                 MAX(format) as format,
                 MAX(bit_depth) as bit_depth,
                 MAX(sample_rate) as sample_rate,
+                json_group_array(json(genres_json)) as genre_sets,
                 MAX(group_key) as directory_path,
                 MAX(source) as source
             FROM (
@@ -1432,6 +1879,11 @@ impl LibraryDatabase {
                     format,
                     bit_depth,
                     sample_rate,
+                    COALESCE(
+                        NULLIF(genres_json, '[]'),
+                        CASE WHEN genre IS NULL OR TRIM(genre) = ''
+                             THEN '[]' ELSE json_array(TRIM(genre)) END
+                    ) AS genres_json,
                     COALESCE(source, 'user') as source
                 FROM local_tracks
                 WHERE 1=1 {} {}
@@ -1473,21 +1925,27 @@ impl LibraryDatabase {
                     all_artists,
                     year: row.get(4)?,
                     catalog_number: row.get(5)?,
+                    genres: Self::genres_from_sets_json(
+                        row.get::<_, Option<String>>(12)?.as_deref(),
+                    ),
                     artwork_path,
+                    artwork_source: None,
                     track_count: row.get(7)?,
-                    total_duration_secs: row.get(8)?,
+                    total_duration_secs: row.get::<_, i64>(8)? as u64,
                     format: Self::parse_format(
                         &row.get::<_, Option<String>>(9)?.unwrap_or_default(),
                     ),
                     bit_depth: row.get(10)?,
                     sample_rate: row.get::<_, Option<f64>>(11)?.unwrap_or(44100.0),
                     directory_path: row
-                        .get::<_, Option<String>>(12)?
+                        .get::<_, Option<String>>(13)?
                         .unwrap_or_else(|| group_key.clone()),
                     source_folders: None,
                     source: row
-                        .get::<_, Option<String>>(13)?
+                        .get::<_, Option<String>>(14)?
                         .unwrap_or_else(|| "user".to_string()),
+                    sources: Vec::new(),
+                    identity_tracks: Vec::new(),
                 })
             })
             .map_err(|e| LibraryError::Database(e.to_string()))?;
@@ -1526,9 +1984,10 @@ impl LibraryDatabase {
     /// List the immediate children of a folder in the local-library
     /// filesystem hierarchy.
     ///
-    /// Walks `local_tracks.file_path` and computes one row per direct
-    /// child. Returns folders first (alphabetical, case-insensitive),
-    /// then tracks (alphabetical, case-insensitive).
+    /// Walks the physical file hierarchy and computes one row per direct
+    /// child. SACD virtual tracks are projected beneath their backing image,
+    /// so the image is an expandable synthetic folder. Returns folders first
+    /// (alphabetical, case-insensitive), then tracks likewise.
     ///
     /// Filters `COALESCE(source, 'user') = 'user'` so Qobuz offline
     /// downloads are excluded; Plex rows already live outside
@@ -1545,7 +2004,7 @@ impl LibraryDatabase {
     ) -> Result<Vec<FolderTreeEntry>, LibraryError> {
         let escaped_prefix = escape_like_pattern(parent_path);
 
-        // Network folder filter: exclude tracks whose file_path starts
+        // Network folder filter: exclude tracks whose physical path starts
         // with any registered network-mount folder path. Mirrors the
         // mechanism used by `get_albums_with_full_filter` so tree rail
         // visibility matches flat-mode + recursive playback.
@@ -1553,15 +2012,16 @@ impl LibraryDatabase {
             "AND NOT EXISTS ( \
                 SELECT 1 FROM library_folders nf \
                 WHERE nf.is_network = 1 \
-                AND local_tracks.file_path LIKE nf.path || '%' \
+                AND folder_tracks.physical_path LIKE nf.path || '%' \
             )"
         } else {
             ""
         };
 
-        // SQL strategy (CTE form for readability; SQLite uses
-        // idx_tracks_file_path on the LIKE prefix in the candidates step):
-        //   suffix        = file_path with the parent prefix + '/' stripped
+        // SQL strategy (CTE form for readability):
+        //   browse_path   = file_path for ordinary tracks; for SACD tracks,
+        //                   image_path + a stable synthetic leaf label
+        //   suffix        = browse_path with the parent prefix + '/' stripped
         //   child_segment = leading path component of suffix
         //   kind          = 'folder' if suffix contains a '/', else 'track'
         // Group by (child_segment, kind) so folders aggregate over all
@@ -1569,13 +2029,29 @@ impl LibraryDatabase {
         // MIN(file_path) so we can recover the absolute path for tracks
         // (folders ignore it and reconstruct path from parent + segment).
         let sql = format!(
-            "WITH candidates AS ( \
+            "WITH folder_tracks AS ( \
+                SELECT local_tracks.*, \
+                       COALESCE( \
+                           sacd_images.image_path || '/' || \
+                               printf('%03d - %s', sacd_tracks.track_number, \
+                                      replace(local_tracks.title, '/', '∕')), \
+                           local_tracks.file_path \
+                       ) AS browse_path, \
+                       COALESCE(sacd_images.image_path, local_tracks.file_path) \
+                           AS physical_path \
+                  FROM local_tracks \
+                  LEFT JOIN local_sacd_tracks sacd_tracks \
+                    ON sacd_tracks.local_track_id=local_tracks.id \
+                  LEFT JOIN local_sacd_images sacd_images \
+                    ON sacd_images.fingerprint=sacd_tracks.fingerprint \
+             ), \
+             candidates AS ( \
                 SELECT \
-                    substr(file_path, length(?1) + 2) AS suffix, \
+                    substr(browse_path, length(?1) + 2) AS suffix, \
                     file_path, \
                     artwork_path \
-                FROM local_tracks \
-                WHERE file_path LIKE ?2 || '/%' ESCAPE '\\' \
+                FROM folder_tracks \
+                WHERE browse_path LIKE ?2 || '/%' ESCAPE '\\' \
                   AND COALESCE(source, 'user') = 'user' \
                   {network_filter} \
              ), \
@@ -1609,7 +2085,7 @@ impl LibraryDatabase {
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         // ?1 bound with the unescaped path (used in length() arithmetic
-        // on the row's stored file_path; that storage is unescaped).
+        // on the computed browse_path, which is itself unescaped).
         // ?2 bound with the LIKE-escaped pattern prefix.
         let rows = stmt
             .query_map(params![parent_path, escaped_prefix], |row| {
@@ -1639,8 +2115,8 @@ impl LibraryDatabase {
                 "track" => {
                     // Use the actual file_path so paths with edge-case
                     // characters round-trip exactly as stored.
-                    let path = one_file_path
-                        .unwrap_or_else(|| format!("{}/{}", parent_path, segment));
+                    let path =
+                        one_file_path.unwrap_or_else(|| format!("{}/{}", parent_path, segment));
                     entries.push(FolderTreeEntry::Track { path, segment });
                 }
                 _ => {
@@ -1672,9 +2148,10 @@ impl LibraryDatabase {
 
     /// List the direct-child tracks of a folder (NON-recursive).
     ///
-    /// Returns rows from `local_tracks` whose `file_path` is exactly
-    /// `folder_path + "/" + filename` — files in subfolders are
-    /// excluded. Mirrors the source filter from
+    /// Returns rows whose projected browse path is exactly
+    /// `folder_path + "/" + filename` — files in subfolders are excluded.
+    /// For SACD this makes the virtual tracks direct children of the image.
+    /// Mirrors the source filter from
     /// [`Self::list_folder_children`] so Qobuz downloads do not appear.
     /// Ordering matches the canonical album-track ordering used by
     /// [`Self::get_album_tracks`]: disc, then track number, then title.
@@ -1692,16 +2169,32 @@ impl LibraryDatabase {
             "AND NOT EXISTS ( \
                 SELECT 1 FROM library_folders nf \
                 WHERE nf.is_network = 1 \
-                AND local_tracks.file_path LIKE nf.path || '%' \
+                AND folder_tracks.physical_path LIKE nf.path || '%' \
             )"
         } else {
             ""
         };
 
         let sql = format!(
-            "SELECT {cols} FROM local_tracks \
-             WHERE file_path LIKE ?1 || '/%' ESCAPE '\\' \
-               AND substr(file_path, length(?2) + 2) NOT LIKE '%/%' \
+            "WITH folder_tracks AS ( \
+                 SELECT local_tracks.*, \
+                        COALESCE( \
+                            sacd_images.image_path || '/' || \
+                                printf('%03d - %s', sacd_tracks.track_number, \
+                                       replace(local_tracks.title, '/', '∕')), \
+                            local_tracks.file_path \
+                        ) AS browse_path, \
+                        COALESCE(sacd_images.image_path, local_tracks.file_path) \
+                            AS physical_path \
+                   FROM local_tracks \
+                   LEFT JOIN local_sacd_tracks sacd_tracks \
+                     ON sacd_tracks.local_track_id=local_tracks.id \
+                   LEFT JOIN local_sacd_images sacd_images \
+                     ON sacd_images.fingerprint=sacd_tracks.fingerprint \
+             ) \
+             SELECT {cols} FROM folder_tracks \
+             WHERE browse_path LIKE ?1 || '/%' ESCAPE '\\' \
+               AND substr(browse_path, length(?2) + 2) NOT LIKE '%/%' \
                AND COALESCE(source, 'user') = 'user' \
                {network_filter} \
              ORDER BY disc_number ASC NULLS LAST, \
@@ -1717,8 +2210,7 @@ impl LibraryDatabase {
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         // ?1 = LIKE-escaped pattern (matches paths under the folder).
-        // ?2 = unescaped path used for substr arithmetic on stored
-        //      file_path (which is itself unescaped).
+        // ?2 = unescaped path used for substr arithmetic on browse_path.
         let rows = stmt
             .query_map(params![escaped_prefix, folder_path], |row| {
                 Self::row_to_track(row)
@@ -1735,8 +2227,8 @@ impl LibraryDatabase {
     /// List ALL tracks recursively under a folder (every descendant, at
     /// any depth). Mirrors the source filter and LIKE-escape strategy
     /// from [`Self::list_folder_tracks`] but does NOT require the
-    /// `file_path` to live directly inside `folder_path` — every row
-    /// matching `file_path LIKE folder_path || '/%'` is included.
+    /// browse path to live directly inside `folder_path` — every descendant
+    /// row is included.
     ///
     /// Used by the tree-mode multi-select to populate the union of
     /// `selectedTrackIds` when the user ticks a folder-row checkbox.
@@ -1744,9 +2236,8 @@ impl LibraryDatabase {
     /// can build queue items for "Play Next" / "Add to Queue" without
     /// a second round-trip.
     ///
-    /// Ordering: by `file_path` ASC. This produces a stable, on-disk
-    /// reading order for cross-album / cross-disc subtrees, matching
-    /// the way `handlePlayRecursive` sorts before queuing.
+    /// Ordering: by projected browse path ASC. This produces a stable tree
+    /// order for ordinary files and SACD virtual leaves alike.
     pub fn list_folder_tracks_recursive(
         &self,
         folder_path: &str,
@@ -1762,18 +2253,34 @@ impl LibraryDatabase {
             "AND NOT EXISTS ( \
                 SELECT 1 FROM library_folders nf \
                 WHERE nf.is_network = 1 \
-                AND local_tracks.file_path LIKE nf.path || '%' \
+                AND folder_tracks.physical_path LIKE nf.path || '%' \
             )"
         } else {
             ""
         };
 
         let sql = format!(
-            "SELECT {cols} FROM local_tracks \
-             WHERE file_path LIKE ?1 || '/%' ESCAPE '\\' \
+            "WITH folder_tracks AS ( \
+                 SELECT local_tracks.*, \
+                        COALESCE( \
+                            sacd_images.image_path || '/' || \
+                                printf('%03d - %s', sacd_tracks.track_number, \
+                                       replace(local_tracks.title, '/', '∕')), \
+                            local_tracks.file_path \
+                        ) AS browse_path, \
+                        COALESCE(sacd_images.image_path, local_tracks.file_path) \
+                            AS physical_path \
+                   FROM local_tracks \
+                   LEFT JOIN local_sacd_tracks sacd_tracks \
+                     ON sacd_tracks.local_track_id=local_tracks.id \
+                   LEFT JOIN local_sacd_images sacd_images \
+                     ON sacd_images.fingerprint=sacd_tracks.fingerprint \
+             ) \
+             SELECT {cols} FROM folder_tracks \
+             WHERE browse_path LIKE ?1 || '/%' ESCAPE '\\' \
                AND COALESCE(source, 'user') = 'user' \
                {network_filter} \
-             ORDER BY file_path ASC",
+             ORDER BY browse_path ASC",
             cols = Self::TRACK_COLUMNS,
             network_filter = network_filter,
         );
@@ -1794,8 +2301,8 @@ impl LibraryDatabase {
         Ok(tracks)
     }
 
-    /// Lightweight `COUNT(*)` of every user track whose `file_path` lives
-    /// recursively under `folder_path`. Used by the tree-mode rail to
+    /// Lightweight `COUNT(*)` of every user track whose projected browse path
+    /// lives recursively under `folder_path`. Used by the tree-mode rail to
     /// populate the recursive descendant count on top-level scan-root
     /// rows (which are synthesized client-side and don't go through
     /// [`Self::list_folder_children`], so they don't carry their own
@@ -1816,15 +2323,31 @@ impl LibraryDatabase {
             "AND NOT EXISTS ( \
                 SELECT 1 FROM library_folders nf \
                 WHERE nf.is_network = 1 \
-                AND local_tracks.file_path LIKE nf.path || '%' \
+                AND folder_tracks.physical_path LIKE nf.path || '%' \
             )"
         } else {
             ""
         };
 
         let sql = format!(
-            "SELECT COUNT(*) FROM local_tracks \
-             WHERE file_path LIKE ?1 || '/%' ESCAPE '\\' \
+            "WITH folder_tracks AS ( \
+                 SELECT local_tracks.*, \
+                        COALESCE( \
+                            sacd_images.image_path || '/' || \
+                                printf('%03d - %s', sacd_tracks.track_number, \
+                                       replace(local_tracks.title, '/', '∕')), \
+                            local_tracks.file_path \
+                        ) AS browse_path, \
+                        COALESCE(sacd_images.image_path, local_tracks.file_path) \
+                            AS physical_path \
+                   FROM local_tracks \
+                   LEFT JOIN local_sacd_tracks sacd_tracks \
+                     ON sacd_tracks.local_track_id=local_tracks.id \
+                   LEFT JOIN local_sacd_images sacd_images \
+                     ON sacd_images.fingerprint=sacd_tracks.fingerprint \
+             ) \
+             SELECT COUNT(*) FROM folder_tracks \
+             WHERE browse_path LIKE ?1 || '/%' ESCAPE '\\' \
                AND COALESCE(source, 'user') = 'user' \
                {network_filter}",
             network_filter = network_filter,
@@ -1903,6 +2426,11 @@ impl LibraryDatabase {
                     format,
                     bit_depth,
                     sample_rate,
+                    COALESCE(
+                        NULLIF(genres_json, '[]'),
+                        CASE WHEN genre IS NULL OR TRIM(genre) = ''
+                             THEN '[]' ELSE json_array(TRIM(genre)) END
+                    ) AS genres_json,
                     album_group_key AS source_folder,
                     COALESCE(source, 'user') AS source
                 FROM local_tracks
@@ -1927,6 +2455,7 @@ impl LibraryDatabase {
                 MAX(format) AS format,
                 MAX(bit_depth) AS bit_depth,
                 MAX(sample_rate) AS sample_rate,
+                json_group_array(json(genres_json)) AS genre_sets,
                 GROUP_CONCAT(DISTINCT source_folder) AS source_folders,
                 MAX(source) AS source
             FROM grouped
@@ -1948,10 +2477,9 @@ impl LibraryDatabase {
                 let group_key: String = row.get(0)?;
                 let album: String = row.get(1)?;
                 let artist: String = row.get(2)?;
-                let all_artists: String =
-                    row.get::<_, Option<String>>(3)?.unwrap_or_default();
+                let all_artists: String = row.get::<_, Option<String>>(3)?.unwrap_or_default();
                 let artwork_path: Option<String> = row.get(6)?;
-                let source_folders: Option<String> = row.get(12)?;
+                let source_folders: Option<String> = row.get(13)?;
 
                 Ok(LocalAlbum {
                     id: group_key.clone(),
@@ -1960,9 +2488,13 @@ impl LibraryDatabase {
                     all_artists,
                     year: row.get(4)?,
                     catalog_number: row.get(5)?,
+                    genres: Self::genres_from_sets_json(
+                        row.get::<_, Option<String>>(12)?.as_deref(),
+                    ),
                     artwork_path,
+                    artwork_source: None,
                     track_count: row.get(7)?,
-                    total_duration_secs: row.get(8)?,
+                    total_duration_secs: row.get::<_, i64>(8)? as u64,
                     format: Self::parse_format(
                         &row.get::<_, Option<String>>(9)?.unwrap_or_default(),
                     ),
@@ -1971,8 +2503,10 @@ impl LibraryDatabase {
                     directory_path: String::new(),
                     source_folders,
                     source: row
-                        .get::<_, Option<String>>(13)?
+                        .get::<_, Option<String>>(14)?
                         .unwrap_or_else(|| "user".to_string()),
+                    sources: Vec::new(),
+                    identity_tracks: Vec::new(),
                 })
             })
             .map_err(|e| LibraryError::Database(e.to_string()))?;
@@ -2015,29 +2549,32 @@ impl LibraryDatabase {
         include_qobuz_downloads: bool,
         exclude_network_folders: bool,
         plex_cache_path: Option<&std::path::Path>,
+        remote_cache_path: Option<&std::path::Path>,
+        remote_sources: &[&str],
         group_mode: crate::album_grouping::AlbumGroupMode,
     ) -> Result<crate::models::AlbumsMetadataPage, LibraryError> {
-        // Best-effort ATTACH of the Plex cache so the union below can
-        // see `plex_cache.plex_cache_tracks`. DETACH first defensively
-        // so a stale attachment from a previous call (or another
-        // connection user) doesn't fail the new one. Failure to
-        // attach is non-fatal — we fall back to local-only.
-        let plex_attached = if let Some(path) = plex_cache_path {
-            if path.exists() {
-                let _ = self.conn.execute("DETACH DATABASE plex_cache", []);
-                let path_str = path.to_string_lossy().replace('\'', "''");
-                self.conn
-                    .execute(
-                        &format!("ATTACH DATABASE '{}' AS plex_cache", path_str),
-                        [],
-                    )
-                    .is_ok()
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+        // TWO attachments, deliberately. `plex_cache` is the original
+        // per-source mirror; `remote_cache` is the shared one every source
+        // added after it writes into (`qbz-media-cache`), keyed by a `source`
+        // column. Plex will fold into the second and this will collapse back
+        // to one — see that crate's header for why it is not folded in the
+        // same change that introduced Jellyfin and Subsonic.
+        //
+        // Best-effort, and independently so: a missing or unreadable Plex
+        // cache must not cost the user their Jellyfin rows, and vice versa.
+        let plex_attached = self.attach_best_effort("plex_cache", plex_cache_path);
+        // The shared mirror holds EVERY remote source, so which of them the
+        // union may show is a separate question from whether the file is
+        // there. Turning Jellyfin off has to hide Jellyfin's rows without
+        // touching Subsonic's, and an empty list means "no remote source is
+        // enabled" — do not attach at all.
+        let remote_filter = remote_source_filter(remote_sources);
+        let remote_attached = !remote_sources.is_empty()
+            && self.attach_best_effort("remote_cache", remote_cache_path);
+        let plex_has_genres_json = plex_attached
+            && self.attached_has_column("plex_cache", "plex_cache_tracks", "genres_json");
+        let remote_has_genres_json = remote_attached
+            && self.attached_has_column("remote_cache", "remote_cache_tracks", "genres_json");
         let result = self.get_albums_metadata_page_inner(
             offset,
             limit,
@@ -2047,12 +2584,51 @@ impl LibraryDatabase {
             include_qobuz_downloads,
             exclude_network_folders,
             plex_attached,
+            remote_attached,
+            plex_has_genres_json,
+            remote_has_genres_json,
+            &remote_filter,
             group_mode,
         );
         if plex_attached {
             let _ = self.conn.execute("DETACH DATABASE plex_cache", []);
         }
+        if remote_attached {
+            let _ = self.conn.execute("DETACH DATABASE remote_cache", []);
+        }
         result
+    }
+
+    /// ATTACH `path` under `alias`, reporting whether the union may use it.
+    ///
+    /// DETACH first, defensively: a stale attachment left by a previous call
+    /// (or by another user of this connection) makes the new ATTACH fail, and
+    /// the failure mode of that is a silently local-only library.
+    ///
+    /// A failure is NON-FATAL by design. The alternative — refusing to list any
+    /// albums because one mirror is missing — turns "your Jellyfin server is
+    /// off" into "your music library is empty".
+    fn attach_best_effort(&self, alias: &str, path: Option<&std::path::Path>) -> bool {
+        let Some(path) = path.filter(|p| p.exists()) else {
+            return false;
+        };
+        let _ = self.conn.execute(&format!("DETACH DATABASE {alias}"), []);
+        let path_str = path.to_string_lossy().replace('\'', "''");
+        self.conn
+            .execute(&format!("ATTACH DATABASE '{path_str}' AS {alias}"), [])
+            .is_ok()
+    }
+
+    fn attached_has_column(&self, schema: &str, table: &str, column: &str) -> bool {
+        let sql = format!("PRAGMA {schema}.table_info({table})");
+        let Ok(mut stmt) = self.conn.prepare(&sql) else {
+            return false;
+        };
+        let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) else {
+            return false;
+        };
+        let found = rows.filter_map(Result::ok).any(|name| name == column);
+        found
     }
 
     /// Resolve a folder cover for an album that has no `artwork_path` in the
@@ -2102,7 +2678,10 @@ impl LibraryDatabase {
             };
             // Check the folder and its parent (covers multi-disc layouts where
             // the art sits one level up).
-            let dirs = [Some(folder.clone()), folder.parent().map(|x| x.to_path_buf())];
+            let dirs = [
+                Some(folder.clone()),
+                folder.parent().map(|x| x.to_path_buf()),
+            ];
             for dir in dirs.into_iter().flatten() {
                 for name in NAMES {
                     let cover = dir.join(name);
@@ -2125,6 +2704,10 @@ impl LibraryDatabase {
         include_qobuz_downloads: bool,
         exclude_network_folders: bool,
         plex_attached: bool,
+        remote_attached: bool,
+        plex_has_genres_json: bool,
+        remote_has_genres_json: bool,
+        remote_filter: &str,
         group_mode: crate::album_grouping::AlbumGroupMode,
     ) -> Result<crate::models::AlbumsMetadataPage, LibraryError> {
         let source_filter = if include_qobuz_downloads {
@@ -2169,8 +2752,14 @@ impl LibraryDatabase {
         // arm (plex stores duration_ms / sampling_rate_hz as INTEGER
         // while local uses REAL for sample_rate and seconds-INTEGER
         // for duration).
+        let plex_genres_expr = if plex_has_genres_json {
+            "genres_json"
+        } else {
+            "'[]'"
+        };
         let plex_cte = if plex_attached {
-            r#",
+            format!(
+                r#",
             plex_aggregated AS (
                 SELECT
                     -- `album_key` is populated by plex/mod.rs::plex_album_key()
@@ -2220,19 +2809,103 @@ impl LibraryDatabase {
                         END
                     ) AS bit_depth,
                     CAST(MAX(sampling_rate_hz) AS REAL) AS sample_rate,
+                    json_group_array(json_array(
+                        COALESCE(title, ''),
+                        CAST(COALESCE(duration_ms, 0) / 1000 AS INTEGER)
+                    )) AS identity_tracks,
+                    json_array('plex') AS source_words,
+                    json_group_array(json(COALESCE(
+                        NULLIF({plex_genres_expr}, '[]'),
+                        CASE WHEN genre IS NULL OR TRIM(genre) = ''
+                             THEN '[]' ELSE json_array(TRIM(genre)) END
+                    ))) AS genre_sets,
                     CAST(NULL AS TEXT) AS source_folders,
                     'plex' AS source
                 FROM plex_cache.plex_cache_tracks
                 GROUP BY COALESCE(album_key, 'plex:' || rating_key)
             )"#
+            )
         } else {
-            ""
+            String::new()
         };
 
-        let unioned_clause = if plex_attached {
-            "SELECT * FROM aggregated UNION ALL SELECT * FROM plex_aggregated"
+        // The SHARED remote mirror: Jellyfin, Subsonic, and whatever comes
+        // next. ONE arm for all of them because the table carries a `source`
+        // column — that is the entire reason it exists.
+        //
+        // The group key is `<source>:<album id>`, matching Plex's `plex:<hash>`
+        // convention: it namespaces two servers that happen to use the same
+        // album id, and it is what lets a source `claim` an album card that
+        // arrives with no source word (which is every card that round-trips
+        // through a QML string property).
+        //
+        // Unlike Plex there is no bit-depth guess here. Both protocols report
+        // it directly — Jellyfin in MediaSources, Subsonic as an OpenSubsonic
+        // field — and the mappers already fold "not applicable" (Jellyfin's
+        // null, Subsonic's 0) to NULL. Inventing 16 for a lossless CD-rate row
+        // would be guessing where the server answered.
+        let remote_genres_expr = if remote_has_genres_json {
+            "genres_json"
         } else {
-            "SELECT * FROM aggregated"
+            "'[]'"
+        };
+        let remote_cte = if remote_attached {
+            format!(
+                r#",
+            remote_aggregated AS (
+                SELECT
+                    source || ':' || album_id AS group_key,
+                    COALESCE(NULLIF(TRIM(album), ''), 'Unknown Album') AS title,
+                    CASE WHEN COUNT(DISTINCT album_artist) > 1
+                         THEN 'Various Artists'
+                         ELSE COALESCE(NULLIF(MIN(album_artist), ''), MIN(artist), 'Unknown Artist')
+                    END AS artist,
+                    GROUP_CONCAT(DISTINCT artist) AS all_artists,
+                    MIN(year) AS year,
+                    CAST(NULL AS TEXT) AS catalog_number,
+                    COALESCE(
+                        MAX(CASE WHEN collection_artwork_token IS NOT NULL
+                                      AND TRIM(collection_artwork_token) != ''
+                                 THEN collection_artwork_token END),
+                        MAX(CASE WHEN artwork_token IS NOT NULL
+                                      AND TRIM(artwork_token) != ''
+                                 THEN artwork_token END)
+                    ) AS artwork,
+                    COUNT(*) AS track_count,
+                    CAST(SUM(COALESCE(duration_ms, 0)) / 1000 AS INTEGER) AS total_duration,
+                    COALESCE(MAX(container), MAX(codec)) AS format,
+                    MAX(bit_depth) AS bit_depth,
+                    CAST(MAX(sample_rate_hz) AS REAL) AS sample_rate,
+                    json_group_array(json_array(
+                        COALESCE(title, ''),
+                        CAST(COALESCE(duration_ms, 0) / 1000 AS INTEGER)
+                    )) AS identity_tracks,
+                    json_group_array(DISTINCT source) AS source_words,
+                    json_group_array(json(COALESCE(
+                        NULLIF({remote_genres_expr}, '[]'),
+                        CASE WHEN genre IS NULL OR TRIM(genre) = ''
+                             THEN '[]' ELSE json_array(TRIM(genre)) END
+                    ))) AS genre_sets,
+                    CAST(NULL AS TEXT) AS source_folders,
+                    source AS source
+                FROM remote_cache.remote_cache_tracks
+                WHERE album_id != '' AND {remote_filter}
+                GROUP BY source, album_id
+            )"#
+            )
+        } else {
+            String::new()
+        };
+
+        let unioned_clause = match (plex_attached, remote_attached) {
+            (true, true) => {
+                "SELECT * FROM aggregated \
+                 UNION ALL SELECT * FROM plex_aggregated \
+                 UNION ALL SELECT * FROM remote_aggregated"
+            }
+            (true, false) => "SELECT * FROM aggregated UNION ALL SELECT * FROM plex_aggregated",
+            (false, true) => "SELECT * FROM aggregated UNION ALL SELECT * FROM remote_aggregated",
+            (false, false) => "SELECT * FROM aggregated",
         };
 
         let query = format!(
@@ -2261,7 +2934,13 @@ impl LibraryDatabase {
                     sample_rate,
                     album_group_key AS source_folder,
                     COALESCE(source, 'user') AS source,
-                    artist AS track_artist
+                    artist AS track_artist,
+                    COALESCE(title, '') AS track_title,
+                    COALESCE(
+                        NULLIF(genres_json, '[]'),
+                        CASE WHEN genre IS NULL OR TRIM(genre) = ''
+                             THEN '[]' ELSE json_array(TRIM(genre)) END
+                    ) AS genres_json
                 FROM local_tracks
                 WHERE 1=1 {source_filter} {network_filter}
             ),
@@ -2272,7 +2951,7 @@ impl LibraryDatabase {
                          THEN 'Unknown Album'
                          ELSE MIN(title)
                     END AS title,
-                    CASE WHEN COUNT(DISTINCT track_artist) > 1
+                    CASE WHEN COUNT(DISTINCT artist) > 1
                          THEN 'Various Artists'
                          ELSE MIN(artist)
                     END AS artist,
@@ -2285,11 +2964,17 @@ impl LibraryDatabase {
                     MAX(format) AS format,
                     MAX(bit_depth) AS bit_depth,
                     MAX(sample_rate) AS sample_rate,
+                    json_group_array(json_array(
+                        track_title,
+                        CAST(COALESCE(duration_secs, 0) AS INTEGER)
+                    )) AS identity_tracks,
+                    json_group_array(DISTINCT source) AS source_words,
+                    json_group_array(json(genres_json)) AS genre_sets,
                     GROUP_CONCAT(DISTINCT source_folder) AS source_folders,
                     MAX(source) AS source
                 FROM grouped
                 GROUP BY group_key
-            ){plex_cte},
+            ){plex_cte}{remote_cte},
             filtered AS (
                 SELECT * FROM ({unioned_clause})
                 WHERE ?1 = 0 OR (title LIKE ?2 OR artist LIKE ?2)
@@ -2297,7 +2982,7 @@ impl LibraryDatabase {
             SELECT
                 group_key, title, artist, all_artists, year, catalog_number,
                 artwork, track_count, total_duration, format, bit_depth,
-                sample_rate, source_folders, source,
+                sample_rate, identity_tracks, source_words, genre_sets, source_folders, source,
                 COUNT(*) OVER () AS total
             FROM filtered
             ORDER BY {order_clause}
@@ -2323,11 +3008,32 @@ impl LibraryDatabase {
                     let group_key: String = row.get(0)?;
                     let title: String = row.get(1)?;
                     let artist: String = row.get(2)?;
-                    let all_artists: String =
-                        row.get::<_, Option<String>>(3)?.unwrap_or_default();
+                    let all_artists: String = row.get::<_, Option<String>>(3)?.unwrap_or_default();
                     let artwork_path: Option<String> = row.get(6)?;
-                    let source_folders: Option<String> = row.get(12)?;
-                    let total: u64 = row.get::<_, i64>(14)? as u64;
+                    let identity_json = row
+                        .get::<_, Option<String>>(12)?
+                        .unwrap_or_else(|| "[]".to_string());
+                    let identity_tracks =
+                        serde_json::from_str::<Vec<(String, u64)>>(&identity_json)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|(title, duration_secs)| crate::models::AlbumTrackEvidence {
+                                title,
+                                duration_secs,
+                            })
+                            .collect();
+                    let sources = serde_json::from_str::<Vec<String>>(
+                        &row.get::<_, Option<String>>(13)?
+                            .unwrap_or_else(|| "[]".to_string()),
+                    )
+                    .unwrap_or_default();
+                    let genres =
+                        Self::genres_from_sets_json(row.get::<_, Option<String>>(14)?.as_deref());
+                    let source_folders: Option<String> = row.get(15)?;
+                    let source = row
+                        .get::<_, Option<String>>(16)?
+                        .unwrap_or_else(|| "user".to_string());
+                    let total: u64 = row.get::<_, i64>(17)? as u64;
 
                     Ok((
                         LocalAlbum {
@@ -2337,9 +3043,11 @@ impl LibraryDatabase {
                             all_artists,
                             year: row.get(4)?,
                             catalog_number: row.get(5)?,
+                            genres,
                             artwork_path,
+                            artwork_source: None,
                             track_count: row.get(7)?,
-                            total_duration_secs: row.get(8)?,
+                            total_duration_secs: row.get::<_, i64>(8)? as u64,
                             format: Self::parse_format(
                                 &row.get::<_, Option<String>>(9)?.unwrap_or_default(),
                             ),
@@ -2347,9 +3055,13 @@ impl LibraryDatabase {
                             sample_rate: row.get::<_, Option<f64>>(11)?.unwrap_or(44100.0),
                             directory_path: String::new(),
                             source_folders,
-                            source: row
-                                .get::<_, Option<String>>(13)?
-                                .unwrap_or_else(|| "user".to_string()),
+                            sources: if sources.is_empty() {
+                                vec![source.clone()]
+                            } else {
+                                sources
+                            },
+                            source,
+                            identity_tracks,
                         },
                         total,
                     ))
@@ -2374,6 +3086,8 @@ impl LibraryDatabase {
                 include_qobuz_downloads,
                 exclude_network_folders,
                 plex_attached,
+                remote_attached,
+                remote_filter,
                 group_mode,
             )?;
         }
@@ -2392,6 +3106,8 @@ impl LibraryDatabase {
         include_qobuz_downloads: bool,
         exclude_network_folders: bool,
         plex_attached: bool,
+        remote_attached: bool,
+        remote_filter: &str,
         group_mode: crate::album_grouping::AlbumGroupMode,
     ) -> Result<u64, LibraryError> {
         let source_filter = if include_qobuz_downloads {
@@ -2429,10 +3145,35 @@ impl LibraryDatabase {
         } else {
             ""
         };
-        let unioned_clause = if plex_attached {
-            "SELECT * FROM aggregated UNION ALL SELECT * FROM plex_aggregated"
+        // Grouped and filtered EXACTLY as the page query groups and filters
+        // it — same key, same `album_id != ''` guard. A count that disagrees
+        // with the page it counts is worse than no count: the grid renders a
+        // scrollbar for rows that are not there.
+        let remote_cte = if remote_attached {
+            format!(
+                r#",
+            remote_aggregated AS (
+                SELECT
+                    source || ':' || album_id AS group_key,
+                    COALESCE(NULLIF(TRIM(album), ''), 'Unknown Album') AS title,
+                    COALESCE(NULLIF(MIN(album_artist), ''), MIN(artist), 'Unknown Artist') AS artist
+                FROM remote_cache.remote_cache_tracks
+                WHERE album_id != '' AND {remote_filter}
+                GROUP BY source, album_id
+            )"#
+            )
         } else {
-            "SELECT * FROM aggregated"
+            String::new()
+        };
+        let unioned_clause = match (plex_attached, remote_attached) {
+            (true, true) => {
+                "SELECT * FROM aggregated \
+                 UNION ALL SELECT * FROM plex_aggregated \
+                 UNION ALL SELECT * FROM remote_aggregated"
+            }
+            (true, false) => "SELECT * FROM aggregated UNION ALL SELECT * FROM plex_aggregated",
+            (false, true) => "SELECT * FROM aggregated UNION ALL SELECT * FROM remote_aggregated",
+            (false, false) => "SELECT * FROM aggregated",
         };
 
         let query = format!(
@@ -2463,13 +3204,13 @@ impl LibraryDatabase {
                          THEN 'Unknown Album'
                          ELSE MIN(title)
                     END AS title,
-                    CASE WHEN COUNT(DISTINCT track_artist) > 1
+                    CASE WHEN COUNT(DISTINCT artist) > 1
                          THEN 'Various Artists'
                          ELSE MIN(artist)
                     END AS artist
                 FROM grouped
                 GROUP BY group_key
-            ){plex_cte}
+            ){plex_cte}{remote_cte}
             SELECT COUNT(*)
             FROM ({unioned_clause})
             WHERE ?1 = 0 OR (title LIKE ?2 OR artist LIKE ?2)
@@ -2478,16 +3219,15 @@ impl LibraryDatabase {
             source_filter = source_filter,
             network_filter = network_filter,
             plex_cte = plex_cte,
+            remote_cte = remote_cte,
             unioned_clause = unioned_clause,
         );
 
         let total: i64 = self
             .conn
-            .query_row(
-                &query,
-                rusqlite::params![has_search, search_like],
-                |row| row.get(0),
-            )
+            .query_row(&query, rusqlite::params![has_search, search_like], |row| {
+                row.get(0)
+            })
             .map_err(|e| LibraryError::Database(e.to_string()))?;
         Ok(total as u64)
     }
@@ -2663,7 +3403,9 @@ impl LibraryDatabase {
     /// per-track embedded covers. Per-track artwork is now resolved
     /// individually at scan time. Kept compilable for any caller that
     /// might still exist; do not introduce new callers.
-    #[deprecated(note = "Was destructive in scan loop; per-track artwork is resolved during scan instead")]
+    #[deprecated(
+        note = "Was destructive in scan loop; per-track artwork is resolved during scan instead"
+    )]
     pub fn update_album_group_artwork(
         &self,
         group_key: &str,
@@ -2821,6 +3563,140 @@ impl LibraryDatabase {
         Ok(())
     }
 
+    /// Commit one metadata-editor draft and its optional front cover as a
+    /// single exact-row transaction. A stale/deleted row aborts the entire
+    /// draft instead of leaving tags, index metadata and artwork out of sync.
+    pub fn update_tracks_metadata_and_artwork_by_id(
+        &mut self,
+        updates: &[TrackMetadataUpdateFull],
+        artwork_path: Option<&str>,
+    ) -> Result<(), LibraryError> {
+        if updates.is_empty() {
+            return Err(LibraryError::Database(
+                "Metadata update requires at least one track".to_string(),
+            ));
+        }
+        if artwork_path.is_some_and(|path| path.trim().is_empty()) {
+            return Err(LibraryError::Database(
+                "Artwork path cannot be blank".to_string(),
+            ));
+        }
+        let unique = updates
+            .iter()
+            .map(|update| update.id)
+            .collect::<std::collections::HashSet<_>>();
+        if unique.len() != updates.len() {
+            return Err(LibraryError::Database(
+                "Metadata update contains duplicate track ids".to_string(),
+            ));
+        }
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|error| LibraryError::Database(error.to_string()))?;
+        {
+            let mut statement = tx
+                .prepare(
+                    r#"
+                    UPDATE local_tracks
+                    SET
+                        title = ?1,
+                        artist = ?2,
+                        album = ?3,
+                        album_artist = ?4,
+                        album_group_title = ?5,
+                        track_number = ?6,
+                        disc_number = ?7,
+                        year = ?8,
+                        genre = ?9,
+                        catalog_number = ?10,
+                        artwork_path = COALESCE(?11, artwork_path)
+                    WHERE id = ?12
+                    "#,
+                )
+                .map_err(|error| LibraryError::Database(error.to_string()))?;
+            for update in updates {
+                let changed = statement
+                    .execute(params![
+                        update.title.trim(),
+                        update.artist.trim(),
+                        update.album.trim(),
+                        update
+                            .album_artist
+                            .as_ref()
+                            .map(|value| value.trim().to_string()),
+                        update.album_group_title.trim(),
+                        update.track_number,
+                        update.disc_number,
+                        update.year,
+                        update.genre.as_ref().map(|value| value.trim().to_string()),
+                        update
+                            .catalog_number
+                            .as_ref()
+                            .map(|value| value.trim().to_string()),
+                        artwork_path,
+                        update.id,
+                    ])
+                    .map_err(|error| LibraryError::Database(error.to_string()))?;
+                if changed != 1 {
+                    return Err(LibraryError::Database(format!(
+                        "Metadata target track {} no longer exists",
+                        update.id
+                    )));
+                }
+            }
+        }
+        tx.commit()
+            .map_err(|error| LibraryError::Database(error.to_string()))?;
+        Ok(())
+    }
+
+    /// Apply an editor-selected cover only to the snapshotted physical rows.
+    /// Album-group-wide artwork updates are intentionally avoided because a
+    /// multi-disc collection may carry a different cover on every disc.
+    pub fn update_tracks_artwork_by_id(
+        &mut self,
+        ids: &[i64],
+        artwork_path: &str,
+    ) -> Result<(), LibraryError> {
+        if ids.is_empty() || artwork_path.trim().is_empty() {
+            return Err(LibraryError::Database(
+                "Artwork update requires track ids and a path".to_string(),
+            ));
+        }
+        let unique = ids
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        if unique.len() != ids.len() {
+            return Err(LibraryError::Database(
+                "Artwork update contains duplicate track ids".to_string(),
+            ));
+        }
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|error| LibraryError::Database(error.to_string()))?;
+        {
+            let mut statement = tx
+                .prepare("UPDATE local_tracks SET artwork_path = ?1 WHERE id = ?2")
+                .map_err(|error| LibraryError::Database(error.to_string()))?;
+            for id in ids {
+                let changed = statement
+                    .execute(params![artwork_path, id])
+                    .map_err(|error| LibraryError::Database(error.to_string()))?;
+                if changed != 1 {
+                    return Err(LibraryError::Database(format!(
+                        "Artwork target track {id} no longer exists"
+                    )));
+                }
+            }
+        }
+        tx.commit()
+            .map_err(|error| LibraryError::Database(error.to_string()))?;
+        Ok(())
+    }
+
     pub fn find_album_group_key(
         &self,
         album: &str,
@@ -2929,6 +3805,33 @@ impl LibraryDatabase {
         exclude_network_folders: bool,
         sort: &str,
     ) -> Result<Vec<LocalTrack>, LibraryError> {
+        self.search_with_filter_page_faceted(
+            query,
+            offset,
+            limit,
+            include_qobuz_downloads,
+            exclude_network_folders,
+            sort,
+            &[],
+            false,
+            &[],
+            &[],
+        )
+    }
+
+    pub fn search_with_filter_page_faceted(
+        &self,
+        query: &str,
+        offset: u64,
+        limit: u64,
+        include_qobuz_downloads: bool,
+        exclude_network_folders: bool,
+        sort: &str,
+        formats: &[String],
+        other_formats: bool,
+        quality_tiers: &[String],
+        source_buckets: &[String],
+    ) -> Result<Vec<LocalTrack>, LibraryError> {
         let pattern = format!("%{}%", query);
         let source_filter = if include_qobuz_downloads {
             ""
@@ -2944,6 +3847,30 @@ impl LibraryDatabase {
         } else {
             ""
         };
+        let media_filter = track_media_filter_sql(
+            "format",
+            "bit_depth",
+            "sample_rate",
+            formats,
+            other_formats,
+            quality_tiers,
+        );
+        let source_bucket_filter = if source_buckets.is_empty() {
+            String::new()
+        } else {
+            let mut values = Vec::new();
+            if source_buckets.iter().any(|value| value == "local") {
+                values.push("COALESCE(source,'local') NOT IN ('qobuz_download','qobuz_purchase')");
+            }
+            if source_buckets.iter().any(|value| value == "offline") {
+                values.push("source IN ('qobuz_download','qobuz_purchase')");
+            }
+            if values.is_empty() {
+                "AND 0".to_string()
+            } else {
+                format!("AND ({})", values.join(" OR "))
+            }
+        };
         // ORDER BY clause is built from a validated allowlist so user
         // input never reaches the SQL string directly. NULL years always
         // sort last regardless of direction; the fallback ("default" or
@@ -2956,6 +3883,9 @@ impl LibraryDatabase {
             "title-desc" => "title COLLATE NOCASE DESC, artist COLLATE NOCASE, id",
             "artist-asc" => "COALESCE(album_artist, artist) COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number, id",
             "artist-desc" => "COALESCE(album_artist, artist) COLLATE NOCASE DESC, album COLLATE NOCASE, disc_number, track_number, id",
+            // Internal Tracks grouping order. Group headers display the
+            // performing artist, so album_artist must not lead this query.
+            "group-artist" => "artist COLLATE NOCASE, album COLLATE NOCASE, title COLLATE NOCASE, id",
             "year-desc" => "year IS NULL, year DESC, album COLLATE NOCASE, disc_number, track_number, id",
             "year-asc" => "year IS NULL, year ASC, album COLLATE NOCASE, disc_number, track_number, id",
             "added-desc" => "indexed_at DESC, album COLLATE NOCASE, disc_number, track_number, id",
@@ -2964,17 +3894,20 @@ impl LibraryDatabase {
                   COALESCE(album_artist, artist) COLLATE NOCASE, \
                   disc_number, \
                   track_number, \
-                  title COLLATE NOCASE",
+                  title COLLATE NOCASE, \
+                  id",
         };
         let sql = format!(
             "SELECT {} FROM local_tracks \
              WHERE (title LIKE ?1 OR artist LIKE ?1 OR album LIKE ?1) \
-             {} {} \
+             {} {} {} {} \
              ORDER BY {} \
              LIMIT ?2 OFFSET ?3",
             Self::TRACK_COLUMNS,
             source_filter,
             network_filter,
+            media_filter,
+            source_bucket_filter,
             order_clause,
         );
         let mut stmt = self
@@ -3037,8 +3970,8 @@ impl LibraryDatabase {
                 track_count: row.get(0)?,
                 album_count: row.get(1)?,
                 artist_count: row.get(2)?,
-                total_duration_secs: row.get(3)?,
-                total_size_bytes: row.get(4)?,
+                total_duration_secs: row.get::<_, i64>(3)? as u64,
+                total_size_bytes: row.get::<_, i64>(4)? as u64,
             })
         })
         .map_err(|e| LibraryError::Database(e.to_string()))
@@ -3049,43 +3982,104 @@ impl LibraryDatabase {
     /// Convert a database row to LocalTrack
     /// Column list for SELECT queries (avoids fragile SELECT * with positional indices)
     const TRACK_COLUMNS: &'static str = "id, file_path, title, artist, album, album_artist, \
-         track_number, disc_number, year, genre, duration_secs, format, \
+         track_number, disc_number, year, genre, genres_json, duration_secs, format, \
          bit_depth, sample_rate, channels, file_size_bytes, \
          cue_file_path, cue_start_secs, cue_end_secs, artwork_path, \
          last_modified, indexed_at, album_group_key, album_group_title, \
-         source, qobuz_track_id, catalog_number, is_network_mount";
+         source, qobuz_track_id, catalog_number, is_network_mount, \
+         isrc, musicbrainz_recording_id, musicbrainz_track_id, \
+         musicbrainz_release_id, musicbrainz_release_group_id, musicbrainz_artist_id";
+
+    fn track_genres_json(track: &LocalTrack) -> String {
+        let mut genres = Vec::<String>::new();
+        for value in track.genres.iter().chain(track.genre.iter()) {
+            let value = value.trim();
+            if !value.is_empty()
+                && !genres
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(value))
+            {
+                genres.push(value.to_string());
+            }
+        }
+        serde_json::to_string(&genres).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    fn genres_from_json(raw: Option<&str>, primary: Option<&str>) -> Vec<String> {
+        let mut genres = raw
+            .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+            .unwrap_or_default();
+        if genres.is_empty() {
+            if let Some(value) = primary.filter(|value| !value.trim().is_empty()) {
+                genres.push(value.trim().to_string());
+            }
+        }
+        genres
+    }
+
+    fn genres_from_sets_json(raw: Option<&str>) -> Vec<String> {
+        let sets = raw
+            .and_then(|value| serde_json::from_str::<Vec<Vec<String>>>(value).ok())
+            .unwrap_or_default();
+        let mut genres = Vec::<String>::new();
+        for value in sets.into_iter().flatten() {
+            let value = value.trim();
+            if !value.is_empty()
+                && !genres
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(value))
+            {
+                genres.push(value.to_string());
+            }
+        }
+        genres.sort_by_key(|value| value.to_lowercase());
+        genres
+    }
 
     fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<LocalTrack> {
+        let genre: Option<String> = row.get(9)?;
+        let genres = Self::genres_from_json(
+            row.get::<_, Option<String>>(10)?.as_deref(),
+            genre.as_deref(),
+        );
         Ok(LocalTrack {
-            id: row.get(0)?,                                                          // id
-            file_path: row.get(1)?,                                                   // file_path
-            title: row.get(2)?,                                                       // title
-            artist: row.get(3)?,                                                      // artist
-            album: row.get(4)?,                                                       // album
-            album_artist: row.get(5)?,   // album_artist
-            track_number: row.get(6)?,   // track_number
-            disc_number: row.get(7)?,    // disc_number
-            year: row.get(8)?,           // year
-            genre: row.get(9)?,          // genre
-            duration_secs: row.get(10)?, // duration_secs
-            format: Self::parse_format(&row.get::<_, String>(11)?), // format
-            bit_depth: row.get(12)?,     // bit_depth
-            sample_rate: row.get::<_, f64>(13)?, // sample_rate
-            channels: row.get(14)?,      // channels
-            file_size_bytes: row.get(15)?, // file_size_bytes
-            cue_file_path: row.get(16)?, // cue_file_path
-            cue_start_secs: row.get(17)?, // cue_start_secs
-            cue_end_secs: row.get(18)?,  // cue_end_secs
-            artwork_path: row.get(19)?,  // artwork_path
-            last_modified: row.get(20)?, // last_modified
-            indexed_at: row.get(21)?,    // indexed_at
-            album_group_key: row.get::<_, Option<String>>(22)?.unwrap_or_default(), // album_group_key
-            album_group_title: row.get::<_, Option<String>>(23)?.unwrap_or_default(), // album_group_title
-            source: row.get(24).ok().flatten(),                                       // source
-            qobuz_track_id: row.get(25).ok().flatten(), // qobuz_track_id
-            catalog_number: row.get(26).ok().flatten(), // catalog_number
+            id: row.get(0)?,           // id
+            file_path: row.get(1)?,    // file_path
+            title: row.get(2)?,        // title
+            artist: row.get(3)?,       // artist
+            album: row.get(4)?,        // album
+            album_artist: row.get(5)?, // album_artist
+            track_number: row.get(6)?, // track_number
+            disc_number: row.get(7)?,  // disc_number
+            year: row.get(8)?,         // year
+            genre,
+            genres,
+            duration_secs: row.get::<_, i64>(11)? as u64, // duration_secs
+            format: Self::parse_format(&row.get::<_, String>(12)?), // format
+            bit_depth: row.get(13)?,                      // bit_depth
+            sample_rate: row.get::<_, f64>(14)?,          // sample_rate
+            channels: row.get(15)?,                       // channels
+            file_size_bytes: row.get::<_, i64>(16)? as u64, // file_size_bytes
+            cue_file_path: row.get(17)?,                  // cue_file_path
+            cue_start_secs: row.get(18)?,                 // cue_start_secs
+            cue_end_secs: row.get(19)?,                   // cue_end_secs
+            artwork_path: row.get(20)?,                   // artwork_path
+            collection_artwork_path: None,
+            last_modified: row.get(21)?, // last_modified
+            indexed_at: row.get(22)?,    // indexed_at
+            album_group_key: row.get::<_, Option<String>>(23)?.unwrap_or_default(), // album_group_key
+            album_group_title: row.get::<_, Option<String>>(24)?.unwrap_or_default(), // album_group_title
+            source: row.get(25).ok().flatten(),                                       // source
+            qobuz_track_id: row.get(26).ok().flatten(), // qobuz_track_id
+            catalog_number: row.get(27).ok().flatten(), // catalog_number
+            isrc: row.get(29).ok().flatten(),
+            musicbrainz_recording_id: row.get(30).ok().flatten(),
+            musicbrainz_track_id: row.get(31).ok().flatten(),
+            musicbrainz_release_id: row.get(32).ok().flatten(),
+            musicbrainz_release_group_id: row.get(33).ok().flatten(),
+            musicbrainz_artist_id: row.get(34).ok().flatten(),
             is_network_mount: row
-                .get::<_, Option<i64>>(27)
+                .get::<_, Option<i64>>(28)
                 .ok()
                 .flatten()
                 .map(|v| v != 0)
@@ -3094,6 +4088,18 @@ impl LibraryDatabase {
     }
 
     /// Parse format string to AudioFormat
+    /// Inverse of `AudioFormat`'s `Display` (`models.rs:24`), which is what
+    /// the scanner stores. It MUST answer every variant that `Display` can
+    /// write: an unlisted one folds to `Unknown` silently and the format is
+    /// destroyed on the way out of the DB, not on the way in.
+    ///
+    /// `"DSD"` was exactly that hole. `MetadataExtractor::detect_format` has
+    /// mapped `.dsf`/`.dff` to `AudioFormat::Dsd` since DSD landed
+    /// (`metadata.rs:824`) and the rows on disk say `DSD` — but every read
+    /// handed back `Unknown`, so a DSD track showed "UNKNOWN" as its format,
+    /// took the CD quality badge (depth 1 is a KNOWN depth < 24) and printed
+    /// "1-bit / 2822.4 kHz". The now-playing bar was right all along because
+    /// it reads the decoder, not the row.
     fn parse_format(s: &str) -> AudioFormat {
         match s.to_uppercase().as_str() {
             "FLAC" => AudioFormat::Flac,
@@ -3102,9 +4108,69 @@ impl LibraryDatabase {
             "AIFF" => AudioFormat::Aiff,
             "APE" => AudioFormat::Ape,
             "MP3" => AudioFormat::Mp3,
+            "DSD" => AudioFormat::Dsd,
             _ => AudioFormat::Unknown,
         }
     }
+}
+
+/// Allowlisted SQL for the Local Library quality/format funnel. Values never
+/// enter SQL; callers can only turn these fixed predicates on or off.
+fn track_media_filter_sql(
+    format_col: &str,
+    depth_col: &str,
+    rate_col: &str,
+    formats: &[String],
+    other_formats: bool,
+    quality_tiers: &[String],
+) -> String {
+    let known = ["flac", "alac", "ape", "wav", "mp3", "aac"];
+    let selected = known
+        .iter()
+        .copied()
+        .filter(|value| {
+            formats
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(value))
+        })
+        .collect::<Vec<_>>();
+    let mut clauses = Vec::new();
+    if !selected.is_empty() || other_formats {
+        let mut formats_sql = selected
+            .into_iter()
+            .map(|value| format!("LOWER({format_col})='{value}'"))
+            .collect::<Vec<_>>();
+        if other_formats {
+            formats_sql.push(format!(
+                "LOWER({format_col}) NOT IN ('flac','alac','ape','wav','mp3','aac')"
+            ));
+        }
+        clauses.push(format!("AND ({})", formats_sql.join(" OR ")));
+    }
+    let hires = quality_tiers.iter().any(|value| value == "hires");
+    let cd = quality_tiers.iter().any(|value| value == "cd");
+    let lossy = quality_tiers.iter().any(|value| value == "lossy");
+    if hires || cd || lossy {
+        let khz = format!(
+            "CASE WHEN COALESCE({rate_col},0)>=1000 THEN COALESCE({rate_col},0)/1000.0 ELSE COALESCE({rate_col},0) END"
+        );
+        let mut quality = Vec::new();
+        if hires {
+            quality.push(format!(
+                "(LOWER({format_col}) IN ('dsd','dsf','dff') OR COALESCE({depth_col},0)>=24)"
+            ));
+        }
+        if cd {
+            quality.push(format!(
+                "(LOWER({format_col}) NOT IN ('mp3','dsd','dsf','dff') AND (({depth_col} IS NOT NULL AND {depth_col}<24) OR ({depth_col} IS NULL AND {khz}>=44.1)))"
+            ));
+        }
+        if lossy {
+            quality.push(format!("LOWER({format_col})='mp3'"));
+        }
+        clauses.push(format!("AND ({})", quality.join(" OR ")));
+    }
+    clauses.join(" ")
 }
 
 /// Escape `%`, `_` and `\` characters so the input can be embedded as a
@@ -4121,6 +5187,104 @@ impl LibraryDatabase {
         Ok(())
     }
 
+    /// Attach a Jellyfin/Subsonic track to a Qobuz playlist by its server
+    /// item id — the Plex pattern, source-qualified. Re-adding MOVES the row
+    /// to the new slot rather than duplicating it (INSERT OR REPLACE on the
+    /// UNIQUE key, edge E4).
+    pub fn add_remote_track_to_playlist(
+        &self,
+        qobuz_playlist_id: u64,
+        source: &str,
+        item_id: &str,
+        position: i32,
+    ) -> Result<(), LibraryError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO playlist_remote_tracks
+                (qobuz_playlist_id, source, item_id, position, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![qobuz_playlist_id as i64, source, item_id, position, now],
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to add remote track to playlist: {}", e))
+            })?;
+
+        Ok(())
+    }
+
+    /// Remove a Jellyfin/Subsonic track from a playlist.
+    pub fn remove_remote_track_from_playlist(
+        &self,
+        qobuz_playlist_id: u64,
+        source: &str,
+        item_id: &str,
+    ) -> Result<(), LibraryError> {
+        self.conn
+            .execute(
+                "DELETE FROM playlist_remote_tracks
+                  WHERE qobuz_playlist_id = ?1 AND source = ?2 AND item_id = ?3",
+                params![qobuz_playlist_id as i64, source, item_id],
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!(
+                    "Failed to remove remote track from playlist: {}",
+                    e
+                ))
+            })?;
+        Ok(())
+    }
+
+    /// `(source, item_id, position)` of every remote sidecar row of one
+    /// playlist, position ASC.
+    pub fn get_playlist_remote_tracks_with_position(
+        &self,
+        qobuz_playlist_id: u64,
+    ) -> Result<Vec<(String, String, i32)>, LibraryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT source, item_id, position FROM playlist_remote_tracks
+                  WHERE qobuz_playlist_id = ?1
+                  ORDER BY position ASC, added_at ASC, id ASC",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare query: {}", e)))?;
+        let rows = stmt
+            .query_map(params![qobuz_playlist_id as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i32>(2)?,
+                ))
+            })
+            .map_err(|e| LibraryError::Database(format!("Failed to query: {}", e)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(
+                row.map_err(|e| LibraryError::Database(format!("Failed to read row: {}", e)))?,
+            );
+        }
+        Ok(out)
+    }
+
+    /// Number of remote sidecar rows of one playlist.
+    pub fn get_playlist_remote_track_count(
+        &self,
+        qobuz_playlist_id: u64,
+    ) -> Result<u32, LibraryError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM playlist_remote_tracks WHERE qobuz_playlist_id = ?1",
+                params![qobuz_playlist_id as i64],
+                |row| row.get::<_, u32>(0),
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to count remote tracks: {}", e)))
+    }
+
     /// Remove a Plex track from a playlist.
     pub fn remove_plex_track_from_playlist(
         &self,
@@ -4162,10 +5326,7 @@ impl LibraryDatabase {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
             })
             .map_err(|e| {
-                LibraryError::Database(format!(
-                    "Failed to query playlist plex tracks: {}",
-                    e
-                ))
+                LibraryError::Database(format!("Failed to query playlist plex tracks: {}", e))
             })?;
 
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
@@ -4202,7 +5363,7 @@ impl LibraryDatabase {
             .prepare(
                 "SELECT t.id, t.file_path, t.title, t.artist, t.album, t.album_artist,
                     t.album_group_key, t.album_group_title, t.track_number, t.disc_number,
-                    t.year, t.genre, t.duration_secs, t.format, t.bit_depth, t.sample_rate,
+                    t.year, t.genre, t.genres_json, t.duration_secs, t.format, t.bit_depth, t.sample_rate,
                     t.channels, t.file_size_bytes, t.cue_file_path, t.cue_start_secs,
                     t.cue_end_secs, t.artwork_path, t.last_modified, t.indexed_at, t.source,
                     t.qobuz_track_id, t.is_network_mount, plt.position
@@ -4228,22 +5389,33 @@ impl LibraryDatabase {
                     disc_number: row.get(9)?,
                     year: row.get(10)?,
                     genre: row.get(11)?,
+                    genres: Self::genres_from_json(
+                        row.get::<_, Option<String>>(12)?.as_deref(),
+                        row.get::<_, Option<String>>(11)?.as_deref(),
+                    ),
                     catalog_number: None,
-                    duration_secs: row.get(12)?,
-                    format: Self::parse_format(&row.get::<_, String>(13)?),
-                    bit_depth: row.get(14)?,
-                    sample_rate: row.get::<_, f64>(15)?,
-                    channels: row.get(16)?,
-                    file_size_bytes: row.get(17)?,
-                    cue_file_path: row.get(18)?,
-                    cue_start_secs: row.get(19)?,
-                    cue_end_secs: row.get(20)?,
-                    artwork_path: row.get(21)?,
-                    last_modified: row.get(22)?,
-                    indexed_at: row.get(23)?,
-                    source: row.get(24)?,
-                    qobuz_track_id: row.get(25)?,
-                    is_network_mount: row.get::<_, i64>(26)? != 0,
+                    duration_secs: row.get::<_, i64>(13)? as u64,
+                    format: Self::parse_format(&row.get::<_, String>(14)?),
+                    bit_depth: row.get(15)?,
+                    sample_rate: row.get::<_, f64>(16)?,
+                    channels: row.get(17)?,
+                    file_size_bytes: row.get::<_, i64>(18)? as u64,
+                    cue_file_path: row.get(19)?,
+                    cue_start_secs: row.get(20)?,
+                    cue_end_secs: row.get(21)?,
+                    artwork_path: row.get(22)?,
+                    collection_artwork_path: None,
+                    last_modified: row.get(23)?,
+                    indexed_at: row.get(24)?,
+                    source: row.get(25)?,
+                    qobuz_track_id: row.get(26)?,
+                    isrc: None,
+                    musicbrainz_recording_id: None,
+                    musicbrainz_track_id: None,
+                    musicbrainz_release_id: None,
+                    musicbrainz_release_group_id: None,
+                    musicbrainz_artist_id: None,
+                    is_network_mount: row.get::<_, i64>(27)? != 0,
                 })
             })
             .map_err(|e| {
@@ -4265,7 +5437,7 @@ impl LibraryDatabase {
             .prepare(
                 "SELECT t.id, t.file_path, t.title, t.artist, t.album, t.album_artist,
                     t.album_group_key, t.album_group_title, t.track_number, t.disc_number,
-                    t.year, t.genre, t.duration_secs, t.format, t.bit_depth, t.sample_rate,
+                    t.year, t.genre, t.genres_json, t.duration_secs, t.format, t.bit_depth, t.sample_rate,
                     t.channels, t.file_size_bytes, t.cue_file_path, t.cue_start_secs,
                     t.cue_end_secs, t.artwork_path, t.last_modified, t.indexed_at, t.source,
                     t.qobuz_track_id, t.is_network_mount, plt.position
@@ -4292,24 +5464,35 @@ impl LibraryDatabase {
                         disc_number: row.get(9)?,
                         year: row.get(10)?,
                         genre: row.get(11)?,
+                        genres: Self::genres_from_json(
+                            row.get::<_, Option<String>>(12)?.as_deref(),
+                            row.get::<_, Option<String>>(11)?.as_deref(),
+                        ),
                         catalog_number: None,
-                        duration_secs: row.get(12)?,
-                        format: Self::parse_format(&row.get::<_, String>(13)?),
-                        bit_depth: row.get(14)?,
-                        sample_rate: row.get::<_, f64>(15)?,
-                        channels: row.get(16)?,
-                        file_size_bytes: row.get(17)?,
-                        cue_file_path: row.get(18)?,
-                        cue_start_secs: row.get(19)?,
-                        cue_end_secs: row.get(20)?,
-                        artwork_path: row.get(21)?,
-                        last_modified: row.get(22)?,
-                        indexed_at: row.get(23)?,
-                        source: row.get(24)?,
-                        qobuz_track_id: row.get(25)?,
-                        is_network_mount: row.get::<_, i64>(26)? != 0,
+                        duration_secs: row.get::<_, i64>(13)? as u64,
+                        format: Self::parse_format(&row.get::<_, String>(14)?),
+                        bit_depth: row.get(15)?,
+                        sample_rate: row.get::<_, f64>(16)?,
+                        channels: row.get(17)?,
+                        file_size_bytes: row.get::<_, i64>(18)? as u64,
+                        cue_file_path: row.get(19)?,
+                        cue_start_secs: row.get(20)?,
+                        cue_end_secs: row.get(21)?,
+                        artwork_path: row.get(22)?,
+                        collection_artwork_path: None,
+                        last_modified: row.get(23)?,
+                        indexed_at: row.get(24)?,
+                        source: row.get(25)?,
+                        qobuz_track_id: row.get(26)?,
+                        isrc: None,
+                        musicbrainz_recording_id: None,
+                        musicbrainz_track_id: None,
+                        musicbrainz_release_id: None,
+                        musicbrainz_release_group_id: None,
+                        musicbrainz_artist_id: None,
+                        is_network_mount: row.get::<_, i64>(27)? != 0,
                     },
-                    playlist_position: row.get(27)?,
+                    playlist_position: row.get(28)?,
                 })
             })
             .map_err(|e| {
@@ -4405,6 +5588,29 @@ impl LibraryDatabase {
             *result.entry(playlist_id).or_insert(0) += count;
         }
 
+        let mut remote_stmt = self
+            .conn
+            .prepare(
+                "SELECT qobuz_playlist_id, COUNT(*) as count
+             FROM playlist_remote_tracks
+             GROUP BY qobuz_playlist_id",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare query: {}", e)))?;
+
+        let remote_rows = remote_stmt
+            .query_map([], |row| {
+                let playlist_id: i64 = row.get(0)?;
+                let count: u32 = row.get(1)?;
+                Ok((playlist_id as u64, count))
+            })
+            .map_err(|e| LibraryError::Database(format!("Failed to query: {}", e)))?;
+
+        for row in remote_rows {
+            let (playlist_id, count) =
+                row.map_err(|e| LibraryError::Database(format!("Failed to read row: {}", e)))?;
+            *result.entry(playlist_id).or_insert(0) += count;
+        }
+
         Ok(result)
     }
 
@@ -4464,6 +5670,7 @@ impl LibraryDatabase {
     ) -> Result<i32, LibraryError> {
         let local_count = self.get_playlist_local_track_count(qobuz_playlist_id)?;
         let plex_count = self.get_playlist_plex_track_count(qobuz_playlist_id)?;
+        let remote_count = self.get_playlist_remote_track_count(qobuz_playlist_id)?;
         let max_pos: Option<i32> = self
             .conn
             .query_row(
@@ -4473,6 +5680,9 @@ impl LibraryDatabase {
                     UNION ALL
                     SELECT MAX(position) AS p FROM playlist_plex_tracks
                      WHERE qobuz_playlist_id = ?1
+                    UNION ALL
+                    SELECT MAX(position) AS p FROM playlist_remote_tracks
+                     WHERE qobuz_playlist_id = ?1
                 )",
                 params![qobuz_playlist_id as i64],
                 |row| row.get(0),
@@ -4480,7 +5690,7 @@ impl LibraryDatabase {
             .map_err(|e| {
                 LibraryError::Database(format!("Failed to read max sidecar position: {}", e))
             })?;
-        let count_based = (qobuz_track_count + local_count + plex_count) as i32;
+        let count_based = (qobuz_track_count + local_count + plex_count + remote_count) as i32;
         Ok(count_based.max(max_pos.map(|p| p + 1).unwrap_or(0)))
     }
 
@@ -4562,6 +5772,33 @@ impl LibraryDatabase {
                 rows.push(("plex", rowid, key, pos));
             }
         }
+        {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, source || ':' || item_id, position FROM playlist_remote_tracks
+                     WHERE qobuz_playlist_id = ?1
+                     ORDER BY position ASC, added_at ASC, id ASC",
+                )
+                .map_err(|e| {
+                    LibraryError::Database(format!("Failed to prepare heal query: {}", e))
+                })?;
+            let mapped = stmt
+                .query_map(params![qobuz_playlist_id as i64], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i32>(2)?,
+                    ))
+                })
+                .map_err(|e| LibraryError::Database(format!("Failed to query heal rows: {}", e)))?;
+            for r in mapped {
+                let (rowid, key, pos) = r.map_err(|e| {
+                    LibraryError::Database(format!("Failed to read heal row: {}", e))
+                })?;
+                rows.push(("remote", rowid, key, pos));
+            }
+        }
         if rows.is_empty() {
             return Ok(Vec::new());
         }
@@ -4577,14 +5814,13 @@ impl LibraryDatabase {
         if moves.is_empty() {
             return Ok(Vec::new());
         }
-        let mut next =
-            ((qobuz_track_count as i32) + sidecar_total as i32).max(max_pos + 1);
+        let mut next = ((qobuz_track_count as i32) + sidecar_total as i32).max(max_pos + 1);
         let mut healed = Vec::with_capacity(moves.len());
         for (kind, rowid, reference, old) in moves {
-            let sql = if kind == "local" {
-                "UPDATE playlist_local_tracks SET position = ?1 WHERE id = ?2"
-            } else {
-                "UPDATE playlist_plex_tracks SET position = ?1 WHERE id = ?2"
+            let sql = match kind {
+                "local" => "UPDATE playlist_local_tracks SET position = ?1 WHERE id = ?2",
+                "plex" => "UPDATE playlist_plex_tracks SET position = ?1 WHERE id = ?2",
+                _ => "UPDATE playlist_remote_tracks SET position = ?1 WHERE id = ?2",
             };
             self.conn.execute(sql, params![next, rowid]).map_err(|e| {
                 LibraryError::Database(format!("Failed to heal sidecar position: {}", e))
@@ -5193,6 +6429,39 @@ impl LibraryDatabase {
         Ok(result)
     }
 
+    /// Whether an artist-image lookup (positive or negative) was completed
+    /// within `max_age_secs`.
+    ///
+    /// Negative rows deliberately keep `image_url` NULL.  Remembering those
+    /// misses is what prevents every visit to a long Artists rail from
+    /// repeating the same Qobuz/Last.fm/Discogs requests.  Custom artwork is
+    /// a positive answer regardless of the remote lookup timestamp.
+    pub fn artist_image_resolution_is_fresh(
+        &self,
+        artist_name: &str,
+        max_age_secs: i64,
+    ) -> Result<bool, LibraryError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let cutoff = now.saturating_sub(max_age_secs.max(0));
+        self.conn
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM artist_images
+                      WHERE artist_name = ?1
+                        AND (custom_image_path IS NOT NULL OR fetched_at >= ?2)
+                 )",
+                params![artist_name, cutoff],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value != 0)
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to query artist image freshness: {e}"))
+            })
+    }
+
     /// Get all custom artist images (for bulk lookup)
     pub fn get_all_custom_artist_images(
         &self,
@@ -5243,9 +6512,7 @@ impl LibraryDatabase {
                 let url: Option<String> = row.get(2)?;
                 Ok((row.get::<_, String>(0)?, custom.or(url)))
             })
-            .map_err(|e| {
-                LibraryError::Database(format!("Failed to query artist images: {}", e))
-            })?;
+            .map_err(|e| LibraryError::Database(format!("Failed to query artist images: {}", e)))?;
 
         let mut map = std::collections::HashMap::new();
         for row in rows.flatten() {
@@ -5314,9 +6581,18 @@ impl LibraryDatabase {
             .as_secs() as i64;
 
         self.conn.execute(
-            "INSERT OR REPLACE INTO artist_images
+            "INSERT INTO artist_images
              (artist_name, image_url, source, custom_image_path, canonical_name, fetched_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(artist_name) DO UPDATE SET
+                 image_url = excluded.image_url,
+                 source = excluded.source,
+                 custom_image_path = COALESCE(excluded.custom_image_path,
+                                               artist_images.custom_image_path),
+                 canonical_name = COALESCE(excluded.canonical_name,
+                                           artist_images.canonical_name),
+                 fetched_at = excluded.fetched_at,
+                 updated_at = excluded.updated_at",
             params![artist_name, image_url, source, custom_image_path, canonical_name, now, now],
         )
         .map_err(|e| LibraryError::Database(format!("Failed to cache artist image: {}", e)))?;
@@ -5641,8 +6917,101 @@ impl LibraryDatabase {
         Ok(())
     }
 
-    /// Remove a downloaded purchase record (e.g. user deleted the file).
-    pub fn remove_downloaded_purchase(&self, track_id: i64) -> Result<(), LibraryError> {
+    /// Every registered download of ONE purchased track: `(format_id,
+    /// file_path)`, newest first. This is the playback resolver's read
+    /// (`purchase_playback_qt`): it decides per format and probes each path
+    /// itself with the bounded reachability probe, so this accessor neither
+    /// stats nor prunes — the prune stays with `get_downloaded_purchase_track_ids`
+    /// so there is exactly one writer.
+    pub fn get_downloaded_purchase_files(
+        &self,
+        track_id: i64,
+    ) -> Result<Vec<(i64, String)>, LibraryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT format_id, file_path FROM downloaded_purchases
+                 WHERE track_id = ?1 ORDER BY downloaded_at DESC",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare statement: {}", e)))?;
+        let rows = stmt
+            .query_map(rusqlite::params![track_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to query downloaded purchase files: {}", e))
+            })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| LibraryError::Database(format!("Failed to collect purchase files: {}", e)))
+    }
+
+    /// The DISTINCT folders the registered downloads of one purchased album
+    /// sit in (a folder per format, e.g. `…/Album [DSF][DSD128]` and
+    /// `…/Album [FLAC][16-bit,44.1kHz]`), newest first. No stat, no prune.
+    pub fn get_downloaded_purchase_folders(
+        &self,
+        album_id: &str,
+    ) -> Result<Vec<String>, LibraryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT file_path FROM downloaded_purchases
+                 WHERE album_id = ?1 ORDER BY downloaded_at DESC",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare statement: {}", e)))?;
+        let paths = stmt
+            .query_map(rusqlite::params![album_id], |row| row.get::<_, String>(0))
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to query purchase folders: {}", e))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| LibraryError::Database(format!("Failed to collect folders: {}", e)))?;
+        let mut folders: Vec<String> = Vec::new();
+        for p in paths {
+            if let Some(dir) = std::path::Path::new(&p).parent() {
+                let dir = dir.to_string_lossy().into_owned();
+                if !folders.contains(&dir) {
+                    folders.push(dir);
+                }
+            }
+        }
+        Ok(folders)
+    }
+
+    /// Remove ONE downloaded purchase record (e.g. the user deleted the file).
+    ///
+    /// The table's primary key is `(track_id, format_id)` — the same purchased
+    /// track may be downloaded in several formats at once, and the whole
+    /// "downloaded" UI is format-scoped because of it. This delete is therefore
+    /// keyed by the full pair. It previously deleted by `track_id` alone, which
+    /// silently dropped the OTHER formats' rows; that never fired because nothing
+    /// called it, and it is corrected here before Qt gives it a caller. The stale
+    /// prune in `get_downloaded_purchase_track_ids` already deletes by the pair.
+    pub fn remove_downloaded_purchase(
+        &self,
+        track_id: i64,
+        format_id: i64,
+    ) -> Result<(), LibraryError> {
+        self.conn
+            .execute(
+                "DELETE FROM downloaded_purchases WHERE track_id = ?1 AND format_id = ?2",
+                rusqlite::params![track_id, format_id],
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to remove downloaded purchase: {}", e))
+            })?;
+        Ok(())
+    }
+
+    /// Remove EVERY downloaded record for a track, across all formats.
+    ///
+    /// Split out from `remove_downloaded_purchase` so that erasing all formats is
+    /// something a caller has to ask for by name rather than something it gets by
+    /// accident from an under-specified key.
+    pub fn remove_downloaded_purchase_all_formats(
+        &self,
+        track_id: i64,
+    ) -> Result<(), LibraryError> {
         self.conn
             .execute(
                 "DELETE FROM downloaded_purchases WHERE track_id = ?1",
@@ -5654,8 +7023,79 @@ impl LibraryDatabase {
         Ok(())
     }
 
+    /// Count DISTINCT downloaded tracks per purchased album id.
+    ///
+    /// This is what makes the Albums tab's "downloaded" mark and its
+    /// "Hide downloaded" filter work at all. The reference derived an album's
+    /// downloaded state from `album.tracks.items` in the purchases response, but
+    /// `getUserPurchases?type=albums` carries no nested tracks page (measured
+    /// against a live account, contract §2.5b), so that predicate is unsatisfiable
+    /// and the filter can never hide anything. The local registry is the only
+    /// place that knows, and `album_id` — written since the table was created and
+    /// never read until now — is the column that answers it. There is already an
+    /// index on it (`idx_downloaded_purchases_album`).
+    ///
+    /// Counting is format-AGNOSTIC (`DISTINCT track_id`), matching the reference's
+    /// list-level rule: a track downloaded in two formats counts once. Rows with a
+    /// NULL `album_id` are skipped — they cannot be attributed to an album.
+    ///
+    /// **Rows whose file no longer exists on disk are excluded**, the same way
+    /// `get_downloaded_purchase_track_ids` excludes them. Without that, an album
+    /// whose files the user deleted keeps reporting as downloaded — and, worse,
+    /// stays HIDDEN behind "Hide downloaded" — until some unrelated call happens
+    /// to prune first. Making the answer depend on which accessor ran last is the
+    /// kind of order-coupling nobody remembers six months later, so this query
+    /// stands on its own.
+    ///
+    /// Unlike the track-ids accessor this one only FILTERS; it does not delete.
+    /// Pruning is left to that accessor so there is exactly one writer, and a
+    /// read taken while a download is mid-flight cannot race it.
+    ///
+    /// The caller compares each count against the album's `tracks_count`; this
+    /// method deliberately does not decide "fully downloaded", because only the
+    /// caller holds the purchase metadata.
+    pub fn get_downloaded_purchase_album_counts(
+        &self,
+    ) -> Result<std::collections::HashMap<String, u32>, LibraryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT album_id, track_id, file_path FROM downloaded_purchases
+                 WHERE album_id IS NOT NULL",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare statement: {}", e)))?;
+
+        let rows: Vec<(String, i64, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to query purchase album counts: {}", e))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to collect album counts: {}", e))
+            })?;
+
+        // DISTINCT over (album_id, track_id) is done here rather than in SQL so
+        // the existence check can drop a row before it is counted.
+        let mut seen: std::collections::HashSet<(String, i64)> = std::collections::HashSet::new();
+        let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+
+        for (album_id, track_id, file_path) in rows {
+            if probe_default(std::path::Path::new(&file_path)) != Reach::Present {
+                continue;
+            }
+            if seen.insert((album_id.clone(), track_id)) {
+                *counts.entry(album_id).or_insert(0) += 1;
+            }
+        }
+
+        Ok(counts)
+    }
+
     /// Get all downloaded track IDs for fast lookup (any format).
-    /// Automatically removes stale entries where the file no longer exists on disk.
+    /// Automatically removes stale entries only when the filesystem positively
+    /// answers that the file is missing. Timeouts and I/O errors are treated as
+    /// unreachable and never prune durable ownership/download state.
     pub fn get_downloaded_purchase_track_ids(&self) -> Result<Vec<i64>, LibraryError> {
         let mut stmt = self
             .conn
@@ -5674,10 +7114,10 @@ impl LibraryDatabase {
         let mut valid_ids: Vec<i64> = Vec::new();
 
         for (track_id, format_id, file_path) in &rows {
-            if std::path::Path::new(file_path).exists() {
-                valid_ids.push(*track_id);
-            } else {
-                stale.push((*track_id, *format_id));
+            match probe_default(std::path::Path::new(file_path)) {
+                Reach::Present => valid_ids.push(*track_id),
+                Reach::Missing => stale.push((*track_id, *format_id)),
+                Reach::Unreachable => {}
             }
         }
 
@@ -5715,6 +7155,143 @@ impl LibraryDatabase {
 
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| LibraryError::Database(format!("Failed to collect formats: {}", e)))
+    }
+}
+
+#[cfg(test)]
+mod track_page_order_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn artist_group_orders_by_the_track_artist_not_album_artist() {
+        let tmp = TempDir::new().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
+        for (path, title, artist, album_artist, album) in [
+            (
+                "/music/zed.flac",
+                "First",
+                "Zed Performer",
+                "Alpha Album Artist",
+                "A Album",
+            ),
+            (
+                "/music/alpha.flac",
+                "Second",
+                "Alpha Performer",
+                "Zed Album Artist",
+                "Z Album",
+            ),
+        ] {
+            let track = LocalTrack {
+                file_path: path.to_string(),
+                title: title.to_string(),
+                artist: artist.to_string(),
+                album_artist: Some(album_artist.to_string()),
+                album: album.to_string(),
+                album_group_key: path.to_string(),
+                album_group_title: album.to_string(),
+                ..Default::default()
+            };
+            db.insert_track(&track).unwrap();
+        }
+
+        let grouped = db
+            .search_with_filter_page("", 0, 10, true, false, "group-artist")
+            .unwrap();
+        assert_eq!(grouped[0].artist, "Alpha Performer");
+
+        let album_artist_sorted = db
+            .search_with_filter_page("", 0, 10, true, false, "artist-asc")
+            .unwrap();
+        assert_eq!(album_artist_sorted[0].artist, "Zed Performer");
+    }
+}
+
+#[cfg(test)]
+mod local_genre_and_filter_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn fixture() -> (TempDir, LibraryDatabase) {
+        let tmp = TempDir::new().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
+        (tmp, db)
+    }
+
+    fn insert(
+        db: &LibraryDatabase,
+        name: &str,
+        format: AudioFormat,
+        depth: Option<u32>,
+        genres: &[&str],
+    ) {
+        let row = LocalTrack {
+            file_path: format!("/music/Album/{name}"),
+            title: name.to_string(),
+            artist: "Fixture Artist".into(),
+            album_artist: Some("Fixture Artist".into()),
+            album: "Fixture Album".into(),
+            album_group_key: "/music/Album".into(),
+            album_group_title: "Fixture Album".into(),
+            track_number: Some(if name.starts_with('a') { 1 } else { 2 }),
+            genre: genres.first().map(|value| value.to_string()),
+            genres: genres.iter().map(|value| value.to_string()).collect(),
+            format,
+            bit_depth: depth,
+            sample_rate: 44_100.0,
+            ..Default::default()
+        };
+        db.insert_track(&row).unwrap();
+    }
+
+    #[test]
+    fn folder_album_unions_all_track_genres_case_insensitively() {
+        let (_tmp, db) = fixture();
+        insert(
+            &db,
+            "a.flac",
+            AudioFormat::Flac,
+            Some(24),
+            &["Progressive Rock", "Art Rock"],
+        );
+        insert(
+            &db,
+            "b.mp3",
+            AudioFormat::Mp3,
+            None,
+            &["art rock", "Psychedelic"],
+        );
+        let albums = db.get_albums_with_full_filter(false, true, false).unwrap();
+        assert_eq!(albums.len(), 1);
+        assert_eq!(
+            albums[0].genres,
+            ["Art Rock", "Progressive Rock", "Psychedelic"]
+        );
+    }
+
+    #[test]
+    fn local_format_and_quality_filters_run_before_page_limits() {
+        let (_tmp, db) = fixture();
+        insert(&db, "a.flac", AudioFormat::Flac, Some(24), &["Rock"]);
+        insert(&db, "b.mp3", AudioFormat::Mp3, None, &["Rock"]);
+        let rows = db
+            .search_with_filter_page_faceted(
+                "",
+                0,
+                1,
+                true,
+                false,
+                "title-asc",
+                &["mp3".to_string()],
+                false,
+                &["lossy".to_string()],
+                &["local".to_string()],
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "b.mp3");
+        assert_eq!(rows[0].genres, ["Rock"]);
     }
 }
 
@@ -5778,7 +7355,14 @@ mod metadata_grouping_tests {
             "/m/mix/cd",
         );
 
-        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
+        let albums = db
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
+            .unwrap();
         let vespertine = albums
             .iter()
             .find(|a| a.title == "Vespertine")
@@ -5793,7 +7377,14 @@ mod metadata_grouping_tests {
         insert_track_for_test(&db, "/m/folder/01.flac", None, None, "A", "/m/folder");
         insert_track_for_test(&db, "/m/folder/02.flac", None, None, "B", "/m/folder");
 
-        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
+        let albums = db
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
+            .unwrap();
         assert_eq!(albums.len(), 1, "single folder fallback group");
         assert_eq!(albums[0].track_count, 2);
         assert_eq!(albums[0].artist, "Various Artists");
@@ -5806,7 +7397,14 @@ mod metadata_grouping_tests {
         insert_track_for_test(&db, "/m/ghost/01.flac", None, None, "X", "");
         insert_track_for_test(&db, "/m/ghost/02.flac", None, None, "Y", "");
 
-        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
+        let albums = db
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
+            .unwrap();
         let unknown = albums
             .iter()
             .find(|a| a.title == "Unknown Album")
@@ -5835,7 +7433,14 @@ mod metadata_grouping_tests {
             "/m/comp",
         );
 
-        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
+        let albums = db
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
+            .unwrap();
         let comp = albums
             .iter()
             .find(|a| a.title == "Comp")
@@ -5852,8 +7457,16 @@ mod metadata_grouping_tests {
         // album_artist. Metadata mode splits per track artist; Folder mode
         // keeps ONE card.
         for (i, artist) in [
-            "MAKE-UP", "MAKE-UP PROJECT", "Horie", "Kageyama", "Furuya",
-            "Trooper", "Matsuzawa", "Marina", "Broadway", "Oren",
+            "MAKE-UP",
+            "MAKE-UP PROJECT",
+            "Horie",
+            "Kageyama",
+            "Furuya",
+            "Trooper",
+            "Matsuzawa",
+            "Marina",
+            "Broadway",
+            "Oren",
         ]
         .iter()
         .enumerate()
@@ -5869,11 +7482,25 @@ mod metadata_grouping_tests {
         }
 
         // Metadata mode: one group per album|artist pair (the #411 split).
-        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
+        let albums = db
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
+            .unwrap();
         assert_eq!(albums.len(), 10, "metadata mode splits per track artist");
 
         // Folder mode: ONE album, Various Artists, everyone in all_artists.
-        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Folder).unwrap();
+        let albums = db
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Folder,
+            )
+            .unwrap();
         assert_eq!(albums.len(), 1, "folder mode keeps the compilation whole");
         let comp = &albums[0];
         assert_eq!(comp.title, "Saint Seiya Best");
@@ -5902,7 +7529,14 @@ mod metadata_grouping_tests {
             "EELS",
             "/m/eels",
         );
-        let albums = db2.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Folder).unwrap();
+        let albums = db2
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Folder,
+            )
+            .unwrap();
         assert_eq!(albums.len(), 1);
         assert_eq!(albums[0].artist, "EELS");
 
@@ -5910,7 +7544,14 @@ mod metadata_grouping_tests {
         let (_tmp3, db3) = fresh_db();
         insert_track_for_test(&db3, "/m/ghost/01.flac", None, None, "X", "");
         insert_track_for_test(&db3, "/m/ghost/02.flac", None, None, "Y", "");
-        let albums = db3.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Folder).unwrap();
+        let albums = db3
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Folder,
+            )
+            .unwrap();
         let unknown = albums
             .iter()
             .find(|a| a.title == "Unknown Album")
@@ -6014,7 +7655,12 @@ mod metadata_grouping_tests {
         );
 
         let albums = db
-            .get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata)
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
             .unwrap();
         let mix = albums
             .iter()
@@ -6040,7 +7686,12 @@ mod metadata_grouping_tests {
         );
 
         let albums = db
-            .get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata)
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
             .unwrap();
         let a = albums
             .iter()
@@ -6087,7 +7738,12 @@ mod metadata_grouping_tests {
         );
 
         let albums = db
-            .get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata)
+            .get_albums_metadata_grouped(
+                false,
+                true,
+                false,
+                crate::album_grouping::AlbumGroupMode::Metadata,
+            )
             .unwrap();
         let old = albums
             .iter()
@@ -6156,6 +7812,140 @@ mod folder_tree_tests {
         db.insert_track(&t).unwrap();
     }
 
+    // ── §12-5: the gold purchase badge, end to end ───────────────────────
+    //
+    // The badge chain is: a purchase download writes `downloaded_purchases`
+    // (file_path, format_id) → a later library scan inserts the same file →
+    // `insert_track` stamps `source = 'qobuz_purchase'` → the UI branches on
+    // that literal to draw the gold mark.
+    //
+    // The join is by EXACT `file_path` string equality, which is the whole
+    // reason these tests exist. Nobody here can smoke-test Purchases, and a
+    // path that differs by one character — a Unicode title sanitized
+    // differently, a trailing space from an empty quality folder — breaks the
+    // stamp silently: the file is there, the registry row is there, and the
+    // badge simply never appears with nothing logged.
+
+    #[test]
+    fn a_scanned_file_matching_the_registry_is_stamped_as_a_purchase() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("lib.db")).unwrap();
+
+        let path = "/music/Artist/Album [FLAC][24-bit,96kHz]/01 - Song.flac";
+        db.mark_purchase_downloaded(1001, Some("alb-1"), path, 7)
+            .unwrap();
+
+        insert_at(&db, path, Some(1), Some(1), "Song");
+
+        let source: String = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT source FROM local_tracks WHERE file_path = ?1",
+                    rusqlite::params![path],
+                    |row| row.get(0),
+                )
+                .map_err(|e| LibraryError::Database(e.to_string()))
+            })
+            .unwrap();
+
+        assert_eq!(
+            source, "qobuz_purchase",
+            "the scan must stamp a file that the purchase registry already knows"
+        );
+    }
+
+    #[test]
+    fn a_scanned_file_the_registry_does_not_know_stays_user() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("lib.db")).unwrap();
+
+        insert_at(
+            &db,
+            "/music/Other/Album/01 - Song.flac",
+            Some(1),
+            Some(1),
+            "Song",
+        );
+
+        let source: String = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT source FROM local_tracks WHERE file_path = ?1",
+                    rusqlite::params!["/music/Other/Album/01 - Song.flac"],
+                    |row| row.get(0),
+                )
+                .map_err(|e| LibraryError::Database(e.to_string()))
+            })
+            .unwrap();
+
+        assert_eq!(source, "user");
+    }
+
+    /// The failure mode the exact-equality join actually has. A registry row and
+    /// a scanned file that differ by ONE character — here the trailing space an
+    /// implementer gets by formatting the album folder as `"{album} {quality}"`
+    /// with an empty quality — do not join, and the badge silently never appears.
+    ///
+    /// This is a characterisation test: it asserts the join is exact, so that if
+    /// anyone ever makes it fuzzy they have to come here and say so deliberately.
+    #[test]
+    fn a_one_character_path_difference_breaks_the_stamp_silently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("lib.db")).unwrap();
+
+        db.mark_purchase_downloaded(1002, Some("alb-2"), "/music/A/Album /01 - S.flac", 6)
+            .unwrap();
+        insert_at(&db, "/music/A/Album/01 - S.flac", Some(1), Some(1), "S");
+
+        let source: String = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT source FROM local_tracks WHERE file_path = ?1",
+                    rusqlite::params!["/music/A/Album/01 - S.flac"],
+                    |row| row.get(0),
+                )
+                .map_err(|e| LibraryError::Database(e.to_string()))
+            })
+            .unwrap();
+
+        assert_eq!(
+            source, "user",
+            "documented: the join is exact, so a one-character path drift loses the badge"
+        );
+    }
+
+    /// A re-scan re-stamps. The contract records that if a scan runs BEFORE the
+    /// registry write the row is stamped `'user'` until the next scan of that
+    /// folder — this proves the "until" half, which is why no repair migration
+    /// or re-stamp UI is owed.
+    #[test]
+    fn a_rescan_after_the_registry_write_upgrades_the_stamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("lib.db")).unwrap();
+        let path = "/music/A/Album/01 - Late.flac";
+
+        // Scan first: nothing in the registry yet.
+        insert_at(&db, path, Some(1), Some(1), "Late");
+
+        // The download registers afterwards, then the folder is scanned again.
+        db.mark_purchase_downloaded(1003, Some("alb-3"), path, 6)
+            .unwrap();
+        insert_at(&db, path, Some(1), Some(1), "Late");
+
+        let source: String = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT source FROM local_tracks WHERE file_path = ?1",
+                    rusqlite::params![path],
+                    |row| row.get(0),
+                )
+                .map_err(|e| LibraryError::Database(e.to_string()))
+            })
+            .unwrap();
+
+        assert_eq!(source, "qobuz_purchase", "the next scan re-stamps it");
+    }
+
     /// Insert a row directly with `source = 'qobuz_download'`.
     /// `insert_track` overrides the source field so we go through raw
     /// SQL to model the offline-cache code path that DOES write that
@@ -6193,6 +7983,81 @@ mod folder_tree_tests {
         // One Qobuz download in the same album — must be filtered out
         // by both list_folder_children and list_folder_tracks.
         insert_qobuz_download_at(db, "/m/A/album1/qcache.flac", "QobuzCache");
+    }
+
+    fn seed_sacd_fixture(db: &LibraryDatabase) {
+        let image = "/m/SACD/Opera.iso";
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO local_sacd_images \
+                     (fingerprint,image_path,image_size_bytes,image_modified_ns,observed_at) \
+                 VALUES ('sacd-folder-test',?1,1,1,1)",
+                rusqlite::params![image],
+            )
+            .unwrap();
+        });
+        for (number, title) in [(1, "Prelude / Dawn"), (2, "Finale")] {
+            let path = format!("sacd:{image}#{number}");
+            insert_at(db, &path, Some(1), Some(number), title);
+            db.with_connection(|conn| {
+                let id: i64 = conn
+                    .query_row(
+                        "SELECT id FROM local_tracks WHERE file_path=?1",
+                        rusqlite::params![path],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                conn.execute(
+                    "INSERT INTO local_sacd_tracks \
+                         (fingerprint,track_number,local_track_id) \
+                     VALUES ('sacd-folder-test',?1,?2)",
+                    rusqlite::params![number, id],
+                )
+                .unwrap();
+            });
+        }
+    }
+
+    #[test]
+    fn sacd_image_is_an_expandable_folder_with_virtual_track_children() {
+        let (_tmp, db) = fresh_db();
+        seed_sacd_fixture(&db);
+
+        let root = db.list_folder_children("/m/SACD", false).unwrap();
+        assert!(matches!(
+            root.as_slice(),
+            [FolderTreeEntry::Folder {
+                path,
+                segment,
+                track_count_under: 2,
+                ..
+            }] if path == "/m/SACD/Opera.iso" && segment == "Opera.iso"
+        ));
+
+        let image = db
+            .list_folder_children("/m/SACD/Opera.iso", false)
+            .unwrap();
+        assert_eq!(image.len(), 2);
+        assert!(matches!(
+            &image[0],
+            FolderTreeEntry::Track { path, segment }
+                if path == "sacd:/m/SACD/Opera.iso#1"
+                    && segment == "001 - Prelude ∕ Dawn"
+        ));
+        assert!(db.list_folder_tracks("/m/SACD", false).unwrap().is_empty());
+        assert_eq!(
+            db.list_folder_tracks("/m/SACD/Opera.iso", false)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            db.list_folder_tracks_recursive("/m/SACD", false)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(db.count_folder_tracks_recursive("/m/SACD", false).unwrap(), 2);
     }
 
     #[test]
@@ -6272,7 +8137,13 @@ mod folder_tree_tests {
         // Folder containing a literal '%' in the filename. Without
         // escape_like_pattern, the '%' would behave as a wildcard and
         // either over-match or fail to match.
-        insert_at(&db, "/m/percent_test/100%.flac", Some(1), Some(1), "Hundred");
+        insert_at(
+            &db,
+            "/m/percent_test/100%.flac",
+            Some(1),
+            Some(1),
+            "Hundred",
+        );
         // A second literal-percent path that should NOT show up under
         // /m/percent_test (different parent).
         insert_at(
@@ -6338,7 +8209,13 @@ mod folder_tree_tests {
         // Expected sort: disc ASC, track ASC, title ASC (NOCASE).
         insert_at(&db, "/m/order/disc2-track1.flac", Some(2), Some(1), "D2T1");
         insert_at(&db, "/m/order/disc1-track2.flac", Some(1), Some(2), "D1T2");
-        insert_at(&db, "/m/order/disc1-track1-bee.flac", Some(1), Some(1), "Bee");
+        insert_at(
+            &db,
+            "/m/order/disc1-track1-bee.flac",
+            Some(1),
+            Some(1),
+            "Bee",
+        );
         insert_at(
             &db,
             "/m/order/disc1-track1-ant.flac",
@@ -6360,9 +8237,15 @@ mod folder_tree_tests {
         // /m/A/album1 has direct tracks t1.flac, t2.flac AND a deeper
         // file at /m/A/album1/Disc 1/t3.flac. The recursive listing
         // must return all three.
-        let tracks = db.list_folder_tracks_recursive("/m/A/album1", false).unwrap();
+        let tracks = db
+            .list_folder_tracks_recursive("/m/A/album1", false)
+            .unwrap();
         let titles: Vec<_> = tracks.iter().map(|track| track.title.clone()).collect();
-        assert_eq!(tracks.len(), 3, "recursive listing must include subfolder tracks");
+        assert_eq!(
+            tracks.len(),
+            3,
+            "recursive listing must include subfolder tracks"
+        );
         assert!(titles.contains(&"Alpha".to_string()));
         assert!(titles.contains(&"Beta".to_string()));
         assert!(titles.contains(&"Gamma".to_string()));
@@ -6401,11 +8284,25 @@ mod folder_tree_tests {
         // Folder containing literal '_' that LIKE would otherwise treat
         // as a single-character wildcard. With escape_like_pattern, the
         // sibling /m/percentXtest must not contaminate the result set.
-        insert_at(&db, "/m/percent_test/100%.flac", Some(1), Some(1), "Hundred");
-        insert_at(&db, "/m/percent_test/inner/200.flac", Some(1), Some(1), "TwoHundred");
+        insert_at(
+            &db,
+            "/m/percent_test/100%.flac",
+            Some(1),
+            Some(1),
+            "Hundred",
+        );
+        insert_at(
+            &db,
+            "/m/percent_test/inner/200.flac",
+            Some(1),
+            Some(1),
+            "TwoHundred",
+        );
         insert_at(&db, "/m/percentXtest/decoy.flac", Some(1), Some(1), "Decoy");
 
-        let tracks = db.list_folder_tracks_recursive("/m/percent_test", false).unwrap();
+        let tracks = db
+            .list_folder_tracks_recursive("/m/percent_test", false)
+            .unwrap();
         let titles: Vec<_> = tracks.iter().map(|track| track.title.clone()).collect();
         assert_eq!(tracks.len(), 2, "underscore in parent path must be escaped");
         assert!(titles.contains(&"Hundred".to_string()));
@@ -6419,7 +8316,9 @@ mod folder_tree_tests {
         // Vec rather than an error — frontend treats empty as "nothing
         // to play/queue" and skips the toast.
         let (_tmp, db) = fresh_db();
-        let tracks = db.list_folder_tracks_recursive("/m/does/not/exist", false).unwrap();
+        let tracks = db
+            .list_folder_tracks_recursive("/m/does/not/exist", false)
+            .unwrap();
         assert!(tracks.is_empty());
     }
 
@@ -6479,7 +8378,11 @@ mod folder_tree_tests {
 
         // --- list_folder_tracks (direct children) ------------------
         let direct_all = db.list_folder_tracks("/m/net/album", false).unwrap();
-        assert_eq!(direct_all.len(), 1, "net1.flac must appear when exclude=false");
+        assert_eq!(
+            direct_all.len(),
+            1,
+            "net1.flac must appear when exclude=false"
+        );
 
         let direct_filtered = db.list_folder_tracks("/m/net/album", true).unwrap();
         assert!(
@@ -6493,11 +8396,13 @@ mod folder_tree_tests {
 
         // --- list_folder_tracks_recursive --------------------------
         let recursive_all = db.list_folder_tracks_recursive("/m/net", false).unwrap();
-        assert_eq!(recursive_all.len(), 2, "both net tracks visible when exclude=false");
+        assert_eq!(
+            recursive_all.len(),
+            2,
+            "both net tracks visible when exclude=false"
+        );
 
-        let recursive_filtered = db
-            .list_folder_tracks_recursive("/m/net", true)
-            .unwrap();
+        let recursive_filtered = db.list_folder_tracks_recursive("/m/net", true).unwrap();
         assert!(
             recursive_filtered.is_empty(),
             "network tracks leaked into recursive listing when exclude=true"
@@ -6505,9 +8410,7 @@ mod folder_tree_tests {
 
         // Recursive listing on a non-network root still returns its
         // tracks even when exclude=true.
-        let recursive_local = db
-            .list_folder_tracks_recursive("/m/local", true)
-            .unwrap();
+        let recursive_local = db.list_folder_tracks_recursive("/m/local", true).unwrap();
         assert_eq!(recursive_local.len(), 2);
     }
 
@@ -6634,6 +8537,47 @@ mod sidecar_position_tests {
     }
 
     #[test]
+    fn reindexing_a_track_keeps_its_rowid_so_playlists_survive_a_rescan() {
+        let (_tmp, db) = fresh_db();
+        let ids = seed_local_tracks(&db, 1);
+        db.add_local_track_to_playlist(7, ids[0], 0).unwrap();
+        assert_eq!(local_positions(&db, 7).len(), 1);
+
+        // What a rescan does: the same file, re-extracted, inserted again.
+        let mut again = LocalTrack::default();
+        again.file_path = "/t/track0.flac".into();
+        again.title = "T0 (retagged)".into();
+        again.artist = "A".into();
+        again.album = "B".into();
+        let id_after = db.insert_track(&again).unwrap();
+
+        assert_eq!(
+            id_after, ids[0],
+            "re-indexing must UPDATE in place; a new rowid orphans every \
+             playlist_local_tracks row that points at the old one"
+        );
+        assert_eq!(
+            db.get_track(ids[0]).unwrap().unwrap().title,
+            "T0 (retagged)",
+            "the row must still take the fresh metadata"
+        );
+
+        let rows = local_positions(&db, 7);
+        assert_eq!(rows.len(), 1, "the playlist row must survive");
+        let resolvable: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM playlist_local_tracks p
+                 JOIN local_tracks t ON t.id = p.local_track_id
+                 WHERE p.qobuz_playlist_id = 7",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(resolvable, 1, "and it must still resolve to a track");
+    }
+
+    #[test]
     fn next_position_empty_sidecar_appends_after_qobuz_block() {
         let (_tmp, db) = fresh_db();
         assert_eq!(db.next_playlist_sidecar_position(7, 50).unwrap(), 50);
@@ -6737,5 +8681,484 @@ mod sidecar_position_tests {
         db.add_local_track_to_playlist(7, ids[1], 0).unwrap();
         assert!(!db.heal_playlist_sidecar_positions(7, 5).unwrap().is_empty());
         assert!(db.heal_playlist_sidecar_positions(7, 5).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod remote_union_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// A local library with one album, plus a shared remote mirror holding one
+    /// Jellyfin album and one Subsonic album.
+    fn bench() -> (TempDir, LibraryDatabase, std::path::PathBuf) {
+        let tmp = TempDir::new().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
+
+        let mut t = LocalTrack::default();
+        t.file_path = "/m/local/01.flac".into();
+        t.title = "Local One".into();
+        t.album = "Local Album".into();
+        t.album_artist = Some("Local Artist".into());
+        t.artist = "Local Artist".into();
+        t.album_group_key = "/m/local".into();
+        t.album_group_title = "Local Album".into();
+        t.duration_secs = 100;
+        t.format = crate::AudioFormat::Flac;
+        t.bit_depth = Some(16);
+        t.sample_rate = 44100.0;
+        db.insert_track(&t).unwrap();
+
+        // The shared mirror, written with plain SQL so this test does not
+        // depend on `qbz-media-cache` (which depends on nothing here, and must
+        // keep not depending on it).
+        let remote = tmp.path().join("remote_cache.db");
+        let conn = rusqlite::Connection::open(&remote).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE remote_cache_tracks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL,
+                item_id TEXT NOT NULL, server_id TEXT NOT NULL DEFAULT '',
+                library_id TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
+                artist TEXT NOT NULL DEFAULT '', album_artist TEXT NOT NULL DEFAULT '',
+                album TEXT NOT NULL DEFAULT '', album_id TEXT NOT NULL DEFAULT '',
+                track_number INTEGER, disc_number INTEGER,
+                duration_ms INTEGER NOT NULL DEFAULT 0, year INTEGER, genre TEXT,
+                container TEXT NOT NULL DEFAULT '', codec TEXT, bit_depth INTEGER,
+                sample_rate_hz INTEGER, channels INTEGER, bitrate_kbps INTEGER,
+                artwork_token TEXT, collection_artwork_token TEXT,
+                size_bytes INTEGER, updated_at INTEGER NOT NULL,
+                UNIQUE (source, item_id));",
+        )
+        .unwrap();
+        let add = |source: &str, item: &str, album: &str, album_id: &str, depth: i64| {
+            conn.execute(
+                "INSERT INTO remote_cache_tracks
+                   (source,item_id,title,artist,album_artist,album,album_id,
+                    duration_ms,container,bit_depth,sample_rate_hz,updated_at)
+                 VALUES (?1,?2,?3,?4,?4,?5,?6,120000,'flac',?7,96000,1)",
+                rusqlite::params![
+                    source,
+                    item,
+                    format!("{item} title"),
+                    "Remote Artist",
+                    album,
+                    album_id,
+                    depth
+                ],
+            )
+            .unwrap();
+        };
+        add("jellyfin", "jf-1", "Jellyfin Album", "jf-alb", 24);
+        add("jellyfin", "jf-2", "Jellyfin Album", "jf-alb", 24);
+        add("subsonic", "sub-1", "Subsonic Album", "sub-alb", 16);
+        (tmp, db, remote)
+    }
+
+    fn titles(
+        db: &LibraryDatabase,
+        remote: Option<&std::path::Path>,
+        sources: &[&str],
+    ) -> Vec<String> {
+        let page = db
+            .get_albums_metadata_page(
+                0,
+                50,
+                None,
+                "title",
+                "asc",
+                true,
+                false,
+                None,
+                remote,
+                sources,
+                crate::album_grouping::AlbumGroupMode::Folder,
+            )
+            .unwrap();
+        let mut v: Vec<String> = page.albums.iter().map(|a| a.title.clone()).collect();
+        v.sort();
+        v
+    }
+
+    /// Both mirrors' albums appear beside the local ones, in ONE result set —
+    /// which is the entire point of unioning rather than concatenating pages.
+    #[test]
+    fn enabled_remote_albums_join_the_local_ones() {
+        let (_t, db, remote) = bench();
+        assert_eq!(
+            titles(&db, Some(&remote), &["jellyfin", "subsonic"]),
+            vec!["Jellyfin Album", "Local Album", "Subsonic Album"]
+        );
+    }
+
+    /// Turning ONE source off hides ITS rows and leaves the other's alone. The
+    /// mirror is shared, so this is a filter rather than a detach — and getting
+    /// it wrong takes the wrong server's music off the screen.
+    #[test]
+    fn disabling_one_source_leaves_the_other_visible() {
+        let (_t, db, remote) = bench();
+        assert_eq!(
+            titles(&db, Some(&remote), &["subsonic"]),
+            vec!["Local Album", "Subsonic Album"]
+        );
+        assert_eq!(
+            titles(&db, Some(&remote), &["jellyfin"]),
+            vec!["Jellyfin Album", "Local Album"]
+        );
+    }
+
+    /// No source enabled, or no mirror on disk: local-only, and NOT an error.
+    /// Refusing to list any albums because a server is off would turn "Jellyfin
+    /// is unplugged" into "your library is empty".
+    #[test]
+    fn no_enabled_sources_is_local_only_not_a_failure() {
+        let (_t, db, remote) = bench();
+        assert_eq!(titles(&db, Some(&remote), &[]), vec!["Local Album"]);
+        assert_eq!(titles(&db, None, &["jellyfin"]), vec!["Local Album"]);
+        let missing = std::path::PathBuf::from("/nonexistent/remote_cache.db");
+        assert_eq!(
+            titles(&db, Some(&missing), &["jellyfin"]),
+            vec!["Local Album"]
+        );
+    }
+
+    /// The two tracks of the Jellyfin album collapse into ONE card, and the
+    /// quality the server reported survives the aggregation. A grouping bug
+    /// here shows as duplicate cards, which is what the album_id key prevents.
+    #[test]
+    fn a_remote_album_aggregates_its_tracks_and_keeps_its_quality() {
+        let (_t, db, remote) = bench();
+        let page = db
+            .get_albums_metadata_page(
+                0,
+                50,
+                None,
+                "title",
+                "asc",
+                true,
+                false,
+                None,
+                Some(&remote),
+                &["jellyfin"],
+                crate::album_grouping::AlbumGroupMode::Folder,
+            )
+            .unwrap();
+        let jf = page
+            .albums
+            .iter()
+            .find(|a| a.title == "Jellyfin Album")
+            .expect("the jellyfin album");
+        assert_eq!(
+            jf.track_count, 2,
+            "the two tracks did not group into one card"
+        );
+        assert_eq!(jf.bit_depth, Some(24));
+        assert_eq!(jf.sample_rate, 96000.0);
+        assert_eq!(jf.source, "jellyfin", "the row lost its source word");
+        assert_eq!(jf.sources, vec!["jellyfin"]);
+        assert_eq!(
+            jf.identity_tracks.len(),
+            2,
+            "cross-source association evidence was not published"
+        );
+        // The group key is PREFIXED, which is what lets the source claim the
+        // card when it comes back with no source word attached.
+        assert_eq!(jf.id, "jellyfin:jf-alb");
+        assert_eq!(page.total, 2, "the count disagrees with the page it counts");
+    }
+
+    /// The interpolated filter is validated, not escaped. Anything that is not
+    /// plain lowercase drops out, and an all-invalid list shows NOTHING rather
+    /// than everything — the safe direction for a predicate that reaches SQL.
+    #[test]
+    fn the_source_filter_rejects_anything_that_is_not_a_source_word() {
+        assert_eq!(
+            remote_source_filter(&["jellyfin"]),
+            "source IN ('jellyfin')"
+        );
+        assert_eq!(
+            remote_source_filter(&["jellyfin", "subsonic"]),
+            "source IN ('jellyfin', 'subsonic')"
+        );
+        assert_eq!(remote_source_filter(&[]), "0");
+        assert_eq!(
+            remote_source_filter(&["x'; DROP TABLE local_tracks; --"]),
+            "0"
+        );
+        assert_eq!(remote_source_filter(&["Jellyfin"]), "0");
+        assert_eq!(remote_source_filter(&[""]), "0");
+        // One bad entry does not smuggle itself in beside a good one.
+        assert_eq!(
+            remote_source_filter(&["jellyfin", "'; --"]),
+            "source IN ('jellyfin')"
+        );
+    }
+}
+
+#[cfg(test)]
+mod audio_format_roundtrip_tests {
+    use super::*;
+
+    /// `parse_format` is the inverse of `AudioFormat`'s `Display`, and the
+    /// scanner writes exactly what `Display` produces. This asserts the pair
+    /// for EVERY variant rather than for one format, because the defect it
+    /// guards is structural: `"DSD"` had no arm, so every DSD row read back
+    /// as `Unknown` — the format printed "UNKNOWN", the quality badge said CD
+    /// and the detail said "1-bit / 2822.4 kHz". A fold to `Unknown` is a
+    /// VALID answer, which is why nothing else caught it.
+    ///
+    /// Adding a variant to `AudioFormat` without an arm here fails this test
+    /// instead of shipping the same silent loss again.
+    #[test]
+    fn every_variant_survives_the_display_parse_round_trip() {
+        let all = [
+            AudioFormat::Flac,
+            AudioFormat::Alac,
+            AudioFormat::Wav,
+            AudioFormat::Aiff,
+            AudioFormat::Ape,
+            AudioFormat::Mp3,
+            AudioFormat::Dsd,
+        ];
+        for f in all {
+            let written = f.to_string();
+            let read_back = LibraryDatabase::parse_format(&written);
+            assert_eq!(
+                read_back, f,
+                "AudioFormat::{f:?} is stored as {written:?} and read back as \
+                 {read_back:?} — parse_format is missing its arm"
+            );
+        }
+    }
+
+    /// The `Unknown` fold stays reachable for genuinely unknown words; it just
+    /// must not be where a KNOWN format lands.
+    #[test]
+    fn an_unknown_word_still_folds_to_unknown() {
+        assert_eq!(LibraryDatabase::parse_format("opus"), AudioFormat::Unknown);
+        assert_eq!(LibraryDatabase::parse_format(""), AudioFormat::Unknown);
+    }
+
+    /// The scanner's own casing must not matter (rows written by older builds).
+    #[test]
+    fn parsing_is_case_insensitive() {
+        assert_eq!(LibraryDatabase::parse_format("dsd"), AudioFormat::Dsd);
+        assert_eq!(LibraryDatabase::parse_format("Dsd"), AudioFormat::Dsd);
+    }
+}
+
+#[cfg(test)]
+mod metadata_editor_transaction_tests {
+    use super::*;
+
+    fn update(id: i64, title: &str) -> TrackMetadataUpdateFull {
+        TrackMetadataUpdateFull {
+            id,
+            title: title.to_string(),
+            artist: "Artist".to_string(),
+            album: "Album".to_string(),
+            album_artist: Some("Artist".to_string()),
+            album_group_title: "Album".to_string(),
+            track_number: Some(1),
+            disc_number: Some(1),
+            year: Some(2026),
+            genre: Some("Rock".to_string()),
+            catalog_number: Some("CAT-1".to_string()),
+        }
+    }
+
+    #[test]
+    fn metadata_and_artwork_update_only_exact_rows_and_rollback_on_stale_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
+        let first = db
+            .insert_track(&LocalTrack {
+                file_path: "/music/album/01.flac".to_string(),
+                title: "One".to_string(),
+                artist: "Artist".to_string(),
+                album: "Album".to_string(),
+                album_group_key: "/music/album".to_string(),
+                album_group_title: "Album".to_string(),
+                artwork_path: Some("/art/disc-one.jpg".to_string()),
+                ..LocalTrack::default()
+            })
+            .unwrap();
+        let second = db
+            .insert_track(&LocalTrack {
+                file_path: "/music/album/02.flac".to_string(),
+                title: "Two".to_string(),
+                artist: "Artist".to_string(),
+                album: "Album".to_string(),
+                album_group_key: "/music/album".to_string(),
+                album_group_title: "Album".to_string(),
+                artwork_path: Some("/art/disc-two.jpg".to_string()),
+                ..LocalTrack::default()
+            })
+            .unwrap();
+
+        db.update_tracks_metadata_and_artwork_by_id(
+            &[update(first, "Edited")],
+            Some("/art/new.jpg"),
+        )
+        .unwrap();
+        let first_row: (String, String) = db
+            .conn
+            .query_row(
+                "SELECT title, artwork_path FROM local_tracks WHERE id = ?1",
+                params![first],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let second_art: String = db
+            .conn
+            .query_row(
+                "SELECT artwork_path FROM local_tracks WHERE id = ?1",
+                params![second],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            first_row,
+            ("Edited".to_string(), "/art/new.jpg".to_string())
+        );
+        assert_eq!(second_art, "/art/disc-two.jpg");
+
+        let error = db.update_tracks_metadata_and_artwork_by_id(
+            &[update(first, "Must Roll Back"), update(i64::MAX, "Missing")],
+            Some("/art/should-not-land.jpg"),
+        );
+        assert!(error.is_err());
+        let after: (String, String) = db
+            .conn
+            .query_row(
+                "SELECT title, artwork_path FROM local_tracks WHERE id = ?1",
+                params![first],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(after, first_row);
+    }
+}
+
+#[cfg(test)]
+mod artist_image_cache_tests {
+    use super::*;
+
+    #[test]
+    fn remote_refresh_preserves_custom_art_and_negative_results_are_fresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
+
+        db.cache_artist_image_with_canonical(
+            "Beyonce",
+            None,
+            "custom",
+            Some("/pictures/beyonce.jpg"),
+            Some("Beyoncé"),
+        )
+        .unwrap();
+        db.cache_artist_image_with_canonical(
+            "Beyonce",
+            Some("https://cdn.example/beyonce.jpg"),
+            "qobuz",
+            None,
+            None,
+        )
+        .unwrap();
+        let image = db.get_artist_image("Beyonce").unwrap().unwrap();
+        assert_eq!(
+            image.custom_image_path.as_deref(),
+            Some("/pictures/beyonce.jpg")
+        );
+        assert_eq!(image.canonical_name.as_deref(), Some("Beyoncé"));
+
+        db.cache_artist_image_with_canonical("No Portrait", None, "miss", None, None)
+            .unwrap();
+        assert!(db
+            .artist_image_resolution_is_fresh("No Portrait", 60)
+            .unwrap());
+        assert!(db
+            .get_artist_image("No Portrait")
+            .unwrap()
+            .unwrap()
+            .image_url
+            .is_none());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod purchase_registry_reachability_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn an_io_error_never_prunes_a_purchase_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
+        let loop_path = tmp.path().join("loop");
+        symlink(&loop_path, &loop_path).unwrap();
+        db.mark_purchase_downloaded(42, Some("album"), loop_path.to_str().unwrap(), 6)
+            .unwrap();
+
+        assert!(db.get_downloaded_purchase_track_ids().unwrap().is_empty());
+        let remaining: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM downloaded_purchases", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(remaining, 1, "I/O errors are unreachable, never missing");
+        crate::reachability::reset_cooldowns();
+    }
+}
+
+#[cfg(test)]
+mod schema_init_concurrency_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn concurrent_opens_serialize_a_legacy_schema_migration() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("library.db");
+        let legacy = Connection::open(&path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE local_sacd_images (
+                    fingerprint TEXT PRIMARY KEY,
+                    image_path TEXT NOT NULL UNIQUE,
+                    image_size_bytes INTEGER NOT NULL,
+                    image_modified_ns INTEGER NOT NULL,
+                    observed_at INTEGER NOT NULL
+                );",
+            )
+            .unwrap();
+        drop(legacy);
+
+        const THREADS: usize = 8;
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles = (0..THREADS)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    LibraryDatabase::open(&path).map(drop)
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+
+        let db = Connection::open(&path).unwrap();
+        let columns: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('local_sacd_images')
+                  WHERE name='parser_revision'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 1);
     }
 }

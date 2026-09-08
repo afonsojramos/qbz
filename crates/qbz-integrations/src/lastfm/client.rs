@@ -791,6 +791,102 @@ impl LastFmClient {
         Ok(albums)
     }
 
+    /// Public `artist.getInfo` lookup used by Local Library's conservative
+    /// portrait enrichment. No Last.fm user session is required; the proxy
+    /// supplies the application key. `autocorrect` is returned to the caller
+    /// as the canonical `name`, but consumers must still validate identity
+    /// before attaching the image to a local tag spelling.
+    pub async fn get_artist_info(&self, artist: &str) -> IntegrationResult<LastFmArtist> {
+        let url = format!("{}/artist.getInfo", LASTFM_PROXY_URL);
+        let response = self
+            .client
+            .post(&url)
+            .json(&json!({
+                "artist": artist,
+                "autocorrect": 1,
+            }))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(IntegrationError::internal(format!(
+                "Last.fm artist.getInfo failed: {text}"
+            )));
+        }
+        let data: serde_json::Value = response.json().await?;
+        if let Some(error) = data.get("error") {
+            return Err(IntegrationError::api(
+                error.as_u64().unwrap_or(0) as u32,
+                data.get("message")
+                    .and_then(|message| message.as_str())
+                    .unwrap_or("Unknown error")
+                    .to_string(),
+            ));
+        }
+        let value = data.get("artist").ok_or_else(|| {
+            IntegrationError::internal("Last.fm returned no artist object".to_string())
+        })?;
+        parse_artist_info(value, artist)
+    }
+
+    /// Public `album.getInfo` lookup used by the local metadata editor for a
+    /// conservative artwork candidate. No Last.fm user session is required;
+    /// the existing proxy supplies the application key.
+    pub async fn get_album_info(
+        &self,
+        artist: &str,
+        album: &str,
+    ) -> IntegrationResult<LastFmAlbum> {
+        let url = format!("{}/album.getInfo", LASTFM_PROXY_URL);
+        let response = self
+            .client
+            .post(&url)
+            .json(&json!({
+                "artist": artist,
+                "album": album,
+                "autocorrect": 1,
+            }))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(IntegrationError::internal(format!(
+                "Last.fm album.getInfo failed: {text}"
+            )));
+        }
+        let data: serde_json::Value = response.json().await?;
+        if let Some(error) = data.get("error") {
+            return Err(IntegrationError::api(
+                error.as_u64().unwrap_or(0) as u32,
+                data.get("message")
+                    .and_then(|message| message.as_str())
+                    .unwrap_or("Unknown error")
+                    .to_string(),
+            ));
+        }
+        let value = data.get("album").ok_or_else(|| {
+            IntegrationError::internal("Last.fm returned no album object".to_string())
+        })?;
+        let name = value
+            .get("name")
+            .and_then(|name| name.as_str())
+            .unwrap_or(album)
+            .to_string();
+        let artist = value
+            .get("artist")
+            .and_then(|artist| artist.as_str())
+            .unwrap_or(artist)
+            .to_string();
+        Ok(LastFmAlbum {
+            name,
+            artist,
+            artist_mbid: None,
+            mbid: extract_mbid(value),
+            image: extract_image(value),
+            playcount: parse_u64(value.get("playcount")),
+        })
+    }
+
     /// user.getTopAlbums — the USER's scrobbled albums (their playcount).
     ///
     /// The "already heard" exclusion set for Recommended Albums. Public read
@@ -900,14 +996,11 @@ fn extract_mbid(value: &serde_json::Value) -> Option<String> {
 
 /// Extract a Unix timestamp from a Last.fm `date.uts` field (string or number).
 fn extract_uts(value: &serde_json::Value) -> Option<i64> {
-    value
-        .get("date")
-        .and_then(|d| d.get("uts"))
-        .and_then(|u| {
-            u.as_str()
-                .and_then(|s| s.parse::<i64>().ok())
-                .or_else(|| u.as_i64())
-        })
+    value.get("date").and_then(|d| d.get("uts")).and_then(|u| {
+        u.as_str()
+            .and_then(|s| s.parse::<i64>().ok())
+            .or_else(|| u.as_i64())
+    })
 }
 
 /// Parse a `u64` that Last.fm may return as a JSON string or number; defaults to 0.
@@ -919,4 +1012,43 @@ fn parse_u64(value: Option<&serde_json::Value>) -> u64 {
                 .or_else(|| v.as_u64())
         })
         .unwrap_or(0)
+}
+
+fn parse_artist_info(
+    value: &serde_json::Value,
+    fallback_name: &str,
+) -> IntegrationResult<LastFmArtist> {
+    Ok(LastFmArtist {
+        name: value
+            .get("name")
+            .and_then(|name| name.as_str())
+            .unwrap_or(fallback_name)
+            .to_string(),
+        mbid: extract_mbid(value),
+        playcount: parse_u64(value.get("stats").and_then(|stats| stats.get("playcount"))),
+        image: extract_image(value),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn artist_info_keeps_autocorrected_identity_and_largest_image() {
+        let value = serde_json::json!({
+            "name": "Beyoncé",
+            "mbid": "859d0860-d480-4efd-970c-c05d5f1776b8",
+            "stats": { "playcount": "42" },
+            "image": [
+                { "#text": "https://img/small.jpg", "size": "small" },
+                { "#text": "https://img/large.jpg", "size": "extralarge" }
+            ]
+        });
+        let parsed = parse_artist_info(&value, "Beyonce").unwrap();
+        assert_eq!(parsed.name, "Beyoncé");
+        assert_eq!(parsed.playcount, 42);
+        assert_eq!(parsed.image.as_deref(), Some("https://img/large.jpg"));
+        assert!(parsed.mbid.is_some());
+    }
 }

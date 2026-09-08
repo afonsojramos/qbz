@@ -3,29 +3,45 @@
 //! Opens the SAME `offline_settings.db` Tauri's `src-tauri/src/offline/mod.rs`
 //! uses (identical creation SQL + additive migrations), so the file stays
 //! frontend-portable like `library.db`/`index.db`. This shared store exposes
-//! only the subset the offline-MODE port consumes:
+//! the subset the current desktop frontends consume:
 //!
 //! - `manual_offline_mode` — the induced-offline flag (persisted; D1).
 //! - `show_network_folders_in_manual_offline` — network-mount policy (D9).
 //! - `pre_offline_stream_first_track` — the issue #279 snapshot of
 //!   `audio_settings.stream_first_track` taken on entering induced offline.
+//! - the Tauri-era immediate/accumulated scrobbling policy flags.
 //!
-//! The legacy columns/tables (cast/scrobbling flags, `pending_playlist_sync`,
-//! `scrobble_queue`, `cache_limit_bytes`) are still CREATED for byte-level
-//! compatibility with the Tauri schema, but get no API here: the dead toggles
-//! are not ported (spec §1) and offline playlist creation is replaced by
-//! first-class local playlists (D7/D8).
+//! The remaining legacy columns/tables (`allow_cast_while_offline`,
+//! `pending_playlist_sync`, `cache_limit_bytes`) are still CREATED for
+//! byte-level compatibility with the Tauri schema. Offline playlist creation
+//! is replaced by first-class local playlists (D7/D8).
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// The offline-mode settings the port consumes.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OfflineModeSettings {
     pub manual_offline_mode: bool,
     pub show_network_folders_in_manual_offline: bool,
+    /// Permit network submission while induced/manual offline is active.
+    pub allow_immediate_scrobbling: bool,
+    /// Retain scrobbles when they cannot be sent and flush them later.
+    pub allow_accumulated_scrobbling: bool,
+}
+
+impl Default for OfflineModeSettings {
+    fn default() -> Self {
+        Self {
+            manual_offline_mode: false,
+            show_network_folders_in_manual_offline: false,
+            // Historical Tauri defaults (f9ca1bd25).
+            allow_immediate_scrobbling: false,
+            allow_accumulated_scrobbling: true,
+        }
+    }
 }
 
 /// One row of the Last.fm offline scrobble queue (`scrobble_queue`). Mirrors
@@ -120,13 +136,17 @@ impl OfflineModeStore {
         self.conn
             .query_row(
                 "SELECT manual_offline_mode,
-                        COALESCE(show_network_folders_in_manual_offline, 0)
+                        COALESCE(show_network_folders_in_manual_offline, 0),
+                        COALESCE(allow_immediate_scrobbling, 0),
+                        COALESCE(allow_accumulated_scrobbling, 1)
                  FROM offline_settings WHERE id = 1",
                 [],
                 |row| {
                     Ok(OfflineModeSettings {
                         manual_offline_mode: row.get::<_, i64>(0)? != 0,
                         show_network_folders_in_manual_offline: row.get::<_, i64>(1)? != 0,
+                        allow_immediate_scrobbling: row.get::<_, i64>(2)? != 0,
+                        allow_accumulated_scrobbling: row.get::<_, i64>(3)? != 0,
                     })
                 },
             )
@@ -150,6 +170,38 @@ impl OfflineModeStore {
                 params![enabled as i64],
             )
             .map_err(|e| format!("Failed to set show network folders in manual offline: {}", e))?;
+        Ok(())
+    }
+
+    /// Tauri `set_allow_immediate_scrobbling`, with the later a68230fad
+    /// mutual-exclusion rule made atomic instead of two UI-side writes.
+    pub fn set_allow_immediate_scrobbling(&self, enabled: bool) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE offline_settings
+                 SET allow_immediate_scrobbling = ?1,
+                     allow_accumulated_scrobbling = CASE
+                         WHEN ?1 != 0 THEN 0 ELSE allow_accumulated_scrobbling END
+                 WHERE id = 1",
+                params![enabled as i64],
+            )
+            .map_err(|e| format!("Failed to set allow immediate scrobbling: {}", e))?;
+        Ok(())
+    }
+
+    /// Tauri `set_allow_accumulated_scrobbling`, with the later a68230fad
+    /// mutual-exclusion rule made atomic instead of two UI-side writes.
+    pub fn set_allow_accumulated_scrobbling(&self, enabled: bool) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE offline_settings
+                 SET allow_accumulated_scrobbling = ?1,
+                     allow_immediate_scrobbling = CASE
+                         WHEN ?1 != 0 THEN 0 ELSE allow_immediate_scrobbling END
+                 WHERE id = 1",
+                params![enabled as i64],
+            )
+            .map_err(|e| format!("Failed to set allow accumulated scrobbling: {}", e))?;
         Ok(())
     }
 
@@ -313,6 +365,8 @@ mod tests {
         let settings = store.get_settings().unwrap();
         assert!(!settings.manual_offline_mode);
         assert!(!settings.show_network_folders_in_manual_offline);
+        assert!(!settings.allow_immediate_scrobbling);
+        assert!(settings.allow_accumulated_scrobbling);
         assert_eq!(store.get_pre_offline_stream_first_track().unwrap(), None);
 
         let _ = std::fs::remove_dir_all(dir);
@@ -343,6 +397,30 @@ mod tests {
                 .unwrap()
                 .show_network_folders_in_manual_offline
         );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn scrobbling_policies_round_trip_and_are_mutually_exclusive() {
+        let dir = unique_test_dir("offline-store-scrobble-policy");
+        let store = OfflineModeStore::new_at(&dir).unwrap();
+
+        store.set_allow_immediate_scrobbling(true).unwrap();
+        let settings = store.get_settings().unwrap();
+        assert!(settings.allow_immediate_scrobbling);
+        assert!(!settings.allow_accumulated_scrobbling);
+
+        // Turning a mode OFF does not silently opt into the other one.
+        store.set_allow_immediate_scrobbling(false).unwrap();
+        let settings = store.get_settings().unwrap();
+        assert!(!settings.allow_immediate_scrobbling);
+        assert!(!settings.allow_accumulated_scrobbling);
+
+        store.set_allow_accumulated_scrobbling(true).unwrap();
+        let settings = store.get_settings().unwrap();
+        assert!(!settings.allow_immediate_scrobbling);
+        assert!(settings.allow_accumulated_scrobbling);
 
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -420,6 +498,8 @@ mod tests {
         let settings = store.get_settings().unwrap();
         assert!(settings.manual_offline_mode, "Tauri-era flag must survive");
         assert!(!settings.show_network_folders_in_manual_offline);
+        assert!(!settings.allow_immediate_scrobbling);
+        assert!(settings.allow_accumulated_scrobbling);
 
         let _ = std::fs::remove_dir_all(dir);
     }

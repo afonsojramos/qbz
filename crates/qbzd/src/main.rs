@@ -5,6 +5,9 @@ mod api;
 mod cli;
 mod config;
 mod daemon;
+mod events_bridge;
+mod hooks;
+mod listen_log_engine;
 mod lock;
 mod login;
 mod mpris;
@@ -223,6 +226,8 @@ enum SettingsCmd {
         #[arg(long)] dry_run: bool,
     },
     Show { #[arg(long)] json: bool },
+    /// List canonical ALSA playback-volume controls for the selected route
+    MixerControls { #[arg(long)] json: bool },
     Set  { key: String, value: String },
 }
 
@@ -256,6 +261,9 @@ enum ConfigCmd { Path, Show { #[arg(long)] json: bool } }
 
 #[tokio::main]
 async fn main() {
+    // Install the rustls process-level `CryptoProvider`
+    qbz_app::ensure_crypto_provider();
+
     let cli = Cli::parse();
     let code = match cli.cmd {
         Cmd::Version { json } => {
@@ -499,6 +507,7 @@ async fn main() {
             let roots = login_roots();
             match cmd {
                 SettingsCmd::Show { json } => cli::settings::show(json, &roots),
+                SettingsCmd::MixerControls { json } => cli::settings::mixer_controls(json, &roots),
                 SettingsCmd::Set { key, value } => cli::settings::set(&roots, &key, &value),
                 SettingsCmd::Export {
                     file,
@@ -557,6 +566,7 @@ async fn main() {
             tui::run(roots).await
         }
     };
+    log::logger().flush();
     std::process::exit(code);
 }
 

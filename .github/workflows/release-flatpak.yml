@@ -1,14 +1,10 @@
-# Flatpak bundle for GitHub Releases — Slint binary (crates/ workspace).
+# Flatpak bundle for GitHub Releases — Qt frontend.
 #
-# Rewritten 2026-07-02 for the Tauri -> Slint migration (v2.0). Builds
-# packaging/flatpak/com.blitzfc.qbz.yml (network manifest) with
-# flatpak-builder and attaches the .flatpak bundle to the Release.
-# Flathub proper is a separate repo/manifest updated at tag time via
-# scripts/update-flathub.sh (offline sources).
-#
-# The cargo build runs on the HOST's resources even though it happens
-# inside the flatpak sandbox, so this runner needs the same swap headroom
-# as release-linux.yml (qbz_ui rustc peak ~30 GB).
+# Rewritten 2026-08-25 for the Slint -> Qt frontend switch: the bundle is a
+# REPACK of the bare binary from the shared build-qt-linux.yml on the KDE
+# runtime (org.kde.Platform 6.9 provides Qt). No cargo inside flatpak-builder,
+# no swap ceremony. Same shape as the Flathub manifest, which consumes the
+# published release tarball instead.
 
 name: release-flatpak
 
@@ -16,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Optional release tag to build (e.g. v2.0.0). Empty = build HEAD, no Release publish."
+        description: "Optional release tag to build (e.g. v2.1.0). Empty = build HEAD, no Release publish."
         required: false
         type: string
   push:
@@ -28,15 +24,46 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  build:
+    uses: ./.github/workflows/build-qt-linux.yml
+    with:
+      arch: x86_64
+      source_ref: ${{ inputs.tag || github.ref }}
+
+  # qbzd rides in the bundle too (same as deb/rpm). Slint-free, minutes-class.
+  build-qbzd:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates -> target
+          shared-key: qbzd-linux-x86_64
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/pre-release' }}
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libjack-jackd2-dev libdbus-1-dev libssl-dev
+      - run: cargo build --release --manifest-path crates/Cargo.toml -p qbzd
+      - uses: actions/upload-artifact@v7
+        with:
+          name: qbzd-linux-x86_64-flatpak
+          path: crates/target/release/qbzd
+          retention-days: 7
+
   build-flatpak:
+    needs: [build, build-qbzd]
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 60
     permissions:
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: Resolve release version
@@ -65,6 +92,17 @@ jobs:
             exit 1
           fi
 
+      - name: Assert Cargo.toml version matches requested tag
+        if: startsWith(github.ref, 'refs/tags/') || inputs.tag != ''
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          CARGO_VERSION="$(grep -m1 '^version = ' crates/Cargo.toml | sed 's/version = "\(.*\)"/\1/')"
+          if [[ "$CARGO_VERSION" != "$VERSION" ]]; then
+            echo "::error::crates/Cargo.toml workspace version ($CARGO_VERSION) != requested version ($VERSION)."
+            exit 1
+          fi
+
       # Keep the metainfo's top <release> entry honest (version + date).
       - name: Sync metainfo release entry
         if: steps.release.outputs.version != ''
@@ -86,35 +124,40 @@ jobs:
           p.write_text(text, encoding="utf-8")
           PY
 
-      - name: Free disk space and add swap
+      - name: Download bare binary
+        uses: actions/download-artifact@v8
+        with:
+          name: qbz-linux-x86_64
+          path: packaging/flatpak/payload
+      - name: Download qbzd
+        uses: actions/download-artifact@v8
+        with:
+          name: qbzd-linux-x86_64-flatpak
+          path: packaging/flatpak/payload
+
+      - name: Stage payload
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
-            /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift \
-            /usr/local/lib/node_modules || true
-          sudo docker system prune -af || true
-          if sudo fallocate -l 18G /swap_extra; then
-            sudo chmod 600 /swap_extra
-            sudo mkswap /swap_extra
-            sudo swapon /swap_extra
-          else
-            echo "::warning::could not allocate extra swap; build may OOM"
-          fi
-          free -h
+          set -euo pipefail
+          P=packaging/flatpak/payload
+          chmod +x "$P/qbz" "$P/qbzd"
+          cp packaging/flatpak/com.blitzfc.qbz.desktop "$P/qbz.desktop"
+          cp packaging/flatpak/com.blitzfc.qbz.metainfo.xml "$P/"
+          cp LICENSE "$P/LICENSE"
+          cp -r licenses "$P/licenses"
+          mkdir -p "$P/icons"; cp packaging/icons/{32x32,48x48,64x64,128x128,256x256,512x512}.png "$P/icons/"
+          ls -la "$P"
 
       - name: Install flatpak tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder
+          sudo apt-get install -y flatpak flatpak-builder dbus-daemon
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 
       - name: Install runtimes
         run: |
           flatpak install --user -y --noninteractive flathub \
-            org.gnome.Platform//49 \
-            org.gnome.Sdk//49
-          flatpak install --user -y --noninteractive flathub \
-            org.freedesktop.Sdk.Extension.rust-stable//25.08 \
-            org.freedesktop.Sdk.Extension.llvm20//25.08
+            org.kde.Platform//6.9 \
+            org.kde.Sdk//6.9
 
       - name: Build Flatpak
         id: build_flatpak
@@ -132,11 +175,31 @@ jobs:
           echo "bundle_name=${BUNDLE_NAME}" >> "$GITHUB_OUTPUT"
           ls -la dist
 
+      # Observe flatpak run until the deadline, with a fresh sandbox profile
+      # and private bus. A crash/early exit after core init must still fail.
+      - name: Offscreen smoke (inside the sandbox)
+        run: |
+          set -euo pipefail
+          flatpak install --user -y --noninteractive --bundle "dist/${{ steps.build_flatpak.outputs.bundle_name }}" || \
+            flatpak install --user -y --noninteractive "dist/${{ steps.build_flatpak.outputs.bundle_name }}"
+          python3 scripts/packaging/smoke_release.py com.blitzfc.qbz \
+            --flatpak --seconds 60 --log smoke.log
+
+      - name: Upload deployed startup evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qbz-flatpak-smoke
+          path: smoke.log*
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Upload Flatpak bundle
         uses: actions/upload-artifact@v7
         with:
           name: qbz-flatpak
           path: dist/${{ steps.build_flatpak.outputs.bundle_name }}
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 7 }}
 
       - name: Publish GitHub Release Asset
         if: startsWith(github.ref, 'refs/tags/')

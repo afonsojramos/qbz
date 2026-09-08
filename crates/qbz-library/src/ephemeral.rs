@@ -32,8 +32,34 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::{cue_to_tracks, CueParser, LibraryError, LibraryScanner, LocalTrack, MetadataExtractor};
+use crate::{
+    cue_to_tracks, AlbumTagSidecar, CueParser, LibraryError, LibraryScanner, LocalTrack,
+    MetadataExtractor,
+};
 use serde::Serialize;
+
+fn should_expand_cue(cue: &crate::CueSheet) -> bool {
+    cue.is_single_file_image()
+}
+
+fn apply_sidecar_override(
+    track: &mut LocalTrack,
+    cache: &mut HashMap<PathBuf, Option<AlbumTagSidecar>>,
+) {
+    let own_directory = Path::new(&track.file_path).parent().map(Path::to_path_buf);
+    let grouped_directory = (!track.album_group_key.trim().is_empty())
+        .then(|| PathBuf::from(&track.album_group_key))
+        .filter(|path| path.is_dir());
+    for directory in grouped_directory.into_iter().chain(own_directory) {
+        let sidecar = cache
+            .entry(directory.clone())
+            .or_insert_with(|| crate::read_album_sidecar(&directory).unwrap_or(None));
+        if let Some(sidecar) = sidecar.as_ref() {
+            crate::apply_sidecar_to_track(track, sidecar);
+            return;
+        }
+    }
+}
 
 /// Floor for synthetic ephemeral track ids. Any id at or above this
 /// value is an ephemeral track; below it is a DB row id. Set high
@@ -145,6 +171,7 @@ impl EphemeralLibraryState {
         // share the same parent directory.
         let mut album_artwork_cache: HashMap<String, Option<String>> = HashMap::new();
         let mut folder_artwork_cache: HashMap<PathBuf, Option<String>> = HashMap::new();
+        let mut sidecar_cache: HashMap<PathBuf, Option<AlbumTagSidecar>> = HashMap::new();
 
         // Audio files referenced by CUE sheets. We index those audio files
         // through the CUE path (one logical "album" file gets exploded
@@ -156,6 +183,20 @@ impl EphemeralLibraryState {
         for cue_path in &scan.cue_files {
             match CueParser::parse(cue_path) {
                 Ok(mut cue) => {
+                    // A multi-file CUE is a sidecar for audio that has
+                    // already been split (usually one FILE per TRACK). The
+                    // regular audio loop below is authoritative in that
+                    // layout. Expanding it as though it were one image would
+                    // duplicate every row and bind the virtual entries to an
+                    // arbitrary backing file.
+                    if !should_expand_cue(&cue) {
+                        log::info!(
+                            "[ephemeral] treating multi-file CUE as sidecar ({} files): {}",
+                            cue.audio_file_count(),
+                            cue_path.display()
+                        );
+                        continue;
+                    }
                     let audio_path_raw = Path::new(&cue.audio_file).to_path_buf();
                     let canonical = std::fs::canonicalize(&audio_path_raw)
                         .unwrap_or_else(|_| audio_path_raw.clone());
@@ -214,7 +255,7 @@ impl EphemeralLibraryState {
                     let mut cue_tracks =
                         cue_to_tracks(&cue, properties.duration_secs, format, &properties);
                     if cue_tracks.is_empty() {
-                        log::warn!("[ephemeral] CUE produced no tracks: {}", cue_path.display());
+                        log::warn!("[ephemeral] CUE produced no tracks");
                         skipped_files += 1;
                         continue;
                     }
@@ -235,9 +276,10 @@ impl EphemeralLibraryState {
                         let mut found =
                             MetadataExtractor::extract_artwork(&canonical, &artwork_cache);
                         if found.is_none() {
-                            if let Some(folder_art) =
-                                MetadataExtractor::find_folder_artwork(&canonical, cue.title.as_deref())
-                            {
+                            if let Some(folder_art) = MetadataExtractor::find_folder_artwork(
+                                &canonical,
+                                cue.title.as_deref(),
+                            ) {
                                 found = MetadataExtractor::cache_artwork_file(
                                     Path::new(&folder_art),
                                     &artwork_cache,
@@ -249,6 +291,7 @@ impl EphemeralLibraryState {
                     };
 
                     for mut track in cue_tracks.drain(..) {
+                        apply_sidecar_override(&mut track, &mut sidecar_cache);
                         track.id = inner.next_id;
                         inner.next_id += 1;
                         track.source = Some("ephemeral".to_string());
@@ -259,19 +302,77 @@ impl EphemeralLibraryState {
                     cue_referenced_audio.insert(canonical);
                 }
                 Err(e) => {
-                    log::warn!("[ephemeral] failed to parse CUE {}: {}", cue_path.display(), e);
+                    log::warn!("[ephemeral] failed to parse CUE: {}", e);
                     skipped_files += 1;
                 }
             }
         }
 
-        for audio_file in &scan.audio_files {
+        // ── THE FILE READS RUN IN PARALLEL; EVERYTHING ELSE STAYS SERIAL ──
+        //
+        // Opening a folder of 247 FLACs on a NAS took ~15 s between "Scanned"
+        // and "ephemeral opened" (owner's log, 2026-08-22), on what is meant to
+        // be the QUICK way to play something outside the library. The cost is
+        // not computation: it is 247 sequential `canonicalize` + tag-read round
+        // trips over the network, each a few tens of milliseconds, one after
+        // another.
+        //
+        // So only the READS move. The bookkeeping below — the CUE-dedup check,
+        // the APE skip, id assignment, the artwork caches, the push order — is
+        // untouched and still runs in scan order, because ids and ordering are
+        // observable and a parallel loop must not renumber anything.
+        //
+        // `std::thread::scope`, not a new dependency: this is I/O-bound, the
+        // work items are independent, and borrowing `scan.audio_files` across
+        // the scope needs no Arc.
+        let t_probe = std::time::Instant::now();
+        let probed: Vec<(std::path::PathBuf, Result<LocalTrack, LibraryError>)> = {
+            let files: &[std::path::PathBuf] = &scan.audio_files;
+            let workers = std::thread::available_parallelism()
+                .map(|n| n.get().min(8))
+                .unwrap_or(4)
+                .max(1);
+            let chunk = files.len().div_ceil(workers).max(1);
+            let mut out: Vec<Vec<(std::path::PathBuf, Result<LocalTrack, LibraryError>)>> =
+                Vec::new();
+            std::thread::scope(|sc| {
+                let handles: Vec<_> = files
+                    .chunks(chunk)
+                    .map(|part| {
+                        sc.spawn(move || {
+                            part.iter()
+                                .map(|f| {
+                                    let canonical =
+                                        std::fs::canonicalize(f).unwrap_or_else(|_| f.clone());
+                                    (canonical, MetadataExtractor::extract(f))
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                for h in handles {
+                    // A panicking worker must not take the whole open down: the
+                    // chunk is dropped and its files are simply absent, which
+                    // the counters below already report as skipped.
+                    out.push(h.join().unwrap_or_default());
+                }
+            });
+            out.into_iter().flatten().collect()
+        };
+
+        log::info!(
+            "[ephemeral][perf] parallel tag reads: {:?} for {} files",
+            t_probe.elapsed(),
+            probed.len()
+        );
+        let t_rest = std::time::Instant::now();
+        for (audio_file, (canonical_audio, extracted)) in
+            scan.audio_files.iter().zip(probed.into_iter())
+        {
             // Skip audio files that were already exploded into tracks via
             // a CUE sheet — listing them again as a single row would
             // duplicate the album and confuse playback (the CUE-derived
             // track ids are the canonical ones).
-            let canonical_audio =
-                std::fs::canonicalize(audio_file).unwrap_or_else(|_| audio_file.clone());
             if cue_referenced_audio.contains(&canonical_audio) {
                 continue;
             }
@@ -293,8 +394,9 @@ impl EphemeralLibraryState {
                 skipped_files += 1;
                 continue;
             }
-            match MetadataExtractor::extract(audio_file) {
+            match extracted {
                 Ok(mut track) => {
+                    apply_sidecar_override(&mut track, &mut sidecar_cache);
                     track.id = inner.next_id;
                     inner.next_id += 1;
                     track.source = Some("ephemeral".to_string());
@@ -354,6 +456,11 @@ impl EphemeralLibraryState {
             }
         }
 
+        log::info!(
+            "[ephemeral][perf] serial bookkeeping (artwork + ids): {:?}",
+            t_rest.elapsed()
+        );
+
         // Musical order (album, then disc/track/title — same as the DB-backed
         // folder view): the extraction order above is readdir order, which is
         // arbitrary. Ids must FOLLOW the display order because
@@ -396,6 +503,96 @@ impl EphemeralLibraryState {
         })
     }
 
+    /// Install a track list that did NOT come from scanning a directory — a
+    /// CD in the drive, and later a disc image.
+    ///
+    /// `open_folder` cannot serve these: it takes a `&Path`, rejects anything
+    /// that is not a real directory (`:118`), and derives every field by
+    /// reading files off a filesystem. A disc has no filesystem to read.
+    ///
+    /// `label` is what the medium is CALLED (the album title, or "Audio CD"),
+    /// and it is stored where a folder path would be, because everything
+    /// downstream — the pane header, the tab, the persisted-session check —
+    /// asks the session what it is, not where it lives.
+    ///
+    /// Ids are assigned from the SAME synthetic range as a folder session, so
+    /// every playback caller keeps routing them to this store without knowing
+    /// a disc exists.
+    pub fn open_tracks(
+        &self,
+        label: &str,
+        tracks: Vec<LocalTrack>,
+    ) -> Result<EphemeralFolderResult, EphemeralError> {
+        let mut inner = self.inner.lock().map_err(|_| EphemeralError::Lock)?;
+        inner.reset();
+        let mut out = Vec::with_capacity(tracks.len());
+        for mut track in tracks {
+            track.id = inner.next_id;
+            inner.next_id += 1;
+            track.source = Some("ephemeral".to_string());
+            inner.tracks.insert(track.id, track.clone());
+            out.push(track);
+        }
+        inner.current_folder_path = Some(label.to_string());
+        Ok(EphemeralFolderResult {
+            folder_path: label.to_string(),
+            tracks: out,
+            skipped_files: 0,
+        })
+    }
+
+    /// Swap the stored rows for an updated copy, KEEPING their ids.
+    ///
+    /// Used when something about the session changes after it opened — the
+    /// cover arriving late is the case that motivated it. Re-running
+    /// `open_tracks` would renumber every row from the floor, and the queue
+    /// may already hold the old ids: a playing track would lose its source
+    /// mid-song.
+    pub fn replace_tracks_preserving_ids(
+        &self,
+        tracks: &[LocalTrack],
+    ) -> Result<(), EphemeralError> {
+        let mut inner = self.inner.lock().map_err(|_| EphemeralError::Lock)?;
+        for t in tracks {
+            // Only rows this session already knows; an unknown id here means
+            // the caller built its list from something else.
+            if inner.tracks.contains_key(&t.id) {
+                inner.tracks.insert(t.id, t.clone());
+            }
+        }
+        Ok(())
+    }
+
+    /// Replace a bounded subset only while the same folder/disc session is
+    /// still open. The exact id/path check prevents a draft from a dismissed
+    /// editor from mutating a later session that reused the synthetic ids.
+    pub fn replace_tracks_for_session(
+        &self,
+        expected_folder_path: &str,
+        tracks: &[LocalTrack],
+    ) -> Result<Option<Vec<LocalTrack>>, EphemeralError> {
+        let mut inner = self.inner.lock().map_err(|_| EphemeralError::Lock)?;
+        if inner.current_folder_path.as_deref() != Some(expected_folder_path) {
+            return Ok(None);
+        }
+        for track in tracks {
+            let Some(current) = inner.tracks.get(&track.id) else {
+                return Ok(None);
+            };
+            if current.file_path != track.file_path
+                || current.cue_start_secs != track.cue_start_secs
+            {
+                return Ok(None);
+            }
+        }
+        for track in tracks {
+            inner.tracks.insert(track.id, track.clone());
+        }
+        let mut snapshot = inner.tracks.values().cloned().collect::<Vec<_>>();
+        snapshot.sort_by_key(|track| track.id);
+        Ok(Some(snapshot))
+    }
+
     pub fn clear(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.reset();
@@ -431,5 +628,103 @@ impl EphemeralLibraryState {
 impl Default for EphemeralLibraryState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn track_at(path: &Path) -> LocalTrack {
+        LocalTrack {
+            file_path: path.to_string_lossy().into_owned(),
+            title: "Before".to_string(),
+            album: "Before album".to_string(),
+            album_group_title: "Before album".to_string(),
+            artist: "Artist".to_string(),
+            ..LocalTrack::default()
+        }
+    }
+
+    #[test]
+    fn ephemeral_loader_only_expands_single_image_cues() {
+        let temp = tempfile::tempdir().unwrap();
+        let single_path = temp.path().join("single.cue");
+        fs::write(
+            &single_path,
+            "FILE \"album.flac\" WAVE\n\
+               TRACK 01 AUDIO\n\
+                 INDEX 01 00:00:00\n\
+               TRACK 02 AUDIO\n\
+                 INDEX 01 03:00:00\n",
+        )
+        .unwrap();
+        let multi_path = temp.path().join("split.cue");
+        fs::write(
+            &multi_path,
+            "FILE \"01. First.flac\" WAVE\n\
+               TRACK 01 AUDIO\n\
+                 INDEX 01 00:00:00\n\
+             FILE \"02. Second.flac\" WAVE\n\
+               TRACK 02 AUDIO\n\
+                 INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+
+        assert!(should_expand_cue(&CueParser::parse(&single_path).unwrap()));
+        assert!(!should_expand_cue(&CueParser::parse(&multi_path).unwrap()));
+    }
+
+    #[test]
+    fn sidecar_overrides_are_visible_to_ephemeral_scans() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("01.flac");
+        let sidecar = crate::AlbumTagSidecar::new(
+            crate::AlbumMetadataOverride {
+                album_title: Some("After album".to_string()),
+                album_artist: Some("After artist".to_string()),
+                ..crate::AlbumMetadataOverride::default()
+            },
+            vec![crate::TrackMetadataOverride {
+                file_path: file.to_string_lossy().into_owned(),
+                cue_start_secs: None,
+                title: Some("After".to_string()),
+                disc_number: Some(1),
+                track_number: Some(1),
+            }],
+        );
+        crate::write_album_sidecar(temp.path(), &sidecar).unwrap();
+
+        let mut track = track_at(&file);
+        let mut cache = HashMap::new();
+        apply_sidecar_override(&mut track, &mut cache);
+
+        assert_eq!(track.album, "After album");
+        assert_eq!(track.album_artist.as_deref(), Some("After artist"));
+        assert_eq!(track.title, "After");
+    }
+
+    #[test]
+    fn stale_editor_snapshot_cannot_retarget_a_new_ephemeral_session() {
+        let state = EphemeralLibraryState::new();
+        let first = state
+            .open_tracks("first", vec![track_at(Path::new("/music/first.flac"))])
+            .unwrap();
+        let mut edited = first.tracks;
+        edited[0].title = "Edited".to_string();
+        assert!(state
+            .replace_tracks_for_session("first", &edited)
+            .unwrap()
+            .is_some());
+
+        state
+            .open_tracks("second", vec![track_at(Path::new("/music/second.flac"))])
+            .unwrap();
+        assert!(state
+            .replace_tracks_for_session("first", &edited)
+            .unwrap()
+            .is_none());
+        assert_eq!(state.tracks_snapshot()[0].title, "Before");
     }
 }

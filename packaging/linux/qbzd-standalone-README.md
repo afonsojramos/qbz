@@ -8,7 +8,8 @@ appears in the official Qobuz app as a Qobuz Connect device.
 ## Contents
 
 - `qbzd` — the daemon binary (also its own CLI client and setup TUI)
-- `qbzd.service` — a systemd user unit (shipped, not enabled)
+- `qbzd.service` — a systemd user unit (shipped, not enabled); the binary can
+  also generate systemd system units, OpenRC scripts, and runit services
 - `completions/` — bash/zsh/fish shell completions
 
 ## Install
@@ -61,6 +62,105 @@ Then enable and start the daemon:
 systemctl --user enable --now qbzd
 systemctl --user status qbzd
 ```
+
+## OpenRC and runit
+
+Do not reuse the systemd unit on a non-systemd host. `qbzd` generates a
+service definition for the init system that is actually running and fills in
+the target user's `HOME`, group, UID-derived runtime directory, and binary
+path. Run it as the playback user so auto-detection and defaults describe the
+right account:
+
+```bash
+qbzd service --user "$USER" --bin /usr/bin/qbzd
+```
+
+The generated definition is written to stdout and the exact install/enable
+commands are written to stderr. You can also select the init explicitly:
+
+```bash
+# OpenRC
+qbzd service openrc --user "$USER" --bin /usr/bin/qbzd \
+  | sudo tee /etc/init.d/qbzd >/dev/null
+sudo chmod +x /etc/init.d/qbzd
+sudo rc-update add qbzd default
+
+# runit (adjust the enabled-service symlink for the distribution)
+sudo mkdir -p /etc/sv/qbzd
+qbzd service runit --user "$USER" --bin /usr/bin/qbzd \
+  | sudo tee /etc/sv/qbzd/run >/dev/null
+sudo chmod +x /etc/sv/qbzd/run
+```
+
+The OpenRC/runit service is system-scoped but drops privileges to the selected
+user. Keep that user in the `audio` group for ALSA Direct and ensure its
+`/run/user/<uid>` exists when using PipeWire or PulseAudio.
+
+## System service (appliances and HiFiBerryOS)
+
+`qbzd` can also emit a **system-scoped** unit. This is the form an appliance
+manager can control with ordinary `systemctl` even when no user is logged in:
+
+```bash
+qbzd service systemd --system --user "$USER" --bin /usr/bin/qbzd \
+  | sudo tee /etc/systemd/system/qbzd.service >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl enable --now qbzd
+sudo systemctl status qbzd
+```
+
+`--system` changes who owns and manages the unit; it deliberately does **not**
+run the audio player as root. The generated unit contains `User=`, `HOME=` and
+`XDG_RUNTIME_DIR=` for the selected account. Keep that account in the `audio`
+group when using ALSA Direct, and enable linger when its PipeWire/Pulse socket
+lives under `/run/user/<uid>`:
+
+```bash
+sudo usermod -aG audio "$USER"
+sudo loginctl enable-linger "$USER"
+```
+
+HiFiBerryOS Next Generation can register an external player through drop-in
+files. Point its `systemd_service` field at `qbzd`; the upstream
+[Add your own player](https://github.com/hifiberry/hifiberry-os/blob/main/docs/add-your-own-player.md)
+guide documents the player descriptor, AudioControl registration and
+config-server permission files. A native HiFiBerry package can therefore own
+the unit and expose its on/off switch without making `qbzd` a root process.
+
+## Read-only root filesystems
+
+All default profile paths follow the standard XDG variables. Redirect them to
+writable mounts before running `qbzd setup`, then use the same environment in
+the service. This example keeps configuration and databases on persistent
+storage while putting disposable cache data in RAM (replace `/data` and the
+`qbz` account with paths/usernames from the appliance):
+
+```bash
+sudo install -d -o qbz -g qbz /data/qbzd-config /data/qbzd-data
+sudo -u qbz env \
+  XDG_CONFIG_HOME=/data/qbzd-config \
+  XDG_DATA_HOME=/data/qbzd-data \
+  XDG_CACHE_HOME=/run/qbzd-cache \
+  /usr/bin/qbzd setup
+```
+
+Add the same paths to the system unit with `sudo systemctl edit qbzd`:
+
+```ini
+[Service]
+Environment=XDG_CONFIG_HOME=/data/qbzd-config
+Environment=XDG_DATA_HOME=/data/qbzd-data
+Environment=XDG_CACHE_HOME=/run/qbzd-cache
+RuntimeDirectory=qbzd-cache
+RuntimeDirectoryMode=0700
+```
+
+After `sudo systemctl daemon-reload && sudo systemctl restart qbzd`, the roots
+reported by `qbzd status` should all be writable. As a simpler container-style
+alternative, set `data_root = "/writable/qbzd-state"` in `qbzd.toml`; this
+moves both application data and its cache below that directory. The XDG config
+root still holds `qbzd.toml` and the login credential, so it must remain
+readable (and writable whenever login/settings are changed).
 
 ## Why glibc 2.35
 

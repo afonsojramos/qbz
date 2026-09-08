@@ -2,6 +2,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Radio sessions idle for longer than this are garbage-collected on open.
+const STALE_SESSION_SECS: i64 = 30 * 24 * 60 * 60;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RadioSeed {
     Artist { artist_id: u64 },
@@ -88,6 +91,13 @@ impl RadioDb {
             path: Some(path.to_path_buf()),
         };
         db.init()?;
+        // Best-effort GC on every open of the on-disk DB: `radio_history`
+        // had no delete path at all, so the file only ever grew.
+        match db.gc_stale_sessions(STALE_SESSION_SECS) {
+            Ok(0) => {}
+            Ok(n) => log::info!("[radio] GC dropped {n} radio session(s) idle > 30 d"),
+            Err(e) => log::debug!("[radio] GC skipped: {e}"),
+        }
         Ok(db)
     }
 
@@ -143,6 +153,43 @@ impl RadioDb {
             )
             .map_err(|e| format!("Failed to initialize radio database: {}", e))?;
         Ok(())
+    }
+
+    /// Delete every session (and its pool + history rows) whose LAST activity
+    /// — the newest `radio_history.played_at`, or `created_at` for a session
+    /// that never played — is older than `max_idle_secs`. Keyed on activity,
+    /// not creation, so a long-running radio is never pulled from under the
+    /// engine. Returns the number of sessions removed.
+    pub fn gc_stale_sessions(&self, max_idle_secs: i64) -> Result<usize, String> {
+        let cutoff = Self::now_ts() - max_idle_secs;
+        let stale: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT s.id FROM radio_session s
+                     LEFT JOIN (SELECT session_id, MAX(played_at) AS last_at
+                                FROM radio_history GROUP BY session_id) h
+                       ON h.session_id = s.id
+                     WHERE COALESCE(h.last_at, s.created_at) < ?",
+                )
+                .map_err(|e| format!("Failed to prepare radio GC: {}", e))?;
+            let rows = stmt
+                .query_map(params![cutoff], |row| row.get::<_, String>(0))
+                .map_err(|e| format!("Failed to query stale radio sessions: {}", e))?;
+            rows.flatten().collect()
+        };
+        for id in &stale {
+            for sql in [
+                "DELETE FROM radio_history WHERE session_id = ?",
+                "DELETE FROM radio_pool WHERE session_id = ?",
+                "DELETE FROM radio_session WHERE id = ?",
+            ] {
+                self.conn
+                    .execute(sql, params![id])
+                    .map_err(|e| format!("Failed to GC radio session: {}", e))?;
+            }
+        }
+        Ok(stale.len())
     }
 
     fn now_ts() -> i64 {

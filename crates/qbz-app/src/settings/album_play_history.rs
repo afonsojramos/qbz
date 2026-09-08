@@ -52,30 +52,46 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             updated_at    INTEGER NOT NULL
         );
         "#,
-    )
+    )?;
+    // PLAYBACK CONTEXT of the event — "album" | "playlist" | "" (unknown).
+    //
+    // Additive, and it has to be: this .db is shared with existing installs,
+    // whose tree is frozen and whose INSERT names its columns explicitly
+    // (`INSERT INTO album_play_events (album_id, occurred_at)`), so an extra
+    // column with a DEFAULT is invisible to it and it simply writes `''`.
+    // Every legacy row is `''` too, and the ranking query treats `''` as
+    // "album" — so no history is lost or reinterpreted by this migration.
+    //
+    // SQLite has no `ADD COLUMN IF NOT EXISTS`; running it and swallowing the
+    // duplicate-column error is the idiom, and it is cheaper than a
+    // `PRAGMA table_info` round trip on every open.
+    let _ = conn.execute_batch(
+        "ALTER TABLE album_play_events ADD COLUMN context_kind TEXT NOT NULL DEFAULT '';",
+    );
+    Ok(())
 }
 
 fn open_db() -> Option<Connection> {
     let path = db_path()?;
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            log::warn!("[qbz-slint] album_play_history dir create failed: {e}");
+            log::warn!("[qbz-app] album_play_history dir create failed: {e}");
             return None;
         }
     }
     let conn = match Connection::open(&path) {
         Ok(c) => c,
         Err(e) => {
-            log::warn!("[qbz-slint] album_play_history open failed: {e}");
+            log::warn!("[qbz-app] album_play_history open failed: {e}");
             return None;
         }
     };
     // ADR-002: WAL for any SQLite store touched off the UI thread.
-    if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;") {
-        log::warn!("[qbz-slint] album_play_history pragma failed: {e}");
+    if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;") {
+        log::warn!("[qbz-app] album_play_history pragma failed: {e}");
     }
     if let Err(e) = init_schema(&conn) {
-        log::warn!("[qbz-slint] album_play_history schema failed: {e}");
+        log::warn!("[qbz-app] album_play_history schema failed: {e}");
         return None;
     }
     Some(conn)
@@ -103,6 +119,11 @@ pub struct AlbumPlayMeta<'a> {
     pub quality_label: &'a str,
     pub year: &'a str,
     pub source: &'a str,
+    /// What the user was PLAYING FROM when this event happened: `"album"`,
+    /// `"playlist"`, or `""` when nothing was stamped. NOT the same axis as
+    /// [`Self::source`], which is where the audio comes from (qobuz / local /
+    /// plex) — an album can be local AND played from a playlist.
+    pub context_kind: &'a str,
 }
 
 /// One ranked album for the "Most Played Albums" rail / View-all page.
@@ -124,10 +145,11 @@ pub struct AlbumPlayRow {
 /// Internal so tests can drive it against an in-memory connection.
 fn record_on(conn: &Connection, m: &AlbumPlayMeta, now: i64) {
     if let Err(e) = conn.execute(
-        "INSERT INTO album_play_events (album_id, occurred_at) VALUES (?, ?)",
-        params![m.album_id, now],
+        "INSERT INTO album_play_events (album_id, occurred_at, context_kind) \
+         VALUES (?, ?, ?)",
+        params![m.album_id, now, m.context_kind],
     ) {
-        log::warn!("[qbz-slint] album_play_history insert event failed: {e}");
+        log::warn!("[qbz-app] album_play_history insert event failed: {e}");
     }
     if let Err(e) = conn.execute(
         r#"
@@ -159,7 +181,7 @@ fn record_on(conn: &Connection, m: &AlbumPlayMeta, now: i64) {
             now
         ],
     ) {
-        log::warn!("[qbz-slint] album_play_history upsert meta failed: {e}");
+        log::warn!("[qbz-app] album_play_history upsert meta failed: {e}");
     }
 }
 
@@ -174,6 +196,13 @@ fn query_on(conn: &Connection, limit: Option<u32>) -> Vec<AlbumPlayRow> {
         JOIN (
             SELECT album_id, COUNT(*) AS plays, MAX(occurred_at) AS last_at
             FROM album_play_events
+            -- Only plays that were ABOUT the album. A playlist of 40 tracks
+            -- from 40 albums used to add one play to each of them, which is
+            -- how "Most Played Albums" came to be a list of whatever playlist
+            -- the user had on. `''` is a legacy row or one written by the
+            -- other frontend, and is counted — dropping it would erase
+            -- history that is almost entirely genuine album listening.
+            WHERE context_kind IN ('', 'album')
             GROUP BY album_id
         ) p ON p.album_id = m.album_id
         ORDER BY p.plays DESC, p.last_at DESC
@@ -207,7 +236,6 @@ fn query_on(conn: &Connection, limit: Option<u32>) -> Vec<AlbumPlayRow> {
 /// Record a play. Called from `playback::record_recent` when a track starts
 /// audible playback. No-op when the album id is empty (some local/Plex
 /// sources carry none — same guard as the recently-played rail).
-#[allow(dead_code)] // wired by playback::record_recent
 pub fn record_album_play(m: AlbumPlayMeta) {
     if m.album_id.is_empty() {
         return;
@@ -223,15 +251,43 @@ pub fn record_album_play(m: AlbumPlayMeta) {
 }
 
 /// The top `limit` most-played albums (the carousel).
-#[allow(dead_code)] // wired by home/foryou
 pub fn top_albums(limit: u32) -> Vec<AlbumPlayRow> {
     with_db(|conn| Some(query_on(conn, Some(limit)))).unwrap_or_default()
 }
 
 /// Every played album, ranked (the "View all" page).
-#[allow(dead_code)] // wired by the View-all loader
 pub fn all_albums() -> Vec<AlbumPlayRow> {
     with_db(|conn| Some(query_on(conn, None))).unwrap_or_default()
+}
+
+/// Drop every trace of the given albums — the twin of
+/// `playlist_play_history::prune_playlists`, for albums whose library folder
+/// was removed. Until this existed "Most Played Albums" kept cards that
+/// opened onto deleted tracks while Recently Played had already pruned them.
+/// Returns how many meta rows went.
+pub fn prune_albums(album_ids: &[String]) -> usize {
+    if album_ids.is_empty() {
+        return 0;
+    }
+    with_db(|conn| Some(prune_on(conn, album_ids)))
+        .unwrap_or(0)
+}
+
+fn prune_on(conn: &Connection, album_ids: &[String]) -> usize {
+    let mut gone = 0usize;
+    for id in album_ids {
+        let _ = conn.execute(
+            "DELETE FROM album_play_events WHERE album_id = ?",
+            rusqlite::params![id],
+        );
+        gone += conn
+            .execute(
+                "DELETE FROM album_meta WHERE album_id = ?",
+                rusqlite::params![id],
+            )
+            .unwrap_or(0);
+    }
+    gone
 }
 
 #[cfg(test)]
@@ -249,6 +305,7 @@ mod tests {
             quality_label: "Hi-Res",
             year: "2024",
             source: "qobuz",
+            context_kind: "album",
         }
     }
 

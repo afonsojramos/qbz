@@ -6,6 +6,15 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use qbz_integrations::musicbrainz::cache::{MusicBrainzCache, QobuzArtistMatch};
+use qbz_integrations::musicbrainz::genre::{extract_affinity_seeds, genre_summary, is_broad_genre};
+use qbz_integrations::musicbrainz::location::compute_affinity_score;
+use qbz_integrations::musicbrainz::{
+    location, AffinitySeeds, AlbumAppearance, ArtistMetadata, ArtistRelationships,
+    DiscoveryArtist, DiscoveryResponse, LocationCandidate, LocationDiscoveryResponse,
+    MusicBrainzClient, MusicianAppearances, MusicianConfidence, Period, RelatedArtist,
+    ResolvedArtist, ResolvedMusician, Tag,
+};
 use qbz_models::{
     ArtistStoryResponse,
     AssetOrigin, ExternalStreamAsset, StreamQualityInfo,
@@ -17,16 +26,9 @@ use qbz_models::{
     RepeatMode, SearchAllResults, SearchResultsPage, StreamUrl, Track, TrackToAnalyse,
     TracksContainer, UserSession,
 };
-use qbz_integrations::musicbrainz::cache::MusicBrainzCache;
-use qbz_integrations::musicbrainz::genre::{extract_affinity_seeds, genre_summary, is_broad_genre};
-use qbz_integrations::musicbrainz::location::compute_affinity_score;
-use qbz_integrations::musicbrainz::{
-    location, AffinitySeeds, AlbumAppearance, ArtistMetadata, ArtistRelationships,
-    DiscoveryArtist, DiscoveryResponse, LocationCandidate, LocationDiscoveryResponse,
-    MusicBrainzClient, MusicianAppearances, MusicianConfidence, Period, RelatedArtist,
-    ResolvedArtist, ResolvedMusician, Tag,
+use qbz_player::{
+    PlaybackState, Player, QueueAuthoritySnapshot as PlayerQueueAuthoritySnapshot, QueueManager,
 };
-use qbz_player::{PlaybackState, Player, QueueManager};
 use qbz_qobuz::QobuzClient;
 
 use crate::error::CoreError;
@@ -264,11 +266,24 @@ pub struct QbzCore<A: FrontendAdapter> {
     initialized: Arc<RwLock<bool>>,
     /// D8 guard: true when the current queue was built from an OFFLINE-ONLY
     /// local playlist — such a queue must never be pushed to the Qobuz
-    /// Connect cloud. Cleared by every queue REPLACEMENT (`set_queue` /
-    /// `set_queue_with_order` / `clear_queue`); append-style ops preserve it.
-    /// Set explicitly by the frontend's local-playlist play path right after
-    /// its `set_queue`.
+    /// Connect cloud. Ordinary queue replacement (`set_queue` /
+    /// `set_queue_with_order` / `clear_queue`) clears it; append-style ops
+    /// preserve it. An offline local-playlist replacement sets it atomically
+    /// through `set_queue_with_offline_only` before publishing QueueUpdated.
     queue_offline_only: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Exact in-process playback authority owned by [`QbzCore`].
+///
+/// The player snapshot preserves the queue mechanics while `offline_only`
+/// preserves the cloud-publication policy coupled to that queue. Keeping both
+/// opaque prevents a delegation handoff from restoring an offline playlist as
+/// if it were eligible for QConnect synchronization.
+#[must_use = "an authority snapshot must be retained until it is restored or deliberately discarded"]
+#[derive(Clone)]
+pub struct QueueAuthoritySnapshot {
+    queue: PlayerQueueAuthoritySnapshot,
+    offline_only: bool,
 }
 
 impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
@@ -291,17 +306,19 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
     }
 
     /// Mark (or unmark) the current queue as built from an OFFLINE-ONLY local
-    /// playlist (D8). Call right after the `set_queue` that loaded it.
-    pub fn set_queue_offline_only(&self, on: bool) {
+    /// playlist (D8). Queue replacement code should prefer
+    /// [`Self::set_queue_with_offline_only`] so the flag is visible before the
+    /// `QueueUpdated` event can trigger cloud synchronization.
+    fn set_queue_offline_only(&self, on: bool) {
         self.queue_offline_only
-            .store(on, std::sync::atomic::Ordering::Relaxed);
+            .store(on, std::sync::atomic::Ordering::Release);
     }
 
     /// True when the current queue originates from an offline-only local
     /// playlist — QConnect must skip its cloud queue push.
     pub fn queue_is_offline_only(&self) -> bool {
         self.queue_offline_only
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Install a MusicBrainz cache. The frontend owns the data path
@@ -484,6 +501,78 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         queue.get_all_tracks()
     }
 
+    /// Capture the complete queue authority state atomically for a temporary
+    /// renderer handoff. The returned payload is opaque and in-process only.
+    pub async fn capture_authority_snapshot(&self) -> QueueAuthoritySnapshot {
+        let queue = self.queue.read().await;
+        QueueAuthoritySnapshot {
+            queue: queue.capture_authority_snapshot(),
+            offline_only: self.queue_is_offline_only(),
+        }
+    }
+
+    /// Restore a previously captured queue authority state in one atomic,
+    /// side-effect-free replacement. The authority coordinator publishes the
+    /// restored projection only after sealing its origin and generation.
+    pub async fn restore_authority_snapshot(&self, snapshot: QueueAuthoritySnapshot) {
+        let queue = self.queue.write().await;
+        self.set_queue_offline_only(snapshot.offline_only);
+        queue.restore_authority_snapshot(snapshot.queue);
+    }
+
+    /// Commit an authority stamp and restore its exact queue as one synchronous
+    /// visibility boundary. The outer Tokio lock is acquired with `try_write`
+    /// because authority coordinators call this from their non-async commit
+    /// gate. If either the queue is busy or `commit` rejects, ownership of the
+    /// opaque snapshot is returned unchanged and no queue state is mutated.
+    pub fn try_commit_authority_snapshot<F>(
+        &self,
+        snapshot: QueueAuthoritySnapshot,
+        commit: F,
+    ) -> Result<QueueState, QueueAuthoritySnapshot>
+    where
+        F: FnOnce() -> bool,
+    {
+        let QueueAuthoritySnapshot {
+            queue: queue_snapshot,
+            offline_only,
+        } = snapshot;
+        let Ok(queue) = self.queue.try_write() else {
+            return Err(QueueAuthoritySnapshot {
+                queue: queue_snapshot,
+                offline_only,
+            });
+        };
+        if !commit() {
+            return Err(QueueAuthoritySnapshot {
+                queue: queue_snapshot,
+                offline_only,
+            });
+        }
+        self.set_queue_offline_only(offline_only);
+        queue.restore_authority_snapshot(queue_snapshot);
+        Ok(queue.get_state())
+    }
+
+    /// Capture queue rows, cursor, and oldest-first playback history under one
+    /// queue lock for session persistence.
+    pub async fn get_persistable_queue_state(
+        &self,
+    ) -> (Vec<QueueTrack>, Option<usize>, Vec<usize>) {
+        let queue = self.queue.read().await;
+        queue.get_persistable_state()
+    }
+
+    /// Restore the oldest-first playback history after restoring its queue.
+    pub async fn restore_queue_history(&self, history: Vec<usize>) {
+        let queue = self.queue.write().await;
+        queue.restore_history_indices(history);
+        self.emit(CoreEvent::QueueUpdated {
+            state: queue.get_state(),
+        })
+        .await;
+    }
+
     /// Get the full queue state without the upcoming/history caps that
     /// `get_queue_state` applies. Used by clients that paginate the
     /// upcoming list and need the complete play history (Queue sidebar).
@@ -543,8 +632,8 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
     /// slot — use when nothing is actively playing and the user wants a full
     /// reset.
     pub async fn clear_queue(&self, keep_current: bool) {
-        self.set_queue_offline_only(false);
         let queue = self.queue.write().await;
+        self.set_queue_offline_only(false);
         queue.clear(keep_current);
         self.emit(CoreEvent::QueueUpdated {
             state: queue.get_state(),
@@ -582,12 +671,35 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         .await;
     }
 
+    /// Add a track at the END of the manual block ("Play later", #442):
+    /// after every play-next / play-later already queued, before the source
+    /// resumes. "Add to queue" stays untouched at the absolute end.
+    pub async fn add_track_later(&self, track: QueueTrack) {
+        let queue = self.queue.write().await;
+        queue.add_track_later(track);
+        self.emit(CoreEvent::QueueUpdated {
+            state: queue.get_state(),
+        })
+        .await;
+    }
+
     /// Set the entire queue (replaces existing)
     pub async fn set_queue(&self, tracks: Vec<QueueTrack>, start_index: Option<usize>) {
-        // Any queue replacement drops the offline-only-playlist stamp; the
-        // local-playlist play path re-sets it right after when it applies.
-        self.set_queue_offline_only(false);
+        self.set_queue_with_offline_only(tracks, start_index, false)
+            .await;
+    }
+
+    /// Replace the queue and publish its offline-only origin as one ordered
+    /// operation. The flag is set before `QueueUpdated`, closing the window in
+    /// which a QConnect subscriber could upload an offline-only playlist.
+    pub async fn set_queue_with_offline_only(
+        &self,
+        tracks: Vec<QueueTrack>,
+        start_index: Option<usize>,
+        offline_only: bool,
+    ) {
         let queue = self.queue.write().await;
+        self.set_queue_offline_only(offline_only);
         queue.set_queue(tracks, start_index);
         self.emit(CoreEvent::QueueUpdated {
             state: queue.get_state(),
@@ -603,8 +715,8 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         shuffle_enabled: bool,
         shuffle_order: Option<Vec<usize>>,
     ) {
-        self.set_queue_offline_only(false);
         let queue = self.queue.write().await;
+        self.set_queue_offline_only(false);
         queue.set_queue_with_order(tracks, start_index, shuffle_enabled, shuffle_order);
         self.emit(CoreEvent::QueueUpdated {
             state: queue.get_state(),
@@ -662,6 +774,60 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         success
     }
 
+    /// Reorder one playback-history occurrence inside Queue View. Source
+    /// coordinates are most-recent-first; the destination is an oldest-first
+    /// insertion slot in the chronological projection.
+    pub async fn move_history_entry(
+        &self,
+        history_index: usize,
+        expected_id: u64,
+        to_slot: usize,
+    ) -> bool {
+        let queue = self.queue.write().await;
+        let success = queue.move_history_entry(history_index, expected_id, to_slot);
+        if success {
+            self.emit(CoreEvent::QueueUpdated {
+                state: queue.get_state(),
+            })
+            .await;
+        }
+        success
+    }
+
+    /// Move one played queue occurrence back into Upcoming without cloning
+    /// it. This is the local Queue View path; remote renderers use
+    /// `remove_history_entry` after their authoritative insert succeeds.
+    pub async fn requeue_history_entry(
+        &self,
+        history_index: usize,
+        expected_id: u64,
+        to_slot: usize,
+    ) -> bool {
+        let queue = self.queue.write().await;
+        let success = queue.requeue_history_entry(history_index, expected_id, to_slot);
+        if success {
+            self.emit(CoreEvent::QueueUpdated {
+                state: queue.get_state(),
+            })
+            .await;
+        }
+        success
+    }
+
+    /// Forget the local history occurrence that an authoritative remote
+    /// renderer just accepted back into its Upcoming sequence.
+    pub async fn remove_history_entry(&self, history_index: usize, expected_id: u64) -> bool {
+        let queue = self.queue.write().await;
+        let success = queue.remove_history_entry(history_index, expected_id);
+        if success {
+            self.emit(CoreEvent::QueueUpdated {
+                state: queue.get_state(),
+            })
+            .await;
+        }
+        success
+    }
+
     /// Jump to a specific track by index
     pub async fn play_index(&self, index: usize) -> Option<QueueTrack> {
         let queue = self.queue.write().await;
@@ -679,6 +845,40 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
     pub async fn play_upcoming_at(&self, upcoming_index: usize) -> Option<QueueTrack> {
         let queue = self.queue.write().await;
         let track = queue.play_upcoming_at(upcoming_index);
+        self.emit(CoreEvent::QueueUpdated {
+            state: queue.get_state(),
+        })
+        .await;
+        track
+    }
+
+    /// Move the cursor to an upcoming Listen List row while retaining every
+    /// crossed row in chronological history. `expected_id` makes the snapshot
+    /// index safe when queue mutations race the frontend activation.
+    pub async fn play_upcoming_at_preserving_timeline(
+        &self,
+        upcoming_index: usize,
+        expected_id: u64,
+    ) -> Option<QueueTrack> {
+        let queue = self.queue.write().await;
+        let track = queue.play_upcoming_at_preserving_timeline(upcoming_index, expected_id);
+        self.emit(CoreEvent::QueueUpdated {
+            state: queue.get_state(),
+        })
+        .await;
+        track
+    }
+
+    /// Move the cursor back to a Listen List history row without cloning it
+    /// into the queue. History coordinates are most-recent-first, matching the
+    /// public queue snapshot.
+    pub async fn play_history_at_preserving_timeline(
+        &self,
+        history_index: usize,
+        expected_id: u64,
+    ) -> Option<QueueTrack> {
+        let queue = self.queue.write().await;
+        let track = queue.play_history_at_preserving_timeline(history_index, expected_id);
         self.emit(CoreEvent::QueueUpdated {
             state: queue.get_state(),
         })
@@ -747,6 +947,40 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         let guard = self.client.read().await;
         let client = guard.as_ref()?;
         self.player.fetch_for_gapless(client, track_id, quality).await
+    }
+
+    /// Progressive counterpart of `fetch_for_external_stream_resolved` for a
+    /// track that is NOT already cached: the bytes are served to the renderer
+    /// while they download (see `Player::open_external_stream`).
+    pub async fn open_external_stream_resolved(
+        &self,
+        track_id: u64,
+        quality: Quality,
+    ) -> Result<qbz_player::ExternalStreamHandle, String> {
+        let guard = self.client.read().await;
+        let client = guard
+            .as_ref()
+            .ok_or_else(|| "No Qobuz client available".to_string())?;
+        self.player
+            .open_external_stream(client, track_id, quality)
+            .await
+    }
+
+    /// Queue a cold Qobuz successor from its initial CMAF buffer instead of
+    /// materializing the whole file. Used only by the Streaming-only gapless
+    /// handoff; cached and offline successors keep the byte path above.
+    pub async fn queue_gapless_streaming(
+        &self,
+        track_id: u64,
+        quality: Quality,
+    ) -> Result<(), String> {
+        let guard = self.client.read().await;
+        let client = guard
+            .as_ref()
+            .ok_or_else(|| "No Qobuz client available".to_string())?;
+        self.player
+            .queue_next_streaming(client, track_id, quality)
+            .await
     }
 
     /// Resolve a fully-materialized audio asset (bytes + MIME + quality) for an
@@ -818,6 +1052,12 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         queue.peek_upcoming(count)
     }
 
+    /// Inspect the previous queue row without changing the cursor/history.
+    pub async fn peek_previous_track(&self) -> Option<QueueTrack> {
+        let queue = self.queue.read().await;
+        queue.peek_previous()
+    }
+
     /// The current queue track, if any (source-aware playback routing).
     pub async fn current_track(&self) -> Option<QueueTrack> {
         let queue = self.queue.read().await;
@@ -882,6 +1122,23 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         let queue = self.queue.write().await;
         let current_patched = queue.patch_plex_quality(updates);
         if current_patched {
+            self.emit(CoreEvent::QueueUpdated {
+                state: queue.get_state(),
+            })
+            .await;
+        }
+        current_patched
+    }
+
+    /// Attach a resolved cover to any queued track in `ids` that has none.
+    /// Frontend-agnostic hook for art that resolves AFTER the row was
+    /// enqueued — a disc's cover is fetched, and the fetch outlives the click
+    /// that started playback. Returns true if the CURRENT track was patched;
+    /// the caller then re-pushes the now-playing stamp.
+    pub async fn patch_queue_artwork(&self, ids: &[u64], url: &str) -> bool {
+        let queue = self.queue.write().await;
+        let (any, current_patched) = queue.patch_artwork(ids, url);
+        if any {
             self.emit(CoreEvent::QueueUpdated {
                 state: queue.get_state(),
             })
@@ -1243,6 +1500,22 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             .map_err(CoreError::Api)
     }
 
+    /// Lightweight membership fetch: one playlist's track IDS only
+    /// (`playlist/get?extra=track_ids`). The membership hydrator's probe —
+    /// no Track objects, no pagination.
+    pub async fn get_playlist_track_ids(
+        &self,
+        playlist_id: u64,
+    ) -> Result<qbz_models::PlaylistWithTrackIds, CoreError> {
+        let client = self.client.read().await;
+        let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
+
+        client
+            .get_playlist_track_ids(playlist_id)
+            .await
+            .map_err(CoreError::Api)
+    }
+
     /// Check how many of `track_ids` are already in the Qobuz playlist
     /// `playlist_id`. Mirrors Tauri's `v2_check_playlist_duplicates`
     /// (commands_v2/playlists.rs): fetch the playlist's existing track ids and
@@ -1275,6 +1548,27 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
 
         client
             .remove_tracks_from_playlist(playlist_id, playlist_track_ids)
+            .await
+            .map_err(CoreError::Api)
+    }
+
+    /// Move tracks within a playlist (the replacement flow's position step).
+    ///
+    /// Takes MEMBERSHIP ids, like [`Self::remove_tracks_from_playlist`].
+    /// `insert_before` is the 0-based slot to land in front of. Callers must
+    /// treat a failure as non-fatal: position is a nicety, and the flows that
+    /// use this have already made a write that must not be rolled back.
+    pub async fn update_playlist_tracks_position(
+        &self,
+        playlist_id: u64,
+        playlist_track_ids: &[u64],
+        insert_before: u32,
+    ) -> Result<(), CoreError> {
+        let client = self.client.read().await;
+        let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
+
+        client
+            .update_playlist_tracks_position(playlist_id, playlist_track_ids, insert_before)
             .await
             .map_err(CoreError::Api)
     }
@@ -2063,6 +2357,14 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         self.musicbrainz.set_enabled(enabled).await;
     }
 
+    /// The core's shared MusicBrainz client — the ONE instance whose enabled
+    /// flag `musicbrainz_set_enabled` toggles. Frontend code that needs a
+    /// client must borrow this one: a private `MusicBrainzClient::new()`
+    /// starts enabled and silently ignores the user's opt-out.
+    pub fn musicbrainz_client(&self) -> Arc<MusicBrainzClient> {
+        Arc::clone(&self.musicbrainz)
+    }
+
     /// Resolve an artist name to a MusicBrainz id. Returns `None` if no
     /// confident match is found.
     pub async fn musicbrainz_resolve_artist(
@@ -2444,13 +2746,229 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
 
 // ----- Location / scene discovery -------------------------------------------
 
+/// Which stage of scene discovery a progress event describes.
+///
+/// [`ScenePhase::as_str`] is the ONLY place the wire spelling lives — the
+/// scene bridge document (`progress.phase`) is `"searching" | "validating" |
+/// "done"` and nothing else may hand-write those literals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScenePhase {
+    Searching,
+    Validating,
+    Done,
+}
+
+impl ScenePhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScenePhase::Searching => "searching",
+            ScenePhase::Validating => "validating",
+            ScenePhase::Done => "done",
+        }
+    }
+}
+
+/// Cooperative cancellation for scene discovery.
+///
+/// A generation guard in the frontend only drops the FINAL publish; it does
+/// not stop the traffic behind it, and ONE page can run up to 100 sequential
+/// Qobuz artist searches on top of rate-limited MusicBrainz calls (which are
+/// serialised at ~1.1 s each). This token is checked between every request, so
+/// leaving the view actually stops the work instead of merely ignoring it.
+///
+/// Deliberately an `AtomicBool` rather than `tokio_util::sync::
+/// CancellationToken`: no new dependency, and `Clone` is free into whichever
+/// task owns the discovery. The frontend holds one token per generation and
+/// trips the old one on a new scene, on Retry, on view deactivation and on an
+/// offline transition.
+#[derive(Clone, Debug, Default)]
+pub struct CancelToken(Arc<std::sync::atomic::AtomicBool>);
+
+impl CancelToken {
+    /// A fresh, un-tripped token.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Trip the token. Idempotent; every clone sees it.
+    pub fn cancel(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// Why scene discovery could not produce a page.
+///
+/// This type exists because the old signature returned `Ok(vec![])` for
+/// offline, MusicBrainz-disabled, unauthenticated, rate-limited AND
+/// genuinely-empty alike — so the UI's error state was unreachable and all
+/// five collapsed into "No matching artists from this scene…". Every variant
+/// here is the ERROR class (error state + Retry) except [`Self::Cancelled`],
+/// which the user asked for and must paint nothing at all.
+///
+/// "Empty" is NOT an error: a query that completed and found nothing still
+/// returns `Ok` with an empty `artists` vector.
+#[derive(Debug, thiserror::Error)]
+pub enum SceneDiscoveryError {
+    /// No Qobuz client — the core booted offline-tolerant, or never init'd.
+    #[error("Not initialized")]
+    NotInitialized,
+
+    /// Qobuz refused on authentication/entitlement grounds.
+    #[error("Authentication required: {0}")]
+    NotAuthenticated(String),
+
+    /// EVERY MusicBrainz genre search failed. Also how a disabled MusicBrainz
+    /// integration surfaces, since the client refuses each call.
+    #[error("MusicBrainz unavailable: {0}")]
+    UpstreamUnavailable(String),
+
+    /// There were candidates to validate and EVERY Qobuz search failed.
+    #[error("Qobuz catalog unavailable: {0}")]
+    CatalogUnavailable(String),
+
+    /// The caller tripped the [`CancelToken`]. Never user-visible.
+    #[error("Scene discovery cancelled")]
+    Cancelled,
+
+    #[error("Internal error: {0}")]
+    Internal(String),
+}
+
+impl SceneDiscoveryError {
+    /// True when the view should show its error state with a Retry button.
+    /// False only for [`Self::Cancelled`], which must leave the UI untouched.
+    pub fn shows_error_state(&self) -> bool {
+        !matches!(self, SceneDiscoveryError::Cancelled)
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, SceneDiscoveryError::Cancelled)
+    }
+}
+
+impl From<SceneDiscoveryError> for CoreError {
+    fn from(err: SceneDiscoveryError) -> Self {
+        match err {
+            SceneDiscoveryError::NotInitialized => CoreError::NotInitialized,
+            SceneDiscoveryError::NotAuthenticated(msg) => CoreError::AuthFailed(msg),
+            other => CoreError::Internal(other.to_string()),
+        }
+    }
+}
+
+/// Does this Qobuz failure end the whole page, or just this one candidate?
+///
+/// Terminal classes abort the loop immediately instead of burning up to 99
+/// more doomed searches: no client, an auth rejection, an entitlement/403
+/// refusal, the open 403 circuit breaker, and offline mode. Everything else
+/// (timeouts, 5xx, one odd response) is per-candidate and merely counted, so a
+/// single flaky artist cannot fail a whole scene.
+fn scene_fatal_qobuz(err: &CoreError) -> Option<SceneDiscoveryError> {
+    use qbz_qobuz::ApiError;
+    match err {
+        CoreError::NotInitialized => Some(SceneDiscoveryError::NotInitialized),
+        CoreError::AuthRequired => {
+            Some(SceneDiscoveryError::NotAuthenticated("session missing".into()))
+        }
+        CoreError::AuthFailed(msg) => Some(SceneDiscoveryError::NotAuthenticated(msg.clone())),
+        CoreError::Api(api) => match api {
+            ApiError::AuthenticationError(_)
+            | ApiError::InvalidAppId
+            | ApiError::InvalidAppSecret
+            | ApiError::IneligibleUser
+            | ApiError::Forbidden(_)
+            | ApiError::ForbiddenCircuitOpen(_) => {
+                Some(SceneDiscoveryError::NotAuthenticated(api.to_string()))
+            }
+            ApiError::OfflineMode => Some(SceneDiscoveryError::CatalogUnavailable(api.to_string())),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Longest we will honour a `Retry-After` before giving up on that request.
+/// MusicBrainz's per-IP limiter recovers in ~1 s; anything asking for more
+/// than this is an outage, not a hiccup, and the user is staring at a bar.
+const SCENE_MAX_BACKOFF_SECS: u64 = 10;
+
+/// Sleep `secs` (capped), waking every 250 ms so a cancellation lands promptly
+/// instead of after a ten-second nap. Returns `false` when cancelled.
+async fn scene_backoff(secs: u64, cancel: &CancelToken) -> bool {
+    let total = secs.min(SCENE_MAX_BACKOFF_SECS);
+    let slices = total * 4;
+    for _ in 0..slices {
+        if cancel.is_cancelled() {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    !cancel.is_cancelled()
+}
+
+/// Drop blacklisted rows from a scene response and keep `total_candidates`
+/// honest. Returns how many were removed.
+///
+/// Run on EVERY cache hit: a hit short-circuits the validation loop (which is
+/// where the blacklist is normally applied, Tauri-style), so without this a
+/// blocked artist would keep reappearing for the whole 30-day TTL. Rows with
+/// no usable Qobuz id are kept — fail-open, same as the Slint adapter.
+fn apply_scene_blacklist(
+    response: &mut LocationDiscoveryResponse,
+    blacklist: &(dyn Fn(u64) -> bool + Send + Sync),
+) -> usize {
+    let before = response.artists.len();
+    response.artists.retain(|c| match c.qobuz_id {
+        Some(id) if id > 0 => !blacklist(id as u64),
+        _ => true,
+    });
+    let removed = before - response.artists.len();
+    response.total_candidates = response.total_candidates.saturating_sub(removed);
+    if removed > 0 {
+        response.has_more = response.next_offset < response.total_candidates;
+    }
+    removed
+}
+
 impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
+    /// Throw away every cached scene.
+    ///
+    /// Call it when the artist blacklist (or its enabled flag) changes, and on
+    /// account switch. The post-filter on read covers newly-BLOCKED artists;
+    /// this covers the two cases it cannot: un-blocking (the validation loop
+    /// had already substituted a different same-name Qobuz artist for that
+    /// MBID) and a change of account territory (which decides what validates
+    /// at all and is not yet part of the cache key).
+    pub fn invalidate_scene_cache(&self) {
+        if let Ok(guard) = self.musicbrainz_cache.lock() {
+            if let Some(cache) = guard.as_ref() {
+                if let Err(e) = cache.clear_scene_cache() {
+                    log::warn!("invalidate_scene_cache: {e}");
+                }
+            }
+        }
+    }
+
     /// "Artists from the same place" — given a source artist's MBID,
     /// area and genre/tag seeds, find other artists from that area
-    /// who share the genres, validated against Qobuz. Ports
-    /// v2_discover_artists_by_location's core pipeline (the scene
-    /// cache + progress events are omitted; subdivision resolution
-    /// and affinity scoring are kept).
+    /// who share the genres, validated against Qobuz.
+    ///
+    /// Thin wrapper over [`Self::discover_artists_by_location_with_progress`]
+    /// with no progress sink, no blacklist and a token that is never tripped.
+    /// It exists because Rust has no default arguments: adding parameters to
+    /// this method would break every existing caller, and the Slint binary's
+    /// `location_view.rs` (which does its own blacklist pass on the way out)
+    /// must keep compiling untouched.
+    ///
+    /// NOTE the one behavioural change for existing callers: a page where
+    /// EVERY upstream search failed is now `Err`, where it used to be `Ok`
+    /// with an empty vector. That is the entire point of B7 — offline,
+    /// MusicBrainz-off, unauthenticated and "genuinely nobody" are different
+    /// answers and the UI cannot say so if the core flattens them.
     #[allow(clippy::too_many_arguments)]
     pub async fn discover_artists_by_location(
         &self,
@@ -2463,11 +2981,107 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         limit: usize,
         offset: usize,
     ) -> Result<LocationDiscoveryResponse, CoreError> {
+        let no_blacklist = |_id: u64| false;
+        let no_progress = |_phase: ScenePhase, _pct: u8, _detail: String| {};
+        self.discover_artists_by_location_with_progress(
+            source_mbid,
+            area_id,
+            area_name,
+            country,
+            genres,
+            tags,
+            limit,
+            offset,
+            &no_blacklist,
+            &CancelToken::new(),
+            &no_progress,
+        )
+        .await
+        .map_err(CoreError::from)
+    }
+
+    /// Scene discovery with a progress stream, a blacklist predicate and
+    /// cancellation. Ports `v2_discover_artists_by_location` end to end —
+    /// subdivision resolution, affinity scoring, the 30-day scene cache and
+    /// the four progress emit points.
+    ///
+    /// `blacklist` is INJECTED rather than imported because the blacklist
+    /// store lives in `qbz-app`/the frontend and `qbz-core` must not learn
+    /// about a frontend module. It is applied in two places, exactly as Tauri
+    /// did: inside the validation loop (so a blocked artist lets the
+    /// NEXT-best same-name Qobuz artist take the slot rather than losing the
+    /// row) and on every cache hit.
+    ///
+    /// `progress` fires with `(phase, 0..=100, detail)`. Two paths emit
+    /// NOTHING and that is deliberate: a cache hit and a no-seed return.
+    /// Completion is signalled by this future resolving, never by waiting for
+    /// a `Done` event — a cached scene would otherwise hang the bar at 0 %.
+    /// The 95 → 100 jump at the end is Tauri's and is kept; the bar's 300 ms
+    /// width transition smooths it.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn discover_artists_by_location_with_progress(
+        &self,
+        source_mbid: &str,
+        area_id: Option<&str>,
+        area_name: &str,
+        country: Option<&str>,
+        genres: Vec<String>,
+        tags: Vec<String>,
+        limit: usize,
+        offset: usize,
+        blacklist: &(dyn Fn(u64) -> bool + Send + Sync),
+        cancel: &CancelToken,
+        progress: &(dyn Fn(ScenePhase, u8, String) + Send + Sync),
+    ) -> Result<LocationDiscoveryResponse, SceneDiscoveryError> {
         use std::collections::HashMap;
+
+        if cancel.is_cancelled() {
+            return Err(SceneDiscoveryError::Cancelled);
+        }
+
+        let source_seeds = AffinitySeeds {
+            genres: genres.clone(),
+            tags: tags.clone(),
+            normalized_seeds: genres.iter().chain(tags.iter()).cloned().collect(),
+        };
+
+        // The cache is consulted BEFORE the area resolution below, unlike
+        // Tauri: resolution is a pure function of `area_id`, so keying on the
+        // pre-resolution identity saves up to five MusicBrainz round-trips on
+        // every hit. First page only, matching Tauri — paginated pages are
+        // cheap to recompute and would multiply the key space by the offset.
+        let cache_key = location::build_scene_cache_key_v1(&location::SceneCacheKey {
+            source_mbid,
+            area_id: area_id.unwrap_or(area_name),
+            country,
+            seeds: &source_seeds,
+            page_size: limit,
+            catalog_scope: None,
+        });
+
+        if offset == 0 {
+            let mut cached = None;
+            if let Ok(guard) = self.musicbrainz_cache.lock() {
+                if let Some(cache) = guard.as_ref() {
+                    cached = cache.get_scene_cache(&cache_key).ok().flatten();
+                }
+            }
+            if let Some(mut hit) = cached {
+                let removed = apply_scene_blacklist(&mut hit, blacklist);
+                log::info!(
+                    "[scene] cache hit for {} ({} artists, {} blacklisted out)",
+                    area_name,
+                    hit.artists.len(),
+                    removed
+                );
+                return Ok(hit);
+            }
+        }
 
         // Step 0: smart area resolution — city → parent subdivision
         // for broader results (Leyton → England, Seattle →
-        // Washington).
+        // Washington). A failure here is PARTIAL, not fatal: the raw
+        // area name still searches, just less broadly.
         let (search_name, display_name) = match area_id {
             Some(aid) => match self.musicbrainz.resolve_parent_subdivision(aid).await {
                 Ok(Some((subdivision, _))) => {
@@ -2476,7 +3090,10 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
                         .unwrap_or_else(|| subdivision.clone());
                     (subdivision, display)
                 }
-                _ => {
+                other => {
+                    if let Err(e) = other {
+                        log::warn!("[scene] area resolution failed for {area_name:?}: {e}");
+                    }
                     let display = country
                         .map(|c| format!("{}, {}", c, area_name))
                         .unwrap_or_else(|| area_name.to_string());
@@ -2491,11 +3108,9 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             }
         };
 
-        let source_seeds = AffinitySeeds {
-            genres: genres.clone(),
-            tags: tags.clone(),
-            normalized_seeds: genres.iter().chain(tags.iter()).cloned().collect(),
-        };
+        if cancel.is_cancelled() {
+            return Err(SceneDiscoveryError::Cancelled);
+        }
 
         // Step 2: pick search genres, dropping overly broad tags that
         // would return the whole country's catalog.
@@ -2537,13 +3152,57 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         let mut candidate_map: HashMap<String, (String, i32, usize, Vec<String>)> =
             HashMap::new();
         let per_genre_limit = 200usize;
-        for genre in &search_genres {
-            let result = self
+        let total_genres = search_genres.len();
+        // Failures used to be swallowed one by one and the whole method still
+        // returned Ok(empty). Counted now, because "one genre 503'd" and "the
+        // integration is off / we are offline" must not look the same.
+        let mut genre_failures = 0usize;
+        let mut last_genre_error = String::new();
+        for (genre_idx, genre) in search_genres.iter().enumerate() {
+            if cancel.is_cancelled() {
+                return Err(SceneDiscoveryError::Cancelled);
+            }
+            // Progress: MusicBrainz search phase = 0-40 %.
+            progress(
+                ScenePhase::Searching,
+                ((genre_idx as f64 / total_genres as f64) * 40.0) as u8,
+                genre.clone(),
+            );
+
+            let mut result = self
                 .musicbrainz
                 .search_artists_by_tag_and_area(genre, &search_name, country, per_genre_limit, 0)
                 .await;
-            let Ok(response) = result else {
-                continue;
+
+            // Honour the server's Retry-After once. MusicBrainz answers 503
+            // (and the proxy 429) with a whole-second header; the client has
+            // already parsed it into RateLimited(secs).
+            if let Err(qbz_integrations::IntegrationError::RateLimited(secs)) = &result {
+                let secs = *secs;
+                log::info!("[scene] MusicBrainz rate-limited on {genre:?}, backing off {secs}s");
+                if !scene_backoff(secs, cancel).await {
+                    return Err(SceneDiscoveryError::Cancelled);
+                }
+                result = self
+                    .musicbrainz
+                    .search_artists_by_tag_and_area(
+                        genre,
+                        &search_name,
+                        country,
+                        per_genre_limit,
+                        0,
+                    )
+                    .await;
+            }
+
+            let response = match result {
+                Ok(response) => response,
+                Err(e) => {
+                    log::warn!("[scene] genre+area search failed for {genre:?}: {e}");
+                    genre_failures += 1;
+                    last_genre_error = e.to_string();
+                    continue;
+                }
             };
             for artist in &response.artists {
                 if artist.id == source_mbid {
@@ -2587,6 +3246,13 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             }
         }
 
+        // Every upstream search failed => this is an ERROR, not an empty
+        // scene. It is also how "MusicBrainz is disabled" arrives, since the
+        // client refuses each call with ServiceUnavailable.
+        if total_genres > 0 && genre_failures == total_genres {
+            return Err(SceneDiscoveryError::UpstreamUnavailable(last_genre_error));
+        }
+
         // Step 3: score + sort. Final = affinity + (genre_hits-1)*15.
         let mut scored: Vec<(String, String, Vec<String>, i32)> = candidate_map
             .into_iter()
@@ -2611,22 +3277,127 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
 
         // Step 4: validate against Qobuz (exact normalized-name match,
         // pick the one with the most albums as a popularity proxy).
+        let total_to_validate = to_validate.len();
+        progress(
+            ScenePhase::Validating,
+            40,
+            format!("{} candidates", total_to_validate),
+        );
+
         let mut validated: Vec<LocationCandidate> = Vec::new();
-        for (mbid, mb_name, candidate_genres, score) in &to_validate {
-            let Ok(results) = self.search_artists(mb_name, 5, 0, None).await else {
+        let mut validation_failures = 0usize;
+        let mut last_validation_error = String::new();
+        for (validate_idx, (mbid, mb_name, candidate_genres, score)) in
+            to_validate.iter().enumerate()
+        {
+            if cancel.is_cancelled() {
+                return Err(SceneDiscoveryError::Cancelled);
+            }
+            // Progress: Qobuz validation phase = 40-95 %, every 5th row.
+            if validate_idx % 5 == 0 && total_to_validate > 0 {
+                progress(
+                    ScenePhase::Validating,
+                    40 + ((validate_idx as f64 / total_to_validate as f64) * 55.0) as u8,
+                    format!("{}/{}", validate_idx, total_to_validate),
+                );
+            }
+
+            let name_normalized = MusicBrainzCache::normalize_name(mb_name);
+
+            // Read-through validation cache. Only the Qobuz projection is
+            // stored (id/name/image/album count) — those four are a pure
+            // function of the name. The candidate is rebuilt around them from
+            // THIS scene's mbid, score and genres, which is exactly what made
+            // the Tauri-era whole-LocationCandidate cache unreplayable.
+            let mut cached_match = None;
+            if let Ok(guard) = self.musicbrainz_cache.lock() {
+                if let Some(cache) = guard.as_ref() {
+                    cached_match = cache.get_qobuz_artist_match(&name_normalized).ok().flatten();
+                }
+            }
+            // A hit on a since-blacklisted artist is treated as a MISS, not as
+            // "no match": re-running the search lets the next-best same-name
+            // Qobuz artist take the slot, exactly as a cold run would.
+            let cached_match =
+                cached_match.filter(|m| !(m.qobuz_id > 0 && blacklist(m.qobuz_id as u64)));
+
+            // RE-ASSERT THE ACCEPTANCE GATE ON REPLAY. The cache KEY is
+            // `MusicBrainzCache::normalize_name`, which also strips `'`, `"`,
+            // `.` and `,`; the cold path below accepts a result only when
+            // `normalize_artist_name` matches, and that one merely
+            // trims/lowercases/collapses whitespace. The key is therefore
+            // strictly COARSER than the predicate, so two MusicBrainz
+            // candidates that the cold path would treat as different names
+            // share one cache slot — "Guns N' Roses" and "Guns N Roses",
+            // "Eve." and "Eve". Whichever validated first would then own the
+            // row for BOTH, for the full 30-day TTL, and a replay that skipped
+            // the gate is the only way an artist the cold path would have
+            // REJECTED can end up attributed to a candidate.
+            //
+            // Checked here rather than by narrowing the key, so it still holds
+            // if either normaliser changes independently later.
+            let cached_match = cached_match
+                .filter(|m| normalize_artist_name(&m.name) == normalize_artist_name(mb_name));
+
+            if let Some(hit) = cached_match {
+                validated.push(LocationCandidate {
+                    mbid: mbid.clone(),
+                    mb_name: mb_name.clone(),
+                    qobuz_id: Some(hit.qobuz_id),
+                    qobuz_name: Some(hit.name),
+                    qobuz_image: hit.image,
+                    score: *score,
+                    genres: candidate_genres.clone(),
+                    qobuz_albums_count: hit.albums_count,
+                });
                 continue;
+            }
+
+            let results = match self.search_artists(mb_name, 5, 0, None).await {
+                Ok(results) => results,
+                Err(e) => {
+                    // Terminal classes end the page here rather than burning
+                    // up to 99 more searches that will fail the same way.
+                    if let Some(fatal) = scene_fatal_qobuz(&e) {
+                        log::warn!("[scene] Qobuz validation aborted: {e}");
+                        return Err(fatal);
+                    }
+                    log::warn!("[scene] Qobuz validation failed for {mb_name:?}: {e}");
+                    validation_failures += 1;
+                    last_validation_error = e.to_string();
+                    continue;
+                }
             };
             let mb_norm = normalize_artist_name(mb_name);
+            // The blacklist filters INSIDE the match, not after it: when the
+            // top same-name artist is blocked, the next-best one takes the
+            // slot instead of the row disappearing. That is Tauri's rule.
             let best = results
                 .items
                 .iter()
-                .filter(|a| normalize_artist_name(&a.name) == mb_norm)
+                .filter(|a| normalize_artist_name(&a.name) == mb_norm && !blacklist(a.id))
                 .max_by_key(|a| a.albums_count.unwrap_or(0));
             if let Some(qobuz_artist) = best {
                 let image_url = qobuz_artist
                     .image
                     .as_ref()
                     .and_then(|img| img.small.as_ref().or(img.thumbnail.as_ref()).cloned());
+                // Positive results only. Tauri's negative cache is disabled on
+                // purpose: "not on Qobuz" stuck for 30 days is how a newly
+                // added artist stays invisible.
+                if let Ok(guard) = self.musicbrainz_cache.lock() {
+                    if let Some(cache) = guard.as_ref() {
+                        let _ = cache.set_qobuz_artist_match(
+                            &name_normalized,
+                            &QobuzArtistMatch {
+                                qobuz_id: qobuz_artist.id as i64,
+                                name: qobuz_artist.name.clone(),
+                                image: image_url.clone(),
+                                albums_count: qobuz_artist.albums_count,
+                            },
+                        );
+                    }
+                }
                 validated.push(LocationCandidate {
                     mbid: mbid.clone(),
                     mb_name: mb_name.clone(),
@@ -2640,18 +3411,46 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             }
         }
 
+        // There were candidates and not one could be checked — the catalog is
+        // unreachable. Distinct from "checked them all, none are on Qobuz",
+        // which is a legitimately empty scene.
+        if total_to_validate > 0 && validation_failures == total_to_validate {
+            return Err(SceneDiscoveryError::CatalogUnavailable(
+                last_validation_error,
+            ));
+        }
+
+        progress(
+            ScenePhase::Done,
+            100,
+            format!("{} artists", validated.len()),
+        );
+
         let scene_label = country
             .map(|c| c.to_string())
             .unwrap_or_else(|| display_name.clone());
         let next_offset = offset + to_validate.len();
-        Ok(LocationDiscoveryResponse {
+        let response = LocationDiscoveryResponse {
             artists: validated,
             scene_label,
             genre_summary: genre_summary(&source_seeds),
             total_candidates,
             has_more: next_offset < total_candidates,
             next_offset,
-        })
+        };
+
+        // First page only, non-empty only — Tauri's rule. The stored rows are
+        // already blacklist-aware; the post-filter on read catches anything
+        // blocked afterwards, and `invalidate_scene_cache` covers un-blocking.
+        if offset == 0 && !response.artists.is_empty() {
+            if let Ok(guard) = self.musicbrainz_cache.lock() {
+                if let Some(cache) = guard.as_ref() {
+                    let _ = cache.set_scene_cache(&cache_key, &response);
+                }
+            }
+        }
+
+        Ok(response)
     }
 }
 
@@ -2929,6 +3728,7 @@ mod tests {
             title: String::new(),
             version: None,
             isrc: None,
+            audio_info: None,
             duration: 0,
             track_number: 0,
             media_number: None,
@@ -2941,7 +3741,11 @@ mod tests {
             hires_streamable: false,
             maximum_sampling_rate: None,
             maximum_bit_depth: None,
-            streamable: false,
+            // `None` = the fixture makes no availability claim, which is the
+            // honest value: nothing in `track_with`'s callers reads it.
+            streamable: None,
+            streamable_at: None,
+            release_date_stream: None,
             parental_warning: false,
             playlist_track_id: None,
             performers: None,
@@ -3073,6 +3877,11 @@ mod tests {
             image: Default::default(),
             label: None,
             genre: None,
+            artist: None,
+            version: None,
+            streamable: None,
+            streamable_at: None,
+            release_date_stream: None,
         });
         t
     }

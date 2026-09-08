@@ -1,4 +1,5 @@
 pub mod artist_blacklist;
+pub mod blacklist_portable;
 pub mod bundle;
 pub mod daemon_prefs;
 pub mod developer;
@@ -7,8 +8,11 @@ pub mod favorites;
 pub mod favorites_cache;
 pub mod graphics;
 pub mod local_favorites;
+pub mod payload_cache;
 pub mod pinned_items;
 pub mod playback;
+pub mod playlist_play_history;
+pub mod media_servers;
 pub mod plex;
 pub mod album_play_history;
 pub mod reco_store;

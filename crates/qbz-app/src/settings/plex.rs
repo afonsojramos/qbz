@@ -79,7 +79,7 @@ impl PlexSettingsStore {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open Plex settings database: {}", e))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
             .map_err(|e| format!("Failed to enable WAL for Plex settings database: {}", e))?;
 
         // Base (slice 2a) schema. New columns are added by idempotent ALTERs

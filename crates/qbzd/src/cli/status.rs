@@ -159,6 +159,23 @@ fn render_audio(p: &Value) -> String {
     if let (Some(sr), Some(bd)) = (sr, bd) {
         parts.push(format!("{sr} Hz / {bd}-bit"));
     }
+    if p.pointer("/audio/hardware_volume_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let active = p
+            .pointer("/audio/hardware_volume_active")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let control = p
+            .pointer("/audio/hardware_volume_control")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown control");
+        parts.push(format!(
+            "hardware volume: {control} ({})",
+            if active { "active" } else { "inactive" }
+        ));
+    }
     parts.join(" · ")
 }
 
@@ -276,7 +293,9 @@ mod tests {
             "auth": {"state": "logged_in", "user_id": 1234567, "subscription": "studio"},
             "audio": {"backend": "alsa", "configured_device": "hw:CARD=D30,DEV=0",
                       "device_present": true, "device_open": true,
-                      "bit_perfect": "DirectHardware", "sample_rate": 192000, "bit_depth": 24},
+                      "bit_perfect": "DirectHardware", "sample_rate": 192000, "bit_depth": 24,
+                      "hardware_volume_enabled": true, "hardware_volume_active": true,
+                      "hardware_volume_control": "D50 III,0"},
             "playback": {"state": "playing", "track_id": 176544871, "title": "Spain",
                          "artist": "Chick Corea", "position": 192, "duration": 581,
                          "volume": 0.8, "muted": false, "queue_len": 14},
@@ -317,6 +336,7 @@ mod tests {
         assert!(block.contains("qbzd 2.1.0 · api v1 · up 3d 0h · 127.0.0.1:8182"), "{block}");
         assert!(block.contains("auth      : logged in (user 1234567, studio)"), "{block}");
         assert!(block.contains("alsa hw:CARD=D30,DEV=0 · present · bit-perfect: DirectHardware · 192000 Hz / 24-bit"), "{block}");
+        assert!(block.contains("hardware volume: D50 III,0 (active)"), "{block}");
         assert!(block.contains("playback  : playing · \"Spain\" — Chick Corea · 3:12 / 9:41 · vol 80% · queue 14"), "{block}");
         assert!(block.contains("qconnect  : connected · session active · name \"QBZ (kitchen-pi)\""), "{block}");
         assert!(block.contains("last error: none"), "{block}");

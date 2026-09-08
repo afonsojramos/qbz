@@ -13,12 +13,14 @@ mod demux;
 mod dop;
 mod dsd2pcm;
 mod native;
+mod sacd_source;
 mod wav;
 
 pub use convert::{DsdPcmConverter, DEFAULT_GAIN_DB, OUTPUT_RATE};
 pub use demux::{open_dsd, DsdDemuxer, DsdError, DsdStreamInfo, DsdTags};
 pub use dop::{dop_carrier_rate, DopPacker, DopStream};
 pub use native::{native_u32_rate, NativeDsdStream, NATIVE_DSD_SILENCE_U32};
+pub use sacd_source::{ChannelLayout, SacdDemuxer};
 pub use wav::{frames_to_pcm24, wav_header, wav_total_size};
 
 /// Common surface of the boxed DSD word streams (DoP and native): an

@@ -30,6 +30,13 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+# W14: GlobalMemoryStatusEx stands in for /proc/meminfo. 0.61 is already in
+# the workspace lock (qbz-local-catalog, qbzd), so this pulls nothing new.
+windows-sys = { version = "0.61", features = [
+  "Win32_System_SystemInformation",
+] }
+
 [features]
 default = []
 # Tier 2 features (to be added later)

@@ -88,6 +88,16 @@ pub enum DiscoverySectionId {
     /// "Most Played Albums" — top albums by local play count
     /// (`qbz_app::settings::album_play_history`). Home + For You, default off.
     MostPlayedAlbums,
+    /// "Recently Played Playlists" — the playlists the user actually chose to
+    /// play, by last play (`qbz_app::settings::playlist_play_history`).
+    ///
+    /// Its sibling `RecentlyPlayedAlbums` used to absorb these: every track
+    /// start wrote its ALBUM into the recent list whatever the user had put on,
+    /// so playing one 40-track playlist filled a 24-entry album rail with that
+    /// playlist's contents. Plays are separated by context now, and this is
+    /// where the playlist half surfaces. Home + For You, default ON — it is the
+    /// answer to a question the album rail was silently answering wrong.
+    RecentlyPlayedPlaylists,
 }
 
 impl DiscoverySectionId {
@@ -115,6 +125,7 @@ impl DiscoverySectionId {
             ArtistSpotlight => "artistSpotlight",
             Pinned => "pinned",
             MostPlayedAlbums => "mostPlayedAlbums",
+            RecentlyPlayedPlaylists => "recentlyPlayedPlaylists",
         }
     }
 
@@ -142,6 +153,7 @@ impl DiscoverySectionId {
             "artistSpotlight" => ArtistSpotlight,
             "pinned" => Pinned,
             "mostPlayedAlbums" => MostPlayedAlbums,
+            "recentlyPlayedPlaylists" => RecentlyPlayedPlaylists,
             _ => return None,
         })
     }
@@ -192,6 +204,7 @@ pub fn default_prefs() -> DiscoverPrefs {
             pref(PressAwards, true),
             pref(QobuzPlaylists, true),
             pref(RecentlyPlayedAlbums, true),
+            pref(RecentlyPlayedPlaylists, true),
             pref(ContinueListening, true),
             pref(IdealDiscography, true),
             pref(MostStreamed, true),
@@ -223,6 +236,7 @@ pub fn default_prefs() -> DiscoverPrefs {
             pref(RadioStations, true),
             pref(ContinueListening, true),
             pref(RecentlyPlayedAlbums, true),
+            pref(RecentlyPlayedPlaylists, true),
             pref(TopArtists, true),
             pref(FavoriteAlbums, true),
             pref(SimilarAlbums, true),
@@ -418,6 +432,24 @@ pub fn reconcile_list(persisted: Option<&Vec<Value>>, fallback: &[SectionPref]) 
 // SQLite store
 // ---------------------------------------------------------------------------
 
+/// The rail sizes the UI offers, IN THE ORDER THE UI OFFERS THEM — the selector
+/// sends back an index into this array. Reordering is safe ONLY because what is
+/// STORED is the size and never the index (`save_rail_size` takes the count,
+/// `rail_size_index_of` derives the index back), so a stored 15 keeps meaning
+/// 15 whatever position it sits in. Keep that invariant or this comment becomes
+/// a trap.
+///
+/// There is no "uncapped" entry, and that is deliberate. It used to read "All",
+/// which was a lie twice over: an "all" in Qobuz terms is what the View-all
+/// page holds, and /discover/index hands each rail a DIFFERENT number anyway —
+/// measured on a live response, new_releases 26, ideal_discography 26,
+/// playlists 20, most_streamed 15, and qobuzissims / album_of_the_week /
+/// press_awards 10. One label could not be honest about all of them. So the
+/// default is now a real, uniform cap of ten and the entry says so.
+pub const RAIL_SIZE_PRESETS: [i64; 4] = [10, 15, 20, 25];
+
+pub const DEFAULT_RAIL_SIZE: i64 = 0;
+
 pub struct DiscoverPrefsStore {
     conn: Connection,
 }
@@ -431,7 +463,7 @@ impl DiscoverPrefsStore {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open discover prefs database: {}", e))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
             .map_err(|e| format!("Failed to enable WAL for discover prefs database: {}", e))?;
 
         conn.execute_batch(
@@ -447,6 +479,33 @@ impl DiscoverPrefsStore {
             params![default_prefs().to_json().to_string()],
         )
         .map_err(|e| format!("Failed to initialize discover prefs: {}", e))?;
+
+        // Rail size lives in its OWN TABLE, not as a key inside `prefs_json`,
+        // and that is a data-safety decision rather than a stylistic one.
+        //
+        // `DiscoverPrefs::to_json` rebuilds the blob FROM SCRATCH out of the
+        // keys the running binary knows, and `save` overwrites the whole
+        // column with it. This .db is SHARED with the Slint build, whose tree
+        // is frozen and will not be recompiled — so the installed Slint binary
+        // has the old `to_json` permanently. A new key inside the blob would
+        // therefore survive exactly until the user touched any toggle over
+        // there, and then vanish, with nothing logged anywhere.
+        //
+        // A separate table cannot be hit that way: the old binary never names
+        // it in any statement, and `CREATE TABLE IF NOT EXISTS` is idempotent
+        // in whichever build opens the file first. WAL + busy_timeout are
+        // already set above, so two binaries on one file is the existing
+        // design, not something this adds.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS discover_rail_sizes (
+                section_id TEXT PRIMARY KEY,
+                rail_size  INTEGER NOT NULL
+            );",
+        )
+        .map_err(|e| format!("Failed to create discover rail size table: {}", e))?;
+        // No seed row: ABSENT means the default, which is uncapped. Writing a
+        // row per section at open would put twenty rows in the file to say
+        // "unchanged", and would then have to be kept in step with the enum.
 
         Ok(Self { conn })
     }
@@ -478,6 +537,55 @@ impl DiscoverPrefsStore {
             },
             Err(_) => default_prefs(),
         }
+    }
+
+    /// How many items each Discover rail may show, by section id. `0` = no
+    /// cap, and a section ABSENT from the map is uncapped too.
+    ///
+    /// Never an error to the caller: a missing table (an older file) or a value
+    /// outside the presets yields an empty map / drops that row.
+    pub fn load_rail_sizes(&self) -> std::collections::HashMap<String, i64> {
+        let out = (|| -> Option<std::collections::HashMap<String, i64>> {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT section_id, rail_size FROM discover_rail_sizes")
+                .ok()?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })
+                .ok()?;
+            Some(
+                rows.flatten()
+                    .filter(|(_, n)| RAIL_SIZE_PRESETS.contains(n))
+                    .collect(),
+            )
+        })();
+        out.unwrap_or_default()
+    }
+
+    /// Persist ONE rail's size. Values outside the presets are rejected rather
+    /// than stored, so what loads back and the UI's index can never disagree.
+    /// The DEFAULT deletes the row instead of storing it — the file then only
+    /// carries the rails the user actually changed.
+    pub fn save_rail_size(&self, section_id: &str, n: i64) -> Result<(), String> {
+        if !RAIL_SIZE_PRESETS.contains(&n) {
+            return Err(format!("rail size {n} is not one of {RAIL_SIZE_PRESETS:?}"));
+        }
+        let sql = if n == DEFAULT_RAIL_SIZE {
+            self.conn.execute(
+                "DELETE FROM discover_rail_sizes WHERE section_id = ?1",
+                params![section_id],
+            )
+        } else {
+            self.conn.execute(
+                "INSERT INTO discover_rail_sizes (section_id, rail_size) VALUES (?1, ?2)
+                 ON CONFLICT(section_id) DO UPDATE SET rail_size = excluded.rail_size",
+                params![section_id, n],
+            )
+        };
+        sql.map_err(|e| format!("Failed to save discover rail size: {}", e))?;
+        Ok(())
     }
 
     /// Persist the whole prefs blob (upsert row 1).
@@ -525,18 +633,20 @@ mod tests {
     #[test]
     fn defaults_match_spec_exactly() {
         let d = default_prefs();
-        // home: 15 entries, first 8 ON (Tauri sectionPrefs.ts + Slint `pinned`
-        // + the local mostPlayedAlbums, default off).
+        // home: 16 entries, first 9 ON (Tauri sectionPrefs.ts + Slint `pinned`
+        // + the local mostPlayedAlbums, default off, + recentlyPlayedPlaylists
+        // sitting right after its album sibling, default on).
         assert_eq!(
             ids(&d.home),
             vec![
                 NewReleases, PressAwards, QobuzPlaylists, RecentlyPlayedAlbums,
+                RecentlyPlayedPlaylists,
                 ContinueListening, IdealDiscography, MostStreamed, Pinned,
                 QobuzMixes, ReleaseWatch, EditorPicks, Qobuzissimes, TopArtists,
                 FavoriteAlbums, MostPlayedAlbums,
             ]
         );
-        assert_eq!(d.enabled_count(DiscoveryTab::Home), 8);
+        assert_eq!(d.enabled_count(DiscoveryTab::Home), 9);
         assert!(d.is_enabled(DiscoveryTab::Home, MostStreamed));
         assert!(!d.is_enabled(DiscoveryTab::Home, Qobuzissimes));
         // editorPicks: 7 entries, all ON.
@@ -545,13 +655,15 @@ mod tests {
             vec![NewReleases, EditorPicks, Qobuzissimes, PressAwards, MostStreamed, IdealDiscography, QobuzPlaylists]
         );
         assert_eq!(d.enabled_count(DiscoveryTab::EditorPicks), 7);
-        // forYou: 14 entries, qobuzMixes first, pinned second; the 13
-        // Tauri+Slint ones ON, mostPlayedAlbums (local addition) OFF.
-        assert_eq!(d.for_you.len(), 14);
+        // forYou: 15 entries, qobuzMixes first, pinned second; the 13
+        // Tauri+Slint ones plus recentlyPlayedPlaylists ON, mostPlayedAlbums
+        // (local addition) OFF.
+        assert_eq!(d.for_you.len(), 15);
         assert_eq!(d.for_you[0].id, QobuzMixes);
         assert_eq!(d.for_you[1].id, Pinned);
-        assert_eq!(d.for_you[13].id, MostPlayedAlbums);
-        assert_eq!(d.enabled_count(DiscoveryTab::ForYou), 13);
+        assert_eq!(d.for_you[6].id, RecentlyPlayedPlaylists);
+        assert_eq!(d.for_you[14].id, MostPlayedAlbums);
+        assert_eq!(d.enabled_count(DiscoveryTab::ForYou), 14);
     }
 
     // --- Group 2: reconcile_list ---

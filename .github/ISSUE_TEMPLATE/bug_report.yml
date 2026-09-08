@@ -1,33 +1,34 @@
 name: Bug report
-description: Report something that is not working as expected
-title: "[Bug] "
+description: Tell us about something that is not working as expected
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        ## ⚠️ Bug reports need logs
-        Without logs I am debugging blind, and the report will almost certainly
-        stall waiting on `needs: info` instead of getting fixed.
+        Thanks for reporting this. Please describe what happened and, if
+        possible, how to reproduce it. Logs help with most reports, but they
+        are not required when the issue is self-explanatory or unavailable.
 
-        **Please attach your logs in the Logs section below** — it is the single
-        most useful thing you can do to get this fixed fast
-        (**Settings → Developer Mode → View Logs → Upload** the Terminal *and*
-        Console tabs, then paste both URLs). If the app crashes before the UI
-        opens, use the terminal fallback described in that section.
+        If you investigated the cause, please include what you found. Patches
+        are welcome, but never required.
 
-  - type: checkboxes
-    id: preflight
+  - type: dropdown
+    id: area
     attributes:
-      label: Before submitting
-      description: A bug report without these is much harder to act on.
+      label: Area
+      description: Which part of QBZ is affected?
       options:
-        - label: I have attached my logs below (Terminal + Console), or explained why I cannot get them.
-          required: true
-        - label: I searched the existing issues and this is not a duplicate.
-          required: true
-        - label: I included concrete steps to reproduce.
-          required: true
+        - Startup or crash
+        - Playback or audio
+        - Qobuz login or catalog
+        - Local or offline library
+        - Qobuz Connect or casting
+        - Interface or navigation
+        - qbzd or headless use
+        - Installation, update or packaging
+        - Other
+    validations:
+      required: true
 
   - type: dropdown
     id: platform
@@ -36,41 +37,29 @@ body:
       options:
         - Linux
         - macOS
+        - Windows
+        - Other
     validations:
       required: true
 
   - type: textarea
     id: description
     attributes:
-      label: Description
-      description: A clear and concise description of the problem.
+      label: What happened?
+      description: Tell us what you observed and what you expected instead.
+      placeholder: Describe the problem in your own words.
     validations:
       required: true
 
   - type: textarea
     id: steps
     attributes:
-      label: Steps to reproduce
-      value: |
-        1.
-        2.
-        3.
-    validations:
-      required: true
-
-  - type: textarea
-    id: expected
-    attributes:
-      label: Expected behavior
-      description: What you expected to happen.
-    validations:
-      required: true
-
-  - type: textarea
-    id: actual
-    attributes:
-      label: Actual behavior
-      description: What actually happened.
+      label: How can we reproduce it?
+      description: If it is intermittent, describe what you were doing before it appeared.
+      placeholder: |
+        1. Open...
+        2. Select...
+        3. Observe...
     validations:
       required: true
 
@@ -78,7 +67,8 @@ body:
     id: version
     attributes:
       label: QBZ version
-      placeholder: e.g. v1.2.0
+      description: Find it under About, or include the package version.
+      placeholder: e.g. 2.1.0
     validations:
       required: true
 
@@ -88,94 +78,51 @@ body:
       label: Installation method
       options:
         - AppImage
-        - .deb
-        - .rpm
+        - APT repository or .deb
+        - RPM repository or .rpm
         - AUR
         - Gentoo overlay
-        - Tarball
+        - Nix or NixOS
         - Flatpak
-        - DMG (macOS)
+        - Snap
+        - Homebrew Cask
+        - Signed macOS DMG
+        - Upstream macOS DMG
+        - Windows MSI or ZIP
+        - Standalone qbzd tarball
         - Built from source
+        - Other
     validations:
       required: true
 
-  - type: input
-    id: distro
+  - type: textarea
+    id: environment
     attributes:
-      label: Distribution / macOS version
-      description: Linux distro or macOS version.
-      placeholder: e.g. Arch Linux, Ubuntu 24.04, Fedora 43, macOS 15.3 Sequoia
-
-  - type: input
-    id: de
-    attributes:
-      label: Desktop environment / WM
-      description: Linux only.
-      placeholder: e.g. KDE Plasma 6, GNOME 46
-
-  - type: dropdown
-    id: display
-    attributes:
-      label: Display server
-      description: Linux only.
-      options:
-        - Wayland
-        - X11
-        - N/A (macOS)
-
-  - type: input
-    id: gpu
-    attributes:
-      label: GPU
-      placeholder: e.g. NVIDIA RTX 3070, AMD RX 6600 XT, Apple M3
-
-  - type: dropdown
-    id: audio_backend
-    attributes:
-      label: Audio backend
-      options:
-        - PipeWire
-        - ALSA Direct
-        - PulseAudio
-        - System Default (macOS)
-        - Auto
-
-  - type: input
-    id: dac
-    attributes:
-      label: Audio device / DAC
-      placeholder: e.g. Schiit Bifrost 2, FiiO K17
+      label: Environment details
+      description: Add only what seems relevant to this report.
+      placeholder: |
+        OS or distribution:
+        Desktop environment / display server:
+        Audio backend / DAC:
+        GPU:
 
   - type: textarea
     id: logs
     attributes:
       label: Logs
       description: |
-        **Sharing your logs when you open an issue helps me fix it much faster — please include them whenever you can.**
+        Logs make most bugs much faster to diagnose and often reveal whether
+        the cause is QBZ, packaging, configuration or the surrounding system.
 
-        1. Open **Settings > Developer Mode > View Logs**
-        2. Click **Upload** on both the **Terminal** and **Console** tabs
-        3. Paste both URLs here
-
-        Where to find the logs (click the image to enlarge):
-
-        [![Settings > Developer Mode > View Logs](https://raw.githubusercontent.com/vicrodh/qbz/main/docs/release-1.1.15/screenshots/log_access_for_bug_reporting.png)](https://raw.githubusercontent.com/vicrodh/qbz/main/docs/release-1.1.15/screenshots/log_access_for_bug_reporting.png)
-
-        **If QBZ crashes on startup**, run from terminal:
-        `flatpak run com.blitzfc.qbz 2>&1 | tee /tmp/qbz-crash.log`
-        Then upload: `curl -F'file=@/tmp/qbz-crash.log' https://0x0.st`
-      value: |
-        - Terminal log URL:
-        - Console log URL:
+        If they are relevant and available, open Settings > Developer Mode >
+        View Logs, upload both Terminal and Console, and paste both links here.
+        For startup failures, terminal output is enough.
+      placeholder: |
+        Terminal log URL:
+        Console log URL:
 
   - type: textarea
-    id: screenshots
+    id: attachments
     attributes:
-      label: Screenshots
-      description: If applicable, add screenshots to help illustrate the issue.
-
-  - type: textarea
-    id: context
-    attributes:
-      label: Additional context
-      description: Anything else that may help reproduce or understand the issue.
+      label: Screenshots or additional context
+      description: Drag in images or files, or add anything else that may help.

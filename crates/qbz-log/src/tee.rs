@@ -3,18 +3,53 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::sync::Mutex;
+use std::time::Instant;
 
 use log::{Log, Metadata, Record};
 
 use crate::line::LogLine;
+use crate::repeat::ConsecutiveRecords;
 use crate::{redact, ring};
 
 /// Wraps `env_logger`'s built `Logger` and tees every record to the in-memory ring and
 /// (optionally) the on-disk log file, with secret redaction applied once at this single
 /// write choke point. **All** sinks (ring, file, and stderr) receive the redacted text.
+/// Consecutive duplicate records are summarized with their original severity,
+/// target, redacted message, repetition count and monotonic elapsed time.
 pub struct TeeLogger {
-    pub(crate) inner: env_logger::Logger,
-    pub(crate) file: Option<Mutex<BufWriter<File>>>,
+    inner: env_logger::Logger,
+    // One lock covers grouping AND all sink writes: concurrent threads cannot
+    // interleave a summary and its next record or reorder the file vs. the ring.
+    output: Mutex<Output>,
+}
+
+struct Output {
+    file: Option<BufWriter<File>>,
+    consecutive: ConsecutiveRecords,
+}
+
+impl TeeLogger {
+    pub(crate) fn new(inner: env_logger::Logger, file: Option<BufWriter<File>>) -> Self {
+        Self {
+            inner,
+            output: Mutex::new(Output {
+                file,
+                consecutive: ConsecutiveRecords::default(),
+            }),
+        }
+    }
+}
+
+impl Output {
+    fn write(&mut self, line: LogLine) {
+        let formatted = format_line(&line);
+        ring::push(line);
+        if let Some(writer) = &mut self.file {
+            let _ = writeln!(writer, "{formatted}");
+        }
+        // Never delegate to inner.log(record): it would bypass redaction.
+        let _ = writeln!(std::io::stderr(), "{formatted}");
+    }
 }
 
 fn now_epoch_ms() -> i64 {
@@ -45,33 +80,35 @@ impl Log for TeeLogger {
 
         // Redact ONCE; every downstream sink gets the cleaned text.
         let msg = redact::redact(&record.args().to_string());
+        let mut output = self.output.lock().unwrap_or_else(|p| p.into_inner());
         let line = LogLine {
             ts: now_epoch_ms(),
             level: record.level(),
             target: record.target().to_owned(),
-            message: msg.clone(),
+            message: msg,
         };
-
-        ring::push(line.clone());
-
-        if let Some(file) = &self.file {
-            if let Ok(mut writer) = file.lock() {
-                let _ = writeln!(writer, "{}", format_line(&line));
+        let [summary, first] = output.consecutive.push(line, Instant::now());
+        let summarized = summary.is_some();
+        for line in [summary, first].into_iter().flatten() {
+            output.write(line);
+        }
+        // Compaction may no longer fill BufWriter for minutes. Make periodic
+        // summaries visible to a live file tail as well as stderr/the ring.
+        if summarized {
+            if let Some(writer) = &mut output.file {
+                let _ = writer.flush();
             }
         }
-
-        // stderr: write the redacted line ourselves. Delegating to
-        // `self.inner.log(record)` would reprint the *original* Record args
-        // and bypass redaction (terminal transcripts, CI logs, support dumps).
-        let _ = writeln!(std::io::stderr(), "{}", format_line(&line));
     }
 
     fn flush(&self) {
+        let mut output = self.output.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(summary) = output.consecutive.flush() {
+            output.write(summary);
+        }
         self.inner.flush();
-        if let Some(file) = &self.file {
-            if let Ok(mut writer) = file.lock() {
-                let _ = writer.flush();
-            }
+        if let Some(writer) = &mut output.file {
+            let _ = writer.flush();
         }
         let _ = std::io::stderr().flush();
     }

@@ -1,8 +1,8 @@
 //! qbz-i18n — frontend-agnostic gettext-style translation catalog.
 //!
-//! Reads the same gettext `.po` files Slint bundles, keyed by
-//! `msgid = English source string` (no `msgctxt`). Reusable by any frontend
-//! (Slint / TUI / headless) — no slint or tauri dependencies (ADR-006).
+//! Reads QBZ's gettext `.po` files, keyed by `msgid = English source string`
+//! (no `msgctxt`). Reusable by Qt, TUI, or headless consumers, without a
+//! frontend dependency (ADR-006).
 
 pub mod plural;
 pub mod po;
@@ -16,16 +16,21 @@ use std::sync::OnceLock;
 /// Supported language codes, indexed by the value stored in [`CURRENT`].
 const LANGS: [&str; 8] = ["en", "es", "de", "fr", "pt", "ru", "ja", "nl"];
 
-/// Embedded `.po` sources. Path is relative to this file
-/// (`crates/qbz-i18n/src/lib.rs`): `../` = `qbz-i18n/`, `../../` = `crates/`.
-const PO_EN: &str = include_str!("../../qbz-ui/translations/en/LC_MESSAGES/qbz-ui.po");
-const PO_ES: &str = include_str!("../../qbz-ui/translations/es/LC_MESSAGES/qbz-ui.po");
-const PO_DE: &str = include_str!("../../qbz-ui/translations/de/LC_MESSAGES/qbz-ui.po");
-const PO_FR: &str = include_str!("../../qbz-ui/translations/fr/LC_MESSAGES/qbz-ui.po");
-const PO_PT: &str = include_str!("../../qbz-ui/translations/pt/LC_MESSAGES/qbz-ui.po");
-const PO_RU: &str = include_str!("../../qbz-ui/translations/ru/LC_MESSAGES/qbz-ui.po");
-const PO_JA: &str = include_str!("../../qbz-ui/translations/ja/LC_MESSAGES/qbz-ui.po");
-const PO_NL: &str = include_str!("../../qbz-ui/translations/nl/LC_MESSAGES/qbz-ui.po");
+/// Embedded `.po` sources, OWNED BY THIS CRATE. Path is relative to this file
+/// (`crates/qbz-i18n/src/lib.rs`): `../` = `qbz-i18n/`.
+///
+/// These catalogs are intentionally owned here so deleting or replacing a
+/// frontend cannot break the shared translation crate through hidden
+/// `include_str!` paths. The historical `qbz-ui.po` filename is an on-disk
+/// catalog name, not a dependency on the retired frontend.
+const PO_EN: &str = include_str!("../translations/en/LC_MESSAGES/qbz-ui.po");
+const PO_ES: &str = include_str!("../translations/es/LC_MESSAGES/qbz-ui.po");
+const PO_DE: &str = include_str!("../translations/de/LC_MESSAGES/qbz-ui.po");
+const PO_FR: &str = include_str!("../translations/fr/LC_MESSAGES/qbz-ui.po");
+const PO_PT: &str = include_str!("../translations/pt/LC_MESSAGES/qbz-ui.po");
+const PO_RU: &str = include_str!("../translations/ru/LC_MESSAGES/qbz-ui.po");
+const PO_JA: &str = include_str!("../translations/ja/LC_MESSAGES/qbz-ui.po");
+const PO_NL: &str = include_str!("../translations/nl/LC_MESSAGES/qbz-ui.po");
 
 /// Current language index (0=en, 1=es, 2=de, 3=fr, 4=pt, 5=ru, 6=ja, 7=nl). Defaults to en.
 static CURRENT: AtomicU8 = AtomicU8::new(0);

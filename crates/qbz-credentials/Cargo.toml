@@ -16,7 +16,6 @@ aes-gcm = "0.10"
 sha2 = "0.11"
 rand = "0.10"
 dirs = "6"
-keyring = { version = "3", features = ["async-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -29,3 +28,19 @@ tempfile = "3"
 # running" and dead AT-SPI accessibility. async-io futures are runtime-
 # agnostic, so our portal call still awaits fine inside tokio.
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "secret"] }
+# OS keyring backends, per target. keyring 3 has NO default backend feature:
+# without the per-platform one it silently exports the in-memory `mock`
+# (keyring-3.6.3/src/lib.rs:274-298), whose writes succeed and whose contents
+# die with the process. An unconditional feature list also meant this crate
+# only resolved correctly because Cargo unified features with qbz-secrets.
+# Same shape as crates/qbz-secrets/Cargo.toml.
+keyring = { version = "3", default-features = false, features = [
+  "async-secret-service",
+  "crypto-rust",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }

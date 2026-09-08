@@ -45,6 +45,10 @@ pub struct DaemonShared {
     /// funnels through) or a successful QConnect (re)connect. Defaults true
     /// (optimistic) until the first outcome latches it.
     pub network_online: std::sync::atomic::AtomicBool,
+    /// CoreEvent bus handle so state mutations here can publish matching bus
+    /// events (`emit_qconnect_session_changed`). None until `daemon::run`
+    /// attaches it right after boot; tests leave it None.
+    pub bus: Option<tokio::sync::broadcast::Sender<qbz_models::CoreEvent>>,
 }
 
 impl DaemonShared {
@@ -53,7 +57,8 @@ impl DaemonShared {
     /// `Mutex<DaemonShared>` guard as every other field here, not a
     /// synchronization primitive of its own.
     pub fn network_online(&self) -> bool {
-        self.network_online.load(std::sync::atomic::Ordering::Relaxed)
+        self.network_online
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Latch the network-reachability signal. See the field doc for exactly
@@ -61,6 +66,21 @@ impl DaemonShared {
     pub fn set_network_online(&self, online: bool) {
         self.network_online
             .store(online, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Publish the CURRENT `qconnect` block as a `QconnectSessionChanged` bus
+    /// event (SSE `/api/events`, `qbzd watch`, the event hook). Call AFTER
+    /// mutating `self.qconnect`; a best-effort no-op before the bus attaches
+    /// or when no receiver is subscribed.
+    pub fn emit_qconnect_session_changed(&self) {
+        if let Some(bus) = &self.bus {
+            let _ = bus.send(qbz_models::CoreEvent::QconnectSessionChanged {
+                state: self.qconnect.state.clone(),
+                device_name: (!self.qconnect.device_name.is_empty())
+                    .then(|| self.qconnect.device_name.clone()),
+                session_active: self.qconnect.session_active,
+            });
+        }
     }
 }
 
@@ -75,13 +95,41 @@ pub fn token_fingerprint(token: &str) -> u64 {
     hasher.finish()
 }
 
-#[derive(Debug, Default, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct QconnectStatus {
     pub enabled: bool,
     pub state: String, // "off"|"connecting"|"connected"|"retrying"|"exhausted"
     pub session_active: bool,
     pub device_name: String,
     pub last_transport_reconnect: Option<String>,
+    /// LAN receiver lifecycle. Contract values are
+    /// off|binding|listening|validating|delegated|restoring|error.
+    pub lan_state: String,
+    /// Bound receiver port, published only while the LAN service is live.
+    pub lan_port: Option<u16>,
+    /// Credential authority currently driving QConnect: owner|delegated.
+    pub credential_origin: String,
+    /// Latest candidate under validation/commit, never a session identifier.
+    pub candidate_generation: Option<u64>,
+    /// Sanitized LAN failure code. Never contains an endpoint, JWT, body, or IP.
+    pub last_lan_error: Option<String>,
+}
+
+impl Default for QconnectStatus {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            state: String::new(),
+            session_active: false,
+            device_name: String::new(),
+            last_transport_reconnect: None,
+            lan_state: "off".to_string(),
+            lan_port: None,
+            credential_origin: "owner".to_string(),
+            candidate_generation: None,
+            last_lan_error: None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -104,6 +152,28 @@ mod tests {
         assert!(!q.session_active);
         assert_eq!(q.device_name, "");
         assert!(q.last_transport_reconnect.is_none());
+        assert_eq!(q.lan_state, "off");
+        assert!(q.lan_port.is_none());
+        assert_eq!(q.credential_origin, "owner");
+        assert!(q.candidate_generation.is_none());
+        assert!(q.last_lan_error.is_none());
+    }
+
+    #[test]
+    fn qconnect_lan_observability_serializes_with_contract_field_names() {
+        let mut q = QconnectStatus::default();
+        q.lan_state = "validating".to_string();
+        q.lan_port = Some(49_152);
+        q.credential_origin = "delegated".to_string();
+        q.candidate_generation = Some(7);
+        q.last_lan_error = Some("qws_auth_rejected".to_string());
+
+        let value = serde_json::to_value(q).expect("serialize QConnect status");
+        assert_eq!(value["lan_state"], "validating");
+        assert_eq!(value["lan_port"], 49_152);
+        assert_eq!(value["credential_origin"], "delegated");
+        assert_eq!(value["candidate_generation"], 7);
+        assert_eq!(value["last_lan_error"], "qws_auth_rejected");
     }
 
     #[test]
@@ -141,6 +211,7 @@ mod tests {
             qconnect: QconnectStatus::default(),
             credential_fingerprint: None,
             network_online: std::sync::atomic::AtomicBool::new(true),
+            bus: None,
         };
         assert_eq!(shared.auth, AuthState::LoggedIn);
         assert_eq!(shared.user_id, Some(1234567));
@@ -164,6 +235,7 @@ mod tests {
             qconnect: QconnectStatus::default(),
             credential_fingerprint: None,
             network_online: std::sync::atomic::AtomicBool::new(true),
+            bus: None,
         };
         assert!(shared.network_online(), "defaults true (optimistic)");
 

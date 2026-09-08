@@ -30,6 +30,14 @@ pub struct PersistedQueueTrack {
     pub is_local: bool,
     pub album_id: Option<String>,
     pub artist_id: Option<u64>,
+    /// Resolved availability — absence was already interpreted upstream by
+    /// `qbz_models::Track::is_streamable`, so this stays a plain `bool` while
+    /// the catalog model is an `Option<bool>`, and `default_streamable` (TRUE)
+    /// covers a JSON snapshot written before the column existed. Values written
+    /// before the model became tri-state are untrustworthy and are cleared once
+    /// by the `user_version = 1` migration in `open_at`; from that point on
+    /// `false` here means only "Qobuz said no", which is a state a DOWNLOADED
+    /// track legitimately persists in.
     #[serde(default = "default_streamable")]
     pub streamable: bool,
     #[serde(default)]
@@ -50,6 +58,31 @@ pub struct PersistedPlaybackSession {
     pub repeat_mode: String,
     pub was_playing: bool,
     pub saved_at: i64,
+}
+
+/// Additive queue fields that the legacy portable session shape cannot carry
+/// without breaking older frontend struct literals. Positions refer to the
+/// simultaneously persisted `queue_tracks` vector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedQueueTrackEdition {
+    pub position: usize,
+    pub track_id: u64,
+    pub version: Option<String>,
+    pub album_version: Option<String>,
+}
+
+/// One oldest-first play-history entry. `track_id` validates that `position`
+/// still refers to the same queue snapshot before the entry is restored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedQueueHistoryEntry {
+    pub position: usize,
+    pub track_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PersistedQueueExtras {
+    pub editions: Vec<PersistedQueueTrackEdition>,
+    pub history: Vec<PersistedQueueHistoryEntry>,
 }
 
 impl Default for PersistedPlaybackSession {
@@ -153,6 +186,19 @@ impl SessionStore {
                 source TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS queue_track_extras (
+                position INTEGER PRIMARY KEY,
+                track_id INTEGER NOT NULL,
+                version TEXT,
+                album_version TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS queue_history (
+                sequence INTEGER PRIMARY KEY,
+                position INTEGER NOT NULL,
+                track_id INTEGER NOT NULL
+            );
+
             INSERT OR IGNORE INTO player_state (id, current_position_secs, volume, shuffle_enabled, repeat_mode, was_playing, saved_at)
             VALUES (1, 0, 0.75, 0, 'off', 0, 0);
             ",
@@ -252,6 +298,51 @@ impl SessionStore {
             );
         }
 
+        // ── One-shot: distrust every `streamable` written before the model
+        //    became tri-state ────────────────────────────────────────────────
+        //
+        // `queue_tracks.streamable` is persisted from `QueueTrack.streamable`,
+        // which was fed from `qbz_models::Track.streamable` — a plain `bool`
+        // whose `#[serde(default)]` turned an ABSENT key into `false`. So a row
+        // queued from any endpoint that omits the key was stored as `0` meaning
+        // "the payload was terse", not "Qobuz pulled this track".
+        //
+        // The unavailability work gives `0` a new, destructive meaning: an
+        // unavailable track never enters the queue. Left alone, those legacy
+        // zeroes would silently delete tracks from every restored session, for
+        // good — on a player whose entire point is not losing the user's music.
+        //
+        // The original value is unrecoverable (nothing on disk records WHY a
+        // row is 0), so the only honest repair is to clear the poison once and
+        // let the live API re-establish the truth on the next listing fetch,
+        // with the reactive auto-skip as the backstop for anything genuinely
+        // dead. Erring toward "available" here is the same asymmetry
+        // `Track::is_streamable` documents: a wasted round trip is cheap, a
+        // vanished track is not.
+        //
+        // It must be ONE-SHOT rather than a coercion on read, because after the
+        // model change a `0` is meaningful again: a track Qobuz pulled but the
+        // user already DOWNLOADED stays in the queue and plays from disk, and
+        // it stays there with `streamable = 0`. Coercing on read would
+        // resurrect that row as available forever and re-hide the very state
+        // the render is meant to distinguish.
+        //
+        // `PRAGMA user_version` is the guard — it is 0 on every database that
+        // predates this build and on a freshly created one, where the UPDATE
+        // simply matches no rows. The column-probe idiom used by the migrations
+        // above cannot express this: nothing is being added, only rewritten.
+        let schema_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap_or(0);
+        if schema_version < 1 {
+            let _ = conn.execute_batch(
+                "
+                UPDATE queue_tracks SET streamable = 1 WHERE streamable = 0;
+                PRAGMA user_version = 1;
+                ",
+            );
+        }
+
         Ok(Self { conn })
     }
 
@@ -268,6 +359,14 @@ impl SessionStore {
         if let Err(e) = self.conn.execute("DELETE FROM queue_tracks", []) {
             let _ = self.conn.execute("ROLLBACK", []);
             return Err(format!("Failed to clear queue: {}", e));
+        }
+        if let Err(e) = self.conn.execute("DELETE FROM queue_track_extras", []) {
+            let _ = self.conn.execute("ROLLBACK", []);
+            return Err(format!("Failed to clear queue track extras: {e}"));
+        }
+        if let Err(e) = self.conn.execute("DELETE FROM queue_history", []) {
+            let _ = self.conn.execute("ROLLBACK", []);
+            return Err(format!("Failed to clear queue history: {e}"));
         }
 
         for (pos, track) in session.playback.queue_tracks.iter().enumerate() {
@@ -431,6 +530,95 @@ impl SessionStore {
         })
     }
 
+    /// Persist edition subtitles and oldest-first playback history alongside
+    /// the portable session snapshot. Kept additive so older frontends that
+    /// construct `PersistedPlaybackSession` remain source-compatible.
+    pub fn save_queue_extras(&self, extras: &PersistedQueueExtras) -> Result<(), String> {
+        self.conn
+            .execute("BEGIN TRANSACTION", [])
+            .map_err(|e| format!("Failed to begin queue-extras transaction: {e}"))?;
+
+        let save = (|| -> Result<(), String> {
+            self.conn
+                .execute("DELETE FROM queue_track_extras", [])
+                .map_err(|e| format!("Failed to clear queue track extras: {e}"))?;
+            self.conn
+                .execute("DELETE FROM queue_history", [])
+                .map_err(|e| format!("Failed to clear queue history: {e}"))?;
+
+            for edition in &extras.editions {
+                self.conn
+                    .execute(
+                        "INSERT INTO queue_track_extras (position, track_id, version, album_version) VALUES (?1, ?2, ?3, ?4)",
+                        params![
+                            edition.position as i64,
+                            edition.track_id as i64,
+                            edition.version.as_deref(),
+                            edition.album_version.as_deref(),
+                        ],
+                    )
+                    .map_err(|e| format!("Failed to save queue track extra: {e}"))?;
+            }
+
+            for (sequence, entry) in extras.history.iter().enumerate() {
+                self.conn
+                    .execute(
+                        "INSERT INTO queue_history (sequence, position, track_id) VALUES (?1, ?2, ?3)",
+                        params![sequence as i64, entry.position as i64, entry.track_id as i64],
+                    )
+                    .map_err(|e| format!("Failed to save queue history: {e}"))?;
+            }
+            Ok(())
+        })();
+
+        if let Err(error) = save {
+            let _ = self.conn.execute("ROLLBACK", []);
+            return Err(error);
+        }
+        self.conn
+            .execute("COMMIT", [])
+            .map_err(|e| format!("Failed to commit queue-extras transaction: {e}"))?;
+        Ok(())
+    }
+
+    pub fn load_queue_extras(&self) -> Result<PersistedQueueExtras, String> {
+        let mut editions_stmt = self
+            .conn
+            .prepare(
+                "SELECT position, track_id, version, album_version FROM queue_track_extras ORDER BY position",
+            )
+            .map_err(|e| format!("Failed to prepare queue track extras query: {e}"))?;
+        let editions = editions_stmt
+            .query_map([], |row| {
+                Ok(PersistedQueueTrackEdition {
+                    position: row.get::<_, i64>(0)? as usize,
+                    track_id: row.get::<_, i64>(1)? as u64,
+                    version: row.get(2)?,
+                    album_version: row.get(3)?,
+                })
+            })
+            .map_err(|e| format!("Failed to query queue track extras: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read queue track extras: {e}"))?;
+
+        let mut history_stmt = self
+            .conn
+            .prepare("SELECT position, track_id FROM queue_history ORDER BY sequence")
+            .map_err(|e| format!("Failed to prepare queue history query: {e}"))?;
+        let history = history_stmt
+            .query_map([], |row| {
+                Ok(PersistedQueueHistoryEntry {
+                    position: row.get::<_, i64>(0)? as usize,
+                    track_id: row.get::<_, i64>(1)? as u64,
+                })
+            })
+            .map_err(|e| format!("Failed to query queue history: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read queue history: {e}"))?;
+
+        Ok(PersistedQueueExtras { editions, history })
+    }
+
     pub fn save_position(&self, position_secs: u64) -> Result<(), String> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -473,6 +661,12 @@ impl SessionStore {
         self.conn
             .execute("DELETE FROM queue_tracks", [])
             .map_err(|e| format!("Failed to clear queue: {}", e))?;
+        self.conn
+            .execute("DELETE FROM queue_track_extras", [])
+            .map_err(|e| format!("Failed to clear queue track extras: {e}"))?;
+        self.conn
+            .execute("DELETE FROM queue_history", [])
+            .map_err(|e| format!("Failed to clear queue history: {e}"))?;
 
         self.conn.execute(
             "UPDATE player_state SET current_index = NULL, current_position_secs = 0, was_playing = 0, last_view = 'home', view_context_id = NULL, view_context_type = NULL WHERE id = 1",
@@ -591,8 +785,124 @@ mod tests {
         assert!(loaded.playback.was_playing);
         assert!(loaded.playback.saved_at > 0);
         assert_eq!(loaded.shell_view.last_view, "album");
-        assert_eq!(loaded.shell_view.view_context_id.as_deref(), Some("album-1"));
-        assert_eq!(loaded.shell_view.view_context_type.as_deref(), Some("album"));
+        assert_eq!(
+            loaded.shell_view.view_context_id.as_deref(),
+            Some("album-1")
+        );
+        assert_eq!(
+            loaded.shell_view.view_context_type.as_deref(),
+            Some("album")
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn session_store_round_trips_queue_editions_and_history() {
+        let dir = unique_test_dir("session-queue-extras");
+        let store = SessionStore::new_at(&dir).expect("open store");
+        let session = PersistedSessionSnapshot {
+            playback: PersistedPlaybackSession {
+                queue_tracks: vec![sample_track()],
+                current_index: Some(0),
+                ..PersistedPlaybackSession::default()
+            },
+            shell_view: PersistedShellViewState::default(),
+        };
+        let extras = PersistedQueueExtras {
+            editions: vec![PersistedQueueTrackEdition {
+                position: 0,
+                track_id: 42,
+                version: Some("Backing Track / Bonus Track".to_string()),
+                album_version: Some("Remastered 2014".to_string()),
+            }],
+            history: vec![PersistedQueueHistoryEntry {
+                position: 0,
+                track_id: 42,
+            }],
+        };
+
+        store.save_session(&session).expect("save session");
+        store.save_queue_extras(&extras).expect("save queue extras");
+        drop(store);
+
+        let reopened = SessionStore::new_at(&dir).expect("reopen store");
+        assert_eq!(
+            reopened.load_queue_extras().expect("load queue extras"),
+            extras
+        );
+
+        reopened.clear_session().expect("clear session");
+        assert_eq!(
+            reopened.load_queue_extras().expect("load cleared extras"),
+            PersistedQueueExtras::default()
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The `user_version = 1` repair clears legacy `streamable = 0` rows ONCE,
+    /// and never fires again.
+    ///
+    /// Both halves matter and they pull in opposite directions. A `0` written
+    /// by an older build is untrustworthy — it may only mean the endpoint was
+    /// terse — and under the new queue filter it would silently delete the
+    /// track from every restored session. A `0` written AFTER the repair is
+    /// real: it is a track Qobuz pulled that the user has downloaded, which
+    /// stays in the queue and plays from disk. A coercion on read would satisfy
+    /// the first half and destroy the second, which is why this is a migration.
+    #[test]
+    fn legacy_streamable_zeroes_are_cleared_once_then_honoured() {
+        let dir = unique_test_dir("session-streamable-migration");
+
+        let session_with_sample = || {
+            let mut session = PersistedSessionSnapshot::default();
+            session.playback.queue_tracks = vec![sample_track()];
+            session.playback.current_index = Some(0);
+            session
+        };
+
+        // A database as an older build left it: a row at `streamable = 0` and
+        // no schema stamp. Rewinding the pragma is what makes it "older" —
+        // `sample_track()` already carries `streamable: false`.
+        {
+            let store = SessionStore::new_at(&dir).expect("open store");
+            store
+                .save_session(&session_with_sample())
+                .expect("save legacy session");
+            store
+                .conn
+                .execute_batch("PRAGMA user_version = 0;")
+                .expect("rewind schema stamp");
+        }
+
+        // Reopening runs the repair: the untrustworthy 0 is cleared.
+        {
+            let store = SessionStore::new_at(&dir).expect("reopen store");
+            let loaded = store.load_session().expect("load repaired session");
+            assert!(
+                loaded.playback.queue_tracks[0].streamable,
+                "a pre-migration 0 is untrustworthy and must be cleared, not \
+                 read as 'Qobuz pulled this track'"
+            );
+
+            // Now write a 0 that IS trustworthy — the downloaded-but-pulled
+            // state the render distinguishes.
+            store
+                .save_session(&session_with_sample())
+                .expect("save post-migration session");
+        }
+
+        // Reopening again must leave it alone: the repair is one-shot.
+        {
+            let store = SessionStore::new_at(&dir).expect("reopen store again");
+            let loaded = store.load_session().expect("load session");
+            assert!(
+                !loaded.playback.queue_tracks[0].streamable,
+                "the repair must not fire twice — a post-migration 0 is real \
+                 and resurrecting it would hide a downloaded-but-pulled track"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -106,13 +106,13 @@ jobs:
           foreach ($f in "qbz.exe", "platforms\qwindows.dll", "qml\QtQuick\Controls\Basic\qmldir", "imageformats\qsvg.dll", "LICENSE.txt") {
             if (-not (Test-Path "$root\$f")) { throw "installed layout is missing $f" }
           }
-          foreach ($protocol in "qbz", "qobuzapp") {
+          foreach ($protocol in "qbz") {
             if (-not (Test-Path "HKCU:\Software\Classes\$protocol")) { throw "$protocol protocol key missing" }
           }
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\QBZ.lnk")) { throw "Start-menu shortcut missing" }
           $uninstall = Start-Process msiexec.exe -ArgumentList "/x `"$msi`" /qn /norestart" -Wait -PassThru
           if ($uninstall.ExitCode -ne 0) { throw "synthetic MSI uninstall failed: $($uninstall.ExitCode)" }
-          foreach ($protocol in "qbz", "qobuzapp") {
+          foreach ($protocol in "qbz") {
             if (Test-Path "HKCU:\Software\Classes\$protocol") { throw "$protocol protocol key survived uninstall" }
           }
 
@@ -171,9 +171,11 @@ jobs:
           fi
           # MSI ProductVersion must be numeric x.y.z; the full string goes to ARPCOMMENTS.
           MSI_VERSION="$(echo "$VERSION" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "msi_version=$MSI_VERSION" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$VERSION"
+            echo "msi_version=$MSI_VERSION"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify tag is on main
         if: startsWith(github.ref, 'refs/tags/')
@@ -238,7 +240,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates -> target
-          shared-key: qt-windows-x86_64
+          shared-key: qt-windows-x86_64-${{ env.QT_VERSION }}
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/pre-release' }}
 
@@ -258,7 +260,7 @@ jobs:
           # the link and let the PDB carry them.
           CARGO_PROFILE_RELEASE_STRIP: "none"
         run: |
-          cargo build --release --manifest-path crates/Cargo.toml \
+          python3 scripts/qt-cargo.py build --release --manifest-path crates/Cargo.toml \
             -p qbz-qt --target "$TARGET"
           ls -la "crates/target/$TARGET/release/qbz.exe" "crates/target/$TARGET/release/qbz.pdb"
 
@@ -286,7 +288,7 @@ jobs:
           # (the committed .qsb carry HLSL 50 *source*; d3d11 compiles it at runtime).
           # Exit code is checked (pipefail); the grep is a separate, informational pass.
           "$QT_ROOT_DIR/bin/windeployqt.exe" --release --qmldir crates/qbz-qt/qml \
-            --no-translations --no-opengl-sw "$DIST/qbz.exe" 2>&1 | tee windeploy.log
+            --no-translations --no-opengl-sw --no-compiler-runtime "$DIST/qbz.exe" 2>&1 | tee windeploy.log
           grep -iE 'error|warning' windeploy.log || true
           # Nothing uses Qt SQL, Qt TLS (rustls) or network-information.
           rm -rf "$DIST/sqldrivers" "$DIST/tls" "$DIST/networkinformation"
@@ -319,43 +321,14 @@ jobs:
           # Hard fail, not a warning — plan A task 14 adds licenses/.
           if [ ! -d licenses ]; then echo "::error::licenses/ (Qt LGPL notice) is missing; refusing to package Qt without it"; exit 1; fi
           cp -r licenses "$DIST/licenses"
-          # offscreen platform plugin: smoke only; removed before packaging.
-          cp "$QT_ROOT_DIR/plugins/platforms/qoffscreen.dll" "$DIST/platforms/"
           du -sh "$DIST"
 
-      # THE gate: the deployed directory boots without the Qt install. Pass =
-      # >= 10 log lines, zero QML/loader complaints, core initialized (login
-      # screen reached; `home published` needs a session CI does not have).
-      # This is the step that catches the qrc-backslash bug (W1) as `Cannot open`.
-      # pwsh, not Git-Bash: MSYS `kill $!` cannot reliably stop a native
-      # Windows process (Sol R15), and a survivor locks the deploy dir.
-      - name: Offscreen smoke (the directory that ships)
+      # Both products harvest this exact app-local runtime. Audit every EXE,
+      # DLL and plugin (normal + delay imports) before making either artifact.
+      - name: Deploy official MSVC CRT app-local and audit imports
         shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $dist = "dist\qbz"
-          $qtRoot = $env:QT_ROOT_DIR
-          $qtHidden = "$qtRoot.hidden"
-          # Move-Item accepts a full destination path. Rename-Item's NewName
-          # parameter does not, so using it here can leave the Qt install live
-          # and turn this deployed-tree gate into a false positive.
-          Move-Item -LiteralPath $qtRoot -Destination $qtHidden
-          foreach ($v in "QT_PLUGIN_PATH","QML_IMPORT_PATH","QML2_IMPORT_PATH","QT_ROOT_DIR") { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
-          $env:QT_QPA_PLATFORM = "offscreen"; $env:RUST_LOG = "info"
-          $p = Start-Process -FilePath "$dist\qbz.exe" -RedirectStandardOutput smoke.out -RedirectStandardError smoke.err -PassThru -NoNewWindow
-          Start-Sleep -Seconds 45
-          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force; Start-Sleep 1 }
-          Move-Item -LiteralPath $qtHidden -Destination $qtRoot
-          Get-Content smoke.out, smoke.err | Set-Content smoke.log
-          $lines = (Get-Content smoke.log | Measure-Object -Line).Lines
-          Write-Host "smoke log: $lines lines"
-          if ($lines -lt 10) { Get-Content smoke.log; Write-Host "::error::the app did not start"; exit 1 }
-          $pat = 'is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|non-existent property|failed to load component|is not installed|could not be found|0xc0000135|STATUS_DLL_NOT_FOUND|This application failed to start'
-          $errs = Get-Content smoke.log | Where-Object { $_ -notmatch 'propertyCache' } | Select-String -Pattern $pat
-          if ($errs) { $errs | Select-Object -First 20; Write-Host "::error::$($errs.Count) QML/loader complaint(s) in the smoke log"; exit 1 }
-          if (-not (Select-String -Path smoke.log -Pattern 'QbzCore initialized' -Quiet)) { Get-Content smoke.log -Tail 20; Write-Host "::error::never reached QbzCore init"; exit 1 }
-          Remove-Item "$dist\platforms\qoffscreen.dll"
-          Write-Host "smoke OK (0 QML complaints, core initialized)"
+        run: ./scripts/packaging/deploy_windows_crt.ps1 -Dist dist/qbz
+
       # D4 = unsigned, so this is a no-op until a cert exists (HAVE_CERT is
       # resolved at workflow level — see the env block at the top). PLACEHOLDER
       # for an OV cert in a PFX: cloud-issued keys (Azure Trusted Signing,
@@ -400,37 +373,43 @@ jobs:
             -o "dist/QBZ_${VERSION}_x64.msi"
           ls -la dist
 
-      # The MSI is exercised, not just built: install per-user (no UAC), assert
-      # the layout + registry, launch the INSTALLED exe offscreen, uninstall,
-      # assert nothing is left. `wix msi validate` is deliberately NOT run:
-      # per-user harvested components fail ICE38 by WiX design (issue #8633).
-      - name: Install / launch / uninstall the MSI (runner smoke)
+      # Product smoke uses qwindows from the installed payload with an isolated
+      # profile/PATH. A VS runner still does not certify a clean Windows image.
+      - name: Install / upgrade / launch / uninstall the MSI (runner smoke)
         shell: pwsh
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
+          $ErrorActionPreference = 'Stop'
           $msi = (Resolve-Path "dist\QBZ_$($env:VERSION)_x64.msi").Path
-          $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /l*v install.log" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Get-Content install.log -Tail 60; Write-Host "::error::msiexec /i exit $($p.ExitCode)"; exit 1 }
           $root = "$env:LOCALAPPDATA\Programs\QBZ"
-          foreach ($f in "qbz.exe","platforms\qwindows.dll","qml\QtQuick\Controls\Basic","imageformats\qsvg.dll","LICENSE.txt") {
-            if (-not (Test-Path "$root\$f")) { Write-Host "::error::installed layout is missing $f"; exit 1 }
+          $installed = $false
+          try {
+            foreach ($stage in @('install','upgrade')) {
+              $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /l*v $stage.log" -Wait -PassThru
+              if ($p.ExitCode -ne 0) { Get-Content "$stage.log" -Tail 60; throw "msiexec $stage exit $($p.ExitCode)" }
+              $installed = $true
+            }
+            foreach ($f in @('qbz.exe','platforms\qwindows.dll','qml\QtQuick\Controls\Basic','imageformats\qsvg.dll','LICENSE.txt')) {
+              if (-not (Test-Path "$root\$f")) { throw "Installed layout is missing $f" }
+            }
+            if (-not (Test-Path 'HKCU:\Software\Classes\qbz')) { throw 'qbz protocol key missing' }
+            if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\QBZ.lnk")) { throw 'Start-menu shortcut missing' }
+            $sourceHash = (Get-FileHash 'dist/qbz/licenses/msvc-runtime.json').Hash
+            if ((Get-FileHash "$root/licenses/msvc-runtime.json").Hash -ne $sourceHash) { throw 'MSI CRT inventory differs from shared payload' }
+            python scripts/packaging/windows_crt.py $root --report windows-msi-imports.json
+            if ($LASTEXITCODE -ne 0) { throw 'Installed MSI CRT audit failed' }
+            ./scripts/packaging/smoke_windows_deploy.ps1 -Directory $root -LogPrefix inst
           }
-          foreach ($protocol in "qbz", "qobuzapp") {
-            if (-not (Test-Path "HKCU:\Software\Classes\$protocol")) { Write-Host "::error::$protocol protocol key missing"; exit 1 }
+          finally {
+            if ($installed) {
+              $u = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn /l*v uninstall.log" -Wait -PassThru
+              if ($u.ExitCode -ne 0) { Get-Content uninstall.log -Tail 60; throw "msiexec uninstall exit $($u.ExitCode)" }
+            }
           }
-          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\QBZ.lnk")) { Write-Host "::error::Start-menu shortcut missing"; exit 1 }
-          $env:QT_QPA_PLATFORM = "offscreen"; $env:RUST_LOG = "info"
-          $app = Start-Process "$root\qbz.exe" -RedirectStandardOutput inst.out -RedirectStandardError inst.err -PassThru -NoNewWindow
-          Start-Sleep 25; if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force; Start-Sleep 1 }
-          if (-not (Select-String -Path inst.out,inst.err -Pattern 'QbzCore initialized' -Quiet)) { Get-Content inst.out,inst.err -Tail 30; Write-Host "::error::installed app never reached QbzCore init"; exit 1 }
-          $u = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn /l*v uninstall.log" -Wait -PassThru
-          if ($u.ExitCode -ne 0) { Get-Content uninstall.log -Tail 60; Write-Host "::error::msiexec /x exit $($u.ExitCode)"; exit 1 }
-          if (Test-Path "$root\qbz.exe") { Write-Host "::error::uninstall left $root\qbz.exe"; exit 1 }
-          foreach ($protocol in "qbz", "qobuzapp") {
-            if (Test-Path "HKCU:\Software\Classes\$protocol") { Write-Host "::error::uninstall left the $protocol protocol key"; exit 1 }
-          }
-          Write-Host "MSI install/launch/uninstall OK"
+          if (Test-Path "$root\qbz.exe") { throw 'Uninstall left qbz.exe' }
+          if (Test-Path 'HKCU:\Software\Classes\qbz') { throw 'Uninstall left the qbz protocol key' }
+          Write-Host 'MSI install/upgrade/GUI launch/uninstall OK'
 
       - name: Sign MSI
         if: ${{ env.HAVE_CERT == 'true' }}
@@ -450,6 +429,31 @@ jobs:
         run: |
           Compress-Archive -Path dist\qbz\* -DestinationPath "dist\qbz_$($env:VERSION)_windows_x64.zip"
           Copy-Item "crates\target\$env:TARGET\release\qbz.pdb" "dist\qbz_$($env:VERSION)_windows_x64.pdb"
+          $unpacked = Join-Path $env:RUNNER_TEMP ('qbz-portable-' + [guid]::NewGuid())
+          try {
+            Expand-Archive -LiteralPath "dist\qbz_$($env:VERSION)_windows_x64.zip" -DestinationPath $unpacked
+            if ((Get-FileHash "$unpacked/licenses/msvc-runtime.json").Hash -ne (Get-FileHash 'dist/qbz/licenses/msvc-runtime.json').Hash) { throw 'ZIP CRT inventory differs from shared payload' }
+            python scripts/packaging/windows_crt.py $unpacked --report windows-zip-imports.json
+            if ($LASTEXITCODE -ne 0) { throw 'Portable ZIP CRT audit failed' }
+            ./scripts/packaging/smoke_windows_deploy.ps1 -Directory $unpacked -LogPrefix portable
+          }
+          finally { if (Test-Path $unpacked) { Remove-Item -LiteralPath $unpacked -Recurse -Force } }
+
+      - name: Upload deployment evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qbz-windows-deployment-checks
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            windows-*-imports.json
+            inst.*
+            portable.*
+            install.log
+            upgrade.log
+            uninstall.log
+            dist/qbz/licenses/msvc-runtime.json
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7

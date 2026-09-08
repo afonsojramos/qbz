@@ -1,35 +1,34 @@
 //! Framework-agnostic application runtime facade.
 //!
-//! [`AppRuntime`] is the composition root that a non-Tauri UI shell (Slint,
-//! TUI, headless) builds on. It owns an `Arc<QbzCore<A>>`, the framework-
+//! [`AppRuntime`] is the composition root that a native UI shell (Qt, TUI,
+//! headless) builds on. It owns an `Arc<QbzCore<A>>`, the framework-
 //! agnostic runtime state machine, and the per-user session, all without any
 //! Tauri dependency.
 //!
-//! Scope (Slint POC readiness audit, sessions 21-22):
-//!
-//! - Task 1 — composition and accessors: [`AppRuntime::new`], [`AppRuntime::core`].
-//! - Task 2 — minimal session activation: [`AppRuntime::activate`] and
-//!   friends. This is deliberately minimal. It opens only the session store
-//!   and performs the portable session scaffolding (user paths, directories,
-//!   last-user marker, runtime state). It does NOT touch Tauri's
-//!   `session_lifecycle`, does not initialize the `src-tauri`-side per-user
-//!   stores (`library`, `reco`, `lyrics`, ...), and does not run the
-//!   flat-to-user migration. A shell opens further stores per view, as the
-//!   views that need them come online.
-//!
-//! The Tauri app does not consume this module; `CoreBridge` and
-//! `session_lifecycle` keep their own paths. `AppRuntime` is purely additive.
+//! Session activation is deliberately minimal: it opens the session store and
+//! performs the portable scaffolding (user paths, directories, last-user
+//! marker, runtime state). The shell binds its additional per-user stores as
+//! each session comes online.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use qbz_audio::{settings::AudioSettingsStore, AudioDiagnostic, AudioSettings, VisualizerTap};
 use qbz_core::{FrontendAdapter, QbzCore};
+use qbz_offline_cache::OfflineCacheState;
 use qbz_player::Player;
+use tokio::task::JoinHandle;
 
 use crate::runtime::RuntimeManager;
 use crate::session_store::SessionStore;
+use crate::subscription_lifecycle;
 use crate::user_data::UserDataPaths;
+
+/// How often an activated session re-checks the subscription grace clock,
+/// so a long-running session without a re-login still crosses the 30-day
+/// line on time.
+const SUBSCRIPTION_TICK: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The per-user stores opened for the currently active session.
 ///
@@ -38,8 +37,12 @@ use crate::user_data::UserDataPaths;
 /// loading the full WebKit-era store set up front.
 struct ActiveSession {
     user_id: u64,
+    data_dir: PathBuf,
     session_store: SessionStore,
 }
+
+/// The offline cache a host registered, shared with the subscription ticker.
+type OfflineCacheSlot = Arc<Mutex<Option<Arc<OfflineCacheState>>>>;
 
 /// Composition root for a non-Tauri UI shell.
 ///
@@ -54,6 +57,12 @@ pub struct AppRuntime<A: FrontendAdapter + Send + Sync + 'static> {
     /// the FFT producer and toggle capture. `None` for shells that do not drive
     /// audio visualization (the default `new`/`with_audio_settings` path).
     visualizer_tap: Option<VisualizerTap>,
+    /// The host's offline cache, if it has one (Qt does, qbzd does not).
+    /// The subscription lifecycle purges through it once the grace window
+    /// has passed; without one the verdict is still recorded.
+    offline_cache: OfflineCacheSlot,
+    /// The daily subscription re-check for the active session.
+    subscription_ticker: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl<A: FrontendAdapter + Send + Sync + 'static> AppRuntime<A> {
@@ -76,6 +85,8 @@ impl<A: FrontendAdapter + Send + Sync + 'static> AppRuntime<A> {
             user_paths: UserDataPaths::new(),
             session: Mutex::new(None),
             visualizer_tap: None,
+            offline_cache: Arc::new(Mutex::new(None)),
+            subscription_ticker: Mutex::new(None),
         }
     }
 
@@ -103,9 +114,9 @@ impl<A: FrontendAdapter + Send + Sync + 'static> AppRuntime<A> {
     /// Build like [`AppRuntime::new`], but also wire a [`VisualizerTap`] into the
     /// player and retain it so the shell can start the frontend-agnostic FFT
     /// producer ([`qbz_audio::visualizer::spawn_visualizer_thread`]) and toggle
-    /// capture via the tap's `set_enabled`. Used by the Slint shell for the
-    /// ImmersiveView audio visualizers. The tap starts disabled, so it adds no
-    /// runtime cost until the immersive view enables it.
+    /// capture via the tap's `set_enabled`. Used by the Qt shell for the
+    /// immersive-view audio visualizers. The tap starts disabled, so it adds
+    /// no runtime cost until the immersive view enables it.
     pub fn with_visualizer(adapter: A) -> Self {
         let (device_name, audio_settings) = AudioSettingsStore::new()
             .ok()
@@ -174,17 +185,104 @@ impl<A: FrontendAdapter + Send + Sync + 'static> AppRuntime<A> {
 
         self.runtime.set_session_activated(true, user_id).await;
 
-        let mut guard = self
-            .session
-            .lock()
-            .map_err(|e| format!("session lock poisoned: {}", e))?;
-        *guard = Some(ActiveSession {
-            user_id,
-            session_store,
-        });
+        {
+            let mut guard = self
+                .session
+                .lock()
+                .map_err(|e| format!("session lock poisoned: {}", e))?;
+            *guard = Some(ActiveSession {
+                user_id,
+                data_dir: data_dir.to_path_buf(),
+                session_store,
+            });
+        }
 
         log::info!("[AppRuntime] Session activated for user");
+
+        // Subscription lifecycle (D4): record the login verdict from the
+        // core's session — a member without the offline entitlement starts
+        // the grace clock, a subscriber clears it — and purge the offline
+        // cache when the window has passed. Shared by every host through
+        // this one activation path; best-effort, never blocks entry.
+        self.run_subscription_lifecycle().await;
+        self.start_subscription_ticker(data_dir.to_path_buf());
         Ok(())
+    }
+
+    /// Register (or clear) the host's offline cache. When a session is
+    /// already active and a cache arrives, the grace clock is enforced
+    /// against it right away — Qt activates its cache after the session.
+    pub fn set_offline_cache(self: &Arc<Self>, cache: Option<Arc<OfflineCacheState>>) {
+        let registered = cache.is_some();
+        if let Ok(mut slot) = self.offline_cache.lock() {
+            *slot = cache;
+        }
+        if registered && self.is_session_active() {
+            let runtime = Arc::clone(self);
+            tokio::spawn(async move { runtime.run_subscription_lifecycle().await });
+        }
+    }
+
+    async fn run_subscription_lifecycle(&self) {
+        let Some(data_dir) = self.active_data_dir() else {
+            return;
+        };
+        let session = {
+            let client_lock = self.core.client();
+            let guard = client_lock.read().await;
+            match guard.as_ref() {
+                Some(client) => client.session().await,
+                None => None,
+            }
+        };
+        let offline = self.offline_cache.lock().ok().and_then(|slot| slot.clone());
+        let now = subscription_lifecycle::now_unix_secs();
+        match subscription_lifecycle::run(&data_dir, session.as_ref(), offline, now).await {
+            Ok(v) => log::info!(
+                "[AppRuntime] subscription verdict: offline_entitled={} member_only={} invalid_since={:?} purged={}",
+                v.offline_entitled,
+                v.member_only,
+                v.invalid_since,
+                v.purged
+            ),
+            Err(e) => log::error!("[AppRuntime] subscription lifecycle failed: {e}"),
+        }
+    }
+
+    fn start_subscription_ticker(&self, data_dir: PathBuf) {
+        let offline_cache = Arc::clone(&self.offline_cache);
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(SUBSCRIPTION_TICK);
+            interval.tick().await; // the activation pass already ran
+            loop {
+                interval.tick().await;
+                let offline = offline_cache.lock().ok().and_then(|slot| slot.clone());
+                let now = subscription_lifecycle::now_unix_secs();
+                if let Err(e) = subscription_lifecycle::run(&data_dir, None, offline, now).await {
+                    log::error!("[AppRuntime] subscription tick failed: {e}");
+                }
+            }
+        });
+        if let Ok(mut ticker) = self.subscription_ticker.lock() {
+            if let Some(previous) = ticker.replace(handle) {
+                previous.abort();
+            }
+        }
+    }
+
+    fn stop_subscription_ticker(&self) {
+        if let Ok(mut ticker) = self.subscription_ticker.lock() {
+            if let Some(handle) = ticker.take() {
+                handle.abort();
+            }
+        }
+    }
+
+    fn active_data_dir(&self) -> Option<PathBuf> {
+        self.session
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|s| s.data_dir.clone()))
     }
 
     /// Activate the per-user session for `user_id`.
@@ -260,6 +358,7 @@ impl<A: FrontendAdapter + Send + Sync + 'static> AppRuntime<A> {
     /// `last_user_id` marker is intentionally kept on disk so a later
     /// offline session can still find the user's data.
     pub async fn deactivate(&self) -> Result<(), String> {
+        self.stop_subscription_ticker();
         {
             let mut guard = self
                 .session
@@ -318,6 +417,11 @@ mod tests {
     }
 
     fn test_runtime() -> AppRuntime<NoOpAdapter> {
+        // QbzCore builds a reqwest client (MusicBrainz); since reqwest no
+        // longer pulls a rustls provider (#663), tests must install the
+        // process-level one explicitly, exactly like the real binaries do at
+        // startup — otherwise Client construction panics with "No provider set".
+        crate::ensure_crypto_provider();
         AppRuntime::with_audio_settings(NoOpAdapter, None, AudioSettings::default(), None)
     }
 
@@ -361,6 +465,27 @@ mod tests {
         assert!(data_dir.join("session.db").exists());
         assert!(cache_dir.exists());
 
+        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&cache_dir);
+    }
+
+    /// User zero is the first-run, never-authenticated profile selected by
+    /// `activate_offline`. It is a real local session, not an auth sentinel.
+    #[tokio::test]
+    async fn guest_profile_zero_is_a_valid_local_session() {
+        let rt = test_runtime();
+        let data_dir = unique_test_dir("guest-data");
+        let cache_dir = unique_test_dir("guest-cache");
+
+        rt.activate_at(0, &data_dir, &cache_dir)
+            .await
+            .expect("guest activation succeeds without Qobuz auth");
+
+        assert!(rt.is_session_active());
+        assert_eq!(rt.active_user_id(), Some(0));
+        assert!(data_dir.join("session.db").exists());
+
+        rt.deactivate().await.expect("guest deactivation succeeds");
         let _ = std::fs::remove_dir_all(&data_dir);
         let _ = std::fs::remove_dir_all(&cache_dir);
     }

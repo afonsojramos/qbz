@@ -236,6 +236,16 @@ pub fn compute_affinity_score(
 }
 
 /// Build the scene cache key from location + seeds
+///
+/// UNFIT — kept only so no out-of-tree caller breaks; it has zero callers in
+/// this workspace. It carries **only** area + an ordered seed hash, while the
+/// response also depends on the source MBID (that artist is excluded from its
+/// own scene), the country, the page size and the blacklist. Two callers asking
+/// for different page sizes against the same DB would share one entry. Use
+/// [`build_scene_cache_key_v1`].
+#[deprecated(
+    note = "unfit key: ignores source_mbid/country/page_size. Use build_scene_cache_key_v1."
+)]
 pub fn build_scene_cache_key(area_id: &str, seeds: &AffinitySeeds) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -247,6 +257,170 @@ pub fn build_scene_cache_key(area_id: &str, seeds: &AffinitySeeds) -> String {
     let seed_hash = hasher.finish();
 
     format!("{}:{:x}", area_id, seed_hash)
+}
+
+/// Version tag baked into every scene cache key.
+///
+/// BUMP IT whenever the discovery pipeline changes what a stored
+/// `LocationDiscoveryResponse` means — scoring weights, the broad-tag filter,
+/// the per-genre limit, the `LocationCandidate` shape. Bumping is how old
+/// entries get abandoned; there is no migration and none is wanted, since a
+/// stale scene is indistinguishable from a fresh one on the wire.
+pub const SCENE_CACHE_KEY_VERSION: &str = "v1";
+
+/// Everything a scene discovery response actually depends on.
+///
+/// Every field here is load-bearing, which is the whole point — the previous
+/// key had two of them:
+/// - `source_mbid`: the source artist is *excluded* from their own scene, so
+///   two artists from the same city with the same seeds produce different rows.
+/// - `area_id`: the MB area id as the caller supplied it, falling back to the
+///   area NAME when there is none. Deliberately the pre-resolution identity:
+///   city → parent-subdivision resolution is a pure function of this id, so
+///   keying on it lets the cache be consulted BEFORE those up-to-5 MB hops are
+///   spent. Two cities in one subdivision therefore keep separate entries,
+///   which is also what Tauri did.
+/// - `country`: the MB query is `area:"<country>"` whenever a country is known,
+///   so it, not the subdivision, is what narrows the search.
+/// - the seeds: they pick the search genres AND drive the affinity scoring.
+/// - `page_size`: a 30-row response must never be served to a 100-row caller.
+/// - `catalog_scope`: the Qobuz account territory decides which candidates
+///   validate. Currently `None` everywhere (no accessor exists on the core);
+///   the slot is here so filling it later is a key change, not a schema change.
+///   Until then, invalidate the scene cache on account switch.
+pub struct SceneCacheKey<'a> {
+    pub source_mbid: &'a str,
+    pub area_id: &'a str,
+    pub country: Option<&'a str>,
+    pub seeds: &'a AffinitySeeds,
+    pub page_size: usize,
+    pub catalog_scope: Option<&'a str>,
+}
+
+/// Build the versioned scene cache key.
+///
+/// The seed lists are hashed rather than inlined because they are unbounded;
+/// everything else stays readable in the key so a human can eyeball the DB.
+pub fn build_scene_cache_key_v1(key: &SceneCacheKey<'_>) -> String {
+    format!(
+        "{}|{}|{}|{}|{:016x}|{}|{}",
+        SCENE_CACHE_KEY_VERSION,
+        key.source_mbid,
+        key.area_id,
+        key.country.unwrap_or("-"),
+        seed_signature(key.seeds),
+        key.page_size,
+        key.catalog_scope.unwrap_or("-"),
+    )
+}
+
+/// Stable 64-bit signature of the affinity seeds.
+///
+/// Two deliberate choices:
+///
+/// 1. **Order is preserved**, not sorted. It looks like sorting would give a
+///    better hit rate, but the pipeline slices these lists — `genres.chain(
+///    tags.take(2))`, and `take(3)` on the all-broad fallback — so a different
+///    input order is a genuinely different query. Sorting would collapse two
+///    different result sets onto one entry. Duplicates are dropped keeping the
+///    FIRST occurrence, which is exactly what `take(n)` sees.
+/// 2. **FNV-1a, not `DefaultHasher`.** `DefaultHasher`'s output is explicitly
+///    not guaranteed stable across Rust releases; a toolchain bump would
+///    silently orphan every cached scene. FNV-1a is eight lines and frozen.
+///
+/// Genres and tags are hashed as separate sections so `genres=[a] tags=[b]`
+/// cannot collide with `genres=[a,b] tags=[]` — they search differently.
+fn seed_signature(seeds: &AffinitySeeds) -> u64 {
+    let mut buf = String::new();
+    push_canonical_list(&mut buf, &seeds.genres);
+    buf.push('\u{1e}'); // record separator between the two sections
+    push_canonical_list(&mut buf, &seeds.tags);
+    fnv1a64(buf.as_bytes())
+}
+
+fn push_canonical_list(buf: &mut String, list: &[String]) {
+    let mut seen: HashSet<String> = HashSet::new();
+    for raw in list {
+        let canonical = normalize_genre(raw);
+        if canonical.is_empty() || !seen.insert(canonical.clone()) {
+            continue;
+        }
+        buf.push_str(&canonical);
+        buf.push('\u{1f}'); // unit separator between entries
+    }
+}
+
+/// FNV-1a, 64-bit. Deterministic across toolchains, forever, with no dependency.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+#[cfg(test)]
+mod scene_key_tests {
+    use super::*;
+
+    fn seeds(genres: &[&str], tags: &[&str]) -> AffinitySeeds {
+        AffinitySeeds {
+            genres: genres.iter().map(|s| s.to_string()).collect(),
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+            normalized_seeds: genres
+                .iter()
+                .chain(tags.iter())
+                .map(|s| s.to_string())
+                .collect(),
+        }
+    }
+
+    fn key(source_mbid: &str, page_size: usize, s: &AffinitySeeds) -> String {
+        build_scene_cache_key_v1(&SceneCacheKey {
+            source_mbid,
+            area_id: "area-1",
+            country: Some("United Kingdom"),
+            seeds: s,
+            page_size,
+            catalog_scope: None,
+        })
+    }
+
+    #[test]
+    fn page_size_is_part_of_the_key() {
+        // The whole reason R7 was re-decided: Slint asks for 30 rows and Qt
+        // asks for 100 against the same DB file.
+        let s = seeds(&["post-punk"], &[]);
+        assert_ne!(key("mbid-a", 30, &s), key("mbid-a", 100, &s));
+    }
+
+    #[test]
+    fn source_artist_is_part_of_the_key() {
+        // The source artist is excluded from their own scene, so two artists
+        // with identical area+seeds do NOT share a response.
+        let s = seeds(&["post-punk"], &[]);
+        assert_ne!(key("mbid-a", 100, &s), key("mbid-b", 100, &s));
+    }
+
+    #[test]
+    fn seed_sections_do_not_collide() {
+        // genres=[a] tags=[b] searches differently from genres=[a,b] tags=[].
+        assert_ne!(
+            key("mbid-a", 100, &seeds(&["post-punk"], &["new wave"])),
+            key("mbid-a", 100, &seeds(&["post-punk", "new wave"], &[])),
+        );
+    }
+
+    #[test]
+    fn seed_order_is_significant_but_duplicates_are_not() {
+        let s = seeds(&["post-punk", "new wave"], &[]);
+        assert_ne!(key("mbid-a", 100, &s), key("mbid-a", 100, &seeds(&["new wave", "post-punk"], &[])));
+        assert_eq!(
+            key("mbid-a", 100, &s),
+            key("mbid-a", 100, &seeds(&["post-punk", "new wave", "post-punk"], &[])),
+        );
+    }
 }
 
 /// Format a human-readable date from MB life_span

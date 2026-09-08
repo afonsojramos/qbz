@@ -1,7 +1,7 @@
 //! Integration tests over synthesized DSF/DFF files.
 
 use qbz_dsd::{open_dsd, DsdError, DsdPcmConverter};
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 fn tmp(name: &str) -> PathBuf {
@@ -211,6 +211,49 @@ fn dff_parses_stereo() {
     assert_eq!(info.channels, 2);
     assert_eq!(info.sample_count, 8192 / 2 * 8);
     assert!(!info.lsb_first);
+}
+
+#[test]
+fn dsf_seek_handles_channel_blocks_and_an_in_block_offset() {
+    const DATA_START: u64 = 28 + 52 + 12;
+    const BLOCK: u64 = 4096;
+    let path = write_dsf("seek-blocks.dsf", 2, 2_822_400, 2, None);
+    let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    // Second block-group, byte 7 in each channel block.
+    file.seek(SeekFrom::Start(DATA_START + 2 * BLOCK + 7))
+        .unwrap();
+    file.write_all(&[0x12]).unwrap();
+    file.seek(SeekFrom::Start(DATA_START + 3 * BLOCK + 7))
+        .unwrap();
+    file.write_all(&[0x34]).unwrap();
+
+    let mut demux = open_dsd(&path).unwrap();
+    demux.seek_to_bit((BLOCK + 7) * 8).unwrap();
+    let mut planar = vec![Vec::new(), Vec::new()];
+    assert!(demux.read_planar(&mut planar, BLOCK as usize).unwrap() > 0);
+    assert_eq!(planar[0][0], 0x12);
+    assert_eq!(planar[1][0], 0x34);
+}
+
+#[test]
+fn dff_seek_preserves_interleaved_channel_alignment() {
+    let path = write_dff("seek-interleaved.dff", 2, 2_822_400, 128, b"DSD ");
+    let bytes = std::fs::read(&path).unwrap();
+    let data_header = bytes
+        .windows(4)
+        .rposition(|window| window == b"DSD ")
+        .unwrap();
+    let data_start = data_header as u64 + 12;
+    let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.seek(SeekFrom::Start(data_start + 34)).unwrap();
+    file.write_all(&[0x56, 0x78]).unwrap();
+
+    let mut demux = open_dsd(&path).unwrap();
+    demux.seek_to_bit(17 * 8).unwrap();
+    let mut planar = vec![Vec::new(), Vec::new()];
+    assert_eq!(demux.read_planar(&mut planar, 4).unwrap(), 4);
+    assert_eq!(planar[0][0], 0x56);
+    assert_eq!(planar[1][0], 0x78);
 }
 
 #[test]

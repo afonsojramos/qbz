@@ -69,17 +69,77 @@ fn suspend_default_sink_for_exclusive() {
 /// fix). No-op if QBZ did not suspend one — so it is safe to call on every
 /// stop/teardown. Call it once the exclusive device has actually been released
 /// so the rest of the system can use the sink again.
-pub fn resume_suspended_sink() {
+pub fn resume_suspended_sink() -> Result<(), String> {
     let target = match SUSPENDED_SINK.lock() {
-        Ok(mut guard) => guard.take(),
+        Ok(guard) => guard.clone(),
         Err(_) => None,
     };
-    if let Some(sink) = target {
-        let _ = std::process::Command::new("pactl")
-            .args(["suspend-sink", &sink, "0"])
-            .output();
-        log::info!("[ALSA Backend] Resumed PipeWire sink '{}'", sink);
+    let Some(sink) = target else {
+        return Ok(());
+    };
+
+    // The PCM and reservation have already been dropped by every caller, but
+    // PipeWire may need a short moment to recreate the parked sink. Retry the
+    // exact recorded name, then the default alias as a compatibility fallback.
+    // Keep SUSPENDED_SINK populated until one command actually succeeds: the
+    // old take-before-command implementation permanently lost the recovery
+    // target on one transient `pactl` failure while logging success anyway.
+    let mut last_error = String::new();
+    for delay_ms in [0u64, 25, 75, 150] {
+        if delay_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
+        let mut targets = vec![sink.as_str()];
+        if sink != "@DEFAULT_SINK@" {
+            targets.push("@DEFAULT_SINK@");
+        }
+        for target in targets {
+            match std::process::Command::new("pactl")
+                .args(["suspend-sink", target, "0"])
+                .output()
+            {
+                Ok(output) if output.status.success() => {
+                    if let Ok(mut guard) = SUSPENDED_SINK.lock() {
+                        if guard.as_deref() == Some(sink.as_str()) {
+                            *guard = None;
+                        }
+                    }
+                    log::info!(
+                        "[ALSA Backend] Resumed PipeWire sink '{}' via '{}'",
+                        sink,
+                        target
+                    );
+                    return Ok(());
+                }
+                Ok(output) => {
+                    last_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                }
+                Err(error) => {
+                    last_error = error.to_string();
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        let message = format!(
+                            "cannot resume PipeWire sink '{}': pactl is unavailable ({error})",
+                            sink
+                        );
+                        log::warn!("[ALSA Backend] {message}");
+                        return Err(message);
+                    }
+                }
+            }
+        }
     }
+
+    let message = format!(
+        "cannot resume PipeWire sink '{}' after releasing ALSA: {}",
+        sink,
+        if last_error.is_empty() {
+            "pactl failed without a diagnostic"
+        } else {
+            last_error.as_str()
+        }
+    );
+    log::warn!("[ALSA Backend] {message}");
+    Err(message)
 }
 
 /// Common audio sample rates to check for device support

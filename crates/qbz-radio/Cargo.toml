@@ -9,6 +9,6 @@ description = "Agnostic smart-radio pool builder for QBZ (ported from the Tauri 
 qbz-models = { path = "../qbz-models" }
 qbz-qobuz = { path = "../qbz-qobuz" }
 
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 log = { workspace = true }
 dirs = "5"

@@ -33,7 +33,17 @@ pub async fn resolve_offline_bytes(
 ) -> Option<Vec<u8>> {
     let row = {
         let guard = offline.db.lock().await;
-        guard.as_ref()?.get_cmaf_bundle(track_id).ok().flatten()?
+        let db = guard.as_ref()?;
+        let row = db.get_cmaf_bundle(track_id).ok().flatten()?;
+        // A play IS an access. LRU eviction (`maintenance::check_cache_limit`)
+        // orders by `last_accessed_at`, which until now only the download
+        // wrote — so the cache evicted the tracks the user played most,
+        // oldest download first. This is the one place every offline play
+        // funnels through (both frontends and qbzd resolve here).
+        if let Err(e) = db.touch(track_id) {
+            log::debug!("[OfflineResolve] touch({track_id}) failed: {e}");
+        }
+        row
     };
 
     match row.cache_format {

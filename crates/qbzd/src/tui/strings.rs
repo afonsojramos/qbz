@@ -160,6 +160,7 @@ pub const A_BACKEND: &str = "Backend";
 pub const A_DEVICE: &str = "Output device";
 pub const A_ALSA_PLUGIN: &str = "ALSA plugin";
 pub const A_HW_VOLUME: &str = "Hardware volume";
+pub const A_HW_VOLUME_CONTROL: &str = "Mixer control";
 pub const A_DSD: &str = "DSD playback";
 pub const A_EXCLUSIVE: &str = "Exclusive mode";
 pub const A_RESERVE: &str = "Reserve DAC";
@@ -185,7 +186,7 @@ pub const ALSA_PCM: &str = "pcm (Most compatible)";
 
 /// DSD guard (§3.2.4). Verbatim-in-spirit of the desktop warning.
 pub const DSD_GUARD_TITLE: &str = "DSD direct mode";
-pub const DSD_GUARD_BODY: &str = "Choose DoP or Native only if your DAC supports it. On any other DAC they play\nas LOUD NOISE. Volume is fixed and seeking is disabled in DoP/Native; Native\nadditionally needs kernel support.";
+pub const DSD_GUARD_BODY: &str = "Choose DoP or Native only if your DAC supports it. On any other DAC they play\nas LOUD NOISE. Volume is fixed in DoP/Native; Native additionally needs\nkernel support.";
 pub const DSD_GUARD_HINT: &str = "Enter confirm · Esc revert";
 
 pub const AUDIO_SCANNING: &str = "scanning…";
