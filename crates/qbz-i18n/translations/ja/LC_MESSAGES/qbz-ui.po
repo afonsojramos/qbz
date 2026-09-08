@@ -6824,3 +6824,9 @@ msgstr "ツリー"
 
 msgid "Forward"
 msgstr "進む"
+
+msgid "SACD images use sidecar metadata."
+msgstr "SACDイメージはサイドカーファイルにメタデータを保存します。"
+
+msgid "SACD track numbers cannot be changed."
+msgstr "SACDのトラック番号は変更できません。"

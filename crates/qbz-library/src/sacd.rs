@@ -42,6 +42,44 @@ pub struct SacdImportResult {
 }
 
 impl LibraryDatabase {
+    pub fn sacd_image_needs_artwork(&self, image_path: &str) -> Result<bool, LibraryError> {
+        self.with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM local_tracks l
+             JOIN local_sacd_tracks t ON t.local_track_id=l.id
+             JOIN local_sacd_images i ON i.fingerprint=t.fingerprint
+             WHERE i.image_path=?1 AND COALESCE(l.artwork_path,'')='')",
+                    params![image_path],
+                    |row| row.get(0),
+                )
+                .map_err(database_error)
+        })
+    }
+
+    /// Fill only missing image artwork. This never reads or modifies the ISO,
+    /// and existing disc artwork always wins over a newly discovered folder image.
+    pub fn fill_missing_sacd_artwork(
+        &self,
+        image_path: &str,
+        artwork: &str,
+    ) -> Result<usize, LibraryError> {
+        self.with_connection(|connection| {
+            connection
+                .execute(
+                    "UPDATE local_tracks SET artwork_path=?2,
+                    indexed_at=MAX(COALESCE((SELECT MAX(indexed_at) FROM local_tracks),0)+1,
+                                   CAST(strftime('%s','now') AS INTEGER))
+                 WHERE COALESCE(artwork_path,'')='' AND id IN (
+                    SELECT t.local_track_id FROM local_sacd_tracks t
+                    JOIN local_sacd_images i ON i.fingerprint=t.fingerprint
+                    WHERE i.image_path=?1)",
+                    params![image_path, artwork],
+                )
+                .map_err(database_error)
+        })
+    }
+
     /// Mark a known image as seen by one registered library root, and report
     /// whether its file facts and parser revision still match. Unknown paths
     /// remain unowned until a complete parse is imported.
@@ -1119,6 +1157,50 @@ mod tests {
             })
             .unwrap();
         assert_eq!(old_images, 0);
+    }
+
+    #[test]
+    fn artwork_backfill_keeps_existing_covers_and_other_images_unchanged() {
+        let (_temp, db, root_id) = fresh_db();
+        let mut first = image("first", "/music/first.iso", 2);
+        first.tracks[0].artwork_path = Some("original-disc-cover".into());
+        let ids = db.import_sacd_image(root_id, 1, &first).unwrap().track_ids;
+        let other = db
+            .import_sacd_image(root_id, 1, &image("other", "/music/other.iso", 1))
+            .unwrap()
+            .track_ids;
+        assert_eq!(
+            db.fill_missing_sacd_artwork("/music/first.iso", "folder-cover")
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.get_track(ids[0])
+                .unwrap()
+                .unwrap()
+                .artwork_path
+                .as_deref(),
+            Some("original-disc-cover")
+        );
+        assert_eq!(
+            db.get_track(ids[1])
+                .unwrap()
+                .unwrap()
+                .artwork_path
+                .as_deref(),
+            Some("folder-cover")
+        );
+        assert!(db
+            .get_track(other[0])
+            .unwrap()
+            .unwrap()
+            .artwork_path
+            .is_none());
+        assert_eq!(
+            db.fill_missing_sacd_artwork("/music/first.iso", "replacement")
+                .unwrap(),
+            0
+        );
     }
 
     #[test]

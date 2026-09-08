@@ -246,7 +246,7 @@ Item {
                         }
                         QbzCircleAction {
                             id: editFolderAlbumBtn
-                            visible: !QbzLocal.localSessionIsDisc
+                            visible: !QbzLocal.localEphemeralIsCd
                                 && root.allAlbums.length === 1
                                 && !QbzLocal.localEphemeralLoading
                             name: "pen-line"
@@ -535,7 +535,7 @@ Item {
                                 spacing: 8
                                 QbzCircleAction {
                                     id: editBlockBtn
-                                    visible: !QbzLocal.localSessionIsDisc
+                                    visible: !QbzLocal.localEphemeralIsCd
                                     name: "pen-line"
                                     onClicked: QbzLocal.ephemeralEditTags(
                                         block.modelData.groupKey)

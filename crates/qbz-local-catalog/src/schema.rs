@@ -11,7 +11,9 @@ use crate::{CatalogError, Result};
 // Version 7 adds collection-art fallback to the remote projection. Rebuild
 // existing derived catalogs so coverless v6 rows are repaired even when the
 // authoritative remote cache has not changed. User caches remain untouched.
-pub const SCHEMA_VERSION: u32 = 7;
+// Version 8 distinguishes server album IDs from internal text-fallback groups.
+// Rebuild album cards and artist counts without dropping orphan remote tracks.
+pub const SCHEMA_VERSION: u32 = 8;
 pub const APPLICATION_ID: i64 = 0x5142_5A43; // "QBZC"
 
 pub(crate) fn configure(conn: &Connection) -> Result<()> {

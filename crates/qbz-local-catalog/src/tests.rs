@@ -70,6 +70,126 @@ fn projected(index: usize, source: SourceKind) -> ProjectedTrack {
     }
 }
 
+#[test]
+fn remote_tracks_without_album_ids_do_not_create_unresolvable_album_cards() {
+    for source in [SourceKind::Jellyfin, SourceKind::Subsonic] {
+        let mut catalog = Catalog::open_in_memory(1).unwrap();
+        let mut orphan = projected(1, source);
+        orphan.native_album_id = None;
+        orphan.album.clear();
+        orphan.available = true;
+        let mut named_orphan = orphan.clone();
+        named_orphan.track_ref.native_id = "2".into();
+        named_orphan.album = "Orphan title".into();
+        named_orphan.native_album_id = Some("   ".into());
+        let mut empty_id = named_orphan.clone();
+        empty_id.track_ref.native_id = "4".into();
+        empty_id.native_album_id = Some(String::new());
+        let mut valid = orphan.clone();
+        valid.track_ref.native_id = "3".into();
+        valid.native_album_id = Some("real-album-id".into());
+        valid.album = "Real album".into();
+        let key = SourceKey {
+            source,
+            source_instance: orphan.track_ref.source_instance.clone(),
+        };
+        let mut rows = vec![orphan.clone(), named_orphan, empty_id, valid];
+        catalog
+            .apply_bootstrap_batch(&BootstrapBatch {
+                source: key.clone(),
+                snapshot_version: "missing-album-ids".into(),
+                expected_cursor: String::new(),
+                next_cursor: rows.len().to_string(),
+                tracks: rows.clone(),
+                complete: true,
+            })
+            .unwrap();
+        catalog.rebuild_materialized_views().unwrap();
+        let descriptor = QueryDescriptor::albums();
+        assert_eq!(catalog.count_tracks(&QueryDescriptor::tracks()).unwrap(), 4);
+        assert_eq!(catalog.count_albums(&descriptor).unwrap(), 1);
+        let resolved = catalog.resolve(&orphan.track_ref).unwrap().unwrap();
+        assert_eq!(resolved.native_album_id, None);
+        let tracks = catalog
+            .query_tracks(&QueryDescriptor::tracks(), None, 10)
+            .unwrap();
+        assert_eq!(tracks.rows.len(), 4);
+        assert_eq!(
+            tracks
+                .rows
+                .iter()
+                .filter(|row| row.native_album_id.is_some())
+                .count(),
+            1
+        );
+        let albums = catalog.query_albums(&descriptor, None, 1).unwrap();
+        assert_eq!(albums.rows.len(), 1);
+        assert!(!albums.has_more);
+        assert_eq!(albums.rows[0].native_album_id, "real-album-id");
+        let artist = normalize_artist_key(&orphan.artist);
+        for sources in [vec![], vec![key.clone()]] {
+            assert_eq!(catalog.count_artist_albums(&artist, &sources).unwrap(), 1);
+            let artist_albums = catalog
+                .query_artist_albums(&artist, &sources, None, 10)
+                .unwrap();
+            assert_eq!(artist_albums.rows.len(), 1);
+            let artists = catalog
+                .query_artists(
+                    &QueryDescriptor::artists().with_sources(sources.clone()),
+                    None,
+                    10,
+                )
+                .unwrap();
+            assert_eq!(artists.rows[0].album_count, 1);
+            assert_eq!(artists.rows[0].track_count, 4);
+            assert_eq!(
+                catalog
+                    .count_albums(&descriptor.clone().with_sources(sources))
+                    .unwrap(),
+                1
+            );
+        }
+        assert_eq!(
+            catalog
+                .count_albums(&descriptor.with_search("Orphan title"))
+                .unwrap(),
+            0
+        );
+        assert!(catalog.materialized_views_valid().unwrap());
+
+        // A later sync repairs the server metadata: the same track now has a
+        // real, navigable album and should reappear without manual cache deletion.
+        orphan.native_album_id = Some("repaired-album-id".into());
+        orphan.album = "Repaired album".into();
+        rows[0] = orphan.clone();
+        catalog
+            .begin_reconciliation(&key, "repaired-album-id")
+            .unwrap();
+        catalog
+            .apply_reconciliation_batch(&ReconciliationBatch {
+                source: key,
+                snapshot_version: "repaired-album-id".into(),
+                expected_cursor: String::new(),
+                next_cursor: rows.len().to_string(),
+                tracks: rows,
+                complete: true,
+            })
+            .unwrap();
+        catalog.rebuild_materialized_views().unwrap();
+        assert_eq!(catalog.count_albums(&QueryDescriptor::albums()).unwrap(), 2);
+        assert_eq!(catalog.count_tracks(&QueryDescriptor::tracks()).unwrap(), 4);
+        assert_eq!(
+            catalog
+                .resolve(&orphan.track_ref)
+                .unwrap()
+                .unwrap()
+                .native_album_id,
+            Some("repaired-album-id".into())
+        );
+        assert!(catalog.materialized_views_valid().unwrap());
+    }
+}
+
 fn insert_fixture(catalog: &mut Catalog, count: usize) {
     for start in (0..count).step_by(2_000) {
         let end = (start + 2_000).min(count);

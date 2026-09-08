@@ -6841,3 +6841,9 @@ msgstr "Árvore"
 
 msgid "Forward"
 msgstr "Avançar"
+
+msgid "SACD images use sidecar metadata."
+msgstr "As imagens SACD usam metadados em um arquivo sidecar."
+
+msgid "SACD track numbers cannot be changed."
+msgstr "Os números das faixas SACD não podem ser alterados."

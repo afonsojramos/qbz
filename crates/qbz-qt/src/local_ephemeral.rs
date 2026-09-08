@@ -187,14 +187,24 @@ pub(crate) fn album_tracks_for(group_key: &str) -> Vec<LocalTrack> {
 pub(crate) fn editor_snapshot(group_key: &str) -> Option<(String, String, Vec<LocalTrack>)> {
     let selected = album_tracks(group_key);
     let first = selected.first()?;
-    let directory = Path::new(&first.file_path).parent()?.to_path_buf();
+    let sacd = qbz_disc::SacdRef::parse(&first.file_path);
+    let physical = sacd
+        .as_ref()
+        .map(|reference| reference.image.as_path())
+        .unwrap_or_else(|| Path::new(&first.file_path));
+    let directory = physical.parent()?.to_path_buf();
     if !directory.is_dir() {
         return None;
     }
     let tracks = STATE
         .tracks_snapshot()
         .into_iter()
-        .filter(|track| Path::new(&track.file_path).parent() == Some(directory.as_path()))
+        .filter(|track| match sacd.as_ref() {
+            Some(reference) => qbz_disc::SacdRef::parse(&track.file_path)
+                .map(|other| other.image == reference.image)
+                .unwrap_or(false),
+            None => Path::new(&track.file_path).parent() == Some(directory.as_path()),
+        })
         .collect::<Vec<_>>();
     if tracks.is_empty() {
         return None;
