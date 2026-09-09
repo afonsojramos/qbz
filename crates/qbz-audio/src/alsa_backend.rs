@@ -22,6 +22,17 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::Mutex;
 
+/// Keep scheduling headroom in milliseconds as hi-res rates increase. CPAL
+/// uses this as one period and allocates two periods on ALSA. Respect the
+/// driver's actual bounds, not the synthetic SupportedStreamConfig below.
+fn playback_period_frames(rate: u32, exclusive: bool, bounds: &SupportedBufferSize) -> u32 {
+    let target = (rate / if exclusive { 20 } else { 10 }).max(1);
+    match *bounds {
+        SupportedBufferSize::Range { min, max } if min > 0 && max >= min => target.clamp(min, max),
+        _ => target,
+    }
+}
+
 /// The PipeWire sink QBZ suspended to take a device exclusively (ALSA-direct
 /// EBUSY retry / CPAL-exclusive). Recorded by *resolved name* so
 /// `resume_suspended_sink` wakes the exact sink that was suspended — PipeWire
@@ -1317,12 +1328,14 @@ impl AudioBackend for AlsaBackend {
             .map_err(|e| format!("Failed to get supported configs: {}", e))?;
 
         let mut found_matching = false;
+        let mut buffer_bounds = SupportedBufferSize::Unknown;
         for range in supported_configs {
             if range.channels() == config.channels
                 && config.sample_rate >= range.min_sample_rate()
                 && config.sample_rate <= range.max_sample_rate()
             {
                 found_matching = true;
+                buffer_bounds = *range.buffer_size();
                 log::info!(
                     "[ALSA Backend] Device supports {}Hz (range: {}-{}Hz)",
                     config.sample_rate,
@@ -1357,11 +1370,9 @@ impl AudioBackend for AlsaBackend {
         let stream_config = StreamConfig {
             channels: config.channels,
             sample_rate: effective_rate,
-            buffer_size: if config.exclusive_mode {
-                BufferSize::Fixed(512)
-            } else {
-                BufferSize::Fixed(effective_rate / 10)
-            },
+            buffer_size: BufferSize::Fixed(playback_period_frames(
+                effective_rate, config.exclusive_mode, &buffer_bounds,
+            )),
         };
 
         // Create SupportedStreamConfig
@@ -1382,7 +1393,11 @@ impl AudioBackend for AlsaBackend {
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
 
-        // Create MixerDeviceSink with custom config
+        log::info!(
+            "[ALSA Backend] Callback period: {:?} at {}Hz (driver bounds {:?})",
+            stream_config.buffer_size, effective_rate, buffer_bounds
+        );
+        // with_supported_config resets buffer_size, so apply the period last.
         let mixer_sink = DeviceSinkBuilder::from_device(device)
             .map_err(|e| {
                 if config.exclusive_mode {
@@ -1395,6 +1410,10 @@ impl AudioBackend for AlsaBackend {
                 }
             })?
             .with_supported_config(&supported_config)
+            .with_buffer_size(stream_config.buffer_size)
+            .with_error_callback(move |err| {
+                log::warn!("[ALSA Backend] Stream error at {}Hz: {}", effective_rate, err);
+            })
             .open_stream()
             .map_err(|e| {
                 if config.exclusive_mode {
@@ -1442,6 +1461,19 @@ impl AudioBackend for AlsaBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_period_retains_time_budget_at_hi_res_and_obeys_device_bounds() {
+        let wide = SupportedBufferSize::Range { min: 64, max: 65536 };
+        for rate in [44100, 48000, 96000, 192000, 384000] {
+            assert_eq!(playback_period_frames(rate, true, &wide) * 20, rate);
+            assert_eq!(playback_period_frames(rate, false, &wide) * 10, rate);
+        }
+        let narrow = SupportedBufferSize::Range { min: 256, max: 4096 };
+        assert_eq!(playback_period_frames(192000, true, &narrow), 4096);
+        assert_eq!(playback_period_frames(4000, true, &narrow), 256);
+        assert_eq!(playback_period_frames(192000, true, &SupportedBufferSize::Unknown), 9600);
+    }
 
     #[test]
     fn build_hw_fallback_id_rewrites_iec958_alias() {
